@@ -2,14 +2,9 @@ cmake_minimum_required(VERSION 4.0.0)
 
 project(LiteNN CXX)
 
-add_library(LiteNN
-    src/LiteNN.h
-    src/LiteNN/Device.cpp
-    src/LiteNN/Device.h
-    src/LiteNN/Misc.h
-    src/LiteNN/Operators.h
-    src/LiteNN/Tensor.h
-)
+file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+add_library(LiteNN ${LITENN_SOURCES})
+
 target_include_directories(LiteNN PUBLIC src)
 target_sources(LiteNN PUBLIC FILE_SET modules TYPE CXX_MODULES FILES
     src/LiteNN.ixx
