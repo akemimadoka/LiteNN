@@ -9,7 +9,7 @@ namespace LiteNN
 	{
 	};
 
-	inline constexpr static UninitializedTag Uninitialized{};
+	inline constexpr UninitializedTag Uninitialized{};
 
 	template <Device D>
 	class Tensor

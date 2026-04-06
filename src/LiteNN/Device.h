@@ -1,7 +1,10 @@
 #ifndef LITENN_DEVICE_H
 #define LITENN_DEVICE_H
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <concepts>
 #include <memory>
 
 #include <LiteNN/Operators.h>
@@ -34,6 +37,7 @@ namespace LiteNN
 		{ DeviceTraits<T>::CopyFromCPU(device, type, dst, type, src1, size) } -> std::same_as<void>;
 		{ DeviceTraits<T>::ConvertTo(device, type, src1, size, type, dst) } -> std::same_as<void>;
 
+		// TODO: 分离到 DeviceExecutor
 		// dst = unaryOp(src)
 		// dst 需要预先分配好内存，且类型和 shape 由 UnaryOpTraits 决定
 		{
@@ -216,9 +220,10 @@ namespace LiteNN
 
 		static constexpr void ZeroFill(CPU& device, void* ptr, DataType type, std::size_t size)
 		{
-			const auto typeSize =
-			    EnumDispatch(type, []<DataType type> { return sizeof(DataTypeMapping<type>); });
-			std::memset(ptr, 0, size * typeSize);
+			EnumDispatch(type, [&]<DataType type> {
+				using T = DataTypeMapping<type>;
+				std::ranges::uninitialized_fill(std::span(static_cast<T*>(ptr), size), T{});
+			});
 		}
 
 		// TODO: stride
@@ -243,7 +248,9 @@ namespace LiteNN
 				using SrcT = DataTypeMapping<SrcTypeValue>;
 				if (srcType == dstType)
 				{
-					std::memcpy(dst, src, size * sizeof(SrcT));
+					std::ranges::copy(
+					    std::span(static_cast<const std::byte*>(src), size * sizeof(SrcT)),
+					    static_cast<std::byte*>(dst));
 					return;
 				}
 				EnumDispatch(dstType, [&]<DataType DstTypeValue> {

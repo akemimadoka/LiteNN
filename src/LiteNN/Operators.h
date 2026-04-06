@@ -16,6 +16,7 @@ namespace LiteNN
 		Transpose,
 	};
 
+	// TODO: 应实现 IR 来表示操作
 	enum class BinaryOp
 	{
 		Add,
