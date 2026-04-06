@@ -225,26 +225,8 @@ namespace LiteNN
 		static constexpr void CopyToCPU(CPU& device, DataType srcType, const void* src,
 		                                std::size_t size, DataType dstType, void* dst)
 		{
-			EnumDispatch(srcType, [&]<DataType SrcTypeValue> {
-				EnumDispatch(dstType, [&]<DataType DstTypeValue> {
-					using SrcType = DataTypeMapping<SrcTypeValue>;
-					using DstType = DataTypeMapping<DstTypeValue>;
-					if constexpr (SrcTypeValue == DstTypeValue)
-					{
-						// 如果类型相同，可以直接 memcpy
-						std::memcpy(dst, src, size * sizeof(SrcType));
-					}
-					else
-					{
-						// 类型不同，需要逐元素转换
-						for (auto i = 0uz; i < size; ++i)
-						{
-							static_cast<DstType*>(dst)[i] =
-							    static_cast<DstType>(static_cast<const SrcType*>(src)[i]);
-						}
-					}
-				});
-			});
+			// 在 CPU 设备上，CopyToCPU 和 ConvertTo 的实现相同
+			ConvertTo(device, srcType, src, size, dstType, dst);
 		}
 
 		static constexpr void CopyFromCPU(CPU& device, DataType dstType, void* dst,
