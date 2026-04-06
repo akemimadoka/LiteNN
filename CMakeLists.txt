@@ -11,7 +11,11 @@ target_sources(LiteNN PUBLIC FILE_SET modules TYPE CXX_MODULES FILES
 )
 
 target_compile_features(LiteNN PUBLIC cxx_std_26)
-target_compile_options(LiteNN PUBLIC -freflection-latest)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(LiteNN PUBLIC -freflection-latest)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(LiteNN PUBLIC -freflection)
+endif()
 
 include(CTest)
 
