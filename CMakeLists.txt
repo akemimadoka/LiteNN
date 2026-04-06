@@ -20,7 +20,7 @@ target_compile_options(LiteNN PUBLIC -freflection-latest)
 
 include(CTest)
 
-file(GLOB TEST_SOURCES "tests/*.cpp")
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
