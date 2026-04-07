@@ -17,5 +17,8 @@ jobs:
             sudo apt install g++-16 cmake
         - name: build
           run: |
-            /usr/bin/cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release
+            /usr/bin/cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=/usr/bin/g++-16
             /usr/bin/cmake --build build --parallel
+        - name: test
+          run: |
+            /usr/bin/ctest -j4 -C Debug --test-dir build -T test --output-on-failure
