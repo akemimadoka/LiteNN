@@ -53,8 +53,8 @@ namespace LiteNN
 		// 	return dispatchers[static_cast<std::size_t>(enumValue)](
 		// 	    std::forward<Receiver>(receiver));
 		// }
-		template for (constexpr auto value : std::define_static_array(
-		                  std::meta::enumerators_of(^^typename std::decay_t<Enum>)))
+		template for (constexpr auto value :
+		              std::define_static_array(std::meta::enumerators_of(^^typename std::decay_t<Enum>)))
 		{
 			if ([:value:] == enumValue)
 			{
@@ -77,16 +77,14 @@ namespace LiteNN
 	    requires(std::is_enum_v<Enum>)
 	constexpr std::string_view EnumToString(Enum enumValue)
 	{
-		template for (constexpr auto enumerator :
-		              std::define_static_array(std::meta::enumerators_of(^^Enum)))
+		template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^Enum)))
 		{
 			if ([:enumerator:] == enumValue)
 			{
 				if constexpr (Style == EnumToStringStyle::Qualified)
 				{
 					return std::define_static_string(
-					    std::format("{}::{}", std::meta::identifier_of(^^Enum),
-					                std::meta::identifier_of(enumerator)));
+					    std::format("{}::{}", std::meta::identifier_of(^^Enum), std::meta::identifier_of(enumerator)));
 				}
 				else
 				{
@@ -136,6 +134,16 @@ namespace LiteNN
 				throw std::runtime_error("SubShape out of range");
 			}
 			return { { Dims.data() + startDim, NumDim() - startDim } };
+		}
+
+		constexpr bool IsScalar() const
+		{
+			return NumDim() == 0;
+		}
+
+		constexpr std::vector<std::size_t> ToOwned() const
+		{
+			return std::vector(Dims.begin(), Dims.end());
 		}
 	};
 } // namespace LiteNN
