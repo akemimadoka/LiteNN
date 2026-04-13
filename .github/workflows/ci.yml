@@ -7,6 +7,8 @@ jobs:
     steps:
         - name: checkout
           uses: actions/checkout@v6
+          with:
+            submodules: true
         - name: configure-build-env
           run: |
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test
