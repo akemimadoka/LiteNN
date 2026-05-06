@@ -70,4 +70,18 @@ namespace LiteNN
 	{
 		device.impl_->DoReduceOp(reduceOp, dst, type, shape, src, axis);
 	}
+
+	void DeviceTraits<PolymorphicDevice>::DoConcatOp(PolymorphicDevice& device, void* dst, DataType type,
+	                                                 const void* const* srcPtrs, const ShapeView* srcShapes,
+	                                                 std::size_t inputCount, std::size_t axis)
+	{
+		device.impl_->DoConcatOp(dst, type, srcPtrs, srcShapes, inputCount, axis);
+	}
+
+	void DeviceTraits<PolymorphicDevice>::DoSliceOp(PolymorphicDevice& device, void* dst, DataType type,
+	                                                ShapeView srcShape, const void* src, std::size_t axis,
+	                                                std::size_t start, std::size_t length)
+	{
+		device.impl_->DoSliceOp(dst, type, srcShape, src, axis, start, length);
+	}
 } // namespace LiteNN

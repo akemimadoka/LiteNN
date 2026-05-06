@@ -54,6 +54,13 @@ namespace LiteNN
 			                             allocatedNumElements_);
 		}
 
+		// GCC libstdc++ 尚未实现 P2447R6（span 的 initializer_list 构造），需要显式重载
+		constexpr Tensor(std::initializer_list<double> flatInitializer, ShapeView shape,
+		                 DataType dtype = DataType::Float32, UsingDevice device = UsingDevice())
+		    : Tensor(std::span<const double>(flatInitializer), shape, dtype, std::move(device))
+		{
+		}
+
 		// dtype 必须显式给出，避免漏填
 		// allocatedNumElements_ 此时无意义
 		constexpr Tensor(void* externalData, ShapeView shape, DataType dtype, UsingDevice device = UsingDevice())

@@ -46,6 +46,8 @@ namespace LiteNN::Runtime
 		{
 			activationStore_.clear();
 			activationStore_.resize(graph.ActivationSlotCount());
+			tapeStore_.clear();
+			tapeStore_.resize(graph.TapeSlotCount());
 			return RunSubgraph(graph, graph.Forward(), inputs, std::move(device));
 		}
 
@@ -170,6 +172,32 @@ namespace LiteNN::Runtime
 			slots[nodeId] = RunSubgraph(graph, branchId, args, device);
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const WhileNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			// 初始 carry values
+			std::vector<Tensor<D>> carry;
+			carry.reserve(node.initArgs.size());
+			for (const auto& arg : node.initArgs)
+			{
+				carry.push_back(GetValue(slots, arg));
+			}
+
+			// 循环
+			while (true)
+			{
+				auto condResult = RunSubgraph(graph, node.condBranch, carry, device);
+				if (!ReadScalarBool(condResult[0]))
+				{
+					break;
+				}
+				carry = RunSubgraph(graph, node.bodyBranch, carry, device);
+			}
+
+			// 输出 = 最终 carry
+			slots[nodeId] = std::move(carry);
+		}
+
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SaveActivationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
@@ -184,6 +212,23 @@ namespace LiteNN::Runtime
 		{
 			assert(activationStore_[node.slotId].has_value());
 			slots[nodeId].push_back(Tensor<D>(*activationStore_[node.slotId]));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TapeSaveActivationNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			tapeStore_[node.tapeSlotId].push_back(Tensor<D>(input));
+			// 透传：输出 = 输入
+			slots[nodeId].push_back(Tensor<D>(input));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TapeLoadActivationNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			assert(!tapeStore_[node.tapeSlotId].empty());
+			slots[nodeId].push_back(std::move(tapeStore_[node.tapeSlotId].back()));
+			tapeStore_[node.tapeSlotId].pop_back();
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ReduceOpNode& node,
@@ -212,7 +257,57 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConcatNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& outputInfo = entry.outputInfos[0];
+
+			std::vector<const void*> srcPtrs;
+			std::vector<ShapeView> srcShapes;
+			srcPtrs.reserve(node.inputs.size());
+			srcShapes.reserve(node.inputs.size());
+			for (const auto& input : node.inputs)
+			{
+				const auto& t = GetValue(slots, input);
+				srcPtrs.push_back(t.RawData());
+				srcShapes.push_back(t.Shape());
+			}
+
+			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
+			DeviceTraits<D>::DoConcatOp(device, result.RawData(), outputInfo.dtype, srcPtrs.data(), srcShapes.data(),
+			                            srcPtrs.size(), node.axis);
+			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SliceNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			const auto& outputInfo = entry.outputInfos[0];
+
+			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
+			DeviceTraits<D>::DoSliceOp(device, result.RawData(), outputInfo.dtype, input.Shape(), input.RawData(),
+			                           node.axis, node.start, node.length);
+			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const FusedOpNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			// 收集参数
+			std::vector<Tensor<D>> args;
+			args.reserve(node.args.size());
+			for (const auto& arg : node.args)
+			{
+				args.push_back(GetValue(slots, arg));
+			}
+
+			// 执行 body 子图（语义等价于融合前的原语操作）
+			slots[nodeId] = RunSubgraph(graph, node.body, args, device);
+		}
+
 		std::vector<std::optional<Tensor<D>>> activationStore_;
+		std::vector<std::vector<Tensor<D>>> tapeStore_;
 	};
 } // namespace LiteNN::Runtime
 

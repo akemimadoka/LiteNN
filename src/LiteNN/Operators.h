@@ -241,6 +241,14 @@ namespace LiteNN
 	{
 	};
 
+	enum class FusionPattern
+	{
+		// y = MatMul(a, b) + c
+		MatMulBiasAdd,
+		// 2+ 逐元素操作链，每个中间结果仅一个消费者
+		ElementWiseChain,
+	};
+
 } // namespace LiteNN
 
 #endif

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <initializer_list>
 
 using namespace LiteNN;
 

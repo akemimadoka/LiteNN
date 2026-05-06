@@ -90,6 +90,17 @@ namespace LiteNN
 			std::vector<NodeOutput> args; // 传入两个分支的参数
 		};
 
+		// 函数式循环：while condBranch(carry) do carry = bodyBranch(carry)
+		// condBranch: params 与 initArgs 类型/形状一致，返回单个 Bool 标量
+		// bodyBranch: params 和 results 与 initArgs 类型/形状一致
+		// 输出 = 最终 carry values（多输出节点，outputInfos.size() == initArgs.size()）
+		struct WhileNode
+		{
+			SubgraphId condBranch;
+			SubgraphId bodyBranch;
+			std::vector<NodeOutput> initArgs;
+		};
+
 		// 保存激活值到 ActivationStore（前向使用）
 		// 透传输入值，不阻断数据流（输出 = 输入）
 		struct SaveActivationNode
@@ -102,6 +113,22 @@ namespace LiteNN
 		struct LoadActivationNode
 		{
 			std::size_t slotId;
+		};
+
+		// 栈式保存激活值（循环体前向使用）
+		// 每次执行 push 一个值到 TapeStore[tapeSlotId]
+		// 透传输入值，不阻断数据流（输出 = 输入）
+		struct TapeSaveActivationNode
+		{
+			NodeOutput input;
+			std::size_t tapeSlotId;
+		};
+
+		// 栈式加载激活值（循环体反向使用）
+		// 每次执行 pop 最近的值（LIFO）
+		struct TapeLoadActivationNode
+		{
+			std::size_t tapeSlotId;
 		};
 
 		// 归约操作（沿指定轴）
@@ -117,6 +144,33 @@ namespace LiteNN
 		{
 			NodeOutput input;
 			std::vector<std::size_t> targetShape;
+		};
+
+		// 沿指定轴拼接多个张量
+		// 所有输入除 axis 维度外 shape 必须相同
+		struct ConcatNode
+		{
+			std::vector<NodeOutput> inputs;
+			std::size_t axis;
+		};
+
+		// 沿指定轴提取连续切片
+		struct SliceNode
+		{
+			NodeOutput input;
+			std::size_t axis;
+			std::size_t start;  // 起始索引（含）
+			std::size_t length; // 切片长度
+		};
+
+		// 融合操作：语义等价于执行 body 子图，
+		// 但向后端发出信号以生成优化的融合内核
+		// body 子图参数与 args 按序 1:1 对应
+		struct FusedOpNode
+		{
+			FusionPattern pattern;
+			SubgraphId body;
+			std::vector<NodeOutput> args;
 		};
 	} // namespace Node
 
@@ -176,6 +230,13 @@ namespace LiteNN
 
 	// 前向/反向共享的激活值存储槽位
 	struct ActivationSlot
+	{
+		DataType dtype;
+		std::vector<std::size_t> shape;
+	};
+
+	// 循环体的栈式激活值槽位
+	struct TapeSlot
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
@@ -350,12 +411,30 @@ namespace LiteNN
 			return activationSlots_.size();
 		}
 
+		std::size_t AddTapeSlot(TapeSlot slot)
+		{
+			const auto id = tapeSlots_.size();
+			tapeSlots_.push_back(std::move(slot));
+			return id;
+		}
+
+		const TapeSlot& GetTapeSlot(std::size_t id) const
+		{
+			return tapeSlots_[id];
+		}
+
+		std::size_t TapeSlotCount() const
+		{
+			return tapeSlots_.size();
+		}
+
 	private:
 		SubgraphId forward_{};
 		std::optional<SubgraphId> backward_;
 		std::deque<Subgraph> subgraphs_;
 		std::vector<std::shared_ptr<Variable>> variables_;
 		std::vector<ActivationSlot> activationSlots_;
+		std::vector<TapeSlot> tapeSlots_;
 	};
 } // namespace LiteNN
 

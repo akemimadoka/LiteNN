@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 4.0.0)
 
 project(LiteNN CXX)
 
-file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
+
+file(GLOB_RECURSE LITENN_SOURCES src/*.cpp src/*.h)
+list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
 add_library(LiteNN ${LITENN_SOURCES})
 
 target_include_directories(LiteNN PUBLIC src)
@@ -17,6 +20,18 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(LiteNN PUBLIC -freflection)
 endif()
 
+if(LITENN_ENABLE_MLIR)
+    find_package(LLVM REQUIRED)
+    find_package(MLIR REQUIRED)
+
+    list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+    include(TableGen)
+    include(AddLLVM)
+    include(AddMLIR)
+
+    add_subdirectory(src/LiteNN/Compiler)
+endif()
+
 include(CTest)
 include(GoogleTest)
 
@@ -29,16 +44,20 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(third_party/googletest)
 
-# clang-p2996 的 c++.dll 需要在 PATH 中才能运行测试
-get_filename_component(COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
-set(TEST_PATH_ENV "PATH=${COMPILER_BIN_DIR}")
-
-file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
+file(GLOB TEST_SOURCES "tests/*.cpp")
+if(NOT LITENN_ENABLE_MLIR)
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest)\\.cpp$")
+endif()
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_SOURCE})
-    target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)
+    if(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
+       OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
+       OR TEST_NAME STREQUAL "CompiledModuleTest")
+        target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
+    else()
+        target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)
+    endif()
     gtest_add_tests(TARGET ${TEST_NAME} TEST_LIST ${TEST_NAME}_TESTS)
-    set_tests_properties(${${TEST_NAME}_TESTS} PROPERTIES ENVIRONMENT "${TEST_PATH_ENV}")
 endforeach()

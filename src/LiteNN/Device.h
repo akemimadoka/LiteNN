@@ -49,6 +49,14 @@ namespace LiteNN
 		    // dst = reduceOp(src, axis)
 		    // dst 需要预先分配好内存，且类型和 shape 由 ReduceOpTraits 决定
 		    { DeviceTraits<T>::DoReduceOp(device, reduceOp, dst, type, shape, src1, size) } -> std::same_as<void>;
+		    // dst = concat(srcs..., axis)
+		    // srcPtrs 和 srcShapes 分别是各输入数据指针和 shape 的数组
+		    {
+			    DeviceTraits<T>::DoConcatOp(device, dst, type, (const void* const*)nullptr,
+			                               (const ShapeView*)nullptr, size, size)
+		    } -> std::same_as<void>;
+		    // dst = slice(src, axis, start, length)
+		    { DeviceTraits<T>::DoSliceOp(device, dst, type, shape, src1, size, size, size) } -> std::same_as<void>;
 	    };
 
 	// 擦除了类型的 Device
@@ -114,6 +122,10 @@ namespace LiteNN
 			                        DataType type2, ShapeView shape2, const void* src2) = 0;
 			virtual void DoReduceOp(ReduceOp reduceOp, void* dst, DataType type, ShapeView shape, const void* src,
 			                        std::size_t axis) = 0;
+			virtual void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs,
+			                        const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) = 0;
+			virtual void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			                       std::size_t axis, std::size_t start, std::size_t length) = 0;
 			virtual bool IsSameDevice(const Interface& other) const = 0;
 		};
 
@@ -177,6 +189,16 @@ namespace LiteNN
 			{
 				DeviceTraits<D>::DoReduceOp(device_, reduceOp, dst, type, shape, src, axis);
 			}
+			void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs,
+			                const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) override
+			{
+				DeviceTraits<D>::DoConcatOp(device_, dst, type, srcPtrs, srcShapes, inputCount, axis);
+			}
+			void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			               std::size_t axis, std::size_t start, std::size_t length) override
+			{
+				DeviceTraits<D>::DoSliceOp(device_, dst, type, srcShape, src, axis, start, length);
+			}
 			bool IsSameDevice(const Interface& other) const override
 			{
 				if (auto* p = dynamic_cast<const Impl<D>*>(&other))
@@ -216,6 +238,10 @@ namespace LiteNN
 		                       ShapeView shape1, const void* src1, DataType type2, ShapeView shape2, const void* src2);
 		static void DoReduceOp(PolymorphicDevice& device, ReduceOp reduceOp, void* dst, DataType type, ShapeView shape,
 		                       const void* src, std::size_t axis);
+		static void DoConcatOp(PolymorphicDevice& device, void* dst, DataType type, const void* const* srcPtrs,
+		                       const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis);
+		static void DoSliceOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                      std::size_t axis, std::size_t start, std::size_t length);
 	};
 
 	struct CPU
@@ -660,6 +686,70 @@ namespace LiteNN
 						}
 					}
 				});
+			});
+		}
+
+		static constexpr void DoConcatOp(CPU& device, void* dst, DataType type, const void* const* srcPtrs,
+		                                  const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis)
+		{
+			EnumDispatch(type, [&]<DataType TypeValue> {
+				using T = DataTypeMapping<TypeValue>;
+				// 所有输入除 axis 维度外 shape 相同，计算 outer 和 inner
+				const auto& shape0 = srcShapes[0];
+				auto outer = 1uz;
+				for (auto d = 0uz; d < axis; ++d)
+				{
+					outer *= shape0[d];
+				}
+				auto inner = 1uz;
+				for (auto d = axis + 1; d < shape0.NumDim(); ++d)
+				{
+					inner *= shape0[d];
+				}
+
+				auto* dstPtr = static_cast<T*>(dst);
+				for (auto o = 0uz; o < outer; ++o)
+				{
+					for (auto i = 0uz; i < inputCount; ++i)
+					{
+						const auto axisDim = srcShapes[i][axis];
+						const auto chunkSize = axisDim * inner;
+						const auto* srcPtr = static_cast<const T*>(srcPtrs[i]) + o * axisDim * inner;
+						std::copy_n(srcPtr, chunkSize, dstPtr);
+						dstPtr += chunkSize;
+					}
+				}
+			});
+		}
+
+		static constexpr void DoSliceOp(CPU& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                                 std::size_t axis, std::size_t start, std::size_t length)
+		{
+			assert(axis < srcShape.NumDim());
+			assert(start + length <= srcShape[axis]);
+			EnumDispatch(type, [&]<DataType TypeValue> {
+				using T = DataTypeMapping<TypeValue>;
+				auto outer = 1uz;
+				for (auto d = 0uz; d < axis; ++d)
+				{
+					outer *= srcShape[d];
+				}
+				const auto axisDim = srcShape[axis];
+				auto inner = 1uz;
+				for (auto d = axis + 1; d < srcShape.NumDim(); ++d)
+				{
+					inner *= srcShape[d];
+				}
+
+				const auto srcStride = axisDim * inner;
+				const auto dstStride = length * inner;
+				const auto* srcPtr = static_cast<const T*>(src);
+				auto* dstPtr = static_cast<T*>(dst);
+
+				for (auto o = 0uz; o < outer; ++o)
+				{
+					std::copy_n(srcPtr + o * srcStride + start * inner, dstStride, dstPtr + o * dstStride);
+				}
 			});
 		}
 	};

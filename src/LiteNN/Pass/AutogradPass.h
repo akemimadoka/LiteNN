@@ -24,6 +24,14 @@ namespace LiteNN
 	private:
 		using NodeOutputKey = std::pair<NodeId, std::size_t>; // (nodeId, port)
 
+		struct SavedSlotInfo
+		{
+			std::size_t slotId;
+			bool isTape; // true = TapeSlot, false = ActivationSlot
+		};
+
+		using SavedSlotMap = std::map<NodeOutputKey, SavedSlotInfo>;
+
 		struct VarGradEntry
 		{
 			std::size_t variableIndex;
@@ -41,7 +49,7 @@ namespace LiteNN
 		std::map<SubgraphId, SubgraphGradInfo> processed_;
 
 		// 对任意子图生成 augmented forward 和 backward，支持递归处理 CallNode
-		SubgraphGradInfo ProcessSubgraph(Graph& graph, SubgraphId fwdId)
+		SubgraphGradInfo ProcessSubgraph(Graph& graph, SubgraphId fwdId, bool insideLoop = false)
 		{
 			if (auto it = processed_.find(fwdId); it != processed_.end())
 			{
@@ -55,8 +63,8 @@ namespace LiteNN
 			std::map<NodeOutputKey, std::size_t> consumerCount;
 			CountConsumers(fwdSg, consumerCount);
 
-			std::map<NodeOutputKey, std::size_t> savedActivations;
-			AnalyzeSavedValues(fwdSg, graph, savedActivations);
+			SavedSlotMap savedActivations;
+			AnalyzeSavedValues(fwdSg, graph, savedActivations, insideLoop);
 
 			// 递归处理所有 callee，收集映射
 			std::map<SubgraphId, SubgraphGradInfo> calleeInfo;
@@ -81,6 +89,14 @@ namespace LiteNN
 						calleeInfo[cond->elseBranch] = ProcessSubgraph(graph, cond->elseBranch);
 					}
 				}
+				else if (auto* wh = std::get_if<WhileNode>(&entry.node))
+				{
+					// condBranch 不需要 autograd（返回 Bool，不可微）
+					if (!calleeInfo.contains(wh->bodyBranch))
+					{
+						calleeInfo[wh->bodyBranch] = ProcessSubgraph(graph, wh->bodyBranch, true);
+					}
+				}
 			}
 
 			// callee augmented forward 映射
@@ -94,7 +110,7 @@ namespace LiteNN
 
 			Subgraph augFwd;
 			std::vector<NodeId> augNodeMap(fwdSg.NodeCount());
-			BuildAugmentedForward(fwdSg, savedActivations, calleeAugFwdMap, augFwd, augNodeMap);
+			BuildAugmentedForward(fwdSg, savedActivations, calleeAugFwdMap, augFwd, augNodeMap, insideLoop, graph);
 			const auto augFwdId = graph.AddSubgraph(std::move(augFwd));
 
 			// 3. 构建 backward
@@ -247,9 +263,38 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, ConcatNode>)
+					    {
+						    for (const auto& input : node.inputs)
+						    {
+							    ++counts[{ input.node, input.port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, SliceNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    ++counts[{ node.condition.node, node.condition.port }];
+						    for (const auto& a : node.args)
+						    {
+							    ++counts[{ a.node, a.port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, WhileNode>)
+					    {
+						    for (const auto& a : node.initArgs)
+						    {
+							    ++counts[{ a.node, a.port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, FusedOpNode>)
+					    {
 						    for (const auto& a : node.args)
 						    {
 							    ++counts[{ a.node, a.port }];
@@ -260,7 +305,8 @@ namespace LiteNN
 			}
 		}
 
-		static void AnalyzeSavedValues(const Subgraph& fwdSg, Graph& graph, std::map<NodeOutputKey, std::size_t>& saved)
+		static void AnalyzeSavedValues(const Subgraph& fwdSg, Graph& graph, SavedSlotMap& saved,
+		                              bool insideLoop = false)
 		{
 			for (NodeId nodeId = 0; nodeId < fwdSg.NodeCount(); ++nodeId)
 			{
@@ -274,11 +320,11 @@ namespace LiteNN
 						        node.op == UnaryOp::Cos || node.op == UnaryOp::Tan || node.op == UnaryOp::Arcsin ||
 						        node.op == UnaryOp::Arccos || node.op == UnaryOp::Arctan)
 						    {
-							    SaveIfNeeded(fwdSg, graph, node.input, saved);
+							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
 						    }
 						    else if (node.op == UnaryOp::Sqrt || node.op == UnaryOp::Exp)
 						    {
-							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved); // 保存输出
+							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved, insideLoop); // 保存输出
 						    }
 					    }
 					    else if constexpr (std::same_as<T, BinaryOpNode>)
@@ -286,41 +332,78 @@ namespace LiteNN
 						    if (node.op == BinaryOp::Multiply || node.op == BinaryOp::MatMul ||
 						        node.op == BinaryOp::Divide || node.op == BinaryOp::Max || node.op == BinaryOp::Min)
 						    {
-							    SaveIfNeeded(fwdSg, graph, node.lhs, saved);
-							    SaveIfNeeded(fwdSg, graph, node.rhs, saved);
+							    SaveIfNeeded(fwdSg, graph, node.lhs, saved, insideLoop);
+							    SaveIfNeeded(fwdSg, graph, node.rhs, saved, insideLoop);
 						    }
 						    else if (node.op == BinaryOp::Pow)
 						    {
-							    SaveIfNeeded(fwdSg, graph, node.lhs, saved);
-							    SaveIfNeeded(fwdSg, graph, node.rhs, saved);
-							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved); // 保存输出 a^b
+							    SaveIfNeeded(fwdSg, graph, node.lhs, saved, insideLoop);
+							    SaveIfNeeded(fwdSg, graph, node.rhs, saved, insideLoop);
+							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved, insideLoop); // 保存输出 a^b
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ReduceOpNode>)
 					    {
 						    if (node.op == ReduceOp::Max)
 						    {
-							    SaveIfNeeded(fwdSg, graph, node.input, saved);
-							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved);
+							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
+							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved, insideLoop);
 						    }
 						    // Sum/Mean 不需要保存前向值
+					    }
+					    else if constexpr (std::same_as<T, ConcatNode> || std::same_as<T, SliceNode>)
+					    {
+						    // Concat/Slice 反向只需要 shape/axis/start/length 信息，
+						    // 全部在前向图中静态可知，无需保存激活值
 					    }
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
 						    // CallNode 的 args 在 backward 中需要传给 callee backward
 						    for (const auto& a : node.args)
 						    {
-							    SaveIfNeeded(fwdSg, graph, a, saved);
+							    SaveIfNeeded(fwdSg, graph, a, saved, insideLoop);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    // 保存 condition（backward 需要重新判断走哪个分支）
-						    SaveIfNeeded(fwdSg, graph, node.condition, saved);
+						    SaveIfNeeded(fwdSg, graph, node.condition, saved, insideLoop);
 						    // 保存所有 args（传入分支 backward）
 						    for (const auto& a : node.args)
 						    {
-							    SaveIfNeeded(fwdSg, graph, a, saved);
+							    SaveIfNeeded(fwdSg, graph, a, saved, insideLoop);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, WhileNode>)
+					    {
+						    // 保存所有 initArgs（backward 需要）
+						    for (const auto& a : node.initArgs)
+						    {
+							    SaveIfNeeded(fwdSg, graph, a, saved, insideLoop);
+						    }
+						    // 迭代次数 ActivationSlot (虚拟端口 = numCarry)
+						    const auto numCarry = entry.outputInfos.size();
+						    const auto countKey = std::make_pair(nodeId, numCarry);
+						    if (!saved.contains(countKey))
+						    {
+							    saved[countKey] = { graph.AddActivationSlot({ DataType::Int64, { 1 } }), false };
+						    }
+						    // 各 carry 值的 TapeSlot（虚拟端口 = numCarry + 1 + i）
+						    for (std::size_t i = 0; i < numCarry; ++i)
+						    {
+							    const auto carryKey = std::make_pair(nodeId, numCarry + 1 + i);
+							    if (!saved.contains(carryKey))
+							    {
+								    const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+								    saved[carryKey] = { graph.AddTapeSlot({ info.dtype, info.shape }), true };
+							    }
+						    }
+					    }
+					    else if constexpr (std::same_as<T, FusedOpNode>)
+					    {
+						    for (const auto& a : node.args)
+						    {
+							    SaveIfNeeded(fwdSg, graph, a, saved, insideLoop);
 						    }
 					    }
 				    },
@@ -329,7 +412,7 @@ namespace LiteNN
 		}
 
 		static void SaveIfNeeded(const Subgraph& fwdSg, Graph& graph, NodeOutput output,
-		                         std::map<NodeOutputKey, std::size_t>& saved)
+		                         SavedSlotMap& saved, bool insideLoop = false)
 		{
 			auto key = std::make_pair(output.node, output.port);
 			if (saved.contains(key))
@@ -343,18 +426,117 @@ namespace LiteNN
 				return;
 			}
 			const auto& info = fwdSg.GetNodeEntry(output.node).outputInfos[output.port];
-			saved[key] = graph.AddActivationSlot({ info.dtype, info.shape });
+			if (insideLoop)
+			{
+				saved[key] = { graph.AddTapeSlot({ info.dtype, info.shape }), true };
+			}
+			else
+			{
+				saved[key] = { graph.AddActivationSlot({ info.dtype, info.shape }), false };
+			}
 		}
 
 		// Augmented forward
 
-		static void BuildAugmentedForward(const Subgraph& fwdSg, const std::map<NodeOutputKey, std::size_t>& saved,
+		static void BuildAugmentedForward(const Subgraph& fwdSg, const SavedSlotMap& saved,
 		                                  const std::map<SubgraphId, SubgraphId>& calleeAugFwdMap, Subgraph& augFwd,
-		                                  std::vector<NodeId>& augNodeMap)
+		                                  std::vector<NodeId>& augNodeMap, bool insideLoop, Graph& graph)
 		{
 			for (NodeId fwdNodeId = 0; fwdNodeId < fwdSg.NodeCount(); ++fwdNodeId)
 			{
 				const auto& entry = fwdSg.GetNodeEntry(fwdNodeId);
+
+				// WhileNode needs special counting + carry-tape subgraph wrappers
+				if (auto* wh = std::get_if<WhileNode>(&entry.node))
+				{
+					const auto numCarry = entry.outputInfos.size();
+					auto augBodyId =
+					    calleeAugFwdMap.count(wh->bodyBranch) ? calleeAugFwdMap.at(wh->bodyBranch) : wh->bodyBranch;
+
+					// Build counting-cond wrapper: [carry..., count] → Bool
+					SubgraphId countingCondId;
+					{
+						Subgraph condSg;
+						std::vector<NodeOutput> condArgs;
+						for (std::size_t i = 0; i < numCarry; ++i)
+						{
+							const auto& info = entry.outputInfos[i];
+							condArgs.push_back({ condSg.AddParam(info.dtype, info.shape), 0 });
+						}
+						condSg.AddParam(DataType::Int64, { 1 }); // count (ignored)
+						auto call = condSg.AddNode(CallNode{ wh->condBranch, std::move(condArgs) },
+						                           { OutputInfo{ DataType::Bool, { 1 } } });
+						condSg.SetResults({ { call, 0 } });
+						countingCondId = graph.AddSubgraph(std::move(condSg));
+					}
+
+					// Build counting-body wrapper: [carry..., count] → [newCarry..., count+1]
+					// Also TapeSaves each carry_i before calling body
+					SubgraphId countingBodyId;
+					{
+						Subgraph bodySg;
+						std::vector<NodeOutput> carryArgs;
+						for (std::size_t i = 0; i < numCarry; ++i)
+						{
+							const auto& info = entry.outputInfos[i];
+							carryArgs.push_back({ bodySg.AddParam(info.dtype, info.shape), 0 });
+						}
+						auto countParam = bodySg.AddParam(DataType::Int64, { 1 });
+
+						// TapeSave each carry_i (pass-through) using pre-allocated tape slot
+						for (std::size_t i = 0; i < numCarry; ++i)
+						{
+							const auto carrySlotId = saved.at({ fwdNodeId, numCarry + 1 + i }).slotId;
+							const auto& info = entry.outputInfos[i];
+							auto saveNode = bodySg.AddNode(
+							    TapeSaveActivationNode{ carryArgs[i], carrySlotId }, { info });
+							carryArgs[i] = { saveNode, 0 };
+						}
+
+						// Call augmented body
+						std::vector<OutputInfo> bodyOutInfos(entry.outputInfos.begin(), entry.outputInfos.end());
+						auto bodyCall = bodySg.AddNode(CallNode{ augBodyId, carryArgs }, bodyOutInfos);
+
+						// count + 1
+						auto one = MakeScalarConstant(bodySg, DataType::Int64, { 1 }, 1.0);
+						auto countPlusOne = bodySg.AddNode(
+						    BinaryOpNode{ BinaryOp::Add, { countParam, 0 }, { one, 0 } },
+						    { OutputInfo{ DataType::Int64, { 1 } } });
+
+						std::vector<NodeOutput> results;
+						for (std::size_t i = 0; i < numCarry; ++i)
+							results.push_back({ bodyCall, i });
+						results.push_back({ countPlusOne, 0 });
+						bodySg.SetResults(std::move(results));
+						countingBodyId = graph.AddSubgraph(std::move(bodySg));
+					}
+
+					// Build initArgs with extra count=0
+					std::vector<NodeOutput> countingInitArgs;
+					for (const auto& arg : wh->initArgs)
+						countingInitArgs.push_back({ augNodeMap[arg.node], arg.port });
+					auto zeroConst = augFwd.AddNode(
+					    ConstantNode{ MakeScalarTensor(DataType::Int64, { 1 }, 0.0) },
+					    { OutputInfo{ DataType::Int64, { 1 } } });
+					countingInitArgs.push_back({ zeroConst, 0 });
+
+					// Build counting WhileNode outputInfos: [carry..., count]
+					std::vector<OutputInfo> countingOutputInfos(entry.outputInfos.begin(), entry.outputInfos.end());
+					countingOutputInfos.push_back({ DataType::Int64, { 1 } });
+
+					auto countingWhileId = augFwd.AddNode(
+					    WhileNode{ countingCondId, countingBodyId, std::move(countingInitArgs) },
+					    std::move(countingOutputInfos));
+
+					// Save count via SaveActivationNode (virtual port = numCarry)
+					const auto countSlotId = saved.at({ fwdNodeId, numCarry }).slotId;
+					augFwd.AddNode(SaveActivationNode{ { countingWhileId, numCarry }, countSlotId },
+					               { OutputInfo{ DataType::Int64, { 1 } } });
+
+					augNodeMap[fwdNodeId] = countingWhileId;
+					continue;
+				}
+
 				auto remapped = RemapNode(entry.node, augNodeMap, calleeAugFwdMap);
 				auto augNodeId =
 				    augFwd.AddNode(std::move(remapped), { entry.outputInfos.begin(), entry.outputInfos.end() });
@@ -365,8 +547,18 @@ namespace LiteNN
 					if (it != saved.end() && entry.outputInfos.size() == 1)
 					{
 						const auto& info = entry.outputInfos[port];
-						augNodeId = augFwd.AddNode(SaveActivationNode{ { augNodeId, port }, it->second },
-						                           { OutputInfo{ info.dtype, info.shape } });
+						if (it->second.isTape)
+						{
+							augNodeId = augFwd.AddNode(
+							    TapeSaveActivationNode{ { augNodeId, port }, it->second.slotId },
+							    { OutputInfo{ info.dtype, info.shape } });
+						}
+						else
+						{
+							augNodeId = augFwd.AddNode(
+							    SaveActivationNode{ { augNodeId, port }, it->second.slotId },
+							    { OutputInfo{ info.dtype, info.shape } });
+						}
 					}
 				}
 				augNodeMap[fwdNodeId] = augNodeId;
@@ -413,6 +605,19 @@ namespace LiteNN
 				    {
 					    return ReshapeNode{ { nodeMap[n.input.node], n.input.port }, n.targetShape };
 				    }
+				    else if constexpr (std::same_as<T, ConcatNode>)
+				    {
+					    std::vector<NodeOutput> inputs;
+					    for (const auto& input : n.inputs)
+					    {
+						    inputs.push_back({ nodeMap[input.node], input.port });
+					    }
+					    return ConcatNode{ std::move(inputs), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, SliceNode>)
+				    {
+					    return SliceNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.start, n.length };
+				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
 					    std::vector<NodeOutput> args;
@@ -439,6 +644,46 @@ namespace LiteNN
 						    { nodeMap[n.condition.node], n.condition.port }, thenBranch, elseBranch, std::move(args)
 					    };
 				    }
+				    else if constexpr (std::same_as<T, FusedOpNode>)
+				    {
+					    std::vector<NodeOutput> args;
+					    for (const auto& a : n.args)
+					    {
+						    args.push_back({ nodeMap[a.node], a.port });
+					    }
+					    auto bodyIt = calleeAugMap.find(n.body);
+					    auto body = bodyIt != calleeAugMap.end() ? bodyIt->second : n.body;
+					    return FusedOpNode{ n.pattern, body, std::move(args) };
+				    }
+				    else if constexpr (std::same_as<T, WhileNode>)
+				    {
+					    std::vector<NodeOutput> args;
+					    for (const auto& a : n.initArgs)
+					    {
+						    args.push_back({ nodeMap[a.node], a.port });
+					    }
+					    auto condIt = calleeAugMap.find(n.condBranch);
+					    auto cond = condIt != calleeAugMap.end() ? condIt->second : n.condBranch;
+					    auto bodyIt = calleeAugMap.find(n.bodyBranch);
+					    auto body = bodyIt != calleeAugMap.end() ? bodyIt->second : n.bodyBranch;
+					    return WhileNode{ cond, body, std::move(args) };
+				    }
+				    else if constexpr (std::same_as<T, SaveActivationNode>)
+				    {
+					    return SaveActivationNode{ { nodeMap[n.input.node], n.input.port }, n.slotId };
+				    }
+				    else if constexpr (std::same_as<T, LoadActivationNode>)
+				    {
+					    return n;
+				    }
+				    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
+				    {
+					    return TapeSaveActivationNode{ { nodeMap[n.input.node], n.input.port }, n.tapeSlotId };
+				    }
+				    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
+				    {
+					    return n;
+				    }
 				    else
 				    {
 					    throw std::runtime_error("AutogradPass: unsupported node type in remap");
@@ -450,7 +695,7 @@ namespace LiteNN
 		// Backward 构建
 
 		NodeId GetForwardValue(const Subgraph& fwdSg, Subgraph& bwdSg, NodeId fwdNodeId, std::size_t port,
-		                       const std::map<NodeOutputKey, std::size_t>& saved,
+		                       const SavedSlotMap& saved,
 		                       std::map<NodeOutputKey, NodeId>& loadMap)
 		{
 			auto key = std::make_pair(fwdNodeId, port);
@@ -480,7 +725,17 @@ namespace LiteNN
 
 			if (auto it = saved.find(key); it != saved.end())
 			{
-				auto id = bwdSg.AddNode(LoadActivationNode{ it->second }, { OutputInfo{ info.dtype, info.shape } });
+				NodeId id;
+				if (it->second.isTape)
+				{
+					id = bwdSg.AddNode(TapeLoadActivationNode{ it->second.slotId },
+					                   { OutputInfo{ info.dtype, info.shape } });
+				}
+				else
+				{
+					id = bwdSg.AddNode(LoadActivationNode{ it->second.slotId },
+					                   { OutputInfo{ info.dtype, info.shape } });
+				}
 				loadMap[key] = id;
 				return id;
 			}
@@ -529,7 +784,7 @@ namespace LiteNN
 
 		void BuildBackwardNodes(const Subgraph& fwdSg, Graph& graph,
 		                        const std::map<SubgraphId, SubgraphGradInfo>& calleeInfo,
-		                        const std::map<NodeOutputKey, std::size_t>& saved, Subgraph& bwdSg,
+		                        const SavedSlotMap& saved, Subgraph& bwdSg,
 		                        std::map<NodeOutputKey, std::vector<NodeOutput>>& gradContribs,
 		                        std::map<NodeOutputKey, NodeId>& loadMap,
 		                        std::map<std::size_t, std::vector<NodeOutput>>& varGradContribs)
@@ -572,10 +827,40 @@ namespace LiteNN
 					    {
 						    EmitReshapeGrad(fwdSg, bwdSg, node, dy, gradContribs);
 					    }
+					    else if constexpr (std::same_as<T, ConcatNode>)
+					    {
+						    EmitConcatGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, SliceNode>)
+					    {
+						    EmitSliceGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    EmitCondGrad(fwdSg, graph, bwdSg, node, dy, calleeInfo, saved, loadMap, gradContribs,
 						                 varGradContribs);
+					    }
+					    else if constexpr (std::same_as<T, WhileNode>)
+					    {
+						    EmitWhileGrad(fwdSg, graph, bwdSg, fwdNodeId, node, dy, calleeInfo, saved, loadMap,
+						                  gradContribs, varGradContribs);
+					    }
+					    else if constexpr (std::same_as<T, SaveActivationNode> ||
+					                      std::same_as<T, TapeSaveActivationNode>)
+					    {
+						    // 透传节点，梯度直接流向 input
+						    auto& dst = gradContribs[{ node.input.node, node.input.port }];
+						    dst.push_back(dy);
+					    }
+					    else if constexpr (std::same_as<T, LoadActivationNode> ||
+					                      std::same_as<T, TapeLoadActivationNode>)
+					    { /* 加载节点，不产生反向梯度 */
+					    }
+					    else if constexpr (std::same_as<T, FusedOpNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: FusedOpNode encountered. "
+						        "FusionPass should run after AutogradPass.");
 					    }
 					    else
 					    {
@@ -589,7 +874,7 @@ namespace LiteNN
 		// 各节点类型的梯度生成
 
 		void EmitUnaryGrad(const Subgraph& fwdSg, Subgraph& bwdSg, NodeId fwdNodeId, const UnaryOpNode& node,
-		                   NodeOutput dy, const NodeEntry& entry, const std::map<NodeOutputKey, std::size_t>& saved,
+		                   NodeOutput dy, const NodeEntry& entry, const SavedSlotMap& saved,
 		                   std::map<NodeOutputKey, NodeId>& loadMap,
 		                   std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
 		{
@@ -742,7 +1027,7 @@ namespace LiteNN
 		}
 
 		void EmitBinaryGrad(const Subgraph& fwdSg, Subgraph& bwdSg, NodeId fwdNodeId, const BinaryOpNode& node,
-		                    NodeOutput dy, const NodeEntry& entry, const std::map<NodeOutputKey, std::size_t>& saved,
+		                    NodeOutput dy, const NodeEntry& entry, const SavedSlotMap& saved,
 		                    std::map<NodeOutputKey, NodeId>& loadMap,
 		                    std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
 		{
@@ -901,7 +1186,7 @@ namespace LiteNN
 
 		void EmitCallGrad(const Subgraph& fwdSg, Graph& graph, Subgraph& bwdSg, const CallNode& node, NodeOutput dy,
 		                  const std::map<SubgraphId, SubgraphGradInfo>& calleeInfo,
-		                  const std::map<NodeOutputKey, std::size_t>& saved, std::map<NodeOutputKey, NodeId>& loadMap,
+		                  const SavedSlotMap& saved, std::map<NodeOutputKey, NodeId>& loadMap,
 		                  std::map<NodeOutputKey, std::vector<NodeOutput>>& gc,
 		                  std::map<std::size_t, std::vector<NodeOutput>>& varGradContribs)
 		{
@@ -1019,7 +1304,7 @@ namespace LiteNN
 
 		void EmitCondGrad(const Subgraph& fwdSg, Graph& graph, Subgraph& bwdSg, const CondNode& node, NodeOutput dy,
 		                  const std::map<SubgraphId, SubgraphGradInfo>& calleeInfo,
-		                  const std::map<NodeOutputKey, std::size_t>& saved, std::map<NodeOutputKey, NodeId>& loadMap,
+		                  const SavedSlotMap& saved, std::map<NodeOutputKey, NodeId>& loadMap,
 		                  std::map<NodeOutputKey, std::vector<NodeOutput>>& gc,
 		                  std::map<std::size_t, std::vector<NodeOutput>>& varGradContribs)
 		{
@@ -1147,8 +1432,173 @@ namespace LiteNN
 			return MakeScalarConstant(sg, dtype, shape, 1.0);
 		}
 
+		static Tensor<PolymorphicDevice> MakeScalarTensor(DataType dtype, const std::vector<std::size_t>& shape,
+		                                                   double value)
+		{
+			const auto numElements = std::max(ShapeView{ shape }.NumElements(), std::size_t(1));
+			std::vector<double> data(numElements, value);
+			return Tensor<CPU>(data, shape, dtype).CopyToDevice(PolymorphicDevice{ CPU{} });
+		}
+
+		void EmitWhileGrad(const Subgraph& fwdSg, Graph& graph, Subgraph& bwdSg, NodeId fwdNodeId,
+		                   const WhileNode& node, NodeOutput /*dy*/,
+		                   const std::map<SubgraphId, SubgraphGradInfo>& calleeInfo, const SavedSlotMap& saved,
+		                   std::map<NodeOutputKey, NodeId>& loadMap,
+		                   std::map<NodeOutputKey, std::vector<NodeOutput>>& gc,
+		                   std::map<std::size_t, std::vector<NodeOutput>>& varGradContribs)
+		{
+			auto bodyIt = calleeInfo.find(node.bodyBranch);
+			if (bodyIt == calleeInfo.end())
+			{
+				throw std::runtime_error("AutogradPass: WhileNode bodyBranch not processed");
+			}
+			const auto& bodyInfo = bodyIt->second;
+			const auto numCarry = node.initArgs.size();
+			const auto numVarGrads = bodyInfo.variableGrads.size();
+
+			// 加载迭代次数 N（从 SaveActivationNode 保存的 ActivationSlot）
+			const auto countSlotId = saved.at({ fwdNodeId, numCarry }).slotId;
+			auto nNodeId = bwdSg.AddNode(LoadActivationNode{ countSlotId }, { OutputInfo{ DataType::Int64, { 1 } } });
+
+			// 收集各 carry 输出端口的梯度
+			std::vector<NodeOutput> dCarryFinal;
+			for (std::size_t i = 0; i < numCarry; ++i)
+			{
+				dCarryFinal.push_back(ResolveGrad(fwdSg, bwdSg, fwdNodeId, i, gc));
+			}
+
+			// 构建反向条件子图: counter > 0
+			SubgraphId bwdCondId;
+			{
+				Subgraph condSg;
+				for (std::size_t i = 0; i < numCarry; ++i)
+				{
+					const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+					condSg.AddParam(info.dtype, info.shape);
+				}
+				for (const auto& vg : bodyInfo.variableGrads)
+					condSg.AddParam(vg.outputInfo.dtype, vg.outputInfo.shape);
+				auto counterParam = condSg.AddParam(DataType::Int64, { 1 });
+				auto zero = MakeScalarConstant(condSg, DataType::Int64, { 1 }, 0.0);
+				auto gt = condSg.AddNode(BinaryOpNode{ BinaryOp::Greater, { counterParam, 0 }, { zero, 0 } },
+				                         { OutputInfo{ DataType::Bool, { 1 } } });
+				condSg.SetResults({ { gt, 0 } });
+				bwdCondId = graph.AddSubgraph(std::move(condSg));
+			}
+
+			// 构建反向循环体子图
+			SubgraphId bwdBodyId;
+			{
+				Subgraph bodySg;
+				// params: [d_carry_0..K-1, v_accum_0..V-1, counter]
+				std::vector<NodeId> dCarryParams;
+				for (std::size_t i = 0; i < numCarry; ++i)
+				{
+					const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+					dCarryParams.push_back(bodySg.AddParam(info.dtype, info.shape));
+				}
+				std::vector<NodeId> vAccumParams;
+				for (const auto& vg : bodyInfo.variableGrads)
+					vAccumParams.push_back(bodySg.AddParam(vg.outputInfo.dtype, vg.outputInfo.shape));
+				auto counterParam = bodySg.AddParam(DataType::Int64, { 1 });
+
+				// TapeLoad 本次迭代的 carry 值（从 TapeSlot 弹出）
+				std::vector<NodeOutput> carryVals;
+				for (std::size_t i = 0; i < numCarry; ++i)
+				{
+					const auto carrySlotId = saved.at({ fwdNodeId, numCarry + 1 + i }).slotId;
+					const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+					auto loadId =
+					    bodySg.AddNode(TapeLoadActivationNode{ carrySlotId }, { OutputInfo{ info.dtype, info.shape } });
+					carryVals.push_back({ loadId, 0 });
+				}
+
+				// 调用 body_backward([carry..., d_carry_out...])
+				std::vector<NodeOutput> bwdCallArgs;
+				for (const auto& cv : carryVals)
+					bwdCallArgs.push_back(cv);
+				for (std::size_t i = 0; i < numCarry; ++i)
+					bwdCallArgs.push_back({ dCarryParams[i], 0 });
+
+				std::vector<OutputInfo> bwdCallOutInfos;
+				for (std::size_t i = 0; i < numCarry; ++i) // 输入梯度 = d_carry_prev
+				{
+					const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+					bwdCallOutInfos.push_back({ info.dtype, info.shape });
+				}
+				for (const auto& vg : bodyInfo.variableGrads) // variable 梯度
+					bwdCallOutInfos.push_back(vg.outputInfo);
+
+				auto bwdCallId =
+				    bodySg.AddNode(CallNode{ bodyInfo.backwardId, std::move(bwdCallArgs) }, std::move(bwdCallOutInfos));
+
+				// 累加 variable 梯度
+				std::vector<NodeOutput> newVAccums;
+				for (std::size_t j = 0; j < numVarGrads; ++j)
+				{
+					const auto& vg = bodyInfo.variableGrads[j];
+					const auto thisGradPort = bodyInfo.numInputGrads + j;
+					auto acc = bodySg.AddNode(
+					    BinaryOpNode{ BinaryOp::Add, { vAccumParams[j], 0 }, { bwdCallId, thisGradPort } },
+					    { vg.outputInfo });
+					newVAccums.push_back({ acc, 0 });
+				}
+
+				// counter - 1
+				auto one = MakeScalarConstant(bodySg, DataType::Int64, { 1 }, 1.0);
+				auto counterMinus1 = bodySg.AddNode(
+				    BinaryOpNode{ BinaryOp::Subtract, { counterParam, 0 }, { one, 0 } },
+				    { OutputInfo{ DataType::Int64, { 1 } } });
+
+				// Results: [new_d_carry..., updated_v_accums..., counter-1]
+				std::vector<NodeOutput> results;
+				for (std::size_t i = 0; i < numCarry; ++i)
+					results.push_back({ bwdCallId, i });
+				for (const auto& va : newVAccums)
+					results.push_back(va);
+				results.push_back({ counterMinus1, 0 });
+				bodySg.SetResults(std::move(results));
+				bwdBodyId = graph.AddSubgraph(std::move(bodySg));
+			}
+
+			// 构建反向 WhileNode 的 initArgs: [d_carry_final..., zero_v_accums..., N]
+			std::vector<NodeOutput> bwdInitArgs;
+			for (const auto& dc : dCarryFinal)
+				bwdInitArgs.push_back(dc);
+			for (const auto& vg : bodyInfo.variableGrads)
+			{
+				auto zeroId = MakeZeroConstant(bwdSg, vg.outputInfo.dtype, vg.outputInfo.shape);
+				bwdInitArgs.push_back({ zeroId, 0 });
+			}
+			bwdInitArgs.push_back({ nNodeId, 0 });
+
+			// 构建反向 WhileNode 的 outputInfos: [d_carry..., v_accums..., counter]
+			std::vector<OutputInfo> bwdWhileOutputInfos;
+			for (std::size_t i = 0; i < numCarry; ++i)
+			{
+				const auto& info = fwdSg.GetOutputInfo(node.initArgs[i]);
+				bwdWhileOutputInfos.push_back({ info.dtype, info.shape });
+			}
+			for (const auto& vg : bodyInfo.variableGrads)
+				bwdWhileOutputInfos.push_back(vg.outputInfo);
+			bwdWhileOutputInfos.push_back({ DataType::Int64, { 1 } });
+
+			auto bwdWhileId = bwdSg.AddNode(
+			    WhileNode{ bwdCondId, bwdBodyId, std::move(bwdInitArgs) }, std::move(bwdWhileOutputInfos));
+
+			// 将梯度传播回 initArgs
+			for (std::size_t i = 0; i < numCarry; ++i)
+				gc[{ node.initArgs[i].node, node.initArgs[i].port }].push_back({ bwdWhileId, i });
+
+			// 传播 variable 梯度
+			for (std::size_t j = 0; j < numVarGrads; ++j)
+			{
+				varGradContribs[bodyInfo.variableGrads[j].variableIndex].push_back({ bwdWhileId, numCarry + j });
+			}
+		}
+
 		void EmitReduceGrad(const Subgraph& fwdSg, Subgraph& bwdSg, NodeId fwdNodeId, const ReduceOpNode& node,
-		                    NodeOutput dy, const NodeEntry& entry, const std::map<NodeOutputKey, std::size_t>& saved,
+		                    NodeOutput dy, const NodeEntry& entry, const SavedSlotMap& saved,
 		                    std::map<NodeOutputKey, NodeId>& loadMap,
 		                    std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
 		{
@@ -1221,6 +1671,72 @@ namespace LiteNN
 			// Reshape gradient: just reshape back to the input shape
 			auto id = bwdSg.AddNode(ReshapeNode{ dy, inInfo.shape }, { OutputInfo{ inInfo.dtype, inInfo.shape } });
 			gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
+		}
+
+		// Concat gradient: dx_i = Slice(dy, axis, offset_i, axisDim_i)
+		static void EmitConcatGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const ConcatNode& node, NodeOutput dy,
+		                            std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
+		{
+			std::size_t offset = 0;
+			for (const auto& input : node.inputs)
+			{
+				const auto& inInfo = fwdSg.GetOutputInfo(input);
+				const auto axisDim = inInfo.shape[node.axis];
+
+				// 构建 SliceNode 的输出 shape
+				std::vector<std::size_t> sliceShape = inInfo.shape;
+
+				auto id = bwdSg.AddNode(SliceNode{ dy, node.axis, offset, axisDim },
+				                        { OutputInfo{ inInfo.dtype, sliceShape } });
+				gc[{ input.node, input.port }].push_back({ id, 0 });
+
+				offset += axisDim;
+			}
+		}
+
+		// Slice gradient: dx = Concat([zeroBefore, dy, zeroAfter], axis)
+		static void EmitSliceGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const SliceNode& node, NodeOutput dy,
+		                           std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
+		{
+			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
+			const auto totalAxisDim = inInfo.shape[node.axis];
+			const auto beforeLen = node.start;
+			const auto afterLen = totalAxisDim - node.start - node.length;
+
+			std::vector<NodeOutput> concatInputs;
+
+			// zeroBefore（如果需要）
+			if (beforeLen > 0)
+			{
+				auto beforeShape = inInfo.shape;
+				beforeShape[node.axis] = beforeLen;
+				auto zeroId = MakeZeroConstant(bwdSg, inInfo.dtype, beforeShape);
+				concatInputs.push_back({ zeroId, 0 });
+			}
+
+			// dy 本身
+			concatInputs.push_back(dy);
+
+			// zeroAfter（如果需要）
+			if (afterLen > 0)
+			{
+				auto afterShape = inInfo.shape;
+				afterShape[node.axis] = afterLen;
+				auto zeroId = MakeZeroConstant(bwdSg, inInfo.dtype, afterShape);
+				concatInputs.push_back({ zeroId, 0 });
+			}
+
+			if (concatInputs.size() == 1)
+			{
+				// start==0 且 length==totalAxisDim，dy 直接就是 dx
+				gc[{ node.input.node, node.input.port }].push_back(dy);
+			}
+			else
+			{
+				auto id = bwdSg.AddNode(ConcatNode{ std::move(concatInputs), node.axis },
+				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
+			}
 		}
 	};
 } // namespace LiteNN
