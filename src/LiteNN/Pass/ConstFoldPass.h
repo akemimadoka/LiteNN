@@ -3,6 +3,7 @@
 
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <optional>
 #include <set>
@@ -19,6 +20,7 @@ namespace LiteNN
 	public:
 		void Run(Graph& graph) override
 		{
+			Validation::ValidateGraph(graph);
 			const auto originalCount = graph.SubgraphCount();
 			for (std::size_t sgId = 0; sgId < originalCount; ++sgId)
 			{
@@ -641,6 +643,14 @@ namespace LiteNN
 			// 重建子图
 			Subgraph newSg;
 			std::vector<NodeId> nodeMap(nodeCount, static_cast<NodeId>(-1));
+			for (NodeId oldId = 0; oldId < nodeCount; ++oldId)
+			{
+				if (const auto* paramRef = std::get_if<ParamRefNode>(&sg.GetNodeEntry(oldId).node))
+				{
+					const auto& param = sg.Params()[paramRef->paramIndex];
+					nodeMap[oldId] = newSg.AddParam(param.dtype, param.shape);
+				}
+			}
 
 			auto remapOutput = [&](NodeOutput out) -> NodeOutput {
 				auto resolved = resolveIdentity(out);
@@ -655,6 +665,10 @@ namespace LiteNN
 				}
 
 				const auto& entry = sg.GetNodeEntry(oldId);
+				if (std::holds_alternative<ParamRefNode>(entry.node))
+				{
+					continue;
+				}
 
 				if (isConst[oldId] && !std::holds_alternative<ConstantNode>(entry.node))
 				{

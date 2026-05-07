@@ -3,6 +3,7 @@
 
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <stdexcept>
 
@@ -15,6 +16,7 @@ namespace LiteNN
 	public:
 		void Run(Graph& graph) override
 		{
+			Validation::ValidateGraph(graph);
 			processed_.clear();
 			auto info = ProcessSubgraph(graph, graph.Forward());
 			graph.SetForward(info.augForwardId);
@@ -444,7 +446,20 @@ namespace LiteNN
 		{
 			for (NodeId fwdNodeId = 0; fwdNodeId < fwdSg.NodeCount(); ++fwdNodeId)
 			{
+				if (const auto* paramRef = std::get_if<ParamRefNode>(&fwdSg.GetNodeEntry(fwdNodeId).node))
+				{
+					const auto& param = fwdSg.Params()[paramRef->paramIndex];
+					augNodeMap[fwdNodeId] = augFwd.AddParam(param.dtype, param.shape);
+				}
+			}
+
+			for (NodeId fwdNodeId = 0; fwdNodeId < fwdSg.NodeCount(); ++fwdNodeId)
+			{
 				const auto& entry = fwdSg.GetNodeEntry(fwdNodeId);
+				if (std::holds_alternative<ParamRefNode>(entry.node))
+				{
+					continue;
+				}
 
 				// WhileNode needs special counting + carry-tape subgraph wrappers
 				if (auto* wh = std::get_if<WhileNode>(&entry.node))
@@ -782,6 +797,67 @@ namespace LiteNN
 			return SumGradContributions(bwdSg, it->second, info);
 		}
 
+		static bool SameShape(const std::vector<std::size_t>& lhs, const std::vector<std::size_t>& rhs)
+		{
+			return lhs.size() == rhs.size() && std::ranges::equal(lhs, rhs);
+		}
+
+		static NodeOutput ReduceBroadcastGradient(Subgraph& bwdSg, NodeOutput grad, const OutputInfo& gradInfo,
+		                                          const OutputInfo& targetInfo)
+		{
+			if (SameShape(gradInfo.shape, targetInfo.shape))
+			{
+				return grad;
+			}
+
+			std::vector<std::size_t> currentShape = gradInfo.shape;
+			std::vector<std::size_t> reduceAxes;
+			for (std::size_t axis = 0; axis < gradInfo.shape.size(); ++axis)
+			{
+				const auto targetDim = axis < targetInfo.shape.size() ? targetInfo.shape[axis] : 1;
+				const auto gradDim = gradInfo.shape[axis];
+				if (targetDim == gradDim)
+				{
+					continue;
+				}
+				if (targetDim != 1)
+				{
+					throw std::runtime_error("AutogradPass: cannot reduce broadcast gradient to target shape");
+				}
+				reduceAxes.push_back(axis);
+			}
+
+			for (auto it = reduceAxes.rbegin(); it != reduceAxes.rend(); ++it)
+			{
+				const auto axis = *it;
+				std::vector<std::size_t> reducedShape;
+				for (std::size_t i = 0; i < currentShape.size(); ++i)
+				{
+					if (i != axis)
+					{
+						reducedShape.push_back(currentShape[i]);
+					}
+				}
+				if (reducedShape.empty())
+				{
+					reducedShape.push_back(1);
+				}
+
+				auto reduced = bwdSg.AddNode(ReduceOpNode{ ReduceOp::Sum, grad, axis },
+				                             { OutputInfo{ targetInfo.dtype, reducedShape } });
+				grad = { reduced, 0 };
+				currentShape = std::move(reducedShape);
+			}
+
+			if (!SameShape(currentShape, targetInfo.shape))
+			{
+				auto reshaped = bwdSg.AddNode(ReshapeNode{ grad, targetInfo.shape }, { targetInfo });
+				grad = { reshaped, 0 };
+			}
+
+			return grad;
+		}
+
 		void BuildBackwardNodes(const Subgraph& fwdSg, Graph& graph,
 		                        const std::map<SubgraphId, SubgraphGradInfo>& calleeInfo,
 		                        const SavedSlotMap& saved, Subgraph& bwdSg,
@@ -1033,30 +1109,32 @@ namespace LiteNN
 		{
 			const auto& li = fwdSg.GetOutputInfo(node.lhs);
 			const auto& ri = fwdSg.GetOutputInfo(node.rhs);
+			const auto& outInfo = entry.outputInfos[0];
 			auto& dstL = gc[{ node.lhs.node, node.lhs.port }];
 			auto& dstR = gc[{ node.rhs.node, node.rhs.port }];
 
 			switch (node.op)
 			{
 			case BinaryOp::Add:
-				dstL.push_back(dy);
-				dstR.push_back(dy);
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, dy, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, dy, outInfo, ri));
 				break;
 			case BinaryOp::Subtract: {
-				dstL.push_back(dy);
-				auto neg = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, dy }, { OutputInfo{ ri.dtype, ri.shape } });
-				dstR.push_back({ neg, 0 });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, dy, outInfo, li));
+				auto neg = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, dy },
+				                         { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { neg, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::Multiply: {
 				auto bV = GetForwardValue(fwdSg, bwdSg, node.rhs.node, node.rhs.port, saved, loadMap);
 				auto aV = GetForwardValue(fwdSg, bwdSg, node.lhs.node, node.lhs.port, saved, loadMap);
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { bV, 0 } },
-				                        { OutputInfo{ li.dtype, li.shape } });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { aV, 0 } },
-				                        { OutputInfo{ ri.dtype, ri.shape } });
-				dstL.push_back({ da, 0 });
-				dstR.push_back({ db, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::Divide: {
@@ -1064,16 +1142,17 @@ namespace LiteNN
 				auto bV = GetForwardValue(fwdSg, bwdSg, node.rhs.node, node.rhs.port, saved, loadMap);
 				auto aV = GetForwardValue(fwdSg, bwdSg, node.lhs.node, node.lhs.port, saved, loadMap);
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Divide, dy, { bV, 0 } },
-				                        { OutputInfo{ li.dtype, li.shape } });
-				auto negDy = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, dy }, { OutputInfo{ ri.dtype, ri.shape } });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto negDy = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, dy },
+				                           { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto negDyA = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { negDy, 0 }, { aV, 0 } },
-				                            { OutputInfo{ ri.dtype, ri.shape } });
+				                            { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto bSq = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bV, 0 }, { bV, 0 } },
 				                         { OutputInfo{ ri.dtype, ri.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Divide, { negDyA, 0 }, { bSq, 0 } },
-				                        { OutputInfo{ ri.dtype, ri.shape } });
-				dstL.push_back({ da, 0 });
-				dstR.push_back({ db, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::MatMul: {
@@ -1098,25 +1177,22 @@ namespace LiteNN
 				auto aV = GetForwardValue(fwdSg, bwdSg, node.lhs.node, node.lhs.port, saved, loadMap);
 				auto bV = GetForwardValue(fwdSg, bwdSg, node.rhs.node, node.rhs.port, saved, loadMap);
 				auto outV = GetForwardValue(fwdSg, bwdSg, fwdNodeId, 0, saved, loadMap); // a^b
-
-				const auto& outInfo = entry.outputInfos[0];
-
 				// da = dy * b * a^b / a
 				auto bMulOut = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bV, 0 }, { outV, 0 } },
 				                             { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto bMulOutDivA = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Divide, { bMulOut, 0 }, { aV, 0 } },
 				                                 { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { bMulOutDivA, 0 } },
-				                        { OutputInfo{ li.dtype, li.shape } });
-				dstL.push_back({ da, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
 
 				// db = dy * a^b * log(a)
 				auto logA = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Log, { aV, 0 } }, { OutputInfo{ li.dtype, li.shape } });
 				auto outMulLogA = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { outV, 0 }, { logA, 0 } },
 				                                { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { outMulLogA, 0 } },
-				                        { OutputInfo{ ri.dtype, ri.shape } });
-				dstR.push_back({ db, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::Max: {
@@ -1127,19 +1203,21 @@ namespace LiteNN
 
 				// a >= b  等价于  !(a < b)
 				auto ltId = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Less, { aV, 0 }, { bV, 0 } },
-				                          { OutputInfo{ DataType::Bool, li.shape } });
+				                          { OutputInfo{ DataType::Bool, outInfo.shape } });
 				auto geId = bwdSg.AddNode(UnaryOpNode{ UnaryOp::LogicalNegation, { ltId, 0 } },
-				                          { OutputInfo{ DataType::Bool, li.shape } });
+				                          { OutputInfo{ DataType::Bool, outInfo.shape } });
 
-				auto geMask = bwdSg.AddNode(CastNode{ { geId, 0 }, li.dtype }, { OutputInfo{ li.dtype, li.shape } });
-				auto ltMask = bwdSg.AddNode(CastNode{ { ltId, 0 }, ri.dtype }, { OutputInfo{ ri.dtype, ri.shape } });
+				auto geMask =
+				    bwdSg.AddNode(CastNode{ { geId, 0 }, outInfo.dtype }, { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto ltMask =
+				    bwdSg.AddNode(CastNode{ { ltId, 0 }, outInfo.dtype }, { OutputInfo{ outInfo.dtype, outInfo.shape } });
 
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { geMask, 0 } },
-				                        { OutputInfo{ li.dtype, li.shape } });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { ltMask, 0 } },
-				                        { OutputInfo{ ri.dtype, ri.shape } });
-				dstL.push_back({ da, 0 });
-				dstR.push_back({ db, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::Min: {
@@ -1149,19 +1227,21 @@ namespace LiteNN
 
 				// a <= b  等价于  !(a > b)
 				auto gtId = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Greater, { aV, 0 }, { bV, 0 } },
-				                          { OutputInfo{ DataType::Bool, li.shape } });
+				                          { OutputInfo{ DataType::Bool, outInfo.shape } });
 				auto leId = bwdSg.AddNode(UnaryOpNode{ UnaryOp::LogicalNegation, { gtId, 0 } },
-				                          { OutputInfo{ DataType::Bool, li.shape } });
+				                          { OutputInfo{ DataType::Bool, outInfo.shape } });
 
-				auto leMask = bwdSg.AddNode(CastNode{ { leId, 0 }, li.dtype }, { OutputInfo{ li.dtype, li.shape } });
-				auto gtMask = bwdSg.AddNode(CastNode{ { gtId, 0 }, ri.dtype }, { OutputInfo{ ri.dtype, ri.shape } });
+				auto leMask =
+				    bwdSg.AddNode(CastNode{ { leId, 0 }, outInfo.dtype }, { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto gtMask =
+				    bwdSg.AddNode(CastNode{ { gtId, 0 }, outInfo.dtype }, { OutputInfo{ outInfo.dtype, outInfo.shape } });
 
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { leMask, 0 } },
-				                        { OutputInfo{ li.dtype, li.shape } });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { gtMask, 0 } },
-				                        { OutputInfo{ ri.dtype, ri.shape } });
-				dstL.push_back({ da, 0 });
-				dstR.push_back({ db, 0 });
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
 				break;
 			}
 			case BinaryOp::Less:

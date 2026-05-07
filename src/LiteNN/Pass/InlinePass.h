@@ -3,6 +3,7 @@
 
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <stdexcept>
 
@@ -16,6 +17,7 @@ namespace LiteNN
 	public:
 		void Run(Graph& graph) override
 		{
+			Validation::ValidateGraph(graph);
 			const auto originalCount = graph.SubgraphCount();
 
 			// 迭代 fixpoint：反复扫描直到没有 CallNode 被内联
@@ -165,6 +167,14 @@ namespace LiteNN
 
 			Subgraph newSg;
 			std::vector<NodeId> nodeMap(sg.NodeCount(), static_cast<NodeId>(-1));
+			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
+			{
+				if (const auto* paramRef = std::get_if<ParamRefNode>(&sg.GetNodeEntry(oldId).node))
+				{
+					const auto& param = sg.Params()[paramRef->paramIndex];
+					nodeMap[oldId] = newSg.AddParam(param.dtype, param.shape);
+				}
+			}
 
 			// callResultMap: 对于 CallNode，其输出通过 callee 的 Results 映射
 			// key = {callNodeOldId, port}, value = 内联后的 NodeOutput
@@ -183,6 +193,10 @@ namespace LiteNN
 			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
 			{
 				const auto& entry = sg.GetNodeEntry(oldId);
+				if (std::holds_alternative<ParamRefNode>(entry.node))
+				{
+					continue;
+				}
 
 				if (auto* callNode = std::get_if<CallNode>(&entry.node))
 				{

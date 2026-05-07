@@ -10,5 +10,6 @@
 #include <LiteNN/Operators.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/Validation/GraphValidator.h>
 
 #endif

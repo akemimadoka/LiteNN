@@ -2,6 +2,8 @@
 #define LITENN_RUNTIME_INTERPRETER_H
 
 #include <LiteNN/Graph.h>
+#include <LiteNN/Validation/GraphValidator.h>
+#include <format>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -17,7 +19,60 @@ namespace LiteNN::Runtime
 		std::vector<Tensor<D>> RunSubgraph(const Graph& graph, SubgraphId subgraphId, std::span<const Tensor<D>> inputs,
 		                                   D device = D{})
 		{
+			Validation::ValidateGraph(graph);
+			return RunSubgraphUnchecked(graph, subgraphId, inputs, std::move(device));
+		}
+
+		// 执行前向子图（自动初始化 activation store）
+		std::vector<Tensor<D>> RunForward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
+		{
+			Validation::ValidateGraph(graph);
+			activationStore_.clear();
+			activationStore_.resize(graph.ActivationSlotCount());
+			tapeStore_.clear();
+			tapeStore_.resize(graph.TapeSlotCount());
+			return RunSubgraphUnchecked(graph, graph.Forward(), inputs, std::move(device));
+		}
+
+		// 执行反向子图（使用前向已填充的 activation store）
+		std::vector<Tensor<D>> RunBackward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
+		{
+			Validation::ValidateGraph(graph);
+			const auto backwardId = graph.Backward();
+			if (!backwardId)
+			{
+				throw std::runtime_error("Graph has no backward subgraph");
+			}
+			return RunSubgraphUnchecked(graph, *backwardId, inputs, std::move(device));
+		}
+
+	private:
+		static void ValidateRuntimeInputs(const Graph& graph, SubgraphId subgraphId, std::span<const Tensor<D>> inputs)
+		{
 			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			if (inputs.size() != subgraph.Params().size())
+			{
+				throw std::runtime_error(std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}",
+				                                     subgraphId, subgraph.Params().size(), inputs.size()));
+			}
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+			{
+				const auto& param = subgraph.Params()[i];
+				if (inputs[i].DType() != param.dtype || !Validation::SameShape(inputs[i].Shape().Dims, param.shape))
+				{
+					throw std::runtime_error(std::format(
+					    "RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
+					    Validation::FormatInfo(param.dtype, param.shape),
+					    Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+				}
+			}
+		}
+
+		std::vector<Tensor<D>> RunSubgraphUnchecked(const Graph& graph, SubgraphId subgraphId,
+		                                            std::span<const Tensor<D>> inputs, D device = D{})
+		{
+			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			ValidateRuntimeInputs(graph, subgraphId, inputs);
 
 			// slot 表: slots[nodeId] 存储该节点各 port 的输出张量
 			// TODO: 如果可能，进行 flatten，直接用一个 vector 存储所有节点的输出，避免多层 vector 的开销
@@ -40,29 +95,6 @@ namespace LiteNN::Runtime
 			}
 			return results;
 		}
-
-		// 执行前向子图（自动初始化 activation store）
-		std::vector<Tensor<D>> RunForward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
-		{
-			activationStore_.clear();
-			activationStore_.resize(graph.ActivationSlotCount());
-			tapeStore_.clear();
-			tapeStore_.resize(graph.TapeSlotCount());
-			return RunSubgraph(graph, graph.Forward(), inputs, std::move(device));
-		}
-
-		// 执行反向子图（使用前向已填充的 activation store）
-		std::vector<Tensor<D>> RunBackward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
-		{
-			const auto backwardId = graph.Backward();
-			if (!backwardId)
-			{
-				throw std::runtime_error("Graph has no backward subgraph");
-			}
-			return RunSubgraph(graph, *backwardId, inputs, std::move(device));
-		}
-
-	private:
 		static const Tensor<D>& GetValue(const std::vector<std::vector<Tensor<D>>>& slots, NodeOutput output)
 		{
 			return slots[output.node][output.port];
@@ -150,7 +182,7 @@ namespace LiteNN::Runtime
 			}
 
 			// 递归执行被调用的子图
-			slots[nodeId] = RunSubgraph(graph, node.callee, args, device);
+			slots[nodeId] = RunSubgraphUnchecked(graph, node.callee, args, device);
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CondNode& node,
@@ -169,7 +201,7 @@ namespace LiteNN::Runtime
 
 			// 根据条件选择分支执行
 			const auto branchId = condValue ? node.thenBranch : node.elseBranch;
-			slots[nodeId] = RunSubgraph(graph, branchId, args, device);
+			slots[nodeId] = RunSubgraphUnchecked(graph, branchId, args, device);
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const WhileNode& node,
@@ -186,12 +218,12 @@ namespace LiteNN::Runtime
 			// 循环
 			while (true)
 			{
-				auto condResult = RunSubgraph(graph, node.condBranch, carry, device);
+				auto condResult = RunSubgraphUnchecked(graph, node.condBranch, carry, device);
 				if (!ReadScalarBool(condResult[0]))
 				{
 					break;
 				}
-				carry = RunSubgraph(graph, node.bodyBranch, carry, device);
+				carry = RunSubgraphUnchecked(graph, node.bodyBranch, carry, device);
 			}
 
 			// 输出 = 最终 carry
@@ -303,7 +335,7 @@ namespace LiteNN::Runtime
 			}
 
 			// 执行 body 子图（语义等价于融合前的原语操作）
-			slots[nodeId] = RunSubgraph(graph, node.body, args, device);
+			slots[nodeId] = RunSubgraphUnchecked(graph, node.body, args, device);
 		}
 
 		std::vector<std::optional<Tensor<D>>> activationStore_;

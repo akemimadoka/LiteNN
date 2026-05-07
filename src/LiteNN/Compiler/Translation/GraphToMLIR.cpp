@@ -3,6 +3,7 @@
 
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/Validation/GraphValidator.h>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -463,6 +464,7 @@ private:
 
 OwningOpRef<ModuleOp> translateGraphToMLIR(const Graph& graph, MLIRContext& ctx)
 {
+	Validation::ValidateGraph(graph);
 	GraphTranslator translator(graph, ctx);
 	return translator.translate();
 }

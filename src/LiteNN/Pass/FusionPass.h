@@ -3,6 +3,7 @@
 
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -17,6 +18,7 @@ namespace LiteNN
 	public:
 		void Run(Graph& graph) override
 		{
+			Validation::ValidateGraph(graph);
 			// 只处理运行前已有的子图，避免处理新创建的 body 子图
 			const auto originalCount = graph.SubgraphCount();
 			for (std::size_t sgId = 0; sgId < originalCount; ++sgId)
@@ -554,9 +556,22 @@ namespace LiteNN
 			// 重建子图
 			Subgraph newSg;
 			std::vector<NodeId> nodeMap(sg.NodeCount(), static_cast<NodeId>(-1));
+			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
+			{
+				if (const auto* paramRef = std::get_if<ParamRefNode>(&sg.GetNodeEntry(oldId).node))
+				{
+					const auto& param = sg.Params()[paramRef->paramIndex];
+					nodeMap[oldId] = newSg.AddParam(param.dtype, param.shape);
+				}
+			}
 
 			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
 			{
+				if (std::holds_alternative<ParamRefNode>(sg.GetNodeEntry(oldId).node))
+				{
+					continue;
+				}
+
 				// 跳过融合区域内部的非起始节点
 				if (fusedNodeSet.contains(oldId) && !fusedRegionStart.contains(oldId))
 				{
