@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 4.0.0)
 project(LiteNN CXX)
 
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
+option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
 
 file(GLOB_RECURSE LITENN_SOURCES src/*.cpp src/*.h)
 list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
@@ -43,6 +44,10 @@ add_compile_definitions(GTEST_HAS_STD_WSTRING=0 GTEST_HAS_FILE_SYSTEM=0)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(third_party/googletest)
+
+if(LITENN_BUILD_EXAMPLES)
+    add_subdirectory(example/mnist)
+endif()
 
 file(GLOB TEST_SOURCES "tests/*.cpp")
 if(NOT LITENN_ENABLE_MLIR)

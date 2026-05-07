@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-LiteNN 是一个使用 **C++26** 实现的神经网络库，采用**编译器前端**风格进行设计。核心思想是将神经网络计算表示为一个静态计算图（Graph），通过 Pass 系统对其进行变换和优化，最终由后端执行。目前实现了基于解释执行的运行时（Interpreter），AOT 编译器后端待实现。
+LiteNN 是一个使用 **C++26** 实现的神经网络库，采用**编译器前端**风格进行设计。核心思想是将神经网络计算表示为一个静态计算图（Graph），通过 Pass 系统对其进行变换和优化，最终由后端执行。目前实现了基于解释执行的运行时（Interpreter）和 CPU AOT 编译后端（MLIR/LLVM）。
 
 ---
 
@@ -21,7 +21,7 @@ Graph (前端表示，设备无关)
 Graph (优化后)
   ↓
 Runtime::Interpreter<D>    ← 当前实现（逐节点解释执行）
-Compiler<D>                ← 规划中（AOT 编译）
+Compiler<CPU>              ← 当前实现（MLIR/LLVM AOT 编译）
   ↓
 CompiledModule<D>::Run()
 ```
@@ -97,7 +97,7 @@ NodeVariant 通过 C++26 反射从 `inline namespace Node` 的成员类型自动
 
 **UnaryOp**：`Negate`, `Abs`, `Sqrt`, `Exp`, `Log`, `Sin`, `Cos`, `Tan`, `Arcsin`, `Arccos`, `Arctan`, `Transpose`, `LogicalNegation`
 
-**BinaryOp**：`Add`, `Subtract`, `Multiply`（Hadamard 积）, `Divide`, `MatMul`, `Less`, `Greater`, `Equal`
+**BinaryOp**：`Add`, `Subtract`, `Multiply`（Hadamard 积）, `Divide`, `MatMul`, `Pow`, `Max`, `Min`, `Less`, `Greater`, `Equal`
 
 高级操作（如 ReLU、Sigmoid）通过 Subgraph 组合表达，不扩充枚举。
 
@@ -182,6 +182,9 @@ struct Pass {
 | Multiply | `da=dy*b, db=dy*a` |
 | Divide | `da=dy/b, db=-dy*a/b²` |
 | MatMul | `da=dy@bᵀ, db=aᵀ@dy` |
+| Pow | `da=dy*b*a^b/a, db=dy*a^b*log(a)` |
+| Max | `da=dy*(a>=b), db=dy*(a<b)` |
+| Min | `da=dy*(a<=b), db=dy*(a>b)` |
 | Negate | `dx=-dy` |
 | Transpose | `dx=transpose(dy)` |
 | Abs | `dx=dy*sign(x)` |
@@ -193,8 +196,6 @@ struct Pass {
 | CondNode | 分两路：各自对 thenBranch / elseBranch 做 autograd；选中分支的 backward 执行，另一分支梯度为零 |
 | WhileNode | BPTT：构建反向 WhileNode，每次迭代从 TapeStack pop carry 值并调用 body backward；variable 梯度跨迭代累积 |
 | Less/Greater/Equal/LogicalNegation | 不可微，不传播 |
-
-**待实现**：`Power`, `Maximum`, `Minimum` 的梯度
 
 ### InlinePass
 
@@ -342,11 +343,62 @@ tests/
 
 ---
 
+## 生产化差距与路线图
+
+LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、基础融合、控制流、MLIR/LLVM AOT 和 CompiledModule 加载执行能力。整体定位应视为“编译器式 NN runtime 原型进入可验证阶段”，但距离可稳定接入生产项目，还需要补齐可靠性、模型生态、AOT ABI、性能和工程发布能力。
+
+**已关闭的关键风险**：
+- [x] **AOT/MLIR 测试退出 crash**：此前 `BufferizationPassTest.WhileNode`、`CompiledModuleTest.RunsAfterLoadingFromRodataAndInstructionAddresses`、`CompiledModuleTest.WritesCarrierObjectFile` 在进程退出阶段触发 MLIR TLS 析构 crash；该问题已修复，不再作为生产化阻塞项跟踪。
+
+### P0：正确性与稳定性
+
+- [ ] **Graph 静态验证器**：在建图或 Pass 入口统一检查 shape/dtype、参数数量、结果数量、NodeOutput 合法性、子图调用签名、VariableRef 下标、控制流分支输入输出一致性。目标是在执行或编译前给出明确错误，而不是在后端或运行期崩溃。
+- [ ] **Autograd 完整性回归**：系统覆盖广播梯度、变量梯度顺序、多变量、多输出、共享 callee、CondNode/WhileNode、Concat/Slice、Reduce、FusedOpNode 相关组合。重点验证 `backward results = [grad_inputs..., grad_variables...]` 的顺序和 shape 约定。
+- [ ] **错误信息与诊断上下文**：所有核心异常应包含 op 类型、nodeId、subgraphId、期望/实际 shape 和 dtype。当前部分错误只描述“mismatch”，对用户定位不够友好。
+- [ ] **线程安全边界**：明确 Graph、Interpreter、CompiledModule、MLIR context/JIT 初始化和销毁的线程模型。需要文档化“可并发 Run”与“不可并发修改”的边界，并补充多线程 smoke test。
+- [ ] **CI 矩阵**：覆盖 Windows/Linux、Debug/Release、`LITENN_ENABLE_MLIR=ON/OFF`、MinGW/Clang/MSVC（如支持）。所有测试需纳入可复现的持续集成。
+- [ ] **内存安全验证**：引入 ASAN/UBSAN（或平台等价工具）、泄漏检查和长时间循环测试，覆盖 Tensor 视图、PolymorphicDevice、CompiledModule image 生命周期。
+
+### P1：用户可用性
+
+- [ ] **模型保存/加载**：序列化 Graph、Variable 权重、输入输出签名和版本信息。需要支持 checkpoint、推理模型导出，以及跨版本兼容策略。
+- [ ] **输入输出命名与签名 API**：Graph/CompiledModule 需要提供命名 input/output、shape/dtype 查询、动态 batch 策略和更友好的绑定接口，避免用户只靠参数顺序传 Tensor。
+- [ ] **训练 API**：封装 Loss、Optimizer、梯度清零、参数组、学习率调度、epoch/batch loop。当前 example 仍需要用户手写 softmax、loss gradient 和 SGD 更新。
+- [ ] **Batch 训练与推理**：当前示例和很多路径偏 sample-by-sample。生产训练和推理都需要 batch 维度、mini-batch loss、梯度平均和吞吐优化。
+- [ ] **常用算子覆盖**：补齐 Conv2D、Pooling、BatchNorm、LayerNorm、Softmax、CrossEntropy、Embedding、Gather/Scatter、Pad、更多 broadcast/reduce 变体。否则只能覆盖很小的模型族。
+- [ ] **示例体系**：保留 MNIST，同时增加 MLP/CNN、保存加载、AOT 静态库/动态库加载、训练 checkpoint、纯推理部署等端到端示例。
+
+### P1：AOT 产品化
+
+- [ ] **CompiledModule image ABI 版本化**：rodata/instruction 格式需要 magic、version、target triple、endianness、pointer size、对齐约束和兼容性检查。
+- [ ] **静态库/动态库加载示例**：除了内存中的 `compiled.Image()`，需要展示 carrier object 链接进静态库/动态库后，通过导出符号地址构造 `CompiledModuleImage` 并执行。
+- [ ] **Forward-only inference graph 提取**：训练图经 AutogradPass 后包含 backward/activation 节点。AOT 编译生产推理模型时应有明确的 forward-only graph extraction，避免把训练辅助子图纳入编译闭包。
+- [ ] **对象文件与 JIT 路径分层**：JIT/MCJIT 更适合作为验证路径；生产部署应优先稳定 object/link/load 路径。需要清晰区分“编译期生成 object”和“运行时加载 image”的职责。
+- [ ] **CompiledModule 生命周期**：明确 rodata/instruction 内存是否复制、何时可释放、Run 是否可并发、析构顺序是否依赖 MLIR/LLVM 全局状态。
+
+### P2：性能工程
+
+- [ ] **CPU kernel 后端优化**：当前 CPU 更接近 reference backend。MatMul/Conv/Reduce 等核心算子需要接入 BLAS、oneDNN、OpenBLAS 或手写 SIMD kernel。
+- [ ] **内存规划器**：减少逐节点 Tensor 分配，支持 activation reuse、arena allocator、in-place 分析和临时 buffer 生命周期规划。
+- [ ] **Pass benchmark 驱动**：FusionPass、ConstFoldPass、InlinePass 的收益需要通过 benchmark 验证，并建立性能回归基线。
+- [ ] **AOT 优化策略**：围绕 linalg/LLVM pipeline 增加目标相关优化、vectorization、loop tiling、constant parameter folding、shape specialization。
+- [ ] **性能基准套件**：和 NumPy/PyTorch/ONNX Runtime 在小模型、MLP、CNN、控制流图上的 correctness 和吞吐对比。
+
+### P2：工程发布与维护
+
+- [ ] **CMake install/export/package**：支持 `find_package(LiteNN)`、安装头文件/库、导出 targets、可选 MLIR 组件。
+- [ ] **C++26 module 导出完善**：`LiteNN.ixx` 需要成为稳定入口或明确标记 experimental，避免 include/module 两套入口语义漂移。
+- [ ] **Graph/MLIR dump 工具**：提供 Graph textual dump、Pass 前后 dump、MLIR dump、CompiledModule metadata dump，便于调试和 issue 复现。
+- [ ] **版本与兼容策略**：建立 release 版本号、changelog、弃用策略、Graph/CompiledModule 序列化版本迁移规则。
+- [ ] **文档质量**：补齐 API guide、设计约束、Pass 编写指南、Device 后端接入指南、AOT 部署指南和常见错误排查。
+
+---
+
 ## TODO List
 
 ### 近期
 
-- [x] **BinaryOp 补全**：添加 `Power`, `Maximum`, `Minimum` 及其 Device 实现和梯度规则
+- [x] **BinaryOp 补全**：添加 `Pow`, `Max`, `Min` 及其 Device 实现和梯度规则
 - [x] **ReduceNode**：新节点类型，支持 `ReduceSum`/`ReduceMean`/`ReduceMax`（带 axis 参数）——实现标量 loss 的必要条件
 - [x] **ReshapeNode**：新节点类型，改变 shape 不改变数据——CNN→FC 衔接必需
 - [x] **CondNode 梯度**：AutogradPass 支持 `CondNode` 的反向传播
