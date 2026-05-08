@@ -7,6 +7,8 @@
 #include "Pass/LowerLiteNNPass.h"
 #include "Translation/GraphToMLIR.h"
 
+#include <LiteNN/Validation/GraphValidator.h>
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/MCJIT.h"
@@ -45,6 +47,7 @@
 #include <array>
 #include <cstring>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -843,15 +846,14 @@ namespace
 		}
 	}
 
-	void ValidateTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec)
+	void ValidateTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
 	{
-		if (tensor.DType() != spec.dtype)
+		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
 		{
-			throw std::runtime_error("CompiledModule input dtype mismatch");
-		}
-		if (!std::ranges::equal(tensor.Shape().Dims, spec.shape))
-		{
-			throw std::runtime_error("CompiledModule input shape mismatch");
+			throw std::runtime_error(std::format(
+			    "CompiledModule input {} mismatch: expected {}, got {}", inputIndex,
+			    Validation::FormatInfo(spec.dtype, spec.shape),
+			    Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
 	}
 
@@ -938,14 +940,15 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 	}
 	if (inputs.size() != impl_->inputSpecs.size())
 	{
-		throw std::runtime_error("CompiledModule input count mismatch");
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     impl_->inputSpecs.size(), inputs.size()));
 	}
 
 	std::vector<void*> inputPtrs;
 	inputPtrs.reserve(inputs.size());
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{
-		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i]);
+		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
 		inputPtrs.push_back(const_cast<void*>(inputs[i].RawData()));
 	}
 

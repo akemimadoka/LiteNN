@@ -108,3 +108,42 @@ TEST(AutogradRegression, VariableGradientsAreReturnedAfterInputGradientsInVariab
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[1], 0), 6.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[2], 0), 3.0f);
 }
+
+TEST(AutogradRegression, MultipleOutputGradientsAccumulateIntoSharedInput)
+{
+	Graph graph;
+	Subgraph sg;
+
+	const auto x = sg.AddParam(DataType::Float32, { 1 });
+	const auto square = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { x, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto three = sg.AddNode(
+	    ConstantNode{ Tensor<CPU>({ 3 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	    { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { three, 0 } },
+	                                { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { square, 0 }, { shifted, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	AutogradPass autograd;
+	autograd.Run(graph);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::vector<Tensor<CPU>> fwdInputs;
+	fwdInputs.emplace_back(Tensor<CPU>({ 4 }, { 1 }));
+	auto forward = interpreter.RunForward(graph, fwdInputs);
+
+	ASSERT_EQ(forward.size(), 2);
+	EXPECT_FLOAT_EQ(ReadFloat(forward[0], 0), 16.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(forward[1], 0), 7.0f);
+
+	std::vector<Tensor<CPU>> bwdInputs;
+	bwdInputs.emplace_back(Tensor<CPU>({ 4 }, { 1 }));
+	bwdInputs.emplace_back(Tensor<CPU>({ 2 }, { 1 }));
+	bwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
+
+	auto gradients = interpreter.RunBackward(graph, bwdInputs);
+
+	ASSERT_EQ(gradients.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 0), 19.0f);
+}

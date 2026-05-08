@@ -82,8 +82,17 @@ namespace LiteNN::Runtime
 			{
 				const auto& entry = subgraph.GetNodeEntry(nodeId);
 
-				std::visit([&](const auto& node) { Execute(graph, entry, nodeId, node, slots, inputs, device); },
-				           entry.node);
+				try
+				{
+					std::visit([&](const auto& node) { Execute(graph, entry, nodeId, node, slots, inputs, device); },
+					           entry.node);
+				}
+				catch (const std::exception& ex)
+				{
+					throw std::runtime_error(std::format("Interpreter failed at subgraph {}, node {} ({}): {}",
+					                                     subgraphId, nodeId, Validation::NodeKindName(entry.node),
+					                                     ex.what()));
+				}
 			}
 
 			// 收集结果

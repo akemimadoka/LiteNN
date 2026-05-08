@@ -145,6 +145,53 @@ namespace LiteNN::Validation
 		return std::format("{}{}", DataTypeToString(dtype), ShapeToString(shape));
 	}
 
+	inline std::string_view NodeKindName(const NodeVariant& node)
+	{
+		return std::visit(
+		    [](const auto& value) -> std::string_view {
+			    using T = std::decay_t<decltype(value)>;
+			    if constexpr (std::same_as<T, ParamRefNode>)
+				    return "ParamRefNode";
+			    else if constexpr (std::same_as<T, ConstantNode>)
+				    return "ConstantNode";
+			    else if constexpr (std::same_as<T, VariableRefNode>)
+				    return "VariableRefNode";
+			    else if constexpr (std::same_as<T, UnaryOpNode>)
+				    return "UnaryOpNode";
+			    else if constexpr (std::same_as<T, BinaryOpNode>)
+				    return "BinaryOpNode";
+			    else if constexpr (std::same_as<T, CallNode>)
+				    return "CallNode";
+			    else if constexpr (std::same_as<T, CastNode>)
+				    return "CastNode";
+			    else if constexpr (std::same_as<T, CondNode>)
+				    return "CondNode";
+			    else if constexpr (std::same_as<T, WhileNode>)
+				    return "WhileNode";
+			    else if constexpr (std::same_as<T, SaveActivationNode>)
+				    return "SaveActivationNode";
+			    else if constexpr (std::same_as<T, LoadActivationNode>)
+				    return "LoadActivationNode";
+			    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
+				    return "TapeSaveActivationNode";
+			    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
+				    return "TapeLoadActivationNode";
+			    else if constexpr (std::same_as<T, ReduceOpNode>)
+				    return "ReduceOpNode";
+			    else if constexpr (std::same_as<T, ReshapeNode>)
+				    return "ReshapeNode";
+			    else if constexpr (std::same_as<T, ConcatNode>)
+				    return "ConcatNode";
+			    else if constexpr (std::same_as<T, SliceNode>)
+				    return "SliceNode";
+			    else if constexpr (std::same_as<T, FusedOpNode>)
+				    return "FusedOpNode";
+			    else
+				    return "UnknownNode";
+		    },
+		    node);
+	}
+
 	class GraphValidator
 	{
 	public:
@@ -329,14 +376,22 @@ namespace LiteNN::Validation
 			for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
 			{
 				const auto& entry = subgraph.GetNodeEntry(nodeId);
-				for (std::size_t port = 0; port < entry.outputInfos.size(); ++port)
+				try
 				{
-					ValidateOutputInfo(entry.outputInfos[port],
-					                   std::format("subgraph {} node {} output {}", subgraphId, nodeId, port));
-				}
+					for (std::size_t port = 0; port < entry.outputInfos.size(); ++port)
+					{
+						ValidateOutputInfo(entry.outputInfos[port],
+						                   std::format("subgraph {} node {} output {}", subgraphId, nodeId, port));
+					}
 
-				std::visit([&](const auto& node) { ValidateNode(subgraph, subgraphId, nodeId, entry, node); },
-				           entry.node);
+					std::visit([&](const auto& node) { ValidateNode(subgraph, subgraphId, nodeId, entry, node); },
+					           entry.node);
+				}
+				catch (const GraphValidationError& ex)
+				{
+					throw GraphValidationError(
+					    std::format("{} (nodeKind={})", ex.what(), NodeKindName(entry.node)));
+				}
 			}
 
 			for (std::size_t i = 0; i < subgraph.Results().size(); ++i)
