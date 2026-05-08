@@ -3,6 +3,8 @@
 
 #include <LiteNN/Graph.h>
 
+#include <cstring>
+#include <cstdint>
 #include <format>
 #include <span>
 #include <stdexcept>
@@ -57,6 +59,33 @@ namespace LiteNN::Optimizer::Detail
 	{
 		return backwardResults[inputGradientCount + variableIndex];
 	}
+
+	inline std::size_t ElementByteSize(DataType dtype)
+	{
+		switch (dtype)
+		{
+		case DataType::Float32:
+			return sizeof(float);
+		case DataType::Float64:
+			return sizeof(double);
+		case DataType::Int32:
+			return sizeof(std::int32_t);
+		case DataType::Int64:
+			return sizeof(std::int64_t);
+		case DataType::Bool:
+			return sizeof(bool);
+		}
+		throw std::runtime_error("Invalid data type");
+	}
+
+	inline void ZeroTensor(Tensor<PolymorphicDevice>& tensor)
+	{
+		if (!tensor.CurDevice().template Is<CPU>())
+		{
+			throw std::runtime_error("CPU training utilities currently require CPU-backed tensors");
+		}
+		std::memset(tensor.RawData(), 0, tensor.AllocatedNumElements() * ElementByteSize(tensor.DType()));
+	}
 } // namespace LiteNN::Optimizer::Detail
 
 namespace LiteNN::Optimizer
@@ -64,6 +93,34 @@ namespace LiteNN::Optimizer
 	inline std::size_t InferInputGradientCount(const Graph& graph)
 	{
 		return Detail::InferInputGradientCount(graph);
+	}
+
+	inline void ZeroGradients(Graph& graph)
+	{
+		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+		{
+			Detail::ZeroTensor(graph.GetVariable(variableIndex)->Grad());
+		}
+	}
+
+	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults,
+	                                   std::size_t inputGradientCount)
+	{
+		Detail::ValidateBackwardResults(graph, backwardResults, inputGradientCount);
+		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+		{
+			auto& variable = graph.GetVariable(variableIndex)->Data();
+			auto& targetGrad = graph.GetVariable(variableIndex)->Grad();
+			const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
+			Detail::ValidateVariableGradient(variable, gradient, variableIndex);
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.RawData(),
+			                                             gradient.DType(), gradient.RawData(), gradient.NumElements());
+		}
+	}
+
+	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults)
+	{
+		StoreVariableGradients(graph, backwardResults, InferInputGradientCount(graph));
 	}
 } // namespace LiteNN::Optimizer
 

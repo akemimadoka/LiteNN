@@ -9,7 +9,9 @@
 #include <LiteNN/Optimizer/Optimizer.h>
 #include <LiteNN/Operators.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/Training/Trainer.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #endif
