@@ -40,6 +40,13 @@ namespace LiteNN::Examples::Mnist
 	constexpr std::size_t kWeightVariableIndex = 0;
 	constexpr std::size_t kBiasVariableIndex = 1;
 
+	// MLP 变量布局（两层 MLP：input → hidden → output）
+	constexpr std::size_t kMlpHiddenWeightIdx = 0;
+	constexpr std::size_t kMlpHiddenBiasIdx = 1;
+	constexpr std::size_t kMlpOutputWeightIdx = 2;
+	constexpr std::size_t kMlpOutputBiasIdx = 3;
+	constexpr std::size_t kMlpDefaultHiddenSize = 128;
+
 	struct Options
 	{
 		std::filesystem::path dataDir = LITENN_MNIST_DEFAULT_DATA_DIR;
@@ -49,6 +56,12 @@ namespace LiteNN::Examples::Mnist
 		std::size_t epochs = 3;
 		float learningRate = 0.05f;
 		std::uint32_t seed = 42;
+		// 0 = 单层线性模型，>0 = 两层 MLP（指定隐藏层宽度）
+		std::size_t hiddenSize = 0;
+		// 训练结束后保存推理图的路径（可选）
+		std::optional<std::filesystem::path> saveModelPath;
+		// 跳过训练，直接从该路径加载推理图（可选）
+		std::optional<std::filesystem::path> loadModelPath;
 	};
 
 	struct MnistSplit
@@ -235,9 +248,61 @@ namespace LiteNN::Examples::Mnist
 		                                     Initializer::Zeros({ 1, kDigitCount }));
 	}
 
+	// 构建两层 MLP 训练图：input(784) → Linear(hiddenSize) → ReLU → Linear(10)
+	inline Graph BuildTrainableMlpGraph(std::uint32_t seed = 42,
+	                                    std::size_t hiddenSize = kMlpDefaultHiddenSize)
+	{
+		std::mt19937 rng(seed);
+
+		Graph graph;
+		const auto hidden = Layer::CreateLinear(
+		    graph, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
+		    Initializer::Zeros({ 1, hiddenSize }));
+		const auto output = Layer::CreateLinear(
+		    graph, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
+		    Initializer::Zeros({ 1, kDigitCount }));
+
+		if (hidden.weightVariable != kMlpHiddenWeightIdx || !hidden.biasVariable ||
+		    *hidden.biasVariable != kMlpHiddenBiasIdx ||
+		    output.weightVariable != kMlpOutputWeightIdx || !output.biasVariable ||
+		    *output.biasVariable != kMlpOutputBiasIdx)
+		{
+			throw std::runtime_error("Unexpected MLP variable layout");
+		}
+
+		Subgraph forward;
+		const auto image = forward.AddParam(DataType::Float32, { 1, kMnistPixels });
+		const auto h1 = Layer::AddLinear(forward, hidden, { image, 0 });
+		const auto h1Act = Layer::AddReLU(forward, h1);
+		const auto logits = Layer::AddLinear(forward, output, h1Act);
+		forward.SetResults({ logits });
+
+		const auto forwardId = graph.AddSubgraph(std::move(forward));
+		graph.SetForward(forwardId);
+		graph.SetInputNames({ "image" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
 	inline Graph BuildInferenceGraphFromTrainedVariables(const Graph& trainedGraph)
 	{
 		return ExtractForwardOnlyGraph(trainedGraph);
+	}
+
+	// 将训练后的推理图保存到文件（forward-only 提取后保存）
+	inline void SaveMnistModel(const Graph& trainedGraph, const std::filesystem::path& path)
+	{
+		const auto inferGraph = ExtractForwardOnlyGraph(trainedGraph);
+		Serialization::SaveModel(inferGraph, path);
+		std::cout << std::format("Model saved to {}\n", path.string());
+	}
+
+	// 从文件加载推理图（已经是 forward-only，无需再提取）
+	inline Graph LoadMnistInferenceModel(const std::filesystem::path& path)
+	{
+		auto graph = Serialization::LoadModel(path);
+		std::cout << std::format("Model loaded from {}\n", path.string());
+		return graph;
 	}
 
 	inline const float* FloatData(const Tensor<CPU>& tensor)
@@ -350,6 +415,21 @@ namespace LiteNN::Examples::Mnist
 			options.showSamples = ParseSize(RequireValue(index, argc, argv, arg), arg);
 			return true;
 		}
+		if (arg == "--hidden-size")
+		{
+			options.hiddenSize = ParseSize(RequireValue(index, argc, argv, arg), arg);
+			return true;
+		}
+		if (arg == "--save")
+		{
+			options.saveModelPath = std::filesystem::path(std::string(RequireValue(index, argc, argv, arg)));
+			return true;
+		}
+		if (arg == "--load")
+		{
+			options.loadModelPath = std::filesystem::path(std::string(RequireValue(index, argc, argv, arg)));
+			return true;
+		}
 		if (arg == "--epochs")
 		{
 			options.epochs = ParseSize(RequireValue(index, argc, argv, arg), arg);
@@ -396,7 +476,10 @@ namespace LiteNN::Examples::Mnist
 		    "  --epochs <n>          Training epochs. Default: 3.\n"
 		    "  --learning-rate <x>   SGD learning rate. Default: 0.05.\n"
 		    "  --seed <n>            Parameter initializer seed. Default: 42.\n"
-		    "  --show-samples <n>    Print the first n predictions and logits.\n";
+		    "  --show-samples <n>    Print the first n predictions and logits.\n"
+		    "  --hidden-size <n>     Use a 2-layer MLP with this hidden size (0 = linear). Default: 0.\n"
+		    "  --save <path>         Save the trained inference model to this path.\n"
+		    "  --load <path>         Skip training, load inference model from this path.\n";
 	}
 
 	inline void PrintAccuracy(std::size_t correct, std::size_t total)

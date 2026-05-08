@@ -5,7 +5,7 @@ project(LiteNN CXX)
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
 
-file(GLOB_RECURSE LITENN_SOURCES src/*.cpp src/*.h)
+file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
 add_library(LiteNN ${LITENN_SOURCES})
 
@@ -49,7 +49,7 @@ if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
 endif()
 
-file(GLOB TEST_SOURCES "tests/*.cpp")
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 if(NOT LITENN_ENABLE_MLIR)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest)\\.cpp$")
 endif()
