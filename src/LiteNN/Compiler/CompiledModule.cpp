@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <cstdint>
 #include <format>
@@ -63,7 +64,9 @@ namespace
 	    std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 	    std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
 	};
-	constexpr std::uint32_t kRodataVersion = 1;
+	constexpr std::uint32_t kRodataVersion = 2;
+	constexpr std::uint32_t kRodataLittleEndian = 1;
+	constexpr std::uint32_t kRodataBigEndian = 2;
 
 	using EntryFn = void (*)(void**, void**);
 
@@ -181,6 +184,13 @@ namespace
 		}
 	}
 
+	void AppendString(std::vector<std::byte>& out, std::string_view value)
+	{
+		AppendU64(out, static_cast<std::uint64_t>(value.size()));
+		const auto* data = reinterpret_cast<const std::byte*>(value.data());
+		out.insert(out.end(), data, data + value.size());
+	}
+
 	std::uint32_t ReadU32(std::span<const std::byte> bytes, std::size_t& offset)
 	{
 		if (offset + 4 > bytes.size())
@@ -211,12 +221,46 @@ namespace
 		return value;
 	}
 
+	std::string ReadString(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		const auto size = ReadU64(bytes, offset);
+		if (size > std::numeric_limits<std::size_t>::max() ||
+		    static_cast<std::size_t>(size) > bytes.size() - offset)
+		{
+			throw std::runtime_error("Compiled module rodata string is truncated");
+		}
+		const auto stringSize = static_cast<std::size_t>(size);
+		std::string value(reinterpret_cast<const char*>(bytes.data() + offset), stringSize);
+		offset += stringSize;
+		return value;
+	}
+
+	std::uint32_t NativeEndianTag()
+	{
+		if constexpr (std::endian::native == std::endian::little)
+		{
+			return kRodataLittleEndian;
+		}
+		else if constexpr (std::endian::native == std::endian::big)
+		{
+			return kRodataBigEndian;
+		}
+		else
+		{
+			throw std::runtime_error("Unsupported mixed-endian target");
+		}
+	}
+
 	std::vector<std::byte> SerializeRodata(std::span<const CompiledTensorSpec> inputs,
-	                                       std::span<const CompiledTensorSpec> outputs)
+	                                       std::span<const CompiledTensorSpec> outputs,
+	                                       std::string_view targetTriple)
 	{
 		std::vector<std::byte> rodata;
 		rodata.insert(rodata.end(), kRodataMagic.begin(), kRodataMagic.end());
 		AppendU32(rodata, kRodataVersion);
+		AppendU32(rodata, static_cast<std::uint32_t>(sizeof(void*)));
+		AppendU32(rodata, NativeEndianTag());
+		AppendString(rodata, targetTriple);
 		AppendU32(rodata, static_cast<std::uint32_t>(inputs.size()));
 		AppendU32(rodata, static_cast<std::uint32_t>(outputs.size()));
 
@@ -227,6 +271,7 @@ namespace
 			{
 				AppendU64(rodata, static_cast<std::uint64_t>(dim));
 			}
+			AppendString(rodata, spec.name);
 		};
 
 		for (const auto& spec : inputs)
@@ -251,9 +296,28 @@ namespace
 
 		std::size_t offset = kRodataMagic.size();
 		const auto version = ReadU32(rodata, offset);
-		if (version != kRodataVersion)
+		if (version == 0 || version > kRodataVersion)
 		{
 			throw std::runtime_error("Unsupported compiled module rodata version");
+		}
+
+		if (version >= 2)
+		{
+			const auto pointerSize = ReadU32(rodata, offset);
+			if (pointerSize != sizeof(void*))
+			{
+				throw std::runtime_error("Compiled module rodata pointer size does not match this process");
+			}
+			const auto endianTag = ReadU32(rodata, offset);
+			if (endianTag != NativeEndianTag())
+			{
+				throw std::runtime_error("Compiled module rodata endianness does not match this process");
+			}
+			const auto targetTriple = ReadString(rodata, offset);
+			if (targetTriple != llvm::sys::getDefaultTargetTriple())
+			{
+				throw std::runtime_error("Compiled module rodata target triple does not match this process");
+			}
 		}
 
 		const auto inputCount = ReadU32(rodata, offset);
@@ -278,6 +342,10 @@ namespace
 					throw std::runtime_error("Compiled module rodata shape dimension is too large");
 				}
 				spec.shape.push_back(static_cast<std::size_t>(dim));
+			}
+			if (version >= 2)
+			{
+				spec.name = ReadString(rodata, offset);
 			}
 			return spec;
 		};
@@ -304,25 +372,28 @@ namespace
 		return { std::move(inputs), std::move(outputs) };
 	}
 
-	std::vector<CompiledTensorSpec> BuildInputSpecs(const Subgraph& subgraph)
+	std::vector<CompiledTensorSpec> BuildInputSpecs(const Graph& graph)
 	{
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
 		std::vector<CompiledTensorSpec> specs;
 		specs.reserve(subgraph.Params().size());
-		for (const auto& param : subgraph.Params())
+		for (std::size_t i = 0; i < subgraph.Params().size(); ++i)
 		{
-			specs.push_back({ param.dtype, param.shape });
+			const auto& param = subgraph.Params()[i];
+			specs.push_back({ param.dtype, param.shape, graph.InputName(i) });
 		}
 		return specs;
 	}
 
-	std::vector<CompiledTensorSpec> BuildOutputSpecs(const Subgraph& subgraph)
+	std::vector<CompiledTensorSpec> BuildOutputSpecs(const Graph& graph)
 	{
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
 		std::vector<CompiledTensorSpec> specs;
 		specs.reserve(subgraph.Results().size());
-		for (const auto& result : subgraph.Results())
+		for (std::size_t i = 0; i < subgraph.Results().size(); ++i)
 		{
-			const auto& info = subgraph.GetOutputInfo(result);
-			specs.push_back({ info.dtype, info.shape });
+			const auto& info = subgraph.GetOutputInfo(subgraph.Results()[i]);
+			specs.push_back({ info.dtype, info.shape, graph.OutputName(i) });
 		}
 		return specs;
 	}
@@ -850,8 +921,9 @@ namespace
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
 		{
+			const auto label = spec.name.empty() ? std::to_string(inputIndex) : std::format("{} ('{}')", inputIndex, spec.name);
 			throw std::runtime_error(std::format(
-			    "CompiledModule input {} mismatch: expected {}, got {}", inputIndex,
+			    "CompiledModule input {} mismatch: expected {}, got {}", label,
 			    Validation::FormatInfo(spec.dtype, spec.shape),
 			    Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
@@ -1016,6 +1088,38 @@ std::span<const CompiledTensorSpec> CompiledModule<CPU>::OutputSpecs() const
 	return impl_->outputSpecs;
 }
 
+std::optional<std::size_t> CompiledModule<CPU>::FindInput(std::string_view name) const
+{
+	if (!impl_)
+	{
+		return std::nullopt;
+	}
+	for (std::size_t i = 0; i < impl_->inputSpecs.size(); ++i)
+	{
+		if (impl_->inputSpecs[i].name == name)
+		{
+			return i;
+		}
+	}
+	return std::nullopt;
+}
+
+std::optional<std::size_t> CompiledModule<CPU>::FindOutput(std::string_view name) const
+{
+	if (!impl_)
+	{
+		return std::nullopt;
+	}
+	for (std::size_t i = 0; i < impl_->outputSpecs.size(); ++i)
+	{
+		if (impl_->outputSpecs[i].name == name)
+		{
+			return i;
+		}
+	}
+	return std::nullopt;
+}
+
 void CompiledModule<CPU>::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
 {
 	if (!impl_)
@@ -1042,12 +1146,11 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 	auto config = CreateNativeTargetMachine();
 	ConfigureForNativeObject(*llvmModule, config);
 
-	const auto& forward = graph.GetSubgraph(graph.Forward());
-	const auto inputSpecs = BuildInputSpecs(forward);
-	const auto outputSpecs = BuildOutputSpecs(forward);
+	const auto inputSpecs = BuildInputSpecs(graph);
+	const auto outputSpecs = BuildOutputSpecs(graph);
 	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
 
-	const auto rodata = SerializeRodata(inputSpecs, outputSpecs);
+	const auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple);
 	auto instructions = EmitObjectFile(*llvmModule);
 	return CompiledModule<CPU>::Load({
 	    .rodata = rodata.data(),

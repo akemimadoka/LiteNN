@@ -85,3 +85,37 @@ TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 0), -0.5f);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 1), 0.5f);
 }
+
+TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
+{
+	Graph graph;
+	const auto logitsIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f }, { 2, 2 })));
+
+	Subgraph sg;
+	const auto logits = sg.AddNode(VariableRefNode{ logitsIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	sg.SetResults({ { logits, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	std::vector<Tensor<CPU>> inputs;
+	std::vector<std::size_t> targets = { 0, 1 };
+
+	auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+
+	ASSERT_EQ(result.outputs.size(), 1);
+	ASSERT_EQ(result.backwardResults.size(), 1);
+	EXPECT_NEAR(result.loss, std::log(2.0), 1.0e-6);
+	EXPECT_FLOAT_EQ(ReadFloat(result.backwardResults[0], 0), -0.25f);
+	EXPECT_FLOAT_EQ(ReadFloat(result.backwardResults[0], 1), 0.25f);
+	EXPECT_FLOAT_EQ(ReadFloat(result.backwardResults[0], 2), 0.25f);
+	EXPECT_FLOAT_EQ(ReadFloat(result.backwardResults[0], 3), -0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableGradFloat(graph, logitsIndex, 0), -0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableGradFloat(graph, logitsIndex, 1), 0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableGradFloat(graph, logitsIndex, 2), 0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableGradFloat(graph, logitsIndex, 3), -0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 0), 0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 1), -0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 2), -0.25f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, logitsIndex, 3), 0.25f);
+}

@@ -14,6 +14,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -22,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 1;
+		constexpr std::uint32_t kModelVersion = 2;
 
 		enum class NodeKind : std::uint32_t
 		{
@@ -133,6 +134,40 @@ namespace LiteNN::Serialization
 				dim = ReadSize(in);
 			}
 			return shape;
+		}
+
+		inline void WriteString(std::ostream& out, std::string_view value)
+		{
+			WriteSize(out, value.size());
+			out.write(value.data(), static_cast<std::streamsize>(value.size()));
+			EnsureWrite(out);
+		}
+
+		inline std::string ReadString(std::istream& in)
+		{
+			std::string value(ReadSize(in), '\0');
+			in.read(value.data(), static_cast<std::streamsize>(value.size()));
+			EnsureRead(in);
+			return value;
+		}
+
+		inline void WriteStringList(std::ostream& out, std::span<const std::string> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto& value : values)
+			{
+				WriteString(out, value);
+			}
+		}
+
+		inline std::vector<std::string> ReadStringList(std::istream& in)
+		{
+			std::vector<std::string> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadString(in);
+			}
+			return values;
 		}
 
 		inline void WriteNodeOutput(std::ostream& out, NodeOutput output)
@@ -489,6 +524,8 @@ namespace LiteNN::Serialization
 		{
 			Detail::WriteSize(out, *graph.Backward());
 		}
+		Detail::WriteStringList(out, graph.InputNames());
+		Detail::WriteStringList(out, graph.OutputNames());
 
 		Detail::WriteSize(out, graph.VariableCount());
 		for (const auto& variable : graph.Variables())
@@ -536,7 +573,7 @@ namespace LiteNN::Serialization
 		}
 
 		const auto version = Detail::ReadScalar<std::uint32_t>(in);
-		if (version != Detail::kModelVersion)
+		if (version == 0 || version > Detail::kModelVersion)
 		{
 			throw std::runtime_error("Unsupported LiteNN model version");
 		}
@@ -547,6 +584,13 @@ namespace LiteNN::Serialization
 		if (hasBackward)
 		{
 			backward = Detail::ReadSize(in);
+		}
+		std::vector<std::string> inputNames;
+		std::vector<std::string> outputNames;
+		if (version >= 2)
+		{
+			inputNames = Detail::ReadStringList(in);
+			outputNames = Detail::ReadStringList(in);
 		}
 
 		Graph graph;
@@ -578,6 +622,8 @@ namespace LiteNN::Serialization
 		{
 			graph.SetBackward(*backward);
 		}
+		graph.SetInputNames(std::move(inputNames));
+		graph.SetOutputNames(std::move(outputNames));
 
 		if (in.peek() != std::char_traits<char>::eof())
 		{

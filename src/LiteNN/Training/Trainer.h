@@ -77,6 +77,22 @@ namespace LiteNN::Training
 			return { lossGradient.loss, std::move(outputs), std::move(backwardResults) };
 		}
 
+		LossTrainStepResult StepSoftmaxCrossEntropyBatch(std::span<const Tensor<CPU>> inputs,
+		                                                 std::span<const std::size_t> targetClasses)
+		{
+			auto outputs = interpreter_.RunForward(*graph_, inputs);
+			if (outputs.size() != 1)
+			{
+				throw std::runtime_error("StepSoftmaxCrossEntropyBatch requires a graph with exactly one output");
+			}
+
+			auto lossGradient = LiteNN::Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targetClasses);
+			std::vector<Tensor<CPU>> outputGradients;
+			outputGradients.push_back(std::move(lossGradient.gradient));
+			auto backwardResults = BackwardAndStep(inputs, outputGradients);
+			return { lossGradient.loss, std::move(outputs), std::move(backwardResults) };
+		}
+
 		void ZeroGradients()
 		{
 			LiteNN::Optimizer::ZeroGradients(*graph_);

@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -17,6 +19,7 @@ namespace LiteNN
 	{
 		DataType dtype{};
 		std::vector<std::size_t> shape;
+		std::string name;
 	};
 
 	struct CompiledModuleImage
@@ -50,6 +53,8 @@ namespace LiteNN
 		std::span<const std::byte> Instructions() const;
 		std::span<const CompiledTensorSpec> InputSpecs() const;
 		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		std::optional<std::size_t> FindInput(std::string_view name) const;
+		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
 		void WriteObjectFile(const std::filesystem::path& path,
 		                     std::string_view symbolPrefix = "litenn_module") const;

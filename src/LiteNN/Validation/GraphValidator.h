@@ -222,6 +222,7 @@ namespace LiteNN::Validation
 			{
 				ValidateSubgraph(id);
 			}
+			ValidatePublicSignatureNames();
 		}
 
 	private:
@@ -361,6 +362,41 @@ namespace LiteNN::Validation
 				ValidateDataType(slot.dtype, std::format("tape slot {}", i));
 				ValidateShape(slot.shape, std::format("tape slot {}", i));
 			}
+		}
+
+		static void ValidateNameList(std::span<const std::string> names, std::size_t expectedCount,
+		                             std::string_view role)
+		{
+			if (names.empty())
+			{
+				return;
+			}
+			if (names.size() != expectedCount)
+			{
+				Fail(std::format("Graph validation failed: {} name count {} does not match expected count {}", role,
+				                 names.size(), expectedCount));
+			}
+			for (std::size_t i = 0; i < names.size(); ++i)
+			{
+				if (names[i].empty())
+				{
+					Fail(std::format("Graph validation failed: {} name {} is empty", role, i));
+				}
+				for (std::size_t j = i + 1; j < names.size(); ++j)
+				{
+					if (names[i] == names[j])
+					{
+						Fail(std::format("Graph validation failed: duplicate {} name '{}'", role, names[i]));
+					}
+				}
+			}
+		}
+
+		void ValidatePublicSignatureNames() const
+		{
+			const auto& forward = graph_.GetSubgraph(graph_.Forward());
+			ValidateNameList(graph_.InputNames(), forward.Params().size(), "input");
+			ValidateNameList(graph_.OutputNames(), forward.Results().size(), "output");
 		}
 
 		void ValidateSubgraph(SubgraphId subgraphId) const

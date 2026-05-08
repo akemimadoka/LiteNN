@@ -6,7 +6,9 @@
 #include <LiteNN/Optimizer/Loss.h>
 #include <LiteNN/Optimizer/SGD.h>
 #include <LiteNN/Pass/AutogradPass.h>
+#include <LiteNN/Pass/ForwardOnlyPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Training/Trainer.h>
 
 #include <algorithm>
 #include <array>
@@ -221,6 +223,8 @@ namespace LiteNN::Examples::Mnist
 
 		const auto forwardId = graph.AddSubgraph(std::move(forward));
 		graph.SetForward(forwardId);
+		graph.SetInputNames({ "image" });
+		graph.SetOutputNames({ "logits" });
 		return graph;
 	}
 
@@ -233,14 +237,7 @@ namespace LiteNN::Examples::Mnist
 
 	inline Graph BuildInferenceGraphFromTrainedVariables(const Graph& trainedGraph)
 	{
-		if (trainedGraph.VariableCount() < 2)
-		{
-			throw std::runtime_error("MNIST graph does not contain weight and bias variables");
-		}
-
-		auto weight = trainedGraph.GetVariable(kWeightVariableIndex)->Data().CopyToDevice(CPU{});
-		auto bias = trainedGraph.GetVariable(kBiasVariableIndex)->Data().CopyToDevice(CPU{});
-		return BuildMnistGraphWithParameters(std::move(weight), std::move(bias));
+		return ExtractForwardOnlyGraph(trainedGraph);
 	}
 
 	inline const float* FloatData(const Tensor<CPU>& tensor)
@@ -256,14 +253,8 @@ namespace LiteNN::Examples::Mnist
 
 	inline void TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options)
 	{
-		if (!graph.Backward())
-		{
-			AutogradPass autograd;
-			autograd.Run(graph);
-		}
-
-		Runtime::Interpreter<CPU> interpreter;
-		Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = options.learningRate });
+		Training::CPUTrainer<Optimizer::SGD> trainer(
+		    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
 
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)
 		{
@@ -277,25 +268,14 @@ namespace LiteNN::Examples::Mnist
 
 				auto forwardImage = MakeFloatTensor(image, { 1, kMnistPixels });
 				std::array<Tensor<CPU>, 1> forwardInputs = { std::move(forwardImage) };
-				auto outputs = interpreter.RunForward(graph, forwardInputs);
-				if (outputs.size() != 1)
+				auto step = trainer.StepSoftmaxCrossEntropy(forwardInputs, label);
+				if (step.outputs.size() != 1)
 				{
 					throw std::runtime_error("MNIST graph returned an unexpected output count");
 				}
 
-				correct += ArgMaxLogits(outputs[0]) == static_cast<int>(label) ? 1 : 0;
-				auto lossGrad = Optimizer::SoftmaxCrossEntropyWithLogits(outputs[0], label);
-				totalLoss += lossGrad.loss;
-
-				auto backwardImage = MakeFloatTensor(image, { 1, kMnistPixels });
-
-				std::vector<Tensor<CPU>> backwardInputs;
-				backwardInputs.reserve(2);
-				backwardInputs.push_back(std::move(backwardImage));
-				backwardInputs.push_back(std::move(lossGrad.gradient));
-
-				auto backwardResults = interpreter.RunBackward(graph, backwardInputs);
-				optimizer.Step(graph, backwardResults);
+				correct += ArgMaxLogits(step.outputs[0]) == static_cast<int>(label) ? 1 : 0;
+				totalLoss += step.loss;
 			}
 
 			const auto accuracy = 100.0 * static_cast<double>(correct) / static_cast<double>(train.Count());

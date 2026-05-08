@@ -8,6 +8,8 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <string>
+#include <string_view>
 
 namespace LiteNN
 {
@@ -25,6 +27,19 @@ namespace LiteNN
 	// 节点输出的类型和形状元信息
 	struct OutputInfo
 	{
+		DataType dtype;
+		std::vector<std::size_t> shape;
+	};
+
+	struct TensorSpec
+	{
+		DataType dtype;
+		std::vector<std::size_t> shape;
+	};
+
+	struct NamedTensorSpec
+	{
+		std::string name;
 		DataType dtype;
 		std::vector<std::size_t> shape;
 	};
@@ -361,6 +376,34 @@ namespace LiteNN
 			backward_ = id;
 		}
 
+		void SetInputNames(std::vector<std::string> names)
+		{
+			inputNames_ = std::move(names);
+		}
+
+		void SetOutputNames(std::vector<std::string> names)
+		{
+			outputNames_ = std::move(names);
+		}
+
+		void SetInputName(std::size_t index, std::string name)
+		{
+			if (inputNames_.size() <= index)
+			{
+				inputNames_.resize(index + 1);
+			}
+			inputNames_[index] = std::move(name);
+		}
+
+		void SetOutputName(std::size_t index, std::string name)
+		{
+			if (outputNames_.size() <= index)
+			{
+				outputNames_.resize(index + 1);
+			}
+			outputNames_[index] = std::move(name);
+		}
+
 		SubgraphId Forward() const
 		{
 			return forward_;
@@ -374,6 +417,74 @@ namespace LiteNN
 		auto& GetSubgraph(this auto&& self, SubgraphId id)
 		{
 			return self.subgraphs_[id];
+		}
+
+		std::span<const std::string> InputNames() const
+		{
+			return inputNames_;
+		}
+
+		std::span<const std::string> OutputNames() const
+		{
+			return outputNames_;
+		}
+
+		std::string InputName(std::size_t index) const
+		{
+			return NameOrDefault(inputNames_, index, "input");
+		}
+
+		std::string OutputName(std::size_t index) const
+		{
+			return NameOrDefault(outputNames_, index, "output");
+		}
+
+		std::optional<std::size_t> FindInput(std::string_view name) const
+		{
+			return FindName(inputNames_, name);
+		}
+
+		std::optional<std::size_t> FindOutput(std::string_view name) const
+		{
+			return FindName(outputNames_, name);
+		}
+
+		TensorSpec InputSpec(std::size_t index) const
+		{
+			const auto& param = GetSubgraph(Forward()).Params()[index];
+			return { param.dtype, param.shape };
+		}
+
+		TensorSpec OutputSpec(std::size_t index) const
+		{
+			const auto& forward = GetSubgraph(Forward());
+			const auto& info = forward.GetOutputInfo(forward.Results()[index]);
+			return { info.dtype, info.shape };
+		}
+
+		std::vector<NamedTensorSpec> InputSignature() const
+		{
+			const auto& params = GetSubgraph(Forward()).Params();
+			std::vector<NamedTensorSpec> signature;
+			signature.reserve(params.size());
+			for (std::size_t i = 0; i < params.size(); ++i)
+			{
+				signature.push_back({ InputName(i), params[i].dtype, params[i].shape });
+			}
+			return signature;
+		}
+
+		std::vector<NamedTensorSpec> OutputSignature() const
+		{
+			const auto& forward = GetSubgraph(Forward());
+			std::vector<NamedTensorSpec> signature;
+			signature.reserve(forward.Results().size());
+			for (std::size_t i = 0; i < forward.Results().size(); ++i)
+			{
+				const auto& info = forward.GetOutputInfo(forward.Results()[i]);
+				signature.push_back({ OutputName(i), info.dtype, info.shape });
+			}
+			return signature;
 		}
 
 		auto Subgraphs() const
@@ -429,12 +540,38 @@ namespace LiteNN
 		}
 
 	private:
+		static std::string NameOrDefault(const std::vector<std::string>& names, std::size_t index,
+		                                 std::string_view prefix)
+		{
+			if (index < names.size() && !names[index].empty())
+			{
+				return names[index];
+			}
+			std::string fallback(prefix);
+			fallback += std::to_string(index);
+			return fallback;
+		}
+
+		static std::optional<std::size_t> FindName(const std::vector<std::string>& names, std::string_view name)
+		{
+			for (std::size_t i = 0; i < names.size(); ++i)
+			{
+				if (names[i] == name)
+				{
+					return i;
+				}
+			}
+			return std::nullopt;
+		}
+
 		SubgraphId forward_{};
 		std::optional<SubgraphId> backward_;
 		std::deque<Subgraph> subgraphs_;
 		std::vector<std::shared_ptr<Variable>> variables_;
 		std::vector<ActivationSlot> activationSlots_;
 		std::vector<TapeSlot> tapeSlots_;
+		std::vector<std::string> inputNames_;
+		std::vector<std::string> outputNames_;
 	};
 } // namespace LiteNN
 

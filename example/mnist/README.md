@@ -17,17 +17,24 @@ logits = image @ weight + bias
 ```
 
 Graph construction uses `LiteNN::Layer::CreateLinear` / `AddLinear`. Training
-uses `LiteNN::Optimizer::SoftmaxCrossEntropyWithLogits` and `Optimizer::SGD`.
+uses `LiteNN::Training::CPUTrainer`, `Optimizer::SoftmaxCrossEntropyWithLogits`,
+and `Optimizer::SGD`.
 Weight parameters are initialized with `LiteNN::Initializer::XavierUniform`,
 and bias parameters use `Initializer::Zeros`. The loss helper computes
-`dLoss/dLogits`, then the gradient is passed to the LiteNN backward graph:
+`dLoss/dLogits`, then `CPUTrainer` passes the gradient to the LiteNN backward graph:
 
 ```text
-RunForward(graph, image)
-grad_logits = Optimizer::SoftmaxCrossEntropyWithLogits(logits, label).gradient
-RunBackward(graph, [image, grad_logits]) -> [grad_image, grad_weight, grad_bias]
-Optimizer::SGD::Step(graph, backward_results)
+CPUTrainer::StepSoftmaxCrossEntropy([image], label)
+  -> RunForward(graph, image)
+  -> RunBackward(graph, [image, grad_logits])
+  -> StoreVariableGradients
+  -> Optimizer::SGD::Step
 ```
+
+After training, both examples call `ExtractForwardOnlyGraph` so inference and
+AOT compilation use a forward-only graph with the trained weights and without
+backward/activation-save nodes. The graph exposes named signatures:
+`image -> logits`.
 
 ## Dataset
 

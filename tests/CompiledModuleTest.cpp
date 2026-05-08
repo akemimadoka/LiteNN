@@ -4,6 +4,7 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 
 #include <array>
+#include <cstddef>
 #include <format>
 #include <filesystem>
 #include <future>
@@ -31,6 +32,8 @@ namespace
 		sg.SetResults({ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "sum" });
 		return graph;
 	}
 
@@ -82,8 +85,24 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 
 	ASSERT_GT(compiled.Rodata().size(), 0u);
 	ASSERT_GT(compiled.Instructions().size(), 0u);
+	ASSERT_EQ(compiled.InputSpecs().size(), 2u);
+	ASSERT_EQ(compiled.OutputSpecs().size(), 1u);
+	EXPECT_EQ(compiled.InputSpecs()[0].name, "lhs");
+	EXPECT_EQ(compiled.InputSpecs()[1].name, "rhs");
+	EXPECT_EQ(compiled.OutputSpecs()[0].name, "sum");
+	EXPECT_EQ(compiled.FindInput("lhs"), 0u);
+	EXPECT_EQ(compiled.FindInput("rhs"), 1u);
+	EXPECT_EQ(compiled.FindOutput("sum"), 0u);
 
 	auto loaded = CompiledModule<CPU>::Load(compiled.Image());
+	ASSERT_EQ(loaded.InputSpecs().size(), 2u);
+	ASSERT_EQ(loaded.OutputSpecs().size(), 1u);
+	EXPECT_EQ(loaded.InputSpecs()[0].name, "lhs");
+	EXPECT_EQ(loaded.InputSpecs()[1].name, "rhs");
+	EXPECT_EQ(loaded.OutputSpecs()[0].name, "sum");
+	EXPECT_EQ(loaded.FindInput("lhs"), 0u);
+	EXPECT_EQ(loaded.FindInput("rhs"), 1u);
+	EXPECT_EQ(loaded.FindOutput("sum"), 0u);
 	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
 	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
 	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
@@ -128,9 +147,40 @@ TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)
 	catch (const std::runtime_error& ex)
 	{
 		const std::string message = ex.what();
-		EXPECT_NE(message.find("CompiledModule input 0 mismatch"), std::string::npos);
+		EXPECT_NE(message.find("CompiledModule input 0 ('lhs') mismatch"), std::string::npos);
 		EXPECT_NE(message.find("expected Float32[2, 2]"), std::string::npos);
 		EXPECT_NE(message.find("got Float32[3]"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(graph);
+
+	std::vector<std::byte> rodata(compiled.Rodata().begin(), compiled.Rodata().end());
+	ASSERT_GT(rodata.size(), 16u);
+	rodata[12] = std::byte{ 0 };
+	rodata[13] = std::byte{ 0 };
+	rodata[14] = std::byte{ 0 };
+	rodata[15] = std::byte{ 0 };
+
+	const auto image = CompiledModuleImage{
+	    .rodata = rodata.data(),
+	    .rodataSize = rodata.size(),
+	    .instructions = compiled.Instructions().data(),
+	    .instructionSize = compiled.Instructions().size(),
+	};
+
+	try
+	{
+		(void)CompiledModule<CPU>::Load(image);
+		FAIL() << "expected ABI metadata validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("pointer size"), std::string::npos);
 	}
 }
 

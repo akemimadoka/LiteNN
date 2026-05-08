@@ -40,6 +40,8 @@ namespace
 		                          { OutputInfo{ DataType::Float32, { 1, 2 } } });
 		sg.SetResults({ { y, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "features" });
+		graph.SetOutputNames({ "logits" });
 		return graph;
 	}
 } // namespace
@@ -57,6 +59,10 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 	auto loaded = Serialization::LoadModel(path);
 	std::filesystem::remove(path);
 
+	ASSERT_EQ(loaded.InputSignature().size(), 1);
+	ASSERT_EQ(loaded.OutputSignature().size(), 1);
+	EXPECT_EQ(loaded.InputSignature()[0].name, "features");
+	EXPECT_EQ(loaded.OutputSignature()[0].name, "logits");
 	ASSERT_EQ(loaded.VariableCount(), 2);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 0), 1.0f);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 1), 2.0f);

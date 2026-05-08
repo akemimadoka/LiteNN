@@ -60,6 +60,63 @@ namespace LiteNN::Optimizer
 		gradient[targetClass] -= 1.0f;
 		return { loss, MakeFloatTensor(gradient, logits.Shape()) };
 	}
+
+	inline LossGradient SoftmaxCrossEntropyWithLogitsBatch(const Tensor<CPU>& logits,
+	                                                       std::span<const std::size_t> targetClasses)
+	{
+		if (logits.DType() != DataType::Float32 || logits.Shape().Dims.size() != 2)
+		{
+			throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch expects a Float32 [batch, classes] logits tensor");
+		}
+
+		const auto batchSize = logits.Shape().Dims[0];
+		const auto classCount = logits.Shape().Dims[1];
+		if (batchSize == 0 || classCount == 0)
+		{
+			throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch expects non-empty batch and class dimensions");
+		}
+		if (targetClasses.size() != batchSize)
+		{
+			throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch target count does not match batch size");
+		}
+
+		const auto* data = static_cast<const float*>(logits.RawData());
+		std::vector<float> gradient(logits.NumElements());
+		double totalLoss = 0.0;
+		const auto invBatch = 1.0f / static_cast<float>(batchSize);
+
+		for (std::size_t row = 0; row < batchSize; ++row)
+		{
+			const auto targetClass = targetClasses[row];
+			if (targetClass >= classCount)
+			{
+				throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch target class is out of range");
+			}
+
+			const auto rowOffset = row * classCount;
+			const auto* rowData = data + rowOffset;
+			const auto maxLogit = *std::max_element(rowData, rowData + classCount);
+
+			double sumExp = 0.0;
+			for (std::size_t col = 0; col < classCount; ++col)
+			{
+				sumExp += std::exp(static_cast<double>(rowData[col] - maxLogit));
+			}
+
+			for (std::size_t col = 0; col < classCount; ++col)
+			{
+				const auto probability = static_cast<float>(std::exp(static_cast<double>(rowData[col] - maxLogit)) / sumExp);
+				gradient[rowOffset + col] = probability * invBatch;
+			}
+
+			const auto targetProbability =
+			    std::max(static_cast<double>(gradient[rowOffset + targetClass] / invBatch), 1.0e-12);
+			totalLoss += -std::log(targetProbability);
+			gradient[rowOffset + targetClass] -= invBatch;
+		}
+
+		return { totalLoss / static_cast<double>(batchSize), MakeFloatTensor(gradient, logits.Shape()) };
+	}
 } // namespace LiteNN::Optimizer
 
 #endif
