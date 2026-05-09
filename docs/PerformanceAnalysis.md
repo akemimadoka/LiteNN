@@ -118,9 +118,9 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 | # | 瓶颈                                                        | 受影响场景                       | 证据 |
 |---|-------------------------------------------------------------|----------------------------------|------|
-| 1 | **MatMul 缺少 tiling+vectorize**（accumulator 在内存）      | 所有 batch ≥ 32 的层             | 反汇编全是 `vfmadd…ss + vmovss` |
-| 2 | **窄 N 输出层不向量化**（N=10 → 标量 tail）                 | Linear 输出层、MLP 末层          | linear_b512 packed/scalar = 40/40 |
-| 3 | 没有 panel packing / B 矩阵布局优化                         | 任意 K 较大的层（K=784, 512, 256）| LLVM 默认按 row-major 跨步访问 B |
+| 1 | **MatMul 缺少 tiling+vectorize**（accumulator 在内存）      | 所有 batch ≥ 32 的层             | 已由专用 micro-kernel 部分缓解，仍缺 K blocking / B packing |
+| 2 | **窄 N 输出层不向量化**（N=10 → 标量 tail）                 | Linear 输出层、MLP 末层          | 已通过 `vector<Nxf32>` 窄输出 micro-kernel 解决 |
+| 3 | 没有 panel packing / B 矩阵布局优化                         | 任意 K 较大的层（K=784, 512, 256）| 仍待实现；当前仅通过 M-row tile 提高 B 复用 |
 | 4 | `Run()` 每次分配输出张量                                    | 极小模型/极小 batch 时少量影响    | `Run vs RunInto Δ ≈ 0`，已验证不影响大模型 |
 | 5 | ReLU 常量与 ReLU 后处理曾单独产生额外 buffer/pass          | 所有含 ReLU 的层                  | 已改为标量常量，并新增 MatMulBiasAddReLU AOT 融合 |
 | 6 | Bias add 通过 `linalg.generic + 广播 affine map` 表示       | 所有 Linear                       | LowerLiteNNPass.cpp 中 ConvertBinaryOp 的广播路径 |
@@ -131,40 +131,41 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 ## 5. 优化建议（按 ROI 排序）
 
-### 🥇 P0 — 必做：替换 linalg→loops 为 tile + vectorize
-**期望收益**：matmul 性能 2–4×，可消除 70%+ 当前差距。
+### 🥇 P0 — 部分完成：替换 linalg→loops 为 tile + vectorize
+**状态**：已完成当前 `linalg.generic` MatMul contraction 的专用 micro-kernel lowering；完整 K blocking / B panel packing 仍未完成。
 
-具体改动思路（[LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp)）：
+已完成：
+- [x] 在 [LowerLiteNNPass.cpp](src/LiteNN/Compiler/Pass/LowerLiteNNPass.cpp) 中将 MatMul lowering 为 `M,K,N` 的 `linalg.generic` contraction，使 innermost N 维连续访问 RHS 和输出行。
+- [x] 在 [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 中加入 MatMul micro-kernel pass，在 `convert-linalg-to-loops` 前匹配当前 contraction。
+- [x] 宽输出 `f32` MatMul 使用 `vector<16xf32>`，当前策略按形状依次尝试 `8-row x 2-vector`、`4-row x 4-vector`、`2-row x 8-vector` 寄存器 tile；K 循环中一个 RHS/B 向量复用给多行 LHS/A。
+- [x] `vector` dialect lowering 已接入 LLVM codegen pipeline。
 
-1. 在 `createConvertLinalgToLoopsPass` 之前，插入：
-   - `linalg::populateElementwiseOpsFusionPatterns`
-   - 自定义 `LinalgTilingPass`，对 `linalg.matmul` tile 出 `[M=8, N=16, K=64]`（M 用 batch，N 用 SIMD 宽，K 一段）。
-   - 用 `mlir::linalg::vectorize` / `linalg::populateVectorizationPatterns`：把 tiled matmul 重写成 `vector.contract` + `vector.transfer_read/write`。
-   - 然后用 `convert-vector-to-llvm`（已经隐式包含在 `O3`）将 `vector.contract` 降到 packed FMA。
-2. **如果目标 N 很窄**（输出 10 列），将 N 维填充到 16 并 mask；或者沿 M（batch）维做 vectorize（M ≥ 32 总是充足）。
-3. 加上 `linalg::LinalgPromote` 把 micro-kernel 输入临时缓冲 promote 到 stack。
+仍待完成：
+- [ ] K 维 blocking / unroll 策略。
+- [ ] RHS/B panel packing 与 prefetch。
+- [ ] CPU feature aware tile policy（AVX-512 / AVX2 / fallback）。
+- [ ] IR/ASM 统计脚本，持续跟踪 `vfmadd...ps` / `vfmadd...ss` / spill / gather。
 
-落地时，可参考 IREE / mlir-cpu-runner 默认 pipeline 中的：
-`-test-linalg-codegen-strategy=anchor-op=linalg.matmul tile-sizes=8,16,64 vectorize`
-等价的 C++ pass 串。
+### 🥈 P1 — 已完成：解决"窄 N 退化为标量"问题
+**收益**：Linear 输出层、MLP 末层不再使用一组标量 accumulator 作为主路径。
 
-### 🥈 P1 — 高收益：解决"窄 N 退化为标量"问题
-**期望收益**：Linear 输出层、MLP 末层 1.5–2×。
+已完成：
+- [x] `4 <= N <= 16` 的输出层改为精确 `vector<Nxf32>` 累加，例如 MNIST 的 `N=10` 末层走 `vector<10xf32>`。
+- [x] `N < 4` 保留旧的标量窄输出路径，避免过小向量引入额外 lowering 噪声。
 
-- 让 vectorization 沿 **M 维（batch）** 向量化而不是 N 维。具体：把 matmul 重写成
-  `linalg.generic { iterator_types=[parallel(M tiled by 16), parallel(N), reduction(K)] }`。
-- 或者写一个特化的 pattern：当输出形状最后一维 < 8 时，交换 loop 顺序到 K → M → N。
+后续可选：
+- [ ] 对 `N=1..3` 的特殊 reduce/linear 场景再做专门 micro-kernel。
 
 ### 🥉 P2 — 已落地：消除 ReLU 中的零张量并融合 MatMulBiasAddReLU
 **收益**：减少 ReLU 常量体积，避免 MLP hidden layer 在 AOT 中额外执行一段 ReLU 读写 pass。
 
 已完成：
-- [Activation.h](src/LiteNN/Layer/Activation.h) 中 ReLU/Sigmoid/Tanh/GELU/ELU 的标量系数改为 `{1}` 标量常量，通过既有 broadcast lowering 复用。
-- 新增 `FusionPattern::MatMulBiasAddReLU`。Graph 层仍保留 body 子图语义；Interpreter 按 body 执行，AOT lowering 则给 matmul contraction 标记 `litenn.apply_relu`。
-- [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 的 matmul micro-kernel 在最终 store 前执行 `arith.maximumf(acc, 0)`，避免单独 materialize ReLU 输出。
+- [x] [Activation.h](src/LiteNN/Layer/Activation.h) 中 ReLU/Sigmoid/Tanh/GELU/ELU 的标量系数改为 `{1}` 标量常量，通过既有 broadcast lowering 复用。
+- [x] 新增 `FusionPattern::MatMulBiasAddReLU`。Graph 层仍保留 body 子图语义；Interpreter 按 body 执行，AOT lowering 则给 matmul contraction 标记 `litenn.apply_relu`。
+- [x] [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 的 matmul micro-kernel 在最终 store 前执行 `arith.maximumf(acc, 0)`，避免单独 materialize ReLU 输出。
 
-### P3 — 低成本但建议做
-- **FastMath 加上 `nnan | ninf | nsz | afn`**：让 LLVM 进一步合并 `max/min` 与 fma，消除 NaN check。改 [LLVMCodegenPipeline.cpp:32](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp)：
+### P3 — 低成本项状态
+- [x] **FastMath 加上 `nnan | ninf | nsz`**：让 LLVM 进一步合并 fma，消除不必要的 NaN/Inf 保守路径。`afn` 暂不默认开启，避免对 `exp/log/pow` 等超越函数引入更强近似语义。当前 [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 使用：
   ```cpp
   auto flags = mlir::arith::FastMathFlags::reassoc
              | mlir::arith::FastMathFlags::contract
@@ -172,8 +173,9 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
              | mlir::arith::FastMathFlags::ninf
              | mlir::arith::FastMathFlags::nsz;
   ```
-- **CMake 编译标志**：`-march=native -funroll-loops -fomit-frame-pointer`（已隐式启用部分），并对 `LiteNN` 主库本身打 LTO（`-flto=thin`）。
-- **bench 添加 `--use-runinto` 选项**：保留 `Run()` 的便利接口，新增 `RunInto` 路径，避免后续优化时被分配噪声掩盖。
+- [ ] **CMake 编译标志**：`-march=native -funroll-loops -fomit-frame-pointer`（已隐式启用部分），并对 `LiteNN` 主库本身打 LTO（`-flto=thin`）。
+- [x] **bench 添加 `--use-runinto` 选项**：保留 `Run()` 的便利接口，新增 `RunInto` 路径，避免后续优化时被分配噪声掩盖。
+- [x] **bench 添加多请求并发测量**：`--parallel-requests N --request-threads N` 使用 `CompiledModule::RunManyInto` 测量服务端吞吐模式。
 
 ### P4 — 可选增强
 - 加入 IR dump 环境变量：`if (getenv("LITENN_DUMP_MLIR")) module.dump();`，便于今后调优时观察各 pass 输出。当前需要重编译才能 dump IR，体验差。
@@ -196,7 +198,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 本轮继续推进了四个方向：
 
-- **宽输出 MatMul 4-row micro-kernel**：在 `M` 维静态且可被 4 整除的宽输出 `f32` MatMul 上，新增 `4 x (最多 4 个 vector<16xf32>)` 的寄存器 tile。K 循环中同一个 RHS/B 向量会同时喂四行 LHS/A，减少 hidden layer 中重复加载 B 的比例；不满足条件时回退到单行、最多 8 个 N 向量 tile。
+- **宽输出 MatMul row-tile 策略**：在 `M` 维静态的宽输出 `f32` MatMul 上，按形状依次尝试 `8 x 2`、`4 x 4`、`2 x 8` 个 `vector<16xf32>` accumulator。K 循环中同一个 RHS/B 向量会同时喂多行 LHS/A，减少 hidden layer 中重复加载 B 的比例；不满足条件时回退到单行、最多 8 个 N 向量 tile。对比测试中 `8x4` 因寄存器压力导致 MLP-512 退化，未保留。
 - **窄输出 MatMul vector<N> micro-kernel**：`4 <= N <= 16` 的输出层改为精确 `vector<Nxf32>` 累加，例如 MNIST 的 `N=10` 末层不再使用 10 个标量 accumulator；`N < 4` 继续走旧的标量窄输出路径。
 - **MatMulBiasAddReLU 融合**：新增 graph fusion pattern 与 AOT lowering 标记，使 hidden layer 的 ReLU 在 matmul micro-kernel store 前完成，减少额外中间张量读写。该 pattern 目前只在输出为 f32 rank-2 且 `N <= 16 || N % 16 == 0` 时启用，保证当前 codegen pass 可以消化标记，不会落到错误的普通 lowering。
 - **标量常量收缩**：激活层内部的 `0/1/2/0.5/...` 系数改为 `{1}` 标量常量，避免 ReLU 等层为每个输出 shape 生成完整常量张量。
@@ -204,23 +206,23 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 本轮验证：
 
-- `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：137/137 通过。
+- `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：138/138 通过。
 - 新增 `FusionPass.MatMulBiasAddReLU` 单测，并额外跑过 `FusionPassTest.exe`、`LLVMCodegenPassTest.exe`、`CompiledModuleTest.exe`。
 - `cmd /c build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
   - `Linear(784->10), batch=512`: AOTInto 约 `0.312 ms`
-  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.509 ms`
-  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.700 ms`
-- `cmd /c build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_row_tile4x4` 关键结果：
-  - `linear_b512`: RunInto 约 `0.309 ms`
-  - `mlp128_b512`: RunInto 约 `0.545 ms`
-  - `mlp512_b512`: RunInto 约 `3.251 ms`
+  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.407 ms`
+  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.551 ms`
+- `cmd /c build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_row_tile_strategy` 关键结果：
+  - `linear_b512`: RunInto 约 `0.291 ms`
+  - `mlp128_b512`: RunInto 约 `0.422 ms`
+  - `mlp512_b512`: RunInto 约 `2.636 ms`
 - `cmd /c build-release-mingw\benchmark\litenn_bench.exe --parallel-requests 4 --request-threads 4` 关键结果：
-  - `MLP(784->512->256->10), batch=512`: AOTIntoMT 吞吐等价约 `1.618 ms/batch`
+  - `MLP(784->512->256->10), batch=512`: AOTIntoMT 吞吐等价约 `1.445 ms/batch`
   - 小 batch/小模型会被线程调度开销反噬，不能默认开启多请求并发
 
 后续最高收益点仍是：
 
-- 将当前 `4-row x N-vector` micro-kernel 继续升级为真正的 M/N/K blocking，并为 RHS/B 引入 panel packing 与 prefetch，减少大 hidden layer 的 cache miss。
+- 将当前 row-tile micro-kernel 继续升级为真正的 M/N/K blocking，并为 RHS/B 引入 panel packing 与 prefetch，减少大 hidden layer 的 cache miss。
 - 设计单个 MatMul 的 intra-op 并行：优先考虑编译期 tile plan + LiteNN runtime threadpool，而不是让生成 object 直接依赖平台线程库。
 - 为不同 CPU feature 生成 tile policy：AVX-512 可保持 `vector<16xf32>`，AVX2/无 AVX-512 时应退回 `vector<8xf32>` 或更保守的 tile，避免过度依赖 LLVM 对非法向量的拆分质量。
 - 增加 IR/ASM 统计脚本，把 `vfmadd...ps`、`vfmadd...ss`、`gather/scatter` 数量变成可回归的指标。
@@ -235,7 +237,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
      Select-String "vfmadd" | Group-Object { $_ -match 'ps.*zmm' } | Format-Table
    ```
    完整 P0 tile/vectorize 的目标：`linear_b512` 中 `vfmadd…ps zmm/ymm` 占比 > 80%；`vfmadd…ss` 数量 → 0。
-   当前阶段目标：确保窄输出 `N=10` 走 `vector<10xf32>`，宽输出 hidden layer 走 4-row tile，并持续观察是否出现 gather/scatter 或寄存器 spill。
+   当前阶段目标：确保窄输出 `N=10` 走 `vector<10xf32>`，宽输出 hidden layer 走 row-tile 策略，并持续观察是否出现 gather/scatter 或寄存器 spill。
 4. 关键阈值（建议 PR 验收门槛）：
    - Linear/512：≤ 0.30 ms（即追平 PyTorch ±40%）
    - MLP-512/512：≤ 5.0 ms（即追平 PyTorch ±15%）

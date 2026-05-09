@@ -181,7 +181,9 @@ mlir::LogicalResult validateMatMulCandidate(mlir::linalg::GenericOp op,
 }
 
 mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
-                                             mlir::OpBuilder& builder)
+                                             mlir::OpBuilder& builder,
+                                             int64_t rowTile,
+                                             int64_t maxTileVectors)
 {
     mlir::Value lhs;
     mlir::Value rhs;
@@ -195,22 +197,28 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
     }
 
     constexpr int64_t kVectorWidth = 16;
-    constexpr int64_t kRowTile = 4;
     const int64_t n = outType.getDimSize(1);
     if (n <= kVectorWidth || n % kVectorWidth != 0 ||
-        outType.isDynamicDim(0) || outType.getDimSize(0) % kRowTile != 0)
+        outType.isDynamicDim(0) || outType.getDimSize(0) % rowTile != 0)
     {
         return mlir::failure();
     }
 
-    const int64_t tileVectors = (n % (kVectorWidth * 4) == 0) ? 4 :
-                                (n % (kVectorWidth * 2) == 0) ? 2 : 1;
+    int64_t tileVectors = 1;
+    for (int64_t candidate = maxTileVectors; candidate > 1; candidate /= 2)
+    {
+        if (n % (kVectorWidth * candidate) == 0)
+        {
+            tileVectors = candidate;
+            break;
+        }
+    }
     const int64_t nStep = kVectorWidth * tileVectors;
 
     const auto loc = op.getLoc();
     auto c0 = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
     auto c1 = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
-    auto cMstep = builder.create<mlir::arith::ConstantIndexOp>(loc, kRowTile);
+    auto cMstep = builder.create<mlir::arith::ConstantIndexOp>(loc, rowTile);
     auto cNStep = builder.create<mlir::arith::ConstantIndexOp>(loc, nStep);
     auto nUpper = builder.create<mlir::arith::ConstantIndexOp>(loc, n);
     auto mUpper = builder.create<mlir::memref::DimOp>(loc, out, 0);
@@ -223,10 +231,10 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
         mlir::OpBuilder::InsertionGuard mGuard(builder);
         builder.setInsertionPointToStart(mLoop.getBody());
         auto mBase = mLoop.getInductionVar();
-        llvm::SmallVector<mlir::Value, 4> mIndices;
-        mIndices.reserve(kRowTile);
+        llvm::SmallVector<mlir::Value, 8> mIndices;
+        mIndices.reserve(static_cast<size_t>(rowTile));
         mIndices.push_back(mBase);
-        for (int64_t row = 1; row < kRowTile; ++row)
+        for (int64_t row = 1; row < rowTile; ++row)
         {
             auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, row);
             mIndices.push_back(builder.create<mlir::arith::AddIOp>(loc, mBase, offset).getResult());
@@ -238,10 +246,10 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
             builder.setInsertionPointToStart(nLoop.getBody());
             auto nBase = nLoop.getInductionVar();
 
-            llvm::SmallVector<mlir::Value, 4> nIndices;
-            llvm::SmallVector<mlir::Value, 8> initAccs;
+            llvm::SmallVector<mlir::Value, 8> nIndices;
+            llvm::SmallVector<mlir::Value, 16> initAccs;
             nIndices.reserve(static_cast<size_t>(tileVectors));
-            initAccs.reserve(static_cast<size_t>(kRowTile * tileVectors));
+            initAccs.reserve(static_cast<size_t>(rowTile * tileVectors));
             for (int64_t lane = 0; lane < tileVectors; ++lane)
             {
                 mlir::Value nIndex = nBase;
@@ -253,7 +261,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
                 nIndices.push_back(nIndex);
             }
 
-            for (int64_t row = 0; row < kRowTile; ++row)
+            for (int64_t row = 0; row < rowTile; ++row)
             {
                 for (int64_t lane = 0; lane < tileVectors; ++lane)
                 {
@@ -269,7 +277,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
                 loc, c0, kUpper, c1, initAccs,
                 [&](mlir::OpBuilder& nested, mlir::Location nestedLoc,
                     mlir::Value k, mlir::ValueRange accs) {
-                    llvm::SmallVector<mlir::Value, 4> bVecs;
+                    llvm::SmallVector<mlir::Value, 8> bVecs;
                     bVecs.reserve(static_cast<size_t>(tileVectors));
                     for (int64_t lane = 0; lane < tileVectors; ++lane)
                     {
@@ -278,9 +286,9 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
                             mlir::ValueRange{ k, nIndices[static_cast<size_t>(lane)] }).getResult());
                     }
 
-                    llvm::SmallVector<mlir::Value, 8> nextAccs;
+                    llvm::SmallVector<mlir::Value, 16> nextAccs;
                     nextAccs.reserve(accs.size());
-                    for (int64_t row = 0; row < kRowTile; ++row)
+                    for (int64_t row = 0; row < rowTile; ++row)
                     {
                         auto a = nested.create<mlir::memref::LoadOp>(
                             nestedLoc, lhs,
@@ -300,7 +308,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
                     nested.create<mlir::scf::YieldOp>(nestedLoc, nextAccs);
                 });
 
-            for (int64_t row = 0; row < kRowTile; ++row)
+            for (int64_t row = 0; row < rowTile; ++row)
             {
                 for (int64_t lane = 0; lane < tileVectors; ++lane)
                 {
@@ -590,7 +598,15 @@ struct LowerNarrowMatMulPass
         for (auto op : candidates)
         {
             builder.setInsertionPoint(op);
-            if (mlir::succeeded(rewriteWideMatMulRowTile(op, builder)))
+            if (mlir::succeeded(rewriteWideMatMulRowTile(op, builder, 8, 2)))
+            {
+                continue;
+            }
+            if (mlir::succeeded(rewriteWideMatMulRowTile(op, builder, 4, 4)))
+            {
+                continue;
+            }
+            if (mlir::succeeded(rewriteWideMatMulRowTile(op, builder, 2, 8)))
             {
                 continue;
             }
