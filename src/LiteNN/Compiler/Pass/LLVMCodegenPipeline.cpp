@@ -151,7 +151,9 @@ mlir::Value applyReluIfNeeded(mlir::OpBuilder& builder,
         zero = builder.create<mlir::arith::ConstantFloatOp>(
             loc, floatType, llvm::APFloat::getZero(floatType.getFloatSemantics())).getResult();
     }
-    return builder.create<mlir::arith::MaximumFOp>(loc, value, zero).getResult();
+    auto maxOp = builder.create<mlir::arith::MaxNumFOp>(loc, value, zero);
+    maxOp->setAttr(maxOp.getFastMathAttrName(), getContractOnlyFastMath(builder.getContext()));
+    return maxOp.getResult();
 }
 
 mlir::LogicalResult validateMatMulCandidate(mlir::linalg::GenericOp op,
@@ -520,6 +522,96 @@ mlir::LogicalResult rewriteNarrowVectorMatMul(mlir::linalg::GenericOp op,
     return mlir::success();
 }
 
+mlir::LogicalResult rewriteNarrowVectorMatMulRowTile(mlir::linalg::GenericOp op,
+                                                     mlir::OpBuilder& builder,
+                                                     int64_t rowTile)
+{
+    mlir::Value lhs;
+    mlir::Value rhs;
+    mlir::Value out;
+    mlir::MemRefType lhsType;
+    mlir::MemRefType rhsType;
+    mlir::MemRefType outType;
+    if (mlir::failed(validateMatMulCandidate(op, lhs, rhs, out, lhsType, rhsType, outType)))
+    {
+        return mlir::failure();
+    }
+
+    const int64_t n = outType.getDimSize(1);
+    if (n < 4 || n > 16 || outType.isDynamicDim(0) || outType.getDimSize(0) % rowTile != 0)
+    {
+        return mlir::failure();
+    }
+
+    const auto loc = op.getLoc();
+    auto c0 = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
+    auto c1 = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+    auto cMstep = builder.create<mlir::arith::ConstantIndexOp>(loc, rowTile);
+    auto mUpper = builder.create<mlir::memref::DimOp>(loc, out, 0);
+    auto kUpper = builder.create<mlir::memref::DimOp>(loc, lhs, 1);
+    auto vecType = mlir::VectorType::get({ n }, outType.getElementType());
+    const bool applyRelu = op->hasAttr(kApplyReluAttr);
+
+    auto mLoop = builder.create<mlir::scf::ForOp>(loc, c0, mUpper, cMstep);
+    {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(mLoop.getBody());
+        auto mBase = mLoop.getInductionVar();
+
+        llvm::SmallVector<mlir::Value, 16> mIndices;
+        llvm::SmallVector<mlir::Value, 16> initAccs;
+        mIndices.reserve(static_cast<size_t>(rowTile));
+        initAccs.reserve(static_cast<size_t>(rowTile));
+        mIndices.push_back(mBase);
+        for (int64_t row = 1; row < rowTile; ++row)
+        {
+            auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, row);
+            mIndices.push_back(builder.create<mlir::arith::AddIOp>(loc, mBase, offset).getResult());
+        }
+        for (int64_t row = 0; row < rowTile; ++row)
+        {
+            initAccs.push_back(builder.create<mlir::vector::LoadOp>(
+                loc, vecType, out,
+                mlir::ValueRange{ mIndices[static_cast<size_t>(row)], c0 }).getResult());
+        }
+
+        auto kLoop = builder.create<mlir::scf::ForOp>(
+            loc, c0, kUpper, c1, initAccs,
+            [&](mlir::OpBuilder& nested, mlir::Location nestedLoc,
+                mlir::Value k, mlir::ValueRange accs) {
+                auto bVec = nested.create<mlir::vector::LoadOp>(
+                    nestedLoc, vecType, rhs, mlir::ValueRange{ k, c0 }).getResult();
+
+                llvm::SmallVector<mlir::Value, 16> nextAccs;
+                nextAccs.reserve(accs.size());
+                for (int64_t row = 0; row < rowTile; ++row)
+                {
+                    auto a = nested.create<mlir::memref::LoadOp>(
+                        nestedLoc, lhs,
+                        mlir::ValueRange{ mIndices[static_cast<size_t>(row)], k }).getResult();
+                    auto aVec = nested.create<mlir::vector::BroadcastOp>(
+                        nestedLoc, vecType, a).getResult();
+                    auto next = nested.create<mlir::vector::FMAOp>(
+                        nestedLoc, aVec, bVec, accs[static_cast<size_t>(row)]).getResult();
+                    nextAccs.push_back(next);
+                }
+                nested.create<mlir::scf::YieldOp>(nestedLoc, nextAccs);
+            });
+
+        for (int64_t row = 0; row < rowTile; ++row)
+        {
+            auto value = applyReluIfNeeded(
+                builder, loc, kLoop.getResult(static_cast<unsigned>(row)), applyRelu);
+            builder.create<mlir::vector::StoreOp>(
+                loc, value, out,
+                mlir::ValueRange{ mIndices[static_cast<size_t>(row)], c0 });
+        }
+    }
+
+    op.erase();
+    return mlir::success();
+}
+
 mlir::LogicalResult rewriteNarrowMatMul(mlir::linalg::GenericOp op,
                                         mlir::OpBuilder& builder)
 {
@@ -638,6 +730,14 @@ struct LowerNarrowMatMulPass
                 continue;
             }
             if (mlir::succeeded(rewriteWideMatMul(op, builder)))
+            {
+                continue;
+            }
+            if (mlir::succeeded(rewriteNarrowVectorMatMulRowTile(op, builder, 16)))
+            {
+                continue;
+            }
+            if (mlir::succeeded(rewriteNarrowVectorMatMulRowTile(op, builder, 8)))
             {
                 continue;
             }

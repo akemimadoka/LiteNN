@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <future>
 #include <ranges>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -171,6 +172,60 @@ TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
+	    { 1.0, -2.0, 0.5, 3.0, -1.0,
+	      0.25, 4.0, -1.5, 2.0, 0.75,
+	      -3.0, 1.0, 2.5, -0.5, 1.25 },
+	    { 3, 5 }, DataType::Float32)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 16, 3 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
+	                               { OutputInfo{ DataType::Float32, { 3, 5 } } });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 16, 5 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+
+	std::vector<double> inputData(16 * 3);
+	for (std::size_t row = 0; row < 16; ++row)
+	{
+		inputData[row * 3 + 0] = static_cast<double>(row + 1);
+		inputData[row * 3 + 1] = static_cast<double>(row % 5) - 2.0;
+		inputData[row * 3 + 2] = static_cast<double>(row % 7) * 0.5 + 1.0;
+	}
+	Tensor<CPU> x(std::span<const double>(inputData), { 16, 3 }, DataType::Float32);
+	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
+	std::array<Tensor<CPU>, 1> outputs = {
+	    Tensor<CPU>(Uninitialized, { 16, 5 }, DataType::Float32)
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	compiled.RunInto(inputs, outputs);
+
+	const double weights[3][5] = {
+	    { 1.0, -2.0, 0.5, 3.0, -1.0 },
+	    { 0.25, 4.0, -1.5, 2.0, 0.75 },
+	    { -3.0, 1.0, 2.5, -0.5, 1.25 },
+	};
+	for (std::size_t row = 0; row < 16; ++row)
+	{
+		for (std::size_t col = 0; col < 5; ++col)
+		{
+			double expected = 0.0;
+			for (std::size_t k = 0; k < 3; ++k)
+			{
+				expected += inputData[row * 3 + k] * weights[k][col];
+			}
+			EXPECT_NEAR(ReadFloat(outputs[0], row * 5 + col), expected, 1e-5f);
+		}
+	}
 }
 
 TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)

@@ -151,6 +151,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 已完成：
 - [x] `4 <= N <= 16` 的输出层改为精确 `vector<Nxf32>` 累加，例如 MNIST 的 `N=10` 末层走 `vector<10xf32>`。
+- [x] `4 <= N <= 16` 且 batch/M 维静态可整除时，新增 `16-row x vector<N>` / `8-row x vector<N>` row-tile micro-kernel。K 循环中一个 RHS/B `vector<N>` 同时喂多行 LHS/A，Linear/512 从约 `0.28 ms` 降到约 `0.054 ms`。
 - [x] `N < 4` 保留旧的标量窄输出路径，避免过小向量引入额外 lowering 噪声。
 
 后续可选：
@@ -162,7 +163,8 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 已完成：
 - [x] [Activation.h](src/LiteNN/Layer/Activation.h) 中 ReLU/Sigmoid/Tanh/GELU/ELU 的标量系数改为 `{1}` 标量常量，通过既有 broadcast lowering 复用。
 - [x] 新增 `FusionPattern::MatMulBiasAddReLU`。Graph 层仍保留 body 子图语义；Interpreter 按 body 执行，AOT lowering 则给 matmul contraction 标记 `litenn.apply_relu`。
-- [x] [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 的 matmul micro-kernel 在最终 store 前执行 `arith.maximumf(acc, 0)`，避免单独 materialize ReLU 输出。
+- [x] [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 的 matmul micro-kernel 在最终 store 前执行 `arith.maxnumf(acc, 0)`，避免单独 materialize ReLU 输出。
+- [x] fused ReLU 的 AOT micro-kernel 改用 `arith.maxnumf` + fastmath，hot hidden layer store 前不再生成 `vcmpunordps + masked vmovaps` 的 NaN 保守路径，只保留 `vmaxps`。
 
 ### P3 — 低成本项状态
 - [x] **FastMath 加上 `nnan | ninf | nsz`**：让 LLVM 进一步合并 fma，消除不必要的 NaN/Inf 保守路径。`afn` 暂不默认开启，避免对 `exp/log/pow` 等超越函数引入更强近似语义。当前 [LLVMCodegenPipeline.cpp](src/LiteNN/Compiler/Pass/LLVMCodegenPipeline.cpp) 使用：
@@ -174,6 +176,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
              | mlir::arith::FastMathFlags::nsz;
   ```
 - [ ] **CMake 编译标志**：`-march=native -funroll-loops -fomit-frame-pointer`（已隐式启用部分），并对 `LiteNN` 主库本身打 LTO（`-flto=thin`）。
+- [x] **AOT 变量全局只读与 64B 对齐**：Lowering 时把烘进 object 的 `memref.global` 变量标为 `constant` 并设置 64 字节对齐，权重/偏置进入 `.rdata`，帮助 LLVM 消除写入假设与部分 init/scatter 噪声。
 - [x] **bench 添加 `--use-runinto` 选项**：保留 `Run()` 的便利接口，新增 `RunInto` 路径，避免后续优化时被分配噪声掩盖。
 - [x] **bench 添加多请求并发测量**：`--parallel-requests N --request-threads N` 使用 `CompiledModule::RunManyInto` 测量服务端吞吐模式。
 
@@ -250,22 +253,54 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 P0 剩余最高收益项仍是 RHS/B panel packing 与真正的 K blocking/prefetch。当前 row-tile micro-kernel 已经把主要算子推进到 packed zmm FMA，后续应避免大改 accumulator 初始化形态，优先在 B layout/packing 层减少 cache 流量。
 
+### 6.3 Copilot Update（2026-05-10）
+
+本轮在允许更激进改动的前提下继续推进，并保留了三项确定收益/确定清理：
+
+- **窄输出 MatMul row-tile**：为 `4 <= N <= 16` 的 `vector<Nxf32>` 路径新增 `16-row x vector<N>` / `8-row x vector<N>` tile。此前 Linear/末层虽然已经不再是标量 FMA，但每个 batch 行仍重复加载同一个 RHS/B `vector<N>`；新路径在 K 循环中一次 B load 复用给 16 行 accumulator。Linear/512 profile 从约 `0.28 ms` 降到约 `0.054 ms`，已经明显快于本报告早期 PyTorch 单线程基线 `0.215 ms`。
+- **fused ReLU maxnum lowering**：micro-kernel store 前的 ReLU 从 NaN-preserving `maximumf` 改为 `maxnumf` 并显式携带 fastmath。`subgraph_0` 中 hidden layer ReLU 不再生成 `vmaxps + vcmpunordps + masked vmovaps`，变成单条 `vmaxps`。
+- **AOT 变量全局只读与对齐**：变量 lowering 到 `memref.global` 时标为 `constant` 并设置 64B alignment。编译产物中权重/偏置进入 `.rdata`，hot ASM 中 scatter 与 scalar move 噪声消失。
+
+实验但未保留：
+
+- **K 维手动 unroll**：试过 4-way 和 2-way。4-way 让 MLP-512/512 退到约 `2.7–3.0 ms`；2-way 也没有稳定收益，已撤回。LLVM 当前对这类 `scf.for + vector.fma` 的自动调度已经比手动展开更稳。
+- **`4-row x 4-vector` 优先于 `8-row x 2-vector`**：MLP-128/512 与 MLP-512/512 均退化，已恢复 `8x2 -> 4x4 -> 2x8` 的原优先级。
+
+最终验证结果：
+
+- `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：139/139 通过。
+- 新增 `CompiledModuleTest.NarrowMatMulRowTileMatchesReference`，覆盖 batch=16、`N=5` 的窄输出 row-tile AOT 数值正确性。
+- `build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
+  - `Linear(784->10), batch=512`: AOTInto 约 `0.061 ms`
+  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.363 ms`
+  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.361 ms`
+- `build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_narrow_row_tile16_repeat` 关键结果：
+  - `linear_b512`: RunInto 约 `0.054 ms`
+  - `mlp128_b512`: RunInto 约 `0.342 ms`
+  - `mlp512_b512`: RunInto 约 `2.385 ms`
+- ASM 统计：
+  - `linear_b512.o / subgraph_0`: `PackedFMA=32`、`ScalarFMA=0`、`ZmmPackedFMA=32`、`Gather=0`、`Scatter=0`、`StackVectorOp=0`
+  - `mlp512_b512.o / subgraph_0`: `PackedFMA=96`、`ScalarFMA=0`、`ZmmPackedFMA=96`、`Gather=0`、`Scatter=0`、`StackVectorOp=0`
+
+当前单线程剩余主要差距已经从 Linear 转移到大 hidden layer 的 cache/layout 问题。下一轮 P0 应继续做 RHS/B panel packing：当前 row-major B 在固定 N tile 下沿 K 维跨行 stride 访问，虽然 row-tile 已提升 B 复用，但还没有把 `[K, Ntile]` panel 变成 K-loop 连续流式读取。
+
 ## 7. 验证方法（下一轮回归用）
 
 1. 重跑 `litenn_bench.exe` 与 `bench.py --threads 1`，对比上面表格。
 2. 重跑 `litenn_profile.exe` 收集 `Run vs RunInto`，确保改动没有引入 alloc 退化。
 3. 重新 dump `.o` 反汇编：
    ```pwsh
-  benchmark\analyze_asm.ps1 -Object build-release-mingw\profile_out_final_p0\mlp512_b512.o -Function subgraph_0
+  benchmark\analyze_asm.ps1 -Object build-release-mingw\profile_out_narrow_row_tile16_repeat\mlp512_b512.o -Function subgraph_0
 
    objdump -d -M intel linear_b512.o |
      Select-String "vfmadd" | Group-Object { $_ -match 'ps.*zmm' } | Format-Table
    ```
    完整 P0 tile/vectorize 的目标：`linear_b512` 中 `vfmadd…ps zmm/ymm` 占比 > 80%；`vfmadd…ss` 数量 → 0。
-   当前阶段目标：确保窄输出 `N=10` 走 `vector<10xf32>`，宽输出 hidden layer 走 row-tile 策略，并持续观察是否出现 gather/scatter 或寄存器 spill。
+  当前阶段目标：确保窄输出 `N=10` 走 `16-row x vector<10xf32>` row-tile，宽输出 hidden layer 走 row-tile 策略，并持续观察是否出现 gather/scatter 或寄存器 spill。
 4. 关键阈值（建议 PR 验收门槛）：
-   - Linear/512：≤ 0.30 ms（即追平 PyTorch ±40%）
-   - MLP-512/512：≤ 5.0 ms（即追平 PyTorch ±15%）
+  - Linear/512：≤ 0.08 ms
+  - MLP-128/512：≤ 0.40 ms
+  - MLP-512/512：≤ 2.60 ms
 
 ## 8. 风险与注意
 

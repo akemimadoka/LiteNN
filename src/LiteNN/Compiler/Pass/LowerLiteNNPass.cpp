@@ -234,8 +234,8 @@ struct ConvertVariableOp : OpRewritePattern<VariableOp>
 		    op, op.getSymName(),
 		    /*sym_visibility=*/rewriter.getStringAttr("public"),
 		    memrefType, initAttr,
-		    /*constant=*/false,
-		    /*alignment=*/IntegerAttr{});
+		    /*constant=*/true,
+		    /*alignment=*/rewriter.getI64IntegerAttr(64));
 		return success();
 	}
 };
