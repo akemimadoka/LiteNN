@@ -140,11 +140,11 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 - [x] 宽输出 `f32` MatMul 使用 `vector<16xf32>`，当前策略按形状依次尝试 `8-row x 2-vector`、`4-row x 4-vector`、`2-row x 8-vector` 寄存器 tile；K 循环中一个 RHS/B 向量复用给多行 LHS/A。
 - [x] `vector` dialect lowering 已接入 LLVM codegen pipeline。
 
-仍待完成：
+当前状态：
 - [ ] K 维 blocking / unroll 策略。
 - [ ] RHS/B panel packing 与 prefetch。
-- [ ] CPU feature aware tile policy（AVX-512 / AVX2 / fallback）。
-- [ ] IR/ASM 统计脚本，持续跟踪 `vfmadd...ps` / `vfmadd...ss` / spill / gather。
+- [x] CPU feature aware tile policy（AVX-512 / AVX2 / fallback）。当前 AVX-512 机器继续使用 `vector<16xf32>`；AVX/AVX2 退回 8 lane；SSE 退回 4 lane。
+- [x] ASM 统计脚本，持续跟踪 `vfmadd...ps` / `vfmadd...ss` / spill / gather / scatter。
 
 ### 🥈 P1 — 已完成：解决"窄 N 退化为标量"问题
 **收益**：Linear 输出层、MLP 末层不再使用一组标量 accumulator 作为主路径。
@@ -224,8 +224,31 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 - 将当前 row-tile micro-kernel 继续升级为真正的 M/N/K blocking，并为 RHS/B 引入 panel packing 与 prefetch，减少大 hidden layer 的 cache miss。
 - 设计单个 MatMul 的 intra-op 并行：优先考虑编译期 tile plan + LiteNN runtime threadpool，而不是让生成 object 直接依赖平台线程库。
-- 为不同 CPU feature 生成 tile policy：AVX-512 可保持 `vector<16xf32>`，AVX2/无 AVX-512 时应退回 `vector<8xf32>` 或更保守的 tile，避免过度依赖 LLVM 对非法向量的拆分质量。
-- 增加 IR/ASM 统计脚本，把 `vfmadd...ps`、`vfmadd...ss`、`gather/scatter` 数量变成可回归的指标。
+- 在 CPU feature tile policy 和 ASM 统计脚本已落地的基础上，继续把 tile 策略与回归指标接入自动化性能门槛。
+
+### 6.2 Copilot Update（2026-05-10）
+
+本轮继续沿 P0 方向做了验证和收敛：
+
+- **CPU feature aware vector width**：宽输出 MatMul micro-kernel 不再硬编码 `vector<16xf32>`，而是根据 `llvm::sys::getHostCPUFeatures()` 选择 f32 lane 数：AVX-512 = 16，AVX/AVX2 = 8，SSE = 4，fallback = 1。当前 9950X 仍生成与之前一致的 zmm hot kernel；非 AVX-512 机器不再依赖 LLVM 拆分 16-lane 非法向量。
+- **ASM 统计脚本**：新增 [benchmark/analyze_asm.ps1](../benchmark/analyze_asm.ps1)，可直接统计指定 object/function 的 packed/scalar FMA、zmm/ymm/xmm、gather/scatter、栈上 vector op、load/broadcast/prefetch 等指标。
+- **实验但未保留：直接吸收 zero/bias init 到 accumulator**。扫描并删除 MatMul 前置 init op 后，MLP-512/512 从约 `2.4 ms` 退化到 `2.9–3.3 ms`；原因是当前 LLVM 对前置 bias 初始化的调度形态反而更利于后续 micro-kernel。该改动已撤回。
+- **实验但未保留：`16-row x 1-vector` tile**。该策略理论上提升 RHS/B 复用，但实测 MLP-512/512 退化到约 `2.7 ms`，说明 N-loop 数量增加与调度压力抵消了 B load 减少。当前 `8x2 -> 4x4 -> 2x8` 策略仍更稳。
+
+最终验证结果：
+
+- `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：138/138 通过。
+- `build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
+  - `Linear(784->10), batch=512`: AOTInto 约 `0.288 ms`
+  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.381 ms`
+  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.505 ms`
+- `build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_final_p0` 关键结果：
+  - `linear_b512`: RunInto 约 `0.284 ms`
+  - `mlp128_b512`: RunInto 约 `0.392 ms`
+  - `mlp512_b512`: RunInto 约 `2.420 ms`
+- `benchmark\analyze_asm.ps1 -Object build-release-mingw\profile_out_final_p0\mlp512_b512.o -Function subgraph_0`：hot forward 函数 `PackedFMA=80`、`ScalarFMA=0`、`ZmmPackedFMA=80`、`Gather=0`、`StackVectorOp=0`、`Scatter=40`。
+
+P0 剩余最高收益项仍是 RHS/B panel packing 与真正的 K blocking/prefetch。当前 row-tile micro-kernel 已经把主要算子推进到 packed zmm FMA，后续应避免大改 accumulator 初始化形态，优先在 B layout/packing 层减少 cache 流量。
 
 ## 7. 验证方法（下一轮回归用）
 
@@ -233,6 +256,8 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 2. 重跑 `litenn_profile.exe` 收集 `Run vs RunInto`，确保改动没有引入 alloc 退化。
 3. 重新 dump `.o` 反汇编：
    ```pwsh
+  benchmark\analyze_asm.ps1 -Object build-release-mingw\profile_out_final_p0\mlp512_b512.o -Function subgraph_0
+
    objdump -d -M intel linear_b512.o |
      Select-String "vfmadd" | Group-Object { $_ -match 'ps.*zmm' } | Format-Table
    ```

@@ -22,6 +22,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/TargetParser/Host.h"
 
 namespace litenn
 {
@@ -47,6 +48,32 @@ bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
         }
     }
     return true;
+}
+
+int64_t nativeF32VectorWidth()
+{
+    static const int64_t width = [] {
+        const auto features = llvm::sys::getHostCPUFeatures();
+        const auto hasFeature = [&](llvm::StringRef name) {
+            auto it = features.find(name);
+            return it != features.end() && it->second;
+        };
+
+        if (hasFeature("avx512f"))
+        {
+            return int64_t{ 16 };
+        }
+        if (hasFeature("avx2") || hasFeature("avx"))
+        {
+            return int64_t{ 8 };
+        }
+        if (hasFeature("sse2") || hasFeature("sse"))
+        {
+            return int64_t{ 4 };
+        }
+        return int64_t{ 1 };
+    }();
+    return width;
 }
 
 bool hasMatMulPayload(mlir::linalg::GenericOp op)
@@ -196,9 +223,9 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
         return mlir::failure();
     }
 
-    constexpr int64_t kVectorWidth = 16;
+    const int64_t vectorWidth = nativeF32VectorWidth();
     const int64_t n = outType.getDimSize(1);
-    if (n <= kVectorWidth || n % kVectorWidth != 0 ||
+    if (vectorWidth < 4 || n <= vectorWidth || n % vectorWidth != 0 ||
         outType.isDynamicDim(0) || outType.getDimSize(0) % rowTile != 0)
     {
         return mlir::failure();
@@ -207,13 +234,13 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
     int64_t tileVectors = 1;
     for (int64_t candidate = maxTileVectors; candidate > 1; candidate /= 2)
     {
-        if (n % (kVectorWidth * candidate) == 0)
+        if (n % (vectorWidth * candidate) == 0)
         {
             tileVectors = candidate;
             break;
         }
     }
-    const int64_t nStep = kVectorWidth * tileVectors;
+    const int64_t nStep = vectorWidth * tileVectors;
 
     const auto loc = op.getLoc();
     auto c0 = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
@@ -223,7 +250,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
     auto nUpper = builder.create<mlir::arith::ConstantIndexOp>(loc, n);
     auto mUpper = builder.create<mlir::memref::DimOp>(loc, out, 0);
     auto kUpper = builder.create<mlir::memref::DimOp>(loc, lhs, 1);
-    auto vecType = mlir::VectorType::get({ kVectorWidth }, outType.getElementType());
+    auto vecType = mlir::VectorType::get({ vectorWidth }, outType.getElementType());
     const bool applyRelu = op->hasAttr(kApplyReluAttr);
 
     auto mLoop = builder.create<mlir::scf::ForOp>(loc, c0, mUpper, cMstep);
@@ -255,7 +282,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
                 mlir::Value nIndex = nBase;
                 if (lane != 0)
                 {
-                    auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, lane * kVectorWidth);
+                    auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, lane * vectorWidth);
                     nIndex = builder.create<mlir::arith::AddIOp>(loc, nBase, offset).getResult();
                 }
                 nIndices.push_back(nIndex);
@@ -344,17 +371,17 @@ mlir::LogicalResult rewriteWideMatMul(mlir::linalg::GenericOp op,
         return mlir::failure();
     }
 
-    constexpr int64_t kVectorWidth = 16;
+    const int64_t vectorWidth = nativeF32VectorWidth();
     const int64_t n = outType.getDimSize(1);
-    if (n <= kVectorWidth || n % kVectorWidth != 0)
+    if (vectorWidth < 4 || n <= vectorWidth || n % vectorWidth != 0)
     {
         return mlir::failure();
     }
 
-    const int64_t tileVectors = (n % (kVectorWidth * 8) == 0) ? 8 :
-                                (n % (kVectorWidth * 4) == 0) ? 4 :
-                                (n % (kVectorWidth * 2) == 0) ? 2 : 1;
-    const int64_t nStep = kVectorWidth * tileVectors;
+    const int64_t tileVectors = (n % (vectorWidth * 8) == 0) ? 8 :
+                                (n % (vectorWidth * 4) == 0) ? 4 :
+                                (n % (vectorWidth * 2) == 0) ? 2 : 1;
+    const int64_t nStep = vectorWidth * tileVectors;
 
     const auto loc = op.getLoc();
     auto c0 = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
@@ -363,7 +390,7 @@ mlir::LogicalResult rewriteWideMatMul(mlir::linalg::GenericOp op,
     auto nUpper = builder.create<mlir::arith::ConstantIndexOp>(loc, n);
     auto mUpper = builder.create<mlir::memref::DimOp>(loc, out, 0);
     auto kUpper = builder.create<mlir::memref::DimOp>(loc, lhs, 1);
-    auto vecType = mlir::VectorType::get({ kVectorWidth }, outType.getElementType());
+    auto vecType = mlir::VectorType::get({ vectorWidth }, outType.getElementType());
     const bool applyRelu = op->hasAttr(kApplyReluAttr);
 
     auto mLoop = builder.create<mlir::scf::ForOp>(loc, c0, mUpper, c1);
@@ -387,7 +414,7 @@ mlir::LogicalResult rewriteWideMatMul(mlir::linalg::GenericOp op,
                 mlir::Value nIndex = nBase;
                 if (lane != 0)
                 {
-                    auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, lane * kVectorWidth);
+                    auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, lane * vectorWidth);
                     nIndex = builder.create<mlir::arith::AddIOp>(loc, nBase, offset).getResult();
                 }
                 nIndices.push_back(nIndex);
