@@ -756,9 +756,11 @@ struct ConvertFusedOp : OpRewritePattern<FusedOp>
 	using OpRewritePattern::OpRewritePattern;
 	LogicalResult matchAndRewrite(FusedOp op, PatternRewriter& rewriter) const override
 	{
-		if (op.getPattern() == FusionPatternKind::MatMulBiasAdd)
+		if (op.getPattern() == FusionPatternKind::MatMulBiasAdd ||
+		    op.getPattern() == FusionPatternKind::MatMulBiasAddReLU)
 		{
-			if (op.getArgs().size() != 3 || op.getNumResults() != 1)
+			const bool applyReLU = op.getPattern() == FusionPatternKind::MatMulBiasAddReLU;
+			if (op.getArgs().size() != (applyReLU ? 4u : 3u) || op.getNumResults() != 1)
 			{
 				return failure();
 			}
@@ -809,6 +811,10 @@ struct ConvertFusedOp : OpRewritePattern<FusedOp>
 				    auto sum = emitBinaryScalar(b, l, BinaryOpKind::Add, args[2], product, elemType);
 				    b.create<linalg::YieldOp>(l, sum);
 			    });
+			if (applyReLU)
+			{
+				fused->setAttr("litenn.apply_relu", rewriter.getUnitAttr());
+			}
 			rewriter.replaceOp(op, fused.getResult(0));
 			return success();
 		}

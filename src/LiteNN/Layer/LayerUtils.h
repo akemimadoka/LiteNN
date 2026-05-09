@@ -18,6 +18,11 @@ namespace LiteNN::Layer::Detail
 		return tensor;
 	}
 
+	inline Tensor<CPU> MakeScalarTensor(DataType dtype, double value)
+	{
+		return MakeFilledTensor({ 1 }, dtype, value);
+	}
+
 	inline NodeId AddConstant(Subgraph& subgraph, const Tensor<CPU>& tensor)
 	{
 		return subgraph.AddNode(ConstantNode{ tensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },

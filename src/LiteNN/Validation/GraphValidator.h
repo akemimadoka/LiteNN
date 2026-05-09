@@ -114,6 +114,7 @@ namespace LiteNN::Validation
 		{
 		case FusionPattern::MatMulBiasAdd:
 		case FusionPattern::ElementWiseChain:
+		case FusionPattern::MatMulBiasAddReLU:
 			return true;
 		}
 		return false;

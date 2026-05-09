@@ -45,6 +45,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
@@ -1016,7 +1017,7 @@ namespace
 		ctx.loadDialect<litenn::LiteNNDialect, mlir::arith::ArithDialect, mlir::bufferization::BufferizationDialect,
 		                mlir::cf::ControlFlowDialect, mlir::func::FuncDialect, mlir::linalg::LinalgDialect,
 		                mlir::LLVM::LLVMDialect, mlir::math::MathDialect, mlir::memref::MemRefDialect,
-		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect>();
+		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
 	}
 } // namespace
 

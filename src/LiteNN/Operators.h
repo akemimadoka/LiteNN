@@ -247,6 +247,8 @@ namespace LiteNN
 		MatMulBiasAdd,
 		// 2+ 逐元素操作链，每个中间结果仅一个消费者
 		ElementWiseChain,
+		// y = ReLU(MatMul(a, b) + c)
+		MatMulBiasAddReLU,
 	};
 
 } // namespace LiteNN

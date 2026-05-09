@@ -310,6 +310,8 @@ struct Pass {
 - **MLIR fast-math 标注**：在 lowered arith op 上标注 `reassoc|contract`，允许 LLVM 对浮点累加做更积极的向量化和 FMA 合并。
 - **MatMul loop order**：`BinaryOp::MatMul` lowering 不再直接依赖默认 `linalg.matmul` loop order，而是生成 `M,K,N` 的 `linalg.generic`，让 innermost `N` 连续访问 RHS 和输出行。
 - **MatMulBiasAdd AOT 融合**：`FusionPattern::MatMulBiasAdd` 在 LowerLiteNNPass 中直接 lowering 为 bias 初始化 + `M,K,N` matmul 累加，避免先 matmul 再单独执行一次 Add 输出遍历。
+- **MatMulBiasAddReLU AOT 融合**：`FusionPattern::MatMulBiasAddReLU` 在 graph 层保持语义 body，AOT lowering 则给 matmul contraction 标记 `litenn.apply_relu`，由 CPU micro-kernel 在最终 store 前完成 ReLU。
+- **CPU AOT MatMul micro-kernel**：当前 codegen pass 会识别 bufferized `f32` MatMul contraction。宽输出使用 `vector<16xf32>`，优先走 2-row N-vector tile 以复用 RHS/B；窄输出 `4 <= N <= 16` 使用精确 `vector<Nxf32>` accumulator，覆盖 MNIST `N=10` 末层。
 - **函数边界布局收紧**：One-shot bufferize 的 function boundary/unknown type conversion 使用 identity layout map，减少动态 layout/stride 对 LLVM 优化的干扰。
 - **Interpreter reference kernel 改善**：CPU reference MatMul 改为 `i,k,j` 累加并预零输出，解释器路径也具备更合理的 cache/SIMD 访问形态，但它仍不是性能主路径。
 - **输出复用接口**：`CompiledModule::RunInto` 支持调用方复用输出 Tensor；当前主要用于生产接口完整性，端到端 benchmark 仍应同时观察 wrapper 校验、输出 copy 和 generated kernel 的占比。
@@ -318,7 +320,7 @@ struct Pass {
 
 - 大 batch MLP 的主要差距来自 dense MatMul kernel。与 PyTorch 默认 16 线程相比，LiteNN 单线程 AOT 会显著落后；与 PyTorch 单线程相比，差距主要来自 BLAS 级别的 blocking/packing、寄存器 tiling、prefetch 和更成熟的 micro-kernel。
 - 小 batch 下 fixed overhead（JIT wrapper、输入输出校验、临时 allocation/copy）更明显；大 batch 下 GEMM 计算占主导。
-- `MatMul + bias` 的独立 Add pass 在宽输出上是可见但次要的开销，已通过 AOT 融合减少一次输出遍历。
+- `MatMul + bias + ReLU` 的独立后处理在宽输出上是可见但次要的开销，已通过 AOT 融合减少额外输出遍历。
 
 后续优化顺序：
 

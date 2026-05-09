@@ -273,12 +273,116 @@ namespace LiteNN
 				return std::nullopt;
 			}
 
+			if (auto relu = TryMatchReLUConsumer(sg, ci, addId, alreadyFused))
+			{
+				const auto& reluEntry = sg.GetNodeEntry(*relu);
+				const auto& reluInfo = reluEntry.outputInfos[0];
+				if (CanLowerMatMulBiasAddReLU(reluInfo))
+				{
+					return FusionCandidate{
+						FusionPattern::MatMulBiasAddReLU,
+						{ matmulId, addId, *relu },
+						{ matmul.lhs, matmul.rhs, bias, FindReLUZeroOperand(sg, *relu, { addId, 0 }).value() },
+						*relu,
+					};
+				}
+			}
+
 			return FusionCandidate{
 				FusionPattern::MatMulBiasAdd,
 				{ matmulId, addId },
 				{ matmul.lhs, matmul.rhs, bias }, // 外部输入: a, b, c
 				addId,
 			};
+		}
+
+		static bool CanLowerMatMulBiasAddReLU(const OutputInfo& info)
+		{
+			if (info.dtype != DataType::Float32 || info.shape.size() != 2)
+			{
+				return false;
+			}
+			const auto n = info.shape[1];
+			return n > 0 && (n <= 16 || n % 16 == 0);
+		}
+
+		static bool IsZeroConstantOutput(const Subgraph& sg, NodeOutput output)
+		{
+			if (output.port != 0 || output.node >= sg.NodeCount())
+			{
+				return false;
+			}
+
+			const auto* constant = std::get_if<ConstantNode>(&sg.GetNodeEntry(output.node).node);
+			if (!constant)
+			{
+				return false;
+			}
+
+			const auto cpuTensor = constant->value.CopyToDevice(CPU{});
+			bool allZero = true;
+			EnumDispatch(cpuTensor.DType(), [&]<DataType TypeValue> {
+				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+				const auto* data = static_cast<const T*>(cpuTensor.RawData());
+				for (std::size_t i = 0; i < cpuTensor.NumElements(); ++i)
+				{
+					if (data[i] != T{})
+					{
+						allZero = false;
+						break;
+					}
+				}
+			});
+			return allZero;
+		}
+
+		static std::optional<NodeOutput> FindReLUZeroOperand(const Subgraph& sg, NodeId reluId, NodeOutput value)
+		{
+			const auto& reluEntry = sg.GetNodeEntry(reluId);
+			const auto* relu = std::get_if<BinaryOpNode>(&reluEntry.node);
+			if (!relu || relu->op != BinaryOp::Max)
+			{
+				return std::nullopt;
+			}
+
+			if (relu->lhs.node == value.node && relu->lhs.port == value.port && IsZeroConstantOutput(sg, relu->rhs))
+			{
+				return relu->rhs;
+			}
+			if (relu->rhs.node == value.node && relu->rhs.port == value.port && IsZeroConstantOutput(sg, relu->lhs))
+			{
+				return relu->lhs;
+			}
+			return std::nullopt;
+		}
+
+		static std::optional<NodeId> TryMatchReLUConsumer(const Subgraph& sg, const ConsumerInfo& ci,
+		                                                   NodeId addId, const std::set<NodeId>& alreadyFused)
+		{
+			const auto key = NodeOutputKey{ addId, 0 };
+			const auto countIt = ci.counts.find(key);
+			if (countIt == ci.counts.end() || countIt->second != 1)
+			{
+				return std::nullopt;
+			}
+
+			const auto consIt = ci.consumers.find(key);
+			if (consIt == ci.consumers.end() || consIt->second.size() != 1)
+			{
+				return std::nullopt;
+			}
+
+			const auto reluId = consIt->second[0];
+			if (alreadyFused.contains(reluId))
+			{
+				return std::nullopt;
+			}
+
+			if (!FindReLUZeroOperand(sg, reluId, { addId, 0 }))
+			{
+				return std::nullopt;
+			}
+			return reluId;
 		}
 
 		static std::optional<FusionCandidate> TryMatchElementWiseChain(const Subgraph& sg, const ConsumerInfo& ci,

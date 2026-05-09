@@ -65,7 +65,8 @@ def LiteNN_ReduceOpKind : I32EnumAttr<"ReduceOpKind", "litenn reduce operation",
 
 def LiteNN_FusionPatternKind : I32EnumAttr<"FusionPatternKind", "litenn fusion pattern", [
   I32EnumAttrCase<"MatMulBiasAdd",    0>,
-  I32EnumAttrCase<"ElementWiseChain", 1>
+  I32EnumAttrCase<"ElementWiseChain", 1>,
+  I32EnumAttrCase<"MatMulBiasAddReLU", 2>
 ]> {
   let cppNamespace = "::litenn";
 }

@@ -75,6 +75,8 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRSCFDialect
     MLIRTensorDialect
     MLIRTensorTransforms
+    MLIRVectorDialect
+    MLIRVectorTransforms
     MLIRMemRefDialect
     MLIRMemRefTransforms
     MLIRBufferizationDialect
@@ -83,6 +85,8 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRBufferizationToMemRef
     MLIRTransforms
     MLIRSCFToControlFlow
+    MLIRVectorToLLVM
+    MLIRVectorToLLVMPass
     MLIRMathToLLVM
     MLIRArithToLLVM
     MLIRIndexToLLVM

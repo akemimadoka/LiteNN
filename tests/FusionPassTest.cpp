@@ -5,6 +5,9 @@
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <span>
+#include <vector>
+
 using namespace LiteNN;
 
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
@@ -137,6 +140,67 @@ TEST(FusionPass, MatMulBiasAddSwapped)
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
+	{
+		EXPECT_FLOAT_EQ(ReadFloat(actual[0], i), ReadFloat(expected[0], i));
+	}
+}
+
+TEST(FusionPass, MatMulBiasAddReLU)
+{
+	Graph graph;
+	Subgraph sg;
+
+	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto w = sg.AddParam(DataType::Float32, { 3, 16 });
+	const auto b = sg.AddParam(DataType::Float32, { 1, 16 });
+
+	const auto matmul =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
+	               { OutputInfo{ DataType::Float32, { 2, 16 } } });
+	const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
+	                            { OutputInfo{ DataType::Float32, { 2, 16 } } });
+	const auto zeroTensor = Tensor<CPU>({ 0.0 }, { 1 });
+	const auto zero = sg.AddNode(ConstantNode{ zeroTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                             { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto relu = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } },
+	                             { OutputInfo{ DataType::Float32, { 2, 16 } } });
+
+	sg.SetResults({ { relu, 0 } });
+	const auto fwdId = graph.AddSubgraph(std::move(sg));
+	graph.SetForward(fwdId);
+
+	std::vector<double> xData = { -1, 2, -3, 4, -5, 6 };
+	std::vector<double> wData(3 * 16);
+	for (std::size_t i = 0; i < wData.size(); ++i)
+	{
+		wData[i] = (static_cast<int>(i % 7) - 3) * 0.25;
+	}
+	std::vector<double> bData(16);
+	for (std::size_t i = 0; i < bData.size(); ++i)
+	{
+		bData[i] = (static_cast<int>(i % 5) - 2) * 0.5;
+	}
+
+	Tensor<CPU> tensorX(std::span<const double>(xData), { 2, 3 });
+	Tensor<CPU> tensorW(std::span<const double>(wData), { 3, 16 });
+	Tensor<CPU> tensorB(std::span<const double>(bData), { 1, 16 });
+	std::array<Tensor<CPU>, 3> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorW), Tensor<CPU>(tensorB) };
+
+	Runtime::Interpreter<CPU> interp;
+	auto expected = interp.RunForward(graph, inputs);
+
+	FusionPass fusionPass;
+	fusionPass.Run(graph);
+
+	const auto& fusedSg = graph.GetSubgraph(graph.Forward());
+	EXPECT_TRUE(HasFusedOpNode(fusedSg, FusionPattern::MatMulBiasAddReLU));
+	EXPECT_FALSE(HasFusedOpNode(fusedSg, FusionPattern::MatMulBiasAdd));
+
+	std::array<Tensor<CPU>, 3> inputs2 = { std::move(tensorX), std::move(tensorW), std::move(tensorB) };
+	auto actual = interp.RunForward(graph, inputs2);
+
+	ASSERT_EQ(actual.size(), 1);
+	for (std::size_t i = 0; i < 32; ++i)
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(actual[0], i), ReadFloat(expected[0], i));
 	}

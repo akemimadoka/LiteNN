@@ -10,8 +10,7 @@ namespace LiteNN::Layer
 	inline NodeOutput AddReLU(Subgraph& subgraph, NodeOutput input)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
-		auto zeroTensor = Tensor<CPU>(info.shape, info.dtype);
-		const auto zero = Detail::AddConstant(subgraph, zeroTensor);
+		const auto zero = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 0.0));
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Max, input, { zero, 0 } },
 		                                     { OutputInfo{ info.dtype, info.shape } });
 		return { result, 0 };
@@ -20,7 +19,7 @@ namespace LiteNN::Layer
 	inline NodeOutput AddSigmoid(Subgraph& subgraph, NodeOutput input)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
-		const auto one = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 1.0));
+		const auto one = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 1.0));
 		const auto neg = subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, input }, { OutputInfo{ info.dtype, info.shape } });
 		const auto exp =
 		    subgraph.AddNode(UnaryOpNode{ UnaryOp::Exp, { neg, 0 } }, { OutputInfo{ info.dtype, info.shape } });
@@ -34,8 +33,8 @@ namespace LiteNN::Layer
 	inline NodeOutput AddTanh(Subgraph& subgraph, NodeOutput input)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
-		const auto two = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 2.0));
-		const auto one = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 1.0));
+		const auto two = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 2.0));
+		const auto one = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 1.0));
 		const auto scaled = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, { two, 0 } },
 		                                     { OutputInfo{ info.dtype, info.shape } });
 		const auto exp =
@@ -81,14 +80,12 @@ namespace LiteNN::Layer
 	inline NodeOutput AddGELU(Subgraph& subgraph, NodeOutput input)
 	{
 		const auto info = subgraph.GetOutputInfo(input); // copy
-		const auto half = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 0.5));
-		const auto one = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 1.0));
+		const auto half = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 0.5));
+		const auto one = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 1.0));
 		// sqrt(2/π) ≈ 0.7978845608028654
-		const auto kappa =
-		    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 0.7978845608028654));
-		const auto coeff =
-		    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 0.044715));
-		const auto three = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 3.0));
+		const auto kappa = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 0.7978845608028654));
+		const auto coeff = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 0.044715));
+		const auto three = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 3.0));
 
 		// x³
 		const auto xCubed = subgraph.AddNode(BinaryOpNode{ BinaryOp::Pow, input, { three, 0 } },
@@ -130,10 +127,9 @@ namespace LiteNN::Layer
 	inline NodeOutput AddELU(Subgraph& subgraph, NodeOutput input, double alpha = 1.0)
 	{
 		const auto info = subgraph.GetOutputInfo(input); // copy
-		const auto zero = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 0.0));
-		const auto one = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, 1.0));
-		const auto alphaC =
-		    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(info.shape, info.dtype, alpha));
+		const auto zero = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 0.0));
+		const auto one = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 1.0));
+		const auto alphaC = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, alpha));
 
 		// exp(x)
 		const auto expX =
