@@ -2,6 +2,7 @@
 
 #include "mlir/Conversion/BufferizationToMemRef/BufferizationToMemRef.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -28,6 +29,8 @@ void addBufferizationPipeline(mlir::PassManager& pm)
     mlir::bufferization::OneShotBufferizePassOptions opts;
     opts.bufferizeFunctionBoundaries = true;
     opts.allowReturnAllocsFromLoops = true;
+    opts.functionBoundaryTypeConversion = mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+    opts.unknownTypeConversion = mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(opts));
 
     // Inline of buildBufferDeallocationPipeline — avoids PassPipelineOptions

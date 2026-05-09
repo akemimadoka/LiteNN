@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNN/Pass/FusionPass.h>
 
 #include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
@@ -116,14 +117,69 @@ TEST_F(LoweringPassTest, MatMulWithVariable)
     EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
     expectNoLiteNNOps(*module);
 
-    // Should contain linalg.matmul and memref.global for the variable
-    bool hasMatmul = false;
-    module->walk([&](mlir::linalg::MatmulOp) { hasMatmul = true; });
-    EXPECT_TRUE(hasMatmul) << "Expected linalg.matmul from MatMul";
+    // MatMul lowers to linalg.generic in M,K,N order for better CPU codegen.
+    bool hasMatmulGeneric = false;
+    module->walk([&](mlir::linalg::GenericOp generic) {
+        const auto iterators = generic.getIteratorTypesArray();
+        hasMatmulGeneric = hasMatmulGeneric ||
+            (iterators.size() == 3 &&
+             iterators[0] == mlir::utils::IteratorType::parallel &&
+             iterators[1] == mlir::utils::IteratorType::reduction &&
+             iterators[2] == mlir::utils::IteratorType::parallel);
+    });
+    EXPECT_TRUE(hasMatmulGeneric) << "Expected linalg.generic M,K,N from MatMul";
 
     bool hasGlobal = false;
     module->walk([&](mlir::memref::GlobalOp) { hasGlobal = true; });
     EXPECT_TRUE(hasGlobal) << "Expected memref.global from Variable";
+}
+
+TEST_F(LoweringPassTest, FusedMatMulBiasAddLowersWithoutSeparateAddLoop)
+{
+    Graph graph;
+    Subgraph sg;
+    const auto x = sg.AddParam(DataType::Float32, { 4, 8 });
+    const auto w = sg.AddParam(DataType::Float32, { 8, 16 });
+    const auto b = sg.AddParam(DataType::Float32, { 1, 16 });
+    const auto mm = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
+                               { OutputInfo{ DataType::Float32, { 4, 16 } } });
+    const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { mm, 0 }, { b, 0 } },
+                              { OutputInfo{ DataType::Float32, { 4, 16 } } });
+    sg.SetResults({ { y, 0 } });
+    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+    FusionPass{}.Run(graph);
+
+    auto module = translateAndLower(graph);
+    ASSERT_TRUE(module);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    expectNoLiteNNOps(*module);
+
+    int rank2ParallelGenerics = 0;
+    int rank3ReductionGenerics = 0;
+    module->walk([&](mlir::linalg::GenericOp generic) {
+        auto parentFunc = generic->getParentOfType<mlir::func::FuncOp>();
+        if (!parentFunc || parentFunc.getSymName() != "subgraph_0")
+            return;
+
+        const auto iterators = generic.getIteratorTypesArray();
+        if (iterators.size() == 2 &&
+            iterators[0] == mlir::utils::IteratorType::parallel &&
+            iterators[1] == mlir::utils::IteratorType::parallel)
+        {
+            ++rank2ParallelGenerics;
+        }
+        if (iterators.size() == 3 &&
+            iterators[0] == mlir::utils::IteratorType::parallel &&
+            iterators[1] == mlir::utils::IteratorType::reduction &&
+            iterators[2] == mlir::utils::IteratorType::parallel)
+        {
+            ++rank3ReductionGenerics;
+        }
+    });
+
+    EXPECT_EQ(rank2ParallelGenerics, 1) << "Expected only bias initialization, not a separate Add loop";
+    EXPECT_EQ(rank3ReductionGenerics, 1) << "Expected fused M,K,N matmul accumulation";
 }
 
 TEST_F(LoweringPassTest, CondNode)

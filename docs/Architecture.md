@@ -295,6 +295,37 @@ struct Pass {
 - `InputSpecs()` / `OutputSpecs()` 返回 `CompiledTensorSpec{dtype, shape, name}`
 - `FindInput(name)` / `FindOutput(name)` 支持命名签名查询
 - `WriteObjectFile()` 生成 carrier object，导出 `<prefix>_rodata`, `<prefix>_rodata_size`, `<prefix>_instructions`, `<prefix>_instructions_size`
+- `RunInto(inputs, outputs)` 可复用调用方提供的输出 Tensor，适合生产推理循环中减少外层输出分配；`Run(inputs)` 仍保留为便捷接口
+
+---
+
+## CPU AOT 性能优化路径
+
+当前 CPU AOT 的性能目标分两层看待：一层是与 PyTorch 默认配置对比的端到端吞吐，另一层是与 PyTorch 单线程对比的 kernel/codegen 质量。PyTorch 默认会使用多线程 BLAS/oneDNN；LiteNN 当前 AOT 生成的是单线程 native loop，因此性能分析应先固定线程数，再判断是否进入多线程后端工作。
+
+已落地的优化：
+
+- **Release 构建基线**：benchmark 必须使用 `CMAKE_BUILD_TYPE=Release` 的 MLIR/AOT 构建；Debug 构建会把差距夸大到不可参考。
+- **目标相关 LLVM codegen**：object 生成阶段使用 host CPU/features、`CodeGenOptLevel::Aggressive`，并在发射对象文件前对 LLVM module 跑 O3 pipeline。
+- **MLIR fast-math 标注**：在 lowered arith op 上标注 `reassoc|contract`，允许 LLVM 对浮点累加做更积极的向量化和 FMA 合并。
+- **MatMul loop order**：`BinaryOp::MatMul` lowering 不再直接依赖默认 `linalg.matmul` loop order，而是生成 `M,K,N` 的 `linalg.generic`，让 innermost `N` 连续访问 RHS 和输出行。
+- **MatMulBiasAdd AOT 融合**：`FusionPattern::MatMulBiasAdd` 在 LowerLiteNNPass 中直接 lowering 为 bias 初始化 + `M,K,N` matmul 累加，避免先 matmul 再单独执行一次 Add 输出遍历。
+- **函数边界布局收紧**：One-shot bufferize 的 function boundary/unknown type conversion 使用 identity layout map，减少动态 layout/stride 对 LLVM 优化的干扰。
+- **Interpreter reference kernel 改善**：CPU reference MatMul 改为 `i,k,j` 累加并预零输出，解释器路径也具备更合理的 cache/SIMD 访问形态，但它仍不是性能主路径。
+- **输出复用接口**：`CompiledModule::RunInto` 支持调用方复用输出 Tensor；当前主要用于生产接口完整性，端到端 benchmark 仍应同时观察 wrapper 校验、输出 copy 和 generated kernel 的占比。
+
+当前 profile 结论：
+
+- 大 batch MLP 的主要差距来自 dense MatMul kernel。与 PyTorch 默认 16 线程相比，LiteNN 单线程 AOT 会显著落后；与 PyTorch 单线程相比，差距主要来自 BLAS 级别的 blocking/packing、寄存器 tiling、prefetch 和更成熟的 micro-kernel。
+- 小 batch 下 fixed overhead（JIT wrapper、输入输出校验、临时 allocation/copy）更明显；大 batch 下 GEMM 计算占主导。
+- `MatMul + bias` 的独立 Add pass 在宽输出上是可见但次要的开销，已通过 AOT 融合减少一次输出遍历。
+
+后续优化顺序：
+
+1. **单线程 GEMM 质量**：为常见 `f32` MatMul 引入 tiled/packed kernel（手写 micro-kernel、MLIR tiling/packing，或调用 BLAS/oneDNN 的单线程路径），目标先把 PyTorch 单线程差距压到 1.2-1.5x 内。
+2. **Destination-passing / buffer reuse**：让 AOT 子图直接写入 caller output 和规划好的临时 buffer，减少内部 tensor allocation、最终 output copy 和 wrapper 开销。
+3. **多线程 CPU backend**：在单线程 kernel 质量稳定后，再接入 OpenMP/threadpool/oneDNN 多线程，否则多线程只会掩盖单核效率问题。
+4. **profile 工具化**：补齐 Graph/MLIR/LLVM dump 和 per-op/per-shape benchmark，持续记录 Linear/MLP/CNN/Reduce 的性能回归基线。
 
 ---
 

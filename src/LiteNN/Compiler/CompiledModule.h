@@ -46,7 +46,11 @@ namespace LiteNN
 
 		static CompiledModule Load(CompiledModuleImage image);
 
+		/// Runs the compiled entry point and returns newly allocated output tensors.
 		std::vector<Tensor<CPU>> Run(std::span<const Tensor<CPU>> inputs) const;
+
+		/// Runs the compiled entry point into caller-provided output tensors.
+		void RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const;
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;

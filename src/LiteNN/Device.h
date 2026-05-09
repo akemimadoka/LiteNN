@@ -574,17 +574,25 @@ namespace LiteNN
 								assert(shape1[1] == shape2[0]);
 								const auto& resultShape = ShapeView{ *resultShapeOrError };
 
-								for (auto i = 0uz; i < shape1[0]; ++i)
+								auto* out = static_cast<ResultType*>(dst);
+								const auto* lhs = static_cast<const T1*>(src1);
+								const auto* rhs = static_cast<const T2*>(src2);
+								const auto m = shape1[0];
+								const auto kDim = shape1[1];
+								const auto n = shape2[1];
+
+								std::fill_n(out, resultShape.NumElements(), ResultType{});
+								for (auto i = 0uz; i < m; ++i)
 								{
-									for (auto j = 0uz; j < shape2[1]; ++j)
+									auto* outRow = out + i * n;
+									for (auto k = 0uz; k < kDim; ++k)
 									{
-										ResultType sum = 0;
-										for (auto k = 0uz; k < shape1[1]; ++k)
+										const auto lhsValue = static_cast<ResultType>(lhs[i * kDim + k]);
+										const auto* rhsRow = rhs + k * n;
+										for (auto j = 0uz; j < n; ++j)
 										{
-											sum += static_cast<T1>(static_cast<const T1*>(src1)[i * shape1[1] + k]) *
-											       static_cast<T2>(static_cast<const T2*>(src2)[k * shape2[1] + j]);
+											outRow[j] += lhsValue * static_cast<ResultType>(rhsRow[j]);
 										}
-										static_cast<ResultType*>(dst)[i * shape2[1] + j] = sum;
 									}
 								}
 								break;

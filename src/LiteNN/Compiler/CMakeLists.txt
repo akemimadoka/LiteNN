@@ -44,6 +44,14 @@ llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS
     target
     codegen
     passes
+    analysis
+    scalaropts
+    transformutils
+    instcombine
+    aggressiveinstcombine
+    ipo
+    vectorize
+    targetparser
 )
 target_link_libraries(LiteNNCompiler PUBLIC
     MLIRIR

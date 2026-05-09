@@ -153,6 +153,26 @@ TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)
 	}
 }
 
+TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(graph);
+
+	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+	std::array<Tensor<CPU>, 1> outputs = {
+		Tensor<CPU>(Uninitialized, { 2, 2 }, DataType::Float32)
+	};
+
+	compiled.RunInto(inputs, outputs);
+
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
 TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 {
 	auto graph = BuildSimpleAddGraph();

@@ -10,6 +10,9 @@
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/IR/Constants.h"
@@ -17,9 +20,11 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
@@ -28,6 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -73,6 +79,8 @@ namespace
 	struct NativeTargetConfig
 	{
 		std::string triple;
+		std::string cpu;
+		std::string features;
 		std::unique_ptr<llvm::TargetMachine> targetMachine;
 	};
 
@@ -127,20 +135,52 @@ namespace
 
 		llvm::TargetOptions options;
 		auto relocModel = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
+		auto cpuName = llvm::sys::getHostCPUName();
+		std::string cpu = cpuName.empty() ? std::string("generic") : cpuName.str();
+
+		llvm::SubtargetFeatures hostFeatureSet;
+		const auto hostFeatures = llvm::sys::getHostCPUFeatures();
+		for (const auto& feature : hostFeatures)
+		{
+			hostFeatureSet.AddFeature(feature.getKey(), feature.getValue());
+		}
+		std::string features = hostFeatureSet.getString();
+
 		auto targetMachine = std::unique_ptr<llvm::TargetMachine>(
-		    target->createTargetMachine(triple, "generic", "", options, relocModel));
+		    target->createTargetMachine(triple, cpu, features, options, relocModel, std::nullopt,
+		                                llvm::CodeGenOptLevel::Aggressive));
 		if (!targetMachine)
 		{
 			throw std::runtime_error("Failed to create native LLVM target machine");
 		}
 
-		return { std::move(triple), std::move(targetMachine) };
+		return { std::move(triple), std::move(cpu), std::move(features), std::move(targetMachine) };
 	}
 
 	void ConfigureForNativeObject(llvm::Module& module, const NativeTargetConfig& config)
 	{
 		module.setTargetTriple(llvm::Triple(config.triple));
 		module.setDataLayout(config.targetMachine->createDataLayout());
+	}
+
+	void OptimizeLLVMModule(llvm::Module& module, llvm::TargetMachine& targetMachine)
+	{
+		llvm::LoopAnalysisManager loopAnalysisManager;
+		llvm::FunctionAnalysisManager functionAnalysisManager;
+		llvm::CGSCCAnalysisManager cgsccAnalysisManager;
+		llvm::ModuleAnalysisManager moduleAnalysisManager;
+
+		llvm::PassBuilder passBuilder(&targetMachine);
+		passBuilder.registerModuleAnalyses(moduleAnalysisManager);
+		passBuilder.registerCGSCCAnalyses(cgsccAnalysisManager);
+		passBuilder.registerFunctionAnalyses(functionAnalysisManager);
+		passBuilder.registerLoopAnalyses(loopAnalysisManager);
+		passBuilder.crossRegisterProxies(loopAnalysisManager, functionAnalysisManager,
+		                                 cgsccAnalysisManager, moduleAnalysisManager);
+
+		auto modulePipeline =
+		    passBuilder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+		modulePipeline.run(module, moduleAnalysisManager);
 	}
 
 	std::vector<std::byte> EmitObjectFile(llvm::Module& module)
@@ -929,6 +969,18 @@ namespace
 		}
 	}
 
+	void ValidateOutputTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec, std::size_t outputIndex)
+	{
+		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
+		{
+			const auto label = spec.name.empty() ? std::to_string(outputIndex) : std::format("{} ('{}')", outputIndex, spec.name);
+			throw std::runtime_error(std::format(
+			    "CompiledModule output {} mismatch: expected {}, got {}", label,
+			    Validation::FormatInfo(spec.dtype, spec.shape),
+			    Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
+		}
+	}
+
 	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
 	{
 		auto module = litenn::translateGraphToMLIR(graph, ctx);
@@ -1016,7 +1068,7 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 		                                     impl_->inputSpecs.size(), inputs.size()));
 	}
 
-	std::vector<void*> inputPtrs;
+	llvm::SmallVector<void*, 8> inputPtrs;
 	inputPtrs.reserve(inputs.size());
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{
@@ -1026,7 +1078,7 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 
 	std::vector<Tensor<CPU>> outputs;
 	outputs.reserve(impl_->outputSpecs.size());
-	std::vector<void*> outputPtrs;
+	llvm::SmallVector<void*, 8> outputPtrs;
 	outputPtrs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
@@ -1036,6 +1088,42 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 	return outputs;
+}
+
+void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const
+{
+	if (!impl_ || !impl_->entry)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	if (inputs.size() != impl_->inputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     impl_->inputSpecs.size(), inputs.size()));
+	}
+	if (outputs.size() != impl_->outputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule output count mismatch: expected {}, got {}",
+		                                     impl_->outputSpecs.size(), outputs.size()));
+	}
+
+	llvm::SmallVector<void*, 8> inputPtrs;
+	inputPtrs.reserve(inputs.size());
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
+		inputPtrs.push_back(const_cast<void*>(inputs[i].RawData()));
+	}
+
+	llvm::SmallVector<void*, 8> outputPtrs;
+	outputPtrs.reserve(outputs.size());
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		ValidateOutputTensorAgainstSpec(outputs[i], impl_->outputSpecs[i], i);
+		outputPtrs.push_back(outputs[i].RawData());
+	}
+
+	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
 CompiledModuleImage CompiledModule<CPU>::Image() const
@@ -1149,6 +1237,7 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 	const auto inputSpecs = BuildInputSpecs(graph);
 	const auto outputSpecs = BuildOutputSpecs(graph);
 	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
+	OptimizeLLVMModule(*llvmModule, *config.targetMachine);
 
 	const auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple);
 	auto instructions = EmitObjectFile(*llvmModule);

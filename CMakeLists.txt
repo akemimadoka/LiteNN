@@ -4,6 +4,7 @@ project(LiteNN CXX)
 
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
+option(LITENN_BUILD_BENCHMARKS "Build LiteNN benchmark programs" OFF)
 
 file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
@@ -47,6 +48,10 @@ add_subdirectory(third_party/googletest)
 
 if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
+endif()
+
+if(LITENN_BUILD_BENCHMARKS)
+    add_subdirectory(benchmark)
 endif()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")

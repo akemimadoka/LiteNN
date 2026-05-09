@@ -541,77 +541,75 @@ namespace LiteNN
 				return;
 			}
 
-			// 构建融合节点集合和起始节点映射
+			// 构建融合节点集合
 			std::set<NodeId> fusedNodeSet;
-			std::map<NodeId, std::size_t> fusedRegionStart; // 起始节点 → candidate 索引
-			for (std::size_t i = 0; i < candidates.size(); ++i)
+			for (const auto& c : candidates)
 			{
-				fusedRegionStart[candidates[i].fusedNodeIds[0]] = i;
-				for (auto id : candidates[i].fusedNodeIds)
+				for (auto id : c.fusedNodeIds)
 				{
 					fusedNodeSet.insert(id);
 				}
 			}
 
-			// 重建子图
-			Subgraph newSg;
-			std::vector<NodeId> nodeMap(sg.NodeCount(), static_cast<NodeId>(-1));
-			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
+			// outputNodeId → candidate 索引（FusedOpNode 在此位置发射）
+			std::map<NodeId, std::size_t> outputNodeToCandidate;
+			for (std::size_t i = 0; i < candidates.size(); ++i)
 			{
-				if (const auto* paramRef = std::get_if<ParamRefNode>(&sg.GetNodeEntry(oldId).node))
-				{
-					const auto& param = sg.Params()[paramRef->paramIndex];
-					nodeMap[oldId] = newSg.AddParam(param.dtype, param.shape);
-				}
+				outputNodeToCandidate[candidates[i].outputNodeId] = i;
 			}
 
+			// 单趟重建：按原始拓扑序扫描
+			//   · ParamRefNode / 非融合节点：立即复制（其所有输入已就绪）
+			//   · 融合区域的 outputNodeId：在此处发射 FusedOpNode
+			//     （保证所有外部输入均已处理：外部输入在拓扑序上先于 outputNodeId）
+			//   · 融合区域内其他节点（非 outputNodeId）：跳过
+			Subgraph newSg;
+			std::vector<NodeId> nodeMap(sg.NodeCount(), static_cast<NodeId>(-1));
+
 			for (NodeId oldId = 0; oldId < sg.NodeCount(); ++oldId)
 			{
-				if (std::holds_alternative<ParamRefNode>(sg.GetNodeEntry(oldId).node))
-				{
-					continue;
-				}
+				const auto& entry = sg.GetNodeEntry(oldId);
 
-				// 跳过融合区域内部的非起始节点
-				if (fusedNodeSet.contains(oldId) && !fusedRegionStart.contains(oldId))
+				// 融合区域输出节点：发射 FusedOpNode
+				if (auto outIt = outputNodeToCandidate.find(oldId); outIt != outputNodeToCandidate.end())
 				{
-					continue;
-				}
-
-				auto regionIt = fusedRegionStart.find(oldId);
-				if (regionIt != fusedRegionStart.end())
-				{
-					// 融合区域起始节点：构建 body 子图并创建 FusedOpNode
-					const auto& candidate = candidates[regionIt->second];
+					const auto& candidate = candidates[outIt->second];
 					auto bodyId = BuildBodySubgraph(graph, sg, candidate);
 
-					// 重映射外部输入引用
 					std::vector<NodeOutput> remappedArgs;
 					for (const auto& input : candidate.externalInputs)
 					{
 						remappedArgs.push_back({ nodeMap[input.node], input.port });
 					}
 
-					const auto& outputInfos = sg.GetNodeEntry(candidate.outputNodeId).outputInfos;
-					auto newId = newSg.AddNode(
+					const auto& outputInfos = entry.outputInfos;
+					nodeMap[oldId] = newSg.AddNode(
 					    FusedOpNode{ candidate.pattern, bodyId, std::move(remappedArgs) },
 					    { outputInfos.begin(), outputInfos.end() });
+					continue;
+				}
 
-					// 映射输出节点（融合区域的最终输出）
-					nodeMap[candidate.outputNodeId] = newId;
-				}
-				else
+				// 融合区域内部节点（非输出端）：跳过
+				if (fusedNodeSet.contains(oldId))
 				{
-					// 非融合节点：重映射输入后复制
-					const auto& entry = sg.GetNodeEntry(oldId);
-					auto remapFn = [&](NodeOutput output) -> NodeOutput {
-						return { nodeMap[output.node], output.port };
-					};
-					auto remapped = RemapNodeInputs(entry.node, remapFn);
-					auto newId = newSg.AddNode(std::move(remapped),
-					                           { entry.outputInfos.begin(), entry.outputInfos.end() });
-					nodeMap[oldId] = newId;
+					continue;
 				}
+
+				// ParamRefNode
+				if (const auto* paramRef = std::get_if<ParamRefNode>(&entry.node))
+				{
+					const auto& param = sg.Params()[paramRef->paramIndex];
+					nodeMap[oldId] = newSg.AddParam(param.dtype, param.shape);
+					continue;
+				}
+
+				// 普通非融合节点：重映射输入后复制
+				auto remapFn = [&](NodeOutput output) -> NodeOutput {
+					return { nodeMap[output.node], output.port };
+				};
+				auto remapped = RemapNodeInputs(entry.node, remapFn);
+				nodeMap[oldId] = newSg.AddNode(std::move(remapped),
+				                               { entry.outputInfos.begin(), entry.outputInfos.end() });
 			}
 
 			// 重映射结果

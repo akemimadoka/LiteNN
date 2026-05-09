@@ -272,7 +272,8 @@ struct ConvertBinaryOp : OpRewritePattern<litenn::BinaryOp>
 		auto rhs = op.getRhs();
 		auto resultType = cast<RankedTensorType>(op.getResult().getType());
 
-		// MatMul: delegate to linalg.matmul
+		// MatMul: emit M,K,N iteration order so the innermost N loop touches
+		// contiguous rows of B and C, giving LLVM a much better SIMD target.
 		if (op.getOp() == BinaryOpKind::MatMul)
 		{
 			auto emptyOut = rewriter.create<tensor::EmptyOp>(loc, resultType.getShape(),
@@ -280,8 +281,30 @@ struct ConvertBinaryOp : OpRewritePattern<litenn::BinaryOp>
 			auto zero = zeroScalar(rewriter, loc, resultType.getElementType());
 			auto filled = rewriter.create<linalg::FillOp>(loc, ValueRange{zero}, ValueRange{emptyOut})
 			                  .getResult(0);
-			rewriter.replaceOpWithNewOp<linalg::MatmulOp>(op, TypeRange{resultType},
-			                                               ValueRange{lhs, rhs}, ValueRange{filled});
+
+			auto d0 = getAffineDimExpr(0, ctx); // M
+			auto d1 = getAffineDimExpr(1, ctx); // K
+			auto d2 = getAffineDimExpr(2, ctx); // N
+			SmallVector<AffineMap> maps = {
+			    AffineMap::get(3, 0, { d0, d1 }, ctx),
+			    AffineMap::get(3, 0, { d1, d2 }, ctx),
+			    AffineMap::get(3, 0, { d0, d2 }, ctx),
+			};
+			SmallVector<utils::IteratorType> iterTypes = {
+			    utils::IteratorType::parallel,
+			    utils::IteratorType::reduction,
+			    utils::IteratorType::parallel,
+			};
+			auto elemType = resultType.getElementType();
+			auto generic = rewriter.create<linalg::GenericOp>(
+			    loc, TypeRange{ resultType }, ValueRange{ lhs, rhs }, ValueRange{ filled }, maps,
+			    iterTypes, [&](OpBuilder& b, Location l, ValueRange args) {
+				    auto product = emitBinaryScalar(b, l, BinaryOpKind::Multiply, args[0], args[1],
+				                                    elemType);
+				    auto sum = emitBinaryScalar(b, l, BinaryOpKind::Add, args[2], product, elemType);
+				    b.create<linalg::YieldOp>(l, sum);
+			    });
+			rewriter.replaceOp(op, generic.getResult(0));
 			return success();
 		}
 
@@ -733,6 +756,63 @@ struct ConvertFusedOp : OpRewritePattern<FusedOp>
 	using OpRewritePattern::OpRewritePattern;
 	LogicalResult matchAndRewrite(FusedOp op, PatternRewriter& rewriter) const override
 	{
+		if (op.getPattern() == FusionPatternKind::MatMulBiasAdd)
+		{
+			if (op.getArgs().size() != 3 || op.getNumResults() != 1)
+			{
+				return failure();
+			}
+
+			auto loc = op.getLoc();
+			auto* ctx = rewriter.getContext();
+			auto resultType = dyn_cast<RankedTensorType>(op.getResult(0).getType());
+			auto lhsType = dyn_cast<RankedTensorType>(op.getArgs()[0].getType());
+			auto rhsType = dyn_cast<RankedTensorType>(op.getArgs()[1].getType());
+			auto biasType = dyn_cast<RankedTensorType>(op.getArgs()[2].getType());
+			if (!resultType || !lhsType || !rhsType || !biasType ||
+			    resultType.getRank() != 2 || lhsType.getRank() != 2 || rhsType.getRank() != 2)
+			{
+				return failure();
+			}
+
+			auto emptyOut = rewriter.create<tensor::EmptyOp>(loc, resultType.getShape(),
+			                                                  resultType.getElementType());
+			auto biasMap = buildBroadcastMap(ctx, biasType.getShape(), resultType.getShape());
+			auto outMap = identityMap(ctx, resultType.getRank());
+			auto init = rewriter.create<linalg::GenericOp>(
+			    loc, TypeRange{ resultType }, ValueRange{ op.getArgs()[2] }, ValueRange{ emptyOut },
+			    SmallVector<AffineMap>{ biasMap, outMap }, parallelIterators(resultType.getRank()),
+			    [&](OpBuilder& b, Location l, ValueRange args) {
+				    b.create<linalg::YieldOp>(l, args[0]);
+			    });
+
+			auto dM = getAffineDimExpr(0, ctx);
+			auto dK = getAffineDimExpr(1, ctx);
+			auto dN = getAffineDimExpr(2, ctx);
+			SmallVector<AffineMap> maps = {
+			    AffineMap::get(3, 0, { dM, dK }, ctx),
+			    AffineMap::get(3, 0, { dK, dN }, ctx),
+			    AffineMap::get(3, 0, { dM, dN }, ctx),
+			};
+			SmallVector<utils::IteratorType> iterTypes = {
+			    utils::IteratorType::parallel,
+			    utils::IteratorType::reduction,
+			    utils::IteratorType::parallel,
+			};
+			auto elemType = resultType.getElementType();
+			auto fused = rewriter.create<linalg::GenericOp>(
+			    loc, TypeRange{ resultType }, ValueRange{ op.getArgs()[0], op.getArgs()[1] },
+			    ValueRange{ init.getResult(0) }, maps, iterTypes,
+			    [&](OpBuilder& b, Location l, ValueRange args) {
+				    auto product = emitBinaryScalar(b, l, BinaryOpKind::Multiply, args[0], args[1],
+				                                    elemType);
+				    auto sum = emitBinaryScalar(b, l, BinaryOpKind::Add, args[2], product, elemType);
+				    b.create<linalg::YieldOp>(l, sum);
+			    });
+			rewriter.replaceOp(op, fused.getResult(0));
+			return success();
+		}
+
 		Region& body = op.getBody();
 		Block* bodyBlock = &body.front();
 

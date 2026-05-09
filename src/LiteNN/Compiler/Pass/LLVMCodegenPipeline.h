@@ -21,16 +21,19 @@ namespace litenn
 void registerLLVMTranslations(mlir::DialectRegistry& registry);
 
 // Appends the LLVM codegen pipeline to pm (run after addBufferizationPipeline):
-//   1. convert-linalg-to-loops   — linalg.generic(memref) → scf.for
-//   2. convert-scf-to-control-flow
-//   3. convert-math-to-llvm
-//   4. convert-arith-to-llvm
-//   5. convert-index-to-llvm
-//   6. expand-strided-metadata   — required before finalize-memref-to-llvm
-//   7. finalize-memref-to-llvm
-//   8. convert-func-to-llvm
-//   9. convert-control-flow-to-llvm
-//  10. reconcile-unrealized-casts
+//   1. canonicalize/CSE
+//   2. convert-linalg-to-loops   — linalg.generic(memref) → scf.for
+//   3. mark floating-point arith with reassoc/contract fast-math for SIMD/FMA
+//   4. canonicalize/CSE
+//   5. convert-scf-to-control-flow
+//   6. convert-math-to-llvm
+//   7. convert-arith-to-llvm
+//   8. convert-index-to-llvm
+//   9. expand-strided-metadata   — required before finalize-memref-to-llvm
+//  10. finalize-memref-to-llvm
+//  11. convert-func-to-llvm
+//  12. convert-control-flow-to-llvm
+//  13. reconcile-unrealized-casts
 void addLLVMCodegenPipeline(mlir::PassManager& pm);
 
 // Translates a fully lowered LLVM dialect ModuleOp to llvm::Module.
