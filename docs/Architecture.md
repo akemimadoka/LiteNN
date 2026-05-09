@@ -296,6 +296,7 @@ struct Pass {
 - `FindInput(name)` / `FindOutput(name)` 支持命名签名查询
 - `WriteObjectFile()` 生成 carrier object，导出 `<prefix>_rodata`, `<prefix>_rodata_size`, `<prefix>_instructions`, `<prefix>_instructions_size`
 - `RunInto(inputs, outputs)` 可复用调用方提供的输出 Tensor，适合生产推理循环中减少外层输出分配；`Run(inputs)` 仍保留为便捷接口
+- `RunManyInto(invocations, threadCount)` 支持同一个已加载 module 在独立输入/输出 buffer 上执行多请求并发；这是服务吞吐优化，不改变单个 generated entry 的 object ABI
 
 ---
 
@@ -311,10 +312,11 @@ struct Pass {
 - **MatMul loop order**：`BinaryOp::MatMul` lowering 不再直接依赖默认 `linalg.matmul` loop order，而是生成 `M,K,N` 的 `linalg.generic`，让 innermost `N` 连续访问 RHS 和输出行。
 - **MatMulBiasAdd AOT 融合**：`FusionPattern::MatMulBiasAdd` 在 LowerLiteNNPass 中直接 lowering 为 bias 初始化 + `M,K,N` matmul 累加，避免先 matmul 再单独执行一次 Add 输出遍历。
 - **MatMulBiasAddReLU AOT 融合**：`FusionPattern::MatMulBiasAddReLU` 在 graph 层保持语义 body，AOT lowering 则给 matmul contraction 标记 `litenn.apply_relu`，由 CPU micro-kernel 在最终 store 前完成 ReLU。
-- **CPU AOT MatMul micro-kernel**：当前 codegen pass 会识别 bufferized `f32` MatMul contraction。宽输出使用 `vector<16xf32>`，优先走 2-row N-vector tile 以复用 RHS/B；窄输出 `4 <= N <= 16` 使用精确 `vector<Nxf32>` accumulator，覆盖 MNIST `N=10` 末层。
+- **CPU AOT MatMul micro-kernel**：当前 codegen pass 会识别 bufferized `f32` MatMul contraction。宽输出使用 `vector<16xf32>`，优先走 4-row N-vector tile 以复用 RHS/B；窄输出 `4 <= N <= 16` 使用精确 `vector<Nxf32>` accumulator，覆盖 MNIST `N=10` 末层。
 - **函数边界布局收紧**：One-shot bufferize 的 function boundary/unknown type conversion 使用 identity layout map，减少动态 layout/stride 对 LLVM 优化的干扰。
 - **Interpreter reference kernel 改善**：CPU reference MatMul 改为 `i,k,j` 累加并预零输出，解释器路径也具备更合理的 cache/SIMD 访问形态，但它仍不是性能主路径。
 - **输出复用接口**：`CompiledModule::RunInto` 支持调用方复用输出 Tensor；当前主要用于生产接口完整性，端到端 benchmark 仍应同时观察 wrapper 校验、输出 copy 和 generated kernel 的占比。
+- **多请求并发接口**：`CompiledModule::RunManyInto` 使用调用方指定线程数调度独立请求，适合服务端 throughput 场景；小 batch 或极小模型默认不应开启，单个大 MatMul 的 intra-op 并行仍需专门后端支持。
 
 当前 profile 结论：
 
@@ -326,7 +328,7 @@ struct Pass {
 
 1. **单线程 GEMM 质量**：为常见 `f32` MatMul 引入 tiled/packed kernel（手写 micro-kernel、MLIR tiling/packing，或调用 BLAS/oneDNN 的单线程路径），目标先把 PyTorch 单线程差距压到 1.2-1.5x 内。
 2. **Destination-passing / buffer reuse**：让 AOT 子图直接写入 caller output 和规划好的临时 buffer，减少内部 tensor allocation、最终 output copy 和 wrapper 开销。
-3. **多线程 CPU backend**：在单线程 kernel 质量稳定后，再接入 OpenMP/threadpool/oneDNN 多线程，否则多线程只会掩盖单核效率问题。
+3. **多线程 CPU backend**：已支持 `RunManyInto` 的多请求并发；下一步是单个 MatMul/Conv 的 intra-op threadpool 或 oneDNN/OpenBLAS 后端，否则多线程只能提升并发吞吐，不能降低单请求大 batch 延迟。
 4. **profile 工具化**：补齐 Graph/MLIR/LLVM dump 和 per-op/per-shape benchmark，持续记录 Linear/MLP/CNN/Reduce 的性能回归基线。
 
 ---

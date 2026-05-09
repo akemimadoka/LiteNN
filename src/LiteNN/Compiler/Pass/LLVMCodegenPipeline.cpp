@@ -195,7 +195,7 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
     }
 
     constexpr int64_t kVectorWidth = 16;
-    constexpr int64_t kRowTile = 2;
+    constexpr int64_t kRowTile = 4;
     const int64_t n = outType.getDimSize(1);
     if (n <= kVectorWidth || n % kVectorWidth != 0 ||
         outType.isDynamicDim(0) || outType.getDimSize(0) % kRowTile != 0)
@@ -223,9 +223,14 @@ mlir::LogicalResult rewriteWideMatMulRowTile(mlir::linalg::GenericOp op,
         mlir::OpBuilder::InsertionGuard mGuard(builder);
         builder.setInsertionPointToStart(mLoop.getBody());
         auto mBase = mLoop.getInductionVar();
-        llvm::SmallVector<mlir::Value, 2> mIndices;
+        llvm::SmallVector<mlir::Value, 4> mIndices;
+        mIndices.reserve(kRowTile);
         mIndices.push_back(mBase);
-        mIndices.push_back(builder.create<mlir::arith::AddIOp>(loc, mBase, c1).getResult());
+        for (int64_t row = 1; row < kRowTile; ++row)
+        {
+            auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, row);
+            mIndices.push_back(builder.create<mlir::arith::AddIOp>(loc, mBase, offset).getResult());
+        }
 
         auto nLoop = builder.create<mlir::scf::ForOp>(loc, c0, nUpper, cNStep);
         {

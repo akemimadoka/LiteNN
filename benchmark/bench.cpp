@@ -28,6 +28,7 @@
 #include <iostream>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -113,6 +114,8 @@ struct BenchResult
 struct BenchOptions
 {
 	bool useRunInto = false;
+	std::size_t parallelRequests = 1;
+	std::size_t requestThreads = 1;
 };
 
 static BenchResult RunBench(Graph& graph, std::size_t batch)
@@ -171,23 +174,44 @@ static std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& modul
 }
 
 static BenchResult RunBenchCompiled(const CompiledModule<CPU>& module, std::size_t batch,
-                                    bool useRunInto)
+                                    const BenchOptions& options)
 {
 	std::mt19937 rng(0);
 	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	std::vector<float> data(batch * 784);
-	for (float& v : data)
-		v = dist(rng);
+	const auto requestCount = options.useRunInto ? options.parallelRequests : std::size_t{ 1 };
 
-	auto inputTensor = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
-	const std::vector<Tensor<CPU>> inputs = { std::move(inputTensor) };
-	auto outputs = useRunInto ? AllocateOutputs(module) : std::vector<Tensor<CPU>>{};
+	std::vector<std::vector<float>> inputData(requestCount);
+	std::vector<std::vector<Tensor<CPU>>> inputSets(requestCount);
+	std::vector<std::vector<Tensor<CPU>>> outputSets(requestCount);
+	std::vector<CompiledModuleInvocation> invocations;
+	invocations.reserve(requestCount);
+
+	for (std::size_t request = 0; request < requestCount; ++request)
+	{
+		inputData[request].resize(batch * 784);
+		for (float& v : inputData[request])
+			v = dist(rng);
+
+		inputSets[request].push_back(
+		    Optimizer::MakeFloatTensor(std::span<const float>(inputData[request]), { batch, 784 }));
+
+		if (options.useRunInto)
+		{
+			outputSets[request] = AllocateOutputs(module);
+			invocations.push_back({
+			    .inputs = std::span<const Tensor<CPU>>(inputSets[request]),
+			    .outputs = std::span<Tensor<CPU>>(outputSets[request]),
+			});
+		}
+	}
 
 	const auto runOnce = [&] {
-		if (useRunInto)
-			module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		if (options.useRunInto && requestCount > 1)
+			module.RunManyInto(invocations, options.requestThreads);
+		else if (options.useRunInto)
+			module.RunInto(std::span<const Tensor<CPU>>(inputSets[0]), std::span<Tensor<CPU>>(outputSets[0]));
 		else
-			(void)module.Run(std::span<const Tensor<CPU>>(inputs));
+			(void)module.Run(std::span<const Tensor<CPU>>(inputSets[0]));
 	};
 
 	for (std::size_t i = 0; i < 5; ++i)
@@ -207,9 +231,10 @@ static BenchResult RunBenchCompiled(const CompiledModule<CPU>& module, std::size
 	const auto t1 = std::chrono::steady_clock::now();
 
 	const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	const auto totalSamples = batch * iters * requestCount;
 	return {
-		totalMs / static_cast<double>(iters),
-		static_cast<double>(batch * iters) / (totalMs * 1e-3)
+		totalMs / static_cast<double>(iters * requestCount),
+		static_cast<double>(totalSamples) / (totalMs * 1e-3)
 	};
 }
 #endif // LITENN_BENCH_HAS_AOT
@@ -221,6 +246,16 @@ static BenchResult RunBenchCompiled(const CompiledModule<CPU>& module, std::size
 int main(int argc, char** argv)
 {
 	BenchOptions options;
+	const auto parsePositiveSize = [](std::string_view text, std::string_view optionName) {
+		std::size_t pos = 0;
+		const auto value = std::stoull(std::string(text), &pos);
+		if (pos != text.size() || value == 0)
+		{
+			throw std::runtime_error(std::format("{} expects a positive integer", optionName));
+		}
+		return static_cast<std::size_t>(value);
+	};
+
 	for (int i = 1; i < argc; ++i)
 	{
 		const std::string_view arg(argv[i]);
@@ -228,9 +263,30 @@ int main(int argc, char** argv)
 		{
 			options.useRunInto = true;
 		}
+		else if (arg == "--parallel-requests")
+		{
+			if (++i >= argc)
+			{
+				std::cerr << "--parallel-requests expects a value\n";
+				return 2;
+			}
+			options.parallelRequests = parsePositiveSize(argv[i], "--parallel-requests");
+			options.useRunInto = true;
+		}
+		else if (arg == "--request-threads")
+		{
+			if (++i >= argc)
+			{
+				std::cerr << "--request-threads expects a value\n";
+				return 2;
+			}
+			options.requestThreads = parsePositiveSize(argv[i], "--request-threads");
+			options.useRunInto = true;
+		}
 		else if (arg == "--help" || arg == "-h")
 		{
-			std::cout << "Usage: litenn_bench [--use-runinto]\n";
+			std::cout << "Usage: litenn_bench [--use-runinto] "
+			          << "[--parallel-requests N] [--request-threads N]\n";
 			return 0;
 		}
 		else
@@ -246,7 +302,14 @@ int main(int argc, char** argv)
 	std::cout << "LiteNN CPU Inference Benchmark\n";
 #ifdef LITENN_BENCH_HAS_AOT
 	if (options.useRunInto)
+	{
 		std::cout << "AOT measurement mode: RunInto\n";
+		if (options.parallelRequests > 1 || options.requestThreads > 1)
+		{
+			std::cout << "AOT parallel requests: " << options.parallelRequests
+			          << ", request threads: " << options.requestThreads << "\n";
+		}
+	}
 #endif
 	std::cout << std::string(72, '=') << "\n";
 	std::cout << std::format("{:<24} {:>6} {:>10} {:>14} {:>14}\n",
@@ -267,8 +330,10 @@ int main(int argc, char** argv)
 #ifdef LITENN_BENCH_HAS_AOT
 			auto compiled = Compiler<CPU>::Compile(graph);
 			const auto module = CompiledModule<CPU>::Load(compiled.Image());
-			const auto ra = RunBenchCompiled(module, batch, options.useRunInto);
-			const auto aotBackend = options.useRunInto ? "AOTInto" : "AOT";
+			const auto ra = RunBenchCompiled(module, batch, options);
+			const auto aotBackend = (options.useRunInto && options.parallelRequests > 1)
+				? "AOTIntoMT"
+				: (options.useRunInto ? "AOTInto" : "AOT");
 			std::cout << std::format("{:<24} {:>6} {:>10} {:>12.3f}ms {:>12.0f}/s\n",
 			    name, batch, aotBackend, ra.meanMs, ra.throughput);
 #endif

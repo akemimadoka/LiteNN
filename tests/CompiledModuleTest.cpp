@@ -224,3 +224,46 @@ TEST(CompiledModuleTest, ConcurrentRunUsesIndependentInputAndOutputBuffers)
 		EXPECT_TRUE(result.ok) << result.message;
 	}
 }
+
+TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(graph);
+
+	constexpr std::size_t kInvocationCount = 16;
+	std::vector<std::array<Tensor<CPU>, 2>> inputs;
+	std::vector<std::array<Tensor<CPU>, 1>> outputs;
+	std::vector<CompiledModuleInvocation> invocations;
+	inputs.reserve(kInvocationCount);
+	outputs.reserve(kInvocationCount);
+	invocations.reserve(kInvocationCount);
+
+	for (std::size_t i = 0; i < kInvocationCount; ++i)
+	{
+		const auto base = static_cast<float>(i * 100);
+		inputs.push_back({
+		    Tensor<CPU>({ base + 1, base + 2, base + 3, base + 4 }, { 2, 2 }, DataType::Float32),
+		    Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32),
+		});
+		outputs.push_back({
+		    Tensor<CPU>(Uninitialized, { 2, 2 }, DataType::Float32),
+		});
+		invocations.push_back({
+		    .inputs = std::span<const Tensor<CPU>>(inputs.back()),
+		    .outputs = std::span<Tensor<CPU>>(outputs.back()),
+		});
+	}
+
+	compiled.RunManyInto(invocations, 4);
+
+	for (std::size_t i = 0; i < kInvocationCount; ++i)
+	{
+		const auto base = static_cast<float>(i * 100);
+		for (std::size_t element = 0; element < 4; ++element)
+		{
+			const auto expected = base + static_cast<float>(element + 1) +
+			                      static_cast<float>((element + 1) * 10);
+			EXPECT_FLOAT_EQ(ReadFloat(outputs[i][0], element), expected);
+		}
+	}
+}

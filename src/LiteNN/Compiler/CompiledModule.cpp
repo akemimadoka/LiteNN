@@ -52,14 +52,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstring>
 #include <cstdint>
+#include <exception>
 #include <format>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 using namespace LiteNN;
@@ -982,6 +986,23 @@ namespace
 		}
 	}
 
+	std::size_t NormalizeThreadCount(std::size_t requested, std::size_t workCount)
+	{
+		if (workCount == 0)
+		{
+			return 0;
+		}
+		if (requested == 0)
+		{
+			requested = std::thread::hardware_concurrency();
+			if (requested == 0)
+			{
+				requested = 1;
+			}
+		}
+		return std::clamp<std::size_t>(requested, 1, workCount);
+	}
+
 	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
 	{
 		auto module = litenn::translateGraphToMLIR(graph, ctx);
@@ -1125,6 +1146,74 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 	}
 
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
+}
+
+void CompiledModule<CPU>::RunManyInto(std::span<const CompiledModuleInvocation> invocations,
+                                      std::size_t threadCount) const
+{
+	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
+	if (workerCount == 0)
+	{
+		return;
+	}
+	if (workerCount == 1)
+	{
+		for (const auto& invocation : invocations)
+		{
+			RunInto(invocation.inputs, invocation.outputs);
+		}
+		return;
+	}
+
+	std::atomic<std::size_t> next{ 0 };
+	std::atomic_bool stop{ false };
+	std::exception_ptr firstError;
+	std::mutex errorMutex;
+
+	auto worker = [&] {
+		while (!stop.load(std::memory_order_relaxed))
+		{
+			const auto index = next.fetch_add(1, std::memory_order_relaxed);
+			if (index >= invocations.size())
+			{
+				break;
+			}
+
+			try
+			{
+				const auto& invocation = invocations[index];
+				RunInto(invocation.inputs, invocation.outputs);
+			}
+			catch (...)
+			{
+				{
+					std::lock_guard lock(errorMutex);
+					if (!firstError)
+					{
+						firstError = std::current_exception();
+					}
+				}
+				stop.store(true, std::memory_order_relaxed);
+				break;
+			}
+		}
+	};
+
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	for (std::size_t i = 0; i < workerCount; ++i)
+	{
+		workers.emplace_back(worker);
+	}
+	for (auto& thread : workers)
+	{
+		thread.join();
+	}
+
+	if (firstError)
+	{
+		std::rethrow_exception(firstError);
+	}
 }
 
 CompiledModuleImage CompiledModule<CPU>::Image() const

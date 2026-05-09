@@ -30,6 +30,12 @@ namespace LiteNN
 		std::size_t instructionSize{};
 	};
 
+	struct CompiledModuleInvocation
+	{
+		std::span<const Tensor<CPU>> inputs;
+		std::span<Tensor<CPU>> outputs;
+	};
+
 	template <Device D>
 	class CompiledModule;
 
@@ -51,6 +57,10 @@ namespace LiteNN
 
 		/// Runs the compiled entry point into caller-provided output tensors.
 		void RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const;
+
+		/// Runs independent invocations concurrently when threadCount > 1.
+		void RunManyInto(std::span<const CompiledModuleInvocation> invocations,
+		                 std::size_t threadCount = 0) const;
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;

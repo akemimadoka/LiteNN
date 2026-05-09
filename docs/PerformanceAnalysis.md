@@ -196,27 +196,32 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 本轮继续推进了四个方向：
 
-- **宽输出 MatMul 2-row micro-kernel**：在 `M` 维静态且可被 2 整除的宽输出 `f32` MatMul 上，新增 `2 x (最多 4 个 vector<16xf32>)` 的寄存器 tile。K 循环中同一个 RHS/B 向量会同时喂两行 LHS/A，减少 hidden layer 中重复加载 B 的比例；不满足条件时回退到上一版单行、最多 8 个 N 向量 tile。
+- **宽输出 MatMul 4-row micro-kernel**：在 `M` 维静态且可被 4 整除的宽输出 `f32` MatMul 上，新增 `4 x (最多 4 个 vector<16xf32>)` 的寄存器 tile。K 循环中同一个 RHS/B 向量会同时喂四行 LHS/A，减少 hidden layer 中重复加载 B 的比例；不满足条件时回退到单行、最多 8 个 N 向量 tile。
 - **窄输出 MatMul vector<N> micro-kernel**：`4 <= N <= 16` 的输出层改为精确 `vector<Nxf32>` 累加，例如 MNIST 的 `N=10` 末层不再使用 10 个标量 accumulator；`N < 4` 继续走旧的标量窄输出路径。
 - **MatMulBiasAddReLU 融合**：新增 graph fusion pattern 与 AOT lowering 标记，使 hidden layer 的 ReLU 在 matmul micro-kernel store 前完成，减少额外中间张量读写。该 pattern 目前只在输出为 f32 rank-2 且 `N <= 16 || N % 16 == 0` 时启用，保证当前 codegen pass 可以消化标记，不会落到错误的普通 lowering。
 - **标量常量收缩**：激活层内部的 `0/1/2/0.5/...` 系数改为 `{1}` 标量常量，避免 ReLU 等层为每个输出 shape 生成完整常量张量。
+- **多请求并发执行**：新增 `CompiledModule::RunManyInto`，允许同一个已加载 AOT module 在独立输入/输出 buffer 上并发处理多组请求。该路径不改变生成 object 的 ABI，也不等同于单个 MatMul 的 intra-op 并行。
 
 本轮验证：
 
 - `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：137/137 通过。
 - 新增 `FusionPass.MatMulBiasAddReLU` 单测，并额外跑过 `FusionPassTest.exe`、`LLVMCodegenPassTest.exe`、`CompiledModuleTest.exe`。
 - `cmd /c build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
-  - `Linear(784->10), batch=512`: AOTInto 约 `0.321 ms`
-  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.760 ms`
-  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `5.668 ms`
-- `cmd /c build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_row_tile2` 关键结果：
-  - `linear_b512`: RunInto 约 `0.319 ms`
-  - `mlp128_b512`: RunInto 约 `0.773 ms`
-  - `mlp512_b512`: RunInto 约 `5.725 ms`
+  - `Linear(784->10), batch=512`: AOTInto 约 `0.312 ms`
+  - `MLP(784->128->10), batch=512`: AOTInto 约 `0.509 ms`
+  - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.700 ms`
+- `cmd /c build-release-mingw\benchmark\litenn_profile.exe build-release-mingw\profile_out_row_tile4x4` 关键结果：
+  - `linear_b512`: RunInto 约 `0.309 ms`
+  - `mlp128_b512`: RunInto 约 `0.545 ms`
+  - `mlp512_b512`: RunInto 约 `3.251 ms`
+- `cmd /c build-release-mingw\benchmark\litenn_bench.exe --parallel-requests 4 --request-threads 4` 关键结果：
+  - `MLP(784->512->256->10), batch=512`: AOTIntoMT 吞吐等价约 `1.618 ms/batch`
+  - 小 batch/小模型会被线程调度开销反噬，不能默认开启多请求并发
 
 后续最高收益点仍是：
 
-- 将当前 `2-row x N-vector` micro-kernel 继续升级为真正的 M/N/K blocking，并为 RHS/B 引入 panel packing 与 prefetch，减少大 hidden layer 的 cache miss。
+- 将当前 `4-row x N-vector` micro-kernel 继续升级为真正的 M/N/K blocking，并为 RHS/B 引入 panel packing 与 prefetch，减少大 hidden layer 的 cache miss。
+- 设计单个 MatMul 的 intra-op 并行：优先考虑编译期 tile plan + LiteNN runtime threadpool，而不是让生成 object 直接依赖平台线程库。
 - 为不同 CPU feature 生成 tile policy：AVX-512 可保持 `vector<16xf32>`，AVX2/无 AVX-512 时应退回 `vector<8xf32>` 或更保守的 tile，避免过度依赖 LLVM 对非法向量的拆分质量。
 - 增加 IR/ASM 统计脚本，把 `vfmadd...ps`、`vfmadd...ss`、`gather/scatter` 数量变成可回归的指标。
 
@@ -230,7 +235,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
      Select-String "vfmadd" | Group-Object { $_ -match 'ps.*zmm' } | Format-Table
    ```
    完整 P0 tile/vectorize 的目标：`linear_b512` 中 `vfmadd…ps zmm/ymm` 占比 > 80%；`vfmadd…ss` 数量 → 0。
-   当前阶段目标：确保窄输出 `N=10` 走 `vector<10xf32>`，宽输出 hidden layer 走 2-row tile，并持续观察是否出现 gather/scatter 或寄存器 spill。
+   当前阶段目标：确保窄输出 `N=10` 走 `vector<10xf32>`，宽输出 hidden layer 走 4-row tile，并持续观察是否出现 gather/scatter 或寄存器 spill。
 4. 关键阈值（建议 PR 验收门槛）：
    - Linear/512：≤ 0.30 ms（即追平 PyTorch ±40%）
    - MLP-512/512：≤ 5.0 ms（即追平 PyTorch ±15%）
