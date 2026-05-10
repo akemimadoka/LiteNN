@@ -1,5 +1,8 @@
 name: ci
 on: [push, pull_request]
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -8,7 +11,8 @@ jobs:
         - name: checkout
           uses: actions/checkout@v6
           with:
-            submodules: true
+            fetch-depth: 0
+            submodules: recursive
         - name: configure-build-env
           run: |
             sudo add-apt-repository ppa:ubuntu-toolchain-r/test
@@ -18,7 +22,7 @@ jobs:
             echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
             echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble main' | sudo tee /etc/apt/sources.list.d/llvm-toolchain.list >/dev/null
             sudo apt update
-            sudo apt install g++-16 cmake llvm-23-dev libmlir-23-dev mlir-23-tools libzstd-dev libedit-dev ninja-build
+            sudo apt install g++-16 cmake llvm-23-dev libmlir-23-dev mlir-23-tools libzstd-dev libedit-dev ninja-build python3
         - name: build
           run: |
             /usr/bin/cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH="/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
@@ -26,3 +30,95 @@ jobs:
         - name: test
           run: |
             /usr/bin/ctest -j4 -C Debug --test-dir build -T test --output-on-failure
+        - name: resolve-benchmark-baseline
+          id: benchmark_baseline
+          shell: bash
+          run: |
+            set -euo pipefail
+            if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+              git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+              baseline_sha="$(git rev-parse "refs/remotes/origin/${{ github.base_ref }}")"
+              baseline_label="${{ github.base_ref }}@${baseline_sha:0:12}"
+            else
+              baseline_sha="${{ github.event.before }}"
+              if [[ "${baseline_sha}" == "0000000000000000000000000000000000000000" ]]; then
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              git cat-file -e "${baseline_sha}^{commit}"
+              baseline_label="previous@${baseline_sha:0:12}"
+            fi
+
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "sha=${baseline_sha}" >> "$GITHUB_OUTPUT"
+            echo "label=${baseline_label}" >> "$GITHUB_OUTPUT"
+        - name: run-current-benchmark
+          shell: bash
+          run: |
+            set -euo pipefail
+            ./build/benchmark/litenn_bench \
+              --benchmark_out=benchmark-current.json \
+              --benchmark_out_format=json \
+              --benchmark_repetitions=3 \
+              --benchmark_report_aggregates_only=true \
+              --benchmark_min_time=0.05s
+        - name: build-and-run-benchmark-baseline
+          id: benchmark_baseline_run
+          if: steps.benchmark_baseline.outputs.skip != 'true'
+          continue-on-error: true
+          shell: bash
+          run: |
+            set -euo pipefail
+            rm -rf .benchmark-baseline build-benchmark-baseline
+            git worktree add --force --detach .benchmark-baseline "${{ steps.benchmark_baseline.outputs.sha }}"
+            git -C .benchmark-baseline submodule update --init --recursive
+            /usr/bin/cmake -S .benchmark-baseline -B build-benchmark-baseline -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH="/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
+            /usr/bin/cmake --build build-benchmark-baseline --parallel --target litenn_bench
+            ./build-benchmark-baseline/benchmark/litenn_bench \
+              --benchmark_out=benchmark-baseline.json \
+              --benchmark_out_format=json \
+              --benchmark_repetitions=3 \
+              --benchmark_report_aggregates_only=true \
+              --benchmark_min_time=0.05s
+        - name: compare-benchmarks
+          if: steps.benchmark_baseline.outputs.skip != 'true' && steps.benchmark_baseline_run.outcome == 'success'
+          shell: bash
+          run: |
+            set -euo pipefail
+            current_label="current@${GITHUB_SHA:0:12}"
+            python3 .github/scripts/compare_benchmarks.py \
+              --baseline benchmark-baseline.json \
+              --contender benchmark-current.json \
+              --baseline-label "${{ steps.benchmark_baseline.outputs.label }}" \
+              --contender-label "${current_label}" \
+              --output benchmark-summary.md
+            cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+        - name: write-benchmark-summary-without-baseline
+          if: steps.benchmark_baseline.outputs.skip == 'true' || (steps.benchmark_baseline.outputs.skip != 'true' && steps.benchmark_baseline_run.outcome != 'success')
+          shell: bash
+          run: |
+            set -euo pipefail
+            {
+              echo "## Benchmark Diff"
+              echo
+              if [[ "${{ steps.benchmark_baseline.outputs.skip }}" == "true" ]]; then
+                echo "Baseline unavailable for this push, so only current benchmark results were collected."
+              else
+                echo "Baseline build failed or the baseline ref does not support litenn_bench yet, so diff generation was skipped."
+                echo
+                echo "Baseline ref: ${{ steps.benchmark_baseline.outputs.label }}"
+              fi
+              echo
+              echo "Current benchmark artifact: benchmark-current.json"
+            } > benchmark-summary.md
+            cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+        - name: upload-benchmark-artifacts
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: benchmark-results-${{ github.run_id }}
+            path: |
+              benchmark-current.json
+              benchmark-baseline.json
+              benchmark-summary.md
+            if-no-files-found: warn
