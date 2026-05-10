@@ -1,5 +1,5 @@
 add_executable(litenn_bench bench.cpp)
-target_link_libraries(litenn_bench PRIVATE LiteNN)
+target_link_libraries(litenn_bench PRIVATE LiteNN benchmark::benchmark_main)
 
 if(TARGET LiteNNCompiler)
     target_link_libraries(litenn_bench PRIVATE LiteNNCompiler)

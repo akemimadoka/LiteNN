@@ -1,0 +1,141 @@
+name: benchmark
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: configure-build-env
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+          if [[ ! -f /usr/share/doc/kitware-archive-keyring/copyright ]]; then
+            wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+            echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+          fi
+          sudo apt update
+          sudo apt install -y gcc-16 g++-16 ninja-build cmake python3
+
+      - name: resolve-baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+            baseline_sha="$(git rev-parse "refs/remotes/origin/${{ github.base_ref }}")"
+            baseline_label="${{ github.base_ref }}@${baseline_sha:0:12}"
+          else
+            baseline_sha="${{ github.event.before }}"
+            if [[ "${baseline_sha}" == "0000000000000000000000000000000000000000" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git cat-file -e "${baseline_sha}^{commit}"
+            baseline_label="previous@${baseline_sha:0:12}"
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "sha=${baseline_sha}" >> "$GITHUB_OUTPUT"
+          echo "label=${baseline_label}" >> "$GITHUB_OUTPUT"
+
+      - name: build-and-run-current
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-benchmark-current -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/bin/gcc-16 \
+            -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 \
+            -DLITENN_BUILD_EXAMPLES=OFF \
+            -DLITENN_BUILD_BENCHMARKS=ON
+          cmake --build build-benchmark-current --parallel --target litenn_bench
+          ./build-benchmark-current/benchmark/litenn_bench \
+            --benchmark_out=benchmark-current.json \
+            --benchmark_out_format=json \
+            --benchmark_repetitions=3 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_min_time=0.05s
+
+      - name: build-and-run-baseline
+        id: baseline_run
+        if: steps.baseline.outputs.skip != 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .benchmark-baseline
+          git worktree add --force --detach .benchmark-baseline "${{ steps.baseline.outputs.sha }}"
+          git -C .benchmark-baseline submodule update --init --recursive
+          cmake -S .benchmark-baseline -B build-benchmark-baseline -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/bin/gcc-16 \
+            -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 \
+            -DLITENN_BUILD_EXAMPLES=OFF \
+            -DLITENN_BUILD_BENCHMARKS=ON
+          cmake --build build-benchmark-baseline --parallel --target litenn_bench
+          ./build-benchmark-baseline/benchmark/litenn_bench \
+            --benchmark_out=benchmark-baseline.json \
+            --benchmark_out_format=json \
+            --benchmark_repetitions=3 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_min_time=0.05s
+
+      - name: compare-results
+        if: steps.baseline.outputs.skip != 'true' && steps.baseline_run.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_label="current@${GITHUB_SHA:0:12}"
+          python3 .github/scripts/compare_benchmarks.py \
+            --baseline benchmark-baseline.json \
+            --contender benchmark-current.json \
+            --baseline-label "${{ steps.baseline.outputs.label }}" \
+            --contender-label "${current_label}" \
+            --output benchmark-summary.md
+          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: write-no-baseline-summary
+        if: steps.baseline.outputs.skip == 'true' || (steps.baseline.outputs.skip != 'true' && steps.baseline_run.outcome != 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Benchmark Diff"
+            echo
+            if [[ "${{ steps.baseline.outputs.skip }}" == "true" ]]; then
+              echo "Baseline unavailable for this push, so only current benchmark results were collected."
+            else
+              echo "Baseline build failed or the baseline ref does not support litenn_bench yet, so diff generation was skipped."
+              echo
+              echo "Baseline ref: ${{ steps.baseline.outputs.label }}"
+            fi
+            echo
+            echo "Current benchmark artifact: benchmark-current.json"
+          } > benchmark-summary.md
+          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload-artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: |
+            benchmark-current.json
+            benchmark-baseline.json
+            benchmark-summary.md
+          if-no-files-found: warn

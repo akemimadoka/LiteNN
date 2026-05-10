@@ -51,6 +51,12 @@ if(LITENN_BUILD_EXAMPLES)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable bundled benchmark tests" FORCE)
+    set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "Disable bundled benchmark gtest tests" FORCE)
+    set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "Disable bundled benchmark -Werror" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable bundled benchmark install targets" FORCE)
+    set(BENCHMARK_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "Disable bundled benchmark dependency downloads" FORCE)
+    add_subdirectory(third_party/benchmark EXCLUDE_FROM_ALL)
     add_subdirectory(benchmark)
 endif()
 

@@ -1,13 +1,4 @@
-// LiteNN CPU Inference Benchmark
-//
-// 测试三种模型在不同批次大小下的推理吞吐量，与 bench.py（PyTorch）结果对比。
-//
-// 模型：
-//   Linear      784 → 10
-//   MLP-128     784 → 128 → ReLU → 10
-//   MLP-512     784 → 512 → ReLU → 256 → ReLU → 10
-//
-// 批次大小：1 / 32 / 128 / 512；自适应迭代次数（目标计时约 2 秒）。
+#include <benchmark/benchmark.h>
 
 #include <LiteNN.h>
 #include <LiteNN/Initializer/Initializer.h>
@@ -22,24 +13,42 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
 
-#include <algorithm>
-#include <chrono>
+#include <array>
+#include <cstddef>
 #include <format>
-#include <iostream>
 #include <random>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace LiteNN;
 
-// ---------------------------------------------------------------------------
-// Model builders — each returns an inference-ready Graph for the given batch
-// ---------------------------------------------------------------------------
+namespace {
 
-static Graph BuildLinear(std::size_t batch, std::mt19937& rng)
+enum class ModelKind : std::size_t
+{
+	Linear,
+	MLP128,
+	MLP512,
+};
+
+struct ModelSpec
+{
+	std::string_view name;
+	Graph (*build)(std::size_t, std::mt19937&);
+};
+
+constexpr std::array<ModelKind, 3> kModelKinds = {
+	ModelKind::Linear,
+	ModelKind::MLP128,
+	ModelKind::MLP512,
+};
+
+constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
+
+Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
 	Graph graph;
 	const auto fc = Layer::CreateLinear(graph,
@@ -52,7 +61,7 @@ static Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 	return graph;
 }
 
-static Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
+Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
 	Graph graph;
 	const auto h1 = Layer::CreateLinear(graph,
@@ -69,7 +78,7 @@ static Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	return graph;
 }
 
-static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
+Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
 	Graph graph;
 	const auto h1 = Layer::CreateLinear(graph,
@@ -90,81 +99,78 @@ static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	return graph;
 }
 
-// ---------------------------------------------------------------------------
-// Optimization: InlinePass → ConstFoldPass → FusionPass
-// ---------------------------------------------------------------------------
-
-static void Optimize(Graph& graph)
+void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
 	ConstFoldPass{}.Run(graph);
 	FusionPass{}.Run(graph);
 }
 
-// ---------------------------------------------------------------------------
-// Single benchmark run
-// ---------------------------------------------------------------------------
-
-struct BenchResult
+const ModelSpec& GetModelSpec(ModelKind kind)
 {
-	double meanMs;    // milliseconds per forward call
-	double throughput; // samples per second
-};
+	static const std::array<ModelSpec, 3> specs = {
+		ModelSpec{ "Linear(784->10)", &BuildLinear },
+		ModelSpec{ "MLP(784->128->10)", &BuildMLP128 },
+		ModelSpec{ "MLP(784->512->256->10)", &BuildMLP512 },
+	};
+	return specs[static_cast<std::size_t>(kind)];
+}
 
-struct BenchOptions
+std::vector<float> MakeInputData(std::size_t batch)
 {
-	bool useRunInto = false;
-	std::size_t parallelRequests = 1;
-	std::size_t requestThreads = 1;
-};
-
-static BenchResult RunBench(Graph& graph, std::size_t batch)
-{
-	// Build a fixed random input (reused every call — measures kernel time, not alloc time)
 	std::mt19937 rng(0);
 	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 	std::vector<float> data(batch * 784);
-	for (float& v : data)
-		v = dist(rng);
-
-	auto inputTensor = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
-	const std::vector<Tensor<CPU>> inputs = { std::move(inputTensor) };
-
-	Runtime::Interpreter<CPU> interp;
-
-	// Warmup (fixed 5 runs)
-	for (std::size_t i = 0; i < 5; ++i)
-		(void)interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-
-	// Probe: 1 iteration to estimate per-call cost
-	const auto tp0 = std::chrono::steady_clock::now();
-	(void)interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-	const auto tp1 = std::chrono::steady_clock::now();
-	const double probeMs = std::chrono::duration<double, std::milli>(tp1 - tp0).count();
-
-	// Target ~2 seconds total, at least 10 iters, at most 1000
-	const auto iters = static_cast<std::size_t>(
-	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 1000.0));
-
-	// Timed loop
-	const auto t0 = std::chrono::steady_clock::now();
-	for (std::size_t i = 0; i < iters; ++i)
-		(void)interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-	const auto t1 = std::chrono::steady_clock::now();
-
-	const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-	return {
-		totalMs / static_cast<double>(iters),
-		static_cast<double>(batch * iters) / (totalMs * 1e-3)
-	};
+	for (float& value : data)
+		value = dist(rng);
+	return data;
 }
 
-// ---------------------------------------------------------------------------
-// AOT benchmark — compile once, then measure module.Run()
-// ---------------------------------------------------------------------------
+std::vector<Tensor<CPU>> MakeInputs(const std::vector<float>& data, std::size_t batch)
+{
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
+	return inputs;
+}
+
+void SetThroughputCounters(benchmark::State& state, std::size_t batch)
+{
+	state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(batch));
+	state.counters["samples_per_second"] = benchmark::Counter(
+	    static_cast<double>(batch), benchmark::Counter::kIsIterationInvariantRate);
+}
+
+template <typename Fn>
+void RegisterBenchmarkCase(std::string_view backend, ModelKind kind, std::size_t batch, Fn&& fn)
+{
+	auto* benchmarkCase = benchmark::RegisterBenchmark(
+	    std::format("{}/{}/batch:{}", backend, GetModelSpec(kind).name, batch),
+	    std::forward<Fn>(fn));
+	benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+}
+
+void BMInterpreter(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	std::mt19937 rng(42);
+	auto graph = GetModelSpec(kind).build(batch, rng);
+	Optimize(graph);
+
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeInputs(inputData, batch);
+	Runtime::Interpreter<CPU> interp;
+
+	for (auto _ : state)
+	{
+		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		benchmark::DoNotOptimize(outputs);
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
 
 #ifdef LITENN_BENCH_HAS_AOT
-static std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
+std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
 {
 	std::vector<Tensor<CPU>> outputs;
 	outputs.reserve(module.OutputSpecs().size());
@@ -173,180 +179,73 @@ static std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& modul
 	return outputs;
 }
 
-static BenchResult RunBenchCompiled(const CompiledModule<CPU>& module, std::size_t batch,
-                                    const BenchOptions& options)
+void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	std::mt19937 rng(0);
-	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	const auto requestCount = options.useRunInto ? options.parallelRequests : std::size_t{ 1 };
+	std::mt19937 rng(42);
+	auto graph = GetModelSpec(kind).build(batch, rng);
+	Optimize(graph);
 
-	std::vector<std::vector<float>> inputData(requestCount);
-	std::vector<std::vector<Tensor<CPU>>> inputSets(requestCount);
-	std::vector<std::vector<Tensor<CPU>>> outputSets(requestCount);
-	std::vector<CompiledModuleInvocation> invocations;
-	invocations.reserve(requestCount);
+	auto compiled = Compiler<CPU>::Compile(graph);
+	auto module = CompiledModule<CPU>::Load(compiled.Image());
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeInputs(inputData, batch);
 
-	for (std::size_t request = 0; request < requestCount; ++request)
+	for (auto _ : state)
 	{
-		inputData[request].resize(batch * 784);
-		for (float& v : inputData[request])
-			v = dist(rng);
-
-		inputSets[request].push_back(
-		    Optimizer::MakeFloatTensor(std::span<const float>(inputData[request]), { batch, 784 }));
-
-		if (options.useRunInto)
-		{
-			outputSets[request] = AllocateOutputs(module);
-			invocations.push_back({
-			    .inputs = std::span<const Tensor<CPU>>(inputSets[request]),
-			    .outputs = std::span<Tensor<CPU>>(outputSets[request]),
-			});
-		}
+		auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+		benchmark::DoNotOptimize(outputs);
+		benchmark::ClobberMemory();
 	}
 
-	const auto runOnce = [&] {
-		if (options.useRunInto && requestCount > 1)
-			module.RunManyInto(invocations, options.requestThreads);
-		else if (options.useRunInto)
-			module.RunInto(std::span<const Tensor<CPU>>(inputSets[0]), std::span<Tensor<CPU>>(outputSets[0]));
-		else
-			(void)module.Run(std::span<const Tensor<CPU>>(inputSets[0]));
-	};
-
-	for (std::size_t i = 0; i < 5; ++i)
-		runOnce();
-
-	const auto tp0 = std::chrono::steady_clock::now();
-	runOnce();
-	const auto tp1 = std::chrono::steady_clock::now();
-	const double probeMs = std::chrono::duration<double, std::milli>(tp1 - tp0).count();
-
-	const auto iters = static_cast<std::size_t>(
-	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 1000.0));
-
-	const auto t0 = std::chrono::steady_clock::now();
-	for (std::size_t i = 0; i < iters; ++i)
-		runOnce();
-	const auto t1 = std::chrono::steady_clock::now();
-
-	const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-	const auto totalSamples = batch * iters * requestCount;
-	return {
-		totalMs / static_cast<double>(iters * requestCount),
-		static_cast<double>(totalSamples) / (totalMs * 1e-3)
-	};
+	SetThroughputCounters(state, batch);
 }
-#endif // LITENN_BENCH_HAS_AOT
 
-// ---------------------------------------------------------------------------
-// main
-// ---------------------------------------------------------------------------
-
-int main(int argc, char** argv)
+void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	BenchOptions options;
-	const auto parsePositiveSize = [](std::string_view text, std::string_view optionName) {
-		std::size_t pos = 0;
-		const auto value = std::stoull(std::string(text), &pos);
-		if (pos != text.size() || value == 0)
-		{
-			throw std::runtime_error(std::format("{} expects a positive integer", optionName));
-		}
-		return static_cast<std::size_t>(value);
-	};
+	std::mt19937 rng(42);
+	auto graph = GetModelSpec(kind).build(batch, rng);
+	Optimize(graph);
 
-	for (int i = 1; i < argc; ++i)
+	auto compiled = Compiler<CPU>::Compile(graph);
+	auto module = CompiledModule<CPU>::Load(compiled.Image());
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeInputs(inputData, batch);
+	auto outputs = AllocateOutputs(module);
+
+	for (auto _ : state)
 	{
-		const std::string_view arg(argv[i]);
-		if (arg == "--use-runinto")
-		{
-			options.useRunInto = true;
-		}
-		else if (arg == "--parallel-requests")
-		{
-			if (++i >= argc)
-			{
-				std::cerr << "--parallel-requests expects a value\n";
-				return 2;
-			}
-			options.parallelRequests = parsePositiveSize(argv[i], "--parallel-requests");
-			options.useRunInto = true;
-		}
-		else if (arg == "--request-threads")
-		{
-			if (++i >= argc)
-			{
-				std::cerr << "--request-threads expects a value\n";
-				return 2;
-			}
-			options.requestThreads = parsePositiveSize(argv[i], "--request-threads");
-			options.useRunInto = true;
-		}
-		else if (arg == "--help" || arg == "-h")
-		{
-			std::cout << "Usage: litenn_bench [--use-runinto] "
-			          << "[--parallel-requests N] [--request-threads N]\n";
-			return 0;
-		}
-		else
-		{
-			std::cerr << "Unknown argument: " << arg << "\n";
-			std::cerr << "Usage: litenn_bench [--use-runinto]\n";
-			return 2;
-		}
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		benchmark::DoNotOptimize(outputs.data());
+		benchmark::ClobberMemory();
 	}
 
-	const std::size_t batchSizes[] = { 1, 32, 128, 512 };
-
-	std::cout << "LiteNN CPU Inference Benchmark\n";
-#ifdef LITENN_BENCH_HAS_AOT
-	if (options.useRunInto)
-	{
-		std::cout << "AOT measurement mode: RunInto\n";
-		if (options.parallelRequests > 1 || options.requestThreads > 1)
-		{
-			std::cout << "AOT parallel requests: " << options.parallelRequests
-			          << ", request threads: " << options.requestThreads << "\n";
-		}
-	}
-#endif
-	std::cout << std::string(72, '=') << "\n";
-	std::cout << std::format("{:<24} {:>6} {:>10} {:>14} {:>14}\n",
-	    "Model", "Batch", "Backend", "ms/batch", "samples/sec");
-	std::cout << std::string(72, '-') << "\n";
-
-	for (const std::size_t batch : batchSizes)
-	{
-		std::mt19937 rng(42);
-
-		auto run = [&](std::string_view name, Graph graph) {
-			Optimize(graph);
-
-			const auto ri = RunBench(graph, batch);
-			std::cout << std::format("{:<24} {:>6} {:>10} {:>12.3f}ms {:>12.0f}/s\n",
-			    name, batch, "Interp", ri.meanMs, ri.throughput);
-
-#ifdef LITENN_BENCH_HAS_AOT
-			auto compiled = Compiler<CPU>::Compile(graph);
-			const auto module = CompiledModule<CPU>::Load(compiled.Image());
-			const auto ra = RunBenchCompiled(module, batch, options);
-			const auto aotBackend = (options.useRunInto && options.parallelRequests > 1)
-				? "AOTIntoMT"
-				: (options.useRunInto ? "AOTInto" : "AOT");
-			std::cout << std::format("{:<24} {:>6} {:>10} {:>12.3f}ms {:>12.0f}/s\n",
-			    name, batch, aotBackend, ra.meanMs, ra.throughput);
-#endif
-		};
-
-		run("Linear(784->10)",        BuildLinear(batch, rng));
-		run("MLP(784->128->10)",      BuildMLP128(batch, rng));
-		run("MLP(784->512->256->10)", BuildMLP512(batch, rng));
-
-		if (batch != 512)
-			std::cout << "\n";
-	}
-
-	std::cout << std::string(72, '=') << "\n";
-	return 0;
+	SetThroughputCounters(state, batch);
 }
+#endif
+
+void RegisterBenchmarks()
+{
+	for (const auto kind : kModelKinds)
+	{
+		for (const auto batch : kBatchSizes)
+		{
+			RegisterBenchmarkCase("Interpreter", kind, batch,
+			    [=](benchmark::State& state) { BMInterpreter(state, kind, batch); });
+#ifdef LITENN_BENCH_HAS_AOT
+			RegisterBenchmarkCase("AOTRun", kind, batch,
+			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
+			RegisterBenchmarkCase("AOTRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
+#endif
+		}
+	}
+}
+
+const bool kRegisteredBenchmarks = [] {
+	RegisterBenchmarks();
+	return true;
+}();
+
+} // namespace
+
+BENCHMARK_MAIN();
