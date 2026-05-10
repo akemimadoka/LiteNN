@@ -132,7 +132,7 @@ namespace
 
 		auto triple = llvm::sys::getDefaultTargetTriple();
 		std::string error;
-		const auto* target = llvm::TargetRegistry::lookupTarget(triple, error);
+		const auto* target = llvm::TargetRegistry::lookupTarget(llvm::Triple(triple), error);
 		if (!target)
 		{
 			throw std::runtime_error("Failed to lookup native LLVM target: " + error);
