@@ -886,6 +886,12 @@ namespace
 		    "litenn-compiled-module.o");
 		auto object = TakeExpected(llvm::object::ObjectFile::createObjectFile(buffer->getMemBufferRef()),
 		                           "Failed to parse LiteNN object image");
+		// NOTE: Under Linux/WSL sanitizers, LLVM MCJIT/RuntimeDyld currently reports
+		// one fixed 80-byte leak per addObjectFile/finalizeObject cycle on this path.
+		// LiteNN copies and owns rodata/instruction bytes above this boundary; local
+		// experiments disabling EH-frame registration and the GDB JIT listener did not
+		// eliminate the leak, so treat that specific LSan report as external loader
+		// behavior rather than a LiteNN-owned buffer lifetime bug.
 		loaded.engine->addObjectFile(
 		    llvm::object::OwningBinary<llvm::object::ObjectFile>(std::move(object), std::move(buffer)));
 		loaded.engine->finalizeObject();
