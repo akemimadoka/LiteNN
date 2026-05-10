@@ -210,7 +210,7 @@ endif()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 if(NOT LITENN_ENABLE_MLIR)
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest)\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest|CompilerDumpTest)\\.cpp$")
 endif()
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -221,7 +221,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     if(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
        OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
-       OR TEST_NAME STREQUAL "CompiledModuleTest"
+       OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND TEST_NAME STREQUAL "MemorySafetyTest"))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
     else()

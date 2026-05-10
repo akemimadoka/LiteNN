@@ -64,3 +64,23 @@ target_link_libraries(app PRIVATE LiteNN::LiteNNCompiler)
 请求 `Compiler` 组件时，调用方还需要把 LLVM/MLIR 的 CMake 包前缀加入 `CMAKE_PREFIX_PATH`。
 
 仓库里的 `cmake/PackageSmokeTest` 提供了最小外部消费工程，可用于验证安装后的 `find_package(LiteNN)` 链路。
+
+## 调试 Dump API
+
+基础运行时现在提供 Graph 文本 dump：
+
+```cpp
+#include <LiteNN.h>
+
+std::string graphText = LiteNN::Debug::DumpGraph(graph);
+```
+
+启用 `LITENN_ENABLE_MLIR=ON` 并链接 `LiteNN::LiteNNCompiler` 后，还可以输出不同阶段的 MLIR 和 CompiledModule metadata：
+
+```cpp
+#include <LiteNN/Compiler/Dump.h>
+
+std::string inputMlir = LiteNN::Debug::DumpMLIR(graph, LiteNN::Debug::MLIRDumpStage::InputDialect);
+std::string loweredMlir = LiteNN::Debug::DumpMLIR(graph, LiteNN::Debug::MLIRDumpStage::AfterLowering);
+std::string metadata = LiteNN::Debug::DumpCompiledModuleMetadata(artifact);
+```

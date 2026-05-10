@@ -14,6 +14,7 @@ add_public_tablegen_target(LiteNNCompilerIncGen)
 
 add_library(LiteNNCompiler
     CompiledModule.cpp
+    Dump.cpp
     Dialect/LiteNNDialect.cpp
     Dialect/LiteNNOps.cpp
     Translation/GraphToMLIR.cpp

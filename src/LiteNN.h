@@ -2,6 +2,7 @@
 #define LITENN_H
 
 #include <LiteNN/Device.h>
+#include <LiteNN/Debug/Dump.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
