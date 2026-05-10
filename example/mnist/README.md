@@ -7,8 +7,9 @@ training, and graph construction code:
   and SGD, then evaluates with `Runtime::Interpreter`.
 - `litenn_mnist_aot`: trains the same graph with `RunBackward`, copies the
   trained parameters into a forward-only inference graph, then compiles that
-  graph with `Compiler<CPU>`, reloads it from rodata/instruction addresses with
-  `CompiledModule<CPU>::Load`, and evaluates the loaded module.
+  graph with `Compiler<CPU>::CompileArtifact`, optionally writes a carrier
+  object, loads the artifact into `CompiledModule<CPU>`, and evaluates the
+  loaded module.
 
 The LiteNN graph is a trainable linear classifier:
 
@@ -83,6 +84,8 @@ Write a carrier object while running the AOT example:
 ```powershell
 build\example\mnist\litenn_mnist_aot.exe --epochs 3 --train-limit 1000 --test-limit 1000 --object build\mnist_module.o
 ```
+
+For a buildable static/shared carrier loading example, see `example/carrier`.
 
 Common options:
 

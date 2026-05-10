@@ -856,6 +856,23 @@ namespace
 		return bytes;
 	}
 
+	std::size_t ReadExportedSymbolSize(const void* symbol, std::string_view label)
+	{
+		if (symbol == nullptr)
+		{
+			throw std::runtime_error(std::format("Compiled module exported symbol '{}' is null", label));
+		}
+
+		std::uint64_t rawSize = 0;
+		std::memcpy(&rawSize, symbol, sizeof(rawSize));
+		if (rawSize > std::numeric_limits<std::size_t>::max())
+		{
+			throw std::runtime_error(std::format(
+			    "Compiled module exported symbol '{}' does not fit in size_t on this host", label));
+		}
+		return static_cast<std::size_t>(rawSize);
+	}
+
 	struct LoadedJIT
 	{
 		std::unique_ptr<llvm::LLVMContext> context;
@@ -958,6 +975,18 @@ namespace
 		}
 	}
 
+	std::optional<std::size_t> FindSpecIndex(std::span<const CompiledTensorSpec> specs, std::string_view name)
+	{
+		for (std::size_t i = 0; i < specs.size(); ++i)
+		{
+			if (specs[i].name == name)
+			{
+				return i;
+			}
+		}
+		return std::nullopt;
+	}
+
 	void ValidateTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
@@ -1051,6 +1080,87 @@ struct CompiledModule<CPU>::Impl
 };
 
 CompiledModule<CPU>::CompiledModule() = default;
+
+CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata,
+	                                           std::vector<std::byte> instructions,
+	                                           std::vector<CompiledTensorSpec> inputSpecs,
+	                                           std::vector<CompiledTensorSpec> outputSpecs)
+	: rodata_(std::move(rodata)),
+	  instructions_(std::move(instructions)),
+	  inputSpecs_(std::move(inputSpecs)),
+	  outputSpecs_(std::move(outputSpecs))
+{
+}
+
+CompiledModuleArtifact CompiledModuleArtifact::CopyFromImage(CompiledModuleImage image)
+{
+	auto rodata = ToByteVector(image.rodata, image.rodataSize);
+	auto instructions = ToByteVector(image.instructions, image.instructionSize);
+	auto [inputSpecs, outputSpecs] = DeserializeRodata(rodata);
+	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), std::move(inputSpecs),
+	                              std::move(outputSpecs));
+}
+
+CompiledModuleArtifact CompiledModuleArtifact::FromExportedSymbols(CompiledModuleExportedSymbols symbols)
+{
+	return CopyFromImage({
+	    .rodata = symbols.rodata,
+	    .rodataSize = ReadExportedSymbolSize(symbols.rodataSize, "rodata_size"),
+	    .instructions = symbols.instructions,
+	    .instructionSize = ReadExportedSymbolSize(symbols.instructionSize, "instructions_size"),
+	});
+}
+
+CompiledModule<CPU> CompiledModuleArtifact::Load() const
+{
+	return CompiledModule<CPU>::Load(Image());
+}
+
+CompiledModuleImage CompiledModuleArtifact::Image() const
+{
+	return {
+		.rodata = rodata_.data(),
+		.rodataSize = rodata_.size(),
+		.instructions = instructions_.data(),
+		.instructionSize = instructions_.size(),
+	};
+}
+
+std::span<const std::byte> CompiledModuleArtifact::Rodata() const
+{
+	return rodata_;
+}
+
+std::span<const std::byte> CompiledModuleArtifact::Instructions() const
+{
+	return instructions_;
+}
+
+std::span<const CompiledTensorSpec> CompiledModuleArtifact::InputSpecs() const
+{
+	return inputSpecs_;
+}
+
+std::span<const CompiledTensorSpec> CompiledModuleArtifact::OutputSpecs() const
+{
+	return outputSpecs_;
+}
+
+std::optional<std::size_t> CompiledModuleArtifact::FindInput(std::string_view name) const
+{
+	return FindSpecIndex(inputSpecs_, name);
+}
+
+std::optional<std::size_t> CompiledModuleArtifact::FindOutput(std::string_view name) const
+{
+	return FindSpecIndex(outputSpecs_, name);
+}
+
+void CompiledModuleArtifact::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
+{
+	const auto objectBytes = EmitCarrierObject(rodata_, instructions_, symbolPrefix);
+	WriteAllBytes(path, objectBytes);
+}
 CompiledModule<CPU>::CompiledModule(const CompiledModule&) = default;
 CompiledModule<CPU>::CompiledModule(CompiledModule&&) noexcept = default;
 CompiledModule<CPU>& CompiledModule<CPU>::operator=(const CompiledModule&) = default;
@@ -1271,14 +1381,7 @@ std::optional<std::size_t> CompiledModule<CPU>::FindInput(std::string_view name)
 	{
 		return std::nullopt;
 	}
-	for (std::size_t i = 0; i < impl_->inputSpecs.size(); ++i)
-	{
-		if (impl_->inputSpecs[i].name == name)
-		{
-			return i;
-		}
-	}
-	return std::nullopt;
+	return FindSpecIndex(impl_->inputSpecs, name);
 }
 
 std::optional<std::size_t> CompiledModule<CPU>::FindOutput(std::string_view name) const
@@ -1287,14 +1390,7 @@ std::optional<std::size_t> CompiledModule<CPU>::FindOutput(std::string_view name
 	{
 		return std::nullopt;
 	}
-	for (std::size_t i = 0; i < impl_->outputSpecs.size(); ++i)
-	{
-		if (impl_->outputSpecs[i].name == name)
-		{
-			return i;
-		}
-	}
-	return std::nullopt;
+	return FindSpecIndex(impl_->outputSpecs, name);
 }
 
 void CompiledModule<CPU>::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
@@ -1307,7 +1403,7 @@ void CompiledModule<CPU>::WriteObjectFile(const std::filesystem::path& path, std
 	WriteAllBytes(path, objectBytes);
 }
 
-CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
 	mlir::MLIRContext ctx;
 	SetupCompilerMLIRContext(ctx);
@@ -1328,12 +1424,12 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
 	OptimizeLLVMModule(*llvmModule, *config.targetMachine);
 
-	const auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple);
+	auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple);
 	auto instructions = EmitObjectFile(*llvmModule);
-	return CompiledModule<CPU>::Load({
-	    .rodata = rodata.data(),
-	    .rodataSize = rodata.size(),
-	    .instructions = instructions.data(),
-	    .instructionSize = instructions.size(),
-	});
+	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs);
+}
+
+CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
+{
+	return CompileArtifact(graph).Load();
 }

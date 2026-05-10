@@ -173,6 +173,7 @@ add_subdirectory(third_party/googletest)
 
 if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
+    add_subdirectory(example/carrier)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)

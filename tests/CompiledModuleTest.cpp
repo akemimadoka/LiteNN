@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <filesystem>
 #include <future>
@@ -121,14 +122,70 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 TEST(CompiledModuleTest, WritesCarrierObjectFile)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
 
 	const auto path = std::filesystem::temp_directory_path() / "litenn_compiled_module_test.o";
-	compiled.WriteObjectFile(path, "litenn_test_module");
+	artifact.WriteObjectFile(path, "litenn_test_module");
 
 	ASSERT_TRUE(std::filesystem::exists(path));
 	EXPECT_GT(std::filesystem::file_size(path), 0u);
 	std::filesystem::remove(path);
+}
+
+TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+
+	ASSERT_GT(artifact.Rodata().size(), 0u);
+	ASSERT_GT(artifact.Instructions().size(), 0u);
+	ASSERT_EQ(artifact.InputSpecs().size(), 2u);
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	EXPECT_EQ(artifact.FindInput("lhs"), 0u);
+	EXPECT_EQ(artifact.FindInput("rhs"), 1u);
+	EXPECT_EQ(artifact.FindOutput("sum"), 0u);
+
+	auto loaded = artifact.Load();
+	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+
+	auto outputs = loaded.Run(inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+
+	const std::uint64_t rodataSize = artifact.Rodata().size();
+	const std::uint64_t instructionSize = artifact.Instructions().size();
+	auto exportedArtifact = CompiledModuleArtifact::FromExportedSymbols({
+	    .rodata = artifact.Rodata().data(),
+	    .rodataSize = &rodataSize,
+	    .instructions = artifact.Instructions().data(),
+	    .instructionSize = &instructionSize,
+	});
+
+	ASSERT_EQ(exportedArtifact.InputSpecs().size(), 2u);
+	ASSERT_EQ(exportedArtifact.OutputSpecs().size(), 1u);
+
+	auto loaded = exportedArtifact.Load();
+	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+
+	auto outputs = loaded.Run(inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
 }
 
 TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)

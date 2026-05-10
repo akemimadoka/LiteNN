@@ -61,27 +61,22 @@ namespace
 		return options;
 	}
 
-	CompiledModule<CPU> CompileAndLoadFromImage(const Graph& graph, const AotOptions& options)
+	CompiledModule<CPU> CompileAndLoadFromArtifact(const Graph& graph, const AotOptions& options)
 	{
 		std::cout << "Compiling graph with LiteNN AOT\n";
-		auto compiled = Compiler<CPU>::Compile(graph);
+		auto artifact = Compiler<CPU>::CompileArtifact(graph);
 
 		if (options.writeObject)
 		{
-			compiled.WriteObjectFile(options.objectPath, "litenn_mnist_module");
+			artifact.WriteObjectFile(options.objectPath, "litenn_mnist_module");
 			std::cout << std::format("Wrote carrier object to {}\n", options.objectPath.string());
 		}
 
-		const auto image = compiled.Image();
+		const auto image = artifact.Image();
 		std::cout << std::format("Loading compiled module from rodata={} bytes, instructions={} bytes\n",
 		                         image.rodataSize, image.instructionSize);
 
-		return CompiledModule<CPU>::Load({
-		    .rodata = image.rodata,
-		    .rodataSize = image.rodataSize,
-		    .instructions = image.instructions,
-		    .instructionSize = image.instructionSize,
-		});
+		return artifact.Load();
 	}
 
 	int Run(const AotOptions& options)
@@ -95,7 +90,7 @@ namespace
 		TrainMnistGraph(trainingGraph, train, options.mnist);
 
 		auto inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
-		auto module = CompileAndLoadFromImage(inferenceGraph, options);
+		auto module = CompileAndLoadFromArtifact(inferenceGraph, options);
 
 		const auto correct = Evaluate(test, options.mnist.showSamples, [&](Tensor<CPU> image) {
 			std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
