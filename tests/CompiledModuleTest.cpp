@@ -228,6 +228,61 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 	}
 }
 
+TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
+{
+	Graph graph;
+	std::vector<double> weightData(3 * 256);
+	for (std::size_t k = 0; k < 3; ++k)
+	{
+		for (std::size_t col = 0; col < 256; ++col)
+		{
+			weightData[k * 256 + col] =
+			    (static_cast<double>((col % 17) + 1) * 0.03125) - static_cast<double>(k) * 0.125;
+		}
+	}
+	const auto weightIndex = graph.AddVariable(Variable::Create(
+	    Tensor<CPU>(std::span<const double>(weightData), { 3, 256 }, DataType::Float32)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 8, 3 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
+	                               { OutputInfo{ DataType::Float32, { 3, 256 } } });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 8, 256 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+
+	std::vector<double> inputData(8 * 3);
+	for (std::size_t row = 0; row < 8; ++row)
+	{
+		inputData[row * 3 + 0] = static_cast<double>(row + 1) * 0.5;
+		inputData[row * 3 + 1] = static_cast<double>(row % 3) - 1.0;
+		inputData[row * 3 + 2] = static_cast<double>(row % 5) * 0.25 + 0.75;
+	}
+	Tensor<CPU> x(std::span<const double>(inputData), { 8, 3 }, DataType::Float32);
+	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
+	std::array<Tensor<CPU>, 1> outputs = {
+	    Tensor<CPU>(Uninitialized, { 8, 256 }, DataType::Float32)
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	compiled.RunInto(inputs, outputs);
+
+	for (std::size_t row = 0; row < 8; ++row)
+	{
+		for (std::size_t col = 0; col < 256; ++col)
+		{
+			double expected = 0.0;
+			for (std::size_t k = 0; k < 3; ++k)
+			{
+				expected += inputData[row * 3 + k] * weightData[k * 256 + col];
+			}
+			EXPECT_NEAR(ReadFloat(outputs[0], row * 256 + col), expected, 1e-5f);
+		}
+	}
+}
+
 TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 {
 	auto graph = BuildSimpleAddGraph();

@@ -132,7 +132,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 ## 5. 优化建议（按 ROI 排序）
 
 ### 🥇 P0 — 部分完成：替换 linalg→loops 为 tile + vectorize
-**状态**：已完成当前 `linalg.generic` MatMul contraction 的专用 micro-kernel lowering；完整 K blocking / B panel packing 仍未完成。
+**状态**：已完成当前 `linalg.generic` MatMul contraction 的专用 micro-kernel lowering；RHS/B panel packing 已对 `N >= 256` 的只读常量权重落地，完整 K blocking 仍未完成。
 
 已完成：
 - [x] 在 [LowerLiteNNPass.cpp](src/LiteNN/Compiler/Pass/LowerLiteNNPass.cpp) 中将 MatMul lowering 为 `M,K,N` 的 `linalg.generic` contraction，使 innermost N 维连续访问 RHS 和输出行。
@@ -142,7 +142,8 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 当前状态：
 - [ ] K 维 blocking / unroll 策略。
-- [ ] RHS/B panel packing 与 prefetch。
+- [x] RHS/B panel packing：对 `N >= 256` 的只读常量 RHS 生成 `[Ntile, K, Nstep]` packed global，让 K loop 中 B panel 连续读取。
+- [ ] Prefetch：显式 RHS prefetch 已实验但回归，未保留。
 - [x] CPU feature aware tile policy（AVX-512 / AVX2 / fallback）。当前 AVX-512 机器继续使用 `vector<16xf32>`；AVX/AVX2 退回 8 lane；SSE 退回 4 lane。
 - [x] ASM 统计脚本，持续跟踪 `vfmadd...ps` / `vfmadd...ss` / spill / gather / scatter。
 
@@ -177,7 +178,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
   ```
 - [ ] **CMake 编译标志**：`-march=native -funroll-loops -fomit-frame-pointer`（已隐式启用部分），并对 `LiteNN` 主库本身打 LTO（`-flto=thin`）。
 - [x] **AOT 变量全局只读与 64B 对齐**：Lowering 时把烘进 object 的 `memref.global` 变量标为 `constant` 并设置 64 字节对齐，权重/偏置进入 `.rdata`，帮助 LLVM 消除写入假设与部分 init/scatter 噪声。
-- [x] **bench 添加 `--use-runinto` 选项**：保留 `Run()` 的便利接口，新增 `RunInto` 路径，避免后续优化时被分配噪声掩盖。
+- [x] **bench 注册 `AOTRunInto` 基准项**：保留 `Run()` 的便利接口，同时提供 `RunInto` 路径，避免后续优化时被分配噪声掩盖。
 - [x] **bench 添加多请求并发测量**：`--parallel-requests N --request-threads N` 使用 `CompiledModule::RunManyInto` 测量服务端吞吐模式。
 
 ### P4 — 可选增强
@@ -193,9 +194,9 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 - 当前 [LowerLiteNNPass.cpp](src/LiteNN/Compiler/Pass/LowerLiteNNPass.cpp) 已不再按报告中的“`linalg.matmul` 直接转 loops”路径生成代码；MatMul 与 fused MatMulBiasAdd 已改成 `linalg.generic`，iterator order 为 `M, K, N`，并带有 bias 初始化 generic。
 - 因此 P0 不能直接套用只匹配 `linalg.matmul` 的 tiling/vectorize pattern。下一步应优先面向当前 `linalg.generic` contraction 形态落地，或者在 lowering 中保留一个可识别的 named/contraction op，再由专门的 CPU codegen pass 处理。
 - `nnan/ninf/nsz` fast-math 扩展已实现；`afn` 暂不默认开启，避免对 `exp/log/pow` 等超越函数引入更强近似语义。后续可通过 compile options 暴露 aggressive fast-math 模式。
-- `benchmark/bench.cpp` 已增加 `--use-runinto` 测量路径，便于之后分离 kernel 优化与输出分配噪声。
+- `benchmark/bench.cpp` 已注册 `AOTRunInto/...` 测量路径，便于之后分离 kernel 优化与输出分配噪声。
 - 已新增一个窄输出 MatMul lowering：匹配当前 `linalg.generic` contraction 且 `N <= 16` 的场景，将其改写为 `scf.for` micro-kernel，让输出列累加器保持为 loop-carried SSA 值，并只在 K 归约结束后写回。该 pass 对内部生成的 FMA 只使用 `contract/nnan/ninf/nsz`，刻意不使用 `reassoc`，避免 LLVM 把 K 维重新向量化成 gather-heavy reduction。
-- 本轮验证结果：`litenn_profile.exe` 中 `linear_b512` 从约 `0.66 ms` 降到约 `0.46 ms`；`litenn_bench.exe --use-runinto` 中 `Linear(784->10), batch=512` 约 `0.435 ms`。MLP-512 仍主要受宽 hidden matmul 影响，下一步收益点仍是完整 tile/vectorize/packing。
+- 本轮验证结果：`litenn_profile.exe` 中 `linear_b512` 从约 `0.66 ms` 降到约 `0.46 ms`；`AOTRunInto` 基准中 `Linear(784->10), batch=512` 约 `0.435 ms`。MLP-512 仍主要受宽 hidden matmul 影响，下一步收益点仍是完整 tile/vectorize/packing。
 
 ### 6.1 Codex Update（2026-05-10）
 
@@ -211,7 +212,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 
 - `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：138/138 通过。
 - 新增 `FusionPass.MatMulBiasAddReLU` 单测，并额外跑过 `FusionPassTest.exe`、`LLVMCodegenPassTest.exe`、`CompiledModuleTest.exe`。
-- `cmd /c build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
+- `AOTRunInto` 关键结果：
   - `Linear(784->10), batch=512`: AOTInto 约 `0.312 ms`
   - `MLP(784->128->10), batch=512`: AOTInto 约 `0.407 ms`
   - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.551 ms`
@@ -241,7 +242,7 @@ PyTorch CPU 后端用 OneDNN / MKL，对每个矩阵尺寸生成专门的 micro-
 最终验证结果：
 
 - `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：138/138 通过。
-- `build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
+- `AOTRunInto` 关键结果：
   - `Linear(784->10), batch=512`: AOTInto 约 `0.288 ms`
   - `MLP(784->128->10), batch=512`: AOTInto 约 `0.381 ms`
   - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.505 ms`
@@ -270,7 +271,7 @@ P0 剩余最高收益项仍是 RHS/B panel packing 与真正的 K blocking/prefe
 
 - `cmd /c ctest --test-dir build-release-mingw --output-on-failure`：139/139 通过。
 - 新增 `CompiledModuleTest.NarrowMatMulRowTileMatchesReference`，覆盖 batch=16、`N=5` 的窄输出 row-tile AOT 数值正确性。
-- `build-release-mingw\benchmark\litenn_bench.exe --use-runinto` 关键结果：
+- `AOTRunInto` 关键结果：
   - `Linear(784->10), batch=512`: AOTInto 约 `0.061 ms`
   - `MLP(784->128->10), batch=512`: AOTInto 约 `0.363 ms`
   - `MLP(784->512->256->10), batch=512`: AOTInto 约 `2.361 ms`
@@ -283,6 +284,50 @@ P0 剩余最高收益项仍是 RHS/B panel packing 与真正的 K blocking/prefe
   - `mlp512_b512.o / subgraph_0`: `PackedFMA=96`、`ScalarFMA=0`、`ZmmPackedFMA=96`、`Gather=0`、`Scatter=0`、`StackVectorOp=0`
 
 当前单线程剩余主要差距已经从 Linear 转移到大 hidden layer 的 cache/layout 问题。下一轮 P0 应继续做 RHS/B panel packing：当前 row-major B 在固定 N tile 下沿 K 维跨行 stride 访问，虽然 row-tile 已提升 B 复用，但还没有把 `[K, Ntile]` panel 变成 K-loop 连续流式读取。
+
+### 6.4 Copilot Update（2026-05-10）
+
+本轮继续尝试 P0 的 B layout/cache 方向，最终保留 **selective RHS/B panel packing**：
+
+- **保留：N >= 256 的常量 RHS packed global**。当 MatMul RHS 是只读 `memref.global` 权重、输出宽度 `N >= 256` 且可按当前 SIMD tile 整除时，AOT 额外生成 packed 权重 global，布局从原始 `[K, N]` 转为 `[Ntile, K, Nstep]`。宽输出 micro-kernel 仍使用当前 `8-row x 2-vector` accumulator tile，但 B load 从原来的沿 K 大 stride 访问，变成 packed panel 中的连续流式读取。以 AVX-512 `Nstep=32` 为例，hot loop 中两轮 K 的 B 指针步进从原始约 `0x1000/0x800` 降到 packed 后的 `0x100`。
+- **选择性启用的原因**：无条件 packing 会让 `N=128` 的 MLP-128 路径退化，且编译时间上升；限制到 `N >= 256` 后，MLP-128 回到基线附近，收益集中到 MLP-512 的两个大 hidden layer。
+- **新增正确性覆盖**：新增 `CompiledModuleTest.PackedWideMatMulMatchesReference`，构造 `8x3 @ 3x256`，直接覆盖 packed RHS 宽核。
+
+实验但未保留：
+
+- **RHS prefetch**：在 K loop 中预取后续 RHS panel，`mlp512_b512` profile 从基线约 `2.25 ms` 退到约 `2.67 ms`，已撤回。
+- **N-first loop order**：把循环从 `M tile -> N tile -> K` 改为 `N tile -> M tile -> K`，理论上提升 B panel 复用，但 batch=512 filtered benchmark 退到约 `2.47 ms`，已撤回。
+- **`16-row x 2-vector` tile**：B 复用提升但寄存器压力过高，`mlp512_b512` 退到 `3.2 ms+`，已撤回。
+- **`12-row + 8-row` mixed tile**：主 tile 试图在 8 行与 16 行之间折中，但 ASM 出现 `StackVectorOp=14`，`mlp512_b512` profile 约 `2.42 ms`，已撤回。
+
+同环境 A/B 结果：
+
+| Case | Rebuilt baseline RunInto | Selective packed RunInto |
+|---|---:|---:|
+| linear_b512 | 0.0535 ms | 0.0541 ms |
+| mlp128_b512 | 0.3524 ms | 0.3470 ms |
+| mlp512_b32 | 0.1332 ms | 0.1133 ms |
+| mlp512_b128 | 0.5365 ms | 0.4506 ms |
+| mlp512_b512 | 2.3059 ms | 2.0063 ms |
+
+`litenn_bench.exe --benchmark_filter='AOTRunInto/.*/batch:512' --benchmark_min_time=0.5s --benchmark_repetitions=5` 关键结果：
+
+- `Linear(784->10), batch=512`: AOTRunInto mean 约 `0.054 ms`
+- `MLP(784->128->10), batch=512`: AOTRunInto mean 约 `0.345 ms`
+- `MLP(784->512->256->10), batch=512`: AOTRunInto mean 约 `1.99 ms`
+
+ASM 统计：
+
+- `mlp512_b512.o / subgraph_0`: `PackedFMA=96`、`ScalarFMA=0`、`ZmmPackedFMA=96`、`Gather=0`、`Scatter=0`、`StackVectorOp=0`
+- `mlp128_b512.o / subgraph_0`: `PackedFMA=64`、`ScalarFMA=0`、`ZmmPackedFMA=64`、`Gather=0`、`Scatter=0`、`StackVectorOp=0`
+
+已通过的测试：
+
+- `ctest --test-dir build-release-mingw --output-on-failure -R "PackedWideMatMul|NarrowMatMulRowTile|CompiledModuleTest"`：9/9 通过。
+- `ctest --test-dir build-release-mingw --output-on-failure -R "Compiler|LLVMCodegen|Lowering"`：12/12 通过。
+- `ctest --test-dir build-release-mingw --output-on-failure`：140/140 通过。
+
+P0 当前状态更新：RHS/B panel packing 已对只读常量权重、`N >= 256` 的宽 hidden layer 落地；K blocking 与 prefetch 仍未保留，后续应围绕 packed layout 继续做 K blocking 或更精细的 M/N tile policy，而不是继续增大 row tile。
 
 ## 7. 验证方法（下一轮回归用）
 
