@@ -65,6 +65,31 @@ target_link_libraries(app PRIVATE LiteNN::LiteNNCompiler)
 
 仓库里的 `cmake/PackageSmokeTest` 提供了最小外部消费工程，可用于验证安装后的 `find_package(LiteNN)` 链路。
 
+## Conan 打包
+
+仓库根目录现在提供 `conanfile.py`，会复用现有的 CMake install/export 逻辑来生成 Conan 包。
+
+导出并创建基础 runtime 包：
+
+```powershell
+conan create . -s compiler=gcc -s compiler.version=<gcc-version> -s compiler.cppstd=gnu26 --build=missing
+```
+
+如需把可选 AOT 编译器一起打进包中，可启用 `with_mlir` 选项；这要求构建环境里已经能被 CMake 发现到 LLVM/MLIR 的包配置：
+
+```powershell
+conan create . -s compiler=gcc -s compiler.version=<gcc-version> -s compiler.cppstd=gnu26 -o litenn/*:with_mlir=True --build=missing
+```
+
+当前默认 `conan profile detect` 在 Windows 上通常会生成 MSVC profile，但 LiteNN 代码目前依赖实验性 C++26 反射工具链，因此需要改用与现有构建一致的 GCC/Clang profile。
+
+消费侧继续使用现有的 CMake 包入口：
+
+```cmake
+find_package(LiteNN CONFIG REQUIRED)
+target_link_libraries(app PRIVATE LiteNN::LiteNN)
+```
+
 ## 调试 Dump API
 
 基础运行时现在提供 Graph 文本 dump：
