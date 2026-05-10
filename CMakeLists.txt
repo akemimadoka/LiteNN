@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.0.0)
 
-project(LiteNN CXX)
+project(LiteNN C CXX)
 
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)

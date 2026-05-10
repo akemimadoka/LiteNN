@@ -9,6 +9,20 @@
 
 #include <LiteNN/Validation/GraphValidator.h>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
@@ -17,8 +31,8 @@
 #include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -35,27 +49,13 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Verifier.h"
-#include "mlir/Pass/PassManager.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -72,8 +72,8 @@ namespace
 {
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
 	constexpr std::array<std::byte, 8> kRodataMagic = {
-	    std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
-	    std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
+		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
+		std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
 	};
 	constexpr std::uint32_t kRodataVersion = 2;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
@@ -123,7 +123,7 @@ namespace
 			llvm::InitializeNativeTargetAsmParser();
 			return true;
 		}();
-		(void)initialized;
+		(void) initialized;
 	}
 
 	NativeTargetConfig CreateNativeTargetMachine()
@@ -151,9 +151,8 @@ namespace
 		}
 		std::string features = hostFeatureSet.getString();
 
-		auto targetMachine = std::unique_ptr<llvm::TargetMachine>(
-		    target->createTargetMachine(triple, cpu, features, options, relocModel, std::nullopt,
-		                                llvm::CodeGenOptLevel::Aggressive));
+		auto targetMachine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
+		    llvm::Triple(triple), cpu, features, options, relocModel, std::nullopt, llvm::CodeGenOptLevel::Aggressive));
 		if (!targetMachine)
 		{
 			throw std::runtime_error("Failed to create native LLVM target machine");
@@ -180,11 +179,10 @@ namespace
 		passBuilder.registerCGSCCAnalyses(cgsccAnalysisManager);
 		passBuilder.registerFunctionAnalyses(functionAnalysisManager);
 		passBuilder.registerLoopAnalyses(loopAnalysisManager);
-		passBuilder.crossRegisterProxies(loopAnalysisManager, functionAnalysisManager,
-		                                 cgsccAnalysisManager, moduleAnalysisManager);
+		passBuilder.crossRegisterProxies(loopAnalysisManager, functionAnalysisManager, cgsccAnalysisManager,
+		                                 moduleAnalysisManager);
 
-		auto modulePipeline =
-		    passBuilder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+		auto modulePipeline = passBuilder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
 		modulePipeline.run(module, moduleAnalysisManager);
 	}
 
@@ -201,8 +199,7 @@ namespace
 		llvm::SmallVector<char, 0> buffer;
 		llvm::raw_svector_ostream stream(buffer);
 		llvm::legacy::PassManager passManager;
-		if (config.targetMachine->addPassesToEmitFile(passManager, stream, nullptr,
-		                                              llvm::CodeGenFileType::ObjectFile))
+		if (config.targetMachine->addPassesToEmitFile(passManager, stream, nullptr, llvm::CodeGenFileType::ObjectFile))
 		{
 			throw std::runtime_error("Native target cannot emit object files");
 		}
@@ -269,8 +266,7 @@ namespace
 	std::string ReadString(std::span<const std::byte> bytes, std::size_t& offset)
 	{
 		const auto size = ReadU64(bytes, offset);
-		if (size > std::numeric_limits<std::size_t>::max() ||
-		    static_cast<std::size_t>(size) > bytes.size() - offset)
+		if (size > std::numeric_limits<std::size_t>::max() || static_cast<std::size_t>(size) > bytes.size() - offset)
 		{
 			throw std::runtime_error("Compiled module rodata string is truncated");
 		}
@@ -297,8 +293,7 @@ namespace
 	}
 
 	std::vector<std::byte> SerializeRodata(std::span<const CompiledTensorSpec> inputs,
-	                                       std::span<const CompiledTensorSpec> outputs,
-	                                       std::string_view targetTriple)
+	                                       std::span<const CompiledTensorSpec> outputs, std::string_view targetTriple)
 	{
 		std::vector<std::byte> rodata;
 		rodata.insert(rodata.end(), kRodataMagic.begin(), kRodataMagic.end());
@@ -557,8 +552,7 @@ namespace
 		return array;
 	}
 
-	llvm::Value* BuildMemRefDescriptor(llvm::IRBuilder<>& builder, llvm::Value* data,
-	                                   const CompiledTensorSpec& spec)
+	llvm::Value* BuildMemRefDescriptor(llvm::IRBuilder<>& builder, llvm::Value* data, const CompiledTensorSpec& spec)
 	{
 		auto& ctx = builder.getContext();
 		auto* descTy = GetMemRefDescriptorType(ctx, spec.shape.size());
@@ -576,8 +570,7 @@ namespace
 	}
 
 	void AppendDescriptorCallArgument(llvm::IRBuilder<>& builder, llvm::FunctionType* calleeType,
-	                                  std::size_t& paramIndex, llvm::Value* descriptor,
-	                                  std::vector<llvm::Value*>& args)
+	                                  std::size_t& paramIndex, llvm::Value* descriptor, std::vector<llvm::Value*>& args)
 	{
 		if (paramIndex >= calleeType->getNumParams())
 		{
@@ -633,12 +626,11 @@ namespace
 		};
 
 		if (tryAppendPattern([&] {
-			    return appendWholeField(0) && appendWholeField(1) && appendWholeField(2) &&
-			           appendWholeField(3) && appendWholeField(4);
+			    return appendWholeField(0) && appendWholeField(1) && appendWholeField(2) && appendWholeField(3) &&
+			           appendWholeField(4);
 		    }) ||
 		    tryAppendPattern([&] {
-			    return appendWholeField(1) && appendWholeField(2) && appendWholeField(3) &&
-			           appendWholeField(4);
+			    return appendWholeField(1) && appendWholeField(2) && appendWholeField(3) && appendWholeField(4);
 		    }) ||
 		    tryAppendPattern([&] {
 			    return appendWholeField(1) && appendWholeField(2) && appendArrayScalars(3, sizesTy) &&
@@ -661,8 +653,8 @@ namespace
 			return;
 		}
 
-		std::string message = "Compiled subgraph function has an unsupported memref ABI at parameter " +
-		                      std::to_string(paramIndex);
+		std::string message =
+		    "Compiled subgraph function has an unsupported memref ABI at parameter " + std::to_string(paramIndex);
 		if (paramIndex < calleeType->getNumParams())
 		{
 			message += ": expected " + LLVMTypeToString(calleeType->getParamType(paramIndex));
@@ -700,8 +692,7 @@ namespace
 	}
 
 	void AddUniformEntryWrapper(llvm::Module& module, std::string_view calleeName,
-	                            std::span<const CompiledTensorSpec> inputs,
-	                            std::span<const CompiledTensorSpec> outputs)
+	                            std::span<const CompiledTensorSpec> inputs, std::span<const CompiledTensorSpec> outputs)
 	{
 		auto* callee = module.getFunction(calleeName);
 		if (!callee)
@@ -713,8 +704,8 @@ namespace
 		auto* voidTy = llvm::Type::getVoidTy(ctx);
 		auto* ptrTy = llvm::PointerType::get(ctx, 0);
 		auto* entryType = llvm::FunctionType::get(voidTy, { ptrTy, ptrTy }, false);
-		auto* entry = llvm::Function::Create(entryType, llvm::GlobalValue::ExternalLinkage,
-		                                     std::string(kEntrySymbol), module);
+		auto* entry =
+		    llvm::Function::Create(entryType, llvm::GlobalValue::ExternalLinkage, std::string(kEntrySymbol), module);
 
 		auto* block = llvm::BasicBlock::Create(ctx, "entry", entry);
 		llvm::IRBuilder<> builder(block);
@@ -919,8 +910,8 @@ namespace
 	{
 		auto& ctx = module.getContext();
 		auto* init = ByteArrayConstant(ctx, bytes);
-		auto* global = new llvm::GlobalVariable(module, init->getType(), true,
-		                                        llvm::GlobalValue::ExternalLinkage, init, std::string(name));
+		auto* global = new llvm::GlobalVariable(module, init->getType(), true, llvm::GlobalValue::ExternalLinkage, init,
+		                                        std::string(name));
 		global->setAlignment(llvm::Align(1));
 	}
 
@@ -932,8 +923,7 @@ namespace
 		new llvm::GlobalVariable(module, i64Ty, true, llvm::GlobalValue::ExternalLinkage, init, std::string(name));
 	}
 
-	std::vector<std::byte> EmitCarrierObject(std::span<const std::byte> rodata,
-	                                         std::span<const std::byte> instructions,
+	std::vector<std::byte> EmitCarrierObject(std::span<const std::byte> rodata, std::span<const std::byte> instructions,
 	                                         std::string_view symbolPrefix)
 	{
 		llvm::LLVMContext ctx;
@@ -966,23 +956,24 @@ namespace
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
 		{
-			const auto label = spec.name.empty() ? std::to_string(inputIndex) : std::format("{} ('{}')", inputIndex, spec.name);
-			throw std::runtime_error(std::format(
-			    "CompiledModule input {} mismatch: expected {}, got {}", label,
-			    Validation::FormatInfo(spec.dtype, spec.shape),
-			    Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
+			const auto label =
+			    spec.name.empty() ? std::to_string(inputIndex) : std::format("{} ('{}')", inputIndex, spec.name);
+			throw std::runtime_error(std::format("CompiledModule input {} mismatch: expected {}, got {}", label,
+			                                     Validation::FormatInfo(spec.dtype, spec.shape),
+			                                     Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
 	}
 
-	void ValidateOutputTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec, std::size_t outputIndex)
+	void ValidateOutputTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec,
+	                                     std::size_t outputIndex)
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
 		{
-			const auto label = spec.name.empty() ? std::to_string(outputIndex) : std::format("{} ('{}')", outputIndex, spec.name);
-			throw std::runtime_error(std::format(
-			    "CompiledModule output {} mismatch: expected {}, got {}", label,
-			    Validation::FormatInfo(spec.dtype, spec.shape),
-			    Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
+			const auto label =
+			    spec.name.empty() ? std::to_string(outputIndex) : std::format("{} ('{}')", outputIndex, spec.name);
+			throw std::runtime_error(std::format("CompiledModule output {} mismatch: expected {}, got {}", label,
+			                                     Validation::FormatInfo(spec.dtype, spec.shape),
+			                                     Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
 	}
 
@@ -1060,7 +1051,9 @@ CompiledModule<CPU>& CompiledModule<CPU>::operator=(const CompiledModule&) = def
 CompiledModule<CPU>& CompiledModule<CPU>::operator=(CompiledModule&&) noexcept = default;
 CompiledModule<CPU>::~CompiledModule() = default;
 
-CompiledModule<CPU>::CompiledModule(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
+CompiledModule<CPU>::CompiledModule(std::shared_ptr<Impl> impl) : impl_(std::move(impl))
+{
+}
 
 CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleImage image)
 {
