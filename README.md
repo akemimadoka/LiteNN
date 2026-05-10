@@ -1,6 +1,8 @@
 LiteNN
 ====
 
+[![ci](https://github.com/akemimadoka/LiteNN/actions/workflows/ci.yml/badge.svg)](https://github.com/akemimadoka/LiteNN/actions/workflows/ci.yml)
+
 学习用的 C++26 编译器风格神经网络库。
 
 ~~人类含量很低，只有最初的 Tensor/Device/Graph 部分是全人工古法编程的，其他部分合作完成~~
