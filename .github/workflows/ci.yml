@@ -18,10 +18,10 @@ jobs:
             echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
             echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble main' | sudo tee /etc/apt/sources.list.d/llvm-toolchain.list >/dev/null
             sudo apt update
-            sudo apt install g++-16 cmake libmlir-23-dev mlir-23-tools libzstd-dev libedit-dev ninja-build
+            sudo apt install g++-16 cmake llvm-23-dev libmlir-23-dev mlir-23-tools libzstd-dev libedit-dev ninja-build
         - name: build
           run: |
-            /usr/bin/cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23/lib/cmake/mlir
+            /usr/bin/cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH="/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
             /usr/bin/cmake --build build --parallel
         - name: test
           run: |
