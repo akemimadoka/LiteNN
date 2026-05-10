@@ -1,0 +1,28 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+set(LiteNN_COMPILER_AVAILABLE @LITENN_ENABLE_MLIR@)
+
+include("${CMAKE_CURRENT_LIST_DIR}/LiteNNTargets.cmake")
+
+foreach(_litenn_component IN LISTS LiteNN_FIND_COMPONENTS)
+    if(NOT _litenn_component STREQUAL "Compiler")
+        set(LiteNN_${_litenn_component}_FOUND FALSE)
+    endif()
+endforeach()
+
+if("Compiler" IN_LIST LiteNN_FIND_COMPONENTS)
+    if(NOT LiteNN_COMPILER_AVAILABLE)
+        set(LiteNN_Compiler_FOUND FALSE)
+    else()
+        find_dependency(LLVM CONFIG REQUIRED)
+        find_dependency(MLIR CONFIG REQUIRED)
+        include("${CMAKE_CURRENT_LIST_DIR}/LiteNNCompilerTargets.cmake")
+        set(LiteNN_Compiler_FOUND TRUE)
+    endif()
+endif()
+
+unset(_litenn_component)
+
+check_required_components(LiteNN)

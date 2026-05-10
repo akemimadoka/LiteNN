@@ -22,14 +22,18 @@ add_library(LiteNNCompiler
     Pass/LLVMCodegenPipeline.cpp
 )
 
+add_library(LiteNN::LiteNNCompiler ALIAS LiteNNCompiler)
+
 add_dependencies(LiteNNCompiler LiteNNCompilerIncGen)
 
 target_include_directories(LiteNNCompiler PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}
-    ${MLIR_INCLUDE_DIRS}
-    ${LLVM_INCLUDE_DIRS}
-    ${CMAKE_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${MLIR_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${LLVM_INCLUDE_DIRS}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(LiteNNCompiler PUBLIC LiteNN)
@@ -101,4 +105,11 @@ target_link_libraries(LiteNNCompiler PUBLIC
     LLVMCore
     LLVMAsmPrinter
     ${LITENN_LLVM_NATIVE_LIBS}
+)
+
+install(TARGETS LiteNNCompiler
+    EXPORT LiteNNCompilerTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )

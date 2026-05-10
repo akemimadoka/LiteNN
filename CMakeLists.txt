@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.0.0)
 
-project(LiteNN C CXX)
+project(LiteNN VERSION 0.1.0 LANGUAGES C CXX)
 
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
@@ -10,6 +10,11 @@ set(LITENN_SANITIZERS "address,undefined" CACHE STRING "Comma-separated list of 
 
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(LITENN_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/LiteNN" CACHE STRING
+    "Install path for LiteNN CMake package files")
 
 function(litenn_parse_sanitizers out_var)
     string(REPLACE "," ";" parsed_sanitizers "${LITENN_SANITIZERS}")
@@ -132,9 +137,11 @@ file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
 add_library(LiteNN ${LITENN_SOURCES})
 
-target_include_directories(LiteNN PUBLIC src)
-target_sources(LiteNN PUBLIC FILE_SET modules TYPE CXX_MODULES FILES
-    src/LiteNN.ixx
+add_library(LiteNN::LiteNN ALIAS LiteNN)
+
+target_include_directories(LiteNN PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_compile_features(LiteNN PUBLIC cxx_std_26)
@@ -147,8 +154,8 @@ litenn_enable_sanitizers(LiteNN)
 
 if(LITENN_ENABLE_MLIR)
     add_compile_definitions(LITENN_ENABLE_MLIR=1)
-    find_package(LLVM REQUIRED)
-    find_package(MLIR REQUIRED)
+    find_package(LLVM CONFIG REQUIRED)
+    find_package(MLIR CONFIG REQUIRED)
 
     list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
     include(TableGen)
@@ -159,6 +166,20 @@ if(LITENN_ENABLE_MLIR)
     litenn_enable_sanitizers(LiteNNCompiler)
 endif()
 
+install(TARGETS LiteNN
+    EXPORT LiteNNRuntimeTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN
+    FILES_MATCHING PATTERN "*.h"
+)
+install(FILES src/LiteNN.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/LiteNN)
+
 include(CTest)
 include(GoogleTest)
 
@@ -167,6 +188,7 @@ enable_testing()
 # gtest 1.16.0 使用了 C++26 中已移除的 std::wstring_convert 和 std::codecvt，
 # 需要禁用相关功能以在 C++26 模式下编译
 add_compile_definitions(GTEST_HAS_STD_WSTRING=0 GTEST_HAS_FILE_SYSTEM=0)
+set(INSTALL_GTEST OFF CACHE BOOL "Disable installation of bundled googletest" FORCE)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(third_party/googletest)
@@ -211,3 +233,48 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         set_tests_properties(${${TEST_NAME}_TESTS} PROPERTIES LABELS "memory-safety;sanitizer")
     endif()
 endforeach()
+
+if(LITENN_ENABLE_MLIR)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler
+        FILES_MATCHING PATTERN "*.h"
+    )
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN/Compiler/Dialect/LiteNNDialect.h.inc
+        ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN/Compiler/Dialect/LiteNNEnums.h.inc
+        ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN/Compiler/Dialect/LiteNNOps.h.inc
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler/Dialect
+    )
+endif()
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/LiteNNConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/LiteNNConfig.cmake
+    INSTALL_DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+)
+
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/LiteNNConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(EXPORT LiteNNRuntimeTargets
+    FILE LiteNNTargets.cmake
+    NAMESPACE LiteNN::
+    DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+)
+
+if(LITENN_ENABLE_MLIR)
+    install(EXPORT LiteNNCompilerTargets
+        FILE LiteNNCompilerTargets.cmake
+        NAMESPACE LiteNN::
+        DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+    )
+endif()
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/LiteNNConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/LiteNNConfigVersion.cmake
+    DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+)
