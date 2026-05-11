@@ -14,6 +14,17 @@ LiteNN
 - 模型保存/加载、训练 API、MNIST 与 carrier 示例
 - 可安装的 CMake 包导出，支持 `find_package(LiteNN)`
 
+## 文档
+
+详细文档索引见 [docs/README.md](docs/README.md)。常用入口：
+
+- [docs/Architecture.md](docs/Architecture.md)：架构与路线图
+- [docs/Versioning.md](docs/Versioning.md)：版本、兼容与弃用策略
+- [docs/APIGuide.md](docs/APIGuide.md)：public API 入口与升级边界
+- [docs/AOTDeployment.md](docs/AOTDeployment.md)：AOT artifact / carrier / 部署路径
+- [docs/Troubleshooting.md](docs/Troubleshooting.md)：常见构建与消费问题排查
+- [CHANGELOG.md](CHANGELOG.md)：用户可见改动记录
+
 ## 构建
 
 仅构建基础运行时：
@@ -33,6 +44,8 @@ cmake --build build
 ## 安装
 
 当前包版本为 `0.1.0`，安装后会导出 `LiteNNConfig.cmake` 和 `LiteNNConfigVersion.cmake`：
+
+- `0.x` 阶段 CMake 包按同 minor 版本兼容匹配，避免在 pre-1.0 阶段误接受潜在 breaking minor 升级
 
 ```powershell
 cmake --install build --prefix <install-prefix>
