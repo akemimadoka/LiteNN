@@ -1,6 +1,3 @@
-#ifndef LITENN_INITIALIZER_INITIALIZER_H
-#define LITENN_INITIALIZER_INITIALIZER_H
-
 #include <LiteNN/Device.h>
 #include <LiteNN/Tensor.h>
 
@@ -10,6 +7,9 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+
+#ifndef LITENN_INITIALIZER_INITIALIZER_H
+#define LITENN_INITIALIZER_INITIALIZER_H
 
 namespace LiteNN::Initializer
 {

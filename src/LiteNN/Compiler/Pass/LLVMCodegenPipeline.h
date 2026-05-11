@@ -1,8 +1,9 @@
-#pragma once
-
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassManager.h"
 #include <memory>
+
+#ifndef LITENN_COMPILER_PASS_LLVMCODEGENPIPELINE_H
+#define LITENN_COMPILER_PASS_LLVMCODEGENPIPELINE_H
 
 namespace llvm {
 class LLVMContext;
@@ -42,3 +43,5 @@ std::unique_ptr<llvm::Module> translateToLLVMIR(mlir::ModuleOp module,
                                                  llvm::LLVMContext& llvmCtx);
 
 } // namespace litenn
+
+#endif

@@ -1,12 +1,12 @@
-#ifndef LITENN_RUNTIME_INTERPRETER_H
-#define LITENN_RUNTIME_INTERPRETER_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 #include <format>
 #include <optional>
 #include <stdexcept>
 #include <vector>
+
+#ifndef LITENN_RUNTIME_INTERPRETER_H
+#define LITENN_RUNTIME_INTERPRETER_H
 
 namespace LiteNN::Runtime
 {

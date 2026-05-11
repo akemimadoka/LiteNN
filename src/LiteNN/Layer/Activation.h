@@ -1,9 +1,9 @@
-#ifndef LITENN_LAYER_ACTIVATION_H
-#define LITENN_LAYER_ACTIVATION_H
-
 #include <LiteNN/Layer/LayerUtils.h>
 
 #include <utility>
+
+#ifndef LITENN_LAYER_ACTIVATION_H
+#define LITENN_LAYER_ACTIVATION_H
 
 namespace LiteNN::Layer
 {

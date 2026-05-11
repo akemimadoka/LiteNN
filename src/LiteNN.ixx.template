@@ -1,0 +1,14 @@
+module;
+
+%DEFINE_GUARDS%
+
+%INCLUDE%
+
+%UNDEF_GUARDS%
+
+export module LiteNN;
+
+export
+{
+%INCLUDE%
+}

@@ -1,6 +1,3 @@
-#ifndef LITENN_DEVICE_H
-#define LITENN_DEVICE_H
-
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -8,6 +5,9 @@
 #include <memory>
 
 #include <LiteNN/Operators.h>
+
+#ifndef LITENN_DEVICE_H
+#define LITENN_DEVICE_H
 
 namespace LiteNN
 {

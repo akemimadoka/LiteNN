@@ -1,6 +1,3 @@
-#ifndef LITENN_DIALECT_TD
-#define LITENN_DIALECT_TD
-
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/AttrTypeBase.td"
@@ -9,6 +6,9 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
+
+#ifndef LITENN_DIALECT_TD
+#define LITENN_DIALECT_TD
 
 def LiteNN_Dialect : Dialect {
   let name = "litenn";

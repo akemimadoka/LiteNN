@@ -1,12 +1,12 @@
-#ifndef LITENN_PASS_FUSION_H
-#define LITENN_PASS_FUSION_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <set>
 #include <stdexcept>
+
+#ifndef LITENN_PASS_FUSION_H
+#define LITENN_PASS_FUSION_H
 
 namespace LiteNN
 {

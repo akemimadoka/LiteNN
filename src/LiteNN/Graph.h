@@ -1,15 +1,15 @@
-#ifndef LITENN_GRAPH_H
-#define LITENN_GRAPH_H
-
-#include "meta"
 #include <LiteNN/Device.h>
 #include <LiteNN/Tensor.h>
 #include <deque>
 #include <memory>
+#include <meta>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+
+#ifndef LITENN_GRAPH_H
+#define LITENN_GRAPH_H
 
 namespace LiteNN
 {

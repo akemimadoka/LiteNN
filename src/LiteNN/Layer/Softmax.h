@@ -1,11 +1,11 @@
-#ifndef LITENN_LAYER_SOFTMAX_H
-#define LITENN_LAYER_SOFTMAX_H
-
 #include <LiteNN/Graph.h>
 
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#ifndef LITENN_LAYER_SOFTMAX_H
+#define LITENN_LAYER_SOFTMAX_H
 
 namespace LiteNN::Layer
 {

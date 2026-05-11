@@ -1,6 +1,3 @@
-#ifndef LITENN_PASS_CONSTFOLD_H
-#define LITENN_PASS_CONSTFOLD_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -9,6 +6,9 @@
 #include <set>
 #include <stdexcept>
 #include <vector>
+
+#ifndef LITENN_PASS_CONSTFOLD_H
+#define LITENN_PASS_CONSTFOLD_H
 
 namespace LiteNN
 {

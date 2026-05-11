@@ -1,6 +1,3 @@
-#ifndef LITENN_LAYER_LINEAR_H
-#define LITENN_LAYER_LINEAR_H
-
 #include <LiteNN/Graph.h>
 
 #include <format>
@@ -8,6 +5,9 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#ifndef LITENN_LAYER_LINEAR_H
+#define LITENN_LAYER_LINEAR_H
 
 namespace LiteNN::Layer
 {

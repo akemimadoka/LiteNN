@@ -1,6 +1,3 @@
-#ifndef LITENN_TRAINING_TRAINER_H
-#define LITENN_TRAINING_TRAINER_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Optimizer/Loss.h>
 #include <LiteNN/Optimizer/OptimizerUtils.h>
@@ -12,6 +9,9 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#ifndef LITENN_TRAINING_TRAINER_H
+#define LITENN_TRAINING_TRAINER_H
 
 namespace LiteNN::Training
 {

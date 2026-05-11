@@ -1,4 +1,6 @@
+#ifndef LITENN_MODULE_IMPL
 #include "Device.h"
+#endif
 
 namespace LiteNN
 {

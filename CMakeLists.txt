@@ -6,12 +6,14 @@ option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
 option(LITENN_BUILD_BENCHMARKS "Build LiteNN benchmark programs" OFF)
 option(LITENN_ENABLE_SANITIZERS "Enable sanitizer instrumentation for LiteNN and its tests" OFF)
+option(LITENN_WITH_MODULES "Build LiteNN with C++20 modules support" OFF)
 set(LITENN_SANITIZERS "address,undefined" CACHE STRING "Comma-separated list of sanitizers to enable")
 
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+find_program(LITENN_PYTHON_EXECUTABLE NAMES python python3 REQUIRED)
 
 set(LITENN_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/LiteNN" CACHE STRING
     "Install path for LiteNN CMake package files")
@@ -134,7 +136,7 @@ function(litenn_configure_sanitizer_test_environment)
 endfunction()
 
 file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
-list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/")
+list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|.*\\.module\\.cpp$")
 add_library(LiteNN ${LITENN_SOURCES})
 
 add_library(LiteNN::LiteNN ALIAS LiteNN)
@@ -152,6 +154,10 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 litenn_enable_sanitizers(LiteNN)
 
+set(LITENN_HEADERS ${LITENN_SOURCES})
+list(FILTER LITENN_HEADERS EXCLUDE REGEX "src/.*\\.cpp$")
+set(LITENN_MODULE_HEADERS ${LITENN_HEADERS})
+
 if(LITENN_ENABLE_MLIR)
     add_compile_definitions(LITENN_ENABLE_MLIR=1)
     find_package(LLVM CONFIG REQUIRED)
@@ -164,6 +170,41 @@ if(LITENN_ENABLE_MLIR)
 
     add_subdirectory(src/LiteNN/Compiler)
     litenn_enable_sanitizers(LiteNNCompiler)
+
+    get_target_property(LITENN_COMPILER_HEADERS LiteNNCompiler SOURCES)
+    list(FILTER LITENN_COMPILER_HEADERS EXCLUDE REGEX ".*\\.cpp$")
+    list(APPEND LITENN_HEADERS ${LITENN_COMPILER_HEADERS})
+endif()
+
+set(LITENN_GENERATED_MODULE_INTERFACE)
+if(LITENN_WITH_MODULES)
+    set(LITENN_GENERATED_MODULE_INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN/LiteNN.ixx)
+    add_custom_command(
+        OUTPUT ${LITENN_GENERATED_MODULE_INTERFACE}
+        COMMAND ${CMAKE_COMMAND} -E echo "Generating C++20 module interface for LiteNN"
+        COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GenerateModule.py"
+            --input-files ${LITENN_MODULE_HEADERS}
+                --input-template "${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN.ixx.template"
+                --output ${LITENN_GENERATED_MODULE_INTERFACE}
+        DEPENDS ${LITENN_MODULE_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN.ixx.template" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GenerateModule.py"
+        VERBATIM
+    )
+    target_sources(LiteNN PRIVATE
+        src/LiteNN/Device.module.cpp
+        src/LiteNN/Debug/Dump.module.cpp
+    )
+    target_sources(LiteNN PUBLIC
+        FILE_SET litenn_modules TYPE CXX_MODULES
+        BASE_DIRS ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN
+        FILES ${LITENN_GENERATED_MODULE_INTERFACE}
+    )
+endif()
+
+set(LITENN_RUNTIME_INSTALL_EXTRA_ARGS)
+if(LITENN_WITH_MODULES)
+    list(APPEND LITENN_RUNTIME_INSTALL_EXTRA_ARGS
+        FILE_SET litenn_modules DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
 endif()
 
 install(TARGETS LiteNN
@@ -171,6 +212,7 @@ install(TARGETS LiteNN
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ${LITENN_RUNTIME_INSTALL_EXTRA_ARGS}
 )
 
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/
@@ -259,11 +301,20 @@ write_basic_package_version_file(
     COMPATIBILITY SameMajorVersion
 )
 
-install(EXPORT LiteNNRuntimeTargets
-    FILE LiteNNTargets.cmake
-    NAMESPACE LiteNN::
-    DESTINATION ${LITENN_INSTALL_CMAKEDIR}
-)
+if(LITENN_WITH_MODULES)
+    install(EXPORT LiteNNRuntimeTargets
+        FILE LiteNNTargets.cmake
+        NAMESPACE LiteNN::
+        DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+        CXX_MODULES_DIRECTORY modules
+    )
+else()
+    install(EXPORT LiteNNRuntimeTargets
+        FILE LiteNNTargets.cmake
+        NAMESPACE LiteNN::
+        DESTINATION ${LITENN_INSTALL_CMAKEDIR}
+    )
+endif()
 
 if(LITENN_ENABLE_MLIR)
     install(EXPORT LiteNNCompilerTargets

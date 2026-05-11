@@ -1,11 +1,11 @@
-#ifndef LITENN_MISC_H
-#define LITENN_MISC_H
-
 #include <format>
 #include <meta>
 #include <numeric>
 #include <ranges>
 #include <type_traits>
+
+#ifndef LITENN_MISC_H
+#define LITENN_MISC_H
 
 namespace LiteNN
 {

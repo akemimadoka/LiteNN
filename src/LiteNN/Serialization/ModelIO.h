@@ -1,6 +1,3 @@
-#ifndef LITENN_SERIALIZATION_MODELIO_H
-#define LITENN_SERIALIZATION_MODELIO_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -17,6 +14,9 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
+
+#ifndef LITENN_SERIALIZATION_MODELIO_H
+#define LITENN_SERIALIZATION_MODELIO_H
 
 namespace LiteNN::Serialization
 {

@@ -1,9 +1,9 @@
-#ifndef LITENN_LAYER_LAYERUTILS_H
-#define LITENN_LAYER_LAYERUTILS_H
-
 #include <LiteNN/Device.h>
 #include <LiteNN/Graph.h>
 #include <algorithm>
+
+#ifndef LITENN_LAYER_LAYERUTILS_H
+#define LITENN_LAYER_LAYERUTILS_H
 
 namespace LiteNN::Layer::Detail
 {

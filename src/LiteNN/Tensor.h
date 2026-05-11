@@ -1,8 +1,8 @@
-#ifndef LITENN_TENSOR_H
-#define LITENN_TENSOR_H
-
 #include <LiteNN/Device.h>
 #include <concepts>
+
+#ifndef LITENN_TENSOR_H
+#define LITENN_TENSOR_H
 
 namespace LiteNN
 {

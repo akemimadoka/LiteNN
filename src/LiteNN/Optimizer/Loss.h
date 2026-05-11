@@ -1,6 +1,3 @@
-#ifndef LITENN_OPTIMIZER_LOSS_H
-#define LITENN_OPTIMIZER_LOSS_H
-
 #include <LiteNN/Tensor.h>
 
 #include <algorithm>
@@ -9,6 +6,9 @@
 #include <span>
 #include <stdexcept>
 #include <vector>
+
+#ifndef LITENN_OPTIMIZER_LOSS_H
+#define LITENN_OPTIMIZER_LOSS_H
 
 namespace LiteNN::Optimizer
 {

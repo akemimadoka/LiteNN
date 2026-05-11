@@ -1,9 +1,11 @@
+#ifndef LITENN_MODULE_IMPL
 #include <LiteNN/Debug/Dump.h>
 
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <format>
 #include <string_view>
+#endif
 
 namespace LiteNN::Debug
 {

@@ -1,12 +1,12 @@
-#ifndef LITENN_LAYER_LAYERNORM_H
-#define LITENN_LAYER_LAYERNORM_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
 
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#ifndef LITENN_LAYER_LAYERNORM_H
+#define LITENN_LAYER_LAYERNORM_H
 
 namespace LiteNN::Layer
 {

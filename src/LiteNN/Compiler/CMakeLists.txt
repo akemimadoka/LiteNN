@@ -12,15 +12,13 @@ mlir_tablegen(Dialect/LiteNNEnums.h.inc -gen-enum-decls)
 mlir_tablegen(Dialect/LiteNNEnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(LiteNNCompilerIncGen)
 
+file(GLOB_RECURSE LITENN_COMPILER_SOURCES CONFIGURE_DEPENDS
+    *.cpp
+    *.h
+)
+
 add_library(LiteNNCompiler
-    CompiledModule.cpp
-    Dump.cpp
-    Dialect/LiteNNDialect.cpp
-    Dialect/LiteNNOps.cpp
-    Translation/GraphToMLIR.cpp
-    Pass/LowerLiteNNPass.cpp
-    Pass/BufferizationPipeline.cpp
-    Pass/LLVMCodegenPipeline.cpp
+    ${LITENN_COMPILER_SOURCES}
 )
 
 add_library(LiteNN::LiteNNCompiler ALIAS LiteNNCompiler)

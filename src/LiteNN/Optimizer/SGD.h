@@ -1,10 +1,10 @@
-#ifndef LITENN_OPTIMIZER_SGD_H
-#define LITENN_OPTIMIZER_SGD_H
-
 #include <LiteNN/Optimizer/OptimizerUtils.h>
 
 #include <stdexcept>
 #include <vector>
+
+#ifndef LITENN_OPTIMIZER_SGD_H
+#define LITENN_OPTIMIZER_SGD_H
 
 namespace LiteNN::Optimizer
 {

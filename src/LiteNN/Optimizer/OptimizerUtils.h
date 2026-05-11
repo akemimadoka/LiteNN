@@ -1,6 +1,3 @@
-#ifndef LITENN_OPTIMIZER_OPTIMIZERUTILS_H
-#define LITENN_OPTIMIZER_OPTIMIZERUTILS_H
-
 #include <LiteNN/Graph.h>
 
 #include <cstring>
@@ -8,6 +5,9 @@
 #include <format>
 #include <span>
 #include <stdexcept>
+
+#ifndef LITENN_OPTIMIZER_OPTIMIZERUTILS_H
+#define LITENN_OPTIMIZER_OPTIMIZERUTILS_H
 
 namespace LiteNN::Optimizer::Detail
 {

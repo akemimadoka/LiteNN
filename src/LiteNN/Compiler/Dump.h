@@ -1,10 +1,10 @@
-#ifndef LITENN_COMPILER_DUMP_H
-#define LITENN_COMPILER_DUMP_H
-
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Graph.h>
 
 #include <string>
+
+#ifndef LITENN_COMPILER_DUMP_H
+#define LITENN_COMPILER_DUMP_H
 
 namespace LiteNN::Debug
 {

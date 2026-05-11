@@ -1,6 +1,3 @@
-#ifndef LITENN_PASS_FORWARDONLYPASS_H
-#define LITENN_PASS_FORWARDONLYPASS_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -11,6 +8,9 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+
+#ifndef LITENN_PASS_FORWARDONLYPASS_H
+#define LITENN_PASS_FORWARDONLYPASS_H
 
 namespace LiteNN
 {

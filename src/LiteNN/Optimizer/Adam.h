@@ -1,11 +1,11 @@
-#ifndef LITENN_OPTIMIZER_ADAM_H
-#define LITENN_OPTIMIZER_ADAM_H
-
 #include <LiteNN/Optimizer/OptimizerUtils.h>
 
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+
+#ifndef LITENN_OPTIMIZER_ADAM_H
+#define LITENN_OPTIMIZER_ADAM_H
 
 namespace LiteNN::Optimizer
 {

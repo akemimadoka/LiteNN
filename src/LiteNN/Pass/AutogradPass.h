@@ -1,11 +1,11 @@
-#ifndef LITENN_PASS_AUTOGRAD_H
-#define LITENN_PASS_AUTOGRAD_H
-
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Validation/GraphValidator.h>
 #include <map>
 #include <stdexcept>
+
+#ifndef LITENN_PASS_AUTOGRAD_H
+#define LITENN_PASS_AUTOGRAD_H
 
 namespace LiteNN
 {

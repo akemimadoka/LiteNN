@@ -1,5 +1,3 @@
-#pragma once
-
 #include <LiteNN/Device.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
@@ -12,6 +10,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifndef LITENN_COMPILER_COMPILEDMODULE_H
+#define LITENN_COMPILER_COMPILEDMODULE_H
 
 namespace LiteNN
 {
@@ -145,3 +146,5 @@ namespace LiteNN
 		static CompiledModule<CPU> Compile(const Graph& graph);
 	};
 } // namespace LiteNN
+
+#endif

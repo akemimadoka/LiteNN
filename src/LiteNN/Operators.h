@@ -1,10 +1,10 @@
-#ifndef LITENN_OPERATORS_H
-#define LITENN_OPERATORS_H
-
 #include <expected>
 #include <vector>
 
 #include <LiteNN/Misc.h>
+
+#ifndef LITENN_OPERATORS_H
+#define LITENN_OPERATORS_H
 
 namespace LiteNN
 {
