@@ -5,7 +5,7 @@
 - `Graph`：训练或推理前端 IR。
 - `CompiledModuleArtifact`：拥有 rodata/native object bytes 的编译期产物。
 - `CompiledModule<CPU>`：运行期已加载 CPU native module，可执行 `Run` / `RunInto` / `RunManyInto`。
-- `CompiledModule<CUDA>`：第一版 CUDA AOT bridge，使用 CUDA Tensor 作为输入/输出边界，内部复用 CPU AOT image/JIT。
+- `CompiledModule<CUDA>`：CUDA 运行期 module。`CPUNative` artifact 通过 CPU AOT bridge 执行；`CUDANative` artifact 反序列化 CUDA payload、加载 Driver module，并直接使用 CUDA Tensor 指针 launch kernel。
 
 ## 推荐部署路径
 
@@ -21,7 +21,8 @@
 - `Load` 返回后，原始 rodata/instruction 地址可释放。
 - `Run`/`RunInto`/`RunManyInto` 可并发，但要与 `Load` / 析构分离。
 - image 兼容性依赖 rodata header 校验；不同 format version、pointer size、endianness、target triple、backend 必须拒绝加载或进入明确的 bridge 路径。
-- 当前 CUDA AOT bridge 的 instructions 仍是 CPU native object bytes；`Load(image, CUDA{})` 不要求 carrier library 在执行期间继续存在，但执行时会发生 CPU↔CUDA copy。原生 CUDA AOT 需要新增 backend metadata、GPU binary 打包和 CUDA Driver module 生命周期管理。
+- CUDA AOT 支持两类 image：`CPUNative` 的 instructions 是 CPU native object bytes，`Load(image, CUDA{})` 会在 CUDA Tensor 边界做 CPU↔CUDA copy；`CUDANative` 的 instructions 是 `CUDANativeInstructionPayload`，在原有 `instructions` 字节区承载 PTX/cubin/fatbin、feature flags、scalar data、launch table 和 workspace metadata，并通过 CUDA Driver module 生命周期管理执行。
+- 当前 CUDA native codegen 是 P2 MVP：仅覆盖静态 shape、单 subgraph、`Float32` 双输入单输出 elementwise Add；不匹配的图会回退到 CPU AOT bridge。
 
 ## 包分发建议
 

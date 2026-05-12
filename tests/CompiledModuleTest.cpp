@@ -2,6 +2,7 @@
 
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
+#include <LiteNN/Compiler/CUDANativePayload.h>
 
 #include <array>
 #include <cstddef>
@@ -193,6 +194,104 @@ TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 	EXPECT_EQ(copied.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(loaded.Backend(), CompiledModuleBackend::CPUNative);
+}
+
+TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
+{
+	const auto binary = std::vector<std::byte>{
+		std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' }
+	};
+	const auto payload = CUDANativeInstructionPayload{
+	    .binaryKind = CUDANativeBinaryKind::PTX,
+	    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph,
+	    .target = "compute_75",
+	    .binary = binary,
+	    .scalarData = { std::byte{ 4 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
+	    .workspaceBytes = 256,
+	    .kernels = {
+	        CUDANativeKernelSpec{
+	            .name = "litenn_kernel_0",
+	            .grid = { .x = 8, .y = 2, .z = 1 },
+	            .block = { .x = 128, .y = 1, .z = 1 },
+	            .sharedMemoryBytes = 64,
+	            .workspaceBytes = 128,
+	            .arguments = {
+	                CUDANativeArgumentSpec{
+	                    .kind = CUDANativeArgumentKind::InputTensor,
+	                    .index = 0,
+	                    .byteOffset = 0,
+	                    .byteSize = 8,
+	                },
+	                CUDANativeArgumentSpec{
+	                    .kind = CUDANativeArgumentKind::OutputTensor,
+	                    .index = 0,
+	                    .byteOffset = 8,
+	                    .byteSize = 8,
+	                },
+	                CUDANativeArgumentSpec{
+	                    .kind = CUDANativeArgumentKind::Workspace,
+	                    .index = 0,
+	                    .byteOffset = 16,
+	                    .byteSize = 128,
+	                },
+	                CUDANativeArgumentSpec{
+	                    .kind = CUDANativeArgumentKind::Scalar,
+	                    .index = 0,
+	                    .byteOffset = 0,
+	                    .byteSize = 4,
+	                },
+	            },
+	        },
+	    },
+	};
+
+	auto bytes = SerializeCUDANativeInstructionPayload(payload);
+	auto decoded = DeserializeCUDANativeInstructionPayload(bytes);
+
+	EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::PTX);
+	EXPECT_EQ(decoded.featureFlags, kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph);
+	EXPECT_EQ(decoded.target, "compute_75");
+	EXPECT_EQ(decoded.binary, binary);
+	ASSERT_EQ(decoded.scalarData.size(), 4u);
+	EXPECT_EQ(decoded.scalarData[0], std::byte{ 4 });
+	ASSERT_EQ(decoded.kernels.size(), 1u);
+	EXPECT_EQ(decoded.kernels[0].name, "litenn_kernel_0");
+	EXPECT_EQ(decoded.kernels[0].grid.x, 8u);
+	EXPECT_EQ(decoded.kernels[0].grid.y, 2u);
+	EXPECT_EQ(decoded.kernels[0].block.x, 128u);
+	EXPECT_EQ(decoded.kernels[0].sharedMemoryBytes, 64u);
+	ASSERT_EQ(decoded.kernels[0].arguments.size(), 4u);
+	EXPECT_EQ(decoded.kernels[0].arguments[1].kind, CUDANativeArgumentKind::OutputTensor);
+	EXPECT_EQ(decoded.kernels[0].arguments[2].byteSize, 128u);
+	EXPECT_EQ(decoded.kernels[0].arguments[3].kind, CUDANativeArgumentKind::Scalar);
+}
+
+TEST(CompiledModuleTest, CUDANativeInstructionPayloadRejectsInvalidMagic)
+{
+	std::vector<std::byte> bytes = {
+		std::byte{ 'b' }, std::byte{ 'a' }, std::byte{ 'd' }, std::byte{ 0 }
+	};
+
+	try
+	{
+		(void)DeserializeCUDANativeInstructionPayload(bytes);
+		FAIL() << "expected CUDA native payload validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("magic"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, CUDANativeInstructionPayloadRejectsUnknownFeatureFlags)
+{
+	CUDANativeInstructionPayload payload;
+	payload.target = "sm_30";
+	payload.binary = { std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' } };
+	payload.featureFlags = 1ull << 63;
+
+	EXPECT_THROW((void)SerializeCUDANativeInstructionPayload(payload), std::runtime_error);
 }
 
 TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)

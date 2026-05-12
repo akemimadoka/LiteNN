@@ -6,12 +6,16 @@
 
 #include <cublas_v2.h>
 #include <cuda_runtime_api.h>
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+#include <cuda.h>
+#endif
 
 #include <cstring>
 #include <format>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace LiteNN
@@ -84,6 +88,64 @@ namespace LiteNN
 				throw std::runtime_error(std::format("{} failed: {}", action, CUBLASStatusName(status)));
 			}
 		}
+
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		std::string CUDADriverStatusMessage(CUresult status)
+		{
+			const char* name = nullptr;
+			const char* message = nullptr;
+			(void)cuGetErrorName(status, &name);
+			(void)cuGetErrorString(status, &message);
+			if (name != nullptr && message != nullptr)
+			{
+				return std::format("{} ({})", name, message);
+			}
+			if (name != nullptr)
+			{
+				return name;
+			}
+			return std::format("CUresult({})", static_cast<int>(status));
+		}
+
+		void CheckCUDADriver(CUresult status, std::string_view action)
+		{
+			if (status != CUDA_SUCCESS)
+			{
+				throw std::runtime_error(std::format("{} failed: {}", action, CUDADriverStatusMessage(status)));
+			}
+		}
+
+		void InitializeCUDADriver()
+		{
+			CheckCUDADriver(cuInit(0), "cuInit");
+		}
+
+		class CUDADriverContextScope
+		{
+		public:
+			explicit CUDADriverContextScope(CUcontext context) : context_(context)
+			{
+				CheckCUDADriver(cuCtxPushCurrent(context_), "cuCtxPushCurrent");
+				pushed_ = true;
+			}
+
+			~CUDADriverContextScope()
+			{
+				if (pushed_)
+				{
+					CUcontext popped{};
+					(void)cuCtxPopCurrent(&popped);
+				}
+			}
+
+			CUDADriverContextScope(const CUDADriverContextScope&) = delete;
+			CUDADriverContextScope& operator=(const CUDADriverContextScope&) = delete;
+
+		private:
+			CUcontext context_{};
+			bool pushed_{};
+		};
+#endif
 
 		void ClearCUDAError() noexcept
 		{
@@ -329,6 +391,153 @@ namespace LiteNN
 	{
 		const auto count = CUDADeviceCount();
 		return deviceIndex >= 0 && deviceIndex < count;
+	}
+
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+	bool IsCUDADriverAvailable(int deviceIndex) noexcept
+	{
+		if (deviceIndex < 0 || cuInit(0) != CUDA_SUCCESS)
+		{
+			return false;
+		}
+		int count = 0;
+		if (cuDeviceGetCount(&count) != CUDA_SUCCESS || deviceIndex >= count)
+		{
+			return false;
+		}
+		CUdevice device{};
+		return cuDeviceGet(&device, deviceIndex) == CUDA_SUCCESS;
+	}
+
+	struct CUDADriverModule::Impl
+	{
+		CUDA device;
+		CUdevice driverDevice{};
+		CUcontext context{};
+		CUmodule module{};
+
+		Impl(CUDA deviceValue, std::span<const std::byte> image) : device(std::move(deviceValue))
+		{
+			if (image.empty())
+			{
+				throw std::runtime_error("CUDA driver module image must not be empty");
+			}
+
+			InitializeCUDADriver();
+			CheckCUDADriver(cuDeviceGet(&driverDevice, device.deviceIndex), "cuDeviceGet");
+			CheckCUDADriver(cuDevicePrimaryCtxRetain(&context, driverDevice), "cuDevicePrimaryCtxRetain");
+			try
+			{
+				CUDADriverContextScope scope(context);
+				CheckCUDADriver(cuModuleLoadDataEx(&module, image.data(), 0, nullptr, nullptr), "cuModuleLoadDataEx");
+			}
+			catch (...)
+			{
+				(void)cuDevicePrimaryCtxRelease(driverDevice);
+				context = nullptr;
+				throw;
+			}
+		}
+
+		~Impl()
+		{
+			if (module != nullptr && context != nullptr)
+			{
+				if (cuCtxPushCurrent(context) == CUDA_SUCCESS)
+				{
+					(void)cuModuleUnload(module);
+					CUcontext popped{};
+					(void)cuCtxPopCurrent(&popped);
+				}
+			}
+			if (context != nullptr)
+			{
+				(void)cuDevicePrimaryCtxRelease(driverDevice);
+			}
+		}
+
+		CUfunction GetFunction(std::string_view functionName) const
+		{
+			if (functionName.empty())
+			{
+				throw std::runtime_error("CUDA driver kernel function name must not be empty");
+			}
+			CUDADriverContextScope scope(context);
+			CUfunction function{};
+			CheckCUDADriver(cuModuleGetFunction(&function, module, std::string(functionName).c_str()),
+			                "cuModuleGetFunction");
+			return function;
+		}
+	};
+#else
+	bool IsCUDADriverAvailable(int) noexcept
+	{
+		return false;
+	}
+
+	struct CUDADriverModule::Impl
+	{
+	};
+#endif
+
+	CUDADriverModule::CUDADriverModule() = default;
+	CUDADriverModule::CUDADriverModule(CUDADriverModule&&) noexcept = default;
+	CUDADriverModule& CUDADriverModule::operator=(CUDADriverModule&&) noexcept = default;
+	CUDADriverModule::~CUDADriverModule() = default;
+
+	CUDADriverModule::CUDADriverModule(CUDA device, std::span<const std::byte> image)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		impl_ = std::make_unique<Impl>(std::move(device), image);
+#else
+		(void)device;
+		(void)image;
+		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
+#endif
+	}
+
+	bool CUDADriverModule::Empty() const noexcept
+	{
+		return !impl_;
+	}
+
+	void CUDADriverModule::Launch(std::string_view functionName, const CUDADriverLaunchOptions& options,
+	                              std::span<void*> arguments) const
+	{
+		if (!impl_)
+		{
+			throw std::runtime_error("CUDA driver module is empty");
+		}
+		if (options.grid.x == 0 || options.grid.y == 0 || options.grid.z == 0 ||
+		    options.block.x == 0 || options.block.y == 0 || options.block.z == 0)
+		{
+			throw std::runtime_error("CUDA driver launch dimensions must be non-zero");
+		}
+		if (options.sharedMemoryBytes > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max()))
+		{
+			throw std::runtime_error("CUDA driver launch shared memory exceeds unsigned int range");
+		}
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		CUDADriverContextScope scope(impl_->context);
+		CUfunction function{};
+		CheckCUDADriver(cuModuleGetFunction(&function, impl_->module, std::string(functionName).c_str()),
+		                "cuModuleGetFunction");
+		CheckCUDADriver(cuLaunchKernel(function, options.grid.x, options.grid.y, options.grid.z,
+		                               options.block.x, options.block.y, options.block.z,
+		                               static_cast<unsigned int>(options.sharedMemoryBytes),
+		                               reinterpret_cast<CUstream>(options.stream),
+		                               arguments.empty() ? nullptr : arguments.data(), nullptr),
+		                "cuLaunchKernel");
+		if (options.synchronize)
+		{
+			CheckCUDADriver(cuStreamSynchronize(reinterpret_cast<CUstream>(options.stream)), "cuStreamSynchronize");
+		}
+#else
+		(void)functionName;
+		(void)options;
+		(void)arguments;
+		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
+#endif
 	}
 
 	std::string_view DeviceTraits<CUDA>::Name()

@@ -77,7 +77,8 @@ namespace LiteNN
 		/// Loads the artifact into a runnable module. The artifact remains valid after loading.
 		CompiledModule<CPU> Load() const;
 #ifdef LITENN_ENABLE_CUDA
-		/// Loads the artifact into a CUDA module. This first implementation bridges through CPU AOT code.
+		/// Loads the artifact into a CUDA module. CPU-native artifacts bridge through CPU AOT;
+		/// CUDA-native artifacts load their embedded CUDA instruction payload.
 		CompiledModule<CUDA> Load(CUDA device) const;
 #endif
 
@@ -95,6 +96,9 @@ namespace LiteNN
 
 	private:
 		friend class Compiler<CPU>;
+#ifdef LITENN_ENABLE_CUDA
+		friend class Compiler<CUDA>;
+#endif
 
 		CompiledModuleArtifact(std::vector<std::byte> rodata,
 		                      std::vector<std::byte> instructions,
@@ -182,7 +186,7 @@ namespace LiteNN
 		CompiledModule& operator=(CompiledModule&&) noexcept;
 		~CompiledModule();
 
-		/// Loads a borrowed CPU AOT image and runs it behind CUDA tensor boundaries.
+		/// Loads a borrowed CUDA module image. CPU-native images bridge through CPU AOT.
 		static CompiledModule Load(CompiledModuleImage image, CUDA device = CUDA{});
 
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;

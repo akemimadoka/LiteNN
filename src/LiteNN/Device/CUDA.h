@@ -3,7 +3,10 @@
 
 #include <cstdint>
 #include <LiteNN/Device.h>
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 
 #ifdef LITENN_ENABLE_CUDA
 
@@ -22,6 +25,44 @@ namespace LiteNN
 
 	int CUDADeviceCount() noexcept;
 	bool IsCUDADeviceAvailable(int deviceIndex = 0) noexcept;
+	bool IsCUDADriverAvailable(int deviceIndex = 0) noexcept;
+
+	struct CUDADriverLaunchDim
+	{
+		unsigned int x{ 1 };
+		unsigned int y{ 1 };
+		unsigned int z{ 1 };
+	};
+
+	struct CUDADriverLaunchOptions
+	{
+		CUDADriverLaunchDim grid;
+		CUDADriverLaunchDim block;
+		std::size_t sharedMemoryBytes{};
+		void* stream{};
+		bool synchronize{ true };
+	};
+
+	class CUDADriverModule
+	{
+	public:
+		CUDADriverModule();
+		CUDADriverModule(CUDA device, std::span<const std::byte> image);
+		CUDADriverModule(const CUDADriverModule&) = delete;
+		CUDADriverModule& operator=(const CUDADriverModule&) = delete;
+		CUDADriverModule(CUDADriverModule&&) noexcept;
+		CUDADriverModule& operator=(CUDADriverModule&&) noexcept;
+		~CUDADriverModule();
+
+		bool Empty() const noexcept;
+		void Launch(std::string_view functionName, const CUDADriverLaunchOptions& options,
+		            std::span<void*> arguments = {}) const;
+
+	private:
+		struct Impl;
+
+		std::unique_ptr<Impl> impl_;
+	};
 
 	template <>
 	struct DeviceTraits<CUDA>
