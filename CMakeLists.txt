@@ -158,7 +158,7 @@ litenn_enable_sanitizers(LiteNN)
 if(LITENN_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
     target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_CUDA=1)
-    target_link_libraries(LiteNN PUBLIC CUDA::cudart)
+    target_link_libraries(LiteNN PUBLIC CUDA::cudart CUDA::cublas)
 endif()
 
 set(LITENN_HEADERS ${LITENN_SOURCES})
@@ -259,10 +259,10 @@ endif()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 if(NOT LITENN_ENABLE_MLIR)
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest|CompilerDumpTest)\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest|CompiledModuleCUDATest|CompilerDumpTest)\\.cpp$")
 endif()
 if(NOT LITENN_ENABLE_CUDA)
-    list(FILTER TEST_SOURCES EXCLUDE REGEX "CUDADeviceTest\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "(CUDADeviceTest|CompiledModuleCUDATest)\\.cpp$")
 endif()
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -273,7 +273,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     if(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
        OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
-       OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompilerDumpTest"
+       OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"
+       OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND TEST_NAME STREQUAL "MemorySafetyTest"))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
     else()

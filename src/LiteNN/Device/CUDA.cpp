@@ -4,10 +4,12 @@
 
 #ifdef LITENN_ENABLE_CUDA
 
+#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
 
 #include <cstring>
 #include <format>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -47,6 +49,42 @@ namespace LiteNN
 			}
 		}
 
+		std::string_view CUBLASStatusName(cublasStatus_t status)
+		{
+			switch (status)
+			{
+			case CUBLAS_STATUS_SUCCESS:
+				return "CUBLAS_STATUS_SUCCESS";
+			case CUBLAS_STATUS_NOT_INITIALIZED:
+				return "CUBLAS_STATUS_NOT_INITIALIZED";
+			case CUBLAS_STATUS_ALLOC_FAILED:
+				return "CUBLAS_STATUS_ALLOC_FAILED";
+			case CUBLAS_STATUS_INVALID_VALUE:
+				return "CUBLAS_STATUS_INVALID_VALUE";
+			case CUBLAS_STATUS_ARCH_MISMATCH:
+				return "CUBLAS_STATUS_ARCH_MISMATCH";
+			case CUBLAS_STATUS_MAPPING_ERROR:
+				return "CUBLAS_STATUS_MAPPING_ERROR";
+			case CUBLAS_STATUS_EXECUTION_FAILED:
+				return "CUBLAS_STATUS_EXECUTION_FAILED";
+			case CUBLAS_STATUS_INTERNAL_ERROR:
+				return "CUBLAS_STATUS_INTERNAL_ERROR";
+			case CUBLAS_STATUS_NOT_SUPPORTED:
+				return "CUBLAS_STATUS_NOT_SUPPORTED";
+			case CUBLAS_STATUS_LICENSE_ERROR:
+				return "CUBLAS_STATUS_LICENSE_ERROR";
+			}
+			return "CUBLAS_STATUS_UNKNOWN";
+		}
+
+		void CheckCUBLAS(cublasStatus_t status, std::string_view action)
+		{
+			if (status != CUBLAS_STATUS_SUCCESS)
+			{
+				throw std::runtime_error(std::format("{} failed: {}", action, CUBLASStatusName(status)));
+			}
+		}
+
 		void ClearCUDAError() noexcept
 		{
 			(void)cudaGetLastError();
@@ -79,6 +117,34 @@ namespace LiteNN
 		private:
 			int previousDevice_;
 			bool changed_;
+		};
+
+		class CUBLASHandle
+		{
+		public:
+			CUBLASHandle()
+			{
+				CheckCUBLAS(cublasCreate(&handle_), "cublasCreate");
+			}
+
+			~CUBLASHandle()
+			{
+				if (handle_ != nullptr)
+				{
+					(void)cublasDestroy(handle_);
+				}
+			}
+
+			CUBLASHandle(const CUBLASHandle&) = delete;
+			CUBLASHandle& operator=(const CUBLASHandle&) = delete;
+
+			cublasHandle_t get() const
+			{
+				return handle_;
+			}
+
+		private:
+			cublasHandle_t handle_{};
 		};
 
 		DataType ResolveUnaryResultType(UnaryOp op, DataType inputType)
@@ -199,6 +265,51 @@ namespace LiteNN
 			auto resultShape = srcShape.ToOwned();
 			resultShape[axis] = length;
 			return resultShape;
+		}
+
+		bool TryCUBLASMatMul(CUDA& device, void* dst, DataType type1, ShapeView shape1, const void* src1,
+		                     DataType type2, ShapeView shape2, const void* src2)
+		{
+			if (shape1.NumDim() != 2 || shape2.NumDim() != 2 || shape1[1] != shape2[0] || type1 != type2)
+			{
+				return false;
+			}
+			if (type1 != DataType::Float32 && type1 != DataType::Float64)
+			{
+				return false;
+			}
+			if (shape1[0] > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+			    shape1[1] > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+			    shape2[1] > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+			{
+				throw std::runtime_error("CUDA MatMul dimensions exceed cuBLAS int range");
+			}
+
+			CUDADeviceGuard guard(device.deviceIndex);
+			CUBLASHandle handle;
+			const auto m = static_cast<int>(shape1[0]);
+			const auto k = static_cast<int>(shape1[1]);
+			const auto n = static_cast<int>(shape2[1]);
+
+			if (type1 == DataType::Float32)
+			{
+				const float alpha = 1.0F;
+				const float beta = 0.0F;
+				CheckCUBLAS(cublasSgemm(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
+				                        static_cast<const float*>(src2), n, static_cast<const float*>(src1), k,
+				                        &beta, static_cast<float*>(dst), n),
+				            "cublasSgemm");
+			}
+			else
+			{
+				const double alpha = 1.0;
+				const double beta = 0.0;
+				CheckCUBLAS(cublasDgemm(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
+				                        static_cast<const double*>(src2), n, static_cast<const double*>(src1), k,
+				                        &beta, static_cast<double*>(dst), n),
+				            "cublasDgemm");
+			}
+			return true;
 		}
 	} // namespace
 
@@ -341,6 +452,11 @@ namespace LiteNN
 	void DeviceTraits<CUDA>::DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
 	                                    const void* src1, DataType type2, ShapeView shape2, const void* src2)
 	{
+		if (binaryOp == BinaryOp::MatMul && TryCUBLASMatMul(device, dst, type1, shape1, src1, type2, shape2, src2))
+		{
+			return;
+		}
+
 		const auto resultType = ResolveBinaryResultType(binaryOp, type1, type2);
 		const auto resultShape = ResolveBinaryResultShape(binaryOp, shape1, shape2);
 		auto hostSrc1 = MakeHostBuffer(type1, shape1.NumElements());

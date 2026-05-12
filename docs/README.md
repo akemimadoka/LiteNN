@@ -7,6 +7,7 @@
 - [DesignConstraints.md](DesignConstraints.md): 当前必须保持的设计约束与非目标。
 - [PassGuide.md](PassGuide.md): 新增/修改 Graph Pass 的约定、检查点与测试要求。
 - [DeviceBackendGuide.md](DeviceBackendGuide.md): 新设备后端的接入要求与验证路径。
+- [CUDAAOTRoadmap.md](CUDAAOTRoadmap.md): CUDA AOT native 后端的目标分解与阶段路线图。
 - [AOTDeployment.md](AOTDeployment.md): AOT artifact、carrier object、部署和加载建议。
 - [Troubleshooting.md](Troubleshooting.md): 常见构建、打包、模块、sanitizer 与运行时问题排查。
 - [../CHANGELOG.md](../CHANGELOG.md): 用户可见改动记录。

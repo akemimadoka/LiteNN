@@ -46,7 +46,7 @@ LiteNN 当前没有正式的 API deprecation pipeline；从现在开始采用以
 
 `CompiledModuleArtifact` / `CompiledModule::Load` 的 image ABI 必须保持以下约定：
 
-- rodata header 中的 magic、format version、pointer size、endianness、target triple 是强校验字段。
+- rodata header 中的 magic、format version、pointer size、endianness、target triple、backend 是强校验字段。
 - 任何导致 native object bytes 解释方式变化的修改，都必须提升 image format version。
 - image format 兼容性不等于 source compatibility；即使 C++ API 保持稳定，不兼容 image 也必须被显式拒绝加载。
 - carrier object 导出的 symbol 前缀规则一旦变化，必须记为 breaking packaging/deployment change。

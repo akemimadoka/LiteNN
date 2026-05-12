@@ -75,7 +75,7 @@ namespace
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 		std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
 	};
-	constexpr std::uint32_t kRodataVersion = 2;
+	constexpr std::uint32_t kRodataVersion = 3;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
 	constexpr std::uint32_t kRodataBigEndian = 2;
 
@@ -87,6 +87,13 @@ namespace
 		std::string cpu;
 		std::string features;
 		std::unique_ptr<llvm::TargetMachine> targetMachine;
+	};
+
+	struct RodataMetadata
+	{
+		CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
+		std::vector<CompiledTensorSpec> inputSpecs;
+		std::vector<CompiledTensorSpec> outputSpecs;
 	};
 
 	std::string ToString(llvm::Error error)
@@ -292,8 +299,22 @@ namespace
 		}
 	}
 
+	CompiledModuleBackend DecodeBackend(std::uint32_t value)
+	{
+		switch (value)
+		{
+			case static_cast<std::uint32_t>(CompiledModuleBackend::CPUNative):
+				return CompiledModuleBackend::CPUNative;
+			case static_cast<std::uint32_t>(CompiledModuleBackend::CUDANative):
+				return CompiledModuleBackend::CUDANative;
+			default:
+				throw std::runtime_error("Compiled module rodata contains an invalid backend");
+		}
+	}
+
 	std::vector<std::byte> SerializeRodata(std::span<const CompiledTensorSpec> inputs,
-	                                       std::span<const CompiledTensorSpec> outputs, std::string_view targetTriple)
+	                                       std::span<const CompiledTensorSpec> outputs, std::string_view targetTriple,
+	                                       CompiledModuleBackend backend)
 	{
 		std::vector<std::byte> rodata;
 		rodata.insert(rodata.end(), kRodataMagic.begin(), kRodataMagic.end());
@@ -301,6 +322,7 @@ namespace
 		AppendU32(rodata, static_cast<std::uint32_t>(sizeof(void*)));
 		AppendU32(rodata, NativeEndianTag());
 		AppendString(rodata, targetTriple);
+		AppendU32(rodata, static_cast<std::uint32_t>(backend));
 		AppendU32(rodata, static_cast<std::uint32_t>(inputs.size()));
 		AppendU32(rodata, static_cast<std::uint32_t>(outputs.size()));
 
@@ -325,8 +347,7 @@ namespace
 		return rodata;
 	}
 
-	std::pair<std::vector<CompiledTensorSpec>, std::vector<CompiledTensorSpec>>
-	DeserializeRodata(std::span<const std::byte> rodata)
+	RodataMetadata DeserializeRodata(std::span<const std::byte> rodata)
 	{
 		if (rodata.size() < kRodataMagic.size() ||
 		    !std::equal(kRodataMagic.begin(), kRodataMagic.end(), rodata.begin()))
@@ -358,6 +379,11 @@ namespace
 			{
 				throw std::runtime_error("Compiled module rodata target triple does not match this process");
 			}
+		}
+		CompiledModuleBackend backend = CompiledModuleBackend::CPUNative;
+		if (version >= 3)
+		{
+			backend = DecodeBackend(ReadU32(rodata, offset));
 		}
 
 		const auto inputCount = ReadU32(rodata, offset);
@@ -409,7 +435,11 @@ namespace
 			throw std::runtime_error("Compiled module rodata contains trailing bytes");
 		}
 
-		return { std::move(inputs), std::move(outputs) };
+		return {
+			.backend = backend,
+			.inputSpecs = std::move(inputs),
+			.outputSpecs = std::move(outputs),
+		};
 	}
 
 	std::vector<CompiledTensorSpec> BuildInputSpecs(const Graph& graph)
@@ -987,7 +1017,8 @@ namespace
 		return std::nullopt;
 	}
 
-	void ValidateTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
+	template <Device D>
+	void ValidateTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
 		{
@@ -999,7 +1030,8 @@ namespace
 		}
 	}
 
-	void ValidateOutputTensorAgainstSpec(const Tensor<CPU>& tensor, const CompiledTensorSpec& spec,
+	template <Device D>
+	void ValidateOutputTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec,
 	                                     std::size_t outputIndex)
 	{
 		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
@@ -1074,6 +1106,7 @@ struct CompiledModule<CPU>::Impl
 	std::vector<std::byte> instructions;
 	std::vector<CompiledTensorSpec> inputSpecs;
 	std::vector<CompiledTensorSpec> outputSpecs;
+	CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
 	std::unique_ptr<llvm::LLVMContext> jitContext;
 	std::unique_ptr<llvm::ExecutionEngine> jit;
 	EntryFn entry{};
@@ -1084,11 +1117,13 @@ CompiledModule<CPU>::CompiledModule() = default;
 CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata,
 	                                           std::vector<std::byte> instructions,
 	                                           std::vector<CompiledTensorSpec> inputSpecs,
-	                                           std::vector<CompiledTensorSpec> outputSpecs)
+	                                           std::vector<CompiledTensorSpec> outputSpecs,
+	                                           CompiledModuleBackend backend)
 	: rodata_(std::move(rodata)),
 	  instructions_(std::move(instructions)),
 	  inputSpecs_(std::move(inputSpecs)),
-	  outputSpecs_(std::move(outputSpecs))
+	  outputSpecs_(std::move(outputSpecs)),
+	  backend_(backend)
 {
 }
 
@@ -1096,9 +1131,9 @@ CompiledModuleArtifact CompiledModuleArtifact::CopyFromImage(CompiledModuleImage
 {
 	auto rodata = ToByteVector(image.rodata, image.rodataSize);
 	auto instructions = ToByteVector(image.instructions, image.instructionSize);
-	auto [inputSpecs, outputSpecs] = DeserializeRodata(rodata);
-	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), std::move(inputSpecs),
-	                              std::move(outputSpecs));
+	auto metadata = DeserializeRodata(rodata);
+	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), std::move(metadata.inputSpecs),
+	                              std::move(metadata.outputSpecs), metadata.backend);
 }
 
 CompiledModuleArtifact CompiledModuleArtifact::FromExportedSymbols(CompiledModuleExportedSymbols symbols)
@@ -1146,6 +1181,11 @@ std::span<const CompiledTensorSpec> CompiledModuleArtifact::OutputSpecs() const
 	return outputSpecs_;
 }
 
+CompiledModuleBackend CompiledModuleArtifact::Backend() const
+{
+	return backend_;
+}
+
 std::optional<std::size_t> CompiledModuleArtifact::FindInput(std::string_view name) const
 {
 	return FindSpecIndex(inputSpecs_, name);
@@ -1177,9 +1217,14 @@ CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleImage image)
 	impl->rodata = ToByteVector(image.rodata, image.rodataSize);
 	impl->instructions = ToByteVector(image.instructions, image.instructionSize);
 
-	auto [inputSpecs, outputSpecs] = DeserializeRodata(impl->rodata);
-	impl->inputSpecs = std::move(inputSpecs);
-	impl->outputSpecs = std::move(outputSpecs);
+	auto metadata = DeserializeRodata(impl->rodata);
+	if (metadata.backend != CompiledModuleBackend::CPUNative)
+	{
+		throw std::runtime_error("CompiledModule<CPU> can only load CPU native compiled module images");
+	}
+	impl->backend = metadata.backend;
+	impl->inputSpecs = std::move(metadata.inputSpecs);
+	impl->outputSpecs = std::move(metadata.outputSpecs);
 	auto loadedJit = LoadJIT(impl->instructions);
 	impl->jitContext = std::move(loadedJit.context);
 	impl->jit = std::move(loadedJit.engine);
@@ -1375,6 +1420,11 @@ std::span<const CompiledTensorSpec> CompiledModule<CPU>::OutputSpecs() const
 	return impl_->outputSpecs;
 }
 
+CompiledModuleBackend CompiledModule<CPU>::Backend() const
+{
+	return impl_ ? impl_->backend : CompiledModuleBackend::CPUNative;
+}
+
 std::optional<std::size_t> CompiledModule<CPU>::FindInput(std::string_view name) const
 {
 	if (!impl_)
@@ -1403,6 +1453,229 @@ void CompiledModule<CPU>::WriteObjectFile(const std::filesystem::path& path, std
 	WriteAllBytes(path, objectBytes);
 }
 
+#ifdef LITENN_ENABLE_CUDA
+struct CompiledModule<CUDA>::Impl
+{
+	CompiledModule<CPU> cpuModule;
+	CUDA device;
+};
+
+CompiledModule<CUDA>::CompiledModule() = default;
+CompiledModule<CUDA>::CompiledModule(const CompiledModule&) = default;
+CompiledModule<CUDA>::CompiledModule(CompiledModule&&) noexcept = default;
+CompiledModule<CUDA>& CompiledModule<CUDA>::operator=(const CompiledModule&) = default;
+CompiledModule<CUDA>& CompiledModule<CUDA>::operator=(CompiledModule&&) noexcept = default;
+CompiledModule<CUDA>::~CompiledModule() = default;
+
+CompiledModule<CUDA>::CompiledModule(std::shared_ptr<Impl> impl) : impl_(std::move(impl))
+{
+}
+
+CompiledModule<CUDA> CompiledModuleArtifact::Load(CUDA device) const
+{
+	return CompiledModule<CUDA>::Load(Image(), std::move(device));
+}
+
+CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA device)
+{
+	auto impl = std::make_shared<Impl>();
+	impl->cpuModule = CompiledModule<CPU>::Load(image);
+	impl->device = std::move(device);
+	return CompiledModule(std::move(impl));
+}
+
+std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	const auto specs = impl_->cpuModule.InputSpecs();
+	if (inputs.size() != specs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     specs.size(), inputs.size()));
+	}
+
+	std::vector<Tensor<CPU>> cpuInputs;
+	cpuInputs.reserve(inputs.size());
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], specs[i], i);
+		cpuInputs.push_back(inputs[i].CopyToDevice(CPU{}));
+	}
+
+	auto cpuOutputs = impl_->cpuModule.Run(cpuInputs);
+	std::vector<Tensor<CUDA>> outputs;
+	outputs.reserve(cpuOutputs.size());
+	for (const auto& output : cpuOutputs)
+	{
+		outputs.push_back(output.CopyToDevice(impl_->device));
+	}
+	return outputs;
+}
+
+void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	const auto inputSpecs = impl_->cpuModule.InputSpecs();
+	const auto outputSpecs = impl_->cpuModule.OutputSpecs();
+	if (inputs.size() != inputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     inputSpecs.size(), inputs.size()));
+	}
+	if (outputs.size() != outputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule output count mismatch: expected {}, got {}",
+		                                     outputSpecs.size(), outputs.size()));
+	}
+
+	std::vector<Tensor<CPU>> cpuInputs;
+	cpuInputs.reserve(inputs.size());
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], inputSpecs[i], i);
+		cpuInputs.push_back(inputs[i].CopyToDevice(CPU{}));
+	}
+
+	std::vector<Tensor<CPU>> cpuOutputs;
+	cpuOutputs.reserve(outputSpecs.size());
+	for (const auto& spec : outputSpecs)
+	{
+		cpuOutputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CPU{});
+	}
+	impl_->cpuModule.RunInto(cpuInputs, cpuOutputs);
+
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		ValidateOutputTensorAgainstSpec(outputs[i], outputSpecs[i], i);
+		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].RawData(),
+		                                cpuOutputs[i].DType(), cpuOutputs[i].RawData(), cpuOutputs[i].NumElements());
+	}
+}
+
+void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocation> invocations,
+                                       std::size_t threadCount) const
+{
+	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
+	if (workerCount == 0)
+	{
+		return;
+	}
+	if (workerCount == 1)
+	{
+		for (const auto& invocation : invocations)
+		{
+			RunInto(invocation.inputs, invocation.outputs);
+		}
+		return;
+	}
+
+	std::atomic<std::size_t> next{ 0 };
+	std::atomic_bool stop{ false };
+	std::exception_ptr firstError;
+	std::mutex errorMutex;
+
+	auto worker = [&] {
+		while (!stop.load(std::memory_order_relaxed))
+		{
+			const auto index = next.fetch_add(1, std::memory_order_relaxed);
+			if (index >= invocations.size())
+			{
+				break;
+			}
+
+			try
+			{
+				const auto& invocation = invocations[index];
+				RunInto(invocation.inputs, invocation.outputs);
+			}
+			catch (...)
+			{
+				{
+					std::lock_guard lock(errorMutex);
+					if (!firstError)
+					{
+						firstError = std::current_exception();
+					}
+				}
+				stop.store(true, std::memory_order_relaxed);
+				break;
+			}
+		}
+	};
+
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	for (std::size_t i = 0; i < workerCount; ++i)
+	{
+		workers.emplace_back(worker);
+	}
+	for (auto& thread : workers)
+	{
+		thread.join();
+	}
+
+	if (firstError)
+	{
+		std::rethrow_exception(firstError);
+	}
+}
+
+CompiledModuleImage CompiledModule<CUDA>::Image() const
+{
+	return impl_ ? impl_->cpuModule.Image() : CompiledModuleImage{};
+}
+
+std::span<const std::byte> CompiledModule<CUDA>::Rodata() const
+{
+	return impl_ ? impl_->cpuModule.Rodata() : std::span<const std::byte>{};
+}
+
+std::span<const std::byte> CompiledModule<CUDA>::Instructions() const
+{
+	return impl_ ? impl_->cpuModule.Instructions() : std::span<const std::byte>{};
+}
+
+std::span<const CompiledTensorSpec> CompiledModule<CUDA>::InputSpecs() const
+{
+	return impl_ ? impl_->cpuModule.InputSpecs() : std::span<const CompiledTensorSpec>{};
+}
+
+std::span<const CompiledTensorSpec> CompiledModule<CUDA>::OutputSpecs() const
+{
+	return impl_ ? impl_->cpuModule.OutputSpecs() : std::span<const CompiledTensorSpec>{};
+}
+
+CompiledModuleBackend CompiledModule<CUDA>::Backend() const
+{
+	return impl_ ? impl_->cpuModule.Backend() : CompiledModuleBackend::CPUNative;
+}
+
+std::optional<std::size_t> CompiledModule<CUDA>::FindInput(std::string_view name) const
+{
+	return impl_ ? impl_->cpuModule.FindInput(name) : std::nullopt;
+}
+
+std::optional<std::size_t> CompiledModule<CUDA>::FindOutput(std::string_view name) const
+{
+	return impl_ ? impl_->cpuModule.FindOutput(name) : std::nullopt;
+}
+
+void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	impl_->cpuModule.WriteObjectFile(path, symbolPrefix);
+}
+#endif
+
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
 	mlir::MLIRContext ctx;
@@ -1424,12 +1697,25 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
 	OptimizeLLVMModule(*llvmModule, *config.targetMachine);
 
-	auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple);
+	auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 	auto instructions = EmitObjectFile(*llvmModule);
-	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs);
+	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs,
+	                              CompiledModuleBackend::CPUNative);
 }
 
 CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 {
 	return CompileArtifact(graph).Load();
 }
+
+#ifdef LITENN_ENABLE_CUDA
+CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
+{
+	return Compiler<CPU>::CompileArtifact(graph);
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device)
+{
+	return CompileArtifact(graph).Load(std::move(device));
+}
+#endif

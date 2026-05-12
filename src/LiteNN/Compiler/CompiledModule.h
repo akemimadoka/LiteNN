@@ -1,8 +1,12 @@
 #include <LiteNN/Device.h>
+#ifdef LITENN_ENABLE_CUDA
+#include <LiteNN/Device/CUDA.h>
+#endif
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -16,6 +20,12 @@
 
 namespace LiteNN
 {
+	enum class CompiledModuleBackend : std::uint32_t
+	{
+		CPUNative = 1,
+		CUDANative = 2,
+	};
+
 	struct CompiledTensorSpec
 	{
 		DataType dtype{};
@@ -66,12 +76,17 @@ namespace LiteNN
 
 		/// Loads the artifact into a runnable module. The artifact remains valid after loading.
 		CompiledModule<CPU> Load() const;
+#ifdef LITENN_ENABLE_CUDA
+		/// Loads the artifact into a CUDA module. This first implementation bridges through CPU AOT code.
+		CompiledModule<CUDA> Load(CUDA device) const;
+#endif
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;
 		std::span<const std::byte> Instructions() const;
 		std::span<const CompiledTensorSpec> InputSpecs() const;
 		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		CompiledModuleBackend Backend() const;
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
@@ -84,12 +99,14 @@ namespace LiteNN
 		CompiledModuleArtifact(std::vector<std::byte> rodata,
 		                      std::vector<std::byte> instructions,
 		                      std::vector<CompiledTensorSpec> inputSpecs,
-		                      std::vector<CompiledTensorSpec> outputSpecs);
+		                      std::vector<CompiledTensorSpec> outputSpecs,
+		                      CompiledModuleBackend backend);
 
 		std::vector<std::byte> rodata_;
 		std::vector<std::byte> instructions_;
 		std::vector<CompiledTensorSpec> inputSpecs_;
 		std::vector<CompiledTensorSpec> outputSpecs_;
+		CompiledModuleBackend backend_{ CompiledModuleBackend::CPUNative };
 	};
 
 	template <>
@@ -124,6 +141,7 @@ namespace LiteNN
 		std::span<const std::byte> Instructions() const;
 		std::span<const CompiledTensorSpec> InputSpecs() const;
 		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		CompiledModuleBackend Backend() const;
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
@@ -145,6 +163,61 @@ namespace LiteNN
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
 		static CompiledModule<CPU> Compile(const Graph& graph);
 	};
+
+#ifdef LITENN_ENABLE_CUDA
+	struct CompiledModuleCUDAInvocation
+	{
+		std::span<const Tensor<CUDA>> inputs;
+		std::span<Tensor<CUDA>> outputs;
+	};
+
+	template <>
+	class CompiledModule<CUDA>
+	{
+	public:
+		CompiledModule();
+		CompiledModule(const CompiledModule&);
+		CompiledModule(CompiledModule&&) noexcept;
+		CompiledModule& operator=(const CompiledModule&);
+		CompiledModule& operator=(CompiledModule&&) noexcept;
+		~CompiledModule();
+
+		/// Loads a borrowed CPU AOT image and runs it behind CUDA tensor boundaries.
+		static CompiledModule Load(CompiledModuleImage image, CUDA device = CUDA{});
+
+		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;
+		void RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const;
+		void RunManyInto(std::span<const CompiledModuleCUDAInvocation> invocations,
+		                 std::size_t threadCount = 0) const;
+
+		CompiledModuleImage Image() const;
+		std::span<const std::byte> Rodata() const;
+		std::span<const std::byte> Instructions() const;
+		std::span<const CompiledTensorSpec> InputSpecs() const;
+		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		CompiledModuleBackend Backend() const;
+		std::optional<std::size_t> FindInput(std::string_view name) const;
+		std::optional<std::size_t> FindOutput(std::string_view name) const;
+
+		void WriteObjectFile(const std::filesystem::path& path,
+		                     std::string_view symbolPrefix = "litenn_module") const;
+
+	private:
+		struct Impl;
+
+		explicit CompiledModule(std::shared_ptr<Impl> impl);
+
+		std::shared_ptr<Impl> impl_;
+	};
+
+	template <>
+	class Compiler<CUDA>
+	{
+	public:
+		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
+		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device = CUDA{});
+	};
+#endif
 } // namespace LiteNN
 
 #endif

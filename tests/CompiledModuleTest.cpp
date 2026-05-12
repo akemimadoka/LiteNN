@@ -23,6 +23,27 @@ namespace
 		return static_cast<const float*>(t.RawData())[i];
 	}
 
+	std::uint64_t ReadU64LE(std::span<const std::byte> bytes, std::size_t offset)
+	{
+		std::uint64_t value = 0;
+		for (int i = 0; i < 8; ++i)
+		{
+			value |= std::to_integer<std::uint64_t>(bytes[offset + i]) << (i * 8);
+		}
+		return value;
+	}
+
+	std::size_t RodataBackendOffset(std::span<const std::byte> rodata)
+	{
+		constexpr std::size_t kMagicSize = 8;
+		constexpr std::size_t kU32Size = 4;
+		constexpr std::size_t kU64Size = 8;
+		std::size_t offset = kMagicSize + kU32Size + kU32Size + kU32Size;
+		const auto tripleSize = ReadU64LE(rodata, offset);
+		offset += kU64Size + static_cast<std::size_t>(tripleSize);
+		return offset;
+	}
+
 	Graph BuildSimpleAddGraph()
 	{
 		Graph graph;
@@ -137,6 +158,7 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	auto graph = BuildSimpleAddGraph();
 	auto artifact = Compiler<CPU>::CompileArtifact(graph);
 
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	ASSERT_GT(artifact.Rodata().size(), 0u);
 	ASSERT_GT(artifact.Instructions().size(), 0u);
 	ASSERT_EQ(artifact.InputSpecs().size(), 2u);
@@ -146,6 +168,7 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	EXPECT_EQ(artifact.FindOutput("sum"), 0u);
 
 	auto loaded = artifact.Load();
+	EXPECT_EQ(loaded.Backend(), CompiledModuleBackend::CPUNative);
 	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
 	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
 	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
@@ -156,6 +179,20 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto copied = CompiledModuleArtifact::CopyFromImage(artifact.Image());
+	auto compiled = Compiler<CPU>::Compile(graph);
+	auto loaded = CompiledModule<CPU>::Load(compiled.Image());
+
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
+	EXPECT_EQ(copied.Backend(), CompiledModuleBackend::CPUNative);
+	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
+	EXPECT_EQ(loaded.Backend(), CompiledModuleBackend::CPUNative);
 }
 
 TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)
@@ -368,6 +405,38 @@ TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 	{
 		const std::string message = ex.what();
 		EXPECT_NE(message.find("pointer size"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(graph);
+
+	std::vector<std::byte> rodata(compiled.Rodata().begin(), compiled.Rodata().end());
+	const auto backendOffset = RodataBackendOffset(rodata);
+	ASSERT_LE(backendOffset + 4, rodata.size());
+	rodata[backendOffset + 0] = std::byte{ 0xff };
+	rodata[backendOffset + 1] = std::byte{ 0xff };
+	rodata[backendOffset + 2] = std::byte{ 0xff };
+	rodata[backendOffset + 3] = std::byte{ 0xff };
+
+	const auto image = CompiledModuleImage{
+	    .rodata = rodata.data(),
+	    .rodataSize = rodata.size(),
+	    .instructions = compiled.Instructions().data(),
+	    .instructionSize = compiled.Instructions().size(),
+	};
+
+	try
+	{
+		(void)CompiledModule<CPU>::Load(image);
+		FAIL() << "expected backend metadata validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("backend"), std::string::npos);
 	}
 }
 

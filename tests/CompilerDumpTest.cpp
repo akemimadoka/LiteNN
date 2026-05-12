@@ -47,6 +47,7 @@ TEST(CompilerDumpTest, DumpsCompiledModuleMetadata)
 	auto dump = Debug::DumpCompiledModuleMetadata(artifact);
 
 	EXPECT_NE(dump.find("compiled_module {"), std::string::npos);
+	EXPECT_NE(dump.find("backend = cpu_native"), std::string::npos);
 	EXPECT_NE(dump.find("rodata_size = "), std::string::npos);
 	EXPECT_NE(dump.find("instruction_size = "), std::string::npos);
 	EXPECT_NE(dump.find("inputs = [lhs: Float32[2, 2], rhs: Float32[2, 2]]"), std::string::npos);

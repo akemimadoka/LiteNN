@@ -53,6 +53,18 @@ namespace
 		return std::format("{}: {}", name, Validation::FormatInfo(spec.dtype, spec.shape));
 	}
 
+	std::string_view FormatBackend(CompiledModuleBackend backend)
+	{
+		switch (backend)
+		{
+			case CompiledModuleBackend::CPUNative:
+				return "cpu_native";
+			case CompiledModuleBackend::CUDANative:
+				return "cuda_native";
+		}
+		return "unknown";
+	}
+
 	std::string PrintModule(mlir::ModuleOp module)
 	{
 		std::string text;
@@ -94,9 +106,11 @@ namespace
 	std::string DumpCompiledModuleMetadataImpl(std::span<const std::byte> rodata,
 	                                          std::span<const std::byte> instructions,
 	                                          std::span<const CompiledTensorSpec> inputSpecs,
-	                                          std::span<const CompiledTensorSpec> outputSpecs)
+	                                          std::span<const CompiledTensorSpec> outputSpecs,
+	                                          CompiledModuleBackend backend)
 	{
 		std::string out = "compiled_module {\n";
+		out += std::format("  backend = {}\n", FormatBackend(backend));
 		out += std::format("  rodata_size = {}\n", rodata.size());
 		out += std::format("  instruction_size = {}\n", instructions.size());
 		out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
@@ -146,12 +160,19 @@ namespace
 	std::string DumpCompiledModuleMetadata(const CompiledModuleArtifact& artifact)
 	{
 		return DumpCompiledModuleMetadataImpl(artifact.Rodata(), artifact.Instructions(), artifact.InputSpecs(),
-		                                    artifact.OutputSpecs());
+		                                    artifact.OutputSpecs(), artifact.Backend());
 	}
 
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CPU>& module)
 	{
 		return DumpCompiledModuleMetadataImpl(module.Rodata(), module.Instructions(), module.InputSpecs(),
-		                                    module.OutputSpecs());
+		                                    module.OutputSpecs(), module.Backend());
 	}
+#ifdef LITENN_ENABLE_CUDA
+	std::string DumpCompiledModuleMetadata(const CompiledModule<CUDA>& module)
+	{
+		return DumpCompiledModuleMetadataImpl(module.Rodata(), module.Instructions(), module.InputSpecs(),
+		                                    module.OutputSpecs(), module.Backend());
+	}
+#endif
 } // namespace LiteNN::Debug

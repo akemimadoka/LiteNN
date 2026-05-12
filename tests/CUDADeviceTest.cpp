@@ -32,7 +32,7 @@ TEST(CUDADevice, RoundTripAndElementwiseFallback)
 	}
 }
 
-TEST(CUDADevice, MatMulFallbackMatchesCPU)
+TEST(CUDADevice, MatMulMatchesCPU)
 {
 	if (!IsCUDADeviceAvailable())
 	{
