@@ -209,6 +209,7 @@ namespace LiteNN
 			}
 
 		private:
+			friend class PolymorphicDevice;
 			D device_;
 		};
 

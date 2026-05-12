@@ -2,6 +2,9 @@
 #define LITENN_H
 
 #include <LiteNN/Device.h>
+#ifdef LITENN_ENABLE_CUDA
+#include <LiteNN/Device/CUDA.h>
+#endif
 #include <LiteNN/Debug/Dump.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Initializer/Initializer.h>

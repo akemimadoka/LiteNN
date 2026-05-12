@@ -454,54 +454,100 @@ namespace LiteNN
 		constexpr Tensor<OtherDevice> CopyToDevice(OtherDevice otherDevice) const
 		{
 			Tensor<OtherDevice> result(Shape(), DType(), std::move(otherDevice));
+			const auto copyOnSameDevice = [&] {
+				DeviceTraits<D>::ConvertTo(device_, dtype_, data_, NumElements(), dtype_, result.RawData());
+			};
+			const auto copyViaCPU = [&] {
+				Tensor<CPU> temp(Uninitialized, Shape(), DType(), CPU{});
+				DeviceTraits<D>::CopyToCPU(device_, dtype_, data_, NumElements(), dtype_, temp.RawData());
+				DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.RawData(), dtype_,
+				                                       temp.RawData(), NumElements());
+			};
 			if constexpr (std::same_as<D, PolymorphicDevice>)
 			{
 				if constexpr (std::same_as<OtherDevice, PolymorphicDevice>)
 				{
 					if (device_.IsSameDevice(result.CurDevice()))
 					{
-						DeviceTraits<D>::ConvertTo(device_, dtype_, data_, NumElements(), dtype_, result.RawData());
+						copyOnSameDevice();
 					}
 					else
 					{
-						// 设备不同，先复制到 CPU，再从 CPU 复制到目标设备
-						Tensor<CPU> temp(Uninitialized, Shape(), DType(), CPU{});
-						DeviceTraits<D>::CopyToCPU(device_, dtype_, data_, NumElements(), dtype_, temp.RawData());
-						DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.RawData(), dtype_,
-						                                       temp.RawData(), NumElements());
+						copyViaCPU();
 					}
-				}
-				else if (device_.template Is<OtherDevice>())
-				{
-					DeviceTraits<D>::ConvertTo(device_, dtype_, data_, NumElements(), dtype_, result.RawData());
 				}
 				else
 				{
-					// 设备不同，先复制到 CPU，再从 CPU 复制到目标设备
-					Tensor<CPU> temp(Uninitialized, Shape(), DType(), CPU{});
-					DeviceTraits<D>::CopyToCPU(device_, dtype_, data_, NumElements(), dtype_, temp.RawData());
-					DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.RawData(), dtype_,
-					                                       temp.RawData(), NumElements());
+					bool sameDevice = false;
+					if (const auto* sourceDevice = device_.template As<OtherDevice>())
+					{
+						if constexpr (requires(const OtherDevice& lhs, const OtherDevice& rhs) {
+							              { lhs == rhs } -> std::convertible_to<bool>;
+						              })
+						{
+							sameDevice = *sourceDevice == result.CurDevice();
+						}
+						else
+						{
+							sameDevice = true;
+						}
+					}
+
+					if (sameDevice)
+					{
+						copyOnSameDevice();
+					}
+					else
+					{
+						copyViaCPU();
+					}
 				}
 			}
 			else if constexpr (std::same_as<OtherDevice, PolymorphicDevice>)
 			{
-				if (result.CurDevice().template Is<D>())
+				bool sameDevice = false;
+				if (const auto* targetDevice = result.CurDevice().template As<D>())
 				{
-					DeviceTraits<D>::ConvertTo(device_, dtype_, data_, NumElements(), dtype_, result.RawData());
+					if constexpr (requires(const D& lhs, const D& rhs) {
+						              { lhs == rhs } -> std::convertible_to<bool>;
+					              })
+					{
+						sameDevice = device_ == *targetDevice;
+					}
+					else
+					{
+						sameDevice = true;
+					}
+				}
+
+				if (sameDevice)
+				{
+					copyOnSameDevice();
 				}
 				else
 				{
-					// 设备不同，先复制到 CPU，再从 CPU 复制到目标设备
-					Tensor<CPU> temp(Uninitialized, Shape(), DType(), CPU{});
-					DeviceTraits<D>::CopyToCPU(device_, dtype_, data_, NumElements(), dtype_, temp.RawData());
-					DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.RawData(), dtype_,
-					                                       temp.RawData(), NumElements());
+					copyViaCPU();
 				}
 			}
 			else if constexpr (std::same_as<D, OtherDevice>)
 			{
-				DeviceTraits<D>::ConvertTo(device_, dtype_, data_, NumElements(), dtype_, result.RawData());
+				if constexpr (requires(const D& lhs, const OtherDevice& rhs) {
+					              { lhs == rhs } -> std::convertible_to<bool>;
+				              })
+				{
+					if (device_ == result.CurDevice())
+					{
+						copyOnSameDevice();
+					}
+					else
+					{
+						copyViaCPU();
+					}
+				}
+				else
+				{
+					copyOnSameDevice();
+				}
 			}
 			else if constexpr (std::same_as<OtherDevice, CPU>)
 			{
@@ -514,11 +560,7 @@ namespace LiteNN
 			}
 			else
 			{
-				// 其他设备之间的复制，先复制到 CPU，再从 CPU 复制到目标设备
-				Tensor<CPU> temp(Uninitialized, Shape(), DType(), CPU{});
-				DeviceTraits<D>::CopyToCPU(device_, dtype_, data_, NumElements(), dtype_, temp.RawData());
-				DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.RawData(), dtype_,
-				                                       temp.RawData(), NumElements());
+				copyViaCPU();
 			}
 			return result;
 		}

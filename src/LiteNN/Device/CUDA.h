@@ -1,0 +1,75 @@
+#ifndef LITENN_DEVICE_CUDA_H
+#define LITENN_DEVICE_CUDA_H
+
+#include <cstdint>
+#include <LiteNN/Device.h>
+#include <string>
+
+#ifdef LITENN_ENABLE_CUDA
+
+namespace LiteNN
+{
+	struct CUDA
+	{
+		int deviceIndex = 0;
+		mutable std::string infoCache;
+
+		bool operator==(const CUDA& other) const
+		{
+			return deviceIndex == other.deviceIndex;
+		}
+	};
+
+	int CUDADeviceCount() noexcept;
+	bool IsCUDADeviceAvailable(int deviceIndex = 0) noexcept;
+
+	template <>
+	struct DeviceTraits<CUDA>
+	{
+		static consteval std::meta::info DataTypeMappingFunc(DataType dataType)
+		{
+			switch (dataType)
+			{
+			case DataType::Float32:
+				return ^^float;
+			case DataType::Float64:
+				return ^^double;
+			case DataType::Int32:
+				return ^^int32_t;
+			case DataType::Int64:
+				return ^^int64_t;
+			case DataType::Bool:
+				return ^^bool;
+			}
+		}
+
+		template <DataType DT>
+		using DataTypeMapping = [:DataTypeMappingFunc(DT):];
+
+		static std::string_view Name();
+		static std::string_view Info(const CUDA& device);
+		static void* Allocate(CUDA& device, DataType type, std::size_t size);
+		static void Deallocate(CUDA& device, void* ptr, DataType type, std::size_t size);
+		static void ZeroFill(CUDA& device, void* ptr, DataType type, std::size_t size);
+		static void CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size, DataType dstType,
+		                      void* dst);
+		static void CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType, const void* src,
+		                        std::size_t size);
+		static void ConvertTo(CUDA& device, DataType srcType, const void* src, std::size_t size, DataType dstType,
+		                      void* dst);
+		static void DoUnaryOp(CUDA& device, UnaryOp unaryOp, void* dst, DataType type, ShapeView shape,
+		                      const void* src);
+		static void DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
+		                       const void* src1, DataType type2, ShapeView shape2, const void* src2);
+		static void DoReduceOp(CUDA& device, ReduceOp reduceOp, void* dst, DataType type, ShapeView shape,
+		                       const void* src, std::size_t axis);
+		static void DoConcatOp(CUDA& device, void* dst, DataType type, const void* const* srcPtrs,
+		                       const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis);
+		static void DoSliceOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                      std::size_t axis, std::size_t start, std::size_t length);
+	};
+} // namespace LiteNN
+
+#endif
+
+#endif
