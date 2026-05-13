@@ -111,6 +111,8 @@ namespace
 				return CUDANativeBinaryKind::Cubin;
 			case static_cast<std::uint32_t>(CUDANativeBinaryKind::Fatbin):
 				return CUDANativeBinaryKind::Fatbin;
+			case static_cast<std::uint32_t>(CUDANativeBinaryKind::LibraryCall):
+				return CUDANativeBinaryKind::LibraryCall;
 			default:
 				throw std::runtime_error("CUDA native instruction payload contains an invalid binary kind");
 		}
@@ -152,7 +154,7 @@ namespace
 		{
 			throw std::runtime_error("CUDA native instruction payload target must not be empty");
 		}
-		if (payload.binary.empty())
+		if (payload.binaryKind != CUDANativeBinaryKind::LibraryCall && payload.binary.empty())
 		{
 			throw std::runtime_error("CUDA native instruction payload binary must not be empty");
 		}

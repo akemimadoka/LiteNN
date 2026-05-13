@@ -39,6 +39,9 @@ target_link_libraries(LiteNNCompiler PUBLIC LiteNN)
 llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS
     native
     nativecodegen
+    nvptxcodegen
+    nvptxdesc
+    nvptxinfo
     mcjit
     executionengine
     runtimedyld
@@ -99,7 +102,9 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRReconcileUnrealizedCasts
     MLIRTargetLLVMIRExport
     MLIRLLVMToLLVMIRTranslation
+    MLIRNVVMToLLVMIRTranslation
     MLIRLLVMDialect
+    MLIRNVVMDialect
     MLIRLLVMCommonConversion
     LLVMCore
     LLVMAsmPrinter

@@ -22,7 +22,7 @@
 - `Run`/`RunInto`/`RunManyInto` 可并发，但要与 `Load` / 析构分离。
 - image 兼容性依赖 rodata header 校验；不同 format version、pointer size、endianness、target triple、backend 必须拒绝加载或进入明确的 bridge 路径。
 - CUDA AOT 支持两类 image：`CPUNative` 的 instructions 是 CPU native object bytes，`Load(image, CUDA{})` 会在 CUDA Tensor 边界做 CPU↔CUDA copy；`CUDANative` 的 instructions 是 `CUDANativeInstructionPayload`，在原有 `instructions` 字节区承载 PTX/cubin/fatbin、feature flags、scalar data、launch table 和 workspace metadata，并通过 CUDA Driver module 生命周期管理执行。
-- 当前 CUDA native codegen 是 P2 MVP：仅覆盖静态 shape、单 subgraph、`Float32` 双输入单输出 elementwise Add；不匹配的图会回退到 CPU AOT bridge。
+- 当前 CUDA native codegen 是 P2 MVP：覆盖静态 shape、单 subgraph、`Float32` 单输入单输出 elementwise Negate/Abs/Sqrt、双输入单输出 elementwise Add/Subtract/Multiply/Divide、同 rank binary broadcast，以及二维 `Float32` MatMul/cuBLAS library call。不匹配的图会回退到 CPU AOT bridge。
 
 ## 包分发建议
 

@@ -1,5 +1,6 @@
 #include "CompiledModule.h"
 
+#include "CUDANativeCodegen.h"
 #include "CUDANativePayload.h"
 #include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
@@ -1064,11 +1065,37 @@ namespace
 	}
 
 #ifdef LITENN_ENABLE_CUDA
-	struct CUDANativeAddPlan
+	struct CUDANativeBinaryPlan
 	{
+		BinaryOp op{ BinaryOp::Add };
 		std::uint32_t lhsInputIndex{};
 		std::uint32_t rhsInputIndex{};
 		std::uint32_t elementCount{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		bool requiresBroadcast{};
+		std::vector<std::size_t> outputShape;
+		std::vector<std::size_t> lhsShape;
+		std::vector<std::size_t> rhsShape;
+	};
+
+	struct CUDANativeUnaryPlan
+	{
+		UnaryOp op{ UnaryOp::Negate };
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+	};
+
+	struct CUDANativeMatMulPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		std::uint32_t outputElementCount{};
 	};
 
 	struct CUDANativeArtifactParts
@@ -1100,7 +1127,112 @@ namespace
 		return std::ranges::equal(lhs, rhs);
 	}
 
-	std::optional<CUDANativeAddPlan> MatchCUDANativeAddF32(const Graph& graph)
+	bool IsSameRankBroadcastCompatible(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs,
+	                                   std::span<const std::size_t> output)
+	{
+		if (lhs.size() != output.size() || rhs.size() != output.size())
+		{
+			return false;
+		}
+
+		for (std::size_t i = 0; i < output.size(); ++i)
+		{
+			if ((lhs[i] != output[i] && lhs[i] != 1) || (rhs[i] != output[i] && rhs[i] != 1) ||
+			    output[i] != std::max(lhs[i], rhs[i]))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool IsSupportedCUDANativeBinaryF32Op(BinaryOp op)
+	{
+		switch (op)
+		{
+		case BinaryOp::Add:
+		case BinaryOp::Subtract:
+		case BinaryOp::Multiply:
+		case BinaryOp::Divide:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsSupportedCUDANativeUnaryF32Op(UnaryOp op)
+	{
+		switch (op)
+		{
+		case UnaryOp::Negate:
+		case UnaryOp::Abs:
+		case UnaryOp::Sqrt:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	std::optional<CUDANativeUnaryPlan> MatchCUDANativeUnaryF32(const Graph& graph)
+	{
+		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
+		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* unary = std::get_if<UnaryOpNode>(&resultEntry.node);
+		if (!unary || !IsSupportedCUDANativeUnaryF32Op(unary->op))
+		{
+			return std::nullopt;
+		}
+
+		const auto inputIndex = GetParamIndex(subgraph, unary->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& param = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (param.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    !SameShape(param.shape, output.shape))
+		{
+			return std::nullopt;
+		}
+
+		const auto elementCount = ShapeView{ output.shape }.NumElements();
+		if (elementCount == 0 || elementCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeUnaryPlan{
+			.op = unary->op,
+			.inputIndex = *inputIndex,
+			.elementCount = static_cast<std::uint32_t>(elementCount),
+		};
+	}
+
+	std::optional<CUDANativeBinaryPlan> MatchCUDANativeBinaryF32(const Graph& graph)
 	{
 		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
 		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
@@ -1127,7 +1259,7 @@ namespace
 		}
 
 		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
-		if (!binary || binary->op != BinaryOp::Add)
+		if (!binary || !IsSupportedCUDANativeBinaryF32Op(binary->op))
 		{
 			return std::nullopt;
 		}
@@ -1139,93 +1271,160 @@ namespace
 			return std::nullopt;
 		}
 
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
 		const auto& output = resultEntry.outputInfos[0];
 		if (output.dtype != DataType::Float32)
 		{
 			return std::nullopt;
 		}
-		for (const auto& param : subgraph.Params())
-		{
-			if (param.dtype != DataType::Float32 || !SameShape(param.shape, output.shape))
-			{
-				return std::nullopt;
-			}
-		}
-
-		const auto elementCount = ShapeView{ output.shape }.NumElements();
-		if (elementCount == 0 || elementCount > std::numeric_limits<std::uint32_t>::max())
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    !IsSameRankBroadcastCompatible(lhsParam.shape, rhsParam.shape, output.shape))
 		{
 			return std::nullopt;
 		}
 
-		return CUDANativeAddPlan{
+		const auto elementCount = ShapeView{ output.shape }.NumElements();
+		const auto lhsElementCount = ShapeView{ lhsParam.shape }.NumElements();
+		const auto rhsElementCount = ShapeView{ rhsParam.shape }.NumElements();
+		if (elementCount == 0 || elementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    lhsElementCount == 0 || lhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsElementCount == 0 || rhsElementCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeBinaryPlan{
+			.op = binary->op,
 			.lhsInputIndex = *lhsInputIndex,
 			.rhsInputIndex = *rhsInputIndex,
 			.elementCount = static_cast<std::uint32_t>(elementCount),
+			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
+			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
+			.requiresBroadcast = !SameShape(lhsParam.shape, output.shape) || !SameShape(rhsParam.shape, output.shape),
+			.outputShape = output.shape,
+			.lhsShape = lhsParam.shape,
+			.rhsShape = rhsParam.shape,
 		};
 	}
 
-	std::string_view CUDANativeAddF32PTX()
+	std::optional<CUDANativeMatMulPlan> MatchCUDANativeMatMulF32(const Graph& graph)
 	{
-		return R"ptx(.version 6.4
-.target sm_30
-.address_size 64
-
-.visible .entry litenn_add_f32(
-	.param .u64 out_ptr,
-	.param .u64 lhs_ptr,
-	.param .u64 rhs_ptr,
-	.param .u32 count
-)
-{
-	.reg .pred %p<2>;
-	.reg .b32 %r<6>;
-	.reg .b64 %rd<10>;
-	.reg .f32 %f<4>;
-
-	ld.param.u64 %rd1, [out_ptr];
-	ld.param.u64 %rd2, [lhs_ptr];
-	ld.param.u64 %rd3, [rhs_ptr];
-	ld.param.u32 %r1, [count];
-
-	mov.u32 %r2, %tid.x;
-	mov.u32 %r3, %ctaid.x;
-	mov.u32 %r4, %ntid.x;
-	mul.lo.u32 %r5, %r3, %r4;
-	add.u32 %r5, %r5, %r2;
-	setp.ge.u32 %p1, %r5, %r1;
-	@%p1 bra DONE;
-
-	mul.wide.u32 %rd4, %r5, 4;
-	add.s64 %rd5, %rd2, %rd4;
-	add.s64 %rd6, %rd3, %rd4;
-	ld.global.f32 %f1, [%rd5];
-	ld.global.f32 %f2, [%rd6];
-	add.rn.f32 %f3, %f1, %f2;
-	add.s64 %rd7, %rd1, %rd4;
-	st.global.f32 [%rd7], %f3;
-
-DONE:
-	ret;
-}
-)ptx";
-	}
-
-	std::vector<std::byte> StringBytes(std::string_view text)
-	{
-		std::vector<std::byte> bytes(text.size() + 1);
-		if (!text.empty())
+		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
+		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
 		{
-			std::memcpy(bytes.data(), text.data(), text.size());
+			return std::nullopt;
 		}
-		bytes.back() = std::byte{ 0 };
-		return bytes;
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
+		if (!binary || binary->op != BinaryOp::MatMul)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetParamIndex(subgraph, binary->lhs);
+		const auto rhsInputIndex = GetParamIndex(subgraph, binary->rhs);
+		if (!lhsInputIndex || !rhsInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 ||
+		    output.shape.size() != 2 || lhsParam.shape[1] != rhsParam.shape[0] ||
+		    output.shape[0] != lhsParam.shape[0] || output.shape[1] != rhsParam.shape[1])
+		{
+			return std::nullopt;
+		}
+
+		const auto m = lhsParam.shape[0];
+		const auto k = lhsParam.shape[1];
+		const auto n = rhsParam.shape[1];
+		const auto maxInt = static_cast<std::size_t>(std::numeric_limits<int>::max());
+		if (m == 0 || k == 0 || n == 0 || m > maxInt || k > maxInt || n > maxInt)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = ShapeView{ lhsParam.shape }.NumElements();
+		const auto rhsElementCount = ShapeView{ rhsParam.shape }.NumElements();
+		const auto outputElementCount = ShapeView{ output.shape }.NumElements();
+		if (lhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    outputElementCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeMatMulPlan{
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsInputIndex = *rhsInputIndex,
+			.m = static_cast<std::uint32_t>(m),
+			.k = static_cast<std::uint32_t>(k),
+			.n = static_cast<std::uint32_t>(n),
+			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
+			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
+			.outputElementCount = static_cast<std::uint32_t>(outputElementCount),
+		};
 	}
 
-	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeAddF32(const Graph& graph)
+	std::uint64_t CUDANativeBinaryF32FeatureFlag(BinaryOp op)
+	{
+		switch (op)
+		{
+		case BinaryOp::Add:
+			return kCUDANativeFeatureElementwiseAddF32;
+		case BinaryOp::Subtract:
+			return kCUDANativeFeatureElementwiseSubtractF32;
+		case BinaryOp::Multiply:
+			return kCUDANativeFeatureElementwiseMultiplyF32;
+		case BinaryOp::Divide:
+			return kCUDANativeFeatureElementwiseDivideF32;
+		default:
+			throw std::runtime_error("Unsupported CUDA native binary op");
+		}
+	}
+
+	std::uint64_t CUDANativeUnaryF32FeatureFlag(UnaryOp op)
+	{
+		switch (op)
+		{
+		case UnaryOp::Negate:
+			return kCUDANativeFeatureElementwiseNegateF32;
+		case UnaryOp::Abs:
+			return kCUDANativeFeatureElementwiseAbsF32;
+		case UnaryOp::Sqrt:
+			return kCUDANativeFeatureElementwiseSqrtF32;
+		default:
+			throw std::runtime_error("Unsupported CUDA native unary op");
+		}
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeUnaryF32(const Graph& graph)
 	{
 #ifdef LITENN_ENABLE_CUDA_DRIVER
-		const auto plan = MatchCUDANativeAddF32(graph);
+		const auto plan = MatchCUDANativeUnaryF32(graph);
 		if (!plan)
 		{
 			return std::nullopt;
@@ -1234,16 +1433,18 @@ DONE:
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
 		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureElementwiseAddF32;
+		                       CUDANativeUnaryF32FeatureFlag(plan->op);
 		payload.target = "sm_30";
-		payload.binary = StringBytes(CUDANativeAddF32PTX());
+		const auto mlirPtx = TryCUDANativeUnaryF32PTXFromMLIRNVPTX(plan->op);
+		const auto ptx = mlirPtx ? *mlirPtx : CUDANativeUnaryF32PTX(plan->op);
+		payload.binary = CUDANativeTextBytes(ptx);
 		AppendU32(payload.scalarData, plan->elementCount);
 
 		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
 		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
 		const auto tensorByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		payload.kernels.push_back({
-		    .name = "litenn_add_f32",
+		    .name = std::string(CUDANativeUnaryF32KernelName(plan->op)),
 		    .grid = { .x = gridSize, .y = 1, .z = 1 },
 		    .block = { .x = blockSize, .y = 1, .z = 1 },
 		    .sharedMemoryBytes = 0,
@@ -1251,11 +1452,7 @@ DONE:
 		    .arguments = {
 		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = tensorByteSize },
 		        { .kind = CUDANativeArgumentKind::InputTensor,
-		          .index = plan->lhsInputIndex,
-		          .byteOffset = 0,
-		          .byteSize = tensorByteSize },
-		        { .kind = CUDANativeArgumentKind::InputTensor,
-		          .index = plan->rhsInputIndex,
+		          .index = plan->inputIndex,
 		          .byteOffset = 0,
 		          .byteSize = tensorByteSize },
 		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
@@ -1277,6 +1474,129 @@ DONE:
 		(void) graph;
 		return std::nullopt;
 #endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeBinaryF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeBinaryF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       CUDANativeBinaryF32FeatureFlag(plan->op);
+		if (plan->requiresBroadcast)
+		{
+			payload.featureFlags |= kCUDANativeFeatureElementwiseBroadcastF32;
+		}
+		payload.target = "sm_30";
+		payload.binary =
+		    CUDANativeTextBytes(plan->requiresBroadcast
+		                            ? CUDANativeBinaryBroadcastF32PTX(CUDANativeBroadcastBinaryF32CodegenSpec{
+		                                  .op = plan->op,
+		                                  .outputShape = plan->outputShape,
+		                                  .lhsShape = plan->lhsShape,
+		                                  .rhsShape = plan->rhsShape,
+		                              })
+		                            : CUDANativeBinaryF32PTX(plan->op));
+		AppendU32(payload.scalarData, plan->elementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeBinaryF32KernelName(plan->op, plan->requiresBroadcast)),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .sharedMemoryBytes = 0,
+		    .workspaceBytes = 0,
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = outputByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = lhsByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = rhsByteSize },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulF32(const Graph& graph)
+	{
+		const auto plan = MatchCUDANativeMatMulF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::LibraryCall;
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMatMulCUBLASF32;
+		payload.target = "cublas";
+		AppendU32(payload.scalarData, plan->m);
+		AppendU32(payload.scalarData, plan->k);
+		AppendU32(payload.scalarData, plan->n);
+
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float);
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .name = "litenn_cublas_matmul_f32",
+		    .grid = { .x = 1, .y = 1, .z = 1 },
+		    .block = { .x = 1, .y = 1, .z = 1 },
+		    .sharedMemoryBytes = 0,
+		    .workspaceBytes = 0,
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = outputByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = lhsByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = rhsByteSize },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
 	}
 
 	std::uint64_t TensorByteSize(const Tensor<CUDA>& tensor)
@@ -1310,10 +1630,54 @@ DONE:
 		return const_cast<std::byte*>(base + argument.byteOffset);
 	}
 
-	void RunCUDANativePayload(const CUDANativeInstructionPayload& payload, const CUDADriverModule& module,
-	                          std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs)
+	void RunCUDANativeLibraryCall(CUDA& device, const CUDANativeKernelSpec& kernel,
+	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs)
 	{
-		if (module.Empty())
+		if (kernel.name != "litenn_cublas_matmul_f32")
+		{
+			throw std::runtime_error(std::format("Unsupported CUDA native library call '{}'", kernel.name));
+		}
+		if (kernel.arguments.size() != 3 ||
+		    kernel.arguments[0].kind != CUDANativeArgumentKind::OutputTensor ||
+		    kernel.arguments[1].kind != CUDANativeArgumentKind::InputTensor ||
+		    kernel.arguments[2].kind != CUDANativeArgumentKind::InputTensor)
+		{
+			throw std::runtime_error("CUDA native cuBLAS MatMul expects output, lhs input, rhs input arguments");
+		}
+
+		const auto& outputArg = kernel.arguments[0];
+		const auto& lhsArg = kernel.arguments[1];
+		const auto& rhsArg = kernel.arguments[2];
+		if (outputArg.index >= outputs.size() || lhsArg.index >= inputs.size() || rhsArg.index >= inputs.size())
+		{
+			throw std::runtime_error("CUDA native cuBLAS MatMul argument index is out of bounds");
+		}
+		if (outputArg.byteOffset != 0 || lhsArg.byteOffset != 0 || rhsArg.byteOffset != 0)
+		{
+			throw std::runtime_error("CUDA native cuBLAS MatMul does not support tensor byte offsets");
+		}
+
+		auto& output = outputs[outputArg.index];
+		const auto& lhs = inputs[lhsArg.index];
+		const auto& rhs = inputs[rhsArg.index];
+		if (output.DType() != DataType::Float32 || lhs.DType() != DataType::Float32 || rhs.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("CUDA native cuBLAS MatMul currently supports Float32 tensors only");
+		}
+
+		(void)TensorArgumentPointer(outputArg, output, "output");
+		(void)ConstTensorArgumentPointer(lhsArg, lhs, "input");
+		(void)ConstTensorArgumentPointer(rhsArg, rhs, "input");
+		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
+		                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData());
+	}
+
+	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload,
+	                          const CUDADriverModule& module, std::span<const Tensor<CUDA>> inputs,
+	                          std::span<Tensor<CUDA>> outputs)
+	{
+		const bool libraryCallPayload = payload.binaryKind == CUDANativeBinaryKind::LibraryCall;
+		if (!libraryCallPayload && module.Empty())
 		{
 			throw std::runtime_error("CUDA native compiled module is empty");
 		}
@@ -1327,6 +1691,11 @@ DONE:
 			if (kernel.workspaceBytes != 0)
 			{
 				throw std::runtime_error("CUDA native per-kernel workspace allocation is not implemented yet");
+			}
+			if (libraryCallPayload)
+			{
+				RunCUDANativeLibraryCall(device, kernel, inputs, outputs);
+				continue;
 			}
 
 			std::vector<void*> pointerValues;
@@ -1832,7 +2201,10 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA 
 	else if (impl->backend == CompiledModuleBackend::CUDANative)
 	{
 		impl->cudaPayload = DeserializeCUDANativeInstructionPayload(impl->instructions);
-		impl->cudaModule = CUDADriverModule(impl->device, impl->cudaPayload.binary);
+		if (impl->cudaPayload.binaryKind != CUDANativeBinaryKind::LibraryCall)
+		{
+			impl->cudaModule = CUDADriverModule(impl->device, impl->cudaPayload.binary);
+		}
 	}
 	else
 	{
@@ -1897,7 +2269,7 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 
 	if (impl_->backend == CompiledModuleBackend::CUDANative)
 	{
-		RunCUDANativePayload(impl_->cudaPayload, impl_->cudaModule, inputs, outputs);
+		RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, inputs, outputs);
 		return;
 	}
 
@@ -2088,7 +2460,19 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 {
 	Validation::ValidateGraph(graph);
-	if (auto nativeParts = TryCompileCUDANativeAddF32(graph))
+	if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
 	{
 		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),

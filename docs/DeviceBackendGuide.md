@@ -33,17 +33,17 @@ CUDA 通过 `-DLITENN_ENABLE_CUDA=ON` 启用，并依赖 CMake `CUDAToolkit` 包
 - `Allocate` / `Deallocate` / `ZeroFill` 使用 CUDA Runtime 的 `cudaMalloc` / `cudaFree` / `cudaMemset`。
 - `CopyToCPU` / `CopyFromCPU` / `ConvertTo` 支持同 dtype 直接拷贝，不同 dtype 通过 CPU 临时缓冲转换。
 - `DoBinaryOp(MatMul)` 对 `Float32/Float64` 二维矩阵使用 cuBLAS；其他 unary/binary/reduce/concat/slice 当前走 CPU fallback：先拷回 host，用 CPU reference op 求值，再拷回 CUDA。这样可以先打通 Tensor、Interpreter 与 PolymorphicDevice 语义，性能优化留给后续 kernel 化。
-- `Compiler<CUDA>` / `CompiledModule<CUDA>` 当前采用 native 优先、bridge fallback：静态 shape、单 subgraph、`Float32` elementwise Add 会生成 `CUDANative` payload 并直接 launch CUDA kernel；其他图仍复用 CPU AOT artifact/JIT，在 CUDA Tensor 边界做 CPU↔CUDA copy。`Backend()` 可用于区分当前 module 的真实执行后端。
+- `Compiler<CUDA>` / `CompiledModule<CUDA>` 当前采用 native 优先、bridge fallback：静态 shape、单 subgraph、`Float32` elementwise Negate/Abs/Sqrt/Add/Subtract/Multiply/Divide、同 rank binary broadcast 和二维 `Float32` MatMul 会生成 `CUDANative` payload；elementwise 直接 launch CUDA kernel，MatMul 直接调用 cuBLAS。其他图仍复用 CPU AOT artifact/JIT，在 CUDA Tensor 边界做 CPU↔CUDA copy。`Backend()` 可用于区分当前 module 的真实执行后端。
 - `CUDADriverModule` 是 CUDA native AOT 的 runtime shell：基于 CUDA Driver API 加载 PTX/cubin/fatbin image，查找 kernel symbol，并通过默认或外部 stream launch。`CompiledModule<CUDA>` 的 native loader 已接入该 shell；Interpreter 的 op fallback 路径仍保持独立。
 - `CUDADeviceCount()` 和 `IsCUDADeviceAvailable()` 用于运行时探测；测试会在无 CUDA device 时跳过。
 
-后续 CUDA 原生化建议按风险从低到高推进：elementwise/broadcast kernel、reduce kernel、stream/async copy、device allocator/cache、AOT CUDA codegen。
+后续 CUDA 原生化建议按风险从低到高推进：更多 elementwise op、reduce kernel、fusion epilogue、stream/async copy、device allocator/cache、AOT CUDA codegen。
 
 CUDA 原生 AOT 后续需要额外补齐：
 
 - MLIR GPU/NVVM lowering 或独立 CUDA kernel 生成路径。
 - PTX/cubin/fatbin 打包进 image，并在 rodata metadata 标识 backend/target。详细阶段拆分见 `CUDAAOTRoadmap.md`。
-- 更多 op 的 native codegen：broadcast elementwise、unary、reduce、MatMul/cuBLAS 或 fusion epilogue。
+- 更多 op 的 native codegen：更多 unary/binary、reduce、自定义 MatMul/fusion epilogue。
 - workspace allocator、临时 buffer 生命周期与更完整的异步错误处理。
 
 ## 最低验证清单
