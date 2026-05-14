@@ -31,6 +31,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -44,8 +45,42 @@ namespace LiteNN
 namespace
 {
 	constexpr std::string_view kNVPTXTriple = "nvptx64-nvidia-cuda";
-	constexpr std::string_view kNVPTXChip = "sm_30";
+	constexpr std::string_view kDefaultNVPTXChip = "sm_30";
 	constexpr std::string_view kNVPTXFeatures = "+ptx64";
+
+	bool IsValidNVPTXSMTarget(std::string_view value)
+	{
+		if (value.size() < 5 || value.substr(0, 3) != "sm_")
+		{
+			return false;
+		}
+		for (std::size_t i = 3; i < value.size(); ++i)
+		{
+			if (value[i] < '0' || value[i] > '9')
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	std::string ResolveNVPTXTargetChip()
+	{
+		if (const char* env = std::getenv("LITENN_CUDA_AOT_TARGET"))
+		{
+			const std::string target = env;
+			if (!target.empty())
+			{
+				if (!IsValidNVPTXSMTarget(target))
+				{
+					throw std::runtime_error(
+					    "LITENN_CUDA_AOT_TARGET must use an sm_<major><minor> target such as sm_75");
+				}
+				return target;
+			}
+		}
+		return std::string(kDefaultNVPTXChip);
+	}
 
 	void InitializeNVPTXLLVM()
 	{
@@ -70,8 +105,9 @@ namespace
 		}
 
 		llvm::TargetOptions options;
+		const auto chip = ResolveNVPTXTargetChip();
 		auto targetMachine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-		    llvm::Triple(std::string(kNVPTXTriple)), std::string(kNVPTXChip), std::string(kNVPTXFeatures), options,
+		    llvm::Triple(std::string(kNVPTXTriple)), chip, std::string(kNVPTXFeatures), options,
 		    std::nullopt, std::nullopt, llvm::CodeGenOptLevel::Aggressive));
 		if (!targetMachine)
 		{
@@ -123,6 +159,83 @@ namespace
 			stride *= shape[i - 1];
 		}
 		return strides;
+	}
+
+	std::uint32_t NumElementsU32(std::span<const std::size_t> shape, std::string_view label)
+	{
+		std::uint64_t count = 1;
+		for (const auto dim : shape)
+		{
+			if (dim == 0 || dim > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error(std::format("CUDA native MLIR {} shape dimension is invalid", label));
+			}
+			count *= dim;
+			if (count > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error(std::format("CUDA native MLIR {} shape is too large for u32 indexing", label));
+			}
+		}
+		return static_cast<std::uint32_t>(count);
+	}
+
+	std::vector<std::size_t> ReduceOutputShape(std::span<const std::size_t> inputShape, std::size_t axis)
+	{
+		if (axis >= inputShape.size())
+		{
+			throw std::runtime_error("CUDA native reduce axis is out of range");
+		}
+
+		std::vector<std::size_t> outputShape;
+		outputShape.reserve(inputShape.size() - 1);
+		for (std::size_t i = 0; i < inputShape.size(); ++i)
+		{
+			if (i != axis)
+			{
+				outputShape.push_back(inputShape[i]);
+			}
+		}
+		if (outputShape.empty())
+		{
+			outputShape.push_back(1);
+		}
+		return outputShape;
+	}
+
+	std::uint32_t AxisInnerSizeU32(std::span<const std::size_t> shape, std::size_t axis)
+	{
+		std::uint64_t inner = 1;
+		for (std::size_t i = axis + 1; i < shape.size(); ++i)
+		{
+			inner *= shape[i];
+			if (inner > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("CUDA native reduce inner size is too large for u32 indexing");
+			}
+		}
+		return static_cast<std::uint32_t>(inner);
+	}
+
+	std::vector<std::uint32_t> ConcatAxisStartsU32(std::span<const std::vector<std::size_t>> inputShapes,
+	                                             std::size_t axis)
+	{
+		std::vector<std::uint32_t> starts;
+		starts.reserve(inputShapes.size());
+		std::uint64_t offset = 0;
+		for (const auto& shape : inputShapes)
+		{
+			if (axis >= shape.size())
+			{
+				throw std::runtime_error("CUDA native concat axis is out of range");
+			}
+			if (offset > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("CUDA native concat axis offset is too large for u32 indexing");
+			}
+			starts.push_back(static_cast<std::uint32_t>(offset));
+			offset += shape[axis];
+		}
+		return starts;
 	}
 
 	void ValidateShapeDimsU32(std::span<const std::size_t> shape)
@@ -268,15 +381,206 @@ namespace
 			return FinalizeModule(std::move(kernelModule.module));
 		}
 
+		mlir::OwningOpRef<mlir::ModuleOp> BuildReduceF32(const CUDANativeReduceF32CodegenSpec& spec)
+		{
+			ValidateShapeDimsU32(spec.inputShape);
+			const auto outputShape = ReduceOutputShape(spec.inputShape, spec.axis);
+			const auto outputCount = NumElementsU32(outputShape, "reduce output");
+			const auto axisSize = static_cast<std::uint32_t>(spec.inputShape[spec.axis]);
+			const auto innerSize = AxisInnerSizeU32(spec.inputShape, spec.axis);
+
+			auto kernelModule = CreateKernelModule();
+			llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+			auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeReduceF32KernelName(spec.op), argTypes);
+			auto blocks = EmitLinearIndexGuard(func, 2);
+
+			builder_.setInsertionPointToStart(blocks.body);
+			auto out = blocks.entry->getArgument(0);
+			auto in = blocks.entry->getArgument(1);
+			auto outputIndex = blocks.index32;
+			auto inner = EmitI32Constant(innerSize);
+			auto axis = EmitI32Constant(axisSize);
+			auto outerIndex = EmitI32UDiv(outputIndex, inner);
+			auto innerIndex = EmitI32URem(outputIndex, inner);
+			auto base = EmitI32Add(EmitI32Mul(EmitI32Mul(outerIndex, axis), inner), innerIndex);
+
+			mlir::Value accumulator;
+			for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+			{
+				auto offset = EmitI32Add(base, EmitI32Mul(EmitI32Constant(reduceIndex), inner));
+				auto value = EmitLoadF32(EmitF32GEP(in, offset));
+				if (reduceIndex == 0)
+				{
+					accumulator = value;
+					continue;
+				}
+				switch (spec.op)
+				{
+				case ReduceOp::Sum:
+				case ReduceOp::Mean:
+					accumulator = EmitF32Add(accumulator, value);
+					break;
+				case ReduceOp::Max:
+					accumulator = EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ accumulator, value });
+					break;
+				}
+			}
+			if (spec.op == ReduceOp::Mean)
+			{
+				accumulator = EmitF32Mul(accumulator, EmitF32Constant(1.0f / static_cast<float>(axisSize)));
+			}
+			EmitStoreF32(accumulator, EmitF32GEP(out, outputIndex));
+			FinishLinearKernel(blocks);
+
+			(void)outputCount;
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildConcatF32(const CUDANativeConcatF32CodegenSpec& spec)
+		{
+			if (spec.inputShapes.empty())
+			{
+				throw std::runtime_error("CUDA native concat codegen requires at least one input");
+			}
+			ValidateShapeDimsU32(spec.outputShape);
+			const auto outputStrides = ContiguousStridesU32(spec.outputShape);
+			if (!outputStrides)
+			{
+				throw std::runtime_error("CUDA native concat output shape is too large for u32 indexing");
+			}
+			const auto axisStarts = ConcatAxisStartsU32(spec.inputShapes, spec.axis);
+
+			auto kernelModule = CreateKernelModule();
+			for (std::size_t inputIndex = 0; inputIndex < spec.inputShapes.size(); ++inputIndex)
+			{
+				const auto& inputShape = spec.inputShapes[inputIndex];
+				ValidateShapeDimsU32(inputShape);
+				const auto inputStrides = ContiguousStridesU32(inputShape);
+				if (!inputStrides || inputShape.size() != spec.outputShape.size())
+				{
+					throw std::runtime_error("CUDA native concat input shape is invalid");
+				}
+
+				llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeConcatF32KernelName(inputIndex), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 2);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto in = blocks.entry->getArgument(1);
+				auto outputOffset = EmitI32Constant(0);
+				for (std::size_t dim = 0; dim < inputShape.size(); ++dim)
+				{
+					auto inStride = EmitI32Constant((*inputStrides)[dim]);
+					auto inDim = EmitI32Constant(static_cast<std::uint32_t>(inputShape[dim]));
+					auto coord = EmitI32URem(EmitI32UDiv(blocks.index32, inStride), inDim);
+					if (dim == spec.axis)
+					{
+						coord = EmitI32Add(coord, EmitI32Constant(axisStarts[inputIndex]));
+					}
+					outputOffset = EmitI32Add(outputOffset, EmitI32Mul(coord, EmitI32Constant((*outputStrides)[dim])));
+				}
+				EmitStoreF32(EmitLoadF32(EmitF32GEP(in, blocks.index32)), EmitF32GEP(out, outputOffset));
+				FinishLinearKernel(blocks);
+			}
+
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildSliceF32(const CUDANativeSliceF32CodegenSpec& spec)
+		{
+			ValidateShapeDimsU32(spec.inputShape);
+			ValidateShapeDimsU32(spec.outputShape);
+			if (spec.inputShape.size() != spec.outputShape.size() || spec.axis >= spec.inputShape.size())
+			{
+				throw std::runtime_error("CUDA native slice codegen received incompatible shapes");
+			}
+			const auto inputStrides = ContiguousStridesU32(spec.inputShape);
+			const auto outputStrides = ContiguousStridesU32(spec.outputShape);
+			if (!inputStrides || !outputStrides)
+			{
+				throw std::runtime_error("CUDA native slice shape is too large for u32 indexing");
+			}
+
+			auto kernelModule = CreateKernelModule();
+			llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+			auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeSliceF32KernelName(), argTypes);
+			auto blocks = EmitLinearIndexGuard(func, 2);
+
+			builder_.setInsertionPointToStart(blocks.body);
+			auto out = blocks.entry->getArgument(0);
+			auto in = blocks.entry->getArgument(1);
+			auto inputOffset = EmitI32Constant(0);
+			for (std::size_t dim = 0; dim < spec.outputShape.size(); ++dim)
+			{
+				auto outStride = EmitI32Constant((*outputStrides)[dim]);
+				auto outDim = EmitI32Constant(static_cast<std::uint32_t>(spec.outputShape[dim]));
+				auto coord = EmitI32URem(EmitI32UDiv(blocks.index32, outStride), outDim);
+				if (dim == spec.axis)
+				{
+					coord = EmitI32Add(coord, EmitI32Constant(static_cast<std::uint32_t>(spec.start)));
+				}
+				inputOffset = EmitI32Add(inputOffset, EmitI32Mul(coord, EmitI32Constant((*inputStrides)[dim])));
+			}
+			EmitStoreF32(EmitLoadF32(EmitF32GEP(in, inputOffset)), EmitF32GEP(out, blocks.index32));
+			FinishLinearKernel(blocks);
+
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpilogueF32(
+		    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+		{
+			const auto outputStrides = ContiguousStridesU32(spec.outputShape);
+			const auto biasStrides = ContiguousStridesU32(spec.biasShape);
+			if (!outputStrides || !biasStrides || spec.outputShape.size() != spec.biasShape.size())
+			{
+				throw std::runtime_error("CUDA native MatMulBias epilogue received invalid shapes");
+			}
+
+			auto kernelModule = CreateKernelModule();
+			llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+			auto func = CreateKernelFunc(kernelModule.gpuModule,
+			                             CUDANativeMatMulBiasEpilogueF32KernelName(spec.relu), argTypes);
+			auto blocks = EmitLinearIndexGuard(func, 2);
+
+			builder_.setInsertionPointToStart(blocks.body);
+			auto out = blocks.entry->getArgument(0);
+			auto bias = blocks.entry->getArgument(1);
+			auto biasOffset = EmitI32Constant(0);
+			for (std::size_t dim = 0; dim < spec.outputShape.size(); ++dim)
+			{
+				auto outStride = EmitI32Constant((*outputStrides)[dim]);
+				auto outDim = EmitI32Constant(static_cast<std::uint32_t>(spec.outputShape[dim]));
+				auto coord = EmitI32URem(EmitI32UDiv(blocks.index32, outStride), outDim);
+				if (spec.biasShape[dim] != 1)
+				{
+					biasOffset = EmitI32Add(biasOffset, EmitI32Mul(coord, EmitI32Constant((*biasStrides)[dim])));
+				}
+			}
+
+			auto value = EmitF32Add(EmitLoadF32(EmitF32GEP(out, blocks.index32)),
+			                         EmitLoadF32(EmitF32GEP(bias, biasOffset)));
+			if (spec.relu)
+			{
+				value = EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ value, EmitF32Constant(0.0f) });
+			}
+			EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
+			FinishLinearKernel(blocks);
+
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
 	private:
 		CUDANativeMLIRKernelModule CreateKernelModule()
 		{
 			auto module = mlir::ModuleOp::create(loc_);
 			builder_.setInsertionPointToStart(module.getBody());
 
+			const auto chip = ResolveNVPTXTargetChip();
 			auto target = mlir::NVVM::NVVMTargetAttr::get(
-			    &context_, 2, ToLLVMStringRef(kNVPTXTriple), ToLLVMStringRef(kNVPTXChip),
-			    ToLLVMStringRef(kNVPTXFeatures), nullptr, nullptr, false);
+			    &context_, 2, ToLLVMStringRef(kNVPTXTriple), ToLLVMStringRef(chip), ToLLVMStringRef(kNVPTXFeatures),
+			    nullptr, nullptr, false);
 			llvm::SmallVector<mlir::Attribute, 1> targets{ target };
 			auto gpuModule = builder_.create<mlir::gpu::GPUModuleOp>(
 			    loc_, "litenn_cuda_kernels", targets);
@@ -364,6 +668,11 @@ namespace
 			return builder_.create<mlir::LLVM::ConstantOp>(loc_, f32Type_, builder_.getF32FloatAttr(value)).getResult();
 		}
 
+		mlir::Value EmitF32Add(mlir::Value lhs, mlir::Value rhs)
+		{
+			return builder_.create<mlir::LLVM::FAddOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+		}
+
 		mlir::Value EmitF32Mul(mlir::Value lhs, mlir::Value rhs)
 		{
 			return builder_.create<mlir::LLVM::FMulOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
@@ -427,7 +736,7 @@ namespace
 			switch (op)
 			{
 			case BinaryOp::Add:
-				return builder_.create<mlir::LLVM::FAddOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+				return EmitF32Add(lhs, rhs);
 			case BinaryOp::Subtract:
 				return builder_.create<mlir::LLVM::FSubOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
 			case BinaryOp::Multiply:
@@ -543,6 +852,7 @@ namespace
 	{
 		auto registry = CreateCUDANativeMLIRRegistry();
 		mlir::MLIRContext context(registry);
+		context.disableMultithreading();
 		context.loadAllAvailableDialects();
 
 		CUDANativeMLIRKernelBuilder builder(context);
@@ -570,36 +880,33 @@ namespace
 		});
 	}
 
-	std::string_view CUDANativeBinaryF32Instruction(BinaryOp op)
+	std::string EmitReduceF32PTXFromMLIRNVPTX(const CUDANativeReduceF32CodegenSpec& spec)
 	{
-		switch (op)
-		{
-		case BinaryOp::Add:
-			return "\tadd.rn.f32 %f3, %f1, %f2;\n";
-		case BinaryOp::Subtract:
-			return "\tsub.rn.f32 %f3, %f1, %f2;\n";
-		case BinaryOp::Multiply:
-			return "\tmul.rn.f32 %f3, %f1, %f2;\n";
-		case BinaryOp::Divide:
-			return "\tdiv.rn.f32 %f3, %f1, %f2;\n";
-		default:
-			throw std::runtime_error("Unsupported CUDA native binary op");
-		}
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildReduceF32(spec);
+		});
 	}
 
-	std::string_view CUDANativeUnaryF32Instruction(UnaryOp op)
+	std::string EmitConcatF32PTXFromMLIRNVPTX(const CUDANativeConcatF32CodegenSpec& spec)
 	{
-		switch (op)
-		{
-		case UnaryOp::Negate:
-			return "\tneg.f32 %f2, %f1;\n";
-		case UnaryOp::Abs:
-			return "\tabs.f32 %f2, %f1;\n";
-		case UnaryOp::Sqrt:
-			return "\tsqrt.rn.f32 %f2, %f1;\n";
-		default:
-			throw std::runtime_error("Unsupported CUDA native unary op");
-		}
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildConcatF32(spec);
+		});
+	}
+
+	std::string EmitSliceF32PTXFromMLIRNVPTX(const CUDANativeSliceF32CodegenSpec& spec)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildSliceF32(spec);
+		});
+	}
+
+	std::string EmitMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildMatMulBiasEpilogueF32(spec);
+		});
 	}
 } // namespace
 
@@ -647,183 +954,38 @@ std::string_view CUDANativeUnaryF32KernelName(UnaryOp op)
 	}
 }
 
-std::string CUDANativeBinaryF32PTX(BinaryOp op)
+std::string_view CUDANativeReduceF32KernelName(ReduceOp op)
 {
-	std::string ptx = R"ptx(.version 6.4
-.target sm_30
-.address_size 64
-
-.visible .entry )ptx";
-	ptx += CUDANativeBinaryF32KernelName(op);
-	ptx += R"ptx((
-	.param .u64 out_ptr,
-	.param .u64 lhs_ptr,
-	.param .u64 rhs_ptr,
-	.param .u32 count
-)
-{
-	.reg .pred %p<2>;
-	.reg .b32 %r<6>;
-	.reg .b64 %rd<10>;
-	.reg .f32 %f<4>;
-
-	ld.param.u64 %rd1, [out_ptr];
-	ld.param.u64 %rd2, [lhs_ptr];
-	ld.param.u64 %rd3, [rhs_ptr];
-	ld.param.u32 %r1, [count];
-
-	mov.u32 %r2, %tid.x;
-	mov.u32 %r3, %ctaid.x;
-	mov.u32 %r4, %ntid.x;
-	mul.lo.u32 %r5, %r3, %r4;
-	add.u32 %r5, %r5, %r2;
-	setp.ge.u32 %p1, %r5, %r1;
-	@%p1 bra DONE;
-
-	mul.wide.u32 %rd4, %r5, 4;
-	add.s64 %rd5, %rd2, %rd4;
-	add.s64 %rd6, %rd3, %rd4;
-	ld.global.f32 %f1, [%rd5];
-	ld.global.f32 %f2, [%rd6];
-)ptx";
-	ptx += CUDANativeBinaryF32Instruction(op);
-	ptx += R"ptx(	add.s64 %rd7, %rd1, %rd4;
-	st.global.f32 [%rd7], %f3;
-
-DONE:
-	ret;
-}
-)ptx";
-	return ptx;
-}
-
-std::string CUDANativeBinaryBroadcastF32PTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
-{
-	const auto outputStrides = ContiguousStridesU32(spec.outputShape);
-	const auto lhsStrides = ContiguousStridesU32(spec.lhsShape);
-	const auto rhsStrides = ContiguousStridesU32(spec.rhsShape);
-	if (!outputStrides || !lhsStrides || !rhsStrides)
+	switch (op)
 	{
-		throw std::runtime_error("CUDA native broadcast shape is too large for u32 indexing");
+	case ReduceOp::Sum:
+		return "litenn_reduce_sum_f32";
+	case ReduceOp::Mean:
+		return "litenn_reduce_mean_f32";
+	case ReduceOp::Max:
+		return "litenn_reduce_max_f32";
 	}
-	if (spec.outputShape.size() != spec.lhsShape.size() || spec.outputShape.size() != spec.rhsShape.size())
-	{
-		throw std::runtime_error("CUDA native broadcast codegen requires same-rank shapes");
-	}
-
-	std::string ptx = R"ptx(.version 6.4
-.target sm_30
-.address_size 64
-
-.visible .entry )ptx";
-	ptx += CUDANativeBinaryF32KernelName(spec.op, true);
-	ptx += R"ptx((
-	.param .u64 out_ptr,
-	.param .u64 lhs_ptr,
-	.param .u64 rhs_ptr,
-	.param .u32 count
-)
-{
-	.reg .pred %p<2>;
-	.reg .b32 %r<10>;
-	.reg .b64 %rd<10>;
-	.reg .f32 %f<4>;
-
-	ld.param.u64 %rd1, [out_ptr];
-	ld.param.u64 %rd2, [lhs_ptr];
-	ld.param.u64 %rd3, [rhs_ptr];
-	ld.param.u32 %r1, [count];
-
-	mov.u32 %r2, %tid.x;
-	mov.u32 %r3, %ctaid.x;
-	mov.u32 %r4, %ntid.x;
-	mul.lo.u32 %r5, %r3, %r4;
-	add.u32 %r5, %r5, %r2;
-	setp.ge.u32 %p1, %r5, %r1;
-	@%p1 bra DONE;
-
-	mov.u32 %r6, 0;
-	mov.u32 %r7, 0;
-)ptx";
-
-	for (std::size_t i = 0; i < spec.outputShape.size(); ++i)
-	{
-		ptx += std::format("\tdiv.u32 %r8, %r5, {};\n", (*outputStrides)[i]);
-		ptx += std::format("\trem.u32 %r9, %r8, {};\n", spec.outputShape[i]);
-		if (spec.lhsShape[i] != 1)
-		{
-			ptx += std::format("\tmad.lo.u32 %r6, %r9, {}, %r6;\n", (*lhsStrides)[i]);
-		}
-		if (spec.rhsShape[i] != 1)
-		{
-			ptx += std::format("\tmad.lo.u32 %r7, %r9, {}, %r7;\n", (*rhsStrides)[i]);
-		}
-	}
-
-	ptx += R"ptx(
-	mul.wide.u32 %rd4, %r6, 4;
-	mul.wide.u32 %rd5, %r7, 4;
-	add.s64 %rd6, %rd2, %rd4;
-	add.s64 %rd7, %rd3, %rd5;
-	ld.global.f32 %f1, [%rd6];
-	ld.global.f32 %f2, [%rd7];
-)ptx";
-	ptx += CUDANativeBinaryF32Instruction(spec.op);
-	ptx += R"ptx(	mul.wide.u32 %rd8, %r5, 4;
-	add.s64 %rd9, %rd1, %rd8;
-	st.global.f32 [%rd9], %f3;
-
-DONE:
-	ret;
-}
-)ptx";
-	return ptx;
+	throw std::runtime_error("Unsupported CUDA native reduce op");
 }
 
-std::string CUDANativeUnaryF32PTX(UnaryOp op)
+std::string CUDANativeConcatF32KernelName(std::size_t inputIndex)
 {
-	std::string ptx = R"ptx(.version 6.4
-.target sm_30
-.address_size 64
-
-.visible .entry )ptx";
-	ptx += CUDANativeUnaryF32KernelName(op);
-	ptx += R"ptx((
-	.param .u64 out_ptr,
-	.param .u64 in_ptr,
-	.param .u32 count
-)
-{
-	.reg .pred %p<2>;
-	.reg .b32 %r<6>;
-	.reg .b64 %rd<8>;
-	.reg .f32 %f<3>;
-
-	ld.param.u64 %rd1, [out_ptr];
-	ld.param.u64 %rd2, [in_ptr];
-	ld.param.u32 %r1, [count];
-
-	mov.u32 %r2, %tid.x;
-	mov.u32 %r3, %ctaid.x;
-	mov.u32 %r4, %ntid.x;
-	mul.lo.u32 %r5, %r3, %r4;
-	add.u32 %r5, %r5, %r2;
-	setp.ge.u32 %p1, %r5, %r1;
-	@%p1 bra DONE;
-
-	mul.wide.u32 %rd3, %r5, 4;
-	add.s64 %rd4, %rd2, %rd3;
-	ld.global.f32 %f1, [%rd4];
-)ptx";
-	ptx += CUDANativeUnaryF32Instruction(op);
-	ptx += R"ptx(	add.s64 %rd5, %rd1, %rd3;
-	st.global.f32 [%rd5], %f2;
-
-DONE:
-	ret;
+	return std::format("litenn_concat_f32_input_{}", inputIndex);
 }
-)ptx";
-	return ptx;
+
+std::string_view CUDANativeSliceF32KernelName()
+{
+	return "litenn_slice_f32";
+}
+
+std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
+{
+	return relu ? "litenn_matmul_bias_relu_epilogue_f32" : "litenn_matmul_bias_add_epilogue_f32";
+}
+
+std::string CUDANativeNVPTXTargetChip()
+{
+	return ResolveNVPTXTargetChip();
 }
 
 std::string CUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op)
@@ -854,6 +1016,79 @@ std::optional<std::string> TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(
 	try
 	{
 		return CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeReduceF32PTXFromMLIRNVPTX(const CUDANativeReduceF32CodegenSpec& spec)
+{
+	return EmitReduceF32PTXFromMLIRNVPTX(spec);
+}
+
+std::optional<std::string> TryCUDANativeReduceF32PTXFromMLIRNVPTX(
+    const CUDANativeReduceF32CodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeReduceF32PTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeConcatF32PTXFromMLIRNVPTX(const CUDANativeConcatF32CodegenSpec& spec)
+{
+	return EmitConcatF32PTXFromMLIRNVPTX(spec);
+}
+
+std::optional<std::string> TryCUDANativeConcatF32PTXFromMLIRNVPTX(
+    const CUDANativeConcatF32CodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeConcatF32PTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeSliceF32PTXFromMLIRNVPTX(const CUDANativeSliceF32CodegenSpec& spec)
+{
+	return EmitSliceF32PTXFromMLIRNVPTX(spec);
+}
+
+std::optional<std::string> TryCUDANativeSliceF32PTXFromMLIRNVPTX(
+    const CUDANativeSliceF32CodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeSliceF32PTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+{
+	return EmitMatMulBiasEpilogueF32PTXFromMLIRNVPTX(spec);
+}
+
+std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(spec);
 	}
 	catch (const std::exception&)
 	{

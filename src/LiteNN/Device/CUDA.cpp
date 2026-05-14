@@ -199,9 +199,14 @@ namespace LiteNN
 		class CUBLASHandle
 		{
 		public:
-			CUBLASHandle()
+			explicit CUBLASHandle(CUDAExecutionOptions options = {})
 			{
 				CheckCUBLAS(cublasCreate(&handle_), "cublasCreate");
+				if (options.stream != nullptr)
+				{
+					CheckCUBLAS(cublasSetStream(handle_, reinterpret_cast<cudaStream_t>(options.stream)),
+					            "cublasSetStream");
+				}
 			}
 
 			~CUBLASHandle()
@@ -344,8 +349,14 @@ namespace LiteNN
 			return resultShape;
 		}
 
+		void SynchronizeCUDAStream(void* stream, std::string_view action)
+		{
+			CheckCUDA(cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream)), action);
+		}
+
 		bool TryCUBLASMatMul(CUDA& device, void* dst, DataType type1, ShapeView shape1, const void* src1,
-		                     DataType type2, ShapeView shape2, const void* src2)
+		                     DataType type2, ShapeView shape2, const void* src2,
+		                     CUDAExecutionOptions options = {})
 		{
 			if (shape1.NumDim() != 2 || shape2.NumDim() != 2 || shape1[1] != shape2[0] || type1 != type2)
 			{
@@ -363,7 +374,7 @@ namespace LiteNN
 			}
 
 			CUDADeviceGuard guard(device.deviceIndex);
-			CUBLASHandle handle;
+			CUBLASHandle handle(options);
 			const auto m = static_cast<int>(shape1[0]);
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
@@ -385,6 +396,10 @@ namespace LiteNN
 				                        static_cast<const double*>(src2), n, static_cast<const double*>(src1), k,
 				                        &beta, static_cast<double*>(dst), n),
 				            "cublasDgemm");
+			}
+			if (options.synchronize)
+			{
+				SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after cuBLAS MatMul");
 			}
 			return true;
 		}
@@ -638,16 +653,33 @@ namespace LiteNN
 	void DeviceTraits<CUDA>::CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size,
 	                                   DataType dstType, void* dst)
 	{
+		CopyToCPU(device, srcType, src, size, dstType, dst, CUDAExecutionOptions{});
+	}
+
+	void DeviceTraits<CUDA>::CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size,
+	                                   DataType dstType, void* dst, CUDAExecutionOptions options)
+	{
 		CUDADeviceGuard guard(device.deviceIndex);
+		const auto stream = reinterpret_cast<cudaStream_t>(options.stream);
 		if (srcType == dstType)
 		{
-			CheckCUDA(cudaMemcpy(dst, src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
+			CheckCUDA(cudaMemcpyAsync(dst, src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost, stream),
+			          "cudaMemcpyAsync D2H");
+			if (options.synchronize)
+			{
+				SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after cudaMemcpyAsync D2H");
+			}
 			return;
+		}
+		if (!options.synchronize)
+		{
+			throw std::runtime_error("Asynchronous CUDA D2H copy with data type conversion is not supported");
 		}
 
 		auto hostSrc = MakeHostBuffer(srcType, size);
-		CheckCUDA(cudaMemcpy(hostSrc.data(), src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost),
-		          "cudaMemcpy D2H");
+		CheckCUDA(cudaMemcpyAsync(hostSrc.data(), src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost, stream),
+		          "cudaMemcpyAsync D2H");
+		SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after cudaMemcpyAsync D2H");
 		CPU cpu;
 		DeviceTraits<CPU>::ConvertTo(cpu, srcType, hostSrc.data(), size, dstType, dst);
 	}
@@ -655,18 +687,35 @@ namespace LiteNN
 	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
 	                                     const void* src, std::size_t size)
 	{
+		CopyFromCPU(device, dstType, dst, srcType, src, size, CUDAExecutionOptions{});
+	}
+
+	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
+	                                     const void* src, std::size_t size, CUDAExecutionOptions options)
+	{
 		CUDADeviceGuard guard(device.deviceIndex);
+		const auto stream = reinterpret_cast<cudaStream_t>(options.stream);
 		if (srcType == dstType)
 		{
-			CheckCUDA(cudaMemcpy(dst, src, ElementSize(dstType) * size, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
+			CheckCUDA(cudaMemcpyAsync(dst, src, ElementSize(dstType) * size, cudaMemcpyHostToDevice, stream),
+			          "cudaMemcpyAsync H2D");
+			if (options.synchronize)
+			{
+				SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after cudaMemcpyAsync H2D");
+			}
 			return;
+		}
+		if (!options.synchronize)
+		{
+			throw std::runtime_error("Asynchronous CUDA H2D copy with data type conversion is not supported");
 		}
 
 		auto hostDst = MakeHostBuffer(dstType, size);
 		CPU cpu;
 		DeviceTraits<CPU>::ConvertTo(cpu, srcType, src, size, dstType, hostDst.data());
-		CheckCUDA(cudaMemcpy(dst, hostDst.data(), ElementSize(dstType) * size, cudaMemcpyHostToDevice),
-		          "cudaMemcpy H2D");
+		CheckCUDA(cudaMemcpyAsync(dst, hostDst.data(), ElementSize(dstType) * size, cudaMemcpyHostToDevice, stream),
+		          "cudaMemcpyAsync H2D");
+		SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after cudaMemcpyAsync H2D");
 	}
 
 	void DeviceTraits<CUDA>::ConvertTo(CUDA& device, DataType srcType, const void* src, std::size_t size,
@@ -707,9 +756,21 @@ namespace LiteNN
 	void DeviceTraits<CUDA>::DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
 	                                    const void* src1, DataType type2, ShapeView shape2, const void* src2)
 	{
-		if (binaryOp == BinaryOp::MatMul && TryCUBLASMatMul(device, dst, type1, shape1, src1, type2, shape2, src2))
+		DoBinaryOp(device, binaryOp, dst, type1, shape1, src1, type2, shape2, src2, CUDAExecutionOptions{});
+	}
+
+	void DeviceTraits<CUDA>::DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
+	                                    const void* src1, DataType type2, ShapeView shape2, const void* src2,
+	                                    CUDAExecutionOptions options)
+	{
+		if (binaryOp == BinaryOp::MatMul && TryCUBLASMatMul(device, dst, type1, shape1, src1, type2, shape2, src2,
+		                                                     options))
 		{
 			return;
+		}
+		if (options.stream != nullptr || !options.synchronize)
+		{
+			throw std::runtime_error("Stream-aware asynchronous CUDA binary fallback is not supported");
 		}
 
 		const auto resultType = ResolveBinaryResultType(binaryOp, type1, type2);

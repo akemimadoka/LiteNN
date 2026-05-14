@@ -169,10 +169,17 @@ namespace LiteNN
 	};
 
 #ifdef LITENN_ENABLE_CUDA
+	struct CompiledModuleCUDARunOptions
+	{
+		void* stream{};
+		bool synchronize{ true };
+	};
+
 	struct CompiledModuleCUDAInvocation
 	{
 		std::span<const Tensor<CUDA>> inputs;
 		std::span<Tensor<CUDA>> outputs;
+		CompiledModuleCUDARunOptions options;
 	};
 
 	template <>
@@ -190,7 +197,11 @@ namespace LiteNN
 		static CompiledModule Load(CompiledModuleImage image, CUDA device = CUDA{});
 
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;
+		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs,
+		                             CompiledModuleCUDARunOptions options) const;
 		void RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const;
+		void RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+		             CompiledModuleCUDARunOptions options) const;
 		void RunManyInto(std::span<const CompiledModuleCUDAInvocation> invocations,
 		                 std::size_t threadCount = 0) const;
 

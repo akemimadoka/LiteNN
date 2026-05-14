@@ -133,6 +133,64 @@ std::vector<Tensor<CPU>> MakeInputs(const std::vector<float>& data, std::size_t 
 	return inputs;
 }
 
+#ifdef LITENN_ENABLE_CUDA
+struct TensorInputSpec
+{
+	std::vector<float> values;
+	std::vector<std::size_t> shape;
+};
+
+std::vector<Tensor<CUDA>> MakeCUDAInputs(const std::vector<float>& data, std::size_t batch)
+{
+	std::vector<Tensor<CUDA>> inputs;
+	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
+	inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
+	return inputs;
+}
+
+Graph BuildNativeMatMul(std::size_t batch, std::size_t width)
+{
+	Graph graph;
+	Subgraph fwd;
+	const auto lhs = fwd.AddParam(DataType::Float32, { batch, width });
+	const auto rhs = fwd.AddParam(DataType::Float32, { width, width });
+	const auto out = fwd.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
+	                            { OutputInfo{ DataType::Float32, { batch, width } } });
+	fwd.SetResults({ { out, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
+	return graph;
+}
+
+std::vector<TensorInputSpec> MakeNativeMatMulInputs(std::size_t batch, std::size_t width)
+{
+	std::mt19937 rng(7);
+	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+	std::vector<float> lhs(batch * width);
+	std::vector<float> rhs(width * width);
+	for (auto& value : lhs)
+		value = dist(rng);
+	for (auto& value : rhs)
+		value = dist(rng);
+
+	std::vector<TensorInputSpec> specs;
+	specs.push_back(TensorInputSpec{ .values = std::move(lhs), .shape = { batch, width } });
+	specs.push_back(TensorInputSpec{ .values = std::move(rhs), .shape = { width, width } });
+	return specs;
+}
+
+std::vector<Tensor<CUDA>> MakeCUDAInputs(std::span<const TensorInputSpec> specs)
+{
+	std::vector<Tensor<CUDA>> inputs;
+	inputs.reserve(specs.size());
+	for (const auto& spec : specs)
+	{
+		auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(spec.values), ShapeView{ spec.shape });
+		inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
+	}
+	return inputs;
+}
+#endif
+
 void SetThroughputCounters(benchmark::State& state, std::size_t batch)
 {
 	state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(batch));
@@ -178,6 +236,79 @@ std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CPU{});
 	return outputs;
 }
+
+#ifdef LITENN_ENABLE_CUDA
+std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module)
+{
+	std::vector<Tensor<CUDA>> outputs;
+	outputs.reserve(module.OutputSpecs().size());
+	for (const auto& spec : module.OutputSpecs())
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+	return outputs;
+}
+
+void BMCUDABridgeRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		state.SkipWithError("CUDA device is not available");
+		return;
+	}
+
+	std::mt19937 rng(42);
+	auto graph = GetModelSpec(kind).build(batch, rng);
+	Optimize(graph);
+	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	if (module.Backend() != CompiledModuleBackend::CPUNative)
+	{
+		state.SkipWithError("expected CUDA CPU-bridge backend for model benchmark");
+		return;
+	}
+
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeCUDAInputs(inputData, batch);
+	auto outputs = AllocateCUDAOutputs(module);
+
+	for (auto _ : state)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		benchmark::DoNotOptimize(outputs.data());
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
+
+void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		state.SkipWithError("CUDA device is not available");
+		return;
+	}
+
+	auto graph = BuildNativeMatMul(batch, width);
+	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	if (module.Backend() != CompiledModuleBackend::CUDANative)
+	{
+		state.SkipWithError("expected CUDA native backend for MatMul benchmark");
+		return;
+	}
+
+	auto specs = MakeNativeMatMulInputs(batch, width);
+	auto inputs = MakeCUDAInputs(specs);
+	auto outputs = AllocateCUDAOutputs(module);
+
+	for (auto _ : state)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		benchmark::DoNotOptimize(outputs.data());
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
+#endif
 
 void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
@@ -236,9 +367,24 @@ void RegisterBenchmarks()
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
+#ifdef LITENN_ENABLE_CUDA
+			RegisterBenchmarkCase("CUDABridgeRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMCUDABridgeRunInto(state, kind, batch); });
+#endif
 #endif
 		}
 	}
+
+#if defined(LITENN_BENCH_HAS_AOT) && defined(LITENN_ENABLE_CUDA)
+	constexpr std::size_t nativeMatMulWidth = 128;
+	for (const auto batch : kBatchSizes)
+	{
+		auto* benchmarkCase = benchmark::RegisterBenchmark(
+		    std::format("CUDANativeMatMul/batch:{}/width:{}", batch, nativeMatMulWidth),
+		    [=](benchmark::State& state) { BMCUDANativeMatMulRunInto(state, batch, nativeMatMulWidth); });
+		benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+	}
+#endif
 }
 
 const bool kRegisteredBenchmarks = [] {

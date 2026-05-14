@@ -1098,6 +1098,55 @@ namespace
 		std::uint32_t outputElementCount{};
 	};
 
+	struct CUDANativeReducePlan
+	{
+		ReduceOp op{ ReduceOp::Sum };
+		std::uint32_t inputIndex{};
+		std::uint32_t inputElementCount{};
+		std::uint32_t outputElementCount{};
+		std::size_t axis{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> outputShape;
+	};
+
+	struct CUDANativeConcatPlan
+	{
+		std::uint32_t outputElementCount{};
+		std::vector<std::uint32_t> inputElementCounts;
+		std::vector<std::uint32_t> inputIndices;
+		std::vector<std::vector<std::size_t>> inputShapes;
+		std::vector<std::size_t> outputShape;
+		std::size_t axis{};
+	};
+
+	struct CUDANativeSlicePlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t inputElementCount{};
+		std::uint32_t outputElementCount{};
+		std::size_t axis{};
+		std::size_t start{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> outputShape;
+	};
+
+	struct CUDANativeMatMulBiasPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t biasInputIndex{};
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		std::uint32_t biasElementCount{};
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> outputShape;
+		std::vector<std::size_t> biasShape;
+		bool relu{};
+	};
+
 	struct CUDANativeArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -1146,6 +1195,42 @@ namespace
 		return true;
 	}
 
+	bool IsCUDANativeSingleForwardGraph(const Graph& graph)
+	{
+		return graph.SubgraphCount() == 1 && !graph.Backward().has_value() && graph.VariableCount() == 0 &&
+		       graph.ActivationSlotCount() == 0 && graph.TapeSlotCount() == 0;
+	}
+
+	std::optional<std::uint32_t> ShapeNumElementsU32(std::span<const std::size_t> shape)
+	{
+		std::uint64_t count = 1;
+		for (const auto dim : shape)
+		{
+			if (dim == 0)
+			{
+				return std::nullopt;
+			}
+			count *= static_cast<std::uint64_t>(dim);
+			if (count > std::numeric_limits<std::uint32_t>::max())
+			{
+				return std::nullopt;
+			}
+		}
+		return static_cast<std::uint32_t>(count);
+	}
+
+	bool IsSupportedCUDANativeReduceF32Op(ReduceOp op)
+	{
+		switch (op)
+		{
+		case ReduceOp::Sum:
+		case ReduceOp::Mean:
+		case ReduceOp::Max:
+			return true;
+		}
+		return false;
+	}
+
 	bool IsSupportedCUDANativeBinaryF32Op(BinaryOp op)
 	{
 		switch (op)
@@ -1156,20 +1241,6 @@ namespace
 		case BinaryOp::Divide:
 		case BinaryOp::Max:
 		case BinaryOp::Min:
-			return true;
-		default:
-			return false;
-		}
-	}
-
-	bool HasCUDANativeBinaryF32PTXFallback(BinaryOp op)
-	{
-		switch (op)
-		{
-		case BinaryOp::Add:
-		case BinaryOp::Subtract:
-		case BinaryOp::Multiply:
-		case BinaryOp::Divide:
 			return true;
 		default:
 			return false;
@@ -1193,23 +1264,9 @@ namespace
 		}
 	}
 
-	bool HasCUDANativeUnaryF32PTXFallback(UnaryOp op)
-	{
-		switch (op)
-		{
-		case UnaryOp::Negate:
-		case UnaryOp::Abs:
-		case UnaryOp::Sqrt:
-			return true;
-		default:
-			return false;
-		}
-	}
-
 	std::optional<CUDANativeUnaryPlan> MatchCUDANativeUnaryF32(const Graph& graph)
 	{
-		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
-		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
+		if (!IsCUDANativeSingleForwardGraph(graph))
 		{
 			return std::nullopt;
 		}
@@ -1267,8 +1324,7 @@ namespace
 
 	std::optional<CUDANativeBinaryPlan> MatchCUDANativeBinaryF32(const Graph& graph)
 	{
-		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
-		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
+		if (!IsCUDANativeSingleForwardGraph(graph))
 		{
 			return std::nullopt;
 		}
@@ -1343,8 +1399,7 @@ namespace
 
 	std::optional<CUDANativeMatMulPlan> MatchCUDANativeMatMulF32(const Graph& graph)
 	{
-		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.VariableCount() != 0 ||
-		    graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0)
+		if (!IsCUDANativeSingleForwardGraph(graph))
 		{
 			return std::nullopt;
 		}
@@ -1422,6 +1477,350 @@ namespace
 		};
 	}
 
+	std::optional<CUDANativeMatMulBiasPlan> MakeCUDANativeMatMulBiasPlan(
+	    const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
+	    std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
+	{
+		const auto& lhsParam = subgraph.Params()[lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[rhsInputIndex];
+		const auto& biasParam = subgraph.Params()[biasInputIndex];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 ||
+		    rhsParam.shape.size() != 2 || output.shape.size() != 2 || biasParam.shape.size() != output.shape.size() ||
+		    lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
+		    output.shape[1] != rhsParam.shape[1] ||
+		    !IsSameRankBroadcastCompatible(output.shape, biasParam.shape, output.shape))
+		{
+			return std::nullopt;
+		}
+
+		const auto m = lhsParam.shape[0];
+		const auto k = lhsParam.shape[1];
+		const auto n = rhsParam.shape[1];
+		const auto maxInt = static_cast<std::size_t>(std::numeric_limits<int>::max());
+		if (m == 0 || k == 0 || n == 0 || m > maxInt || k > maxInt || n > maxInt)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = ShapeNumElementsU32(lhsParam.shape);
+		const auto rhsElementCount = ShapeNumElementsU32(rhsParam.shape);
+		const auto biasElementCount = ShapeNumElementsU32(biasParam.shape);
+		const auto outputElementCount = ShapeNumElementsU32(output.shape);
+		if (!lhsElementCount || !rhsElementCount || !biasElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeMatMulBiasPlan{
+			.lhsInputIndex = lhsInputIndex,
+			.rhsInputIndex = rhsInputIndex,
+			.biasInputIndex = biasInputIndex,
+			.m = static_cast<std::uint32_t>(m),
+			.k = static_cast<std::uint32_t>(k),
+			.n = static_cast<std::uint32_t>(n),
+			.lhsElementCount = *lhsElementCount,
+			.rhsElementCount = *rhsElementCount,
+			.biasElementCount = *biasElementCount,
+			.outputElementCount = *outputElementCount,
+			.outputShape = output.shape,
+			.biasShape = biasParam.shape,
+			.relu = relu,
+		};
+	}
+
+	bool IsZeroF32Constant(const Subgraph& subgraph, NodeOutput output)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return false;
+		}
+		const auto* constant = std::get_if<ConstantNode>(&subgraph.GetNodeEntry(output.node).node);
+		if (!constant)
+		{
+			return false;
+		}
+		const auto cpuTensor = constant->value.CopyToDevice(CPU{});
+		if (cpuTensor.DType() != DataType::Float32)
+		{
+			return false;
+		}
+		const auto* data = static_cast<const float*>(cpuTensor.RawData());
+		for (std::size_t i = 0; i < cpuTensor.NumElements(); ++i)
+		{
+			if (data[i] != 0.0f)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	std::optional<CUDANativeMatMulBiasPlan> MatchCUDANativeMatMulBiasF32(const Graph& graph)
+	{
+		if (graph.Backward().has_value() || graph.VariableCount() != 0 || graph.ActivationSlotCount() != 0 ||
+		    graph.TapeSlotCount() != 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		if (const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node))
+		{
+			if ((fused->pattern != FusionPattern::MatMulBiasAdd &&
+			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+			    fused->args.size() < 3)
+			{
+				return std::nullopt;
+			}
+			const auto lhsInputIndex = GetParamIndex(subgraph, fused->args[0]);
+			const auto rhsInputIndex = GetParamIndex(subgraph, fused->args[1]);
+			const auto biasInputIndex = GetParamIndex(subgraph, fused->args[2]);
+			if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
+			{
+				return std::nullopt;
+			}
+			return MakeCUDANativeMatMulBiasPlan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
+			                                   resultEntry.outputInfos[0],
+			                                   fused->pattern == FusionPattern::MatMulBiasAddReLU);
+		}
+
+		bool relu = false;
+		NodeOutput addOutput = result;
+		if (const auto* maxNode = std::get_if<BinaryOpNode>(&resultEntry.node); maxNode && maxNode->op == BinaryOp::Max)
+		{
+			if (IsZeroF32Constant(subgraph, maxNode->lhs))
+			{
+				addOutput = maxNode->rhs;
+			}
+			else if (IsZeroF32Constant(subgraph, maxNode->rhs))
+			{
+				addOutput = maxNode->lhs;
+			}
+			else
+			{
+				return std::nullopt;
+			}
+			relu = true;
+		}
+
+		if (addOutput.port != 0 || addOutput.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& addEntry = subgraph.GetNodeEntry(addOutput.node);
+		const auto* addNode = std::get_if<BinaryOpNode>(&addEntry.node);
+		if (!addNode || addNode->op != BinaryOp::Add)
+		{
+			return std::nullopt;
+		}
+
+		NodeOutput matmulOutput{};
+		NodeOutput biasOutput{};
+		if (addNode->lhs.port == 0 && addNode->lhs.node < subgraph.NodeCount())
+		{
+			if (const auto* lhsBinary = std::get_if<BinaryOpNode>(&subgraph.GetNodeEntry(addNode->lhs.node).node);
+			    lhsBinary && lhsBinary->op == BinaryOp::MatMul)
+			{
+				matmulOutput = addNode->lhs;
+				biasOutput = addNode->rhs;
+			}
+		}
+		if (biasOutput.node == 0 && biasOutput.port == 0 && addNode->rhs.port == 0 &&
+		    addNode->rhs.node < subgraph.NodeCount())
+		{
+			if (const auto* rhsBinary = std::get_if<BinaryOpNode>(&subgraph.GetNodeEntry(addNode->rhs.node).node);
+			    rhsBinary && rhsBinary->op == BinaryOp::MatMul)
+			{
+				matmulOutput = addNode->rhs;
+				biasOutput = addNode->lhs;
+			}
+		}
+		if (matmulOutput.port != 0 || matmulOutput.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto* matmul = std::get_if<BinaryOpNode>(&subgraph.GetNodeEntry(matmulOutput.node).node);
+		if (!matmul || matmul->op != BinaryOp::MatMul)
+		{
+			return std::nullopt;
+		}
+		const auto lhsInputIndex = GetParamIndex(subgraph, matmul->lhs);
+		const auto rhsInputIndex = GetParamIndex(subgraph, matmul->rhs);
+		const auto biasInputIndex = GetParamIndex(subgraph, biasOutput);
+		if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
+		{
+			return std::nullopt;
+		}
+		return MakeCUDANativeMatMulBiasPlan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
+		                                   resultEntry.outputInfos[0], relu);
+	}
+
+	std::optional<CUDANativeReducePlan> MatchCUDANativeReduceF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* reduce = std::get_if<ReduceOpNode>(&resultEntry.node);
+		if (!reduce || !IsSupportedCUDANativeReduceF32Op(reduce->op) || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, reduce->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || reduce->axis >= input.shape.size())
+		{
+			return std::nullopt;
+		}
+		const auto inputElementCount = ShapeNumElementsU32(input.shape);
+		const auto outputElementCount = ShapeNumElementsU32(output.shape);
+		if (!inputElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+		return CUDANativeReducePlan{ reduce->op, *inputIndex, *inputElementCount, *outputElementCount,
+			                         reduce->axis, input.shape, output.shape };
+	}
+
+	std::optional<CUDANativeConcatPlan> MatchCUDANativeConcatF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().empty() || subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* concat = std::get_if<ConcatNode>(&resultEntry.node);
+		if (!concat || resultEntry.outputInfos.size() != 1 || concat->inputs.empty())
+		{
+			return std::nullopt;
+		}
+		const auto& output = resultEntry.outputInfos[0];
+		if (output.dtype != DataType::Float32 || concat->axis >= output.shape.size())
+		{
+			return std::nullopt;
+		}
+
+		const auto outputElementCount = ShapeNumElementsU32(output.shape);
+		if (!outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeConcatPlan plan;
+		plan.outputElementCount = *outputElementCount;
+		plan.outputShape = output.shape;
+		plan.axis = concat->axis;
+		for (const auto& inputOutput : concat->inputs)
+		{
+			const auto inputIndex = GetParamIndex(subgraph, inputOutput);
+			if (!inputIndex)
+			{
+				return std::nullopt;
+			}
+			const auto& input = subgraph.Params()[*inputIndex];
+			if (input.dtype != DataType::Float32 || input.shape.size() != output.shape.size())
+			{
+				return std::nullopt;
+			}
+			const auto inputElementCount = ShapeNumElementsU32(input.shape);
+			if (!inputElementCount)
+			{
+				return std::nullopt;
+			}
+			plan.inputIndices.push_back(*inputIndex);
+			plan.inputElementCounts.push_back(*inputElementCount);
+			plan.inputShapes.push_back(input.shape);
+		}
+		return plan;
+	}
+
+	std::optional<CUDANativeSlicePlan> MatchCUDANativeSliceF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* slice = std::get_if<SliceNode>(&resultEntry.node);
+		if (!slice || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, slice->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    input.shape.size() != output.shape.size() || slice->axis >= input.shape.size())
+		{
+			return std::nullopt;
+		}
+		const auto inputElementCount = ShapeNumElementsU32(input.shape);
+		const auto outputElementCount = ShapeNumElementsU32(output.shape);
+		if (!inputElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+		return CUDANativeSlicePlan{ *inputIndex, *inputElementCount, *outputElementCount, slice->axis, slice->start,
+			                        input.shape, output.shape };
+	}
+
 	std::uint64_t CUDANativeBinaryF32FeatureFlag(BinaryOp op)
 	{
 		switch (op)
@@ -1479,14 +1878,13 @@ namespace
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
 		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
 		                       CUDANativeUnaryF32FeatureFlag(plan->op);
-		payload.target = "sm_30";
+		payload.target = CUDANativeNVPTXTargetChip();
 		const auto mlirPtx = TryCUDANativeUnaryF32PTXFromMLIRNVPTX(plan->op);
-		if (!mlirPtx && !HasCUDANativeUnaryF32PTXFallback(plan->op))
+		if (!mlirPtx)
 		{
 			return std::nullopt;
 		}
-		const auto ptx = mlirPtx ? *mlirPtx : CUDANativeUnaryF32PTX(plan->op);
-		payload.binary = CUDANativeTextBytes(ptx);
+		payload.binary = CUDANativeTextBytes(*mlirPtx);
 		AppendU32(payload.scalarData, plan->elementCount);
 
 		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
@@ -1542,7 +1940,7 @@ namespace
 		{
 			payload.featureFlags |= kCUDANativeFeatureElementwiseBroadcastF32;
 		}
-		payload.target = "sm_30";
+		payload.target = CUDANativeNVPTXTargetChip();
 		std::string ptx;
 		if (plan->requiresBroadcast)
 		{
@@ -1553,20 +1951,20 @@ namespace
 			    .rhsShape = plan->rhsShape,
 			};
 			const auto mlirPtx = TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
-			if (!mlirPtx && !HasCUDANativeBinaryF32PTXFallback(plan->op))
+			if (!mlirPtx)
 			{
 				return std::nullopt;
 			}
-			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryBroadcastF32PTX(spec);
+			ptx = *mlirPtx;
 		}
 		else
 		{
 			const auto mlirPtx = TryCUDANativeBinaryF32PTXFromMLIRNVPTX(plan->op);
-			if (!mlirPtx && !HasCUDANativeBinaryF32PTXFallback(plan->op))
+			if (!mlirPtx)
 			{
 				return std::nullopt;
 			}
-			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryF32PTX(plan->op);
+			ptx = *mlirPtx;
 		}
 		payload.binary = CUDANativeTextBytes(ptx);
 		AppendU32(payload.scalarData, plan->elementCount);
@@ -1665,9 +2063,333 @@ namespace
 		};
 	}
 
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulBiasF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeMatMulBiasF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		const auto epiloguePtx = TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+		    CUDANativeMatMulBiasEpilogueF32CodegenSpec{
+		        .outputShape = plan->outputShape,
+		        .biasShape = plan->biasShape,
+		        .relu = plan->relu,
+		    });
+		if (!epiloguePtx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureMatMulCUBLASF32 | kCUDANativeFeatureMultiKernelLaunch |
+		                       (plan->relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
+		                                   : kCUDANativeFeatureMatMulBiasAddF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*epiloguePtx);
+		AppendU32(payload.scalarData, plan->m);
+		AppendU32(payload.scalarData, plan->k);
+		AppendU32(payload.scalarData, plan->n);
+		const auto epilogueCountOffset = payload.scalarData.size();
+		AppendU32(payload.scalarData, plan->outputElementCount);
+
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float);
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
+		const auto biasByteSize = static_cast<std::uint64_t>(plan->biasElementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .name = "litenn_cublas_matmul_f32",
+		    .grid = { .x = 1, .y = 1, .z = 1 },
+		    .block = { .x = 1, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = outputByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = lhsByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = rhsByteSize },
+		    },
+		});
+
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeMatMulBiasEpilogueF32KernelName(plan->relu)),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = outputByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->biasInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = biasByteSize },
+		        { .kind = CUDANativeArgumentKind::Scalar,
+		          .index = 0,
+		          .byteOffset = epilogueCountOffset,
+		          .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+		                                std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeReduceF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeReduceF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeReduceF32PTXFromMLIRNVPTX(CUDANativeReduceF32CodegenSpec{
+		    .op = plan->op,
+		    .inputShape = plan->inputShape,
+		    .axis = plan->axis,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureReduceF32;
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->outputElementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeReduceF32KernelName(plan->op)),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+		                                std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeConcatF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeConcatF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeConcatF32PTXFromMLIRNVPTX(CUDANativeConcatF32CodegenSpec{
+		    .outputShape = plan->outputShape,
+		    .inputShapes = plan->inputShapes,
+		    .axis = plan->axis,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureConcatF32 | kCUDANativeFeatureMultiKernelLaunch;
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+
+		for (std::size_t i = 0; i < plan->inputElementCounts.size(); ++i)
+		{
+			const auto scalarOffset = payload.scalarData.size();
+			AppendU32(payload.scalarData, plan->inputElementCounts[i]);
+			const auto blockSize = std::min<std::uint32_t>(plan->inputElementCounts[i], 256);
+			const auto gridSize = (plan->inputElementCounts[i] + blockSize - 1) / blockSize;
+			payload.kernels.push_back({
+			    .name = CUDANativeConcatF32KernelName(i),
+			    .grid = { .x = gridSize, .y = 1, .z = 1 },
+			    .block = { .x = blockSize, .y = 1, .z = 1 },
+			    .arguments = {
+			        { .kind = CUDANativeArgumentKind::OutputTensor,
+			          .index = 0,
+			          .byteOffset = 0,
+			          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+			        { .kind = CUDANativeArgumentKind::InputTensor,
+			          .index = plan->inputIndices[i],
+			          .byteOffset = 0,
+			          .byteSize = static_cast<std::uint64_t>(plan->inputElementCounts[i]) * sizeof(float) },
+			        { .kind = CUDANativeArgumentKind::Scalar,
+			          .index = 0,
+			          .byteOffset = scalarOffset,
+			          .byteSize = sizeof(std::uint32_t) },
+			    },
+			});
+		}
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+		                                std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeSliceF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeSliceF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeSliceF32PTXFromMLIRNVPTX(CUDANativeSliceF32CodegenSpec{
+		    .inputShape = plan->inputShape,
+		    .outputShape = plan->outputShape,
+		    .axis = plan->axis,
+		    .start = plan->start,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureSliceF32;
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->outputElementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeSliceF32KernelName()),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+		                                std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
 	std::uint64_t TensorByteSize(const Tensor<CUDA>& tensor)
 	{
 		return static_cast<std::uint64_t>(tensor.NumElements()) * ElementByteSize(tensor.DType());
+	}
+
+	class CUDANativeWorkspaceBuffer
+	{
+	public:
+		CUDANativeWorkspaceBuffer(CUDA& device, std::uint64_t byteSize) : device_(&device), byteSize_(byteSize)
+		{
+			if (byteSize_ == 0)
+			{
+				return;
+			}
+			wordCount_ = static_cast<std::size_t>((byteSize_ + sizeof(std::uint32_t) - 1) / sizeof(std::uint32_t));
+			data_ = DeviceTraits<CUDA>::Allocate(device, DataType::Int32, wordCount_);
+		}
+
+		CUDANativeWorkspaceBuffer(const CUDANativeWorkspaceBuffer&) = delete;
+		CUDANativeWorkspaceBuffer& operator=(const CUDANativeWorkspaceBuffer&) = delete;
+
+		~CUDANativeWorkspaceBuffer()
+		{
+			if (data_ != nullptr)
+			{
+				DeviceTraits<CUDA>::Deallocate(*device_, data_, DataType::Int32, wordCount_);
+			}
+		}
+
+		void* Pointer(const CUDANativeArgumentSpec& argument) const
+		{
+			if (data_ == nullptr)
+			{
+				throw std::runtime_error("CUDA native workspace argument requires a workspace allocation");
+			}
+			if (argument.byteOffset > byteSize_ ||
+			    (argument.byteSize != 0 && argument.byteSize > byteSize_ - argument.byteOffset))
+			{
+				throw std::runtime_error("CUDA native workspace argument byte range is out of bounds");
+			}
+			return static_cast<std::byte*>(data_) + argument.byteOffset;
+		}
+
+	private:
+		CUDA* device_{};
+		void* data_{};
+		std::uint64_t byteSize_{};
+		std::size_t wordCount_{};
+	};
+
+	bool IsCUDANativeLibraryCallKernel(std::string_view name)
+	{
+		return name == "litenn_cublas_matmul_f32";
+	}
+
+	CUDAExecutionOptions ToCUDAExecutionOptions(CompiledModuleCUDARunOptions options)
+	{
+		return CUDAExecutionOptions{ .stream = options.stream, .synchronize = options.synchronize };
 	}
 
 	void* TensorArgumentPointer(const CUDANativeArgumentSpec& argument, Tensor<CUDA>& tensor,
@@ -1697,7 +2419,8 @@ namespace
 	}
 
 	void RunCUDANativeLibraryCall(CUDA& device, const CUDANativeKernelSpec& kernel,
-	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs)
+	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+	                              CompiledModuleCUDARunOptions options)
 	{
 		if (kernel.name != "litenn_cublas_matmul_f32")
 		{
@@ -1735,33 +2458,36 @@ namespace
 		(void)ConstTensorArgumentPointer(lhsArg, lhs, "input");
 		(void)ConstTensorArgumentPointer(rhsArg, rhs, "input");
 		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
-		                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData());
+		                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
+		                                ToCUDAExecutionOptions(options));
 	}
 
 	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload,
 	                          const CUDADriverModule& module, std::span<const Tensor<CUDA>> inputs,
-	                          std::span<Tensor<CUDA>> outputs)
+	                          std::span<Tensor<CUDA>> outputs, CompiledModuleCUDARunOptions options)
 	{
 		const bool libraryCallPayload = payload.binaryKind == CUDANativeBinaryKind::LibraryCall;
 		if (!libraryCallPayload && module.Empty())
 		{
 			throw std::runtime_error("CUDA native compiled module is empty");
 		}
-		if (payload.workspaceBytes != 0)
+		std::uint64_t workspaceBytes = payload.workspaceBytes;
+		for (const auto& kernel : payload.kernels)
 		{
-			throw std::runtime_error("CUDA native workspace allocation is not implemented yet");
+			workspaceBytes = std::max(workspaceBytes, kernel.workspaceBytes);
 		}
+		CUDANativeWorkspaceBuffer workspace(device, workspaceBytes);
 
 		for (const auto& kernel : payload.kernels)
 		{
-			if (kernel.workspaceBytes != 0)
+			if (IsCUDANativeLibraryCallKernel(kernel.name))
 			{
-				throw std::runtime_error("CUDA native per-kernel workspace allocation is not implemented yet");
+				RunCUDANativeLibraryCall(device, kernel, inputs, outputs, options);
+				continue;
 			}
 			if (libraryCallPayload)
 			{
-				RunCUDANativeLibraryCall(device, kernel, inputs, outputs);
-				continue;
+				throw std::runtime_error(std::format("Unsupported CUDA native library call '{}'", kernel.name));
 			}
 
 			std::vector<void*> pointerValues;
@@ -1804,7 +2530,9 @@ namespace
 					argumentPointers.push_back(scalarStorage.back().data());
 					break;
 				case CUDANativeArgumentKind::Workspace:
-					throw std::runtime_error("CUDA native workspace arguments are not implemented yet");
+					pointerValues.push_back(workspace.Pointer(argument));
+					argumentPointers.push_back(&pointerValues.back());
+					break;
 				}
 			}
 
@@ -1813,8 +2541,8 @@ namespace
 			                  .grid = { .x = kernel.grid.x, .y = kernel.grid.y, .z = kernel.grid.z },
 			                  .block = { .x = kernel.block.x, .y = kernel.block.y, .z = kernel.block.z },
 			                  .sharedMemoryBytes = kernel.sharedMemoryBytes,
-			                  .stream = nullptr,
-			                  .synchronize = true,
+			                  .stream = options.stream,
+			                  .synchronize = options.synchronize,
 			              },
 			              argumentPointers);
 		}
@@ -2282,6 +3010,12 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA 
 
 std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const
 {
+	return Run(inputs, CompiledModuleCUDARunOptions{});
+}
+
+std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs,
+                                                    CompiledModuleCUDARunOptions options) const
+{
 	if (!impl_)
 	{
 		throw std::runtime_error("CompiledModule is empty");
@@ -2303,11 +3037,17 @@ std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>
 	{
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, impl_->device);
 	}
-	RunInto(inputs, outputs);
+	RunInto(inputs, outputs, options);
 	return outputs;
 }
 
 void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const
+{
+	RunInto(inputs, outputs, CompiledModuleCUDARunOptions{});
+}
+
+void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+                                   CompiledModuleCUDARunOptions options) const
 {
 	if (!impl_)
 	{
@@ -2335,15 +3075,24 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 
 	if (impl_->backend == CompiledModuleBackend::CUDANative)
 	{
-		RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, inputs, outputs);
+		RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, inputs, outputs, options);
 		return;
+	}
+	if (!options.synchronize)
+	{
+		throw std::runtime_error("CompiledModule<CUDA> CPU bridge does not support asynchronous execution");
 	}
 
 	std::vector<Tensor<CPU>> cpuInputs;
 	cpuInputs.reserve(inputs.size());
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{
-		cpuInputs.push_back(inputs[i].CopyToDevice(CPU{}));
+		Tensor<CPU> cpuInput(Uninitialized, inputs[i].Shape(), inputs[i].DType(), CPU{});
+		auto inputDevice = inputs[i].CurDevice();
+		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].RawData(),
+		                                inputs[i].NumElements(), cpuInput.DType(), cpuInput.RawData(),
+		                                CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+		cpuInputs.push_back(std::move(cpuInput));
 	}
 
 	std::vector<Tensor<CPU>> cpuOutputs;
@@ -2357,7 +3106,8 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	for (std::size_t i = 0; i < outputs.size(); ++i)
 	{
 		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].RawData(),
-		                                cpuOutputs[i].DType(), cpuOutputs[i].RawData(), cpuOutputs[i].NumElements());
+		                                cpuOutputs[i].DType(), cpuOutputs[i].RawData(), cpuOutputs[i].NumElements(),
+		                                CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
 	}
 }
 
@@ -2373,7 +3123,7 @@ void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocat
 	{
 		for (const auto& invocation : invocations)
 		{
-			RunInto(invocation.inputs, invocation.outputs);
+			RunInto(invocation.inputs, invocation.outputs, invocation.options);
 		}
 		return;
 	}
@@ -2395,7 +3145,7 @@ void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocat
 			try
 			{
 				const auto& invocation = invocations[index];
-				RunInto(invocation.inputs, invocation.outputs);
+				RunInto(invocation.inputs, invocation.outputs, invocation.options);
 			}
 			catch (...)
 			{
@@ -2532,6 +3282,12 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
 		                              CompiledModuleBackend::CUDANative);
 	}
+	if (auto nativeParts = TryCompileCUDANativeMatMulBiasF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
 	if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
 	{
 		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
@@ -2539,6 +3295,24 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 		                              CompiledModuleBackend::CUDANative);
 	}
 	if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
 	{
 		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),

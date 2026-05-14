@@ -4,6 +4,7 @@
 #include <LiteNN/Operators.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -20,12 +21,42 @@ namespace LiteNN
 		std::span<const std::size_t> rhsShape;
 	};
 
+	struct CUDANativeReduceF32CodegenSpec
+	{
+		ReduceOp op{ ReduceOp::Sum };
+		std::span<const std::size_t> inputShape;
+		std::size_t axis{};
+	};
+
+	struct CUDANativeConcatF32CodegenSpec
+	{
+		std::span<const std::size_t> outputShape;
+		std::span<const std::vector<std::size_t>> inputShapes;
+		std::size_t axis{};
+	};
+
+	struct CUDANativeSliceF32CodegenSpec
+	{
+		std::span<const std::size_t> inputShape;
+		std::span<const std::size_t> outputShape;
+		std::size_t axis{};
+		std::size_t start{};
+	};
+
+	struct CUDANativeMatMulBiasEpilogueF32CodegenSpec
+	{
+		std::span<const std::size_t> outputShape;
+		std::span<const std::size_t> biasShape;
+		bool relu{};
+	};
+
 	std::string_view CUDANativeBinaryF32KernelName(BinaryOp op, bool broadcast = false);
 	std::string_view CUDANativeUnaryF32KernelName(UnaryOp op);
-
-	std::string CUDANativeBinaryF32PTX(BinaryOp op);
-	std::string CUDANativeBinaryBroadcastF32PTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
-	std::string CUDANativeUnaryF32PTX(UnaryOp op);
+	std::string_view CUDANativeReduceF32KernelName(ReduceOp op);
+	std::string CUDANativeConcatF32KernelName(std::size_t inputIndex);
+	std::string_view CUDANativeSliceF32KernelName();
+	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu);
+	std::string CUDANativeNVPTXTargetChip();
 
 	/**
 	 * Generates a minimal same-shape CUDA binary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.
@@ -37,6 +68,19 @@ namespace LiteNN
 	std::string CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(
 	    const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
+	std::string CUDANativeReduceF32PTXFromMLIRNVPTX(const CUDANativeReduceF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeReduceF32PTXFromMLIRNVPTX(
+	    const CUDANativeReduceF32CodegenSpec& spec);
+	std::string CUDANativeConcatF32PTXFromMLIRNVPTX(const CUDANativeConcatF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeConcatF32PTXFromMLIRNVPTX(
+	    const CUDANativeConcatF32CodegenSpec& spec);
+	std::string CUDANativeSliceF32PTXFromMLIRNVPTX(const CUDANativeSliceF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeSliceF32PTXFromMLIRNVPTX(
+	    const CUDANativeSliceF32CodegenSpec& spec);
+	std::string CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
+	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);
 
 	/**
 	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.

@@ -42,6 +42,13 @@ namespace LiteNN
 	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseCosF32 = 1ull << 14;
 	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseMaxF32 = 1ull << 15;
 	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseMinF32 = 1ull << 16;
+	inline constexpr std::uint64_t kCUDANativeFeatureReduceF32 = 1ull << 17;
+	inline constexpr std::uint64_t kCUDANativeFeatureConcatF32 = 1ull << 18;
+	inline constexpr std::uint64_t kCUDANativeFeatureSliceF32 = 1ull << 19;
+	inline constexpr std::uint64_t kCUDANativeFeatureMatMulBiasAddF32 = 1ull << 20;
+	inline constexpr std::uint64_t kCUDANativeFeatureMatMulBiasAddReLUF32 = 1ull << 21;
+	inline constexpr std::uint64_t kCUDANativeFeatureMultiKernelLaunch = 1ull << 22;
+	inline constexpr std::uint64_t kCUDANativeFeatureWorkspace = 1ull << 23;
 	inline constexpr std::uint64_t kCUDANativeKnownFeatureMask = kCUDANativeFeatureStaticShape |
 	                                                             kCUDANativeFeatureSingleSubgraph |
 	                                                             kCUDANativeFeatureElementwiseAddF32 |
@@ -58,7 +65,14 @@ namespace LiteNN
 	                                                             kCUDANativeFeatureElementwiseSinF32 |
 	                                                             kCUDANativeFeatureElementwiseCosF32 |
 	                                                             kCUDANativeFeatureElementwiseMaxF32 |
-	                                                             kCUDANativeFeatureElementwiseMinF32;
+	                                                             kCUDANativeFeatureElementwiseMinF32 |
+	                                                             kCUDANativeFeatureReduceF32 |
+	                                                             kCUDANativeFeatureConcatF32 |
+	                                                             kCUDANativeFeatureSliceF32 |
+	                                                             kCUDANativeFeatureMatMulBiasAddF32 |
+	                                                             kCUDANativeFeatureMatMulBiasAddReLUF32 |
+	                                                             kCUDANativeFeatureMultiKernelLaunch |
+	                                                             kCUDANativeFeatureWorkspace;
 
 	struct CUDANativeLaunchDim
 	{

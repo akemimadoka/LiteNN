@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -94,6 +96,25 @@ TEST(CUDADevice, CrossDeviceCopyUsesFallbackWhenAvailable)
 	}
 }
 
+TEST(CUDADevice, ReportsInvalidDeviceIndex)
+{
+	const int invalidDevice = CUDADeviceCount();
+	try
+	{
+		Tensor<CUDA> tensor(Uninitialized, { 1 }, DataType::Float32, CUDA{ .deviceIndex = invalidDevice });
+		(void)tensor;
+		FAIL() << "expected invalid CUDA device allocation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_TRUE(message.find("cudaGetDevice") != std::string::npos ||
+		            message.find("cudaSetDevice") != std::string::npos ||
+		            message.find("cudaMalloc") != std::string::npos)
+		    << message;
+	}
+}
+
 TEST(CUDADevice, DriverModuleLaunchesPTXKernel)
 {
 	if (!IsCUDADriverAvailable())
@@ -165,6 +186,59 @@ DONE:
 	for (auto i = 0uz; i < input.NumElements(); ++i)
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(result, i), ReadFloat(input, i) + 1.0F);
+	}
+}
+
+TEST(CUDADevice, DriverModuleReportsInvalidImageDiagnostics)
+{
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	constexpr std::string_view kInvalidImage = "this is not PTX";
+	const auto bytes = std::as_bytes(std::span(kInvalidImage.data(), kInvalidImage.size()));
+	try
+	{
+		CUDADriverModule module(CUDA{}, bytes);
+		(void)module;
+		FAIL() << "expected invalid CUDA module image to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("cuModuleLoadDataEx"), std::string::npos);
+	}
+}
+
+TEST(CUDADevice, DriverModuleReportsUnsupportedTargetDiagnostics)
+{
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	constexpr std::string_view kUnsupportedTargetPTX = R"ptx(
+.version 6.4
+.target sm_999
+.address_size 64
+
+.visible .entry litenn_noop()
+{
+	ret;
+}
+)ptx";
+	const auto bytes = std::as_bytes(std::span(kUnsupportedTargetPTX.data(), kUnsupportedTargetPTX.size()));
+	try
+	{
+		CUDADriverModule module(CUDA{}, bytes);
+		(void)module;
+		FAIL() << "expected unsupported CUDA module target to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("cuModuleLoadDataEx"), std::string::npos);
 	}
 }
 

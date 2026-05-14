@@ -277,16 +277,15 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 	EXPECT_EQ(CUDANativeBinaryF32KernelName(BinaryOp::Subtract), "litenn_subtract_f32");
 	EXPECT_EQ(CUDANativeBinaryF32KernelName(BinaryOp::Subtract, true), "litenn_subtract_broadcast_f32");
 
-	const auto ptx = CUDANativeBinaryBroadcastF32PTX(CUDANativeBroadcastBinaryF32CodegenSpec{
+	const auto ptx = CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(CUDANativeBroadcastBinaryF32CodegenSpec{
 	    .op = BinaryOp::Subtract,
 	    .outputShape = std::span<const std::size_t>{ outputShape },
 	    .lhsShape = std::span<const std::size_t>{ lhsShape },
 	    .rhsShape = std::span<const std::size_t>{ rhsShape },
 	});
 	EXPECT_NE(ptx.find(".visible .entry litenn_subtract_broadcast_f32"), std::string::npos);
-	EXPECT_NE(ptx.find("\tsub.rn.f32 %f3, %f1, %f2;"), std::string::npos);
-	EXPECT_NE(ptx.find("\trem.u32 %r9, %r8, 2;"), std::string::npos);
-	EXPECT_NE(ptx.find("\trem.u32 %r9, %r8, 3;"), std::string::npos);
+	EXPECT_NE(ptx.find("sub.rn.f32"), std::string::npos);
+	EXPECT_NE(ptx.find("st.global"), std::string::npos);
 
 	const auto bytes = CUDANativeTextBytes(ptx);
 	ASSERT_EQ(bytes.size(), ptx.size() + 1);
@@ -300,7 +299,7 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 	    .binaryKind = CUDANativeBinaryKind::PTX,
 	    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
 	                    kCUDANativeFeatureElementwiseSubtractF32 | kCUDANativeFeatureElementwiseBroadcastF32,
-	    .target = "sm_30",
+	    .target = CUDANativeNVPTXTargetChip(),
 	    .binary = bytes,
 	    .scalarData = { std::byte{ 6 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
 	    .kernels = {
@@ -340,7 +339,7 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 
 	const auto decoded = DeserializeCUDANativeInstructionPayload(SerializeCUDANativeInstructionPayload(payload));
 	EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::PTX);
-	EXPECT_EQ(decoded.target, "sm_30");
+	EXPECT_EQ(decoded.target, CUDANativeNVPTXTargetChip());
 	ASSERT_FALSE(decoded.binary.empty());
 	EXPECT_EQ(decoded.binary.back(), std::byte{ 0 });
 	EXPECT_EQ(decoded.featureFlags & kCUDANativeFeatureElementwiseBroadcastF32,

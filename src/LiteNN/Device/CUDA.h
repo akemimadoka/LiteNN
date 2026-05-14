@@ -43,6 +43,12 @@ namespace LiteNN
 		bool synchronize{ true };
 	};
 
+	struct CUDAExecutionOptions
+	{
+		void* stream{};
+		bool synchronize{ true };
+	};
+
 	class CUDADriverModule
 	{
 	public:
@@ -94,14 +100,21 @@ namespace LiteNN
 		static void ZeroFill(CUDA& device, void* ptr, DataType type, std::size_t size);
 		static void CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size, DataType dstType,
 		                      void* dst);
+		static void CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size, DataType dstType,
+		                      void* dst, CUDAExecutionOptions options);
 		static void CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType, const void* src,
 		                        std::size_t size);
+		static void CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType, const void* src,
+		                        std::size_t size, CUDAExecutionOptions options);
 		static void ConvertTo(CUDA& device, DataType srcType, const void* src, std::size_t size, DataType dstType,
 		                      void* dst);
 		static void DoUnaryOp(CUDA& device, UnaryOp unaryOp, void* dst, DataType type, ShapeView shape,
 		                      const void* src);
 		static void DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
 		                       const void* src1, DataType type2, ShapeView shape2, const void* src2);
+		static void DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
+		                       const void* src1, DataType type2, ShapeView shape2, const void* src2,
+		                       CUDAExecutionOptions options);
 		static void DoReduceOp(CUDA& device, ReduceOp reduceOp, void* dst, DataType type, ShapeView shape,
 		                       const void* src, std::size_t axis);
 		static void DoConcatOp(CUDA& device, void* dst, DataType type, const void* const* srcPtrs,
