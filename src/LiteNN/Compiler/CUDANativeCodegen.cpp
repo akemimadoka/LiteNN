@@ -1,11 +1,17 @@
 #include "CUDANativeCodegen.h"
 
+#include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
@@ -94,62 +100,167 @@ namespace
 		return std::string(buffer.begin(), buffer.end());
 	}
 
-	std::string BuildUnaryF32MLIRNVVMModule(UnaryOp op)
+	std::string_view CUDANativeUnaryF32MLIRResultOp(UnaryOp op)
 	{
-		if (op != UnaryOp::Negate)
+		switch (op)
 		{
-			throw std::runtime_error("MLIR NVPTX CUDA native unary codegen currently supports only Negate");
+		case UnaryOp::Negate:
+			return "    %result = llvm.fneg %value : f32\n";
+		case UnaryOp::Abs:
+			return "    %result = llvm.call_intrinsic \"llvm.nvvm.fabs.ftz.f\"(%value) : (f32) -> f32\n";
+		case UnaryOp::Sqrt:
+			return "    %result = llvm.call_intrinsic \"llvm.nvvm.sqrt.rn.ftz.f\"(%value) : (f32) -> f32\n";
+		default:
+			throw std::runtime_error("Unsupported MLIR NVPTX CUDA native unary op");
 		}
+	}
 
-		return std::format(R"mlir(module attributes {{llvm.target_triple = "{}"}} {{
-  llvm.func @{}(%out: !llvm.ptr, %in: !llvm.ptr, %count: i32) attributes {{nvvm.kernel = true}} {{
-    %tid = nvvm.read.ptx.sreg.tid.x : i32
-    %ctaid = nvvm.read.ptx.sreg.ctaid.x : i32
-    %ntid = nvvm.read.ptx.sreg.ntid.x : i32
-    %base = llvm.mul %ctaid, %ntid : i32
-    %idx = llvm.add %base, %tid : i32
-    %done = llvm.icmp "uge" %idx, %count : i32
+	std::string_view CUDANativeBinaryF32MLIRResultOp(BinaryOp op)
+	{
+		switch (op)
+		{
+		case BinaryOp::Add:
+			return "    %result = llvm.fadd %lhsValue, %rhsValue : f32\n";
+		case BinaryOp::Subtract:
+			return "    %result = llvm.fsub %lhsValue, %rhsValue : f32\n";
+		case BinaryOp::Multiply:
+			return "    %result = llvm.fmul %lhsValue, %rhsValue : f32\n";
+		case BinaryOp::Divide:
+			return "    %result = llvm.fdiv %lhsValue, %rhsValue : f32\n";
+		default:
+			throw std::runtime_error("Unsupported MLIR NVPTX CUDA native binary op");
+		}
+	}
+
+	std::string BuildUnaryF32MLIRGPUModule(UnaryOp op)
+	{
+		return std::format(R"mlir(module {{
+  gpu.module @litenn_cuda_kernels [#nvvm.target<chip = "{}">] {{
+    gpu.func @{}(%out: !llvm.ptr, %in: !llvm.ptr, %count: i32) kernel {{
+    %tid = gpu.thread_id x
+    %ctaid = gpu.block_id x
+    %ntid = gpu.block_dim x
+    %base = arith.muli %ctaid, %ntid : index
+    %idx = arith.addi %base, %tid : index
+    %idx32 = arith.index_cast %idx : index to i32
+    %done = llvm.icmp "uge" %idx32, %count : i32
     llvm.cond_br %done, ^bb_done, ^bb_body
   ^bb_body:
-    %elem = llvm.getelementptr %in[%idx] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+    %elem = llvm.getelementptr %in[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
     %value = llvm.load %elem : !llvm.ptr -> f32
-    %result = llvm.fneg %value : f32
-    %dst = llvm.getelementptr %out[%idx] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+{}
+    %dst = llvm.getelementptr %out[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
     llvm.store %result, %dst : f32, !llvm.ptr
     llvm.br ^bb_done
   ^bb_done:
-    llvm.return
+    gpu.return
+    }}
   }}
 }}
 )mlir",
-		                   kNVPTXTriple, CUDANativeUnaryF32KernelName(op));
+		                   kNVPTXChip, CUDANativeUnaryF32KernelName(op), CUDANativeUnaryF32MLIRResultOp(op));
 	}
 
-	std::string EmitUnaryF32PTXFromMLIRNVPTX(UnaryOp op)
+	std::string BuildBinaryF32MLIRGPUModule(BinaryOp op)
+	{
+		return std::format(R"mlir(module {{
+  gpu.module @litenn_cuda_kernels [#nvvm.target<chip = "{}">] {{
+    gpu.func @{}(%out: !llvm.ptr, %lhs: !llvm.ptr, %rhs: !llvm.ptr, %count: i32) kernel {{
+    %tid = gpu.thread_id x
+    %ctaid = gpu.block_id x
+    %ntid = gpu.block_dim x
+    %base = arith.muli %ctaid, %ntid : index
+    %idx = arith.addi %base, %tid : index
+    %idx32 = arith.index_cast %idx : index to i32
+    %done = llvm.icmp "uge" %idx32, %count : i32
+    llvm.cond_br %done, ^bb_done, ^bb_body
+  ^bb_body:
+    %lhsElem = llvm.getelementptr %lhs[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+    %rhsElem = llvm.getelementptr %rhs[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+    %lhsValue = llvm.load %lhsElem : !llvm.ptr -> f32
+    %rhsValue = llvm.load %rhsElem : !llvm.ptr -> f32
+{}
+    %dst = llvm.getelementptr %out[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+    llvm.store %result, %dst : f32, !llvm.ptr
+    llvm.br ^bb_done
+  ^bb_done:
+    gpu.return
+    }}
+  }}
+}}
+)mlir",
+		                   kNVPTXChip, CUDANativeBinaryF32KernelName(op), CUDANativeBinaryF32MLIRResultOp(op));
+	}
+
+	mlir::OwningOpRef<mlir::ModuleOp> ExtractLLVMKernelModule(mlir::ModuleOp loweredModule)
+	{
+		mlir::OpBuilder builder(loweredModule.getContext());
+		auto llvmKernelModule = mlir::ModuleOp::create(loweredModule.getLoc());
+		llvmKernelModule->setAttr("llvm.target_triple", builder.getStringAttr(kNVPTXTriple));
+		builder.setInsertionPointToEnd(llvmKernelModule.getBody());
+
+		std::size_t clonedKernelCount = 0;
+		loweredModule.walk([&](mlir::LLVM::LLVMFuncOp func) {
+			auto* cloned = builder.clone(*func.getOperation());
+			cloned->removeAttr("gpu.kernel");
+			++clonedKernelCount;
+		});
+		if (clonedKernelCount == 0)
+		{
+			throw std::runtime_error("MLIR GPU to NVVM lowering produced no LLVM kernel functions");
+		}
+		if (mlir::failed(mlir::verify(llvmKernelModule)))
+		{
+			throw std::runtime_error("Extracted MLIR NVVM kernel module verification failed");
+		}
+		return mlir::OwningOpRef<mlir::ModuleOp>(llvmKernelModule);
+	}
+
+	std::string EmitMLIRGPUToNVPTX(std::string_view mlirText)
 	{
 		mlir::DialectRegistry registry;
-		registry.insert<mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect>();
+		registry.insert<mlir::arith::ArithDialect, mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+		                mlir::NVVM::NVVMDialect>();
 		mlir::registerBuiltinDialectTranslation(registry);
 		mlir::registerLLVMDialectTranslation(registry);
 		mlir::registerNVVMDialectTranslation(registry);
 
 		mlir::MLIRContext context(registry);
 		context.loadAllAvailableDialects();
-		const auto mlirText = BuildUnaryF32MLIRNVVMModule(op);
 		auto module = mlir::parseSourceString<mlir::ModuleOp>(mlirText, &context);
 		if (!module)
 		{
-			throw std::runtime_error("Failed to parse generated MLIR NVVM module");
+			throw std::runtime_error("Failed to parse generated MLIR GPU module");
 		}
 
+		mlir::PassManager passManager(&context);
+		passManager.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToNVVMOps());
+		passManager.addPass(mlir::createArithToLLVMConversionPass());
+		passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
+		if (mlir::failed(passManager.run(module.get())))
+		{
+			throw std::runtime_error("Failed to lower generated MLIR GPU module to NVVM dialect");
+		}
+
+		auto llvmKernelModule = ExtractLLVMKernelModule(module.get());
 		llvm::LLVMContext llvmContext;
-		auto llvmModule = mlir::translateModuleToLLVMIR(module.get().getOperation(), llvmContext);
+		auto llvmModule = mlir::translateModuleToLLVMIR(llvmKernelModule.get().getOperation(), llvmContext);
 		if (!llvmModule)
 		{
-			throw std::runtime_error("Failed to translate MLIR NVVM module to LLVM IR");
+			throw std::runtime_error("Failed to translate lowered MLIR NVVM module to LLVM IR");
 		}
 
 		return EmitNVPTXAssembly(*llvmModule);
+	}
+
+	std::string EmitUnaryF32PTXFromMLIRNVPTX(UnaryOp op)
+	{
+		return EmitMLIRGPUToNVPTX(BuildUnaryF32MLIRGPUModule(op));
+	}
+
+	std::string EmitBinaryF32PTXFromMLIRNVPTX(BinaryOp op)
+	{
+		return EmitMLIRGPUToNVPTX(BuildBinaryF32MLIRGPUModule(op));
 	}
 
 	std::optional<std::vector<std::uint32_t>> ContiguousStridesU32(std::span<const std::size_t> shape)
@@ -166,6 +277,90 @@ namespace
 			stride *= shape[i - 1];
 		}
 		return strides;
+	}
+
+	std::string BuildBinaryBroadcastF32MLIRIndexCode(std::span<const std::size_t> outputShape,
+	                                                 std::span<const std::size_t> lhsShape,
+	                                                 std::span<const std::size_t> rhsShape,
+	                                                 std::span<const std::uint32_t> outputStrides,
+	                                                 std::span<const std::uint32_t> lhsStrides,
+	                                                 std::span<const std::uint32_t> rhsStrides)
+	{
+		std::string code = "    %c0_i32 = llvm.mlir.constant(0 : i32) : i32\n";
+		std::string lhsOffset = "%c0_i32";
+		std::string rhsOffset = "%c0_i32";
+
+		for (std::size_t i = 0; i < outputShape.size(); ++i)
+		{
+			code += std::format("    %outStride{} = llvm.mlir.constant({} : i32) : i32\n", i, outputStrides[i]);
+			code += std::format("    %outDim{} = llvm.mlir.constant({} : i32) : i32\n", i, outputShape[i]);
+			code += std::format("    %coordDiv{} = llvm.udiv %idx32, %outStride{} : i32\n", i, i);
+			code += std::format("    %coord{} = llvm.urem %coordDiv{}, %outDim{} : i32\n", i, i, i);
+			if (lhsShape[i] != 1)
+			{
+				code += std::format("    %lhsStride{} = llvm.mlir.constant({} : i32) : i32\n", i, lhsStrides[i]);
+				code += std::format("    %lhsTerm{} = llvm.mul %coord{}, %lhsStride{} : i32\n", i, i, i);
+				code += std::format("    %lhsOffset{} = llvm.add {}, %lhsTerm{} : i32\n", i, lhsOffset, i);
+				lhsOffset = std::format("%lhsOffset{}", i);
+			}
+			if (rhsShape[i] != 1)
+			{
+				code += std::format("    %rhsStride{} = llvm.mlir.constant({} : i32) : i32\n", i, rhsStrides[i]);
+				code += std::format("    %rhsTerm{} = llvm.mul %coord{}, %rhsStride{} : i32\n", i, i, i);
+				code += std::format("    %rhsOffset{} = llvm.add {}, %rhsTerm{} : i32\n", i, rhsOffset, i);
+				rhsOffset = std::format("%rhsOffset{}", i);
+			}
+		}
+
+		code += std::format("    %lhsElem = llvm.getelementptr %lhs[{}] : (!llvm.ptr, i32) -> !llvm.ptr, f32\n",
+		                    lhsOffset);
+		code += std::format("    %rhsElem = llvm.getelementptr %rhs[{}] : (!llvm.ptr, i32) -> !llvm.ptr, f32\n",
+		                    rhsOffset);
+		return code;
+	}
+
+	std::string BuildBinaryBroadcastF32MLIRGPUModule(const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
+	{
+		const auto outputStrides = ContiguousStridesU32(spec.outputShape);
+		const auto lhsStrides = ContiguousStridesU32(spec.lhsShape);
+		const auto rhsStrides = ContiguousStridesU32(spec.rhsShape);
+		if (!outputStrides || !lhsStrides || !rhsStrides)
+		{
+			throw std::runtime_error("CUDA native MLIR broadcast shape is too large for u32 indexing");
+		}
+		if (spec.outputShape.size() != spec.lhsShape.size() || spec.outputShape.size() != spec.rhsShape.size())
+		{
+			throw std::runtime_error("CUDA native MLIR broadcast codegen requires same-rank shapes");
+		}
+
+		const auto indexCode = BuildBinaryBroadcastF32MLIRIndexCode(spec.outputShape, spec.lhsShape, spec.rhsShape,
+		                                                            *outputStrides, *lhsStrides, *rhsStrides);
+		return std::format(R"mlir(module {{
+  gpu.module @litenn_cuda_kernels [#nvvm.target<chip = "{}">] {{
+    gpu.func @{}(%out: !llvm.ptr, %lhs: !llvm.ptr, %rhs: !llvm.ptr, %count: i32) kernel {{
+    %tid = gpu.thread_id x
+    %ctaid = gpu.block_id x
+    %ntid = gpu.block_dim x
+    %base = arith.muli %ctaid, %ntid : index
+    %idx = arith.addi %base, %tid : index
+    %idx32 = arith.index_cast %idx : index to i32
+    %done = llvm.icmp "uge" %idx32, %count : i32
+    llvm.cond_br %done, ^bb_done, ^bb_body
+  ^bb_body:
+{}    %lhsValue = llvm.load %lhsElem : !llvm.ptr -> f32
+    %rhsValue = llvm.load %rhsElem : !llvm.ptr -> f32
+{}
+    %dst = llvm.getelementptr %out[%idx32] : (!llvm.ptr, i32) -> !llvm.ptr, f32
+    llvm.store %result, %dst : f32, !llvm.ptr
+    llvm.br ^bb_done
+  ^bb_done:
+    gpu.return
+    }}
+  }}
+}}
+)mlir",
+		                   kNVPTXChip, CUDANativeBinaryF32KernelName(spec.op, true), indexCode,
+		                   CUDANativeBinaryF32MLIRResultOp(spec.op));
 	}
 
 	std::string_view CUDANativeBinaryF32Instruction(BinaryOp op)
@@ -410,6 +605,41 @@ DONE:
 }
 )ptx";
 	return ptx;
+}
+
+std::string CUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op)
+{
+	return EmitBinaryF32PTXFromMLIRNVPTX(op);
+}
+
+std::optional<std::string> TryCUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op)
+{
+	try
+	{
+		return CUDANativeBinaryF32PTXFromMLIRNVPTX(op);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
+{
+	return EmitMLIRGPUToNVPTX(BuildBinaryBroadcastF32MLIRGPUModule(spec));
+}
+
+std::optional<std::string> TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(
+    const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
 }
 
 std::string CUDANativeUnaryF32PTXFromMLIRNVPTX(UnaryOp op)

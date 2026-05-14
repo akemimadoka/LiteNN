@@ -28,10 +28,22 @@ namespace LiteNN
 	std::string CUDANativeUnaryF32PTX(UnaryOp op);
 
 	/**
-	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR LLVM/NVVM dialect to NVPTX PTX.
+	 * Generates a minimal same-shape CUDA binary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.
 	 *
-	 * The first validation slice intentionally supports only `UnaryOp::Negate`; callers should keep
-	 * the template PTX path as fallback until the MLIR/NVPTX route covers the rest of CUDA native codegen.
+	 * Broadcast binary kernels use the overload below, which emits static shape index lowering in MLIR.
+	 */
+	std::string CUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op);
+	std::optional<std::string> TryCUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op);
+	std::string CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(
+	    const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
+
+	/**
+	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.
+	 *
+	 * This path currently covers `UnaryOp::Negate`, `UnaryOp::Abs`, and `UnaryOp::Sqrt`.
+	 * Callers should keep the template PTX path as fallback until the MLIR/NVPTX route covers the
+	 * rest of CUDA native codegen.
 	 */
 	std::string CUDANativeUnaryF32PTXFromMLIRNVPTX(UnaryOp op);
 	std::optional<std::string> TryCUDANativeUnaryF32PTXFromMLIRNVPTX(UnaryOp op);

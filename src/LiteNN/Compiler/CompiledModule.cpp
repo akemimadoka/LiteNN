@@ -1494,15 +1494,24 @@ namespace
 			payload.featureFlags |= kCUDANativeFeatureElementwiseBroadcastF32;
 		}
 		payload.target = "sm_30";
-		payload.binary =
-		    CUDANativeTextBytes(plan->requiresBroadcast
-		                            ? CUDANativeBinaryBroadcastF32PTX(CUDANativeBroadcastBinaryF32CodegenSpec{
-		                                  .op = plan->op,
-		                                  .outputShape = plan->outputShape,
-		                                  .lhsShape = plan->lhsShape,
-		                                  .rhsShape = plan->rhsShape,
-		                              })
-		                            : CUDANativeBinaryF32PTX(plan->op));
+		std::string ptx;
+		if (plan->requiresBroadcast)
+		{
+			const auto spec = CUDANativeBroadcastBinaryF32CodegenSpec{
+			    .op = plan->op,
+			    .outputShape = plan->outputShape,
+			    .lhsShape = plan->lhsShape,
+			    .rhsShape = plan->rhsShape,
+			};
+			const auto mlirPtx = TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
+			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryBroadcastF32PTX(spec);
+		}
+		else
+		{
+			const auto mlirPtx = TryCUDANativeBinaryF32PTXFromMLIRNVPTX(plan->op);
+			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryF32PTX(plan->op);
+		}
+		payload.binary = CUDANativeTextBytes(ptx);
 		AppendU32(payload.scalarData, plan->elementCount);
 
 		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);

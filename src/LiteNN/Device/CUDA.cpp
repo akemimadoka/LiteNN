@@ -10,6 +10,7 @@
 #include <cuda.h>
 #endif
 
+#include <array>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -113,6 +114,20 @@ namespace LiteNN
 			{
 				throw std::runtime_error(std::format("{} failed: {}", action, CUDADriverStatusMessage(status)));
 			}
+		}
+
+		void CheckCUDADriver(CUresult status, std::string_view action, std::string_view detail)
+		{
+			if (status == CUDA_SUCCESS)
+			{
+				return;
+			}
+			auto message = std::format("{} failed: {}", action, CUDADriverStatusMessage(status));
+			if (!detail.empty())
+			{
+				message += std::format("\n{}", detail);
+			}
+			throw std::runtime_error(message);
 		}
 
 		void InitializeCUDADriver()
@@ -429,7 +444,38 @@ namespace LiteNN
 			try
 			{
 				CUDADriverContextScope scope(context);
-				CheckCUDADriver(cuModuleLoadDataEx(&module, image.data(), 0, nullptr, nullptr), "cuModuleLoadDataEx");
+				std::array<char, 8192> errorLog{};
+				std::array<char, 8192> infoLog{};
+				std::array<CUjit_option, 4> options{
+					CU_JIT_ERROR_LOG_BUFFER,
+					CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,
+					CU_JIT_INFO_LOG_BUFFER,
+					CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES,
+				};
+				std::array<void*, 4> values{
+					errorLog.data(),
+					reinterpret_cast<void*>(errorLog.size()),
+					infoLog.data(),
+					reinterpret_cast<void*>(infoLog.size()),
+				};
+				const auto status = cuModuleLoadDataEx(&module, image.data(), static_cast<unsigned int>(options.size()),
+				                                       options.data(), values.data());
+				std::string detail;
+				if (errorLog[0] != '\0')
+				{
+					detail += "CUDA JIT error log:\n";
+					detail += errorLog.data();
+				}
+				if (infoLog[0] != '\0')
+				{
+					if (!detail.empty())
+					{
+						detail += "\n";
+					}
+					detail += "CUDA JIT info log:\n";
+					detail += infoLog.data();
+				}
+				CheckCUDADriver(status, "cuModuleLoadDataEx", detail);
 			}
 			catch (...)
 			{

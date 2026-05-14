@@ -63,6 +63,7 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRIR
     MLIRSupport
     MLIRFuncDialect
+    MLIRGPUDialect
     MLIRArithDialect
     MLIRParser
     MLIRPass
@@ -76,6 +77,7 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRLinalgDialect
     MLIRLinalgTransforms
     MLIRArithTransforms
+    MLIRGPUToNVVMTransforms
     MLIRSCFTransforms
     MLIRMathDialect
     MLIRSCFDialect
