@@ -359,6 +359,23 @@ namespace
 			return builder_.create<mlir::LLVM::URemOp>(loc_, i32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
 		}
 
+		mlir::Value EmitF32Constant(float value)
+		{
+			return builder_.create<mlir::LLVM::ConstantOp>(loc_, f32Type_, builder_.getF32FloatAttr(value)).getResult();
+		}
+
+		mlir::Value EmitF32Mul(mlir::Value lhs, mlir::Value rhs)
+		{
+			return builder_.create<mlir::LLVM::FMulOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+		}
+
+		mlir::Value EmitF32Intrinsic(std::string_view name, mlir::ValueRange args)
+		{
+			return builder_
+			    .create<mlir::LLVM::CallIntrinsicOp>(loc_, f32Type_, builder_.getStringAttr(ToLLVMStringRef(name)), args)
+			    .getResult(0);
+		}
+
 		mlir::Value EmitF32GEP(mlir::Value base, mlir::Value index)
 		{
 			return builder_
@@ -383,15 +400,23 @@ namespace
 			case UnaryOp::Negate:
 				return builder_.create<mlir::LLVM::FNegOp>(loc_, f32Type_, mlir::ValueRange{ value }).getResult();
 			case UnaryOp::Abs:
-				return builder_
-				    .create<mlir::LLVM::CallIntrinsicOp>(
-				        loc_, f32Type_, builder_.getStringAttr("llvm.nvvm.fabs.ftz.f"), mlir::ValueRange{ value })
-				    .getResult(0);
+				return EmitF32Intrinsic("llvm.nvvm.fabs.ftz.f", mlir::ValueRange{ value });
 			case UnaryOp::Sqrt:
-				return builder_
-				    .create<mlir::LLVM::CallIntrinsicOp>(
-				        loc_, f32Type_, builder_.getStringAttr("llvm.nvvm.sqrt.rn.ftz.f"), mlir::ValueRange{ value })
-				    .getResult(0);
+				return EmitF32Intrinsic("llvm.nvvm.sqrt.rn.ftz.f", mlir::ValueRange{ value });
+			case UnaryOp::Exp: {
+				const auto log2e = EmitF32Constant(1.4426950408889634f);
+				auto scaled = EmitF32Mul(value, log2e);
+				return EmitF32Intrinsic("llvm.nvvm.ex2.approx.ftz.f", mlir::ValueRange{ scaled });
+			}
+			case UnaryOp::Log: {
+				auto log2Value = EmitF32Intrinsic("llvm.nvvm.lg2.approx.ftz.f", mlir::ValueRange{ value });
+				const auto ln2 = EmitF32Constant(0.6931471805599453f);
+				return EmitF32Mul(log2Value, ln2);
+			}
+			case UnaryOp::Sin:
+				return EmitF32Intrinsic("llvm.nvvm.sin.approx.ftz.f", mlir::ValueRange{ value });
+			case UnaryOp::Cos:
+				return EmitF32Intrinsic("llvm.nvvm.cos.approx.ftz.f", mlir::ValueRange{ value });
 			default:
 				throw std::runtime_error("Unsupported MLIR NVPTX CUDA native unary op");
 			}
@@ -406,9 +431,13 @@ namespace
 			case BinaryOp::Subtract:
 				return builder_.create<mlir::LLVM::FSubOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
 			case BinaryOp::Multiply:
-				return builder_.create<mlir::LLVM::FMulOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+				return EmitF32Mul(lhs, rhs);
 			case BinaryOp::Divide:
 				return builder_.create<mlir::LLVM::FDivOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+			case BinaryOp::Max:
+				return EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ lhs, rhs });
+			case BinaryOp::Min:
+				return EmitF32Intrinsic("llvm.nvvm.fmin.ftz.f", mlir::ValueRange{ lhs, rhs });
 			default:
 				throw std::runtime_error("Unsupported MLIR NVPTX CUDA native binary op");
 			}
@@ -586,6 +615,10 @@ std::string_view CUDANativeBinaryF32KernelName(BinaryOp op, bool broadcast)
 		return broadcast ? "litenn_multiply_broadcast_f32" : "litenn_multiply_f32";
 	case BinaryOp::Divide:
 		return broadcast ? "litenn_divide_broadcast_f32" : "litenn_divide_f32";
+	case BinaryOp::Max:
+		return broadcast ? "litenn_max_broadcast_f32" : "litenn_max_f32";
+	case BinaryOp::Min:
+		return broadcast ? "litenn_min_broadcast_f32" : "litenn_min_f32";
 	default:
 		throw std::runtime_error("Unsupported CUDA native binary op");
 	}
@@ -601,6 +634,14 @@ std::string_view CUDANativeUnaryF32KernelName(UnaryOp op)
 		return "litenn_abs_f32";
 	case UnaryOp::Sqrt:
 		return "litenn_sqrt_f32";
+	case UnaryOp::Exp:
+		return "litenn_exp_f32";
+	case UnaryOp::Log:
+		return "litenn_log_f32";
+	case UnaryOp::Sin:
+		return "litenn_sin_f32";
+	case UnaryOp::Cos:
+		return "litenn_cos_f32";
 	default:
 		throw std::runtime_error("Unsupported CUDA native unary op");
 	}

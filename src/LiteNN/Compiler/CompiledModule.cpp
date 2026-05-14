@@ -1154,6 +1154,22 @@ namespace
 		case BinaryOp::Subtract:
 		case BinaryOp::Multiply:
 		case BinaryOp::Divide:
+		case BinaryOp::Max:
+		case BinaryOp::Min:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool HasCUDANativeBinaryF32PTXFallback(BinaryOp op)
+	{
+		switch (op)
+		{
+		case BinaryOp::Add:
+		case BinaryOp::Subtract:
+		case BinaryOp::Multiply:
+		case BinaryOp::Divide:
 			return true;
 		default:
 			return false;
@@ -1161,6 +1177,23 @@ namespace
 	}
 
 	bool IsSupportedCUDANativeUnaryF32Op(UnaryOp op)
+	{
+		switch (op)
+		{
+		case UnaryOp::Negate:
+		case UnaryOp::Abs:
+		case UnaryOp::Sqrt:
+		case UnaryOp::Exp:
+		case UnaryOp::Log:
+		case UnaryOp::Sin:
+		case UnaryOp::Cos:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool HasCUDANativeUnaryF32PTXFallback(UnaryOp op)
 	{
 		switch (op)
 		{
@@ -1401,6 +1434,10 @@ namespace
 			return kCUDANativeFeatureElementwiseMultiplyF32;
 		case BinaryOp::Divide:
 			return kCUDANativeFeatureElementwiseDivideF32;
+		case BinaryOp::Max:
+			return kCUDANativeFeatureElementwiseMaxF32;
+		case BinaryOp::Min:
+			return kCUDANativeFeatureElementwiseMinF32;
 		default:
 			throw std::runtime_error("Unsupported CUDA native binary op");
 		}
@@ -1416,6 +1453,14 @@ namespace
 			return kCUDANativeFeatureElementwiseAbsF32;
 		case UnaryOp::Sqrt:
 			return kCUDANativeFeatureElementwiseSqrtF32;
+		case UnaryOp::Exp:
+			return kCUDANativeFeatureElementwiseExpF32;
+		case UnaryOp::Log:
+			return kCUDANativeFeatureElementwiseLogF32;
+		case UnaryOp::Sin:
+			return kCUDANativeFeatureElementwiseSinF32;
+		case UnaryOp::Cos:
+			return kCUDANativeFeatureElementwiseCosF32;
 		default:
 			throw std::runtime_error("Unsupported CUDA native unary op");
 		}
@@ -1436,6 +1481,10 @@ namespace
 		                       CUDANativeUnaryF32FeatureFlag(plan->op);
 		payload.target = "sm_30";
 		const auto mlirPtx = TryCUDANativeUnaryF32PTXFromMLIRNVPTX(plan->op);
+		if (!mlirPtx && !HasCUDANativeUnaryF32PTXFallback(plan->op))
+		{
+			return std::nullopt;
+		}
 		const auto ptx = mlirPtx ? *mlirPtx : CUDANativeUnaryF32PTX(plan->op);
 		payload.binary = CUDANativeTextBytes(ptx);
 		AppendU32(payload.scalarData, plan->elementCount);
@@ -1504,11 +1553,19 @@ namespace
 			    .rhsShape = plan->rhsShape,
 			};
 			const auto mlirPtx = TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
+			if (!mlirPtx && !HasCUDANativeBinaryF32PTXFallback(plan->op))
+			{
+				return std::nullopt;
+			}
 			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryBroadcastF32PTX(spec);
 		}
 		else
 		{
 			const auto mlirPtx = TryCUDANativeBinaryF32PTXFromMLIRNVPTX(plan->op);
+			if (!mlirPtx && !HasCUDANativeBinaryF32PTXFallback(plan->op))
+			{
+				return std::nullopt;
+			}
 			ptx = mlirPtx ? *mlirPtx : CUDANativeBinaryF32PTX(plan->op);
 		}
 		payload.binary = CUDANativeTextBytes(ptx);

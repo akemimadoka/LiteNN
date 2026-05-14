@@ -36,6 +36,12 @@ namespace LiteNN
 	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseSqrtF32 = 1ull << 8;
 	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseBroadcastF32 = 1ull << 9;
 	inline constexpr std::uint64_t kCUDANativeFeatureMatMulCUBLASF32 = 1ull << 10;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseExpF32 = 1ull << 11;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseLogF32 = 1ull << 12;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseSinF32 = 1ull << 13;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseCosF32 = 1ull << 14;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseMaxF32 = 1ull << 15;
+	inline constexpr std::uint64_t kCUDANativeFeatureElementwiseMinF32 = 1ull << 16;
 	inline constexpr std::uint64_t kCUDANativeKnownFeatureMask = kCUDANativeFeatureStaticShape |
 	                                                             kCUDANativeFeatureSingleSubgraph |
 	                                                             kCUDANativeFeatureElementwiseAddF32 |
@@ -46,7 +52,13 @@ namespace LiteNN
 	                                                             kCUDANativeFeatureElementwiseAbsF32 |
 	                                                             kCUDANativeFeatureElementwiseSqrtF32 |
 	                                                             kCUDANativeFeatureElementwiseBroadcastF32 |
-	                                                             kCUDANativeFeatureMatMulCUBLASF32;
+	                                                             kCUDANativeFeatureMatMulCUBLASF32 |
+	                                                             kCUDANativeFeatureElementwiseExpF32 |
+	                                                             kCUDANativeFeatureElementwiseLogF32 |
+	                                                             kCUDANativeFeatureElementwiseSinF32 |
+	                                                             kCUDANativeFeatureElementwiseCosF32 |
+	                                                             kCUDANativeFeatureElementwiseMaxF32 |
+	                                                             kCUDANativeFeatureElementwiseMinF32;
 
 	struct CUDANativeLaunchDim
 	{

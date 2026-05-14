@@ -5,6 +5,7 @@
 #include <LiteNN/Compiler/CUDANativePayload.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <span>
 #include <string>
@@ -21,12 +22,12 @@ namespace
 		return static_cast<const float*>(t.RawData())[i];
 	}
 
-	void ExpectTensorNear(const Tensor<CPU>& tensor, std::span<const float> expected)
+	void ExpectTensorNear(const Tensor<CPU>& tensor, std::span<const float> expected, float tolerance = 1e-6f)
 	{
 		ASSERT_EQ(tensor.NumElements(), expected.size());
 		for (std::size_t i = 0; i < expected.size(); ++i)
 		{
-			EXPECT_NEAR(ReadFloat(tensor, i), expected[i], 1e-6f);
+			EXPECT_NEAR(ReadFloat(tensor, i), expected[i], tolerance);
 		}
 	}
 
@@ -91,9 +92,9 @@ namespace
 		return graph;
 	}
 
-	Graph BuildSimpleMaxGraph()
+	Graph BuildSimplePowGraph()
 	{
-		return BuildSimpleBinaryGraph(BinaryOp::Max, "max");
+		return BuildSimpleBinaryGraph(BinaryOp::Pow, "pow");
 	}
 } // namespace
 
@@ -104,26 +105,23 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	auto graph = BuildSimpleMaxGraph();
+	auto graph = BuildSimplePowGraph();
 	auto compiled = Compiler<CUDA>::Compile(graph, CUDA{});
 
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	ASSERT_GT(compiled.Rodata().size(), 0u);
 	ASSERT_GT(compiled.Instructions().size(), 0u);
 	EXPECT_EQ(compiled.FindInput("lhs"), 0u);
-	EXPECT_EQ(compiled.FindOutput("max"), 0u);
+	EXPECT_EQ(compiled.FindOutput("pow"), 0u);
 
-	auto lhs = Tensor<CPU>({ 1, 20, 3, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
-	auto rhs = Tensor<CPU>({ 10, 2, 30, 4 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
 	auto outputs = compiled.Run(inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 0), 10.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 1), 20.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 2), 30.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 3), 40.0f);
+	ExpectTensorNear(cpuOutput, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 
 	auto loaded = CompiledModule<CUDA>::Load(compiled.Image(), CUDA{});
 	std::array<Tensor<CUDA>, 1> out = {
@@ -131,10 +129,7 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	};
 	loaded.RunInto(inputs, out);
 	auto cpuOutInto = out[0].CopyToDevice(CPU{});
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutInto, 0), 10.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutInto, 1), 20.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutInto, 2), 30.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutInto, 3), 40.0f);
+	ExpectTensorNear(cpuOutInto, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 }
 
 TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
@@ -144,23 +139,20 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	auto graph = BuildSimpleMaxGraph();
+	auto graph = BuildSimplePowGraph();
 	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
 	auto module = artifact.Load(CUDA{});
 
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
 
-	auto lhs = Tensor<CPU>({ 5, 1, 7, 2 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
-	auto rhs = Tensor<CPU>({ 1, 6, 3, 8 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto rhs = Tensor<CPU>({ 3, 2, 1, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
 	auto outputs = module.Run(inputs);
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 0), 5.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 1), 6.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 2), 7.0f);
-	EXPECT_FLOAT_EQ(ReadFloat(cpuOutput, 3), 8.0f);
+	ExpectTensorNear(cpuOutput, std::array{ 8.0f, 9.0f, 4.0f, 1.0f });
 }
 
 TEST(CompiledModuleCUDATest, RunsNativeMatMulWithCUBLAS)
@@ -216,6 +208,8 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBinaryOpsWithCUDATensors)
 		Case{ BinaryOp::Subtract, "difference", { -9.0f, -18.0f, -27.0f, -36.0f } },
 		Case{ BinaryOp::Multiply, "product", { 10.0f, 40.0f, 90.0f, 160.0f } },
 		Case{ BinaryOp::Divide, "quotient", { 0.1f, 0.1f, 0.1f, 0.1f } },
+		Case{ BinaryOp::Max, "maximum", { 10.0f, 20.0f, 30.0f, 40.0f } },
+		Case{ BinaryOp::Min, "minimum", { 1.0f, 2.0f, 3.0f, 4.0f } },
 	};
 
 	for (const auto& testCase : cases)
@@ -298,6 +292,24 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBroadcastBinaryOpsWithCUDATens
 		    .rhs = { 1, 2, 3, 4, 5, 6 },
 		    .expected = { 2.0f, 6.0f, 12.0f, 8.0f, 15.0f, 24.0f },
 		},
+		Case{
+		    .op = BinaryOp::Max,
+		    .outputName = "broadcast_max",
+		    .lhsShape = { 2, 3 },
+		    .rhsShape = { 1, 3 },
+		    .lhs = { 1, 25, 3, 40, 5, 60 },
+		    .rhs = { 10, 20, 30 },
+		    .expected = { 10.0f, 25.0f, 30.0f, 40.0f, 20.0f, 60.0f },
+		},
+		Case{
+		    .op = BinaryOp::Min,
+		    .outputName = "broadcast_min",
+		    .lhsShape = { 2, 1 },
+		    .rhsShape = { 2, 3 },
+		    .lhs = { 7, 18 },
+		    .rhs = { 1, 9, 8, 20, 2, 30 },
+		    .expected = { 1.0f, 7.0f, 7.0f, 18.0f, 2.0f, 18.0f },
+		},
 	};
 
 	for (const auto& testCase : cases)
@@ -354,11 +366,44 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		std::string_view outputName;
 		std::array<double, 4> input;
 		std::array<float, 4> expected;
+		float tolerance{ 1e-6f };
 	};
 	const std::array cases = {
 		Case{ UnaryOp::Negate, "negated", { -4.0, -1.0, 0.0, 9.0 }, { 4.0f, 1.0f, 0.0f, -9.0f } },
 		Case{ UnaryOp::Abs, "absolute", { -4.0, -1.0, 0.0, 9.0 }, { 4.0f, 1.0f, 0.0f, 9.0f } },
 		Case{ UnaryOp::Sqrt, "sqrt", { 4.0, 1.0, 0.0, 9.0 }, { 2.0f, 1.0f, 0.0f, 3.0f } },
+		Case{
+		    UnaryOp::Exp,
+		    "exp",
+		    { 0.0, 1.0, -1.0, 2.0 },
+		    { static_cast<float>(std::exp(0.0)), static_cast<float>(std::exp(1.0)),
+		      static_cast<float>(std::exp(-1.0)), static_cast<float>(std::exp(2.0)) },
+		    2e-3f,
+		},
+		Case{
+		    UnaryOp::Log,
+		    "log",
+		    { 1.0, 2.0, 4.0, 0.5 },
+		    { static_cast<float>(std::log(1.0)), static_cast<float>(std::log(2.0)),
+		      static_cast<float>(std::log(4.0)), static_cast<float>(std::log(0.5)) },
+		    2e-3f,
+		},
+		Case{
+		    UnaryOp::Sin,
+		    "sin",
+		    { 0.0, 0.5, -0.5, 1.0 },
+		    { static_cast<float>(std::sin(0.0)), static_cast<float>(std::sin(0.5)),
+		      static_cast<float>(std::sin(-0.5)), static_cast<float>(std::sin(1.0)) },
+		    2e-3f,
+		},
+		Case{
+		    UnaryOp::Cos,
+		    "cos",
+		    { 0.0, 0.5, -0.5, 1.0 },
+		    { static_cast<float>(std::cos(0.0)), static_cast<float>(std::cos(0.5)),
+		      static_cast<float>(std::cos(-0.5)), static_cast<float>(std::cos(1.0)) },
+		    2e-3f,
+		},
 	};
 
 	for (const auto& testCase : cases)
@@ -383,13 +428,13 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		auto outputs = module.Run(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		auto cpuOutput = outputs[0].CopyToDevice(CPU{});
-		ExpectTensorNear(cpuOutput, testCase.expected);
+		ExpectTensorNear(cpuOutput, testCase.expected, testCase.tolerance);
 
 		std::array<Tensor<CUDA>, 1> out = {
 			Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
 		};
 		module.RunInto(inputs, out);
 		auto cpuOutInto = out[0].CopyToDevice(CPU{});
-		ExpectTensorNear(cpuOutInto, testCase.expected);
+		ExpectTensorNear(cpuOutInto, testCase.expected, testCase.tolerance);
 	}
 }

@@ -41,7 +41,8 @@ namespace LiteNN
 	/**
 	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.
 	 *
-	 * This path currently covers `UnaryOp::Negate`, `UnaryOp::Abs`, and `UnaryOp::Sqrt`.
+	 * This path currently covers `UnaryOp::Negate`, `UnaryOp::Abs`, `UnaryOp::Sqrt`, `UnaryOp::Exp`,
+	 * `UnaryOp::Log`, `UnaryOp::Sin`, and `UnaryOp::Cos`.
 	 * Callers should keep the template PTX path as fallback until the MLIR/NVPTX route covers the
 	 * rest of CUDA native codegen.
 	 */
