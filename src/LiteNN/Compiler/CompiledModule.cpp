@@ -557,7 +557,8 @@ namespace
 		const auto readSpec = [&]() {
 			CompiledTensorSpec spec;
 			const auto dtypeValue = ReadU32(rodata, offset);
-			if (dtypeValue > static_cast<std::uint32_t>(DataType::Bool))
+			if (dtypeValue > static_cast<std::uint32_t>(LastDataType) ||
+			    !IsValidDataTypeValue(static_cast<DataType>(dtypeValue)))
 			{
 				throw std::runtime_error("Compiled module rodata contains an invalid data type");
 			}
@@ -641,8 +642,6 @@ namespace
 		std::vector<CompiledTensorSpec> outputSpecs;
 	};
 
-	std::size_t ElementByteSize(DataType dtype);
-
 	std::optional<std::uint64_t> ShapeNumElementsU64(std::span<const std::size_t> shape)
 	{
 		std::uint64_t count = 1;
@@ -668,7 +667,7 @@ namespace
 		{
 			throw std::runtime_error("Compiled tensor shape is too large");
 		}
-		return *elements * ElementByteSize(dtype);
+		return *elements * LiteNN::ElementByteSize(dtype);
 	}
 
 	bool IsSameRankBroadcastCompatibleShape(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs,
@@ -898,24 +897,6 @@ namespace
 		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), inputSpecs, outputSpecs };
 	}
 
-	std::size_t ElementByteSize(DataType dtype)
-	{
-		switch (dtype)
-		{
-		case DataType::Float32:
-			return sizeof(float);
-		case DataType::Float64:
-			return sizeof(double);
-		case DataType::Int32:
-			return sizeof(std::int32_t);
-		case DataType::Int64:
-			return sizeof(std::int64_t);
-		case DataType::Bool:
-			return sizeof(bool);
-		}
-		throw std::runtime_error("Invalid data type");
-	}
-
 	std::uint64_t NumElements(const CompiledTensorSpec& spec)
 	{
 		std::uint64_t n = 1;
@@ -948,10 +929,20 @@ namespace
 			return llvm::Type::getFloatTy(ctx);
 		case DataType::Float64:
 			return llvm::Type::getDoubleTy(ctx);
+		case DataType::Float16:
+			return llvm::Type::getHalfTy(ctx);
+		case DataType::BFloat16:
+			return llvm::Type::getBFloatTy(ctx);
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+			return llvm::Type::getInt8Ty(ctx);
 		case DataType::Int32:
 			return llvm::Type::getInt32Ty(ctx);
 		case DataType::Int64:
 			return llvm::Type::getInt64Ty(ctx);
+		case DataType::Int8:
+		case DataType::UInt8:
+			return llvm::Type::getInt8Ty(ctx);
 		case DataType::Bool:
 			return llvm::Type::getInt1Ty(ctx);
 		}
@@ -1133,7 +1124,7 @@ namespace
 		auto* descTy = llvm::cast<llvm::StructType>(descriptor->getType());
 		const unsigned dataField = descTy->getNumElements() == 5 ? 1 : 0;
 		auto* sourceData = builder.CreateExtractValue(descriptor, { dataField });
-		const auto byteCount = NumElements(spec) * ElementByteSize(spec.dtype);
+		const auto byteCount = NumElements(spec) * LiteNN::ElementByteSize(spec.dtype);
 		builder.CreateMemCpy(outputData, llvm::Align(1), sourceData, llvm::Align(1), builder.getInt64(byteCount));
 	}
 
@@ -1692,7 +1683,7 @@ namespace
 		{
 			throw std::runtime_error("CUDA native tensor shape is too large");
 		}
-		return static_cast<std::uint64_t>(*elements) * ElementByteSize(dtype);
+		return static_cast<std::uint64_t>(*elements) * LiteNN::ElementByteSize(dtype);
 	}
 
 	CUDANativeArgumentSpec ToCUDANativeArgument(const CUDANativeTensorRef& ref)
@@ -3124,7 +3115,7 @@ namespace
 
 	std::uint64_t TensorByteSize(const Tensor<CUDA>& tensor)
 	{
-		return static_cast<std::uint64_t>(tensor.NumElements()) * ElementByteSize(tensor.DType());
+		return static_cast<std::uint64_t>(tensor.NumElements()) * LiteNN::ElementByteSize(tensor.DType());
 	}
 
 	class CUDANativeWorkspaceBuffer

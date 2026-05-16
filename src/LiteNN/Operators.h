@@ -1,6 +1,7 @@
 #include <expected>
 #include <vector>
 
+#include <LiteNN/DType.h>
 #include <LiteNN/Misc.h>
 
 #ifndef LITENN_OPERATORS_H
@@ -46,15 +47,6 @@ namespace LiteNN
 		Less,
 		Greater,
 		Equal,
-	};
-
-	enum class DataType
-	{
-		Float32,
-		Float64,
-		Int32,
-		Int64,
-		Bool,
 	};
 
 	template <UnaryOp Op>

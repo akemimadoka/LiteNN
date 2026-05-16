@@ -1,6 +1,7 @@
 #ifndef LITENN_H
 #define LITENN_H
 
+#include <LiteNN/DType.h>
 #include <LiteNN/Device.h>
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>

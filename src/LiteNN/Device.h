@@ -275,10 +275,22 @@ namespace LiteNN
 				return ^^float;
 			case DataType::Float64:
 				return ^^double;
+			case DataType::Float16:
+				return ^^Float16;
+			case DataType::BFloat16:
+				return ^^BFloat16;
+			case DataType::Float8E4M3:
+				return ^^Float8E4M3;
+			case DataType::Float8E5M2:
+				return ^^Float8E5M2;
 			case DataType::Int32:
 				return ^^int32_t;
 			case DataType::Int64:
 				return ^^int64_t;
+			case DataType::Int8:
+				return ^^int8_t;
+			case DataType::UInt8:
+				return ^^uint8_t;
 			case DataType::Bool:
 				return ^^bool;
 			}
@@ -299,8 +311,7 @@ namespace LiteNN
 
 		static constexpr void* Allocate(CPU& device, DataType type, std::size_t size)
 		{
-			const auto typeSize = EnumDispatch(type, []<DataType type> { return sizeof(DataTypeMapping<type>); });
-			return ::operator new(size * typeSize);
+			return ::operator new(size * ElementByteSize(type));
 		}
 
 		static constexpr void Deallocate(CPU& device, void* ptr, DataType type, std::size_t size)

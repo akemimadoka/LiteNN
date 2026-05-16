@@ -24,34 +24,16 @@ namespace LiteNN::Validation
 
 	inline std::string DataTypeToString(DataType dtype)
 	{
-		switch (dtype)
+		if (IsValidDataTypeValue(dtype))
 		{
-		case DataType::Float32:
-			return "Float32";
-		case DataType::Float64:
-			return "Float64";
-		case DataType::Int32:
-			return "Int32";
-		case DataType::Int64:
-			return "Int64";
-		case DataType::Bool:
-			return "Bool";
+			return std::string(DataTypeName(dtype));
 		}
 		return std::format("<invalid:{}>", static_cast<int>(dtype));
 	}
 
 	inline bool IsValidDataType(DataType dtype)
 	{
-		switch (dtype)
-		{
-		case DataType::Float32:
-		case DataType::Float64:
-		case DataType::Int32:
-		case DataType::Int64:
-		case DataType::Bool:
-			return true;
-		}
-		return false;
+		return IsValidDataTypeValue(dtype);
 	}
 
 	inline bool IsValidUnaryOp(UnaryOp op)

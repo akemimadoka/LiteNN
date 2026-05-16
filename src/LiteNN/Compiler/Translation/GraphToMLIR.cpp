@@ -6,9 +6,11 @@
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "llvm/ADT/APInt.h"
 
 using namespace mlir;
 using namespace LiteNN;
@@ -28,10 +30,20 @@ Type convertElementType(MLIRContext& ctx, DataType dt)
 		return Float32Type::get(&ctx);
 	case DataType::Float64:
 		return Float64Type::get(&ctx);
+	case DataType::Float16:
+		return Float16Type::get(&ctx);
+	case DataType::BFloat16:
+		return BFloat16Type::get(&ctx);
+	case DataType::Float8E4M3:
+	case DataType::Float8E5M2:
+		return IntegerType::get(&ctx, 8);
 	case DataType::Int32:
 		return IntegerType::get(&ctx, 32);
 	case DataType::Int64:
 		return IntegerType::get(&ctx, 64);
+	case DataType::Int8:
+	case DataType::UInt8:
+		return IntegerType::get(&ctx, 8);
 	case DataType::Bool:
 		return IntegerType::get(&ctx, 1);
 	}
@@ -70,12 +82,56 @@ DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<Polymorphic
 		ArrayRef<double> data(static_cast<const double*>(rawData), numElements);
 		return DenseElementsAttr::get(tensorType, data);
 	}
+	case DataType::Float16: {
+		SmallVector<Attribute> data;
+		data.reserve(numElements);
+		const auto* src = static_cast<const Float16*>(rawData);
+		for (std::size_t i = 0; i < numElements; ++i)
+			data.push_back(FloatAttr::get(tensorType.getElementType(), static_cast<float>(src[i])));
+		return DenseElementsAttr::get(tensorType, data);
+	}
+	case DataType::BFloat16: {
+		SmallVector<Attribute> data;
+		data.reserve(numElements);
+		const auto* src = static_cast<const BFloat16*>(rawData);
+		for (std::size_t i = 0; i < numElements; ++i)
+			data.push_back(FloatAttr::get(tensorType.getElementType(), static_cast<float>(src[i])));
+		return DenseElementsAttr::get(tensorType, data);
+	}
+	case DataType::Float8E4M3: {
+		SmallVector<Attribute> data;
+		data.reserve(numElements);
+		const auto* src = static_cast<const Float8E4M3*>(rawData);
+		for (std::size_t i = 0; i < numElements; ++i)
+			data.push_back(IntegerAttr::get(tensorType.getElementType(), llvm::APInt(8, src[i].bits)));
+		return DenseElementsAttr::get(tensorType, data);
+	}
+	case DataType::Float8E5M2: {
+		SmallVector<Attribute> data;
+		data.reserve(numElements);
+		const auto* src = static_cast<const Float8E5M2*>(rawData);
+		for (std::size_t i = 0; i < numElements; ++i)
+			data.push_back(IntegerAttr::get(tensorType.getElementType(), llvm::APInt(8, src[i].bits)));
+		return DenseElementsAttr::get(tensorType, data);
+	}
 	case DataType::Int32: {
 		ArrayRef<int32_t> data(static_cast<const int32_t*>(rawData), numElements);
 		return DenseElementsAttr::get(tensorType, data);
 	}
 	case DataType::Int64: {
 		ArrayRef<int64_t> data(static_cast<const int64_t*>(rawData), numElements);
+		return DenseElementsAttr::get(tensorType, data);
+	}
+	case DataType::Int8: {
+		ArrayRef<int8_t> data(static_cast<const int8_t*>(rawData), numElements);
+		return DenseElementsAttr::get(tensorType, data);
+	}
+	case DataType::UInt8: {
+		SmallVector<Attribute> data;
+		data.reserve(numElements);
+		const auto* src = static_cast<const uint8_t*>(rawData);
+		for (std::size_t i = 0; i < numElements; ++i)
+			data.push_back(IntegerAttr::get(tensorType.getElementType(), llvm::APInt(8, src[i])));
 		return DenseElementsAttr::get(tensorType, data);
 	}
 	case DataType::Bool: {

@@ -82,10 +82,22 @@ namespace LiteNN
 				return ^^float;
 			case DataType::Float64:
 				return ^^double;
+			case DataType::Float16:
+				return ^^Float16;
+			case DataType::BFloat16:
+				return ^^BFloat16;
+			case DataType::Float8E4M3:
+				return ^^Float8E4M3;
+			case DataType::Float8E5M2:
+				return ^^Float8E5M2;
 			case DataType::Int32:
 				return ^^int32_t;
 			case DataType::Int64:
 				return ^^int64_t;
+			case DataType::Int8:
+				return ^^int8_t;
+			case DataType::UInt8:
+				return ^^uint8_t;
 			case DataType::Bool:
 				return ^^bool;
 			}

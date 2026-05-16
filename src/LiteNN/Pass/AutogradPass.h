@@ -1256,7 +1256,8 @@ namespace LiteNN
 		                         std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
 		{
 			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
-			if (inInfo.dtype == DataType::Bool || inInfo.dtype == DataType::Int32 || inInfo.dtype == DataType::Int64)
+			if (inInfo.dtype == DataType::Bool || inInfo.dtype == DataType::Int32 || inInfo.dtype == DataType::Int64 ||
+			    inInfo.dtype == DataType::Int8 || inInfo.dtype == DataType::UInt8)
 			{
 				return;
 			}

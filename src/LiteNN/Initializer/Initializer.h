@@ -23,9 +23,9 @@ namespace LiteNN::Initializer
 	{
 		inline void ValidateFloatingDType(DataType dtype)
 		{
-			if (dtype != DataType::Float32 && dtype != DataType::Float64)
+			if (!IsFloatingDataType(dtype))
 			{
-				throw std::runtime_error("Random initializers require Float32 or Float64 tensors");
+				throw std::runtime_error("Random initializers require floating-point tensors");
 			}
 		}
 
@@ -35,7 +35,7 @@ namespace LiteNN::Initializer
 			ValidateFloatingDType(dtype);
 			Tensor<CPU> tensor(Uninitialized, shape, dtype);
 			EnumDispatch(dtype, [&]<DataType TypeValue> {
-				if constexpr (TypeValue == DataType::Float32 || TypeValue == DataType::Float64)
+				if constexpr (IsFloatingDataType(TypeValue))
 				{
 					using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
 					auto* data = static_cast<T*>(tensor.RawData());

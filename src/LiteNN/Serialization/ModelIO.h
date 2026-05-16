@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 2;
+		constexpr std::uint32_t kModelVersion = 3;
 
 		enum class NodeKind : std::uint32_t
 		{
@@ -46,24 +46,6 @@ namespace LiteNN::Serialization
 			Slice,
 			FusedOp,
 		};
-
-		inline std::size_t ElementByteSize(DataType dtype)
-		{
-			switch (dtype)
-			{
-			case DataType::Float32:
-				return sizeof(float);
-			case DataType::Float64:
-				return sizeof(double);
-			case DataType::Int32:
-				return sizeof(std::int32_t);
-			case DataType::Int64:
-				return sizeof(std::int64_t);
-			case DataType::Bool:
-				return sizeof(bool);
-			}
-			throw std::runtime_error("Invalid data type");
-		}
 
 		inline void EnsureWrite(const std::ostream& out)
 		{
@@ -236,7 +218,7 @@ namespace LiteNN::Serialization
 			auto cpuTensor = tensor.CopyToDevice(CPU{});
 			WriteDataType(out, cpuTensor.DType());
 			WriteShape(out, cpuTensor.Shape().Dims);
-			const auto byteCount = cpuTensor.NumElements() * ElementByteSize(cpuTensor.DType());
+			const auto byteCount = cpuTensor.NumElements() * LiteNN::ElementByteSize(cpuTensor.DType());
 			out.write(static_cast<const char*>(cpuTensor.RawData()), static_cast<std::streamsize>(byteCount));
 			EnsureWrite(out);
 		}
@@ -246,7 +228,7 @@ namespace LiteNN::Serialization
 			const auto dtype = ReadDataType(in);
 			const auto shape = ReadShape(in);
 			Tensor<CPU> tensor(Uninitialized, ShapeView{ shape }, dtype, CPU{});
-			const auto byteCount = tensor.NumElements() * ElementByteSize(dtype);
+			const auto byteCount = tensor.NumElements() * LiteNN::ElementByteSize(dtype);
 			in.read(static_cast<char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
 			EnsureRead(in);
 			return tensor;

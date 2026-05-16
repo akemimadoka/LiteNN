@@ -32,20 +32,7 @@ namespace LiteNN
 	{
 		std::size_t ElementSize(DataType type)
 		{
-			switch (type)
-			{
-			case DataType::Float32:
-				return sizeof(float);
-			case DataType::Float64:
-				return sizeof(double);
-			case DataType::Int32:
-				return sizeof(int32_t);
-			case DataType::Int64:
-				return sizeof(int64_t);
-			case DataType::Bool:
-				return sizeof(bool);
-			}
-			throw std::runtime_error("Invalid DataType");
+			return ElementByteSize(type);
 		}
 
 		std::vector<std::byte> MakeHostBuffer(DataType type, std::size_t size)
