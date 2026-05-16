@@ -121,9 +121,30 @@ P3: unsupported in the first converter unless a real model requires them:
 
 ### P4: Transformer Graph Coverage
 
-- [ ] Add graph/layer helpers for RMSNorm, RoPE, attention KV cache, SwiGLU/MLP, and causal masking.
-- [ ] Lower common LLaMA-family models from GGUF metadata into LiteNN Graph.
-- [ ] Keep a CPU reference execution path for correctness before relying on CUDA/AOT.
+Status: completed on 2026-05-17. The checklist below is now the source of truth for P4 completion tracking.
+
+Completed note: the first end-to-end LLaMA-family forward graph currently accepts one-hot token planes as input and lowers token embedding through existing MatMul/Transpose primitives. Dedicated token-id row lookup remains tracked separately in P0.
+
+#### P4-A: Layer and Graph Helper Checklist
+
+- [x] Add RMSNorm helper and focused LayerTest coverage.
+- [x] Add RoPE helper and focused LayerTest coverage.
+- [x] Add causal masking helper and focused LayerTest coverage.
+- [x] Add attention KV cache helper(s) for append/view/update and focused tests.
+- [x] Add SwiGLU/MLP helper(s) covering gate/up/down projections and focused tests.
+
+#### P4-B: LLaMA Graph Lowering Checklist
+
+- [x] Map GGUF hyperparameters needed for LLaMA-family graph construction.
+- [x] Lower one decoder block from GGUF metadata and tensor names into LiteNN Graph.
+- [x] Lower token embedding, final norm, and LM head around decoder blocks.
+- [x] Emit a runnable forward graph for at least one common LLaMA-family architecture.
+
+#### P4-C: CPU Correctness Checklist
+
+- [x] Add CPU interpreter smoke coverage for the first lowered decoder block.
+- [x] Add CPU interpreter smoke coverage for the first fully lowered small LLaMA-family graph.
+- [x] Keep the lowering path validated on CPU before relying on CUDA or AOT-only checks.
 
 ### P5: AOT LLM Artifacts
 

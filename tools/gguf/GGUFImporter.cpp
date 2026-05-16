@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -16,8 +17,125 @@
 
 namespace LiteNN::GGUF
 {
+	std::size_t LLaMAHyperparameters::HeadDimension() const
+	{
+		if (attentionHeadCount == 0)
+		{
+			throw std::runtime_error("LLaMA attention.head_count must be greater than zero");
+		}
+		if ((embeddingLength % attentionHeadCount) != 0)
+		{
+			throw std::runtime_error(std::format(
+			    "LLaMA embedding_length {} must be divisible by attention.head_count {}", embeddingLength,
+			    attentionHeadCount));
+		}
+		return embeddingLength / attentionHeadCount;
+	}
+
+	std::size_t LLaMAHyperparameters::QueryGroupsPerKVHead() const
+	{
+		if (attentionHeadCountKV == 0)
+		{
+			throw std::runtime_error("LLaMA attention.head_count_kv must be greater than zero");
+		}
+		if ((attentionHeadCount % attentionHeadCountKV) != 0)
+		{
+			throw std::runtime_error(std::format(
+			    "LLaMA attention.head_count {} must be divisible by attention.head_count_kv {}",
+			    attentionHeadCount, attentionHeadCountKV));
+		}
+		return attentionHeadCount / attentionHeadCountKV;
+	}
+
 	namespace
 	{
+		const ModelMetadataEntry& RequireMetadata(const Graph& graph, std::string_view key)
+		{
+			const auto* entry = graph.FindMetadata(key);
+			if (!entry)
+			{
+				throw std::runtime_error(std::format("Missing GGUF metadata key '{}'", key));
+			}
+			return *entry;
+		}
+
+		std::optional<const ModelMetadataEntry*> FindMetadata(const Graph& graph, std::string_view key)
+		{
+			if (const auto* entry = graph.FindMetadata(key))
+			{
+				return entry;
+			}
+			return std::nullopt;
+		}
+
+		std::size_t NarrowToSize(std::uint64_t value, std::string_view key)
+		{
+			if (value > std::numeric_limits<std::size_t>::max())
+			{
+				throw std::runtime_error(std::format("GGUF metadata key '{}' exceeds size_t range", key));
+			}
+			return static_cast<std::size_t>(value);
+		}
+
+		std::size_t ReadSizeValue(const ModelMetadataEntry& entry)
+		{
+			return std::visit(
+			    [&entry](const auto& value) -> std::size_t {
+				using T = std::decay_t<decltype(value)>;
+				if constexpr (std::same_as<T, std::uint64_t>)
+				{
+					return NarrowToSize(value, entry.key);
+				}
+				else if constexpr (std::same_as<T, std::int64_t>)
+				{
+					if (value < 0)
+					{
+						throw std::runtime_error(std::format("GGUF metadata key '{}' must be non-negative", entry.key));
+					}
+					return NarrowToSize(static_cast<std::uint64_t>(value), entry.key);
+				}
+				else
+				{
+					throw std::runtime_error(std::format("GGUF metadata key '{}' must be an integer", entry.key));
+				}
+			},
+			    entry.value);
+		}
+
+		double ReadDoubleValue(const ModelMetadataEntry& entry)
+		{
+			return std::visit(
+			    [&entry](const auto& value) -> double {
+				using T = std::decay_t<decltype(value)>;
+				if constexpr (std::same_as<T, double>)
+				{
+					return value;
+				}
+				else if constexpr (std::same_as<T, std::uint64_t>)
+				{
+					return static_cast<double>(value);
+				}
+				else if constexpr (std::same_as<T, std::int64_t>)
+				{
+					return static_cast<double>(value);
+				}
+				else
+				{
+					throw std::runtime_error(std::format("GGUF metadata key '{}' must be numeric", entry.key));
+				}
+			},
+			    entry.value);
+		}
+
+		std::string ReadStringValue(const ModelMetadataEntry& entry)
+		{
+			if (const auto* value = std::get_if<std::string>(&entry.value))
+			{
+				return *value;
+			}
+			throw std::runtime_error(std::format("GGUF metadata key '{}' must be a string", entry.key));
+		}
+
 		struct GGUFContextDeleter
 		{
 			void operator()(gguf_context* ctx) const
@@ -364,6 +482,63 @@ namespace LiteNN::GGUF
 			graph.AddVariable(Variable::Create(std::move(plainTensor)));
 		}
 	} // namespace
+
+	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph)
+	{
+		const auto architecture = ReadStringValue(RequireMetadata(graph, "general.architecture"));
+		if (architecture.empty())
+		{
+			throw std::runtime_error("GGUF metadata key 'general.architecture' must not be empty");
+		}
+
+		const auto key = [&architecture](std::string_view suffix) {
+			return std::format("{}.{}", architecture, suffix);
+		};
+
+		LLaMAHyperparameters hyperparameters{
+			.architecture = architecture,
+			.contextLength = ReadSizeValue(RequireMetadata(graph, key("context_length"))),
+			.embeddingLength = ReadSizeValue(RequireMetadata(graph, key("embedding_length"))),
+			.blockCount = ReadSizeValue(RequireMetadata(graph, key("block_count"))),
+			.feedForwardLength = ReadSizeValue(RequireMetadata(graph, key("feed_forward_length"))),
+			.attentionHeadCount = ReadSizeValue(RequireMetadata(graph, key("attention.head_count"))),
+			.attentionHeadCountKV = 0,
+			.rmsNormEpsilon = ReadDoubleValue(RequireMetadata(graph, key("attention.layer_norm_rms_epsilon"))),
+			.ropeFrequencyBase = 10000.0,
+		};
+
+		if (const auto headCountKV = FindMetadata(graph, key("attention.head_count_kv")))
+		{
+			hyperparameters.attentionHeadCountKV = ReadSizeValue(**headCountKV);
+		}
+		else
+		{
+			hyperparameters.attentionHeadCountKV = hyperparameters.attentionHeadCount;
+		}
+
+		if (const auto ropeFrequencyBase = FindMetadata(graph, key("rope.freq_base")))
+		{
+			hyperparameters.ropeFrequencyBase = ReadDoubleValue(**ropeFrequencyBase);
+		}
+
+		if (hyperparameters.contextLength == 0 || hyperparameters.embeddingLength == 0 ||
+		    hyperparameters.blockCount == 0 || hyperparameters.feedForwardLength == 0)
+		{
+			throw std::runtime_error("LLaMA hyperparameters must be greater than zero");
+		}
+		if (!(hyperparameters.rmsNormEpsilon > 0.0))
+		{
+			throw std::runtime_error("LLaMA attention.layer_norm_rms_epsilon must be greater than zero");
+		}
+		if (!(hyperparameters.ropeFrequencyBase > 0.0))
+		{
+			throw std::runtime_error("LLaMA rope.freq_base must be greater than zero");
+		}
+
+		static_cast<void>(hyperparameters.HeadDimension());
+		static_cast<void>(hyperparameters.QueryGroupsPerKVHead());
+		return hyperparameters;
+	}
 
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath)
 	{

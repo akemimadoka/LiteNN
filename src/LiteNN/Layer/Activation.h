@@ -48,6 +48,15 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
+	inline NodeOutput AddSiLU(Subgraph& subgraph, NodeOutput input)
+	{
+		const auto info = subgraph.GetOutputInfo(input);
+		const auto sigmoid = AddSigmoid(subgraph, input);
+		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, sigmoid },
+		                                     { OutputInfo{ info.dtype, info.shape } });
+		return { result, 0 };
+	}
+
 	inline SubgraphId BuildReLU(Graph& graph, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
@@ -71,6 +80,15 @@ namespace LiteNN::Layer
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddTanh(subgraph, { input, 0 });
+		subgraph.SetResults({ result });
+		return graph.AddSubgraph(std::move(subgraph));
+	}
+
+	inline SubgraphId BuildSiLU(Graph& graph, DataType dtype, ShapeView shape)
+	{
+		Subgraph subgraph;
+		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
+		const auto result = AddSiLU(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
 	}

@@ -45,6 +45,8 @@ litenn_enable_sanitizers(LiteNNGGMLVendor)
 add_library(LiteNNGGUFImporter STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/LLaMABuilder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LLaMABuilder.h
 )
 target_compile_features(LiteNNGGUFImporter PUBLIC cxx_std_26)
 target_include_directories(LiteNNGGUFImporter PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

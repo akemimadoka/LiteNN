@@ -2,8 +2,13 @@
 
 #include <LiteNN.h>
 #include <LiteNN/Layer/Activation.h>
+#include <LiteNN/Layer/CausalMask.h>
+#include <LiteNN/Layer/KVCache.h>
 #include <LiteNN/Layer/LayerNorm.h>
+#include <LiteNN/Layer/RMSNorm.h>
+#include <LiteNN/Layer/RoPE.h>
 #include <LiteNN/Layer/Softmax.h>
+#include <LiteNN/Layer/SwiGLU.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <cmath>
@@ -28,6 +33,12 @@ namespace
 		EXPECT_EQ(results.size(), 1u);
 		return std::move(results[0]);
 	}
+
+		std::vector<Tensor<CPU>> RunWithInputs(Graph& graph, std::vector<Tensor<CPU>> inputs)
+		{
+			Runtime::Interpreter<CPU> interp;
+			return interp.RunForward(graph, inputs);
+		}
 } // namespace
 
 // ─────────────────────────────────────────────
@@ -291,4 +302,303 @@ TEST(LayerLayerNorm, BetaShiftsOutput)
 	}
 	mean /= 3.0f;
 	EXPECT_NEAR(mean, 5.0f, 1e-4f);
+}
+
+// ─────────────────────────────────────────────
+//  RMSNorm 测试
+// ─────────────────────────────────────────────
+
+TEST(LayerRMSNorm, OutputMeanSquareNearOne)
+{
+	Graph graph;
+	const auto norm = Layer::CreateRMSNorm(graph, 4);
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
+	const auto out = Layer::AddRMSNorm(sg, norm, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 1, 4 });
+
+	float meanSquare = 0.0f;
+	for (std::size_t i = 0; i < 4; ++i)
+	{
+		const auto value = ReadFloat(result, i);
+		meanSquare += value * value;
+	}
+	meanSquare /= 4.0f;
+	EXPECT_NEAR(meanSquare, 1.0f, 1e-4f);
+}
+
+TEST(LayerRMSNorm, ZeroInputStaysZero)
+{
+	Graph graph;
+	const auto norm = Layer::CreateRMSNorm(graph, 3);
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
+	const auto out = Layer::AddRMSNorm(sg, norm, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 0.0f, 0.0f, 0.0f }, { 1, 3 });
+	EXPECT_NEAR(ReadFloat(result, 0), 0.0f, 1e-6f);
+	EXPECT_NEAR(ReadFloat(result, 1), 0.0f, 1e-6f);
+	EXPECT_NEAR(ReadFloat(result, 2), 0.0f, 1e-6f);
+}
+
+TEST(LayerRMSNorm, WeightScalesNormalizedOutput)
+{
+	Graph graph;
+
+	Layer::RMSNormLayer norm;
+	norm.featureSize = 3;
+	norm.dtype = DataType::Float32;
+	norm.eps = 1e-6;
+	norm.weightVariable = graph.AddVariable(
+	    Variable::Create(Tensor<CPU>({ 2.0f, 2.0f, 2.0f }, { 1, 3 })));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
+	const auto out = Layer::AddRMSNorm(sg, norm, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f }, { 1, 3 });
+
+	const float denom = std::sqrt((1.0f + 4.0f + 9.0f) / 3.0f + 1e-6f);
+	EXPECT_NEAR(ReadFloat(result, 0), 2.0f * 1.0f / denom, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), 2.0f * 2.0f / denom, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 2), 2.0f * 3.0f / denom, 1e-5f);
+}
+
+// ─────────────────────────────────────────────
+//  RoPE 测试
+// ─────────────────────────────────────────────
+
+TEST(LayerRoPE, PositionZeroIsIdentity)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
+	const auto out = Layer::AddRoPE(sg, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 1, 4 });
+	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), 2.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 2), 3.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 3), 4.0f, 1e-5f);
+}
+
+TEST(LayerRoPE, RotatesPairsAtPositionOne)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 4 });
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, 1.0);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 4 });
+	const auto cos1 = std::cos(1.0f);
+	const auto sin1 = std::sin(1.0f);
+	EXPECT_NEAR(ReadFloat(result, 4), cos1, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 5), sin1, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 6), -sin1, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 7), cos1, 1e-5f);
+}
+
+TEST(LayerRoPE, RejectsOddFeatureSize)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+	EXPECT_THROW(static_cast<void>(Layer::AddRoPE(sg, { input, 0 })), std::runtime_error);
+}
+
+TEST(LayerSiLU, MatchesAnalyticValue)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1 });
+	const auto out = Layer::AddSiLU(sg, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 2.0f }, { 1 });
+	const auto expected = 2.0f / (1.0f + std::exp(-2.0f));
+	EXPECT_NEAR(ReadFloat(result, 0), expected, 1e-5f);
+}
+
+TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
+{
+	Graph graph;
+	const auto layer = Layer::CreateSwiGLUMLP(
+	    graph,
+	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto out = Layer::AddSwiGLUMLP(sg, layer, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
+	EXPECT_NEAR(ReadFloat(result, 0), 1.0f * (1.0f / (1.0f + std::exp(-1.0f))) * 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), 2.0f * (1.0f / (1.0f + std::exp(-2.0f))) * 2.0f, 1e-5f);
+}
+
+TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
+{
+	Graph graph;
+	const auto layer = Layer::CreateSwiGLUMLP(
+	    graph,
+	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	    Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto out = Layer::AddSwiGLUMLP(sg, layer, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
+	ASSERT_EQ(result.Shape().NumElements(), 1u);
+	const auto expected0 = 1.0f * (1.0f / (1.0f + std::exp(-1.0f))) * 1.0f;
+	const auto expected1 = 2.0f * (1.0f / (1.0f + std::exp(-2.0f))) * 2.0f;
+	EXPECT_NEAR(ReadFloat(result, 0), expected0 + expected1, 1e-5f);
+}
+
+TEST(LayerSwiGLU, RejectsMismatchedHiddenSizes)
+{
+	Graph graph;
+	EXPECT_THROW(static_cast<void>(Layer::CreateSwiGLUMLP(
+	                 graph,
+	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f }, { 2, 3 }),
+	                 Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }))),
+	             std::runtime_error);
+}
+
+TEST(LayerCausalMask, PreservesDiagonalAndLowerTriangle)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 3, 3 });
+	const auto out = Layer::AddCausalMask(sg, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph,
+	                                { 1.0f, 2.0f, 3.0f,
+	                                  4.0f, 5.0f, 6.0f,
+	                                  7.0f, 8.0f, 9.0f },
+	                                { 3, 3 });
+	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 3), 4.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 4), 5.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 6), 7.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 7), 8.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 8), 9.0f, 1e-5f);
+}
+
+TEST(LayerCausalMask, MasksStrictUpperTriangle)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 3, 3 });
+	const auto out = Layer::AddCausalMask(sg, { input, 0 });
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph,
+	                                { 1.0f, 2.0f, 3.0f,
+	                                  4.0f, 5.0f, 6.0f,
+	                                  7.0f, 8.0f, 9.0f },
+	                                { 3, 3 });
+	EXPECT_LT(ReadFloat(result, 1), -1.0e8f);
+	EXPECT_LT(ReadFloat(result, 2), -1.0e8f);
+	EXPECT_LT(ReadFloat(result, 5), -1.0e8f);
+}
+
+TEST(LayerCausalMask, RejectsNonSquareMatrix)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+	EXPECT_THROW(static_cast<void>(Layer::AddCausalMask(sg, { input, 0 })), std::runtime_error);
+}
+
+TEST(LayerKVCache, AppendConcatenatesPastAndPresent)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto pastKeys = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto pastValues = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto newKeys = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto newValues = sg.AddParam(DataType::Float32, { 1, 3 });
+	const auto updated = Layer::AddKVCacheAppend(sg, { { pastKeys, 0 }, { pastValues, 0 } },
+	                                          { { newKeys, 0 }, { newValues, 0 } });
+	sg.SetResults({ updated.keys, updated.values });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto results = RunWithInputs(graph,
+	                            {
+	                                Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 }),
+	                                Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f }, { 2, 3 }),
+	                                Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }),
+	                                Tensor<CPU>({ 16.0f, 17.0f, 18.0f }, { 1, 3 }),
+	                            });
+
+	ASSERT_EQ(results.size(), 2u);
+	EXPECT_EQ(results[0].Shape().NumElements(), 6u);
+	EXPECT_EQ(results[1].Shape().NumElements(), 9u);
+	EXPECT_NEAR(ReadFloat(results[0], 0), 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[0], 4), 5.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[0], 5), 6.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[1], 6), 16.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[1], 7), 17.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[1], 8), 18.0f, 1e-5f);
+}
+
+TEST(LayerKVCache, ViewReturnsRequestedWindow)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto keys = sg.AddParam(DataType::Float32, { 3, 2 });
+	const auto values = sg.AddParam(DataType::Float32, { 3, 3 });
+	const auto window = Layer::AddKVCacheView(sg, { { keys, 0 }, { values, 0 } }, 1, 2);
+	sg.SetResults({ window.keys, window.values });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto results = RunWithInputs(graph,
+	                            {
+	                                Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 }),
+	                                Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f },
+	                                            { 3, 3 }),
+	                            });
+
+	ASSERT_EQ(results.size(), 2u);
+	EXPECT_EQ(results[0].Shape().NumElements(), 4u);
+	EXPECT_EQ(results[1].Shape().NumElements(), 6u);
+	EXPECT_NEAR(ReadFloat(results[0], 0), 3.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[0], 3), 6.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[1], 0), 13.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(results[1], 5), 18.0f, 1e-5f);
+}
+
+TEST(LayerKVCache, RejectsMismatchedSequenceLengths)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto keys = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto values = sg.AddParam(DataType::Float32, { 3, 3 });
+	EXPECT_THROW(static_cast<void>(Layer::AddKVCacheView(sg, { { keys, 0 }, { values, 0 } }, 0, 2)),
+	             std::runtime_error);
 }
