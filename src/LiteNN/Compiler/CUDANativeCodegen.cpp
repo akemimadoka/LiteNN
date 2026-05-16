@@ -30,6 +30,10 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
+#ifdef LITENN_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -45,7 +49,7 @@ namespace LiteNN
 namespace
 {
 	constexpr std::string_view kNVPTXTriple = "nvptx64-nvidia-cuda";
-	constexpr std::string_view kDefaultNVPTXChip = "sm_30";
+	constexpr std::string_view kDefaultNVPTXChip = "sm_75";
 	constexpr std::string_view kNVPTXFeatures = "+ptx64";
 
 	bool IsValidNVPTXSMTarget(std::string_view value)
@@ -64,6 +68,31 @@ namespace
 		return true;
 	}
 
+	std::string DetectNativeNVPTXTargetChip()
+	{
+#ifdef LITENN_ENABLE_CUDA
+		int deviceIndex = 0;
+		if (cudaGetDevice(&deviceIndex) != cudaSuccess)
+		{
+			(void)cudaGetLastError();
+			throw std::runtime_error("LITENN_CUDA_AOT_TARGET=native requires an available CUDA runtime device");
+		}
+		cudaDeviceProp properties{};
+		if (cudaGetDeviceProperties(&properties, deviceIndex) != cudaSuccess)
+		{
+			(void)cudaGetLastError();
+			throw std::runtime_error("Failed to query CUDA device properties for LITENN_CUDA_AOT_TARGET=native");
+		}
+		if (properties.major <= 0 || properties.minor < 0)
+		{
+			throw std::runtime_error("CUDA device reported an invalid compute capability");
+		}
+		return std::format("sm_{}{}", properties.major, properties.minor);
+#else
+		throw std::runtime_error("LITENN_CUDA_AOT_TARGET=native requires LiteNN to be built with CUDA support");
+#endif
+	}
+
 	std::string ResolveNVPTXTargetChip()
 	{
 		if (const char* env = std::getenv("LITENN_CUDA_AOT_TARGET"))
@@ -71,10 +100,14 @@ namespace
 			const std::string target = env;
 			if (!target.empty())
 			{
+				if (target == "native")
+				{
+					return DetectNativeNVPTXTargetChip();
+				}
 				if (!IsValidNVPTXSMTarget(target))
 				{
 					throw std::runtime_error(
-					    "LITENN_CUDA_AOT_TARGET must use an sm_<major><minor> target such as sm_75");
+					    "LITENN_CUDA_AOT_TARGET must be native or an sm_<major><minor> target such as sm_75");
 				}
 				return target;
 			}

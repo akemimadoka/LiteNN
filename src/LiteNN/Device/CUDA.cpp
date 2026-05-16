@@ -5,12 +5,16 @@
 #ifdef LITENN_ENABLE_CUDA
 
 #include <cublas_v2.h>
+#ifdef LITENN_ENABLE_CUBLASLT
+#include <cublasLt.h>
+#endif
 #include <cuda_runtime_api.h>
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 #include <cuda.h>
 #endif
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -261,6 +265,246 @@ namespace LiteNN
 			return ref;
 		}
 
+#ifdef LITENN_ENABLE_CUBLASLT
+		class CUBLASLtHandle
+		{
+		public:
+			explicit CUBLASLtHandle(int deviceIndex) : deviceIndex_(deviceIndex)
+			{
+				CUDADeviceGuard guard(deviceIndex_);
+				CheckCUBLAS(cublasLtCreate(&handle_), "cublasLtCreate");
+			}
+
+			~CUBLASLtHandle()
+			{
+				if (handle_ != nullptr)
+				{
+					(void)cublasLtDestroy(handle_);
+				}
+			}
+
+			CUBLASLtHandle(const CUBLASLtHandle&) = delete;
+			CUBLASLtHandle& operator=(const CUBLASLtHandle&) = delete;
+
+			int DeviceIndex() const noexcept
+			{
+				return deviceIndex_;
+			}
+
+			cublasLtHandle_t get() const noexcept
+			{
+				return handle_;
+			}
+
+			struct AlgoKey
+			{
+				DataType type{};
+				int m{};
+				int k{};
+				int n{};
+
+				bool operator==(const AlgoKey& other) const noexcept
+				{
+					return type == other.type && m == other.m && k == other.k && n == other.n;
+				}
+			};
+
+			const cublasLtMatmulAlgo_t* CachedAlgo(const AlgoKey& key) const
+			{
+				for (const auto& entry : algoCache_)
+				{
+					if (entry.key == key)
+					{
+						return &entry.algo;
+					}
+				}
+				return nullptr;
+			}
+
+			void CacheAlgo(const AlgoKey& key, const cublasLtMatmulAlgo_t& algo)
+			{
+				algoCache_.push_back(AlgoCacheEntry{ key, algo });
+			}
+
+		private:
+			struct AlgoCacheEntry
+			{
+				AlgoKey key;
+				cublasLtMatmulAlgo_t algo;
+			};
+
+			int deviceIndex_{};
+			cublasLtHandle_t handle_{};
+			std::vector<AlgoCacheEntry> algoCache_;
+		};
+
+		CUBLASLtHandle& ThreadLocalCUBLASLtHandle(int deviceIndex)
+		{
+			static thread_local std::vector<std::unique_ptr<CUBLASLtHandle>> handles;
+			for (auto& handle : handles)
+			{
+				if (handle->DeviceIndex() == deviceIndex)
+				{
+					return *handle;
+				}
+			}
+			auto handle = std::make_unique<CUBLASLtHandle>(deviceIndex);
+			auto& ref = *handle;
+			handles.push_back(std::move(handle));
+			return ref;
+		}
+
+		template <typename Descriptor, cublasStatus_t (*DestroyFn)(Descriptor)>
+		class CUBLASLtDescriptor
+		{
+		public:
+			CUBLASLtDescriptor() = default;
+			explicit CUBLASLtDescriptor(Descriptor descriptor) : descriptor_(descriptor) {}
+			~CUBLASLtDescriptor()
+			{
+				if (descriptor_ != nullptr)
+				{
+					(void)DestroyFn(descriptor_);
+				}
+			}
+
+			CUBLASLtDescriptor(const CUBLASLtDescriptor&) = delete;
+			CUBLASLtDescriptor& operator=(const CUBLASLtDescriptor&) = delete;
+
+			Descriptor get() const noexcept
+			{
+				return descriptor_;
+			}
+
+		private:
+			Descriptor descriptor_{};
+		};
+
+		using CUBLASLtMatmulDescOwner =
+		    CUBLASLtDescriptor<cublasLtMatmulDesc_t, cublasLtMatmulDescDestroy>;
+		using CUBLASLtMatrixLayoutOwner =
+		    CUBLASLtDescriptor<cublasLtMatrixLayout_t, cublasLtMatrixLayoutDestroy>;
+		using CUBLASLtPreferenceOwner =
+		    CUBLASLtDescriptor<cublasLtMatmulPreference_t, cublasLtMatmulPreferenceDestroy>;
+
+		bool ShouldTryCUBLASLtMatMul(int m, int k, int n)
+		{
+			const char* enable = std::getenv("LITENN_CUDA_ENABLE_CUBLASLT");
+			if (enable == nullptr || (std::string_view(enable) != "1" && std::string_view(enable) != "true" &&
+			                          std::string_view(enable) != "TRUE" && std::string_view(enable) != "on" &&
+			                          std::string_view(enable) != "ON"))
+			{
+				return false;
+			}
+			const std::uint64_t flops =
+			    static_cast<std::uint64_t>(m) * static_cast<std::uint64_t>(k) * static_cast<std::uint64_t>(n) * 2;
+			return flops >= (1ull << 27);
+		}
+
+		bool TryCUBLASLtMatMul(CUDA& device, void* dst, DataType type1, ShapeView shape1, const void* src1,
+		                       DataType type2, ShapeView shape2, const void* src2, CUDAExecutionOptions options)
+		{
+			if (shape1.NumDim() != 2 || shape2.NumDim() != 2 || shape1[1] != shape2[0] || type1 != type2 ||
+			    type1 != DataType::Float32)
+			{
+				return false;
+			}
+			if (shape1[0] > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+			    shape1[1] > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+			    shape2[1] > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+			{
+				throw std::runtime_error("CUDA MatMul dimensions exceed cuBLASLt int range");
+			}
+
+			const auto m = static_cast<int>(shape1[0]);
+			const auto k = static_cast<int>(shape1[1]);
+			const auto n = static_cast<int>(shape2[1]);
+			if (!ShouldTryCUBLASLtMatMul(m, k, n))
+			{
+				return false;
+			}
+
+			CUDADeviceGuard guard(device.deviceIndex);
+			auto& handle = ThreadLocalCUBLASLtHandle(device.deviceIndex);
+
+			cublasLtMatmulDesc_t operation{};
+			if (cublasLtMatmulDescCreate(&operation, CUBLAS_COMPUTE_32F, CUDA_R_32F) != CUBLAS_STATUS_SUCCESS)
+			{
+				return false;
+			}
+			CUBLASLtMatmulDescOwner operationOwner(operation);
+			const cublasOperation_t opN = CUBLAS_OP_N;
+			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
+			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
+
+			const cublasLtOrder_t rowMajor = CUBLASLT_ORDER_ROW;
+			const auto makeLayout = [&](std::uint64_t rows, std::uint64_t cols, std::int64_t ld)
+			    -> CUBLASLtMatrixLayoutOwner {
+				cublasLtMatrixLayout_t layout{};
+				if (cublasLtMatrixLayoutCreate(&layout, CUDA_R_32F, rows, cols, ld) != CUBLAS_STATUS_SUCCESS)
+				{
+					return {};
+				}
+				if (cublasLtMatrixLayoutSetAttribute(layout, CUBLASLT_MATRIX_LAYOUT_ORDER, &rowMajor,
+				                                     sizeof(rowMajor)) != CUBLAS_STATUS_SUCCESS)
+				{
+					(void)cublasLtMatrixLayoutDestroy(layout);
+					return {};
+				}
+				return CUBLASLtMatrixLayoutOwner(layout);
+			};
+			auto aLayout = makeLayout(static_cast<std::uint64_t>(m), static_cast<std::uint64_t>(k), k);
+			auto bLayout = makeLayout(static_cast<std::uint64_t>(k), static_cast<std::uint64_t>(n), n);
+			auto cLayout = makeLayout(static_cast<std::uint64_t>(m), static_cast<std::uint64_t>(n), n);
+			if (!aLayout.get() || !bLayout.get() || !cLayout.get())
+			{
+				return false;
+			}
+
+			CUBLASLtHandle::AlgoKey key{ .type = type1, .m = m, .k = k, .n = n };
+			const cublasLtMatmulAlgo_t* algo = handle.CachedAlgo(key);
+			if (algo == nullptr)
+			{
+				cublasLtMatmulPreference_t preference{};
+				if (cublasLtMatmulPreferenceCreate(&preference) != CUBLAS_STATUS_SUCCESS)
+				{
+					return false;
+				}
+				CUBLASLtPreferenceOwner preferenceOwner(preference);
+				std::uint64_t workspaceBytes = 0;
+				(void)cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+				                                           &workspaceBytes, sizeof(workspaceBytes));
+				cublasLtMatmulHeuristicResult_t heuristic{};
+				int returned = 0;
+				if (cublasLtMatmulAlgoGetHeuristic(handle.get(), operation, aLayout.get(), bLayout.get(), cLayout.get(),
+				                                   cLayout.get(), preference, 1, &heuristic, &returned) !=
+				        CUBLAS_STATUS_SUCCESS ||
+				    returned <= 0 || heuristic.state != CUBLAS_STATUS_SUCCESS)
+				{
+					return false;
+				}
+				handle.CacheAlgo(key, heuristic.algo);
+				algo = handle.CachedAlgo(key);
+			}
+
+			const float alpha = 1.0F;
+			const float beta = 0.0F;
+			const auto status = cublasLtMatmul(handle.get(), operation, &alpha, src1, aLayout.get(), src2,
+			                                   bLayout.get(), &beta, dst, cLayout.get(), dst, cLayout.get(), algo,
+			                                   nullptr, 0, reinterpret_cast<cudaStream_t>(options.stream));
+			if (status != CUBLAS_STATUS_SUCCESS)
+			{
+				return false;
+			}
+			if (options.synchronize)
+			{
+				CheckCUDA(cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(options.stream)),
+				          "cudaStreamSynchronize after cuBLASLt MatMul");
+			}
+			return true;
+		}
+#endif
+
 		DataType ResolveUnaryResultType(UnaryOp op, DataType inputType)
 		{
 			return EnumDispatch(op, [&]<UnaryOp OpValue> {
@@ -411,6 +655,13 @@ namespace LiteNN
 			const auto m = static_cast<int>(shape1[0]);
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
+
+#ifdef LITENN_ENABLE_CUBLASLT
+			if (TryCUBLASLtMatMul(device, dst, type1, shape1, src1, type2, shape2, src2, options))
+			{
+				return true;
+			}
+#endif
 
 			if (type1 == DataType::Float32)
 			{

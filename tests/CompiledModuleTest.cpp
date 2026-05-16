@@ -425,6 +425,12 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 	EXPECT_EQ(decoded.kernels[0].arguments[3].kind, CUDANativeArgumentKind::Scalar);
 }
 
+TEST(CompiledModuleTest, CUDANativeDefaultTargetUsesModernBaseline)
+{
+	ScopedEnvVar target("LITENN_CUDA_AOT_TARGET", "");
+	EXPECT_EQ(CUDANativeNVPTXTargetChip(), "sm_75");
+}
+
 TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesUnaryPTX)
 {
 	struct Case
@@ -863,6 +869,67 @@ TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 				expected += inputData[row * 3 + k] * weightData[k * 256 + col];
 			}
 			EXPECT_NEAR(ReadFloat(outputs[0], row * 256 + col), expected, 1e-5f);
+		}
+	}
+}
+
+TEST(CompiledModuleTest, KPanelPackedWideMatMulMatchesReference)
+{
+	Graph graph;
+	constexpr std::size_t batch = 8;
+	constexpr std::size_t kSize = 128;
+	constexpr std::size_t nSize = 128;
+	std::vector<double> weightData(kSize * nSize);
+	for (std::size_t k = 0; k < kSize; ++k)
+	{
+		for (std::size_t col = 0; col < nSize; ++col)
+		{
+			weightData[k * nSize + col] =
+			    static_cast<double>(static_cast<int>(k % 11) - 5) * 0.03125 +
+			    static_cast<double>(static_cast<int>(col % 7) - 3) * 0.015625;
+		}
+	}
+	const auto weightIndex = graph.AddVariable(Variable::Create(
+	    Tensor<CPU>(std::span<const double>(weightData), { kSize, nSize }, DataType::Float32)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { batch, kSize });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
+	                               { OutputInfo{ DataType::Float32, { kSize, nSize } } });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
+	                               { OutputInfo{ DataType::Float32, { batch, nSize } } });
+	sg.SetResults({ { output, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+
+	std::vector<double> inputData(batch * kSize);
+	for (std::size_t row = 0; row < batch; ++row)
+	{
+		for (std::size_t k = 0; k < kSize; ++k)
+		{
+			inputData[row * kSize + k] =
+			    static_cast<double>((row + 1) * ((k % 13) + 1)) * 0.00390625;
+		}
+	}
+	Tensor<CPU> x(std::span<const double>(inputData), { batch, kSize }, DataType::Float32);
+	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
+	std::array<Tensor<CPU>, 1> outputs = {
+	    Tensor<CPU>(Uninitialized, { batch, nSize }, DataType::Float32)
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	compiled.RunInto(inputs, outputs);
+
+	for (std::size_t row = 0; row < batch; ++row)
+	{
+		for (std::size_t col = 0; col < nSize; ++col)
+		{
+			double expected = 0.0;
+			for (std::size_t k = 0; k < kSize; ++k)
+			{
+				expected += inputData[row * kSize + k] * weightData[k * nSize + col];
+			}
+			EXPECT_NEAR(ReadFloat(outputs[0], row * nSize + col), expected, 1e-3f);
 		}
 	}
 }

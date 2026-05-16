@@ -1045,6 +1045,50 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-4f);
 }
 
+TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	ScopedEnvVar enableGraphReplay("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
+
+	auto graph = BuildTinyMLPGraph(2);
+	std::vector<TensorInputSpec> inputSpecs = {
+		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 } }
+	};
+	auto expectedInputs = MakeCPUInputs(inputSpecs);
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+	auto cudaGraph = graph;
+	FusionPass{}.Run(cudaGraph);
+	auto module = Compiler<CUDA>::Compile(cudaGraph, CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	auto cudaInputs = MakeCUDAInputs(inputSpecs);
+	std::vector<Tensor<CUDA>> cudaOutputs;
+	for (const auto& spec : module.OutputSpecs())
+	{
+		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+	}
+
+	module.RunInto(cudaInputs, cudaOutputs);
+	module.RunInto(cudaInputs, cudaOutputs);
+
+	std::vector<Tensor<CPU>> cudaCPUOutputs;
+	for (const auto& output : cudaOutputs)
+	{
+		cudaCPUOutputs.push_back(output.CopyToDevice(CPU{}));
+	}
+	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-4f);
+}
+
 TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)
 {
 	auto artifact = Compiler<CUDA>::CompileArtifact(BuildSimpleMatMulGraph());

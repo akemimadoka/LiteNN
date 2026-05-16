@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <format>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -47,6 +48,7 @@ constexpr std::array<ModelKind, 3> kModelKinds = {
 };
 
 constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
+constexpr int kWarmupIterations = 5;
 
 Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
@@ -198,6 +200,56 @@ void SetThroughputCounters(benchmark::State& state, std::size_t batch)
 	    static_cast<double>(batch), benchmark::Counter::kIsIterationInvariantRate);
 }
 
+class ScopedEnvVar
+{
+public:
+	ScopedEnvVar(const char* name, const char* value) : name_(name)
+	{
+		if (const char* oldValue = std::getenv(name))
+		{
+			oldValue_ = oldValue;
+		}
+		Set(value);
+	}
+
+	~ScopedEnvVar()
+	{
+		if (oldValue_.empty())
+		{
+			Unset();
+		}
+		else
+		{
+			Set(oldValue_.c_str());
+		}
+	}
+
+	ScopedEnvVar(const ScopedEnvVar&) = delete;
+	ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+	void Set(const char* value) const
+	{
+#ifdef _WIN32
+		_putenv_s(name_, value);
+#else
+		setenv(name_, value, 1);
+#endif
+	}
+
+	void Unset() const
+	{
+#ifdef _WIN32
+		_putenv_s(name_, "");
+#else
+		unsetenv(name_);
+#endif
+	}
+
+	const char* name_{};
+	std::string oldValue_;
+};
+
 template <typename Fn>
 void RegisterBenchmarkCase(std::string_view backend, ModelKind kind, std::size_t batch, Fn&& fn)
 {
@@ -216,6 +268,12 @@ void BMInterpreter(benchmark::State& state, ModelKind kind, std::size_t batch)
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interp;
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		benchmark::DoNotOptimize(outputs);
+	}
 
 	for (auto _ : state)
 	{
@@ -255,6 +313,7 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 		return;
 	}
 
+	ScopedEnvVar disableNative("LITENN_CUDA_DISABLE_NATIVE_AOT", "1");
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
@@ -268,6 +327,11 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCUDAInputs(inputData, batch);
 	auto outputs = AllocateCUDAOutputs(module);
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+	}
 
 	for (auto _ : state)
 	{
@@ -301,6 +365,11 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 	auto inputs = MakeCUDAInputs(inputData, batch);
 	auto outputs = AllocateCUDAOutputs(module);
 
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+	}
+
 	for (auto _ : state)
 	{
 		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
@@ -309,6 +378,12 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 	}
 
 	SetThroughputCounters(state, batch);
+}
+
+void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	ScopedEnvVar enableGraphReplay("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
+	BMCUDANativeModelRunInto(state, kind, batch);
 }
 
 void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width)
@@ -330,6 +405,11 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 	auto specs = MakeNativeMatMulInputs(batch, width);
 	auto inputs = MakeCUDAInputs(specs);
 	auto outputs = AllocateCUDAOutputs(module);
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+	}
 
 	for (auto _ : state)
 	{
@@ -355,10 +435,16 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind, std::size_t)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
+
+void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind, std::size_t)
+{
+	state.SkipWithError("LiteNN benchmark build has no CUDA support");
+}
 #endif
 
 void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
+	ScopedEnvVar disableFastPath("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", "0");
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
@@ -367,6 +453,12 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 	auto module = CompiledModule<CPU>::Load(compiled.Image());
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeInputs(inputData, batch);
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+		benchmark::DoNotOptimize(outputs);
+	}
 
 	for (auto _ : state)
 	{
@@ -378,8 +470,16 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 	SetThroughputCounters(state, batch);
 }
 
-void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch,
+                            bool enableFastPath, const char* threadCount)
 {
+	ScopedEnvVar fastPathEnv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", enableFastPath ? "1" : "0");
+	std::optional<ScopedEnvVar> threadCountEnv;
+	if (threadCount != nullptr)
+	{
+		threadCountEnv.emplace("LITENN_CPU_AOT_THREADS", threadCount);
+	}
+
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
@@ -390,6 +490,11 @@ void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	auto inputs = MakeInputs(inputData, batch);
 	auto outputs = AllocateOutputs(module);
 
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+	}
+
 	for (auto _ : state)
 	{
 		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
@@ -398,6 +503,21 @@ void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	}
 
 	SetThroughputCounters(state, batch);
+}
+
+void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	BMAOTRunIntoConfigured(state, kind, batch, false, nullptr);
+}
+
+void BMAOTFastPathRunIntoT1(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	BMAOTRunIntoConfigured(state, kind, batch, true, "1");
+}
+
+void BMAOTFastPathRunIntoT16(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	BMAOTRunIntoConfigured(state, kind, batch, true, "16");
 }
 #endif
 
@@ -414,10 +534,16 @@ void RegisterBenchmarks()
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
+			RegisterBenchmarkCase("AOTFastPathRunIntoT1", kind, batch,
+			    [=](benchmark::State& state) { BMAOTFastPathRunIntoT1(state, kind, batch); });
+			RegisterBenchmarkCase("AOTFastPathRunIntoT16", kind, batch,
+			    [=](benchmark::State& state) { BMAOTFastPathRunIntoT16(state, kind, batch); });
 			RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMCUDACPUFallbackRunInto(state, kind, batch); });
 			RegisterBenchmarkCase("CUDANativeRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMCUDANativeModelRunInto(state, kind, batch); });
+			RegisterBenchmarkCase("CUDANativeGraphRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMCUDANativeGraphModelRunInto(state, kind, batch); });
 #endif
 		}
 	}

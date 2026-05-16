@@ -53,6 +53,10 @@
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
 
+#ifdef LITENN_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -69,6 +73,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -96,6 +101,17 @@ namespace
 	bool IsCPULinearChainFastPathEnabled()
 	{
 		const char* value = std::getenv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH");
+		if (!value)
+		{
+			return false;
+		}
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	bool IsCUDANativeAOTDisabled()
+	{
+		const char* value = std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT");
 		if (!value)
 		{
 			return false;
@@ -3213,6 +3229,152 @@ namespace
 		return CUDAExecutionOptions{ .stream = options.stream, .synchronize = options.synchronize };
 	}
 
+	bool IsCUDAGraphReplayEnabled()
+	{
+		const char* value = std::getenv("LITENN_CUDA_ENABLE_GRAPH_REPLAY");
+		if (value == nullptr)
+		{
+			return false;
+		}
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	void CheckCUDARuntime(cudaError_t status, std::string_view action)
+	{
+		if (status != cudaSuccess)
+		{
+			throw std::runtime_error(std::format("{} failed: {}", action, cudaGetErrorString(status)));
+		}
+	}
+
+	struct CUDAGraphBindingKey
+	{
+		std::vector<std::uintptr_t> pointers;
+
+		bool operator==(const CUDAGraphBindingKey& other) const noexcept
+		{
+			return pointers == other.pointers;
+		}
+	};
+
+	struct CUDAGraphBindingKeyHash
+	{
+		std::size_t operator()(const CUDAGraphBindingKey& key) const noexcept
+		{
+			std::size_t seed = key.pointers.size();
+			for (const auto value : key.pointers)
+			{
+				seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+			}
+			return seed;
+		}
+	};
+
+	CUDAGraphBindingKey MakeCUDAGraphBindingKey(std::span<const Tensor<CUDA>> inputs,
+	                                            std::span<Tensor<CUDA>> outputs)
+	{
+		CUDAGraphBindingKey key;
+		key.pointers.reserve(inputs.size() + outputs.size());
+		for (const auto& input : inputs)
+		{
+			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(input.RawData()));
+		}
+		for (auto& output : outputs)
+		{
+			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(output.RawData()));
+		}
+		return key;
+	}
+
+	class CUDAGraphCaptureStream
+	{
+	public:
+		CUDAGraphCaptureStream()
+		{
+			CheckCUDARuntime(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
+			                 "cudaStreamCreateWithFlags for CUDA graph capture");
+		}
+
+		CUDAGraphCaptureStream(const CUDAGraphCaptureStream&) = delete;
+		CUDAGraphCaptureStream& operator=(const CUDAGraphCaptureStream&) = delete;
+
+		~CUDAGraphCaptureStream()
+		{
+			if (stream_ != nullptr)
+			{
+				(void)cudaStreamDestroy(stream_);
+			}
+		}
+
+		cudaStream_t Get() const noexcept
+		{
+			return stream_;
+		}
+
+	private:
+		cudaStream_t stream_{};
+	};
+
+	class CUDAGraphExecInstance
+	{
+	public:
+		CUDAGraphExecInstance() = default;
+		explicit CUDAGraphExecInstance(cudaGraphExec_t exec) : exec_(exec)
+		{
+		}
+
+		CUDAGraphExecInstance(const CUDAGraphExecInstance&) = delete;
+		CUDAGraphExecInstance& operator=(const CUDAGraphExecInstance&) = delete;
+
+		CUDAGraphExecInstance(CUDAGraphExecInstance&& other) noexcept : exec_(std::exchange(other.exec_, nullptr))
+		{
+		}
+
+		CUDAGraphExecInstance& operator=(CUDAGraphExecInstance&& other) noexcept
+		{
+			if (this != &other)
+			{
+				Reset();
+				exec_ = std::exchange(other.exec_, nullptr);
+			}
+			return *this;
+		}
+
+		~CUDAGraphExecInstance()
+		{
+			Reset();
+		}
+
+		void Launch(cudaStream_t stream, bool synchronize) const
+		{
+			if (exec_ == nullptr)
+			{
+				throw std::runtime_error("CUDA graph executable is empty");
+			}
+			CheckCUDARuntime(cudaGraphLaunch(exec_, stream), "cudaGraphLaunch");
+			if (synchronize)
+			{
+				CheckCUDARuntime(cudaStreamSynchronize(stream), "cudaStreamSynchronize after cudaGraphLaunch");
+			}
+		}
+
+	private:
+		void Reset() noexcept
+		{
+			if (exec_ != nullptr)
+			{
+				(void)cudaGraphExecDestroy(exec_);
+				exec_ = nullptr;
+			}
+		}
+
+		cudaGraphExec_t exec_{};
+	};
+
+	using CUDAGraphReplayCache =
+	    std::unordered_map<CUDAGraphBindingKey, CUDAGraphExecInstance, CUDAGraphBindingKeyHash>;
+
 	std::uint32_t ReadScalarU32(const CUDANativeInstructionPayload& payload, const CUDANativeArgumentSpec& argument)
 	{
 		if (argument.kind != CUDANativeArgumentKind::Scalar || argument.byteSize != sizeof(std::uint32_t) ||
@@ -3432,6 +3594,83 @@ namespace
 			              },
 			              argumentPointers);
 		}
+	}
+
+	CUDAGraphExecInstance CaptureCUDANativeGraph(CUDA& device, const CUDANativeInstructionPayload& payload,
+	                                             const CUDADriverModule& module,
+	                                             CUDANativeWorkspaceBuffer& workspace,
+	                                             CUDANativeConstantBuffer& constants,
+	                                             std::span<const Tensor<CUDA>> inputs,
+	                                             std::span<Tensor<CUDA>> outputs)
+	{
+		CUDAGraphCaptureStream captureStream;
+		cudaGraph_t graph{};
+		bool capturing = false;
+
+		try
+		{
+			RunCUDANativePayload(device, payload, module, workspace, constants, inputs, outputs,
+			                     CompiledModuleCUDARunOptions{
+			                         .stream = captureStream.Get(),
+			                         .synchronize = true,
+			                     });
+
+			CheckCUDARuntime(cudaStreamBeginCapture(captureStream.Get(), cudaStreamCaptureModeThreadLocal),
+			                 "cudaStreamBeginCapture");
+			capturing = true;
+
+			RunCUDANativePayload(device, payload, module, workspace, constants, inputs, outputs,
+			                     CompiledModuleCUDARunOptions{
+			                         .stream = captureStream.Get(),
+			                         .synchronize = false,
+			                     });
+
+			capturing = false;
+			CheckCUDARuntime(cudaStreamEndCapture(captureStream.Get(), &graph), "cudaStreamEndCapture");
+			cudaGraphExec_t exec{};
+			const auto instantiateStatus = cudaGraphInstantiate(&exec, graph, 0);
+			const auto destroyStatus = cudaGraphDestroy(graph);
+			graph = nullptr;
+			CheckCUDARuntime(instantiateStatus, "cudaGraphInstantiate");
+			CheckCUDARuntime(destroyStatus, "cudaGraphDestroy after instantiate");
+			return CUDAGraphExecInstance(exec);
+		}
+		catch (...)
+		{
+			if (capturing)
+			{
+				cudaGraph_t discardedGraph{};
+				(void)cudaStreamEndCapture(captureStream.Get(), &discardedGraph);
+				if (discardedGraph != nullptr)
+				{
+					(void)cudaGraphDestroy(discardedGraph);
+				}
+			}
+			if (graph != nullptr)
+			{
+				(void)cudaGraphDestroy(graph);
+			}
+			throw;
+		}
+	}
+
+	void RunCUDANativePayloadWithGraphReplay(CUDAGraphReplayCache& cache,
+	                                         CUDA& device, const CUDANativeInstructionPayload& payload,
+	                                         const CUDADriverModule& module,
+	                                         CUDANativeWorkspaceBuffer& workspace,
+	                                         CUDANativeConstantBuffer& constants,
+	                                         std::span<const Tensor<CUDA>> inputs,
+	                                         std::span<Tensor<CUDA>> outputs,
+	                                         CompiledModuleCUDARunOptions options)
+	{
+		auto key = MakeCUDAGraphBindingKey(inputs, outputs);
+		auto it = cache.find(key);
+		if (it == cache.end())
+		{
+			auto instance = CaptureCUDANativeGraph(device, payload, module, workspace, constants, inputs, outputs);
+			it = cache.emplace(std::move(key), std::move(instance)).first;
+		}
+		it->second.Launch(reinterpret_cast<cudaStream_t>(options.stream), options.synchronize);
 	}
 #endif
 
@@ -3842,6 +4081,8 @@ struct CompiledModule<CUDA>::Impl
 	std::optional<CUDANativeWorkspaceBuffer> cudaWorkspace;
 	std::optional<CUDANativeConstantBuffer> cudaConstants;
 	mutable std::mutex cudaWorkspaceMutex;
+	mutable std::mutex cudaGraphReplayMutex;
+	mutable CUDAGraphReplayCache cudaGraphReplayCache;
 };
 
 CompiledModule<CUDA>::CompiledModule() = default;
@@ -3984,6 +4225,14 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 		if (impl_->cudaWorkspace->ByteSize() != 0 && !options.synchronize)
 		{
 			throw std::runtime_error("CUDA native asynchronous execution with shared workspace is not supported");
+		}
+		if (IsCUDAGraphReplayEnabled() && options.synchronize && options.stream == nullptr)
+		{
+			std::scoped_lock lock(impl_->cudaWorkspaceMutex, impl_->cudaGraphReplayMutex);
+			RunCUDANativePayloadWithGraphReplay(impl_->cudaGraphReplayCache, impl_->device, impl_->cudaPayload,
+			                                    impl_->cudaModule, *impl_->cudaWorkspace, *impl_->cudaConstants,
+			                                    inputs, outputs, options);
+			return;
 		}
 		if (impl_->cudaWorkspace->ByteSize() == 0)
 		{
@@ -4206,53 +4455,56 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 {
 	Validation::ValidateGraph(graph);
-	if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+	if (!IsCUDANativeAOTDisabled())
 	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeLinearChainF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeMatMulBiasF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
-	}
-	if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
-	{
-		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-		                              CompiledModuleBackend::CUDANative);
+		if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeLinearChainF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeMatMulBiasF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
 	}
 	return Compiler<CPU>::CompileArtifact(graph);
 }

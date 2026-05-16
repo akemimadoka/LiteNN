@@ -24,7 +24,10 @@
 #include "mlir/Transforms/Passes.h"
 #include "llvm/TargetParser/Host.h"
 
+#include <cstdint>
+#include <limits>
 #include <string>
+#include <utility>
 
 namespace litenn
 {
@@ -211,6 +214,93 @@ mlir::LogicalResult validateMatMulCandidate(mlir::linalg::GenericOp op,
     return mlir::success();
 }
 
+bool isStaticPositiveDim(int64_t dim)
+{
+    return dim > 0 && dim != mlir::ShapedType::kDynamic;
+}
+
+bool isConstantF32Global(mlir::Value value, mlir::MemRefType type)
+{
+    auto getGlobal = value.getDefiningOp<mlir::memref::GetGlobalOp>();
+    if (!getGlobal || type.isDynamicDim(0) || type.isDynamicDim(1))
+    {
+        return false;
+    }
+
+    auto module = getGlobal->getParentOfType<mlir::ModuleOp>();
+    auto global = module.lookupSymbol<mlir::memref::GlobalOp>(getGlobal.getName());
+    if (!global || !global.getConstant())
+    {
+        return false;
+    }
+
+    auto initialValue = global.getInitialValue();
+    if (!initialValue)
+    {
+        return false;
+    }
+    auto dense = llvm::dyn_cast<mlir::DenseFPElementsAttr>(*initialValue);
+    return dense && dense.getElementType().isF32() && dense.getNumElements() == type.getDimSize(0) * type.getDimSize(1);
+}
+
+std::uint64_t saturatedMul(std::uint64_t lhs, std::uint64_t rhs)
+{
+    if (lhs == 0 || rhs == 0)
+    {
+        return 0;
+    }
+    if (lhs > std::numeric_limits<std::uint64_t>::max() / rhs)
+    {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return lhs * rhs;
+}
+
+std::uint64_t matMulFLOPs(int64_t m, int64_t k, int64_t n)
+{
+    auto result = saturatedMul(static_cast<std::uint64_t>(m), static_cast<std::uint64_t>(k));
+    result = saturatedMul(result, static_cast<std::uint64_t>(n));
+    return saturatedMul(result, 2);
+}
+
+bool shouldUsePackedRhs(mlir::Value rhs,
+                        mlir::MemRefType rhsType,
+                        mlir::MemRefType outType,
+                        int64_t nStep,
+                        int64_t rowTile)
+{
+    const int64_t m = outType.getDimSize(0);
+    const int64_t k = rhsType.getDimSize(0);
+    const int64_t n = rhsType.getDimSize(1);
+    if (!isStaticPositiveDim(m) || !isStaticPositiveDim(k) || !isStaticPositiveDim(n) ||
+        m % rowTile != 0 || n % nStep != 0 || !isConstantF32Global(rhs, rhsType))
+    {
+        return false;
+    }
+
+    const auto flops = matMulFLOPs(m, k, n);
+    const auto rhsBytes = static_cast<std::uint64_t>(k) * static_cast<std::uint64_t>(n) * sizeof(float);
+    const bool enoughReuse = static_cast<std::uint64_t>(m) >= rowTile;
+    const bool amortizesPackedGlobal = flops >= rhsBytes * 16;
+    const bool wideEnoughForPanel = n >= 128 && k >= 32;
+    return enoughReuse && wideEnoughForPanel && amortizesPackedGlobal;
+}
+
+bool shouldUseKPanelPackedRhs(mlir::Value rhs,
+                              mlir::MemRefType rhsType,
+                              mlir::MemRefType outType,
+                              int64_t nStep,
+                              int64_t rowTile,
+                              int64_t kPanel)
+{
+    const int64_t m = outType.getDimSize(0);
+    const int64_t k = rhsType.getDimSize(0);
+    const int64_t n = rhsType.getDimSize(1);
+    return shouldUsePackedRhs(rhs, rhsType, outType, nStep, rowTile) &&
+           k >= 128 && k % kPanel == 0 && n >= 128 && m >= rowTile &&
+           matMulFLOPs(m, k, n) >= (1ull << 20);
+}
+
 mlir::Value getOrCreatePackedRhs(mlir::OpBuilder& builder,
                                  mlir::Location loc,
                                  mlir::Value rhs,
@@ -295,6 +385,280 @@ mlir::Value getOrCreatePackedRhs(mlir::OpBuilder& builder,
     return builder.create<mlir::memref::GetGlobalOp>(loc, packedType, packedName).getResult();
 }
 
+mlir::Value getOrCreateKPanelPackedRhs(mlir::OpBuilder& builder,
+                                       mlir::Location loc,
+                                       mlir::Value rhs,
+                                       mlir::MemRefType rhsType,
+                                       int64_t nStep,
+                                       int64_t kPanel,
+                                       mlir::MemRefType& packedType)
+{
+    auto getGlobal = rhs.getDefiningOp<mlir::memref::GetGlobalOp>();
+    if (!getGlobal || rhsType.isDynamicDim(0) || rhsType.isDynamicDim(1))
+    {
+        return {};
+    }
+
+    auto module = getGlobal->getParentOfType<mlir::ModuleOp>();
+    auto global = module.lookupSymbol<mlir::memref::GlobalOp>(getGlobal.getName());
+    if (!global || !global.getConstant())
+    {
+        return {};
+    }
+
+    auto initialValue = global.getInitialValue();
+    if (!initialValue)
+    {
+        return {};
+    }
+    auto dense = llvm::dyn_cast<mlir::DenseFPElementsAttr>(*initialValue);
+    if (!dense || !dense.getElementType().isF32())
+    {
+        return {};
+    }
+
+    const int64_t k = rhsType.getDimSize(0);
+    const int64_t n = rhsType.getDimSize(1);
+    if (k <= 0 || n <= 0 || k % kPanel != 0 || n % nStep != 0 || dense.getNumElements() != k * n)
+    {
+        return {};
+    }
+
+    const int64_t nTiles = n / nStep;
+    const int64_t kPanels = k / kPanel;
+    packedType = mlir::MemRefType::get({ nTiles, kPanels, kPanel, nStep }, rhsType.getElementType());
+
+    const std::string packedName =
+        (getGlobal.getName() + llvm::Twine("__litenn_packed_n") + llvm::Twine(nStep) +
+         llvm::Twine("_kp") + llvm::Twine(kPanel)).str();
+    if (!module.lookupSymbol<mlir::memref::GlobalOp>(packedName))
+    {
+        llvm::SmallVector<float> source;
+        source.reserve(static_cast<size_t>(dense.getNumElements()));
+        for (float value : dense.getValues<float>())
+        {
+            source.push_back(value);
+        }
+
+        llvm::SmallVector<float> packed;
+        packed.resize(source.size());
+        for (int64_t nTile = 0; nTile < nTiles; ++nTile)
+        {
+            for (int64_t kPanelIndex = 0; kPanelIndex < kPanels; ++kPanelIndex)
+            {
+                for (int64_t kInner = 0; kInner < kPanel; ++kInner)
+                {
+                    const int64_t kk = kPanelIndex * kPanel + kInner;
+                    for (int64_t col = 0; col < nStep; ++col)
+                    {
+                        const int64_t srcCol = nTile * nStep + col;
+                        packed[static_cast<size_t>(((nTile * kPanels + kPanelIndex) * kPanel + kInner) *
+                                                   nStep + col)] =
+                            source[static_cast<size_t>(kk * n + srcCol)];
+                    }
+                }
+            }
+        }
+
+        auto packedTensorType = mlir::RankedTensorType::get(
+            { nTiles, kPanels, kPanel, nStep }, rhsType.getElementType());
+        auto packedAttr = mlir::DenseElementsAttr::get(packedTensorType, llvm::ArrayRef(packed));
+
+        mlir::OpBuilder globalBuilder(builder.getContext());
+        globalBuilder.setInsertionPointAfter(global);
+        globalBuilder.create<mlir::memref::GlobalOp>(
+            loc, packedName,
+            /*sym_visibility=*/builder.getStringAttr("private"),
+            packedType, packedAttr,
+            /*constant=*/true,
+            /*alignment=*/builder.getI64IntegerAttr(64));
+    }
+
+    return builder.create<mlir::memref::GetGlobalOp>(loc, packedType, packedName).getResult();
+}
+
+mlir::LogicalResult rewriteKPanelPackedWideMatMulRowTile(mlir::linalg::GenericOp op,
+                                                         mlir::OpBuilder& builder,
+                                                         int64_t rowTile,
+                                                         int64_t maxTileVectors,
+                                                         int64_t kPanel)
+{
+    mlir::Value lhs;
+    mlir::Value rhs;
+    mlir::Value out;
+    mlir::MemRefType lhsType;
+    mlir::MemRefType rhsType;
+    mlir::MemRefType outType;
+    if (mlir::failed(validateMatMulCandidate(op, lhs, rhs, out, lhsType, rhsType, outType)))
+    {
+        return mlir::failure();
+    }
+
+    const int64_t vectorWidth = nativeF32VectorWidth();
+    const int64_t n = outType.getDimSize(1);
+    if (vectorWidth < 4 || n <= vectorWidth || n % vectorWidth != 0 ||
+        outType.isDynamicDim(0) || outType.getDimSize(0) % rowTile != 0)
+    {
+        return mlir::failure();
+    }
+
+    int64_t tileVectors = 1;
+    for (int64_t candidate = maxTileVectors; candidate > 1; candidate /= 2)
+    {
+        if (n % (vectorWidth * candidate) == 0)
+        {
+            tileVectors = candidate;
+            break;
+        }
+    }
+    const int64_t nStep = vectorWidth * tileVectors;
+    if (!shouldUseKPanelPackedRhs(rhs, rhsType, outType, nStep, rowTile, kPanel))
+    {
+        return mlir::failure();
+    }
+
+    const auto loc = op.getLoc();
+    mlir::MemRefType packedRhsType;
+    auto packedRhs = getOrCreateKPanelPackedRhs(builder, loc, rhs, rhsType, nStep, kPanel, packedRhsType);
+    if (!packedRhs)
+    {
+        return mlir::failure();
+    }
+
+    auto c0 = builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
+    auto c1 = builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+    auto cMstep = builder.create<mlir::arith::ConstantIndexOp>(loc, rowTile);
+    auto cNStep = builder.create<mlir::arith::ConstantIndexOp>(loc, nStep);
+    auto cKPanel = builder.create<mlir::arith::ConstantIndexOp>(loc, kPanel);
+    auto nTileUpper = builder.create<mlir::arith::ConstantIndexOp>(loc, n / nStep);
+    auto kPanelUpper = builder.create<mlir::arith::ConstantIndexOp>(loc, rhsType.getDimSize(0) / kPanel);
+    auto mUpper = builder.create<mlir::memref::DimOp>(loc, out, 0);
+    auto vecType = mlir::VectorType::get({ vectorWidth }, outType.getElementType());
+    const bool applyRelu = op->hasAttr(kApplyReluAttr);
+
+    auto mLoop = builder.create<mlir::scf::ForOp>(loc, c0, mUpper, cMstep);
+    {
+        mlir::OpBuilder::InsertionGuard mGuard(builder);
+        builder.setInsertionPointToStart(mLoop.getBody());
+        auto mBase = mLoop.getInductionVar();
+        llvm::SmallVector<mlir::Value, 8> mIndices;
+        mIndices.reserve(static_cast<size_t>(rowTile));
+        mIndices.push_back(mBase);
+        for (int64_t row = 1; row < rowTile; ++row)
+        {
+            auto offset = builder.create<mlir::arith::ConstantIndexOp>(loc, row);
+            mIndices.push_back(builder.create<mlir::arith::AddIOp>(loc, mBase, offset).getResult());
+        }
+
+        auto nLoop = builder.create<mlir::scf::ForOp>(loc, c0, nTileUpper, c1);
+        {
+            mlir::OpBuilder::InsertionGuard nGuard(builder);
+            builder.setInsertionPointToStart(nLoop.getBody());
+            auto nTile = nLoop.getInductionVar();
+            auto nBase = builder.create<mlir::arith::MulIOp>(loc, nTile, cNStep).getResult();
+
+            llvm::SmallVector<mlir::Value, 8> nIndices;
+            llvm::SmallVector<mlir::Value, 8> packedNOffsets;
+            llvm::SmallVector<mlir::Value, 16> initAccs;
+            nIndices.reserve(static_cast<size_t>(tileVectors));
+            packedNOffsets.reserve(static_cast<size_t>(tileVectors));
+            initAccs.reserve(static_cast<size_t>(rowTile * tileVectors));
+            for (int64_t lane = 0; lane < tileVectors; ++lane)
+            {
+                mlir::Value nOffset = builder.create<mlir::arith::ConstantIndexOp>(
+                    loc, lane * vectorWidth);
+                packedNOffsets.push_back(nOffset);
+
+                mlir::Value nIndex = nBase;
+                if (lane != 0)
+                {
+                    nIndex = builder.create<mlir::arith::AddIOp>(loc, nBase, nOffset).getResult();
+                }
+                nIndices.push_back(nIndex);
+            }
+
+            for (int64_t row = 0; row < rowTile; ++row)
+            {
+                for (int64_t lane = 0; lane < tileVectors; ++lane)
+                {
+                    initAccs.push_back(builder.create<mlir::vector::LoadOp>(
+                        loc, vecType, out,
+                        mlir::ValueRange{
+                            mIndices[static_cast<size_t>(row)],
+                            nIndices[static_cast<size_t>(lane)] }).getResult());
+                }
+            }
+
+            auto kPanelLoop = builder.create<mlir::scf::ForOp>(
+                loc, c0, kPanelUpper, c1, initAccs,
+                [&](mlir::OpBuilder& nested, mlir::Location nestedLoc,
+                    mlir::Value kPanelIndex, mlir::ValueRange accs) {
+                    llvm::SmallVector<mlir::Value, 16> currentAccs(accs.begin(), accs.end());
+                    auto kBase = nested.create<mlir::arith::MulIOp>(
+                        nestedLoc, kPanelIndex, cKPanel).getResult();
+                    for (int64_t kInner = 0; kInner < kPanel; ++kInner)
+                    {
+                        auto kInnerOffset = nested.create<mlir::arith::ConstantIndexOp>(nestedLoc, kInner);
+                        auto k = kBase;
+                        if (kInner != 0)
+                        {
+                            k = nested.create<mlir::arith::AddIOp>(nestedLoc, kBase, kInnerOffset).getResult();
+                        }
+
+                        llvm::SmallVector<mlir::Value, 8> bVecs;
+                        bVecs.reserve(static_cast<size_t>(tileVectors));
+                        for (int64_t lane = 0; lane < tileVectors; ++lane)
+                        {
+                            bVecs.push_back(nested.create<mlir::vector::LoadOp>(
+                                nestedLoc, vecType, packedRhs,
+                                mlir::ValueRange{
+                                    nTile, kPanelIndex, kInnerOffset,
+                                    packedNOffsets[static_cast<size_t>(lane)] }).getResult());
+                        }
+
+                        llvm::SmallVector<mlir::Value, 16> nextAccs;
+                        nextAccs.reserve(currentAccs.size());
+                        for (int64_t row = 0; row < rowTile; ++row)
+                        {
+                            auto a = nested.create<mlir::memref::LoadOp>(
+                                nestedLoc, lhs,
+                                mlir::ValueRange{ mIndices[static_cast<size_t>(row)], k }).getResult();
+                            auto aVec = nested.create<mlir::vector::BroadcastOp>(
+                                nestedLoc, vecType, a).getResult();
+                            for (int64_t lane = 0; lane < tileVectors; ++lane)
+                            {
+                                const size_t accIndex = static_cast<size_t>(row * tileVectors + lane);
+                                auto next = nested.create<mlir::vector::FMAOp>(
+                                    nestedLoc, aVec, bVecs[static_cast<size_t>(lane)],
+                                    currentAccs[accIndex]).getResult();
+                                nextAccs.push_back(next);
+                            }
+                        }
+                        currentAccs = std::move(nextAccs);
+                    }
+                    nested.create<mlir::scf::YieldOp>(nestedLoc, currentAccs);
+                });
+
+            for (int64_t row = 0; row < rowTile; ++row)
+            {
+                for (int64_t lane = 0; lane < tileVectors; ++lane)
+                {
+                    const unsigned accIndex = static_cast<unsigned>(row * tileVectors + lane);
+                    auto value = applyReluIfNeeded(builder, loc, kPanelLoop.getResult(accIndex), applyRelu);
+                    builder.create<mlir::vector::StoreOp>(
+                        loc, value, out,
+                        mlir::ValueRange{
+                            mIndices[static_cast<size_t>(row)],
+                            nIndices[static_cast<size_t>(lane)] });
+                }
+            }
+        }
+    }
+
+    op.erase();
+    return mlir::success();
+}
+
 mlir::LogicalResult rewritePackedWideMatMulRowTile(mlir::linalg::GenericOp op,
                                                    mlir::OpBuilder& builder,
                                                    int64_t rowTile,
@@ -329,6 +693,10 @@ mlir::LogicalResult rewritePackedWideMatMulRowTile(mlir::linalg::GenericOp op,
         }
     }
     const int64_t nStep = vectorWidth * tileVectors;
+    if (!shouldUsePackedRhs(rhs, rhsType, outType, nStep, rowTile))
+    {
+        return mlir::failure();
+    }
 
     const auto loc = op.getLoc();
     mlir::MemRefType packedRhsType;
@@ -967,6 +1335,10 @@ struct LowerNarrowMatMulPass
         for (auto op : candidates)
         {
             builder.setInsertionPoint(op);
+            if (mlir::succeeded(rewriteKPanelPackedWideMatMulRowTile(op, builder, 8, 2, 8)))
+            {
+                continue;
+            }
             if (mlir::succeeded(rewritePackedWideMatMulRowTile(op, builder, 8, 2)))
             {
                 continue;
