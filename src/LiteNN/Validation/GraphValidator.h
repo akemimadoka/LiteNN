@@ -397,7 +397,28 @@ namespace LiteNN::Validation
 		{
 			const auto& forward = graph_.GetSubgraph(graph_.Forward());
 			ValidateNameList(graph_.InputNames(), forward.Params().size(), "input");
+			ValidateNameList(graph_.VariableNames(), graph_.VariableCount(), "variable");
 			ValidateNameList(graph_.OutputNames(), forward.Results().size(), "output");
+			ValidateMetadataEntries();
+		}
+
+		void ValidateMetadataEntries() const
+		{
+			const auto metadata = graph_.Metadata();
+			for (std::size_t i = 0; i < metadata.size(); ++i)
+			{
+				if (metadata[i].key.empty())
+				{
+					Fail("Graph validation failed: metadata key is empty");
+				}
+				for (std::size_t j = i + 1; j < metadata.size(); ++j)
+				{
+					if (metadata[i].key == metadata[j].key)
+					{
+						Fail(std::format("Graph validation failed: duplicate metadata key '{}'", metadata[i].key));
+					}
+				}
+			}
 		}
 
 		void ValidateSubgraph(SubgraphId subgraphId) const

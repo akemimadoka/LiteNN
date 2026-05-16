@@ -69,10 +69,20 @@ Completed notes:
 
 ### P3: GGUF Reader and Converter
 
-- [ ] Read GGUF metadata, tensor directory, tensor payloads, and ggml quantized block formats from `third_party/llama.cpp`.
-- [ ] Map GGUF tensors to LiteNN variables with stable names and shape validation.
-- [ ] Import tokenizer/config metadata needed by LLaMA-like models.
-- [ ] Emit LiteNN model files that can be loaded without linking llama.cpp at runtime.
+Status: completed for standalone GGUF-to-LiteNN archive conversion on 2026-05-17.
+
+- [x] Read GGUF metadata, tensor directory, tensor payloads, and ggml quantized block formats from `third_party/llama.cpp`.
+- [x] Map GGUF tensors to LiteNN variables with stable names and shape validation.
+- [x] Import tokenizer/config metadata needed by LLaMA-like models.
+- [x] Emit LiteNN model files that can be loaded without linking llama.cpp at runtime.
+
+Completed notes:
+
+- `tools/gguf/litenn_gguf_convert` now converts GGUF files into LiteNN `.ltnn` archives through a small vendored ggml/gguf support library instead of linking the full llama.cpp runtime.
+- GGUF K/V metadata is preserved in graph metadata with scalar/array widening into LiteNN's metadata value model, so tokenizer/config keys survive conversion.
+- GGUF tensor names are preserved as graph variable names, and supported ggml block-quantized payloads are archived as LiteNN variables with block quantization metadata.
+- Model format version 6 now persists graph variable names plus metadata, which is the storage substrate the GGUF converter relies on.
+- The first converter intentionally emits a weight-archive graph with an empty forward subgraph; executable LLaMA-family graph lowering remains a P4 task.
 
 ### GGUF/Llama.cpp Operator Gap Checklist
 

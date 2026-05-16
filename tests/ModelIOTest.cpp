@@ -145,3 +145,45 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 0), 4.0F, 1e-3F);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 6.0F, 1e-3F);
 }
+
+TEST(ModelIO, SaveLoadPreservesVariableNamesAndMetadataForWeightArchive)
+{
+	Graph graph;
+	graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 })));
+	graph.SetVariableNames({ "token_embd.weight" });
+	graph.SetMetadataEntry("general.architecture", std::string("llama"));
+	graph.SetMetadataEntry("llama.context_length", std::uint64_t{ 4096 });
+	graph.SetMetadataEntry("tokenizer.ggml.tokens", std::vector<std::string>{ "<s>", "hello" });
+
+	Subgraph archive;
+	graph.SetForward(graph.AddSubgraph(std::move(archive)));
+
+	const auto path = std::filesystem::path("litenn_modelio_weight_archive_roundtrip_test.ltnn");
+	std::filesystem::remove(path);
+	Serialization::SaveModel(graph, path);
+
+	auto loaded = Serialization::LoadModel(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(loaded.VariableCount(), 1);
+	ASSERT_EQ(loaded.VariableNames().size(), 1);
+	EXPECT_EQ(loaded.VariableName(0), "token_embd.weight");
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 0), 1.0f);
+	EXPECT_TRUE(loaded.InputSignature().empty());
+	EXPECT_TRUE(loaded.OutputSignature().empty());
+
+	const auto* architecture = loaded.FindMetadata("general.architecture");
+	ASSERT_NE(architecture, nullptr);
+	EXPECT_EQ(std::get<std::string>(architecture->value), "llama");
+
+	const auto* contextLength = loaded.FindMetadata("llama.context_length");
+	ASSERT_NE(contextLength, nullptr);
+	EXPECT_EQ(std::get<std::uint64_t>(contextLength->value), 4096u);
+
+	const auto* tokens = loaded.FindMetadata("tokenizer.ggml.tokens");
+	ASSERT_NE(tokens, nullptr);
+	const auto& tokenList = std::get<std::vector<std::string>>(tokens->value);
+	ASSERT_EQ(tokenList.size(), 2);
+	EXPECT_EQ(tokenList[0], "<s>");
+	EXPECT_EQ(tokenList[1], "hello");
+}

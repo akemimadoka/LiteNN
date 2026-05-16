@@ -6,6 +6,7 @@ option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_ENABLE_CUDA "Enable CUDA runtime device backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" ON)
 option(LITENN_BUILD_BENCHMARKS "Build LiteNN benchmark programs" OFF)
+option(LITENN_BUILD_TOOLS "Build LiteNN standalone tool programs" ON)
 option(LITENN_ENABLE_SANITIZERS "Enable sanitizer instrumentation for LiteNN and its tests" OFF)
 option(LITENN_WITH_MODULES "Build LiteNN with C++20 modules support" OFF)
 set(LITENN_SANITIZERS "address,undefined" CACHE STRING "Comma-separated list of sanitizers to enable")
@@ -267,12 +268,19 @@ if(LITENN_BUILD_BENCHMARKS)
     add_subdirectory(benchmark)
 endif()
 
+if(LITENN_BUILD_TOOLS)
+    add_subdirectory(tools/gguf)
+endif()
+
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 if(NOT LITENN_ENABLE_MLIR)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "(CompilerTest|LoweringPassTest|BufferizationPassTest|LLVMCodegenPassTest|CompiledModuleTest|CompiledModuleCUDATest|CompilerDumpTest)\\.cpp$")
 endif()
 if(NOT LITENN_ENABLE_CUDA)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "(CUDADeviceTest|CompiledModuleCUDATest)\\.cpp$")
+endif()
+if(NOT LITENN_BUILD_TOOLS)
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "GGUFImporterTest\\.cpp$")
 endif()
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -281,7 +289,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     if(LITENN_ENABLE_MLIR)
         target_compile_definitions(${TEST_NAME} PRIVATE LITENN_ENABLE_MLIR=1)
     endif()
-    if(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
+    if(TEST_NAME STREQUAL "GGUFImporterTest")
+        target_link_libraries(${TEST_NAME} PRIVATE LiteNNGGUFImporter LiteNNGGMLVendor GTest::gtest_main)
+    elseif(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
        OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
        OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"
        OR TEST_NAME STREQUAL "CompilerDumpTest"

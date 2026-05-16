@@ -1,4 +1,5 @@
 #include <LiteNN/Device.h>
+#include <LiteNN/Metadata.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
 #include <deque>
@@ -442,6 +443,11 @@ namespace LiteNN
 			inputNames_ = std::move(names);
 		}
 
+		void SetVariableNames(std::vector<std::string> names)
+		{
+			variableNames_ = std::move(names);
+		}
+
 		void SetOutputNames(std::vector<std::string> names)
 		{
 			outputNames_ = std::move(names);
@@ -456,6 +462,15 @@ namespace LiteNN
 			inputNames_[index] = std::move(name);
 		}
 
+		void SetVariableName(std::size_t index, std::string name)
+		{
+			if (variableNames_.size() <= index)
+			{
+				variableNames_.resize(index + 1);
+			}
+			variableNames_[index] = std::move(name);
+		}
+
 		void SetOutputName(std::size_t index, std::string name)
 		{
 			if (outputNames_.size() <= index)
@@ -463,6 +478,24 @@ namespace LiteNN
 				outputNames_.resize(index + 1);
 			}
 			outputNames_[index] = std::move(name);
+		}
+
+		void SetMetadata(std::vector<ModelMetadataEntry> metadata)
+		{
+			metadata_ = std::move(metadata);
+		}
+
+		void SetMetadataEntry(std::string key, ModelMetadataValue value)
+		{
+			for (auto& entry : metadata_)
+			{
+				if (entry.key == key)
+				{
+					entry.value = std::move(value);
+					return;
+				}
+			}
+			metadata_.push_back({ std::move(key), std::move(value) });
 		}
 
 		SubgraphId Forward() const
@@ -485,6 +518,11 @@ namespace LiteNN
 			return inputNames_;
 		}
 
+		std::span<const std::string> VariableNames() const
+		{
+			return variableNames_;
+		}
+
 		std::span<const std::string> OutputNames() const
 		{
 			return outputNames_;
@@ -493,6 +531,11 @@ namespace LiteNN
 		std::string InputName(std::size_t index) const
 		{
 			return NameOrDefault(inputNames_, index, "input");
+		}
+
+		std::string VariableName(std::size_t index) const
+		{
+			return NameOrDefault(variableNames_, index, "variable");
 		}
 
 		std::string OutputName(std::size_t index) const
@@ -505,9 +548,31 @@ namespace LiteNN
 			return FindName(inputNames_, name);
 		}
 
+		std::optional<std::size_t> FindVariable(std::string_view name) const
+		{
+			return FindName(variableNames_, name);
+		}
+
 		std::optional<std::size_t> FindOutput(std::string_view name) const
 		{
 			return FindName(outputNames_, name);
+		}
+
+		const ModelMetadataEntry* FindMetadata(std::string_view key) const
+		{
+			for (const auto& entry : metadata_)
+			{
+				if (entry.key == key)
+				{
+					return &entry;
+				}
+			}
+			return nullptr;
+		}
+
+		std::span<const ModelMetadataEntry> Metadata() const
+		{
+			return metadata_;
 		}
 
 		TensorSpec InputSpec(std::size_t index) const
@@ -632,7 +697,9 @@ namespace LiteNN
 		std::vector<ActivationSlot> activationSlots_;
 		std::vector<TapeSlot> tapeSlots_;
 		std::vector<std::string> inputNames_;
+		std::vector<std::string> variableNames_;
 		std::vector<std::string> outputNames_;
+		std::vector<ModelMetadataEntry> metadata_;
 	};
 } // namespace LiteNN
 

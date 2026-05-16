@@ -23,7 +23,21 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 5;
+		constexpr std::uint32_t kModelVersion = 6;
+
+		enum class MetadataValueKind : std::uint32_t
+		{
+			Int64 = 0,
+			UInt64,
+			Float64,
+			Bool,
+			String,
+			Int64List,
+			UInt64List,
+			Float64List,
+			BoolList,
+			StringList,
+		};
 
 		enum class NodeKind : std::uint32_t
 		{
@@ -136,6 +150,87 @@ namespace LiteNN::Serialization
 			for (auto& value : values)
 			{
 				value = ReadScalar<std::int32_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteI64List(std::ostream& out, std::span<const std::int64_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::int64_t> ReadI64List(std::istream& in)
+		{
+			std::vector<std::int64_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::int64_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteU64List(std::ostream& out, std::span<const std::uint64_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::uint64_t> ReadU64List(std::istream& in)
+		{
+			std::vector<std::uint64_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::uint64_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteF64List(std::ostream& out, std::span<const double> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<double> ReadF64List(std::istream& in)
+		{
+			std::vector<double> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<double>(in);
+			}
+			return values;
+		}
+
+		inline void WriteBoolList(std::ostream& out, const std::vector<bool>& values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, static_cast<std::uint8_t>(value ? 1 : 0));
+			}
+		}
+
+		inline std::vector<bool> ReadBoolList(std::istream& in)
+		{
+			std::vector<bool> values(ReadSize(in));
+			for (std::size_t i = 0; i < values.size(); ++i)
+			{
+				const auto value = ReadScalar<std::uint8_t>(in);
+				if (value > 1)
+				{
+					throw std::runtime_error("Invalid boolean list value in LiteNN model metadata");
+				}
+				values[i] = value != 0;
 			}
 			return values;
 		}
@@ -269,6 +364,121 @@ namespace LiteNN::Serialization
 				value = ReadString(in);
 			}
 			return values;
+		}
+
+		inline void WriteMetadataValue(std::ostream& out, const ModelMetadataValue& value)
+		{
+			std::visit(
+			    [&](const auto& current) {
+				    using T = std::decay_t<decltype(current)>;
+				    if constexpr (std::same_as<T, std::int64_t>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Int64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::uint64_t>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::UInt64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, double>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Float64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, bool>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Bool));
+					    WriteScalar(out, static_cast<std::uint8_t>(current ? 1 : 0));
+				    }
+				    else if constexpr (std::same_as<T, std::string>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::String));
+					    WriteString(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::int64_t>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Int64List));
+					    WriteI64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::uint64_t>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::UInt64List));
+					    WriteU64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<double>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Float64List));
+					    WriteF64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<bool>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::BoolList));
+					    WriteBoolList(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::string>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::StringList));
+					    WriteStringList(out, current);
+				    }
+			    },
+			    value);
+		}
+
+		inline ModelMetadataValue ReadMetadataValue(std::istream& in)
+		{
+			const auto kind = static_cast<MetadataValueKind>(ReadScalar<std::uint32_t>(in));
+			switch (kind)
+			{
+			case MetadataValueKind::Int64:
+				return ReadScalar<std::int64_t>(in);
+			case MetadataValueKind::UInt64:
+				return ReadScalar<std::uint64_t>(in);
+			case MetadataValueKind::Float64:
+				return ReadScalar<double>(in);
+			case MetadataValueKind::Bool: {
+				const auto value = ReadScalar<std::uint8_t>(in);
+				if (value > 1)
+				{
+					throw std::runtime_error("Invalid boolean value in LiteNN model metadata");
+				}
+				return value != 0;
+			}
+			case MetadataValueKind::String:
+				return ReadString(in);
+			case MetadataValueKind::Int64List:
+				return ReadI64List(in);
+			case MetadataValueKind::UInt64List:
+				return ReadU64List(in);
+			case MetadataValueKind::Float64List:
+				return ReadF64List(in);
+			case MetadataValueKind::BoolList:
+				return ReadBoolList(in);
+			case MetadataValueKind::StringList:
+				return ReadStringList(in);
+			}
+			throw std::runtime_error("LiteNN model contains an unknown metadata value kind");
+		}
+
+		inline void WriteMetadataEntries(std::ostream& out, std::span<const ModelMetadataEntry> entries)
+		{
+			WriteSize(out, entries.size());
+			for (const auto& entry : entries)
+			{
+				WriteString(out, entry.key);
+				WriteMetadataValue(out, entry.value);
+			}
+		}
+
+		inline std::vector<ModelMetadataEntry> ReadMetadataEntries(std::istream& in)
+		{
+			std::vector<ModelMetadataEntry> entries(ReadSize(in));
+			for (auto& entry : entries)
+			{
+				entry.key = ReadString(in);
+				entry.value = ReadMetadataValue(in);
+			}
+			return entries;
 		}
 
 		inline void WriteNodeOutput(std::ostream& out, NodeOutput output)
@@ -663,6 +873,8 @@ namespace LiteNN::Serialization
 		Detail::WriteStringList(out, graph.OutputNames());
 
 		Detail::WriteSize(out, graph.VariableCount());
+		Detail::WriteStringList(out, graph.VariableNames());
+		Detail::WriteMetadataEntries(out, graph.Metadata());
 		for (const auto& variable : graph.Variables())
 		{
 			Detail::WriteTensor(out, variable->Data());
@@ -731,6 +943,13 @@ namespace LiteNN::Serialization
 
 		Graph graph;
 		const auto variableCount = Detail::ReadSize(in);
+		std::vector<std::string> variableNames;
+		std::vector<ModelMetadataEntry> metadata;
+		if (version >= 6)
+		{
+			variableNames = Detail::ReadStringList(in);
+			metadata = Detail::ReadMetadataEntries(in);
+		}
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
 			auto tensor = Detail::ReadTensor(in);
@@ -767,7 +986,9 @@ namespace LiteNN::Serialization
 			graph.SetBackward(*backward);
 		}
 		graph.SetInputNames(std::move(inputNames));
+		graph.SetVariableNames(std::move(variableNames));
 		graph.SetOutputNames(std::move(outputNames));
+		graph.SetMetadata(std::move(metadata));
 
 		if (in.peek() != std::char_traits<char>::eof())
 		{

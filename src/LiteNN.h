@@ -10,6 +10,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
+#include <LiteNN/Metadata.h>
 #include <LiteNN/Misc.h>
 #include <LiteNN/Optimizer/Optimizer.h>
 #include <LiteNN/Operators.h>
