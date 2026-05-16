@@ -200,6 +200,61 @@ void SetThroughputCounters(benchmark::State& state, std::size_t batch)
 	    static_cast<double>(batch), benchmark::Counter::kIsIterationInvariantRate);
 }
 
+#ifdef LITENN_ENABLE_CUDA
+std::vector<double> MakeCUDADeviceMatMulData(std::size_t count, DataType dtype)
+{
+	std::vector<double> values(count);
+	if (dtype == DataType::Int8 || dtype == DataType::UInt8)
+	{
+		for (auto i = 0uz; i < values.size(); ++i)
+			values[i] = static_cast<double>(i % 3);
+		return values;
+	}
+
+	std::mt19937 rng(11);
+	std::uniform_real_distribution<double> dist(-1.0, 1.0);
+	for (auto& value : values)
+		value = dist(rng);
+	return values;
+}
+
+void BMCUDADeviceMatMul(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		state.SkipWithError("CUDA device is not available");
+		return;
+	}
+	if (dtype != DataType::Float32 && dtype != DataType::Float64 && !CUDASupportsLowPrecisionStorage(dtype))
+	{
+		state.SkipWithError("CUDA device does not support requested dtype storage");
+		return;
+	}
+
+	const auto lhsData = MakeCUDADeviceMatMulData(batch * width, dtype);
+	const auto rhsData = MakeCUDADeviceMatMulData(width * width, dtype);
+	Tensor<CPU> lhsCpu(std::span<const double>(lhsData), { batch, width }, dtype);
+	Tensor<CPU> rhsCpu(std::span<const double>(rhsData), { width, width }, dtype);
+	auto lhs = lhsCpu.CopyToDevice(CUDA{});
+	auto rhs = rhsCpu.CopyToDevice(CUDA{});
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		auto output = lhs.MatMul(rhs);
+		benchmark::DoNotOptimize(output.RawData());
+	}
+
+	for (auto _ : state)
+	{
+		auto output = lhs.MatMul(rhs);
+		benchmark::DoNotOptimize(output.RawData());
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
+#endif
+
 class ScopedEnvVar
 {
 public:
@@ -556,6 +611,30 @@ void RegisterBenchmarks()
 		    std::format("CUDANativeMatMul/batch:{}/width:{}", batch, nativeMatMulWidth),
 		    [=](benchmark::State& state) { BMCUDANativeMatMulRunInto(state, batch, nativeMatMulWidth); });
 		benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+	}
+#endif
+
+#ifdef LITENN_ENABLE_CUDA
+	constexpr std::size_t cudaDeviceMatMulWidth = 128;
+	constexpr std::array cudaDeviceMatMulDTypes{
+		DataType::Float32,
+		DataType::Float16,
+		DataType::BFloat16,
+		DataType::Float8E4M3,
+		DataType::Float8E5M2,
+		DataType::Int8,
+		DataType::UInt8,
+	};
+	for (const auto batch : kBatchSizes)
+	{
+		for (const auto dtype : cudaDeviceMatMulDTypes)
+		{
+			auto* benchmarkCase = benchmark::RegisterBenchmark(
+			    std::format("CUDADeviceMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch,
+			                cudaDeviceMatMulWidth),
+			    [=](benchmark::State& state) { BMCUDADeviceMatMul(state, batch, cudaDeviceMatMulWidth, dtype); });
+			benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+		}
 	}
 #endif
 }

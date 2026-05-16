@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <LiteNN/Device.h>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,6 +27,28 @@ namespace LiteNN
 	int CUDADeviceCount() noexcept;
 	bool IsCUDADeviceAvailable(int deviceIndex = 0) noexcept;
 	bool IsCUDADriverAvailable(int deviceIndex = 0) noexcept;
+
+	struct CUDALowPrecisionCapabilities
+	{
+		int deviceIndex{};
+		int computeCapabilityMajor{};
+		int computeCapabilityMinor{};
+		bool hasCUBLASLt{};
+		bool supportsFloat16Storage{};
+		bool supportsFloat16MatMul{};
+		bool supportsBFloat16Storage{};
+		bool supportsBFloat16MatMul{};
+		bool supportsFloat8Storage{};
+		bool supportsFloat8MatMul{};
+		bool supportsInt8Storage{};
+		bool supportsInt8TensorCores{};
+	};
+
+	std::optional<CUDALowPrecisionCapabilities> TryGetCUDALowPrecisionCapabilities(int deviceIndex = 0) noexcept;
+	CUDALowPrecisionCapabilities GetCUDALowPrecisionCapabilities(int deviceIndex = 0);
+	bool CUDASupportsLowPrecisionStorage(DataType dtype, int deviceIndex = 0) noexcept;
+	bool CUDASupportsNativeMatMul(DataType dtype, int deviceIndex = 0) noexcept;
+	std::string FormatCUDALowPrecisionCapabilities(const CUDALowPrecisionCapabilities& capabilities);
 
 	struct CUDADriverLaunchDim
 	{

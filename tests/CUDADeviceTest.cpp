@@ -20,6 +20,15 @@ static float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	return static_cast<const float*>(tensor.RawData())[index];
 }
 
+static std::vector<float> ReadAsFloat32(const Tensor<CPU>& tensor)
+{
+	std::vector<float> values(tensor.NumElements());
+	CPU cpu;
+	DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.RawData(), tensor.NumElements(), DataType::Float32,
+	                             values.data());
+	return values;
+}
+
 TEST(CUDADevice, RoundTripAndElementwiseFallback)
 {
 	if (!IsCUDADeviceAvailable())
@@ -57,6 +66,89 @@ TEST(CUDADevice, MatMulMatchesCPU)
 	for (auto i = 0uz; i < cpuResult.NumElements(); ++i)
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(cudaResult, i), ReadFloat(cpuResult, i));
+	}
+}
+
+TEST(CUDADevice, LowPrecisionCapabilitiesAreReported)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	const auto capabilities = GetCUDALowPrecisionCapabilities();
+	EXPECT_EQ(capabilities.deviceIndex, 0);
+	EXPECT_GE(capabilities.computeCapabilityMajor, 0);
+	EXPECT_GE(capabilities.computeCapabilityMinor, 0);
+	EXPECT_TRUE(capabilities.supportsFloat16Storage);
+	EXPECT_TRUE(capabilities.supportsBFloat16Storage);
+	EXPECT_TRUE(capabilities.supportsFloat8Storage);
+	EXPECT_TRUE(capabilities.supportsInt8Storage);
+	EXPECT_TRUE(CUDASupportsLowPrecisionStorage(DataType::Float16));
+	EXPECT_TRUE(CUDASupportsNativeMatMul(DataType::Float32));
+
+	const auto summary = FormatCUDALowPrecisionCapabilities(capabilities);
+	EXPECT_NE(summary.find("cc"), std::string::npos);
+	EXPECT_NE(summary.find("fp16"), std::string::npos);
+	EXPECT_NE(summary.find("bf16"), std::string::npos);
+}
+
+TEST(CUDADevice, LowPrecisionConversionRoundTripUsesCPUBridge)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	const std::array dataTypes{
+		DataType::Float16,
+		DataType::BFloat16,
+		DataType::Float8E4M3,
+		DataType::Float8E5M2,
+		DataType::Int8,
+		DataType::UInt8,
+	};
+	for (const auto dataType : dataTypes)
+	{
+		Tensor<CPU> cpuTensor({ 0, 1, 2, 3, 4 }, { 5 }, dataType);
+		const auto expected = ReadAsFloat32(cpuTensor);
+
+		auto cudaTensor = cpuTensor.CopyToDevice(CUDA{});
+		auto backToCpu = cudaTensor.CopyToDevice(CPU{});
+		const auto actual = ReadAsFloat32(backToCpu);
+
+		ASSERT_EQ(actual.size(), expected.size());
+		for (auto i = 0uz; i < actual.size(); ++i)
+		{
+			EXPECT_FLOAT_EQ(actual[i], expected[i]) << "dtype=" << DataTypeName(dataType) << ", index=" << i;
+		}
+	}
+}
+
+TEST(CUDADevice, Float16MatMulMatchesCPU)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!CUDASupportsNativeMatMul(DataType::Float16))
+	{
+		GTEST_SKIP() << "CUDA device does not report native Float16 MatMul support";
+	}
+
+	Tensor<CPU> lhs({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }, DataType::Float16);
+	Tensor<CPU> rhs({ 7, 8, 9, 10, 11, 12 }, { 3, 2 }, DataType::Float16);
+	const auto expected = ReadAsFloat32(lhs.MatMul(rhs));
+
+	auto cudaLhs = lhs.CopyToDevice(CUDA{});
+	auto cudaRhs = rhs.CopyToDevice(CUDA{});
+	auto cudaResult = cudaLhs.MatMul(cudaRhs).CopyToDevice(CPU{});
+	const auto actual = ReadAsFloat32(cudaResult);
+
+	ASSERT_EQ(actual.size(), expected.size());
+	for (auto i = 0uz; i < actual.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
 	}
 }
 

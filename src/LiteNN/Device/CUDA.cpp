@@ -161,6 +161,49 @@ namespace LiteNN
 			(void)cudaGetLastError();
 		}
 
+		constexpr bool BuildHasCUBLASLt() noexcept
+		{
+#ifdef LITENN_ENABLE_CUBLASLT
+			return true;
+#else
+			return false;
+#endif
+		}
+
+		constexpr bool BuildHasCUBLASBFloat16() noexcept
+		{
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 11000
+			return true;
+#else
+			return false;
+#endif
+		}
+
+		int ComputeCapabilityScore(int major, int minor) noexcept
+		{
+			return major * 10 + minor;
+		}
+
+		CUDALowPrecisionCapabilities MakeLowPrecisionCapabilities(int deviceIndex,
+		                                                           const cudaDeviceProp& properties) noexcept
+		{
+			const auto cc = ComputeCapabilityScore(properties.major, properties.minor);
+			return {
+				.deviceIndex = deviceIndex,
+				.computeCapabilityMajor = properties.major,
+				.computeCapabilityMinor = properties.minor,
+				.hasCUBLASLt = BuildHasCUBLASLt(),
+				.supportsFloat16Storage = true,
+				.supportsFloat16MatMul = cc >= 53,
+				.supportsBFloat16Storage = true,
+				.supportsBFloat16MatMul = cc >= 80 && BuildHasCUBLASBFloat16(),
+				.supportsFloat8Storage = true,
+				.supportsFloat8MatMul = false,
+				.supportsInt8Storage = true,
+				.supportsInt8TensorCores = cc >= 75,
+			};
+		}
+
 		class CUDADeviceGuard
 		{
 		public:
@@ -625,7 +668,7 @@ namespace LiteNN
 			{
 				return false;
 			}
-			if (type1 != DataType::Float32 && type1 != DataType::Float64)
+			if (!CUDASupportsNativeMatMul(type1, device.deviceIndex))
 			{
 				return false;
 			}
@@ -659,7 +702,7 @@ namespace LiteNN
 				                        &beta, static_cast<float*>(dst), n),
 				            "cublasSgemm");
 			}
-			else
+			else if (type1 == DataType::Float64)
 			{
 				const double alpha = 1.0;
 				const double beta = 0.0;
@@ -667,6 +710,36 @@ namespace LiteNN
 				                        static_cast<const double*>(src2), n, static_cast<const double*>(src1), k,
 				                        &beta, static_cast<double*>(dst), n),
 				            "cublasDgemm");
+			}
+			else if (type1 == DataType::Float16)
+			{
+				const float alpha = 1.0F;
+				const float beta = 0.0F;
+				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
+				                                  CUDA_R_16F, n, src1, CUDA_R_16F, k, &beta, dst, CUDA_R_16F, n,
+				                                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				if (status != CUBLAS_STATUS_SUCCESS)
+				{
+					return false;
+				}
+			}
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 11000
+			else if (type1 == DataType::BFloat16)
+			{
+				const float alpha = 1.0F;
+				const float beta = 0.0F;
+				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
+				                                  CUDA_R_16BF, n, src1, CUDA_R_16BF, k, &beta, dst, CUDA_R_16BF, n,
+				                                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				if (status != CUBLAS_STATUS_SUCCESS)
+				{
+					return false;
+				}
+			}
+#endif
+			else
+			{
+				return false;
 			}
 			if (options.synchronize)
 			{
@@ -692,6 +765,108 @@ namespace LiteNN
 	{
 		const auto count = CUDADeviceCount();
 		return deviceIndex >= 0 && deviceIndex < count;
+	}
+
+	std::optional<CUDALowPrecisionCapabilities> TryGetCUDALowPrecisionCapabilities(int deviceIndex) noexcept
+	{
+		if (!IsCUDADeviceAvailable(deviceIndex))
+		{
+			return std::nullopt;
+		}
+		cudaDeviceProp properties{};
+		const auto status = cudaGetDeviceProperties(&properties, deviceIndex);
+		if (status != cudaSuccess)
+		{
+			ClearCUDAError();
+			return std::nullopt;
+		}
+		return MakeLowPrecisionCapabilities(deviceIndex, properties);
+	}
+
+	CUDALowPrecisionCapabilities GetCUDALowPrecisionCapabilities(int deviceIndex)
+	{
+		if (auto capabilities = TryGetCUDALowPrecisionCapabilities(deviceIndex))
+		{
+			return *capabilities;
+		}
+		throw std::runtime_error(std::format("CUDA device {} is not available", deviceIndex));
+	}
+
+	bool CUDASupportsLowPrecisionStorage(DataType dtype, int deviceIndex) noexcept
+	{
+		const auto capabilities = TryGetCUDALowPrecisionCapabilities(deviceIndex);
+		if (!capabilities)
+		{
+			return false;
+		}
+		switch (dtype)
+		{
+		case DataType::Float16:
+			return capabilities->supportsFloat16Storage;
+		case DataType::BFloat16:
+			return capabilities->supportsBFloat16Storage;
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+			return capabilities->supportsFloat8Storage;
+		case DataType::Int8:
+		case DataType::UInt8:
+			return capabilities->supportsInt8Storage;
+		case DataType::Float32:
+		case DataType::Float64:
+		case DataType::Int32:
+		case DataType::Int64:
+		case DataType::Bool:
+			return false;
+		}
+		return false;
+	}
+
+	bool CUDASupportsNativeMatMul(DataType dtype, int deviceIndex) noexcept
+	{
+		if (!IsCUDADeviceAvailable(deviceIndex))
+		{
+			return false;
+		}
+		if (dtype == DataType::Float32 || dtype == DataType::Float64)
+		{
+			return true;
+		}
+		const auto capabilities = TryGetCUDALowPrecisionCapabilities(deviceIndex);
+		if (!capabilities)
+		{
+			return false;
+		}
+		switch (dtype)
+		{
+		case DataType::Float16:
+			return capabilities->supportsFloat16MatMul;
+		case DataType::BFloat16:
+			return capabilities->supportsBFloat16MatMul;
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+			return capabilities->supportsFloat8MatMul;
+		case DataType::Float32:
+		case DataType::Float64:
+		case DataType::Int32:
+		case DataType::Int64:
+		case DataType::Int8:
+		case DataType::UInt8:
+		case DataType::Bool:
+			return false;
+		}
+		return false;
+	}
+
+	std::string FormatCUDALowPrecisionCapabilities(const CUDALowPrecisionCapabilities& capabilities)
+	{
+		return std::format(
+		    "CUDA device {} cc {}.{}: cuBLASLt={}, fp16(storage={}, matmul={}), "
+		    "bf16(storage={}, matmul={}), fp8(storage={}, matmul={}), int8(storage={}, tensorCores={})",
+		    capabilities.deviceIndex, capabilities.computeCapabilityMajor, capabilities.computeCapabilityMinor,
+		    capabilities.hasCUBLASLt, capabilities.supportsFloat16Storage, capabilities.supportsFloat16MatMul,
+		    capabilities.supportsBFloat16Storage, capabilities.supportsBFloat16MatMul,
+		    capabilities.supportsFloat8Storage, capabilities.supportsFloat8MatMul, capabilities.supportsInt8Storage,
+		    capabilities.supportsInt8TensorCores);
 	}
 
 #ifdef LITENN_ENABLE_CUDA_DRIVER

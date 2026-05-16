@@ -11,6 +11,7 @@ This document is the append-only planning entry for LiteNN. New requirements sho
 - GGUF conversion implies model format stability, tensor-name mapping, tokenizer/config import, graph construction helpers for transformer blocks, and enough compiler/runtime ops for LLM inference.
 - CUDA support needs capability detection and fallback rules. FP16/BF16/FP8 kernels depend on device architecture, CUDA version, and cuBLAS/cuBLASLt availability.
 - AOT support must preserve dtype metadata in rodata/instruction-loaded modules so static/shared library embedding can validate buffers before execution.
+- GGUF conversion is also an operator-coverage project. llama.cpp can express more graph ops than LiteNN currently owns, so the converter must either lower them to existing primitives, add LiteNN ops, or reject models with actionable diagnostics.
 
 ### P0: Scalar DType Foundation
 
@@ -52,10 +53,19 @@ Completed notes:
 
 ### P2: CUDA Low Precision Kernels
 
-- [ ] Add CUDA capability detection for fp16, bf16, and fp8.
-- [ ] Use cuBLAS/cuBLASLt for supported GEMM cases and explicit fallback paths for unsupported devices.
-- [ ] Add conversion kernels for f32 <-> fp16/bf16/fp8/int8.
-- [ ] Add benchmark coverage per dtype and backend.
+Status: completed for capability reporting, CPU-bridge conversion coverage, fp16/bf16 GEMM attempts, and benchmark registration on 2026-05-17.
+
+- [x] Add CUDA capability detection for fp16, bf16, fp8, and int8 storage / matmul policy.
+- [x] Use cuBLAS/cuBLASLt for supported GEMM cases and explicit fallback paths for unsupported devices.
+- [x] Add conversion coverage for f32 <-> fp16/bf16/fp8/int8 through the existing synchronous CPU bridge.
+- [x] Add benchmark coverage per dtype for CUDA device MatMul, exposing native and fallback behavior.
+
+Completed notes:
+
+- `CUDALowPrecisionCapabilities` reports compute capability, cuBLASLt build support, storage support, and native MatMul support for low-precision dtypes.
+- `DeviceTraits<CUDA>::DoBinaryOp(MatMul)` still keeps the existing fp32/fp64 cuBLAS path and now attempts fp16/bf16 `cublasGemmEx` when the build and device report support.
+- FP8 and int8 native GEMM are intentionally not marked as implemented yet. They need explicit accumulation/output semantics and cuBLASLt kernel policy before they are safe for production inference.
+- CUDA dtype conversion remains synchronous through CPU reference conversion. Dedicated CUDA conversion kernels are a later performance task, not a correctness blocker.
 
 ### P3: GGUF Reader and Converter
 
@@ -63,6 +73,41 @@ Completed notes:
 - [ ] Map GGUF tensors to LiteNN variables with stable names and shape validation.
 - [ ] Import tokenizer/config metadata needed by LLaMA-like models.
 - [ ] Emit LiteNN model files that can be loaded without linking llama.cpp at runtime.
+
+### GGUF/Llama.cpp Operator Gap Checklist
+
+Audit source: `third_party/llama.cpp/ggml/include/ggml.h` `ggml_op`, `ggml_unary_op`, and `ggml_glu_op` enums, plus llama.cpp model graph builders. This list tracks operators that matter beyond the GGUF container format itself.
+
+P0: required for common LLaMA-family decode/inference:
+
+- [ ] Embedding / row lookup: `GET_ROWS`, `GET_ROWS_BACK` lowering or a dedicated embedding node.
+- [ ] RMSNorm: `RMS_NORM` plus epsilon metadata; backward can remain deferred for inference-only import.
+- [ ] RoPE: `ROPE` with mode, base, scale, and position handling compatible with llama.cpp metadata.
+- [ ] Attention mask and softmax: `SOFT_MAX`, `DIAG_MASK_INF`, `TRI`, scale, and causal masking behavior.
+- [ ] Quantized weight MatMul: `MUL_MAT` over GGML block formats with dequantization or fused low-precision kernels.
+- [ ] KV cache updates/views: `VIEW`, `CPY`, `SET`, `CONT`, `RESHAPE`, `PERMUTE`, `TRANSPOSE`, and slicing semantics, or a higher-level KV cache op.
+- [ ] MLP activation path: `SILU`, `GLU` / `SWIGLU`, `MUL`, `ADD`, `SCALE`, and broadcast helpers such as `REPEAT` / `ADD1`.
+
+P1: needed by popular variants, MoE models, or efficient attention:
+
+- [ ] MoE routing: `MUL_MAT_ID`, `ADD_ID`, `TOP_K`, `ARGSORT`, and gather/scatter style row selection.
+- [ ] Additional normalizations: `NORM`, `GROUP_NORM`, `L2_NORM`.
+- [ ] Fused attention option: `FLASH_ATTN_EXT` as either a fused op or a converter rewrite to LiteNN attention primitives.
+- [ ] Activation coverage: `GELU`, `GELU_ERF`, `GELU_QUICK`, `SIGMOID`, `TANH`, `RELU`, `LEAKY_RELU`, `CLAMP`, `HARDSWISH`, `HARDSIGMOID`.
+- [ ] Shape/data movement: `CONCAT`, `PAD`, `ROLL`, `ARANGE`, `CUMSUM`, `SUM_ROWS`, and robust broadcast semantics.
+
+P2: architecture-specific model families and multimodal support:
+
+- [ ] SSM/Mamba style ops: `SSM_CONV`, `SSM_SCAN`.
+- [ ] RWKV and gated attention: `RWKV_WKV6`, `RWKV_WKV7`, `GATED_LINEAR_ATTN`, `GATED_DELTA_NET`.
+- [ ] Vision/multimodal ops: `CONV_1D/2D/3D` equivalents, `CONV_TRANSPOSE_*`, `IM2COL`, `POOL_*`, `UPSCALE`, `WIN_PART`, `WIN_UNPART`, `GET_REL_POS`, `ADD_REL_POS`.
+- [ ] Loss/training/backward ops only if converted models need training or fine-tuning: `*_BACK`, `CROSS_ENTROPY_LOSS`, optimizer ops.
+
+P3: unsupported in the first converter unless a real model requires them:
+
+- [ ] Custom callback ops: `MAP_CUSTOM*`, `CUSTOM`.
+- [ ] Optimizer-only graph ops: `OPT_STEP_ADAMW`, `OPT_STEP_SGD`.
+- [ ] Rare numerical helpers with no first target model dependency: `SOLVE_TRI`, `OUT_PROD`, `TIMESTEP_EMBEDDING`.
 
 ### P4: Transformer Graph Coverage
 
