@@ -23,6 +23,7 @@ namespace LiteNN
 		OutputTensor = 2,
 		Workspace = 3,
 		Scalar = 4,
+		ConstantTensor = 5,
 	};
 
 	inline constexpr std::uint64_t kCUDANativeFeatureStaticShape = 1ull << 0;
@@ -49,6 +50,7 @@ namespace LiteNN
 	inline constexpr std::uint64_t kCUDANativeFeatureMatMulBiasAddReLUF32 = 1ull << 21;
 	inline constexpr std::uint64_t kCUDANativeFeatureMultiKernelLaunch = 1ull << 22;
 	inline constexpr std::uint64_t kCUDANativeFeatureWorkspace = 1ull << 23;
+	inline constexpr std::uint64_t kCUDANativeFeatureConstantTensor = 1ull << 24;
 	inline constexpr std::uint64_t kCUDANativeKnownFeatureMask = kCUDANativeFeatureStaticShape |
 	                                                             kCUDANativeFeatureSingleSubgraph |
 	                                                             kCUDANativeFeatureElementwiseAddF32 |
@@ -72,7 +74,8 @@ namespace LiteNN
 	                                                             kCUDANativeFeatureMatMulBiasAddF32 |
 	                                                             kCUDANativeFeatureMatMulBiasAddReLUF32 |
 	                                                             kCUDANativeFeatureMultiKernelLaunch |
-	                                                             kCUDANativeFeatureWorkspace;
+	                                                             kCUDANativeFeatureWorkspace |
+	                                                             kCUDANativeFeatureConstantTensor;
 
 	struct CUDANativeLaunchDim
 	{
@@ -106,6 +109,7 @@ namespace LiteNN
 		std::string target;
 		std::vector<std::byte> binary;
 		std::vector<std::byte> scalarData;
+		std::vector<std::byte> constantData;
 		std::uint64_t workspaceBytes{};
 		std::vector<CUDANativeKernelSpec> kernels;
 	};

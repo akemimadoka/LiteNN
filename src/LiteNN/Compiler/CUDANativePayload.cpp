@@ -15,7 +15,7 @@ namespace
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 		std::byte{ 'C' }, std::byte{ 'U' }, std::byte{ 'D' }, std::byte{ 'A' },
 	};
-	constexpr std::uint32_t kPayloadVersion = 2;
+	constexpr std::uint32_t kPayloadVersion = 3;
 
 	void AppendU32(std::vector<std::byte>& bytes, std::uint32_t value)
 	{
@@ -130,6 +130,8 @@ namespace
 				return CUDANativeArgumentKind::Workspace;
 			case static_cast<std::uint32_t>(CUDANativeArgumentKind::Scalar):
 				return CUDANativeArgumentKind::Scalar;
+			case static_cast<std::uint32_t>(CUDANativeArgumentKind::ConstantTensor):
+				return CUDANativeArgumentKind::ConstantTensor;
 			default:
 				throw std::runtime_error("CUDA native instruction payload contains an invalid argument kind");
 		}
@@ -198,6 +200,7 @@ std::vector<std::byte> SerializeCUDANativeInstructionPayload(const CUDANativeIns
 	AppendString(bytes, payload.target);
 	AppendBytes(bytes, payload.binary);
 	AppendBytes(bytes, payload.scalarData);
+	AppendBytes(bytes, payload.constantData);
 	AppendU64(bytes, payload.workspaceBytes);
 	AppendU32(bytes, static_cast<std::uint32_t>(payload.kernels.size()));
 
@@ -247,6 +250,10 @@ CUDANativeInstructionPayload DeserializeCUDANativeInstructionPayload(std::span<c
 	if (version >= 2)
 	{
 		payload.scalarData = ReadBytes(bytes, offset);
+	}
+	if (version >= 3)
+	{
+		payload.constantData = ReadBytes(bytes, offset);
 	}
 	payload.workspaceBytes = ReadU64(bytes, offset);
 

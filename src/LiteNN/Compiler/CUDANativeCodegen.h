@@ -45,8 +45,9 @@ namespace LiteNN
 
 	struct CUDANativeMatMulBiasEpilogueF32CodegenSpec
 	{
-		std::span<const std::size_t> outputShape;
-		std::span<const std::size_t> biasShape;
+		std::string kernelName;
+		std::vector<std::size_t> outputShape;
+		std::vector<std::size_t> biasShape;
 		bool relu{};
 	};
 
@@ -81,6 +82,10 @@ namespace LiteNN
 	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
 	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);
+	std::string CUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
+	    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs);
+	std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
+	    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs);
 
 	/**
 	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.

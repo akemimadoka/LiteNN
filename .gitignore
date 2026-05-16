@@ -2,3 +2,5 @@
 /.claude
 /.vscode
 /build*
+__pycache__
+/benchmark/results

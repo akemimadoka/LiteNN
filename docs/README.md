@@ -2,6 +2,7 @@
 
 - [Architecture.md](Architecture.md): 核心架构、Roadmap、Pass/Runtime/AOT 设计概览。
 - [PerformanceAnalysis.md](PerformanceAnalysis.md): 当前 CPU AOT 性能路径与瓶颈分析。
+- [PerformanceOptimizationRoadmap.md](PerformanceOptimizationRoadmap.md): 基于 benchmark 和性能分析拆出的优化执行路线图。
 - [Versioning.md](Versioning.md): 版本治理、兼容策略、弃用规则、序列化与 image 迁移约定。
 - [APIGuide.md](APIGuide.md): 常用 public API 入口、推荐调用路径和使用边界。
 - [DesignConstraints.md](DesignConstraints.md): 当前必须保持的设计约束与非目标。

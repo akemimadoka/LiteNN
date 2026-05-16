@@ -531,6 +531,30 @@ namespace
 		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpilogueF32(
 		    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
 		{
+			auto kernelModule = CreateKernelModule();
+			EmitMatMulBiasEpilogueF32(kernelModule.gpuModule, spec);
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpiloguesF32(
+		    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
+		{
+			if (specs.empty())
+			{
+				throw std::runtime_error("CUDA native MatMulBias epilogue set must not be empty");
+			}
+			auto kernelModule = CreateKernelModule();
+			for (const auto& spec : specs)
+			{
+				EmitMatMulBiasEpilogueF32(kernelModule.gpuModule, spec);
+			}
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
+	private:
+		void EmitMatMulBiasEpilogueF32(mlir::gpu::GPUModuleOp gpuModule,
+		                               const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+		{
 			const auto outputStrides = ContiguousStridesU32(spec.outputShape);
 			const auto biasStrides = ContiguousStridesU32(spec.biasShape);
 			if (!outputStrides || !biasStrides || spec.outputShape.size() != spec.biasShape.size())
@@ -538,10 +562,10 @@ namespace
 				throw std::runtime_error("CUDA native MatMulBias epilogue received invalid shapes");
 			}
 
-			auto kernelModule = CreateKernelModule();
 			llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
-			auto func = CreateKernelFunc(kernelModule.gpuModule,
-			                             CUDANativeMatMulBiasEpilogueF32KernelName(spec.relu), argTypes);
+			const auto name = spec.kernelName.empty() ? std::string(CUDANativeMatMulBiasEpilogueF32KernelName(spec.relu))
+			                                          : spec.kernelName;
+			auto func = CreateKernelFunc(gpuModule, name, argTypes);
 			auto blocks = EmitLinearIndexGuard(func, 2);
 
 			builder_.setInsertionPointToStart(blocks.body);
@@ -567,11 +591,8 @@ namespace
 			}
 			EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
 			FinishLinearKernel(blocks);
-
-			return FinalizeModule(std::move(kernelModule.module));
 		}
 
-	private:
 		CUDANativeMLIRKernelModule CreateKernelModule()
 		{
 			auto module = mlir::ModuleOp::create(loc_);
@@ -908,6 +929,14 @@ namespace
 			return builder.BuildMatMulBiasEpilogueF32(spec);
 		});
 	}
+
+	std::string EmitMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
+	    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildMatMulBiasEpiloguesF32(specs);
+		});
+	}
 } // namespace
 
 std::string_view CUDANativeBinaryF32KernelName(BinaryOp op, bool broadcast)
@@ -1092,6 +1121,29 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
 	}
 	catch (const std::exception&)
 	{
+		return std::nullopt;
+	}
+}
+
+std::string CUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
+    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
+{
+	return EmitMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(specs);
+}
+
+std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
+    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
+{
+	try
+	{
+		return CUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(specs);
+	}
+	catch (const std::exception& ex)
+	{
+		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
+		{
+			llvm::errs() << "CUDA native MatMulBias epilogue set codegen failed: " << ex.what() << '\n';
+		}
 		return std::nullopt;
 	}
 }

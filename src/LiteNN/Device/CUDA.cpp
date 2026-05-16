@@ -14,7 +14,10 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -199,14 +202,10 @@ namespace LiteNN
 		class CUBLASHandle
 		{
 		public:
-			explicit CUBLASHandle(CUDAExecutionOptions options = {})
+			explicit CUBLASHandle(int deviceIndex) : deviceIndex_(deviceIndex)
 			{
+				CUDADeviceGuard guard(deviceIndex_);
 				CheckCUBLAS(cublasCreate(&handle_), "cublasCreate");
-				if (options.stream != nullptr)
-				{
-					CheckCUBLAS(cublasSetStream(handle_, reinterpret_cast<cudaStream_t>(options.stream)),
-					            "cublasSetStream");
-				}
 			}
 
 			~CUBLASHandle()
@@ -220,14 +219,47 @@ namespace LiteNN
 			CUBLASHandle(const CUBLASHandle&) = delete;
 			CUBLASHandle& operator=(const CUBLASHandle&) = delete;
 
+			int DeviceIndex() const noexcept
+			{
+				return deviceIndex_;
+			}
+
+			void SetStream(void* stream)
+			{
+				if (stream_ == stream)
+				{
+					return;
+				}
+				CheckCUBLAS(cublasSetStream(handle_, reinterpret_cast<cudaStream_t>(stream)), "cublasSetStream");
+				stream_ = stream;
+			}
+
 			cublasHandle_t get() const
 			{
 				return handle_;
 			}
 
 		private:
+			int deviceIndex_{};
 			cublasHandle_t handle_{};
+			void* stream_{};
 		};
+
+		CUBLASHandle& ThreadLocalCUBLASHandle(int deviceIndex)
+		{
+			static thread_local std::vector<std::unique_ptr<CUBLASHandle>> handles;
+			for (auto& handle : handles)
+			{
+				if (handle->DeviceIndex() == deviceIndex)
+				{
+					return *handle;
+				}
+			}
+			auto handle = std::make_unique<CUBLASHandle>(deviceIndex);
+			auto& ref = *handle;
+			handles.push_back(std::move(handle));
+			return ref;
+		}
 
 		DataType ResolveUnaryResultType(UnaryOp op, DataType inputType)
 		{
@@ -374,7 +406,8 @@ namespace LiteNN
 			}
 
 			CUDADeviceGuard guard(device.deviceIndex);
-			CUBLASHandle handle(options);
+			auto& handle = ThreadLocalCUBLASHandle(device.deviceIndex);
+			handle.SetStream(options.stream);
 			const auto m = static_cast<int>(shape1[0]);
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
@@ -445,6 +478,8 @@ namespace LiteNN
 		CUdevice driverDevice{};
 		CUcontext context{};
 		CUmodule module{};
+		mutable std::mutex functionCacheMutex;
+		mutable std::vector<std::pair<std::string, CUfunction>> functionCache;
 
 		Impl(CUDA deviceValue, std::span<const std::byte> image) : device(std::move(deviceValue))
 		{
@@ -523,10 +558,19 @@ namespace LiteNN
 			{
 				throw std::runtime_error("CUDA driver kernel function name must not be empty");
 			}
+			std::lock_guard lock(functionCacheMutex);
+			for (const auto& entry : functionCache)
+			{
+				if (entry.first == functionName)
+				{
+					return entry.second;
+				}
+			}
 			CUDADriverContextScope scope(context);
 			CUfunction function{};
 			CheckCUDADriver(cuModuleGetFunction(&function, module, std::string(functionName).c_str()),
 			                "cuModuleGetFunction");
+			functionCache.emplace_back(functionName, function);
 			return function;
 		}
 	};
@@ -562,6 +606,20 @@ namespace LiteNN
 		return !impl_;
 	}
 
+	void CUDADriverModule::CacheFunction(std::string_view functionName) const
+	{
+		if (!impl_)
+		{
+			throw std::runtime_error("CUDA driver module is empty");
+		}
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		(void)impl_->GetFunction(functionName);
+#else
+		(void)functionName;
+		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
+#endif
+	}
+
 	void CUDADriverModule::Launch(std::string_view functionName, const CUDADriverLaunchOptions& options,
 	                              std::span<void*> arguments) const
 	{
@@ -579,10 +637,8 @@ namespace LiteNN
 			throw std::runtime_error("CUDA driver launch shared memory exceeds unsigned int range");
 		}
 #ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto function = impl_->GetFunction(functionName);
 		CUDADriverContextScope scope(impl_->context);
-		CUfunction function{};
-		CheckCUDADriver(cuModuleGetFunction(&function, impl_->module, std::string(functionName).c_str()),
-		                "cuModuleGetFunction");
 		CheckCUDADriver(cuLaunchKernel(function, options.grid.x, options.grid.y, options.grid.z,
 		                               options.block.x, options.block.y, options.block.z,
 		                               static_cast<unsigned int>(options.sharedMemoryBytes),

@@ -216,6 +216,28 @@ namespace
 		return graph;
 	}
 
+	Graph BuildTinyMLPGraph(std::size_t batch)
+	{
+		Graph graph;
+		const auto h1 = Layer::CreateLinear(graph,
+		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 },
+		                { 3, 4 }, DataType::Float32),
+		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
+		const auto h2 = Layer::CreateLinear(graph,
+		    Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 },
+		                { 4, 2 }, DataType::Float32),
+		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, 3 });
+		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
+		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
 	class ScopedEnvVar
 	{
 	public:
@@ -839,6 +861,36 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 #endif
 }
 
+TEST(CompiledModuleCUDATest, CompilerArtifactsExposeNativeLinearChainPayload)
+{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+	auto graph = BuildTinyMLPGraph(2);
+	FusionPass{}.Run(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASF32, kCUDANativeFeatureMatMulCUBLASF32);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddF32, kCUDANativeFeatureMatMulBiasAddF32);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLUF32,
+	          kCUDANativeFeatureMatMulBiasAddReLUF32);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureWorkspace, kCUDANativeFeatureWorkspace);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureConstantTensor, kCUDANativeFeatureConstantTensor);
+	EXPECT_GT(payload.constantData.size(), 0u);
+	ASSERT_EQ(payload.kernels.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f32");
+	EXPECT_EQ(payload.kernels[1].name, "litenn_matmul_bias_relu_epilogue_f32_0");
+	EXPECT_EQ(payload.kernels[2].name, "litenn_cublas_matmul_f32");
+	EXPECT_EQ(payload.kernels[3].name, "litenn_matmul_bias_add_epilogue_f32_1");
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, CUDANativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, CUDANativeArgumentKind::ConstantTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[0].kind, CUDANativeArgumentKind::OutputTensor);
+#else
+	GTEST_SKIP() << "CUDA driver support is not enabled";
+#endif
+}
+
 TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 {
 	if (!IsCUDADeviceAvailable())
@@ -955,6 +1007,42 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		}
 		ExpectOutputsNear(cudaCPUOutputs, expected, testCase.tolerance);
 	}
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	auto graph = BuildTinyMLPGraph(2);
+	std::vector<TensorInputSpec> inputSpecs = {
+		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 } }
+	};
+	auto expectedInputs = MakeCPUInputs(inputSpecs);
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+	auto cudaGraph = graph;
+	FusionPass{}.Run(cudaGraph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(cudaGraph);
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(cudaGraph);
+	auto module = artifact.Load(CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	auto cudaInputs = MakeCUDAInputs(inputSpecs);
+	auto cudaOutputs = module.Run(cudaInputs);
+	std::vector<Tensor<CPU>> cudaCPUOutputs;
+	for (const auto& output : cudaOutputs)
+	{
+		cudaCPUOutputs.push_back(output.CopyToDevice(CPU{}));
+	}
+	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-4f);
 }
 
 TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)

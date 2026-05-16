@@ -4,10 +4,13 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/CUDANativeCodegen.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
+#include <LiteNN/Pass/FusionPass.h>
+#include <LiteNN/Runtime/Interpreter.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <filesystem>
 #include <future>
@@ -61,6 +64,78 @@ namespace
 		graph.SetOutputNames({ "sum" });
 		return graph;
 	}
+
+	Graph BuildTinyLinearChainGraph(std::size_t batch)
+	{
+		Graph graph;
+		const auto h1 = Layer::CreateLinear(graph,
+		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 },
+		                { 3, 4 }, DataType::Float32),
+		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
+		const auto h2 = Layer::CreateLinear(graph,
+		    Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 },
+		                { 4, 2 }, DataType::Float32),
+		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, 3 });
+		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
+		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
+	class ScopedEnvVar
+	{
+	public:
+		ScopedEnvVar(const char* name, const char* value) : name_(name)
+		{
+			if (const char* oldValue = std::getenv(name))
+			{
+				oldValue_ = oldValue;
+			}
+			Set(value);
+		}
+
+		~ScopedEnvVar()
+		{
+			if (oldValue_.empty())
+			{
+				Unset();
+			}
+			else
+			{
+				Set(oldValue_.c_str());
+			}
+		}
+
+		ScopedEnvVar(const ScopedEnvVar&) = delete;
+		ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+	private:
+		void Set(const char* value) const
+		{
+#ifdef _WIN32
+			_putenv_s(name_, value);
+#else
+			setenv(name_, value, 1);
+#endif
+		}
+
+		void Unset() const
+		{
+#ifdef _WIN32
+			_putenv_s(name_, "");
+#else
+			unsetenv(name_);
+#endif
+		}
+
+		const char* name_{};
+		std::string oldValue_;
+	};
 
 	struct WorkerResult
 	{
@@ -916,5 +991,32 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 			                      static_cast<float>((element + 1) * 10);
 			EXPECT_FLOAT_EQ(ReadFloat(outputs[i][0], element), expected);
 		}
+	}
+}
+
+TEST(CompiledModuleTest, CPULinearChainFastPathMatchesInterpreter)
+{
+	ScopedEnvVar enableFastPath("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", "1");
+	auto graph = BuildTinyLinearChainGraph(4);
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 1.0, -2.0, 0.5, -1.0, 0.25, 2.0, 0.5, 0.5, -0.5, 3.0, -1.0, 1.0 },
+		            { 4, 3 }, DataType::Float32)
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+
+	auto optimized = graph;
+	FusionPass{}.Run(optimized);
+	auto module = Compiler<CPU>::Compile(optimized);
+	std::array<Tensor<CPU>, 1> outputs = {
+		Tensor<CPU>(Uninitialized, { 4, 2 }, DataType::Float32)
+	};
+	module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+
+	ASSERT_EQ(expected.size(), 1u);
+	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
 	}
 }

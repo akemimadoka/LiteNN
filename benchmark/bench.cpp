@@ -247,7 +247,7 @@ std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module
 	return outputs;
 }
 
-void BMCUDABridgeRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -262,6 +262,38 @@ void BMCUDABridgeRunInto(benchmark::State& state, ModelKind kind, std::size_t ba
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
 		state.SkipWithError("expected CUDA CPU-bridge backend for model benchmark");
+		return;
+	}
+
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeCUDAInputs(inputData, batch);
+	auto outputs = AllocateCUDAOutputs(module);
+
+	for (auto _ : state)
+	{
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		benchmark::DoNotOptimize(outputs.data());
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
+
+void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		state.SkipWithError("CUDA device is not available");
+		return;
+	}
+
+	std::mt19937 rng(42);
+	auto graph = GetModelSpec(kind).build(batch, rng);
+	Optimize(graph);
+	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	if (module.Backend() != CompiledModuleBackend::CUDANative)
+	{
+		state.SkipWithError("expected CUDA native backend for model benchmark");
 		return;
 	}
 
@@ -307,6 +339,21 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 	}
 
 	SetThroughputCounters(state, batch);
+}
+#else
+void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind, std::size_t)
+{
+	state.SkipWithError("LiteNN benchmark build has no CUDA support");
+}
+
+void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t, std::size_t)
+{
+	state.SkipWithError("LiteNN benchmark build has no CUDA support");
+}
+
+void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind, std::size_t)
+{
+	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
 #endif
 
@@ -367,15 +414,15 @@ void RegisterBenchmarks()
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
-#ifdef LITENN_ENABLE_CUDA
-			RegisterBenchmarkCase("CUDABridgeRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMCUDABridgeRunInto(state, kind, batch); });
-#endif
+			RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMCUDACPUFallbackRunInto(state, kind, batch); });
+			RegisterBenchmarkCase("CUDANativeRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMCUDANativeModelRunInto(state, kind, batch); });
 #endif
 		}
 	}
 
-#if defined(LITENN_BENCH_HAS_AOT) && defined(LITENN_ENABLE_CUDA)
+#ifdef LITENN_BENCH_HAS_AOT
 	constexpr std::size_t nativeMatMulWidth = 128;
 	for (const auto batch : kBatchSizes)
 	{

@@ -61,6 +61,7 @@ namespace LiteNN
 		~CUDADriverModule();
 
 		bool Empty() const noexcept;
+		void CacheFunction(std::string_view functionName) const;
 		void Launch(std::string_view functionName, const CUDADriverLaunchOptions& options,
 		            std::span<void*> arguments = {}) const;
 

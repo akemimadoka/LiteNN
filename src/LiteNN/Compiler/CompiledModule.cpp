@@ -44,6 +44,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -57,6 +58,7 @@
 #include <atomic>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -65,11 +67,147 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <variant>
 
 using namespace LiteNN;
+
+namespace
+{
+	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
+
+	std::size_t LiteNNCPUAOTThreadCount()
+	{
+		if (const char* value = std::getenv("LITENN_CPU_AOT_THREADS"))
+		{
+			char* end = nullptr;
+			const auto parsed = std::strtoull(value, &end, 10);
+			if (end != value && parsed > 0)
+			{
+				return static_cast<std::size_t>(parsed);
+			}
+		}
+		const auto hardware = std::thread::hardware_concurrency();
+		return hardware == 0 ? 1 : static_cast<std::size_t>(hardware);
+	}
+
+	bool IsCPULinearChainFastPathEnabled()
+	{
+		const char* value = std::getenv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH");
+		if (!value)
+		{
+			return false;
+		}
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
+	                          LiteNNCPUParallelForBody body, void* userData)
+	{
+		if (begin >= end)
+		{
+			return;
+		}
+		grain = std::max<std::uint64_t>(1, grain);
+		const auto range = end - begin;
+		const auto taskCount = (range + grain - 1) / grain;
+		const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), taskCount);
+		if (threadCount <= 1)
+		{
+			body(begin, end, userData);
+			return;
+		}
+
+		std::atomic<std::uint64_t> next{ begin };
+		auto worker = [&] {
+			while (true)
+			{
+				const auto taskBegin = next.fetch_add(grain, std::memory_order_relaxed);
+				if (taskBegin >= end)
+				{
+					break;
+				}
+				const auto taskEnd = std::min<std::uint64_t>(taskBegin + grain, end);
+				body(taskBegin, taskEnd, userData);
+			}
+		};
+
+		std::vector<std::thread> workers;
+		workers.reserve(static_cast<std::size_t>(threadCount - 1));
+		for (std::uint64_t i = 1; i < threadCount; ++i)
+		{
+			workers.emplace_back(worker);
+		}
+		worker();
+		for (auto& thread : workers)
+		{
+			thread.join();
+		}
+	}
+
+	void LiteNNCPUMatMulBiasReLURange(const float* lhs, const float* rhs, const float* bias, float* out,
+	                                  std::uint64_t rowBegin, std::uint64_t rowEnd, std::uint64_t k,
+	                                  std::uint64_t n, bool relu)
+	{
+		for (std::uint64_t row = rowBegin; row < rowEnd; ++row)
+		{
+			for (std::uint64_t col = 0; col < n; ++col)
+			{
+				float value = bias[col];
+				for (std::uint64_t kk = 0; kk < k; ++kk)
+				{
+					value += lhs[row * k + kk] * rhs[kk * n + col];
+				}
+				if (relu && value < 0.0f)
+				{
+					value = 0.0f;
+				}
+				out[row * n + col] = value;
+			}
+		}
+	}
+}
+
+extern "C" void litenn_cpu_parallel_for_u64(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
+                                            LiteNNCPUParallelForBody body, void* userData)
+{
+	LiteNNCPUParallelFor(begin, end, grain, body, userData);
+}
+
+extern "C" void litenn_cpu_matmul_bias_relu_f32(const float* lhs, const float* rhs, const float* bias,
+                                                float* out, std::uint64_t m, std::uint64_t k,
+                                                std::uint64_t n, bool relu)
+{
+	const auto flops = m * k * n * 2;
+	const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), m);
+	if (threadCount <= 1 || flops < (1ull << 20))
+	{
+		LiteNNCPUMatMulBiasReLURange(lhs, rhs, bias, out, 0, m, k, n, relu);
+		return;
+	}
+
+	struct Context
+	{
+		const float* lhs{};
+		const float* rhs{};
+		const float* bias{};
+		float* out{};
+		std::uint64_t k{};
+		std::uint64_t n{};
+		bool relu{};
+	};
+	Context context{ lhs, rhs, bias, out, k, n, relu };
+	const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
+		const auto& ctx = *static_cast<const Context*>(userData);
+		LiteNNCPUMatMulBiasReLURange(ctx.lhs, ctx.rhs, ctx.bias, ctx.out, begin, end, ctx.k, ctx.n, ctx.relu);
+	};
+
+	const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
+	LiteNNCPUParallelFor(0, m, grain, body, &context);
+}
 
 namespace
 {
@@ -469,6 +607,271 @@ namespace
 			specs.push_back({ info.dtype, info.shape, graph.OutputName(i) });
 		}
 		return specs;
+	}
+
+	struct CompiledArtifactParts
+	{
+		std::vector<std::byte> rodata;
+		std::vector<std::byte> instructions;
+		std::vector<CompiledTensorSpec> inputSpecs;
+		std::vector<CompiledTensorSpec> outputSpecs;
+	};
+
+	std::size_t ElementByteSize(DataType dtype);
+
+	std::optional<std::uint64_t> ShapeNumElementsU64(std::span<const std::size_t> shape)
+	{
+		std::uint64_t count = 1;
+		for (const auto dim : shape)
+		{
+			if (dim == 0)
+			{
+				return std::nullopt;
+			}
+			if (count > std::numeric_limits<std::uint64_t>::max() / static_cast<std::uint64_t>(dim))
+			{
+				return std::nullopt;
+			}
+			count *= static_cast<std::uint64_t>(dim);
+		}
+		return count;
+	}
+
+	std::uint64_t TensorByteSizeForShape(DataType dtype, std::span<const std::size_t> shape)
+	{
+		const auto elements = ShapeNumElementsU64(shape);
+		if (!elements)
+		{
+			throw std::runtime_error("Compiled tensor shape is too large");
+		}
+		return *elements * ElementByteSize(dtype);
+	}
+
+	bool IsSameRankBroadcastCompatibleShape(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs,
+	                                        std::span<const std::size_t> output)
+	{
+		if (lhs.size() != output.size() || rhs.size() != output.size())
+		{
+			return false;
+		}
+		for (std::size_t i = 0; i < output.size(); ++i)
+		{
+			if ((lhs[i] != output[i] && lhs[i] != 1) || (rhs[i] != output[i] && rhs[i] != 1) ||
+			    output[i] != std::max(lhs[i], rhs[i]))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	std::optional<std::vector<float>> CopyF32TensorData(const Tensor<PolymorphicDevice>& tensor,
+	                                                    std::span<const std::size_t> expectedShape)
+	{
+		const auto cpuTensor = tensor.CopyToDevice(CPU{});
+		if (cpuTensor.DType() != DataType::Float32 || !Validation::SameShape(cpuTensor.Shape().Dims, expectedShape))
+		{
+			return std::nullopt;
+		}
+		std::vector<float> values(cpuTensor.NumElements());
+		std::memcpy(values.data(), cpuTensor.RawData(), values.size() * sizeof(float));
+		return values;
+	}
+
+	llvm::Value* AddF32ConstantGlobal(llvm::Module& module, llvm::IRBuilder<>& builder, std::string_view name,
+	                                  std::span<const float> values)
+	{
+		auto& ctx = module.getContext();
+		auto* arrayType = llvm::ArrayType::get(llvm::Type::getFloatTy(ctx), values.size());
+		auto* init = llvm::ConstantDataArray::get(ctx, llvm::ArrayRef(values.data(), values.size()));
+		auto* global = new llvm::GlobalVariable(module, arrayType, true, llvm::GlobalValue::PrivateLinkage, init,
+		                                        std::string(name));
+		global->setAlignment(llvm::Align(64));
+		auto* zero = builder.getInt64(0);
+		return builder.CreateInBoundsGEP(arrayType, global, { zero, zero });
+	}
+
+	std::optional<CompiledArtifactParts> TryCompileCPULinearChainF32(const Graph& graph)
+	{
+		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
+		    graph.SubgraphCount() == 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto finalResult = subgraph.Results()[0];
+		if (finalResult.port != 0 || finalResult.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		struct ValueRef
+		{
+			llvm::Value* ptr{};
+			DataType dtype{ DataType::Float32 };
+			std::vector<std::size_t> shape;
+			bool heapOwned{};
+		};
+
+		llvm::LLVMContext ctx;
+		auto module = std::make_unique<llvm::Module>("litenn_cpu_linear_chain", ctx);
+		auto* voidTy = llvm::Type::getVoidTy(ctx);
+		auto* ptrTy = llvm::PointerType::get(ctx, 0);
+		auto* i64Ty = llvm::Type::getInt64Ty(ctx);
+		auto* i1Ty = llvm::Type::getInt1Ty(ctx);
+		auto* entryType = llvm::FunctionType::get(voidTy, { ptrTy, ptrTy }, false);
+		auto* entry =
+		    llvm::Function::Create(entryType, llvm::GlobalValue::ExternalLinkage, std::string(kEntrySymbol), *module);
+		auto* block = llvm::BasicBlock::Create(ctx, "entry", entry);
+		llvm::IRBuilder<> builder(block);
+
+		auto argIt = entry->arg_begin();
+		llvm::Value* inputArray = &*argIt++;
+		llvm::Value* outputArray = &*argIt;
+		auto mallocFn = module->getOrInsertFunction("malloc", llvm::FunctionType::get(ptrTy, { i64Ty }, false));
+		auto freeFn = module->getOrInsertFunction("free", llvm::FunctionType::get(voidTy, { ptrTy }, false));
+		auto kernelFn = module->getOrInsertFunction(
+		    "litenn_cpu_matmul_bias_relu_f32",
+		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i1Ty }, false));
+
+		std::vector<std::optional<ValueRef>> values(subgraph.NodeCount());
+		std::vector<llvm::Value*> heapAllocations;
+		std::size_t fusedLayerCount = 0;
+
+		const auto loadArrayPointer = [&](llvm::Value* array, std::size_t index) {
+			auto* slot = builder.CreateGEP(ptrTy, array, builder.getInt64(index));
+			return builder.CreateLoad(ptrTy, slot);
+		};
+		const auto requireValue = [&](NodeOutput output) -> std::optional<ValueRef> {
+			if (output.port != 0 || output.node >= values.size() || !values[output.node])
+			{
+				return std::nullopt;
+			}
+			return *values[output.node];
+		};
+		const auto tensorBytes = [&](const OutputInfo& info) {
+			return TensorByteSizeForShape(info.dtype, info.shape);
+		};
+
+		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		{
+			const auto& entryNode = subgraph.GetNodeEntry(nodeId);
+			if (entryNode.outputInfos.size() != 1)
+			{
+				return std::nullopt;
+			}
+			const auto& output = entryNode.outputInfos[0];
+			if (const auto* param = std::get_if<ParamRefNode>(&entryNode.node))
+			{
+				values[nodeId] = ValueRef{
+					.ptr = loadArrayPointer(inputArray, param->paramIndex),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+			if (const auto* variable = std::get_if<VariableRefNode>(&entryNode.node))
+			{
+				if (variable->variableIndex >= graph.VariableCount())
+				{
+					return std::nullopt;
+				}
+				auto constantData = CopyF32TensorData(graph.GetVariable(variable->variableIndex)->Data(), output.shape);
+				if (!constantData)
+				{
+					return std::nullopt;
+				}
+				values[nodeId] = ValueRef{
+					.ptr = AddF32ConstantGlobal(*module, builder,
+					                            std::format("litenn_cpu_const_{}", nodeId), *constantData),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+			if (const auto* constant = std::get_if<ConstantNode>(&entryNode.node))
+			{
+				auto constantData = CopyF32TensorData(constant->value, output.shape);
+				if (!constantData)
+				{
+					return std::nullopt;
+				}
+				values[nodeId] = ValueRef{
+					.ptr = AddF32ConstantGlobal(*module, builder,
+					                            std::format("litenn_cpu_const_{}", nodeId), *constantData),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+
+			const auto* fused = std::get_if<FusedOpNode>(&entryNode.node);
+			if (!fused ||
+			    (fused->pattern != FusionPattern::MatMulBiasAdd &&
+			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+			    fused->args.size() < 3)
+			{
+				return std::nullopt;
+			}
+			auto lhs = requireValue(fused->args[0]);
+			auto rhs = requireValue(fused->args[1]);
+			auto bias = requireValue(fused->args[2]);
+			if (!lhs || !rhs || !bias || lhs->dtype != DataType::Float32 || rhs->dtype != DataType::Float32 ||
+			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+			    lhs->shape.size() != 2 || rhs->shape.size() != 2 || output.shape.size() != 2 ||
+			    bias->shape.size() != output.shape.size() || lhs->shape[1] != rhs->shape[0] ||
+			    output.shape[0] != lhs->shape[0] || output.shape[1] != rhs->shape[1] ||
+			    !IsSameRankBroadcastCompatibleShape(output.shape, bias->shape, output.shape))
+			{
+				return std::nullopt;
+			}
+
+			llvm::Value* outPtr = nullptr;
+			bool heapOwned = false;
+			if (nodeId == finalResult.node)
+			{
+				outPtr = loadArrayPointer(outputArray, 0);
+			}
+			else
+			{
+				outPtr = builder.CreateCall(mallocFn, { builder.getInt64(tensorBytes(output)) });
+				heapAllocations.push_back(outPtr);
+				heapOwned = true;
+			}
+
+			const auto m = output.shape[0];
+			const auto k = lhs->shape[1];
+			const auto n = output.shape[1];
+			builder.CreateCall(kernelFn, { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m),
+			                               builder.getInt64(k), builder.getInt64(n),
+			                               builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
+			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape, .heapOwned = heapOwned };
+			++fusedLayerCount;
+		}
+
+		if (fusedLayerCount == 0 || !values[finalResult.node])
+		{
+			return std::nullopt;
+		}
+		for (auto it = heapAllocations.rbegin(); it != heapAllocations.rend(); ++it)
+		{
+			builder.CreateCall(freeFn, { *it });
+		}
+		builder.CreateRetVoid();
+
+		const auto inputSpecs = BuildInputSpecs(graph);
+		const auto outputSpecs = BuildOutputSpecs(graph);
+		auto config = CreateNativeTargetMachine();
+		ConfigureForNativeObject(*module, config);
+		OptimizeLLVMModule(*module, *config.targetMachine);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto instructions = EmitObjectFile(*module);
+		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), inputSpecs, outputSpecs };
 	}
 
 	std::size_t ElementByteSize(DataType dtype)
@@ -916,6 +1319,10 @@ namespace
 	LoadedJIT LoadJIT(std::span<const std::byte> instructions)
 	{
 		InitializeNativeLLVM();
+		llvm::sys::DynamicLibrary::AddSymbol("litenn_cpu_parallel_for_u64",
+		                                      reinterpret_cast<void*>(&litenn_cpu_parallel_for_u64));
+		llvm::sys::DynamicLibrary::AddSymbol("litenn_cpu_matmul_bias_relu_f32",
+		                                      reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_f32));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -1147,6 +1554,22 @@ namespace
 		bool relu{};
 	};
 
+	struct CUDANativeTensorRef
+	{
+		CUDANativeArgumentKind kind{ CUDANativeArgumentKind::InputTensor };
+		std::uint32_t index{};
+		std::uint64_t byteOffset{};
+		std::uint64_t byteSize{};
+		DataType dtype{ DataType::Float32 };
+		std::vector<std::size_t> shape;
+	};
+
+	struct CUDANativeLinearChainPlan
+	{
+		std::vector<CUDANativeMatMulBiasEpilogueF32CodegenSpec> epilogues;
+		CUDANativeInstructionPayload payload;
+	};
+
 	struct CUDANativeArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -1217,6 +1640,65 @@ namespace
 			}
 		}
 		return static_cast<std::uint32_t>(count);
+	}
+
+	std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment)
+	{
+		return ((value + alignment - 1) / alignment) * alignment;
+	}
+
+	std::uint64_t TensorByteSize(DataType dtype, std::span<const std::size_t> shape)
+	{
+		const auto elements = ShapeNumElementsU32(shape);
+		if (!elements)
+		{
+			throw std::runtime_error("CUDA native tensor shape is too large");
+		}
+		return static_cast<std::uint64_t>(*elements) * ElementByteSize(dtype);
+	}
+
+	CUDANativeArgumentSpec ToCUDANativeArgument(const CUDANativeTensorRef& ref)
+	{
+		return {
+			.kind = ref.kind,
+			.index = ref.index,
+			.byteOffset = ref.byteOffset,
+			.byteSize = ref.byteSize,
+		};
+	}
+
+	std::uint64_t AppendCUDANativeConstantTensor(CUDANativeInstructionPayload& payload,
+	                                             const Tensor<PolymorphicDevice>& tensor)
+	{
+		const auto cpuTensor = tensor.CopyToDevice(CPU{});
+		const auto byteSize = TensorByteSize(cpuTensor.DType(), cpuTensor.Shape().Dims);
+		const auto offset = AlignUp(static_cast<std::uint64_t>(payload.constantData.size()), 16);
+		if (payload.constantData.size() < offset)
+		{
+			payload.constantData.resize(static_cast<std::size_t>(offset));
+		}
+		const auto* begin = reinterpret_cast<const std::byte*>(cpuTensor.RawData());
+		payload.constantData.insert(payload.constantData.end(), begin, begin + byteSize);
+		return offset;
+	}
+
+	std::uint64_t AllocateCUDANativeWorkspaceTensor(CUDANativeInstructionPayload& payload, std::uint64_t byteSize)
+	{
+		const auto offset = AlignUp(payload.workspaceBytes, 16);
+		payload.workspaceBytes = offset + byteSize;
+		return offset;
+	}
+
+	CUDANativeArgumentSpec AppendU32ScalarArgument(CUDANativeInstructionPayload& payload, std::uint32_t value)
+	{
+		const auto offset = payload.scalarData.size();
+		AppendU32(payload.scalarData, value);
+		return {
+			.kind = CUDANativeArgumentKind::Scalar,
+			.index = 0,
+			.byteOffset = static_cast<std::uint64_t>(offset),
+			.byteSize = sizeof(std::uint32_t),
+		};
 	}
 
 	bool IsSupportedCUDANativeReduceF32Op(ReduceOp op)
@@ -1865,6 +2347,276 @@ namespace
 		}
 	}
 
+	std::optional<CUDANativeLinearChainPlan> BuildCUDANativeLinearChainPlan(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
+		    graph.SubgraphCount() == 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto finalResult = subgraph.Results()[0];
+		if (finalResult.port != 0 || finalResult.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeLinearChainPlan plan;
+		auto& payload = plan.payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureMatMulCUBLASF32 | kCUDANativeFeatureMultiKernelLaunch;
+		payload.target = CUDANativeNVPTXTargetChip();
+
+		std::vector<std::optional<CUDANativeTensorRef>> values(subgraph.NodeCount());
+		std::size_t fusedLayerCount = 0;
+		bool hasChainSpecificStorage = false;
+
+		const auto tensorRefForOutput = [&](NodeId nodeId, const OutputInfo& output) {
+			const auto byteSize = TensorByteSize(output.dtype, output.shape);
+			if (finalResult.node == nodeId && finalResult.port == 0)
+			{
+				return CUDANativeTensorRef{
+					.kind = CUDANativeArgumentKind::OutputTensor,
+					.index = 0,
+					.byteOffset = 0,
+					.byteSize = byteSize,
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+			}
+			const auto offset = AllocateCUDANativeWorkspaceTensor(payload, byteSize);
+			return CUDANativeTensorRef{
+				.kind = CUDANativeArgumentKind::Workspace,
+				.index = 0,
+				.byteOffset = offset,
+				.byteSize = byteSize,
+				.dtype = output.dtype,
+				.shape = output.shape,
+			};
+		};
+
+		const auto requireValue = [&](NodeOutput output) -> std::optional<CUDANativeTensorRef> {
+			if (output.port != 0 || output.node >= values.size() || !values[output.node])
+			{
+				return std::nullopt;
+			}
+			return *values[output.node];
+		};
+
+		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		{
+			const auto& entry = subgraph.GetNodeEntry(nodeId);
+			if (entry.outputInfos.size() != 1)
+			{
+				return std::nullopt;
+			}
+			const auto& output = entry.outputInfos[0];
+
+			if (const auto* param = std::get_if<ParamRefNode>(&entry.node))
+			{
+				if (param->paramIndex > std::numeric_limits<std::uint32_t>::max())
+				{
+					return std::nullopt;
+				}
+				values[nodeId] = CUDANativeTensorRef{
+					.kind = CUDANativeArgumentKind::InputTensor,
+					.index = static_cast<std::uint32_t>(param->paramIndex),
+					.byteOffset = 0,
+					.byteSize = TensorByteSize(output.dtype, output.shape),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+
+			if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
+			{
+				if (variable->variableIndex >= graph.VariableCount() || output.dtype != DataType::Float32)
+				{
+					return std::nullopt;
+				}
+				const auto& variableTensor = graph.GetVariable(variable->variableIndex)->Data();
+				if (variableTensor.DType() != output.dtype || !SameShape(variableTensor.Shape().Dims, output.shape))
+				{
+					return std::nullopt;
+				}
+				const auto offset = AppendCUDANativeConstantTensor(payload, variableTensor);
+				values[nodeId] = CUDANativeTensorRef{
+					.kind = CUDANativeArgumentKind::ConstantTensor,
+					.index = 0,
+					.byteOffset = offset,
+					.byteSize = TensorByteSize(output.dtype, output.shape),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+
+			if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
+			{
+				if (output.dtype != DataType::Float32)
+				{
+					return std::nullopt;
+				}
+				const auto offset = AppendCUDANativeConstantTensor(payload, constant->value);
+				values[nodeId] = CUDANativeTensorRef{
+					.kind = CUDANativeArgumentKind::ConstantTensor,
+					.index = 0,
+					.byteOffset = offset,
+					.byteSize = TensorByteSize(output.dtype, output.shape),
+					.dtype = output.dtype,
+					.shape = output.shape,
+				};
+				continue;
+			}
+
+			const auto* fused = std::get_if<FusedOpNode>(&entry.node);
+			if (!fused ||
+			    (fused->pattern != FusionPattern::MatMulBiasAdd &&
+			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+			    fused->args.size() < 3)
+			{
+				return std::nullopt;
+			}
+
+			auto lhs = requireValue(fused->args[0]);
+			auto rhs = requireValue(fused->args[1]);
+			auto bias = requireValue(fused->args[2]);
+			if (!lhs || !rhs || !bias || lhs->dtype != DataType::Float32 || rhs->dtype != DataType::Float32 ||
+			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+			    lhs->shape.size() != 2 || rhs->shape.size() != 2 || output.shape.size() != 2 ||
+			    bias->shape.size() != output.shape.size() || lhs->shape[1] != rhs->shape[0] ||
+			    output.shape[0] != lhs->shape[0] || output.shape[1] != rhs->shape[1] ||
+			    !IsSameRankBroadcastCompatible(output.shape, bias->shape, output.shape))
+			{
+				return std::nullopt;
+			}
+
+			const auto m = static_cast<std::uint32_t>(lhs->shape[0]);
+			const auto k = static_cast<std::uint32_t>(lhs->shape[1]);
+			const auto n = static_cast<std::uint32_t>(rhs->shape[1]);
+			if (m == 0 || k == 0 || n == 0)
+			{
+				return std::nullopt;
+			}
+
+			auto target = tensorRefForOutput(nodeId, output);
+			const auto outputElementCount = ShapeNumElementsU32(output.shape);
+			if (!outputElementCount)
+			{
+				return std::nullopt;
+			}
+			hasChainSpecificStorage = hasChainSpecificStorage ||
+			                          target.kind == CUDANativeArgumentKind::Workspace ||
+			                          lhs->kind == CUDANativeArgumentKind::Workspace ||
+			                          rhs->kind == CUDANativeArgumentKind::Workspace ||
+			                          bias->kind == CUDANativeArgumentKind::Workspace ||
+			                          lhs->kind == CUDANativeArgumentKind::ConstantTensor ||
+			                          rhs->kind == CUDANativeArgumentKind::ConstantTensor ||
+			                          bias->kind == CUDANativeArgumentKind::ConstantTensor;
+			const auto mArg = AppendU32ScalarArgument(payload, m);
+			const auto kArg = AppendU32ScalarArgument(payload, k);
+			const auto nArg = AppendU32ScalarArgument(payload, n);
+			payload.kernels.push_back({
+			    .name = "litenn_cublas_matmul_f32",
+			    .grid = { .x = 1, .y = 1, .z = 1 },
+			    .block = { .x = 1, .y = 1, .z = 1 },
+			    .arguments = {
+			        ToCUDANativeArgument(target),
+			        ToCUDANativeArgument(*lhs),
+			        ToCUDANativeArgument(*rhs),
+			        mArg,
+			        kArg,
+			        nArg,
+			    },
+			});
+
+			const bool relu = fused->pattern == FusionPattern::MatMulBiasAddReLU;
+			const auto epilogueName =
+			    std::format("litenn_matmul_bias_{}_epilogue_f32_{}", relu ? "relu" : "add", fusedLayerCount);
+			const auto countArg = AppendU32ScalarArgument(payload, *outputElementCount);
+			const auto blockSize = std::min<std::uint32_t>(*outputElementCount, 256);
+			const auto gridSize = (*outputElementCount + blockSize - 1) / blockSize;
+			payload.kernels.push_back({
+			    .name = epilogueName,
+			    .grid = { .x = gridSize, .y = 1, .z = 1 },
+			    .block = { .x = blockSize, .y = 1, .z = 1 },
+			    .arguments = {
+			        ToCUDANativeArgument(target),
+			        ToCUDANativeArgument(*bias),
+			        countArg,
+			    },
+			});
+			plan.epilogues.push_back({
+			    .kernelName = epilogueName,
+			    .outputShape = output.shape,
+			    .biasShape = bias->shape,
+			    .relu = relu,
+			});
+			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
+			                             : kCUDANativeFeatureMatMulBiasAddF32;
+			values[nodeId] = std::move(target);
+			++fusedLayerCount;
+		}
+
+		if (fusedLayerCount == 0 || !values[finalResult.node])
+		{
+			return std::nullopt;
+		}
+		if (fusedLayerCount == 1 && !hasChainSpecificStorage)
+		{
+			return std::nullopt;
+		}
+		if (payload.workspaceBytes != 0)
+		{
+			payload.featureFlags |= kCUDANativeFeatureWorkspace;
+		}
+		if (!payload.constantData.empty())
+		{
+			payload.featureFlags |= kCUDANativeFeatureConstantTensor;
+		}
+
+		const auto ptx = TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(plan.epilogues);
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+		payload.binary = CUDANativeTextBytes(*ptx);
+		return plan;
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeLinearChainF32(const Graph& graph)
+	{
+		auto plan = BuildCUDANativeLinearChainPlan(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(plan->payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
 	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeUnaryF32(const Graph& graph)
 	{
 #ifdef LITENN_ENABLE_CUDA_DRIVER
@@ -2375,12 +3127,81 @@ namespace
 			return static_cast<std::byte*>(data_) + argument.byteOffset;
 		}
 
+		std::uint64_t ByteSize() const noexcept
+		{
+			return byteSize_;
+		}
+
 	private:
 		CUDA* device_{};
 		void* data_{};
 		std::uint64_t byteSize_{};
 		std::size_t wordCount_{};
 	};
+
+	class CUDANativeConstantBuffer
+	{
+	public:
+		CUDANativeConstantBuffer(CUDA& device, std::span<const std::byte> bytes) : device_(&device), byteSize_(bytes.size())
+		{
+			if (byteSize_ == 0)
+			{
+				return;
+			}
+			wordCount_ = (byteSize_ + sizeof(std::uint32_t) - 1) / sizeof(std::uint32_t);
+			std::vector<std::uint32_t> padded(wordCount_);
+			std::memcpy(padded.data(), bytes.data(), bytes.size());
+			data_ = DeviceTraits<CUDA>::Allocate(device, DataType::Int32, wordCount_);
+			DeviceTraits<CUDA>::CopyFromCPU(device, DataType::Int32, data_, DataType::Int32, padded.data(),
+			                                wordCount_);
+		}
+
+		CUDANativeConstantBuffer(const CUDANativeConstantBuffer&) = delete;
+		CUDANativeConstantBuffer& operator=(const CUDANativeConstantBuffer&) = delete;
+
+		~CUDANativeConstantBuffer()
+		{
+			if (data_ != nullptr)
+			{
+				DeviceTraits<CUDA>::Deallocate(*device_, data_, DataType::Int32, wordCount_);
+			}
+		}
+
+		void* Pointer(const CUDANativeArgumentSpec& argument) const
+		{
+			if (data_ == nullptr)
+			{
+				throw std::runtime_error("CUDA native constant argument requires a constant allocation");
+			}
+			if (argument.byteOffset > byteSize_ ||
+			    (argument.byteSize != 0 && argument.byteSize > byteSize_ - argument.byteOffset))
+			{
+				throw std::runtime_error("CUDA native constant argument byte range is out of bounds");
+			}
+			return static_cast<std::byte*>(data_) + argument.byteOffset;
+		}
+
+		std::uint64_t ByteSize() const noexcept
+		{
+			return byteSize_;
+		}
+
+	private:
+		CUDA* device_{};
+		void* data_{};
+		std::uint64_t byteSize_{};
+		std::size_t wordCount_{};
+	};
+
+	std::uint64_t CUDANativeWorkspaceByteSize(const CUDANativeInstructionPayload& payload)
+	{
+		std::uint64_t workspaceBytes = payload.workspaceBytes;
+		for (const auto& kernel : payload.kernels)
+		{
+			workspaceBytes = std::max(workspaceBytes, kernel.workspaceBytes);
+		}
+		return workspaceBytes;
+	}
 
 	bool IsCUDANativeLibraryCallKernel(std::string_view name)
 	{
@@ -2390,6 +3211,19 @@ namespace
 	CUDAExecutionOptions ToCUDAExecutionOptions(CompiledModuleCUDARunOptions options)
 	{
 		return CUDAExecutionOptions{ .stream = options.stream, .synchronize = options.synchronize };
+	}
+
+	std::uint32_t ReadScalarU32(const CUDANativeInstructionPayload& payload, const CUDANativeArgumentSpec& argument)
+	{
+		if (argument.kind != CUDANativeArgumentKind::Scalar || argument.byteSize != sizeof(std::uint32_t) ||
+		    argument.byteOffset > payload.scalarData.size() ||
+		    argument.byteSize > payload.scalarData.size() - argument.byteOffset)
+		{
+			throw std::runtime_error("CUDA native scalar argument is not a valid u32");
+		}
+		std::uint32_t value = 0;
+		std::memcpy(&value, payload.scalarData.data() + argument.byteOffset, sizeof(value));
+		return value;
 	}
 
 	void* TensorArgumentPointer(const CUDANativeArgumentSpec& argument, Tensor<CUDA>& tensor,
@@ -2418,7 +3252,37 @@ namespace
 		return const_cast<std::byte*>(base + argument.byteOffset);
 	}
 
+	void* CUDANativeDevicePointer(const CUDANativeArgumentSpec& argument, std::span<const Tensor<CUDA>> inputs,
+	                              std::span<Tensor<CUDA>> outputs, CUDANativeWorkspaceBuffer& workspace,
+	                              CUDANativeConstantBuffer& constants, std::string_view label)
+	{
+		switch (argument.kind)
+		{
+		case CUDANativeArgumentKind::InputTensor:
+			if (argument.index >= inputs.size())
+			{
+				throw std::runtime_error("CUDA native input argument index is out of bounds");
+			}
+			return ConstTensorArgumentPointer(argument, inputs[argument.index], label);
+		case CUDANativeArgumentKind::OutputTensor:
+			if (argument.index >= outputs.size())
+			{
+				throw std::runtime_error("CUDA native output argument index is out of bounds");
+			}
+			return TensorArgumentPointer(argument, outputs[argument.index], label);
+		case CUDANativeArgumentKind::Workspace:
+			return workspace.Pointer(argument);
+		case CUDANativeArgumentKind::ConstantTensor:
+			return constants.Pointer(argument);
+		case CUDANativeArgumentKind::Scalar:
+			break;
+		}
+		throw std::runtime_error("CUDA native expected a device pointer argument");
+	}
+
 	void RunCUDANativeLibraryCall(CUDA& device, const CUDANativeKernelSpec& kernel,
+	                              const CUDANativeInstructionPayload& payload,
+	                              CUDANativeWorkspaceBuffer& workspace, CUDANativeConstantBuffer& constants,
 	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
 	                              CompiledModuleCUDARunOptions options)
 	{
@@ -2426,63 +3290,81 @@ namespace
 		{
 			throw std::runtime_error(std::format("Unsupported CUDA native library call '{}'", kernel.name));
 		}
-		if (kernel.arguments.size() != 3 ||
-		    kernel.arguments[0].kind != CUDANativeArgumentKind::OutputTensor ||
-		    kernel.arguments[1].kind != CUDANativeArgumentKind::InputTensor ||
-		    kernel.arguments[2].kind != CUDANativeArgumentKind::InputTensor)
+		if (kernel.arguments.size() != 3 && kernel.arguments.size() != 6)
 		{
-			throw std::runtime_error("CUDA native cuBLAS MatMul expects output, lhs input, rhs input arguments");
+			throw std::runtime_error("CUDA native cuBLAS MatMul expects 3 pointer args and optional m/k/n scalar args");
 		}
 
-		const auto& outputArg = kernel.arguments[0];
-		const auto& lhsArg = kernel.arguments[1];
-		const auto& rhsArg = kernel.arguments[2];
-		if (outputArg.index >= outputs.size() || lhsArg.index >= inputs.size() || rhsArg.index >= inputs.size())
+		if (kernel.arguments.size() == 3)
 		{
-			throw std::runtime_error("CUDA native cuBLAS MatMul argument index is out of bounds");
-		}
-		if (outputArg.byteOffset != 0 || lhsArg.byteOffset != 0 || rhsArg.byteOffset != 0)
-		{
-			throw std::runtime_error("CUDA native cuBLAS MatMul does not support tensor byte offsets");
+			const auto& outputArg = kernel.arguments[0];
+			const auto& lhsArg = kernel.arguments[1];
+			const auto& rhsArg = kernel.arguments[2];
+			if (outputArg.kind != CUDANativeArgumentKind::OutputTensor ||
+			    lhsArg.kind != CUDANativeArgumentKind::InputTensor ||
+			    rhsArg.kind != CUDANativeArgumentKind::InputTensor)
+			{
+				throw std::runtime_error("CUDA native legacy cuBLAS MatMul expects output, lhs input, rhs input");
+			}
+			if (outputArg.index >= outputs.size() || lhsArg.index >= inputs.size() || rhsArg.index >= inputs.size())
+			{
+				throw std::runtime_error("CUDA native cuBLAS MatMul argument index is out of bounds");
+			}
+			if (outputArg.byteOffset != 0 || lhsArg.byteOffset != 0 || rhsArg.byteOffset != 0)
+			{
+				throw std::runtime_error("CUDA native legacy cuBLAS MatMul does not support tensor byte offsets");
+			}
+
+			auto& output = outputs[outputArg.index];
+			const auto& lhs = inputs[lhsArg.index];
+			const auto& rhs = inputs[rhsArg.index];
+			if (output.DType() != DataType::Float32 || lhs.DType() != DataType::Float32 ||
+			    rhs.DType() != DataType::Float32)
+			{
+				throw std::runtime_error("CUDA native cuBLAS MatMul currently supports Float32 tensors only");
+			}
+
+			(void)TensorArgumentPointer(outputArg, output, "output");
+			(void)ConstTensorArgumentPointer(lhsArg, lhs, "input");
+			(void)ConstTensorArgumentPointer(rhsArg, rhs, "input");
+			DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
+			                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
+			                                ToCUDAExecutionOptions(options));
+			return;
 		}
 
-		auto& output = outputs[outputArg.index];
-		const auto& lhs = inputs[lhsArg.index];
-		const auto& rhs = inputs[rhsArg.index];
-		if (output.DType() != DataType::Float32 || lhs.DType() != DataType::Float32 || rhs.DType() != DataType::Float32)
-		{
-			throw std::runtime_error("CUDA native cuBLAS MatMul currently supports Float32 tensors only");
-		}
-
-		(void)TensorArgumentPointer(outputArg, output, "output");
-		(void)ConstTensorArgumentPointer(lhsArg, lhs, "input");
-		(void)ConstTensorArgumentPointer(rhsArg, rhs, "input");
-		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
-		                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
+		const auto m = static_cast<std::size_t>(ReadScalarU32(payload, kernel.arguments[3]));
+		const auto k = static_cast<std::size_t>(ReadScalarU32(payload, kernel.arguments[4]));
+		const auto n = static_cast<std::size_t>(ReadScalarU32(payload, kernel.arguments[5]));
+		void* outputPtr = CUDANativeDevicePointer(kernel.arguments[0], inputs, outputs, workspace, constants, "output");
+		void* lhsPtr = CUDANativeDevicePointer(kernel.arguments[1], inputs, outputs, workspace, constants, "lhs");
+		void* rhsPtr = CUDANativeDevicePointer(kernel.arguments[2], inputs, outputs, workspace, constants, "rhs");
+		Tensor<CUDA> outputView(outputPtr, { m, n }, DataType::Float32, device);
+		Tensor<CUDA> lhsView(lhsPtr, { m, k }, DataType::Float32, device);
+		Tensor<CUDA> rhsView(rhsPtr, { k, n }, DataType::Float32, device);
+		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.RawData(), lhsView.DType(),
+		                                lhsView.Shape(), lhsView.RawData(), rhsView.DType(), rhsView.Shape(),
+		                                rhsView.RawData(),
 		                                ToCUDAExecutionOptions(options));
 	}
 
 	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload,
-	                          const CUDADriverModule& module, std::span<const Tensor<CUDA>> inputs,
-	                          std::span<Tensor<CUDA>> outputs, CompiledModuleCUDARunOptions options)
+	                          const CUDADriverModule& module, CUDANativeWorkspaceBuffer& workspace,
+	                          CUDANativeConstantBuffer& constants,
+	                          std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+	                          CompiledModuleCUDARunOptions options)
 	{
 		const bool libraryCallPayload = payload.binaryKind == CUDANativeBinaryKind::LibraryCall;
 		if (!libraryCallPayload && module.Empty())
 		{
 			throw std::runtime_error("CUDA native compiled module is empty");
 		}
-		std::uint64_t workspaceBytes = payload.workspaceBytes;
-		for (const auto& kernel : payload.kernels)
-		{
-			workspaceBytes = std::max(workspaceBytes, kernel.workspaceBytes);
-		}
-		CUDANativeWorkspaceBuffer workspace(device, workspaceBytes);
 
 		for (const auto& kernel : payload.kernels)
 		{
 			if (IsCUDANativeLibraryCallKernel(kernel.name))
 			{
-				RunCUDANativeLibraryCall(device, kernel, inputs, outputs, options);
+				RunCUDANativeLibraryCall(device, kernel, payload, workspace, constants, inputs, outputs, options);
 				continue;
 			}
 			if (libraryCallPayload)
@@ -2531,6 +3413,10 @@ namespace
 					break;
 				case CUDANativeArgumentKind::Workspace:
 					pointerValues.push_back(workspace.Pointer(argument));
+					argumentPointers.push_back(&pointerValues.back());
+					break;
+				case CUDANativeArgumentKind::ConstantTensor:
+					pointerValues.push_back(constants.Pointer(argument));
 					argumentPointers.push_back(&pointerValues.back());
 					break;
 				}
@@ -2953,6 +3839,9 @@ struct CompiledModule<CUDA>::Impl
 	CUDA device;
 	CUDANativeInstructionPayload cudaPayload;
 	CUDADriverModule cudaModule;
+	std::optional<CUDANativeWorkspaceBuffer> cudaWorkspace;
+	std::optional<CUDANativeConstantBuffer> cudaConstants;
+	mutable std::mutex cudaWorkspaceMutex;
 };
 
 CompiledModule<CUDA>::CompiledModule() = default;
@@ -2998,7 +3887,16 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA 
 		if (impl->cudaPayload.binaryKind != CUDANativeBinaryKind::LibraryCall)
 		{
 			impl->cudaModule = CUDADriverModule(impl->device, impl->cudaPayload.binary);
+			for (const auto& kernel : impl->cudaPayload.kernels)
+			{
+				if (!IsCUDANativeLibraryCallKernel(kernel.name))
+				{
+					impl->cudaModule.CacheFunction(kernel.name);
+				}
+			}
 		}
+		impl->cudaWorkspace.emplace(impl->device, CUDANativeWorkspaceByteSize(impl->cudaPayload));
+		impl->cudaConstants.emplace(impl->device, impl->cudaPayload.constantData);
 	}
 	else
 	{
@@ -3075,7 +3973,29 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 
 	if (impl_->backend == CompiledModuleBackend::CUDANative)
 	{
-		RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, inputs, outputs, options);
+		if (!impl_->cudaWorkspace)
+		{
+			throw std::runtime_error("CUDA native workspace buffer is not initialized");
+		}
+		if (!impl_->cudaConstants)
+		{
+			throw std::runtime_error("CUDA native constant buffer is not initialized");
+		}
+		if (impl_->cudaWorkspace->ByteSize() != 0 && !options.synchronize)
+		{
+			throw std::runtime_error("CUDA native asynchronous execution with shared workspace is not supported");
+		}
+		if (impl_->cudaWorkspace->ByteSize() == 0)
+		{
+			RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, *impl_->cudaWorkspace,
+			                     *impl_->cudaConstants, inputs, outputs, options);
+		}
+		else
+		{
+			std::lock_guard lock(impl_->cudaWorkspaceMutex);
+			RunCUDANativePayload(impl_->device, impl_->cudaPayload, impl_->cudaModule, *impl_->cudaWorkspace,
+			                     *impl_->cudaConstants, inputs, outputs, options);
+		}
 		return;
 	}
 	if (!options.synchronize)
@@ -3242,6 +4162,16 @@ void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, st
 
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
+	if (IsCPULinearChainFastPathEnabled())
+	{
+		if (auto nativeParts = TryCompileCPULinearChainF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CPUNative);
+		}
+	}
+
 	mlir::MLIRContext ctx;
 	SetupCompilerMLIRContext(ctx);
 	auto mlirModule = BuildLoweredMLIRModule(graph, ctx);
@@ -3277,6 +4207,12 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 {
 	Validation::ValidateGraph(graph);
 	if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+	{
+		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+		                              CompiledModuleBackend::CUDANative);
+	}
+	if (auto nativeParts = TryCompileCUDANativeLinearChainF32(graph))
 	{
 		return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 		                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
