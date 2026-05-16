@@ -60,6 +60,26 @@ namespace LiteNN
 			return result;
 		}
 
+		static Tensor<CPU> EvalQuantize(const Tensor<CPU>& input, const QuantizationParams& params)
+		{
+			if (params.scheme != QuantizationScheme::Affine)
+			{
+				throw std::runtime_error("ConstFoldPass only folds affine QuantizeNode");
+			}
+			auto quantized = QuantizeAffine(input, params);
+			return std::move(quantized.Storage());
+		}
+
+		static Tensor<CPU> EvalDequantize(const Tensor<CPU>& input, const QuantizationParams& params,
+		                                  DataType targetType)
+		{
+			if (params.scheme != QuantizationScheme::Affine)
+			{
+				throw std::runtime_error("ConstFoldPass only folds affine DequantizeNode");
+			}
+			return DequantizeAffine(input, params, targetType);
+		}
+
 		static Tensor<CPU> EvalReduceOp(ReduceOp op, const Tensor<CPU>& input, std::size_t axis,
 		                                const OutputInfo& outInfo)
 		{
@@ -178,7 +198,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, VariableRefNode> || std::same_as<T, LoadActivationNode>)
+				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                  std::same_as<T, LoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -193,6 +214,14 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, CastNode>)
 				    {
 					    return CastNode{ remap(n.input), n.targetType };
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return QuantizeNode{ remap(n.input), n.params };
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
 				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {
@@ -308,6 +337,14 @@ namespace LiteNN
 				    {
 					    markInput(node.input);
 				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    markInput(node.input);
+				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
 					    for (const auto& a : node.args)
@@ -364,7 +401,8 @@ namespace LiteNN
 				    {
 					    markInput(node.input);
 				    }
-				    // ParamRefNode, ConstantNode, VariableRefNode, LoadActivationNode, TapeLoadActivationNode: 无输入
+				    // ParamRefNode, ConstantNode, QuantizedConstantNode, VariableRefNode,
+				    // LoadActivationNode, TapeLoadActivationNode: 无输入
 			    },
 			    entry.node);
 		}
@@ -393,6 +431,11 @@ namespace LiteNN
 					    {
 						    isConst[nodeId] = true;
 						    constValues[nodeId] = node.value.CopyToDevice(CPU{});
+					    }
+					    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+					    {
+						    isConst[nodeId] = true;
+						    constValues[nodeId] = node.storage.CopyToDevice(CPU{});
 					    }
 					    else if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, VariableRefNode> ||
 					                       std::same_as<T, LoadActivationNode> || std::same_as<T, SaveActivationNode>)
@@ -425,6 +468,24 @@ namespace LiteNN
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    constValues[nodeId] = EvalCast(input, node.targetType);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, QuantizeNode>)
+					    {
+						    if (isConst[node.input.node] && node.params.scheme == QuantizationScheme::Affine)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalQuantize(input, node.params);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, DequantizeNode>)
+					    {
+						    if (isConst[node.input.node] && node.params.scheme == QuantizationScheme::Affine)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalDequantize(input, node.params, node.targetType);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ReduceOpNode>)

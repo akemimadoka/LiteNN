@@ -12,6 +12,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/APInt.h"
 
+#include <stdexcept>
+
 using namespace mlir;
 using namespace LiteNN;
 
@@ -271,6 +273,15 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
+	void emitNode(const Subgraph&, NodeId nodeId, const QuantizedConstantNode& node, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		auto attr = convertTensorToAttr(ctx_, node.storage);
+		auto op = builder_.create<ConstantOp>(builder_.getUnknownLoc(), attr.getType(), attr);
+		valueMap[nodeId] = { op.getResult() };
+	}
+
 	void emitNode(const Subgraph&, NodeId nodeId, const VariableRefNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
@@ -312,6 +323,20 @@ private:
 		auto input = getVal(valueMap, node.input);
 		auto op = builder_.create<CastOp>(builder_.getUnknownLoc(), resultType, input);
 		valueMap[nodeId] = { op.getResult() };
+	}
+
+	void emitNode(const Subgraph&, NodeId, const QuantizeNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support QuantizeNode yet");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const DequantizeNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support DequantizeNode yet");
 	}
 
 	void emitNode(const Subgraph&, NodeId nodeId, const CallNode& node, std::span<const OutputInfo> outputInfos,

@@ -109,7 +109,9 @@ namespace LiteNN
 					auto clonedNode = std::visit(
 					    [&](const auto& node) -> NodeVariant {
 						    using T = std::decay_t<decltype(node)>;
-						    if constexpr (std::same_as<T, ConstantNode> || std::same_as<T, VariableRefNode>)
+						    if constexpr (std::same_as<T, ConstantNode> ||
+						                  std::same_as<T, QuantizedConstantNode> ||
+						                  std::same_as<T, VariableRefNode>)
 						    {
 							    return node;
 						    }
@@ -128,6 +130,14 @@ namespace LiteNN
 						    else if constexpr (std::same_as<T, CastNode>)
 						    {
 							    return CastNode{ remapOutput(node.input), node.targetType };
+						    }
+						    else if constexpr (std::same_as<T, QuantizeNode>)
+						    {
+							    return QuantizeNode{ remapOutput(node.input), node.params };
+						    }
+						    else if constexpr (std::same_as<T, DequantizeNode>)
+						    {
+							    return DequantizeNode{ remapOutput(node.input), node.params, node.targetType };
 						    }
 						    else if constexpr (std::same_as<T, CondNode>)
 						    {

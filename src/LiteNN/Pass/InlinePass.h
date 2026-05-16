@@ -47,7 +47,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, VariableRefNode> || std::same_as<T, LoadActivationNode>)
+				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                  std::same_as<T, LoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -62,6 +63,14 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, CastNode>)
 				    {
 					    return CastNode{ remap(n.input), n.targetType };
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return QuantizeNode{ remap(n.input), n.params };
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
 				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {

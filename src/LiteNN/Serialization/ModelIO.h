@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 3;
+		constexpr std::uint32_t kModelVersion = 5;
 
 		enum class NodeKind : std::uint32_t
 		{
@@ -45,6 +45,9 @@ namespace LiteNN::Serialization
 			Concat,
 			Slice,
 			FusedOp,
+			QuantizedConstant,
+			Quantize,
+			Dequantize,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -97,6 +100,122 @@ namespace LiteNN::Serialization
 		inline DataType ReadDataType(std::istream& in)
 		{
 			return static_cast<DataType>(ReadScalar<std::uint32_t>(in));
+		}
+
+		inline void WriteFloatList(std::ostream& out, std::span<const float> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<float> ReadFloatList(std::istream& in)
+		{
+			std::vector<float> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<float>(in);
+			}
+			return values;
+		}
+
+		inline void WriteI32List(std::ostream& out, std::span<const std::int32_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::int32_t> ReadI32List(std::istream& in)
+		{
+			std::vector<std::int32_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::int32_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteSizeList(std::ostream& out, std::span<const std::size_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteSize(out, value);
+			}
+		}
+
+		inline std::vector<std::size_t> ReadSizeList(std::istream& in)
+		{
+			std::vector<std::size_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadSize(in);
+			}
+			return values;
+		}
+
+		inline void WriteQuantizationParams(std::ostream& out, const QuantizationParams& params)
+		{
+			WriteScalar(out, static_cast<std::uint32_t>(params.scheme));
+			WriteScalar(out, static_cast<std::uint32_t>(params.granularity));
+			WriteScalar(out, static_cast<std::uint32_t>(params.blockFormat));
+			WriteDataType(out, params.storageType);
+			WriteDataType(out, params.expressedType);
+			WriteScalar(out, params.axis);
+			WriteSize(out, params.groupSize);
+			WriteFloatList(out, params.scales);
+			WriteI32List(out, params.zeroPoints);
+			WriteSizeList(out, params.expressedShape);
+		}
+
+		inline QuantizationParams ReadQuantizationParams(std::istream& in, std::uint32_t version)
+		{
+			QuantizationParams params;
+			params.scheme = static_cast<QuantizationScheme>(ReadScalar<std::uint32_t>(in));
+			params.granularity = static_cast<QuantizationGranularity>(ReadScalar<std::uint32_t>(in));
+			params.blockFormat = static_cast<QuantizedBlockFormat>(ReadScalar<std::uint32_t>(in));
+			params.storageType = ReadDataType(in);
+			params.expressedType = ReadDataType(in);
+			params.axis = ReadScalar<std::int64_t>(in);
+			params.groupSize = ReadSize(in);
+			params.scales = ReadFloatList(in);
+			params.zeroPoints = ReadI32List(in);
+			if (version >= 5)
+			{
+				params.expressedShape = ReadSizeList(in);
+			}
+			return params;
+		}
+
+		inline void WriteOptionalQuantizationParams(std::ostream& out,
+		                                            const std::optional<QuantizationParams>& params)
+		{
+			WriteScalar(out, static_cast<std::uint8_t>(params.has_value() ? 1 : 0));
+			if (!params)
+			{
+				return;
+			}
+			WriteQuantizationParams(out, *params);
+		}
+
+		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in,
+		                                                                        std::uint32_t version)
+		{
+			const auto hasValue = ReadScalar<std::uint8_t>(in);
+			if (hasValue == 0)
+			{
+				return std::nullopt;
+			}
+			if (hasValue != 1)
+			{
+				throw std::runtime_error("Invalid quantization metadata presence flag");
+			}
+			return ReadQuantizationParams(in, version);
 		}
 
 		inline void WriteShape(std::ostream& out, std::span<const std::size_t> shape)
@@ -250,6 +369,12 @@ namespace LiteNN::Serialization
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Constant));
 					    WriteTensor(out, node.value);
 				    }
+				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::QuantizedConstant));
+					    WriteTensor(out, node.storage);
+					    WriteQuantizationParams(out, node.params);
+				    }
 				    else if constexpr (std::same_as<T, VariableRefNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::VariableRef));
@@ -278,6 +403,19 @@ namespace LiteNN::Serialization
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Cast));
 					    WriteNodeOutput(out, node.input);
+					    WriteDataType(out, node.targetType);
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Quantize));
+					    WriteNodeOutput(out, node.input);
+					    WriteQuantizationParams(out, node.params);
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Dequantize));
+					    WriteNodeOutput(out, node.input);
+					    WriteQuantizationParams(out, node.params);
 					    WriteDataType(out, node.targetType);
 				    }
 				    else if constexpr (std::same_as<T, CondNode>)
@@ -355,7 +493,7 @@ namespace LiteNN::Serialization
 			    entry.node);
 		}
 
-		inline NodeVariant ReadNodePayload(std::istream& in)
+		inline NodeVariant ReadNodePayload(std::istream& in, std::uint32_t version)
 		{
 			const auto kind = static_cast<NodeKind>(ReadScalar<std::uint32_t>(in));
 			switch (kind)
@@ -364,6 +502,11 @@ namespace LiteNN::Serialization
 				return ParamRefNode{ ReadSize(in) };
 			case NodeKind::Constant:
 				return ConstantNode{ ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }) };
+			case NodeKind::QuantizedConstant: {
+				auto storage = ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} });
+				auto params = ReadQuantizationParams(in, version);
+				return QuantizedConstantNode{ std::move(storage), std::move(params) };
+			}
 			case NodeKind::VariableRef:
 				return VariableRefNode{ ReadSize(in) };
 			case NodeKind::UnaryOp: {
@@ -383,6 +526,16 @@ namespace LiteNN::Serialization
 			case NodeKind::Cast: {
 				const auto input = ReadNodeOutput(in);
 				return CastNode{ input, ReadDataType(in) };
+			}
+			case NodeKind::Quantize: {
+				const auto input = ReadNodeOutput(in);
+				auto params = ReadQuantizationParams(in, version);
+				return QuantizeNode{ input, std::move(params) };
+			}
+			case NodeKind::Dequantize: {
+				const auto input = ReadNodeOutput(in);
+				auto params = ReadQuantizationParams(in, version);
+				return DequantizeNode{ input, std::move(params), ReadDataType(in) };
 			}
 			case NodeKind::Cond: {
 				const auto condition = ReadNodeOutput(in);
@@ -452,7 +605,7 @@ namespace LiteNN::Serialization
 			WriteNodeOutputList(out, subgraph.Results());
 		}
 
-		inline Subgraph ReadSubgraph(std::istream& in)
+		inline Subgraph ReadSubgraph(std::istream& in, std::uint32_t version)
 		{
 			Subgraph subgraph;
 			const auto paramCount = ReadSize(in);
@@ -471,7 +624,7 @@ namespace LiteNN::Serialization
 			for (std::size_t nodeId = 0; nodeId < nodeCount; ++nodeId)
 			{
 				auto outputInfos = ReadOutputInfoList(in);
-				auto node = ReadNodePayload(in);
+				auto node = ReadNodePayload(in, version);
 				if (nodeId < paramCount)
 				{
 					const auto* param = std::get_if<ParamRefNode>(&node);
@@ -513,6 +666,7 @@ namespace LiteNN::Serialization
 		for (const auto& variable : graph.Variables())
 		{
 			Detail::WriteTensor(out, variable->Data());
+			Detail::WriteOptionalQuantizationParams(out, variable->Quantization());
 		}
 
 		Detail::WriteSize(out, graph.ActivationSlotCount());
@@ -579,7 +733,15 @@ namespace LiteNN::Serialization
 		const auto variableCount = Detail::ReadSize(in);
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
-			graph.AddVariable(Variable::Create(Detail::ReadTensor(in)));
+			auto tensor = Detail::ReadTensor(in);
+			std::optional<QuantizationParams> quantization;
+			if (version >= 4)
+			{
+				quantization = Detail::ReadOptionalQuantizationParams(in, version);
+			}
+			auto variable = Variable::Create(std::move(tensor));
+			variable->SetQuantization(std::move(quantization));
+			graph.AddVariable(std::move(variable));
 		}
 
 		const auto activationSlotCount = Detail::ReadSize(in);
@@ -597,7 +759,7 @@ namespace LiteNN::Serialization
 		const auto subgraphCount = Detail::ReadSize(in);
 		for (std::size_t i = 0; i < subgraphCount; ++i)
 		{
-			graph.AddSubgraph(Detail::ReadSubgraph(in));
+			graph.AddSubgraph(Detail::ReadSubgraph(in, version));
 		}
 		graph.SetForward(forward);
 		if (backward)

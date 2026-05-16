@@ -15,6 +15,7 @@
 #include <LiteNN/Operators.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Pass/ForwardOnlyPass.h>
+#include <LiteNN/Quantization.h>
 #include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Training/Trainer.h>

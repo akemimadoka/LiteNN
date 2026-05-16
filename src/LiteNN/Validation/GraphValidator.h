@@ -137,6 +137,8 @@ namespace LiteNN::Validation
 				    return "ParamRefNode";
 			    else if constexpr (std::same_as<T, ConstantNode>)
 				    return "ConstantNode";
+			    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    return "QuantizedConstantNode";
 			    else if constexpr (std::same_as<T, VariableRefNode>)
 				    return "VariableRefNode";
 			    else if constexpr (std::same_as<T, UnaryOpNode>)
@@ -147,6 +149,10 @@ namespace LiteNN::Validation
 				    return "CallNode";
 			    else if constexpr (std::same_as<T, CastNode>)
 				    return "CastNode";
+			    else if constexpr (std::same_as<T, QuantizeNode>)
+				    return "QuantizeNode";
+			    else if constexpr (std::same_as<T, DequantizeNode>)
+				    return "DequantizeNode";
 			    else if constexpr (std::same_as<T, CondNode>)
 				    return "CondNode";
 			    else if constexpr (std::same_as<T, WhileNode>)
@@ -328,6 +334,18 @@ namespace LiteNN::Validation
 					                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
 					                 FormatInfo(data.DType(), data.Shape().Dims)));
 				}
+				if (variable->Quantization())
+				{
+					try
+					{
+						ValidateQuantizationParams(*variable->Quantization(), data.Shape(), data.DType());
+					}
+					catch (const std::runtime_error& ex)
+					{
+						Fail(std::format("Graph validation failed: variable {} quantization metadata is invalid: {}",
+						                 i, ex.what()));
+					}
+				}
 			}
 		}
 
@@ -443,6 +461,23 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph&, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizedConstantNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { node.storage.DType(), node.storage.Shape().ToOwned() }, "QuantizedConstantNode output");
+			try
+			{
+				ValidateQuantizationParams(node.params, node.storage.Shape(), node.storage.DType());
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("QuantizedConstantNode metadata is invalid: {}", ex.what()));
+			}
+		}
+
+		void ValidateNode(const Subgraph&, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const VariableRefNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
@@ -528,6 +563,59 @@ namespace LiteNN::Validation
 			ValidateDataType(node.targetType, std::format("subgraph {} node {} CastNode target", subgraphId, nodeId));
 			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "CastNode input", true);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.targetType, input.shape }, "CastNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizeNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "QuantizeNode input", true);
+			if (!IsFloatingDataType(input.dtype))
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("QuantizeNode input must be floating-point, got {}",
+				                 FormatInfo(input.dtype, input.shape)));
+			}
+			if (node.params.scheme != QuantizationScheme::Affine)
+			{
+				Fail(subgraphId, nodeId, "QuantizeNode currently supports affine quantization only");
+			}
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ input.shape }, node.params.storageType);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("QuantizeNode metadata is invalid: {}", ex.what()));
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.params.storageType, input.shape },
+			           "QuantizeNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const DequantizeNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			ValidateDataType(node.targetType,
+			                 std::format("subgraph {} node {} DequantizeNode target", subgraphId, nodeId));
+			if (!IsFloatingDataType(node.targetType))
+			{
+				Fail(subgraphId, nodeId, "DequantizeNode target type must be floating-point");
+			}
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "DequantizeNode input", true);
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ input.shape }, input.dtype);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("DequantizeNode metadata is invalid: {}", ex.what()));
+			}
+			const auto outputShape =
+			    node.params.scheme == QuantizationScheme::Block ? node.params.expressedShape : input.shape;
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.targetType, outputShape },
+			           "DequantizeNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

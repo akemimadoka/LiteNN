@@ -221,6 +221,13 @@ namespace
 				{
 					return std::format("ConstantNode(value={})", FormatTensorSummary(value.value, options));
 				}
+				else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				{
+					return std::format("QuantizedConstantNode(storage={}, scheme={}, format={})",
+					                   FormatTensorSummary(value.storage, options),
+					                   QuantizationSchemeName(value.params.scheme),
+					                   QuantizedBlockFormatName(value.params.blockFormat));
+				}
 				else if constexpr (std::same_as<T, VariableRefNode>)
 				{
 					return std::format("VariableRefNode(variable={})", value.variableIndex);
@@ -243,6 +250,20 @@ namespace
 				{
 					return std::format("CastNode(input={}, targetType={})", FormatValueRef(value.input),
 					                   Validation::DataTypeToString(value.targetType));
+				}
+				else if constexpr (std::same_as<T, QuantizeNode>)
+				{
+					return std::format("QuantizeNode(input={}, storageType={}, granularity={})",
+					                   FormatValueRef(value.input),
+					                   Validation::DataTypeToString(value.params.storageType),
+					                   QuantizationGranularityName(value.params.granularity));
+				}
+				else if constexpr (std::same_as<T, DequantizeNode>)
+				{
+					return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={})",
+					                   FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
+					                   QuantizationSchemeName(value.params.scheme),
+					                   QuantizedBlockFormatName(value.params.blockFormat));
 				}
 				else if constexpr (std::same_as<T, CondNode>)
 				{

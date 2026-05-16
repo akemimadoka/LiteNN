@@ -1,4 +1,5 @@
 #include <LiteNN/Device.h>
+#include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
 #include <deque>
 #include <memory>
@@ -59,6 +60,14 @@ namespace LiteNN
 			Tensor<PolymorphicDevice> value;
 		};
 
+		// 量化常量载荷：输出原始 storage tensor，同时携带其量化元数据。
+		// 对于 block 格式，storage 通常是 UInt8 raw byte payload，逻辑 shape 在 params.expressedShape 中。
+		struct QuantizedConstantNode
+		{
+			Tensor<PolymorphicDevice> storage;
+			QuantizationParams params;
+		};
+
 		// 引用 Graph 的第 variableIndex 个可训练参数
 		struct VariableRefNode
 		{
@@ -92,6 +101,21 @@ namespace LiteNN
 		{
 			NodeOutput input;
 			DataType targetType;
+		};
+
+		// 将浮点张量量化为 storage tensor。目前执行路径支持 scalar affine int8/uint8。
+		struct QuantizeNode
+		{
+			NodeOutput input;
+			QuantizationParams params;
+		};
+
+		// 将量化 storage tensor 还原到浮点张量。目前执行路径支持 scalar affine int8/uint8。
+		struct DequantizeNode
+		{
+			NodeOutput input;
+			QuantizationParams params;
+			DataType targetType{ DataType::Float32 };
 		};
 
 		// 条件节点：根据 condition 选择执行 thenBranch 或 elseBranch
@@ -218,6 +242,20 @@ namespace LiteNN
 			return std::shared_ptr<Variable>(new Variable(std::move(data)));
 		}
 
+		template <Device D>
+		static std::shared_ptr<Variable> CreateQuantized(Tensor<D> storage, QuantizationParams quantization)
+		{
+			if constexpr (std::same_as<D, PolymorphicDevice>)
+			{
+				return std::shared_ptr<Variable>(new Variable(std::move(storage), std::move(quantization)));
+			}
+			else
+			{
+				return std::shared_ptr<Variable>(
+				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }), std::move(quantization)));
+			}
+		}
+
 		auto& Data(this auto&& self)
 		{
 			return self.data_;
@@ -228,12 +266,34 @@ namespace LiteNN
 			return self.grad_;
 		}
 
+		bool IsQuantized() const
+		{
+			return quantization_.has_value();
+		}
+
+		const std::optional<QuantizationParams>& Quantization() const
+		{
+			return quantization_;
+		}
+
+		void SetQuantization(std::optional<QuantizationParams> quantization)
+		{
+			quantization_ = std::move(quantization);
+		}
+
 	private:
 		Tensor<PolymorphicDevice> data_;
 		Tensor<PolymorphicDevice> grad_;
+		std::optional<QuantizationParams> quantization_;
 
 		Variable(Tensor<PolymorphicDevice> data)
-		    : data_(std::move(data)), grad_(data_.Shape(), data_.DType(), data_.CurDevice())
+		    : Variable(std::move(data), std::nullopt)
+		{
+		}
+
+		Variable(Tensor<PolymorphicDevice> data, std::optional<QuantizationParams> quantization)
+		    : data_(std::move(data)), grad_(data_.Shape(), data_.DType(), data_.CurDevice()),
+		      quantization_(std::move(quantization))
 		{
 		}
 
@@ -241,6 +301,7 @@ namespace LiteNN
 		Variable(Tensor<D> data) : Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }))
 		{
 		}
+
 	};
 
 	// 前向/反向共享的激活值存储槽位

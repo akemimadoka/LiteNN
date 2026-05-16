@@ -117,6 +117,14 @@ namespace LiteNN
 					    {
 						    countInput(node.input);
 					    }
+					    else if constexpr (std::same_as<T, QuantizeNode>)
+					    {
+						    countInput(node.input);
+					    }
+					    else if constexpr (std::same_as<T, DequantizeNode>)
+					    {
+						    countInput(node.input);
+					    }
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
 						    for (const auto& a : node.args)
@@ -173,7 +181,8 @@ namespace LiteNN
 					    {
 						    countInput(node.input);
 					    }
-					    // ParamRefNode, ConstantNode, VariableRefNode, LoadActivationNode, TapeLoadActivationNode: 无输入
+					    // ParamRefNode, ConstantNode, QuantizedConstantNode, VariableRefNode,
+					    // LoadActivationNode, TapeLoadActivationNode: 无输入
 				    },
 				    sg.GetNodeEntry(nodeId).node);
 			}
@@ -539,7 +548,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, VariableRefNode> || std::same_as<T, LoadActivationNode>)
+				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                  std::same_as<T, LoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -554,6 +564,14 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, CastNode>)
 				    {
 					    return CastNode{ remap(n.input), n.targetType };
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return QuantizeNode{ remap(n.input), n.params };
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
 				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {

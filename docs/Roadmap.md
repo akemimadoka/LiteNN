@@ -16,11 +16,11 @@ This document is the append-only planning entry for LiteNN. New requirements sho
 
 Status: completed for scalar storage/reference paths on 2026-05-17.
 
-- Add scalar dtypes: fp16, bf16, fp8e4m3, fp8e5m2, int8, uint8.
-- Centralize dtype name, byte size, category, and max-valid-value checks.
-- Support CPU allocation, zero fill, dtype conversion, tensor initialization, model serialization, and compiled module metadata.
-- Add MLIR type/constant lowering for scalar low precision. FP8 is initially represented as one-byte storage until arithmetic lowering is implemented.
-- Add tests for dtype metadata, CPU conversion roundtrip, initializer support, and model serialization.
+- [x] Add scalar dtypes: fp16, bf16, fp8e4m3, fp8e5m2, int8, uint8.
+- [x] Centralize dtype name, byte size, category, and max-valid-value checks.
+- [x] Support CPU allocation, zero fill, dtype conversion, tensor initialization, model serialization, and compiled module metadata.
+- [x] Add MLIR type/constant lowering for scalar low precision. FP8 is initially represented as one-byte storage until arithmetic lowering is implemented.
+- [x] Add tests for dtype metadata, CPU conversion roundtrip, initializer support, and model serialization.
 
 Completed notes:
 
@@ -30,39 +30,54 @@ Completed notes:
 
 ### P1: Quantized Tensor Storage
 
-- Introduce quantized tensor metadata: scale, zero point, group size, axis, and block format.
-- Support common int quantization families: int8/uint8 affine, per-tensor, per-channel, and grouped weight-only quantization.
-- Add dequantize/cast graph nodes and CPU reference kernels.
-- Define quantized serialization payloads without conflating them with scalar dtype tensors.
+Status: completed for graph/runtime/storage metadata paths on 2026-05-17.
+
+- [x] Introduce quantized tensor metadata: scale, zero point, group size, axis, and block format.
+- [x] Support int8/uint8 affine quantization for per-tensor, per-axis, and grouped weight-style storage in CPU reference helpers.
+- [x] Keep scalar int8/uint8 tensors distinct from quantized tensors by requiring explicit `QuantizationParams` on `QuantizedTensor` or `Variable`.
+- [x] Define variable quantization serialization payloads and preserve them through ModelIO.
+- [x] Add roundtrip tests for quantization metadata, CPU reference quantize/dequantize, and ModelIO.
+- [x] Add graph-level Dequantize/Quantize nodes and interpreter/const-fold support.
+- [x] Add quantized constant payloads if GGUF conversion needs constants rather than variables.
+- [x] Add non-scalar block formats for GGUF/ggml quantized weights.
+
+Completed notes:
+
+- `QuantizationParams` now records affine scheme, granularity, block format, storage dtype, expressed dtype, axis, group size, scales, and zero points.
+- CPU reference helpers support `QuantizeAffine` / `DequantizeAffine` for int8 and uint8 storage.
+- Model format version was bumped so variable quantization metadata can be stored after each variable tensor while older model versions remain readable.
+- `QuantizeNode` and `DequantizeNode` are validated, interpreted, serialized, and const-folded for scalar affine int8/uint8 paths.
+- `QuantizedConstantNode` preserves raw storage payloads plus `QuantizationParams`, allowing GGUF-style weights to be represented as constants instead of only variables.
+- `QuantizationScheme::Block` and GGML block format metadata now distinguish raw UInt8 payload shape from logical `expressedShape`; ModelIO version 5 persists that extra logical-shape metadata.
 
 ### P2: CUDA Low Precision Kernels
 
-- Add CUDA capability detection for fp16, bf16, and fp8.
-- Use cuBLAS/cuBLASLt for supported GEMM cases and explicit fallback paths for unsupported devices.
-- Add conversion kernels for f32 <-> fp16/bf16/fp8/int8.
-- Add benchmark coverage per dtype and backend.
+- [ ] Add CUDA capability detection for fp16, bf16, and fp8.
+- [ ] Use cuBLAS/cuBLASLt for supported GEMM cases and explicit fallback paths for unsupported devices.
+- [ ] Add conversion kernels for f32 <-> fp16/bf16/fp8/int8.
+- [ ] Add benchmark coverage per dtype and backend.
 
 ### P3: GGUF Reader and Converter
 
-- Read GGUF metadata, tensor directory, tensor payloads, and ggml quantized block formats from `third_party/llama.cpp`.
-- Map GGUF tensors to LiteNN variables with stable names and shape validation.
-- Import tokenizer/config metadata needed by LLaMA-like models.
-- Emit LiteNN model files that can be loaded without linking llama.cpp at runtime.
+- [ ] Read GGUF metadata, tensor directory, tensor payloads, and ggml quantized block formats from `third_party/llama.cpp`.
+- [ ] Map GGUF tensors to LiteNN variables with stable names and shape validation.
+- [ ] Import tokenizer/config metadata needed by LLaMA-like models.
+- [ ] Emit LiteNN model files that can be loaded without linking llama.cpp at runtime.
 
 ### P4: Transformer Graph Coverage
 
-- Add graph/layer helpers for RMSNorm, RoPE, attention KV cache, SwiGLU/MLP, and causal masking.
-- Lower common LLaMA-family models from GGUF metadata into LiteNN Graph.
-- Keep a CPU reference execution path for correctness before relying on CUDA/AOT.
+- [ ] Add graph/layer helpers for RMSNorm, RoPE, attention KV cache, SwiGLU/MLP, and causal masking.
+- [ ] Lower common LLaMA-family models from GGUF metadata into LiteNN Graph.
+- [ ] Keep a CPU reference execution path for correctness before relying on CUDA/AOT.
 
 ### P5: AOT LLM Artifacts
 
-- Compile converted models to CPU/CUDA AOT artifacts with rodata/instruction separation.
-- Preserve quantized and low-precision metadata in compiled signatures.
-- Add runtime loader examples for static/shared library embedding.
+- [ ] Compile converted models to CPU/CUDA AOT artifacts with rodata/instruction separation.
+- [ ] Preserve quantized and low-precision metadata in compiled signatures.
+- [ ] Add runtime loader examples for static/shared library embedding.
 
 ### P6: Validation and Benchmarks
 
-- Add golden tests against llama.cpp or PyTorch for small fixtures.
-- Track CPU single-thread, CPU multithread, CUDA, and AOT performance in one horizontal benchmark table.
-- Add numerical tolerance policy per dtype and quantization format.
+- [ ] Add golden tests against llama.cpp or PyTorch for small fixtures.
+- [ ] Track CPU single-thread, CPU multithread, CUDA, and AOT performance in one horizontal benchmark table.
+- [ ] Add numerical tolerance policy per dtype and quantization format.

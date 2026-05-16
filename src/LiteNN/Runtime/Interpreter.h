@@ -137,6 +137,12 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(node.value.CopyToDevice(device));
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const QuantizedConstantNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			slots[nodeId].push_back(node.storage.CopyToDevice(device));
+		}
+
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const VariableRefNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
@@ -177,6 +183,32 @@ namespace LiteNN::Runtime
 			DeviceTraits<D>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), node.targetType,
 			                           result.RawData());
 			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const QuantizeNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			if (node.params.scheme != QuantizationScheme::Affine)
+			{
+				throw std::runtime_error("Interpreter QuantizeNode currently supports affine quantization only");
+			}
+			const auto& input = GetValue(slots, node.input);
+			const auto cpuInput = input.CopyToDevice(CPU{});
+			auto quantized = QuantizeAffine(cpuInput, node.params);
+			slots[nodeId].push_back(quantized.Storage().CopyToDevice(device));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const DequantizeNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			if (node.params.scheme != QuantizationScheme::Affine)
+			{
+				throw std::runtime_error("Interpreter DequantizeNode currently supports affine quantization only");
+			}
+			const auto& input = GetValue(slots, node.input);
+			const auto cpuInput = input.CopyToDevice(CPU{});
+			auto dequantized = DequantizeAffine(cpuInput, node.params, node.targetType);
+			slots[nodeId].push_back(dequantized.CopyToDevice(device));
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CallNode& node,
