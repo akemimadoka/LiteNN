@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/Layer/Normalization.h>
 
 #include <stdexcept>
 #include <utility>
@@ -45,40 +46,12 @@ namespace LiteNN::Layer
 			    "RMSNorm input must be 2D with shape [batch, featureSize] and matching dtype");
 		}
 
-		const std::size_t batch = info.shape[0];
 		const std::size_t features = info.shape[1];
-		constexpr std::size_t kNormAxis = 1;
-
-		const std::vector<std::size_t> reducedShape{ batch };
-		const std::vector<std::size_t> broadcastShape{ batch, 1 };
 		const std::vector<std::size_t> paramShape{ 1, features };
-
-		const auto xSquared =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, input }, { OutputInfo{ info.dtype, info.shape } });
-
-		const auto meanSquare = subgraph.AddNode(ReduceOpNode{ ReduceOp::Mean, { xSquared, 0 }, kNormAxis },
-		                                     { OutputInfo{ info.dtype, reducedShape } });
-		const auto meanSquareBc = subgraph.AddNode(ReshapeNode{ { meanSquare, 0 }, broadcastShape },
-		                                      { OutputInfo{ info.dtype, broadcastShape } });
-
-		const auto epsC =
-		    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(broadcastShape, info.dtype, layer.eps));
-		const auto meanSquarePlusEps =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { meanSquareBc, 0 }, { epsC, 0 } },
-		                     { OutputInfo{ info.dtype, broadcastShape } });
-		const auto rms = subgraph.AddNode(UnaryOpNode{ UnaryOp::Sqrt, { meanSquarePlusEps, 0 } },
-		                                 { OutputInfo{ info.dtype, broadcastShape } });
-
-		const auto normalized =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, input, { rms, 0 } }, { OutputInfo{ info.dtype, info.shape } });
-
 		const auto weight = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
 		                                    { OutputInfo{ layer.dtype, paramShape } });
-		const auto result =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { weight, 0 }, { normalized, 0 } },
-		                     { OutputInfo{ info.dtype, info.shape } });
-
-		return { result, 0 };
+		return AddNormalization(subgraph, input, NormalizationMode::RMSNorm, 1, layer.eps,
+		                        NodeOutput{ weight, 0 });
 	}
 
 	inline SubgraphId BuildRMSNorm(Graph& graph, const RMSNormLayer& layer, std::size_t batchSize = 1)

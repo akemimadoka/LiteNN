@@ -573,6 +573,48 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support ScatterNode yet; use the interpreter path");
 	}
 
+	void emitNode(const Subgraph&, NodeId, const ScanNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support ScanNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const SSMScanNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support SSMScanNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const RWKVWKVNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support RWKVWKVNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const SoftmaxNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support SoftmaxNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const NormalizationNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support NormalizationNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const BatchMatMulNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support BatchMatMulNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)

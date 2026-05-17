@@ -100,6 +100,35 @@ namespace LiteNN
 				    {
 					    return ScatterNode{ remap(n.data), remap(n.indices), remap(n.updates), n.axis, n.mode };
 				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return ScanNode{ remap(n.input), n.axis, n.op };
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
+					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
+					                        remap(n.timeDecay), remap(n.timeFirst) };
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return SoftmaxNode{ remap(n.input), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return NormalizationNode{ remap(n.input),
+					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					                              n.mode, n.axis, n.groupCount, n.epsilon };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    std::vector<NodeOutput> inputs;

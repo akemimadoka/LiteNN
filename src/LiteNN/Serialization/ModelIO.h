@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 12;
+		constexpr std::uint32_t kModelVersion = 13;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -70,6 +70,12 @@ namespace LiteNN::Serialization
 			Pad,
 			Gather,
 			Scatter,
+			Scan,
+			SSMScan,
+			RWKVWKV,
+			Softmax,
+			Normalization,
+			BatchMatMul,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -500,6 +506,29 @@ namespace LiteNN::Serialization
 			return { ReadSize(in), ReadSize(in) };
 		}
 
+		inline void WriteOptionalNodeOutput(std::ostream& out, const std::optional<NodeOutput>& output)
+		{
+			WriteScalar(out, static_cast<std::uint8_t>(output.has_value() ? 1 : 0));
+			if (output)
+			{
+				WriteNodeOutput(out, *output);
+			}
+		}
+
+		inline std::optional<NodeOutput> ReadOptionalNodeOutput(std::istream& in)
+		{
+			const auto hasValue = ReadScalar<std::uint8_t>(in);
+			if (hasValue == 0)
+			{
+				return std::nullopt;
+			}
+			if (hasValue != 1)
+			{
+				throw std::runtime_error("Invalid optional NodeOutput flag in LiteNN model");
+			}
+			return ReadNodeOutput(in);
+		}
+
 		inline void WriteNodeOutputList(std::ostream& out, std::span<const NodeOutput> outputs)
 		{
 			WriteSize(out, outputs.size());
@@ -723,6 +752,55 @@ namespace LiteNN::Serialization
 					    WriteSize(out, node.axis);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
 				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scan));
+					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SSMScan));
+					    WriteNodeOutput(out, node.state);
+					    WriteNodeOutput(out, node.dt);
+					    WriteNodeOutput(out, node.a);
+					    WriteNodeOutput(out, node.b);
+					    WriteNodeOutput(out, node.c);
+					    WriteOptionalNodeOutput(out, node.d);
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::RWKVWKV));
+					    WriteNodeOutput(out, node.key);
+					    WriteNodeOutput(out, node.value);
+					    WriteNodeOutput(out, node.receptance);
+					    WriteNodeOutput(out, node.timeDecay);
+					    WriteNodeOutput(out, node.timeFirst);
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Softmax));
+					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Normalization));
+					    WriteNodeOutput(out, node.input);
+					    WriteOptionalNodeOutput(out, node.scale);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteSize(out, node.axis);
+					    WriteSize(out, node.groupCount);
+					    WriteScalar(out, node.epsilon);
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BatchMatMul));
+					    WriteNodeOutput(out, node.lhs);
+					    WriteNodeOutput(out, node.rhs);
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Concat));
@@ -872,6 +950,47 @@ namespace LiteNN::Serialization
 				const auto axis = ReadSize(in);
 				const auto mode = static_cast<ScatterMode>(ReadScalar<std::uint32_t>(in));
 				return ScatterNode{ data, indices, updates, axis, mode };
+			}
+			case NodeKind::Scan: {
+				const auto input = ReadNodeOutput(in);
+				const auto axis = ReadSize(in);
+				const auto op = static_cast<ScanOp>(ReadScalar<std::uint32_t>(in));
+				return ScanNode{ input, axis, op };
+			}
+			case NodeKind::SSMScan: {
+				const auto state = ReadNodeOutput(in);
+				const auto dt = ReadNodeOutput(in);
+				const auto a = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto c = ReadNodeOutput(in);
+				return SSMScanNode{ state, dt, a, b, c, ReadOptionalNodeOutput(in) };
+			}
+			case NodeKind::RWKVWKV: {
+				const auto key = ReadNodeOutput(in);
+				const auto value = ReadNodeOutput(in);
+				const auto receptance = ReadNodeOutput(in);
+				const auto timeDecay = ReadNodeOutput(in);
+				const auto timeFirst = ReadNodeOutput(in);
+				return RWKVWKVNode{ key, value, receptance, timeDecay, timeFirst };
+			}
+			case NodeKind::Softmax: {
+				const auto input = ReadNodeOutput(in);
+				return SoftmaxNode{ input, ReadSize(in) };
+			}
+			case NodeKind::Normalization: {
+				const auto input = ReadNodeOutput(in);
+				auto scale = ReadOptionalNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				const auto mode = static_cast<NormalizationMode>(ReadScalar<std::uint32_t>(in));
+				const auto axis = ReadSize(in);
+				const auto groupCount = ReadSize(in);
+				const auto epsilon = ReadScalar<double>(in);
+				return NormalizationNode{ input, std::move(scale), std::move(bias), mode, axis, groupCount, epsilon };
+			}
+			case NodeKind::BatchMatMul: {
+				const auto lhs = ReadNodeOutput(in);
+				const auto rhs = ReadNodeOutput(in);
+				return BatchMatMulNode{ lhs, rhs };
 			}
 			case NodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);

@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/Layer/Normalization.h>
 
 #include <stdexcept>
 #include <vector>
@@ -38,36 +39,9 @@ namespace LiteNN::Layer
 			throw std::runtime_error("GroupNorm requires grouped element count to be divisible by numGroups");
 		}
 
-		const auto groupSize = groupedVolume / numGroups;
-		const std::vector<std::size_t> reshapedShape{ numGroups, groupSize, batch };
-		const std::vector<std::size_t> statsShape{ numGroups, batch };
-		const std::vector<std::size_t> broadcastShape{ numGroups, 1, batch };
-
-		const auto reshaped = subgraph.AddNode(ReshapeNode{ input, reshapedShape },
-		                                      { OutputInfo{ info.dtype, reshapedShape } });
-		const auto mean = subgraph.AddNode(ReduceOpNode{ ReduceOp::Mean, { reshaped, 0 }, 1 },
-		                                  { OutputInfo{ info.dtype, statsShape } });
-		const auto meanBc = subgraph.AddNode(ReshapeNode{ { mean, 0 }, broadcastShape },
-		                                    { OutputInfo{ info.dtype, broadcastShape } });
-		const auto centered = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, { reshaped, 0 }, { meanBc, 0 } },
-		                                      { OutputInfo{ info.dtype, reshapedShape } });
-		const auto squared = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { centered, 0 }, { centered, 0 } },
-		                                     { OutputInfo{ info.dtype, reshapedShape } });
-		const auto variance = subgraph.AddNode(ReduceOpNode{ ReduceOp::Mean, { squared, 0 }, 1 },
-		                                      { OutputInfo{ info.dtype, statsShape } });
-		const auto varianceBc = subgraph.AddNode(ReshapeNode{ { variance, 0 }, broadcastShape },
-		                                        { OutputInfo{ info.dtype, broadcastShape } });
-		const auto epsId = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, eps));
-		const auto varianceWithEps = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { varianceBc, 0 }, { epsId, 0 } },
-		                                             { OutputInfo{ info.dtype, broadcastShape } });
-		const auto denom = subgraph.AddNode(UnaryOpNode{ UnaryOp::Sqrt, { varianceWithEps, 0 } },
-		                                   { OutputInfo{ info.dtype, broadcastShape } });
-		const auto normalized = subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, { centered, 0 }, { denom, 0 } },
-		                                        { OutputInfo{ info.dtype, reshapedShape } });
-		const auto result = subgraph.AddNode(ReshapeNode{ { normalized, 0 }, info.shape },
-		                                    { OutputInfo{ info.dtype, info.shape } });
-
-		return { result, 0 };
+		(void)batch;
+		return AddNormalization(subgraph, input, NormalizationMode::GroupNorm, 0, eps, std::nullopt, std::nullopt,
+		                        numGroups);
 	}
 
 	inline SubgraphId BuildGroupNorm(Graph& graph, DataType dtype, ShapeView shape, std::size_t numGroups,

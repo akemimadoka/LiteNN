@@ -232,6 +232,67 @@ namespace LiteNN
 			ScatterMode mode{ ScatterMode::Update };
 		};
 
+		// Inclusive scan along an axis. Sum/max are the primary G5.2 targets;
+		// prod/logsumexp are kept as explicit interface values for future lowering.
+		struct ScanNode
+		{
+			NodeOutput input;
+			std::size_t axis;
+			ScanOp op{ ScanOp::Sum };
+		};
+
+		// Reference selective scan primitive for Mamba-style state-space layers.
+		// state, dt, a, b, c, and optional d must broadcast to state.shape.
+		struct SSMScanNode
+		{
+			NodeOutput state;
+			NodeOutput dt;
+			NodeOutput a;
+			NodeOutput b;
+			NodeOutput c;
+			std::optional<NodeOutput> d;
+		};
+
+		// RWKV-style weighted key/value recurrence. Inputs are key/value/receptance
+		// sequences plus time-decay/time-first parameters broadcast over channels.
+		struct RWKVWKVNode
+		{
+			NodeOutput key;
+			NodeOutput value;
+			NodeOutput receptance;
+			NodeOutput timeDecay;
+			NodeOutput timeFirst;
+		};
+
+		// Numerically stable softmax along one axis.
+		struct SoftmaxNode
+		{
+			NodeOutput input;
+			std::size_t axis;
+		};
+
+		// Hot-path normalization primitive. scale/bias are optional and broadcast
+		// to input.shape. GroupNorm keeps the existing ggml-oriented layout rule:
+		// rank-4 tensors use the last axis as batch and normalize per batch.
+		struct NormalizationNode
+		{
+			NodeOutput input;
+			std::optional<NodeOutput> scale;
+			std::optional<NodeOutput> bias;
+			NormalizationMode mode{ NormalizationMode::LayerNorm };
+			std::size_t axis;
+			std::size_t groupCount{ 1 };
+			double epsilon{ 1e-5 };
+		};
+
+		// Batch matmul with NumPy-style broadcasting on leading dimensions.
+		// lhs shape [..., M, K], rhs shape [..., K, N] -> [..., M, N].
+		struct BatchMatMulNode
+		{
+			NodeOutput lhs;
+			NodeOutput rhs;
+		};
+
 		// 沿指定轴拼接多个张量
 		// 所有输入除 axis 维度外 shape 必须相同
 		struct ConcatNode

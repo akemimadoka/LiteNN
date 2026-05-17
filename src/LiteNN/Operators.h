@@ -69,6 +69,21 @@ namespace LiteNN
 		Add,
 	};
 
+	enum class ScanOp
+	{
+		Sum,
+		Max,
+		Prod,
+		LogSumExp,
+	};
+
+	enum class NormalizationMode
+	{
+		LayerNorm,
+		RMSNorm,
+		GroupNorm,
+	};
+
 	template <UnaryOp Op>
 	struct DefaultUnaryOpTraits
 	{

@@ -1,7 +1,7 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/Layer/Scan.h>
 
 #include <stdexcept>
-#include <vector>
 
 #ifndef LITENN_LAYER_CUMSUM_H
 #define LITENN_LAYER_CUMSUM_H
@@ -24,39 +24,7 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("Cumsum does not support Bool tensors");
 		}
-
-		auto sliceShape = info.shape;
-		sliceShape[axis] = 1;
-		std::vector<NodeOutput> parts;
-		parts.reserve(info.shape[axis]);
-
-		NodeOutput running{};
-		for (std::size_t index = 0; index < info.shape[axis]; ++index)
-		{
-			const auto sliceId = subgraph.AddNode(SliceNode{ input, axis, index, 1 },
-			                                 { OutputInfo{ info.dtype, sliceShape } });
-			const auto slice = NodeOutput{ sliceId, 0 };
-
-			if (index == 0)
-			{
-				running = slice;
-			}
-			else
-			{
-				const auto addId = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, running, slice },
-				                               { OutputInfo{ info.dtype, sliceShape } });
-				running = { addId, 0 };
-			}
-			parts.push_back(running);
-		}
-
-		if (parts.size() == 1)
-		{
-			return parts.front();
-		}
-
-		const auto concatId = subgraph.AddNode(ConcatNode{ std::move(parts), axis }, { OutputInfo{ info.dtype, info.shape } });
-		return { concatId, 0 };
+		return AddScan(subgraph, input, axis, ScanOp::Sum);
 	}
 
 	inline SubgraphId BuildCumsum(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 0)

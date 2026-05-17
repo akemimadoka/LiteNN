@@ -1,3 +1,4 @@
+#include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -575,6 +576,111 @@ namespace LiteNN::Runtime
 			const auto& updates = GetValue(slots, node.updates);
 			auto cpuResult = Detail::EvalScatter(data.CopyToDevice(CPU{}), indices.CopyToDevice(CPU{}),
 			                                     updates.CopyToDevice(CPU{}), node.axis, node.mode);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ScanNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			auto cpuResult = Detail::EvalScan(input.CopyToDevice(CPU{}), node.axis, node.op);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SSMScanNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const Tensor<D>* dTensor = node.d ? &GetValue(slots, *node.d) : nullptr;
+			const auto cpuD = dTensor ? std::optional{ dTensor->CopyToDevice(CPU{}) } : std::nullopt;
+			auto cpuResult = Detail::EvalSSMScan(GetValue(slots, node.state).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.dt).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.a).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.b).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.c).CopyToDevice(CPU{}),
+			                                     cpuD ? &*cpuD : nullptr);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const RWKVWKVNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalRWKVWKV(GetValue(slots, node.key).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.value).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.receptance).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.timeDecay).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.timeFirst).CopyToDevice(CPU{}));
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SoftmaxNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			auto cpuResult = Detail::EvalSoftmax(input.CopyToDevice(CPU{}), node.axis);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const NormalizationNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const Tensor<D>* scaleTensor = node.scale ? &GetValue(slots, *node.scale) : nullptr;
+			const Tensor<D>* biasTensor = node.bias ? &GetValue(slots, *node.bias) : nullptr;
+			const auto cpuScale = scaleTensor ? std::optional{ scaleTensor->CopyToDevice(CPU{}) } : std::nullopt;
+			const auto cpuBias = biasTensor ? std::optional{ biasTensor->CopyToDevice(CPU{}) } : std::nullopt;
+			auto cpuResult = Detail::EvalNormalization(GetValue(slots, node.input).CopyToDevice(CPU{}),
+			                                           cpuScale ? &*cpuScale : nullptr,
+			                                           cpuBias ? &*cpuBias : nullptr, node.mode,
+			                                           node.axis, node.groupCount, node.epsilon);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const BatchMatMulNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalBatchMatMul(GetValue(slots, node.lhs).CopyToDevice(CPU{}),
+			                                        GetValue(slots, node.rhs).CopyToDevice(CPU{}));
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));

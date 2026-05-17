@@ -3,6 +3,7 @@
 
 #include <LiteNN/DType.h>
 #include <LiteNN/Device.h>
+#include <LiteNN/ComputePrimitives.h>
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>
 #endif

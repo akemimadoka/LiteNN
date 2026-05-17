@@ -1,3 +1,4 @@
+#include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
@@ -129,6 +130,41 @@ namespace LiteNN
 		                              const ScatterNode& node)
 		{
 			return Detail::EvalScatter(data, indices, updates, node.axis, node.mode);
+		}
+
+		static Tensor<CPU> EvalScan(const Tensor<CPU>& input, const ScanNode& node)
+		{
+			return Detail::EvalScan(input, node.axis, node.op);
+		}
+
+		static Tensor<CPU> EvalSSMScan(const Tensor<CPU>& state, const Tensor<CPU>& dt, const Tensor<CPU>& a,
+		                              const Tensor<CPU>& b, const Tensor<CPU>& c, const Tensor<CPU>* d)
+		{
+			return Detail::EvalSSMScan(state, dt, a, b, c, d);
+		}
+
+		static Tensor<CPU> EvalRWKVWKV(const Tensor<CPU>& key, const Tensor<CPU>& value,
+		                              const Tensor<CPU>& receptance, const Tensor<CPU>& timeDecay,
+		                              const Tensor<CPU>& timeFirst)
+		{
+			return Detail::EvalRWKVWKV(key, value, receptance, timeDecay, timeFirst);
+		}
+
+		static Tensor<CPU> EvalSoftmax(const Tensor<CPU>& input, const SoftmaxNode& node)
+		{
+			return Detail::EvalSoftmax(input, node.axis);
+		}
+
+		static Tensor<CPU> EvalNormalization(const Tensor<CPU>& input, const Tensor<CPU>* scale,
+		                                    const Tensor<CPU>* bias, const NormalizationNode& node)
+		{
+			return Detail::EvalNormalization(input, scale, bias, node.mode, node.axis, node.groupCount,
+			                                 node.epsilon);
+		}
+
+		static Tensor<CPU> EvalBatchMatMul(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs)
+		{
+			return Detail::EvalBatchMatMul(lhs, rhs);
 		}
 
 		static Tensor<CPU> EvalConcat(const std::vector<std::optional<Tensor<CPU>>>& constValues,
@@ -291,6 +327,35 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ScatterNode>)
 				    {
 					    return ScatterNode{ remap(n.data), remap(n.indices), remap(n.updates), n.axis, n.mode };
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return ScanNode{ remap(n.input), n.axis, n.op };
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
+					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
+					                        remap(n.timeDecay), remap(n.timeFirst) };
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return SoftmaxNode{ remap(n.input), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return NormalizationNode{ remap(n.input),
+					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					                              n.mode, n.axis, n.groupCount, n.epsilon };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -463,6 +528,51 @@ namespace LiteNN
 					    markInput(node.data);
 					    markInput(node.indices);
 					    markInput(node.updates);
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    markInput(node.state);
+					    markInput(node.dt);
+					    markInput(node.a);
+					    markInput(node.b);
+					    markInput(node.c);
+					    if (node.d)
+					    {
+						    markInput(*node.d);
+					    }
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    markInput(node.key);
+					    markInput(node.value);
+					    markInput(node.receptance);
+					    markInput(node.timeDecay);
+					    markInput(node.timeFirst);
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    markInput(node.input);
+					    if (node.scale)
+					    {
+						    markInput(*node.scale);
+					    }
+					    if (node.bias)
+					    {
+						    markInput(*node.bias);
+					    }
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    markInput(node.lhs);
+					    markInput(node.rhs);
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -663,6 +773,76 @@ namespace LiteNN
 							    const auto& indices = GetConstValue(constValues, node.indices);
 							    const auto& updates = GetConstValue(constValues, node.updates);
 							    constValues[nodeId] = EvalScatter(data, indices, updates, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, ScanNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalScan(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, SSMScanNode>)
+					    {
+						    const auto dConst = !node.d || isConst[node.d->node];
+						    if (isConst[node.state.node] && isConst[node.dt.node] && isConst[node.a.node] &&
+						        isConst[node.b.node] && isConst[node.c.node] && dConst)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& state = GetConstValue(constValues, node.state);
+							    const auto& dt = GetConstValue(constValues, node.dt);
+							    const auto& a = GetConstValue(constValues, node.a);
+							    const auto& b = GetConstValue(constValues, node.b);
+							    const auto& c = GetConstValue(constValues, node.c);
+							    const auto* d = node.d ? &GetConstValue(constValues, *node.d) : nullptr;
+							    constValues[nodeId] = EvalSSMScan(state, dt, a, b, c, d);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, RWKVWKVNode>)
+					    {
+						    if (isConst[node.key.node] && isConst[node.value.node] && isConst[node.receptance.node] &&
+						        isConst[node.timeDecay.node] && isConst[node.timeFirst.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] =
+							        EvalRWKVWKV(GetConstValue(constValues, node.key), GetConstValue(constValues, node.value),
+							                    GetConstValue(constValues, node.receptance),
+							                    GetConstValue(constValues, node.timeDecay),
+							                    GetConstValue(constValues, node.timeFirst));
+						    }
+					    }
+					    else if constexpr (std::same_as<T, SoftmaxNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalSoftmax(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, NormalizationNode>)
+					    {
+						    const auto scaleConst = !node.scale || isConst[node.scale->node];
+						    const auto biasConst = !node.bias || isConst[node.bias->node];
+						    if (isConst[node.input.node] && scaleConst && biasConst)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    const auto* scale = node.scale ? &GetConstValue(constValues, *node.scale) : nullptr;
+							    const auto* bias = node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
+							    constValues[nodeId] = EvalNormalization(input, scale, bias, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, BatchMatMulNode>)
+					    {
+						    if (isConst[node.lhs.node] && isConst[node.rhs.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& lhs = GetConstValue(constValues, node.lhs);
+							    const auto& rhs = GetConstValue(constValues, node.rhs);
+							    constValues[nodeId] = EvalBatchMatMul(lhs, rhs);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)

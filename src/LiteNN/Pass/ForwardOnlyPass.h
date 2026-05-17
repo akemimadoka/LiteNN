@@ -179,6 +179,39 @@ namespace LiteNN
 							    return ScatterNode{ remapOutput(node.data), remapOutput(node.indices),
 							                        remapOutput(node.updates), node.axis, node.mode };
 						    }
+						    else if constexpr (std::same_as<T, ScanNode>)
+						    {
+							    return ScanNode{ remapOutput(node.input), node.axis, node.op };
+						    }
+						    else if constexpr (std::same_as<T, SSMScanNode>)
+						    {
+							    return SSMScanNode{ remapOutput(node.state), remapOutput(node.dt), remapOutput(node.a),
+							                        remapOutput(node.b), remapOutput(node.c),
+							                        node.d ? std::optional<NodeOutput>{ remapOutput(*node.d) } : std::nullopt };
+						    }
+						    else if constexpr (std::same_as<T, RWKVWKVNode>)
+						    {
+							    return RWKVWKVNode{ remapOutput(node.key), remapOutput(node.value),
+							                        remapOutput(node.receptance), remapOutput(node.timeDecay),
+							                        remapOutput(node.timeFirst) };
+						    }
+						    else if constexpr (std::same_as<T, SoftmaxNode>)
+						    {
+							    return SoftmaxNode{ remapOutput(node.input), node.axis };
+						    }
+						    else if constexpr (std::same_as<T, NormalizationNode>)
+						    {
+							    return NormalizationNode{
+							        remapOutput(node.input),
+							        node.scale ? std::optional<NodeOutput>{ remapOutput(*node.scale) } : std::nullopt,
+							        node.bias ? std::optional<NodeOutput>{ remapOutput(*node.bias) } : std::nullopt,
+							        node.mode, node.axis, node.groupCount, node.epsilon
+							    };
+						    }
+						    else if constexpr (std::same_as<T, BatchMatMulNode>)
+						    {
+							    return BatchMatMulNode{ remapOutput(node.lhs), remapOutput(node.rhs) };
+						    }
 						    else if constexpr (std::same_as<T, ConcatNode>)
 						    {
 							    return ConcatNode{ remapList(node.inputs), node.axis };

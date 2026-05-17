@@ -288,6 +288,51 @@ namespace LiteNN
 						    ++counts[{ node.indices.node, node.indices.port }];
 						    ++counts[{ node.updates.node, node.updates.port }];
 					    }
+					    else if constexpr (std::same_as<T, ScanNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, SSMScanNode>)
+					    {
+						    ++counts[{ node.state.node, node.state.port }];
+						    ++counts[{ node.dt.node, node.dt.port }];
+						    ++counts[{ node.a.node, node.a.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+						    ++counts[{ node.c.node, node.c.port }];
+						    if (node.d)
+						    {
+							    ++counts[{ node.d->node, node.d->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, RWKVWKVNode>)
+					    {
+						    ++counts[{ node.key.node, node.key.port }];
+						    ++counts[{ node.value.node, node.value.port }];
+						    ++counts[{ node.receptance.node, node.receptance.port }];
+						    ++counts[{ node.timeDecay.node, node.timeDecay.port }];
+						    ++counts[{ node.timeFirst.node, node.timeFirst.port }];
+					    }
+					    else if constexpr (std::same_as<T, SoftmaxNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, NormalizationNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    if (node.scale)
+						    {
+							    ++counts[{ node.scale->node, node.scale->port }];
+						    }
+						    if (node.bias)
+						    {
+							    ++counts[{ node.bias->node, node.bias->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, BatchMatMulNode>)
+					    {
+						    ++counts[{ node.lhs.node, node.lhs.port }];
+						    ++counts[{ node.rhs.node, node.rhs.port }];
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    for (const auto& input : node.inputs)
@@ -405,6 +450,12 @@ namespace LiteNN
 					    {
 						    // G5.1 data movement nodes do not need extra saved activations here.
 						    // Differentiation is still explicitly gated below.
+					    }
+					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
+					                      std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
+					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode>)
+					    {
+						    // G5.2/G5.3 nodes use explicit differentiation gates below for now.
 					    }
 					    else if constexpr (std::same_as<T, GetRowsNode>)
 					    {
@@ -695,6 +746,46 @@ namespace LiteNN
 					    return ScatterNode{ { nodeMap[n.data.node], n.data.port },
 					                        { nodeMap[n.indices.node], n.indices.port },
 					                        { nodeMap[n.updates.node], n.updates.port }, n.axis, n.mode };
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return ScanNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.op };
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return SSMScanNode{ { nodeMap[n.state.node], n.state.port },
+					                        { nodeMap[n.dt.node], n.dt.port },
+					                        { nodeMap[n.a.node], n.a.port },
+					                        { nodeMap[n.b.node], n.b.port },
+					                        { nodeMap[n.c.node], n.c.port },
+					                        n.d ? std::optional<NodeOutput>{ { nodeMap[n.d->node], n.d->port } }
+					                            : std::nullopt };
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return RWKVWKVNode{ { nodeMap[n.key.node], n.key.port },
+					                        { nodeMap[n.value.node], n.value.port },
+					                        { nodeMap[n.receptance.node], n.receptance.port },
+					                        { nodeMap[n.timeDecay.node], n.timeDecay.port },
+					                        { nodeMap[n.timeFirst.node], n.timeFirst.port } };
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return SoftmaxNode{ { nodeMap[n.input.node], n.input.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return NormalizationNode{
+					        { nodeMap[n.input.node], n.input.port },
+					        n.scale ? std::optional<NodeOutput>{ { nodeMap[n.scale->node], n.scale->port } } : std::nullopt,
+					        n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } } : std::nullopt,
+					        n.mode, n.axis, n.groupCount, n.epsilon
+					    };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ { nodeMap[n.lhs.node], n.lhs.port },
+					                            { nodeMap[n.rhs.node], n.rhs.port } };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -1013,6 +1104,30 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ScatterNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: ScatterNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ScanNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ScanNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SSMScanNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SSMScanNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, RWKVWKVNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: RWKVWKVNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SoftmaxNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SoftmaxNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, NormalizationNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: NormalizationNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, BatchMatMulNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: BatchMatMulNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
