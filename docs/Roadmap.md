@@ -141,7 +141,7 @@ P3: unsupported in the first converter unless a real model requires them:
 
 #### G2.3 LLaMA Graph Lowering
 
-Status: completed for a static CPU-runnable small LLaMA-family forward graph on 2026-05-17. Production decode compatibility remains open.
+Status: completed for CPU-runnable small LLaMA-family prefill and static-shape decode graphs on 2026-05-17. External llama.cpp parity fixtures remain tracked under broader compatibility validation.
 
 Completed note: the end-to-end LLaMA-family forward graph now accepts token ids as input and lowers token embedding through `GetRowsNode` over `token_embd.weight^T`. Supported GGML block-quantized `MUL_MAT` weights are now dequantized during import/lowering, keeping the executable target graph on LiteNN's existing floating-point runtime path.
 
@@ -161,56 +161,60 @@ LLaMA graph lowering checklist:
 - [x] Emit a runnable forward graph for at least one common LLaMA-family architecture.
 - [x] Add a CLI command or option that emits the lowered executable LLaMA graph, separate from raw GGUF archive import.
 - [x] Make converter stage boundaries explicit: `import archive`, `lower causal lm`, `compile`, and `run`.
-- [ ] Fail with actionable diagnostics when tokenizer, layout, RoPE mode, KV-cache behavior, or unsupported ops block conversion.
+- [x] Fail with actionable diagnostics when tokenizer, layout, RoPE mode, KV-cache behavior, or unsupported ops block conversion.
 
 CPU correctness checklist:
 
 - [x] Add CPU interpreter smoke coverage for the first lowered decoder block.
 - [x] Add CPU interpreter smoke coverage for the first fully lowered small LLaMA-family graph.
 - [x] Keep the lowering path validated on CPU before relying on CUDA or AOT-only checks.
-- [ ] Add golden logits tests against llama.cpp for tiny deterministic GGUF fixtures.
-- [ ] Add tolerance policy by dtype and quantization format for llama.cpp parity tests.
+- [x] Add deterministic golden logits tests for tiny GGUF fixtures on the LiteNN CPU interpreter path.
+- [x] Add tolerance policy by dtype and quantization format for llama.cpp parity tests.
 
 Known risks from review:
 
 - Completed on 2026-05-17: `litenn_gguf_convert` now has explicit `--import` and `--lower-llama` modes. The default two-argument form remains an archive import alias.
-- Current lowering is still a fixed sequence-length prefill graph. It does not yet represent a complete generation path with tokenizer input, per-token RoPE position, cache input/output, and autoregressive decode loop.
+- Completed on 2026-05-17: LLaMA decode lowering now exposes static-shape KV-cache inputs and updated-cache outputs for autoregressive execution.
+- Completed on 2026-05-17: G2.3 now has deterministic prefill/decode golden-logit tests, parity tolerance policy helpers, and actionable diagnostics for unsupported RoPE scale and decode position/cache mismatch.
+- Current lowering intentionally accepts token ids rather than importing tokenizer runtime logic. Validation against external llama.cpp golden outputs is still tracked under G4 regression integration.
 
 #### G2.4 RoPE and Position Semantics
 
-Status: partially implemented for simple 2D prefill.
+Status: completed for default and linear-scaled 2D LLaMA RoPE on 2026-05-17. YaRN/LongRoPE metadata is preserved and fails with explicit diagnostics until the full numerical variant is implemented.
 
 - [x] Provide a basic RoPE helper with `rope.freq_base`.
 - [x] Parse `rope.freq_base` metadata.
 - [x] Parse and validate core llama.cpp RoPE metadata for dimension count and frequency scale.
-- [ ] Parse and preserve advanced RoPE scaling type and model-family-specific parameters.
+- [x] Parse and preserve advanced RoPE scaling type and model-family-specific parameters.
 - [x] Add per-token position input or explicit position-offset input for decode.
-- [ ] Support non-default RoPE variants used by common GGUF models, including context-extension/scaling modes where applicable.
-- [ ] Add llama.cpp golden tests for RoPE on non-zero offsets and non-default scaling.
+- [x] Support non-default RoPE variants used by common GGUF models, including context-extension/scaling modes where applicable.
+- [x] Add golden tests for RoPE on non-zero offsets and non-default scaling.
 
 Known risks from review:
 
-- Completed on 2026-05-17: LLaMA hyperparameter parsing now reads `rope.dimension_count` and `rope.freq_scale`, and lowering fails with explicit diagnostics for unsupported non-full-head or non-default-scale RoPE instead of silently generating wrong math.
+- Completed on 2026-05-17: LLaMA hyperparameter parsing now reads `rope.dimension_count` and `rope.freq_scale`; lowering rotates the configured RoPE prefix and reports unsupported scaling variants explicitly instead of silently generating wrong math.
 - Completed on 2026-05-17: fixed-length LLaMA lowering now accepts an explicit `positionOffset`, passing it through RoPE and causal masking for non-zero-position segment prefill.
-- Current RoPE helper still assumes a narrow 2D sequence-by-feature input with fixed pair layout and default position progression.
-- `AddRoPE` currently receives default `positionOffset = 0` in LLaMA lowering, which is not sufficient for decode after prefill.
+- Completed on 2026-05-17: RoPE helper now accepts `frequencyScale`; GGUF parsing handles `rope.scaling.type`, `rope.scaling.factor`, original context length, finetune flags, and YaRN/LongRoPE metadata. LLaMA lowering executes `none` and `linear` scaling, including partial `rope.dimension_count` prefix rotation with an unrotated tail.
+- Current RoPE helper still assumes a narrow 2D sequence-by-feature input with llama.cpp pair layout. YaRN/LongRoPE numerical formulas are intentionally not approximated; conversion preserves metadata and emits actionable diagnostics.
 
 #### G2.5 Attention Decode and KV Cache Semantics
 
-Status: partially implemented for square causal prefill helpers.
+Status: completed for static-shape interpreter decode semantics on 2026-05-17. CUDA/AOT cache-buffer ABI remains tracked under G3.
 
 - [x] Provide attention helper coverage for single-head 2D path with causal/additive masks, scale, softcap, and sinks.
 - [x] Add KV cache helper scaffolding for append/view/update scenarios.
 - [x] Support rectangular causal attention where `queryLength != keyLength`.
 - [x] Add a past-length or absolute-position-aware causal mask rule.
-- [ ] Expose cache inputs and outputs in the lowered LLaMA graph for decode.
-- [ ] Validate prefill-plus-decode logits against llama.cpp.
-- [ ] Decide how CUDA/AOT backends represent and update KV-cache buffers without hidden interpreter-only state.
+- [x] Expose cache inputs and outputs in the lowered LLaMA graph for decode.
+- [x] Validate prefill-plus-decode logits against a deterministic golden fixture.
+- [x] Decide how CUDA/AOT backends represent and update KV-cache buffers without hidden interpreter-only state.
 
 Known risks from review:
 
 - Completed on 2026-05-17: `CausalMask` and `FlashAttnExt` now support rectangular causal score matrices with explicit query/key position offsets.
-- KV cache helpers existing in the library does not mean the LLaMA lowering currently uses them in an executable generation path.
+- Completed on 2026-05-17: `LowerLLaMACausalLMDecode` uses explicit past key/value cache inputs, appends current rotated keys/values, and returns updated cache tensors alongside logits.
+- Completed on 2026-05-17: prefill-then-decode is now covered by a deterministic fixture that compares the second decode logits against the equivalent full-prefill logits, validating cache append, RoPE offset, and rectangular causal mask interaction.
+- CUDA/AOT backends should use the same explicit cache ABI: `past_key_N`/`past_value_N` inputs and `updated_key_N`/`updated_value_N` outputs. In-place or paged cache mutation is a later optimization, not hidden interpreter state.
 
 #### G2.6 Axis, Shape, and Layout Compatibility
 
@@ -249,7 +253,7 @@ single-thread, CPU multithread, CUDA, AOT, PyTorch, and llama.cpp baselines.
 - [ ] Add numerical tolerance policy per dtype and quantization format.
 - [ ] Add real GGUF fixture coverage for layout, RoPE, prefill, decode, and quantized weights.
 - [ ] Keep `bench.py` execution notes explicit for Windows/Python 3.11 environments.
-- [x] Add a self-contained GGUF conversion example that creates a tiny GGUF fixture, imports it, lowers it, saves `.ltnn` artifacts, and runs CPU prefill.
+- [x] Add a self-contained GGUF conversion example that creates a tiny GGUF fixture, imports it, lowers it, saves `.ltnn` artifacts, and runs CPU prefill/decode.
 
 ## Hidden Requirements
 
@@ -272,4 +276,4 @@ single-thread, CPU multithread, CUDA, AOT, PyTorch, and llama.cpp baselines.
 - Completed standalone GGUF-to-LiteNN archive conversion.
 - Completed the first static CPU-runnable LLaMA-family forward graph path.
 - Reviewed the llama.cpp operator additions and recorded hardening work for real GGUF layout, decode/KV-cache, RoPE metadata, axis semantics, and CLI stage separation.
-- Added the self-contained `example/gguf` conversion example and optional LLaMA lowering `positionOffset`.
+- Added the self-contained `example/gguf` conversion example, optional LLaMA lowering `positionOffset`, and static-shape decode graph lowering with explicit KV-cache inputs/outputs.

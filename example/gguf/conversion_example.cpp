@@ -157,12 +157,15 @@ int main(int argc, char** argv)
 		const auto ggufPath = WriteTinyLLaMAGGUF(outputDir / "tiny_llama.gguf");
 		const auto archivePath = outputDir / "tiny_llama.archive.ltnn";
 		const auto loweredPath = outputDir / "tiny_llama.prefill.ltnn";
+		const auto decodePath = outputDir / "tiny_llama.decode.ltnn";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
 		LiteNN::Serialization::SaveModel(imported.graph, archivePath);
 
 		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, 2);
 		LiteNN::Serialization::SaveModel(lowered, loweredPath);
+		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, 1, 1, 1);
+		LiteNN::Serialization::SaveModel(decode, decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
 		LiteNN::CPU cpu;
@@ -174,11 +177,28 @@ int main(int argc, char** argv)
 		std::array<LiteNN::Tensor<LiteNN::CPU>, 1> inputs = { std::move(tokenIds) };
 		const auto outputs = interpreter.RunForward(lowered, inputs);
 
+		LiteNN::Tensor<LiteNN::CPU> decodeTokenIds(LiteNN::Uninitialized, { 1 }, LiteNN::DataType::Int32, cpu);
+		const std::array<std::int32_t, 1> decodeTokenIdValues = { 2 };
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, decodeTokenIds.RawData(),
+		                                               LiteNN::DataType::Int32, decodeTokenIdValues.data(),
+		                                               decodeTokenIdValues.size());
+		LiteNN::Tensor<LiteNN::CPU> pastKeys({ 0.0F, 0.0F }, { 1, 1, 2 });
+		LiteNN::Tensor<LiteNN::CPU> pastValues({ 0.0F, 0.0F }, { 1, 1, 2 });
+		std::array<LiteNN::Tensor<LiteNN::CPU>, 3> decodeInputs = {
+			std::move(decodeTokenIds),
+			std::move(pastKeys),
+			std::move(pastValues),
+		};
+		const auto decodeOutputs = interpreter.RunForward(decode, decodeInputs);
+
 		std::cout << "Imported " << imported.summary.tensorCount << " tensors and "
 		          << imported.summary.metadataCount << " metadata entries\n";
 		std::cout << "Archive: " << archivePath.string() << '\n';
 		std::cout << "Lowered prefill graph: " << loweredPath.string() << '\n';
+		std::cout << "Lowered decode graph: " << decodePath.string() << '\n';
 		std::cout << "Logits shape: [" << outputs[0].Shape()[0] << ", " << outputs[0].Shape()[1] << "]\n";
+		std::cout << "Decode updated key shape: [" << decodeOutputs[1].Shape()[0] << ", "
+		          << decodeOutputs[1].Shape()[1] << ", " << decodeOutputs[1].Shape()[2] << "]\n";
 		return 0;
 	}
 	catch (const std::exception& ex)

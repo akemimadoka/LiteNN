@@ -6,11 +6,14 @@
 #include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -55,6 +58,19 @@ namespace
 	float ReadFloat(const Tensor<PolymorphicDevice>& tensor, std::size_t index)
 	{
 		return ReadFloat(tensor.CopyToDevice(CPU{}), index);
+	}
+
+	template <Device D>
+	void ExpectTensorNear(const Tensor<D>& tensor, std::span<const float> expected,
+	                      GGUF::LLaMAParityTolerance tolerance)
+	{
+		ASSERT_EQ(tensor.NumElements(), expected.size());
+		for (std::size_t i = 0; i < expected.size(); ++i)
+		{
+			const auto actual = ReadFloat(tensor, i);
+			const auto allowed = tolerance.absolute + tolerance.relative * std::fabs(expected[i]);
+			EXPECT_LE(std::fabs(actual - expected[i]), allowed) << "at element " << i;
+		}
 	}
 
 	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
@@ -391,6 +407,33 @@ namespace
 		}
 		return copy;
 	}
+
+	Graph CopyArchiveWithMetadataOverride(const Graph& archive, std::string key, ModelMetadataValue value)
+	{
+		Graph copy;
+		std::vector<ModelMetadataEntry> metadata(archive.Metadata().begin(), archive.Metadata().end());
+		bool replaced = false;
+		for (auto& entry : metadata)
+		{
+			if (entry.key == key)
+			{
+				entry.value = std::move(value);
+				replaced = true;
+				break;
+			}
+		}
+		if (!replaced)
+		{
+			metadata.push_back({ std::move(key), std::move(value) });
+		}
+		copy.SetMetadata(std::move(metadata));
+		for (std::size_t i = 0; i < archive.VariableCount(); ++i)
+		{
+			const auto index = copy.AddVariable(archive.GetVariable(i));
+			copy.SetVariableName(index, archive.VariableName(i));
+		}
+		return copy;
+	}
 } // namespace
 
 TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
@@ -569,6 +612,34 @@ TEST(GGUFLLaMAHyperparameters, UsesExplicitKVHeadCountAndRopeBase)
 	EXPECT_EQ(hyperparameters.QueryGroupsPerKVHead(), 4u);
 }
 
+TEST(GGUFLLaMAHyperparameters, ParsesRopeScalingMetadata)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 8192 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	    { "llama.rope.scaling.type", std::string("linear") },
+	    { "llama.rope.scaling.factor", 4.0 },
+	    { "llama.rope.scaling.original_context_length", std::uint64_t{ 2048 } },
+	    { "llama.rope.scaling.finetuned", true },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	EXPECT_EQ(hyperparameters.ropeScalingType, "linear");
+	ASSERT_TRUE(hyperparameters.ropeScalingFactor);
+	EXPECT_DOUBLE_EQ(*hyperparameters.ropeScalingFactor, 4.0);
+	EXPECT_DOUBLE_EQ(hyperparameters.ropeFrequencyScale, 0.25);
+	ASSERT_TRUE(hyperparameters.ropeScalingOriginalContextLength);
+	EXPECT_EQ(*hyperparameters.ropeScalingOriginalContextLength, 2048u);
+	ASSERT_TRUE(hyperparameters.ropeScalingFinetuned);
+	EXPECT_TRUE(*hyperparameters.ropeScalingFinetuned);
+}
+
 TEST(GGUFLLaMAHyperparameters, RejectsMissingRequiredMetadata)
 {
 	Graph graph;
@@ -660,6 +731,24 @@ TEST(GGUFLLaMACausalLM, LowersFullGraphAndRunsCPUForwardOnTokenIds)
 	EXPECT_NEAR(ReadFloat(outputs[0], 5), 0.0f, 1e-5f);
 }
 
+TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenPrefillLogits)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
+	const auto outputs = interpreter.RunForward(lowered, inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+
+	const float expectedScalar = 1.0f / std::sqrt(0.25f + 1.0e-6f);
+	const std::array<float, 6> goldenLogits = {
+		expectedScalar, 0.0f, 0.0f,
+		0.0f, expectedScalar, 0.0f,
+	};
+	ExpectTensorNear(outputs[0], goldenLogits, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+}
+
 TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 {
 	const auto archive = BuildTinyLLaMAArchive();
@@ -676,6 +765,148 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 0.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 1), 0.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 2), expected, 1e-4f);
+}
+
+TEST(GGUFLLaMACausalLM, LowersDecodeGraphWithExplicitKVCacheInputsAndOutputs)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLMDecode(archive, 1, 1, 1);
+
+	ASSERT_EQ(lowered.InputSignature().size(), 3u);
+	ASSERT_EQ(lowered.OutputSignature().size(), 3u);
+	EXPECT_EQ(lowered.InputName(0), "token_ids");
+	EXPECT_EQ(lowered.InputName(1), "past_key_0");
+	EXPECT_EQ(lowered.InputName(2), "past_value_0");
+	EXPECT_EQ(lowered.OutputName(0), "logits");
+	EXPECT_EQ(lowered.OutputName(1), "updated_key_0");
+	EXPECT_EQ(lowered.OutputName(2), "updated_value_0");
+
+	Runtime::Interpreter<CPU> interpreter;
+	const std::vector<float> zeroCache{ 0.0f, 0.0f };
+	std::array<Tensor<CPU>, 3> inputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+	};
+	const auto outputs = interpreter.RunForward(lowered, inputs);
+	ASSERT_EQ(outputs.size(), 3u);
+	EXPECT_EQ(outputs[0].Shape().ToOwned(), std::vector<std::size_t>({ 1, 3 }));
+	EXPECT_EQ(outputs[1].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+	EXPECT_EQ(outputs[2].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+}
+
+TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenDecodeLogitsAndCacheUpdate)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLMDecode(archive, 1, 1, 1);
+
+	Runtime::Interpreter<CPU> interpreter;
+	const std::vector<float> zeroCache{ 0.0f, 0.0f };
+	std::array<Tensor<CPU>, 3> inputs = {
+		MakeInt32Tensor({ 2 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+	};
+	const auto outputs = interpreter.RunForward(lowered, inputs);
+	ASSERT_EQ(outputs.size(), 3u);
+
+	const float expectedScalar = 1.0f / std::sqrt(0.25f + 1.0e-6f);
+	const std::array<float, 3> goldenLogits = { 0.0f, 0.0f, expectedScalar };
+	ExpectTensorNear(outputs[0], goldenLogits, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+	EXPECT_EQ(outputs[1].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+	EXPECT_EQ(outputs[2].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+}
+
+TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto fullPrefill = GGUF::LowerLLaMACausalLM(archive, 2);
+	const auto secondStep = GGUF::LowerLLaMACausalLMDecode(archive, 1, 1, 1);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> fullInputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
+	const auto fullOutputs = interpreter.RunForward(fullPrefill, fullInputs);
+	ASSERT_EQ(fullOutputs.size(), 1u);
+
+	const std::vector<float> oneTokenPastCache{ 0.0f, 0.0f };
+	std::array<Tensor<CPU>, 3> secondInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeFloatTensor(oneTokenPastCache, { 1, 1, 2 }),
+		MakeFloatTensor(oneTokenPastCache, { 1, 1, 2 }),
+	};
+	const auto secondOutputs = interpreter.RunForward(secondStep, secondInputs);
+	ASSERT_EQ(secondOutputs.size(), 3u);
+	EXPECT_EQ(secondOutputs[1].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+	EXPECT_EQ(secondOutputs[2].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
+
+	const std::array<float, 3> fullSecondLogit = {
+		ReadFloat(fullOutputs[0], 3),
+		ReadFloat(fullOutputs[0], 4),
+		ReadFloat(fullOutputs[0], 5),
+	};
+	ExpectTensorNear(secondOutputs[0], fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+}
+
+TEST(GGUFLLaMACausalLM, LowersLinearRopeScaling)
+{
+	auto archive = CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type",
+	                                               std::string("linear"));
+	archive = CopyArchiveWithMetadataOverride(archive, "llama.rope.scaling.factor", 2.0);
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2, 1);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
+	const auto outputs = interpreter.RunForward(lowered, inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_EQ(outputs[0].Shape().ToOwned(), std::vector<std::size_t>({ 2, 3 }));
+}
+
+TEST(GGUFLLaMACausalLM, RejectsUnsupportedRopeScalingTypeWithActionableDiagnostic)
+{
+	const auto archive = CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type",
+	                                                     std::string("yarn"));
+	try
+	{
+		static_cast<void>(GGUF::LowerLLaMACausalLM(archive, 1));
+		FAIL() << "Expected unsupported RoPE scaling type to fail";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("only executes none/linear scaling"), std::string::npos);
+	}
+}
+
+TEST(GGUFLLaMACausalLM, RejectsDecodePositionOffsetMismatchWithActionableDiagnostic)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+
+	try
+	{
+		static_cast<void>(GGUF::LowerLLaMACausalLMDecode(archive, 1, 2, 1));
+		FAIL() << "Expected unsupported decode cache position mismatch to fail";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("positionOffset == pastLength"), std::string::npos);
+	}
+}
+
+TEST(GGUFLLaMACausalLM, DefinesParityToleranceByDTypeAndQuantizationFormat)
+{
+	const auto f32 = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+	EXPECT_LE(f32.absolute, 1.0e-5);
+	EXPECT_LE(f32.relative, 1.0e-5);
+
+	const auto f16 = GGUF::GetLLaMAParityTolerance(DataType::Float16);
+	EXPECT_GT(f16.absolute, f32.absolute);
+	EXPECT_GT(f16.relative, f32.relative);
+
+	const auto q8 = GGUF::GetLLaMAParityTolerance(DataType::Float32, QuantizedBlockFormat::GGML_Q8_0);
+	const auto q4 = GGUF::GetLLaMAParityTolerance(DataType::Float32, QuantizedBlockFormat::GGML_Q4_0);
+	EXPECT_GT(q8.absolute, f32.absolute);
+	EXPECT_GT(q4.absolute, q8.absolute);
 }
 
 TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)

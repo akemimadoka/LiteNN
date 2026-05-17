@@ -1270,6 +1270,21 @@ TEST(LayerRoPE, RotatesPairsAtPositionOne)
 	EXPECT_NEAR(ReadFloat(result, 7), cos1, 1e-5f);
 }
 
+TEST(LayerRoPE, AppliesFrequencyScale)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, 1.0, 1, 0.5);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 0.0f, 0.0f, 1.0f, 0.0f }, { 2, 2 });
+	const auto angle = 1.0f;
+	EXPECT_NEAR(ReadFloat(result, 2), std::cos(angle), 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 3), std::sin(angle), 1e-5f);
+}
+
 TEST(LayerRoPE, RejectsOddFeatureSize)
 {
 	Graph graph;

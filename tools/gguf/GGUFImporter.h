@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 
 #ifndef LITENN_GGUFIMPORTER_H
 #define LITENN_GGUFIMPORTER_H
@@ -21,6 +22,17 @@ namespace LiteNN::GGUF
 		double ropeFrequencyBase{ 10000.0 };
 		double ropeFrequencyScale{ 1.0 };
 		std::size_t ropeDimensionCount{};
+		std::string ropeScalingType{ "none" };
+		std::optional<double> ropeScalingFactor;
+		std::optional<double> ropeScalingAlpha;
+		std::optional<double> ropeScalingAttentionFactor;
+		std::optional<std::size_t> ropeScalingOriginalContextLength;
+		std::optional<bool> ropeScalingFinetuned;
+		std::optional<double> ropeScalingYarnLogMultiplier;
+		std::optional<double> ropeScalingYarnExtFactor;
+		std::optional<double> ropeScalingYarnAttentionFactor;
+		std::optional<double> ropeScalingYarnBetaFast;
+		std::optional<double> ropeScalingYarnBetaSlow;
 
 		std::size_t HeadDimension() const;
 		std::size_t QueryGroupsPerKVHead() const;

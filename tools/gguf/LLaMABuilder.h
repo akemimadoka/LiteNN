@@ -3,6 +3,8 @@
 #include <LiteNN/Layer/Layer.h>
 
 #include <cstddef>
+#include <optional>
+#include <span>
 #include <vector>
 
 #ifndef LITENN_LLAMABUILDER_H
@@ -32,6 +34,20 @@ namespace LiteNN::GGUF
 		Layer::LinearLayer lmHead;
 	};
 
+	struct LLaMADecodeResult
+	{
+		NodeOutput hiddenState;
+		std::vector<Layer::KVCachePair> updatedCaches;
+	};
+
+	struct LLaMAParityTolerance
+	{
+		double absolute;
+		double relative;
+	};
+
+	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,
+	                                             std::optional<QuantizedBlockFormat> blockFormat = std::nullopt);
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
 	                                         const LLaMAHyperparameters& hyperparameters,
 	                                         std::size_t blockIndex);
@@ -47,10 +63,16 @@ namespace LiteNN::GGUF
 	NodeOutput AddLLaMACausalLM(Subgraph& subgraph, const LLaMACausalLM& model,
 	                           const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
 	                           std::size_t positionOffset = 0);
+	LLaMADecodeResult AddLLaMACausalLMDecode(Subgraph& subgraph, const LLaMACausalLM& model,
+	                                         const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
+	                                         std::span<const Layer::KVCachePair> pastCaches,
+	                                         std::size_t positionOffset);
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model,
 	                            const LLaMAHyperparameters& hyperparameters,
 	                            std::size_t sequenceLength, std::size_t positionOffset = 0);
 	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset = 0);
+	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
+	                               std::size_t positionOffset);
 } // namespace LiteNN::GGUF
 
 #endif

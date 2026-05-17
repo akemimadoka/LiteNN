@@ -2,6 +2,7 @@
 
 #include <LiteNN/Serialization/ModelIO.h>
 
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -134,6 +135,24 @@ namespace LiteNN::GGUF
 				return *value;
 			}
 			throw std::runtime_error(std::format("GGUF metadata key '{}' must be a string", entry.key));
+		}
+
+		bool ReadBoolValue(const ModelMetadataEntry& entry)
+		{
+			if (const auto* value = std::get_if<bool>(&entry.value))
+			{
+				return *value;
+			}
+			throw std::runtime_error(std::format("GGUF metadata key '{}' must be a bool", entry.key));
+		}
+
+		std::string NormalizeRopeScalingType(std::string value)
+		{
+			for (auto& ch : value)
+			{
+				ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+			}
+			return value;
 		}
 
 		struct GGUFContextDeleter
@@ -507,6 +526,7 @@ namespace LiteNN::GGUF
 			.ropeFrequencyBase = 10000.0,
 			.ropeFrequencyScale = 1.0,
 			.ropeDimensionCount = 0,
+			.ropeScalingType = "none",
 		};
 
 		if (const auto headCountKV = FindMetadata(graph, key("attention.head_count_kv")))
@@ -530,6 +550,59 @@ namespace LiteNN::GGUF
 		{
 			hyperparameters.ropeDimensionCount = ReadSizeValue(**ropeDimensionCount);
 		}
+		if (const auto ropeScalingType = FindMetadata(graph, key("rope.scaling.type")))
+		{
+			hyperparameters.ropeScalingType = NormalizeRopeScalingType(ReadStringValue(**ropeScalingType));
+		}
+		if (const auto ropeScalingFactor = FindMetadata(graph, key("rope.scaling.factor")))
+		{
+			hyperparameters.ropeScalingFactor = ReadDoubleValue(**ropeScalingFactor);
+			if (*hyperparameters.ropeScalingFactor < 0.0)
+			{
+				throw std::runtime_error("LLaMA rope.scaling.factor must be non-negative");
+			}
+			hyperparameters.ropeFrequencyScale =
+			    *hyperparameters.ropeScalingFactor == 0.0 ? 1.0 : 1.0 / *hyperparameters.ropeScalingFactor;
+		}
+		if (const auto ropeScalingAlpha = FindMetadata(graph, key("rope.scaling.alpha")))
+		{
+			hyperparameters.ropeScalingAlpha = ReadDoubleValue(**ropeScalingAlpha);
+		}
+		if (const auto ropeScalingAttentionFactor = FindMetadata(graph, key("rope.scaling.attn_factor")))
+		{
+			hyperparameters.ropeScalingAttentionFactor = ReadDoubleValue(**ropeScalingAttentionFactor);
+		}
+		if (const auto ropeScalingOriginalContextLength =
+		        FindMetadata(graph, key("rope.scaling.original_context_length")))
+		{
+			hyperparameters.ropeScalingOriginalContextLength = ReadSizeValue(**ropeScalingOriginalContextLength);
+		}
+		if (const auto ropeScalingFinetuned = FindMetadata(graph, key("rope.scaling.finetuned")))
+		{
+			hyperparameters.ropeScalingFinetuned = ReadBoolValue(**ropeScalingFinetuned);
+		}
+		if (const auto ropeScalingYarnLogMultiplier =
+		        FindMetadata(graph, key("rope.scaling.yarn_log_multiplier")))
+		{
+			hyperparameters.ropeScalingYarnLogMultiplier = ReadDoubleValue(**ropeScalingYarnLogMultiplier);
+		}
+		if (const auto ropeScalingYarnExtFactor = FindMetadata(graph, key("rope.scaling.yarn_ext_factor")))
+		{
+			hyperparameters.ropeScalingYarnExtFactor = ReadDoubleValue(**ropeScalingYarnExtFactor);
+		}
+		if (const auto ropeScalingYarnAttentionFactor =
+		        FindMetadata(graph, key("rope.scaling.yarn_attn_factor")))
+		{
+			hyperparameters.ropeScalingYarnAttentionFactor = ReadDoubleValue(**ropeScalingYarnAttentionFactor);
+		}
+		if (const auto ropeScalingYarnBetaFast = FindMetadata(graph, key("rope.scaling.yarn_beta_fast")))
+		{
+			hyperparameters.ropeScalingYarnBetaFast = ReadDoubleValue(**ropeScalingYarnBetaFast);
+		}
+		if (const auto ropeScalingYarnBetaSlow = FindMetadata(graph, key("rope.scaling.yarn_beta_slow")))
+		{
+			hyperparameters.ropeScalingYarnBetaSlow = ReadDoubleValue(**ropeScalingYarnBetaSlow);
+		}
 
 		if (hyperparameters.contextLength == 0 || hyperparameters.embeddingLength == 0 ||
 		    hyperparameters.blockCount == 0 || hyperparameters.feedForwardLength == 0)
@@ -547,6 +620,12 @@ namespace LiteNN::GGUF
 		if (!(hyperparameters.ropeFrequencyScale > 0.0))
 		{
 			throw std::runtime_error("LLaMA rope.freq_scale must be greater than zero");
+		}
+		if (hyperparameters.ropeScalingType != "none" && hyperparameters.ropeScalingType != "linear" &&
+		    hyperparameters.ropeScalingType != "yarn" && hyperparameters.ropeScalingType != "longrope")
+		{
+			throw std::runtime_error(std::format("Unsupported LLaMA rope.scaling.type '{}'",
+			                                    hyperparameters.ropeScalingType));
 		}
 
 		const auto headDimension = hyperparameters.HeadDimension();

@@ -25,6 +25,7 @@ Command-line conversion for a real file:
 build\tools\gguf\litenn_gguf_convert.exe --import model.gguf model.archive.ltnn
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.prefill.ltnn 16
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.segment.ltnn 4 16
+build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.decode.ltnn 1 16
 ```
 
-Current scope: the lowered graph is a fixed-length prefill graph. Full autoregressive decode with cache inputs/outputs is still tracked in `docs/Roadmap.md`.
+Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

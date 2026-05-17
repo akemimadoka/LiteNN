@@ -16,6 +16,7 @@ namespace
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
 		          << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
+		          << "  " << executable << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
 		          << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
 	}
 
@@ -82,6 +83,23 @@ int main(int argc, char** argv)
 			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, sequenceLength, positionOffset);
 			LiteNN::Serialization::SaveModel(lowered, argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
+			          << imported.summary.metadataCount << " metadata entries\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama-decode")
+		{
+			if (argc != 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
+			const auto pastLength = ParseSize(argv[5], "past-length", true);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, sequenceLength, pastLength, pastLength);
+			LiteNN::Serialization::SaveModel(lowered, argv[3]);
+			std::cout << "Lowered LLaMA decode graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
 			return 0;
 		}

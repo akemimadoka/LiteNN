@@ -20,7 +20,8 @@ namespace LiteNN::Layer
 		};
 
 		inline Tensor<CPU> MakeRoPEAngleTable(std::size_t sequenceLength, std::size_t halfDim, DataType dtype,
-		                                     double base, std::size_t positionOffset, RoPETrig trig)
+		                                     double base, double frequencyScale, std::size_t positionOffset,
+		                                     RoPETrig trig)
 		{
 			std::vector<double> values;
 			values.reserve(sequenceLength * halfDim);
@@ -30,7 +31,7 @@ namespace LiteNN::Layer
 				{
 					const auto exponent = -2.0 * static_cast<double>(dim) / static_cast<double>(halfDim * 2);
 					const auto invFreq = std::pow(base, exponent);
-					const auto angle = static_cast<double>(positionOffset + pos) * invFreq;
+					const auto angle = static_cast<double>(positionOffset + pos) * invFreq * frequencyScale;
 					values.push_back(trig == RoPETrig::Cos ? std::cos(angle) : std::sin(angle));
 				}
 			}
@@ -41,7 +42,7 @@ namespace LiteNN::Layer
 	// Rotary Position Embedding helper.
 	// 当前实现支持 2D 输入 [sequenceLength, featureSize]，并在最后一维上按 pair 做旋转。
 	inline NodeOutput AddRoPE(Subgraph& subgraph, NodeOutput input, double base = 10000.0,
-	                         std::size_t positionOffset = 0)
+	                         std::size_t positionOffset = 0, double frequencyScale = 1.0)
 	{
 		const auto info = subgraph.GetOutputInfo(input); // copy
 		if (info.shape.size() != 2)
@@ -60,6 +61,10 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("RoPE base must be finite and greater than zero");
 		}
+		if (!(std::isfinite(frequencyScale) && frequencyScale > 0.0))
+		{
+			throw std::runtime_error("RoPE frequencyScale must be finite and greater than zero");
+		}
 
 		const auto sequenceLength = info.shape[0];
 		const auto featureSize = info.shape[1];
@@ -75,10 +80,12 @@ namespace LiteNN::Layer
 		    subgraph.AddNode(SliceNode{ { reshaped, 0 }, 2, 1, 1 }, { OutputInfo{ info.dtype, laneShape } });
 
 		const auto cosTable = Detail::AddConstant(
-		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, positionOffset,
+		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, frequencyScale,
+		                                          positionOffset,
 		                                          Detail::RoPETrig::Cos));
 		const auto sinTable = Detail::AddConstant(
-		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, positionOffset,
+		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, frequencyScale,
+		                                          positionOffset,
 		                                          Detail::RoPETrig::Sin));
 
 		const auto firstCos =
@@ -110,11 +117,11 @@ namespace LiteNN::Layer
 	}
 
 	inline SubgraphId BuildRoPE(Graph& graph, DataType dtype, ShapeView shape, double base = 10000.0,
-	                           std::size_t positionOffset = 0)
+	                           std::size_t positionOffset = 0, double frequencyScale = 1.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
-		const auto result = AddRoPE(subgraph, { input, 0 }, base, positionOffset);
+		const auto result = AddRoPE(subgraph, { input, 0 }, base, positionOffset, frequencyScale);
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
 	}
