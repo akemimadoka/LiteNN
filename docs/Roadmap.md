@@ -184,13 +184,14 @@ Status: partially implemented for simple 2D prefill.
 - [x] Parse `rope.freq_base` metadata.
 - [x] Parse and validate core llama.cpp RoPE metadata for dimension count and frequency scale.
 - [ ] Parse and preserve advanced RoPE scaling type and model-family-specific parameters.
-- [ ] Add per-token position input or explicit position-offset input for decode.
+- [x] Add per-token position input or explicit position-offset input for decode.
 - [ ] Support non-default RoPE variants used by common GGUF models, including context-extension/scaling modes where applicable.
 - [ ] Add llama.cpp golden tests for RoPE on non-zero offsets and non-default scaling.
 
 Known risks from review:
 
 - Completed on 2026-05-17: LLaMA hyperparameter parsing now reads `rope.dimension_count` and `rope.freq_scale`, and lowering fails with explicit diagnostics for unsupported non-full-head or non-default-scale RoPE instead of silently generating wrong math.
+- Completed on 2026-05-17: fixed-length LLaMA lowering now accepts an explicit `positionOffset`, passing it through RoPE and causal masking for non-zero-position segment prefill.
 - Current RoPE helper still assumes a narrow 2D sequence-by-feature input with fixed pair layout and default position progression.
 - `AddRoPE` currently receives default `positionOffset = 0` in LLaMA lowering, which is not sufficient for decode after prefill.
 
@@ -248,6 +249,7 @@ single-thread, CPU multithread, CUDA, AOT, PyTorch, and llama.cpp baselines.
 - [ ] Add numerical tolerance policy per dtype and quantization format.
 - [ ] Add real GGUF fixture coverage for layout, RoPE, prefill, decode, and quantized weights.
 - [ ] Keep `bench.py` execution notes explicit for Windows/Python 3.11 environments.
+- [x] Add a self-contained GGUF conversion example that creates a tiny GGUF fixture, imports it, lowers it, saves `.ltnn` artifacts, and runs CPU prefill.
 
 ## Hidden Requirements
 
@@ -270,3 +272,4 @@ single-thread, CPU multithread, CUDA, AOT, PyTorch, and llama.cpp baselines.
 - Completed standalone GGUF-to-LiteNN archive conversion.
 - Completed the first static CPU-runnable LLaMA-family forward graph path.
 - Reviewed the llama.cpp operator additions and recorded hardening work for real GGUF layout, decode/KV-cache, RoPE metadata, axis semantics, and CLI stage separation.
+- Added the self-contained `example/gguf` conversion example and optional LLaMA lowering `positionOffset`.

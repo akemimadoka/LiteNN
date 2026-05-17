@@ -15,19 +15,20 @@ namespace
 	{
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
-		          << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length>\n"
+		          << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
 	}
 
-	std::size_t ParseSize(std::string_view text, std::string_view label)
+	std::size_t ParseSize(std::string_view text, std::string_view label, bool allowZero = false)
 	{
 		std::size_t value{};
 		const auto* first = text.data();
 		const auto* last = text.data() + text.size();
 		const auto result = std::from_chars(first, last, value);
-		if (result.ec != std::errc{} || result.ptr != last || value == 0)
+		if (result.ec != std::errc{} || result.ptr != last || (!allowZero && value == 0))
 		{
-			throw std::runtime_error(std::string(label) + " must be a positive integer");
+			throw std::runtime_error(std::string(label) + (allowZero ? " must be a non-negative integer"
+			                                                        : " must be a positive integer"));
 		}
 		return value;
 	}
@@ -70,13 +71,15 @@ int main(int argc, char** argv)
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama")
 		{
-			if (argc != 5)
+			if (argc != 5 && argc != 6)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
-			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, ParseSize(argv[4], "sequence-length"));
+			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
+			const auto positionOffset = argc == 6 ? ParseSize(argv[5], "position-offset", true) : 0uz;
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, sequenceLength, positionOffset);
 			LiteNN::Serialization::SaveModel(lowered, argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";

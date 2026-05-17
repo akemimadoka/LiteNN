@@ -299,7 +299,7 @@ namespace LiteNN::GGUF
 		}
 
 		NodeOutput AddSingleHeadAttention(Subgraph& subgraph, NodeOutput queries, NodeOutput keys, NodeOutput values,
-		                                 const LLaMAHyperparameters& hyperparameters)
+		                                 const LLaMAHyperparameters& hyperparameters, std::size_t positionOffset)
 		{
 			const auto queryInfo = subgraph.GetOutputInfo(queries);
 			if (queryInfo.shape.size() != 2 || queryInfo.shape != subgraph.GetOutputInfo(keys).shape)
@@ -322,12 +322,15 @@ namespace LiteNN::GGUF
 				    "Current LLaMA lowering does not yet support non-default rope.freq_scale");
 			}
 
-			const auto rotatedQueries = Layer::AddRoPE(subgraph, queries, hyperparameters.ropeFrequencyBase);
-			const auto rotatedKeys = Layer::AddRoPE(subgraph, keys, hyperparameters.ropeFrequencyBase);
+			const auto rotatedQueries =
+			    Layer::AddRoPE(subgraph, queries, hyperparameters.ropeFrequencyBase, positionOffset);
+			const auto rotatedKeys = Layer::AddRoPE(subgraph, keys, hyperparameters.ropeFrequencyBase, positionOffset);
 
 			Layer::FlashAttnExtOptions options;
 			options.scale = 1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1]));
 			options.causal = true;
+			options.keyPositionOffset = positionOffset;
+			options.queryPositionOffset = positionOffset;
 			return Layer::AddFlashAttnExt(subgraph, rotatedQueries, rotatedKeys, values, options);
 		}
 
@@ -375,7 +378,8 @@ namespace LiteNN::GGUF
 	}
 
 	NodeOutput AddLLaMADecoderBlock(Subgraph& subgraph, const LLaMADecoderBlock& block,
-	                               const LLaMAHyperparameters& hyperparameters, NodeOutput hiddenState)
+	                               const LLaMAHyperparameters& hyperparameters, NodeOutput hiddenState,
+	                               std::size_t positionOffset)
 	{
 		const auto hiddenInfo = subgraph.GetOutputInfo(hiddenState);
 		if (hiddenInfo.dtype != block.attentionNorm.dtype || hiddenInfo.shape.size() != 2 ||
@@ -409,7 +413,7 @@ namespace LiteNN::GGUF
 			                                    { OutputInfo{ hiddenInfo.dtype, { hiddenInfo.shape[0], headDim } } }),
 			                                0 };
 			headContexts.push_back(
-			    AddSingleHeadAttention(subgraph, queryHead, keyHead, valueHead, hyperparameters));
+			    AddSingleHeadAttention(subgraph, queryHead, keyHead, valueHead, hyperparameters, positionOffset));
 		}
 
 		NodeOutput mergedContext = headContexts.front();
@@ -432,12 +436,12 @@ namespace LiteNN::GGUF
 
 	SubgraphId BuildLLaMADecoderBlock(Graph& graph, const LLaMADecoderBlock& block,
 	                                const LLaMAHyperparameters& hyperparameters,
-	                                std::size_t sequenceLength)
+	                                std::size_t sequenceLength, std::size_t positionOffset)
 	{
 		Subgraph subgraph;
 		const auto hiddenState = subgraph.AddParam(block.attentionNorm.dtype,
 		                                          { sequenceLength, hyperparameters.embeddingLength });
-		const auto result = AddLLaMADecoderBlock(subgraph, block, hyperparameters, { hiddenState, 0 });
+		const auto result = AddLLaMADecoderBlock(subgraph, block, hyperparameters, { hiddenState, 0 }, positionOffset);
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
 	}
@@ -522,12 +526,13 @@ namespace LiteNN::GGUF
 	}
 
 	NodeOutput AddLLaMACausalLM(Subgraph& subgraph, const LLaMACausalLM& model,
-	                           const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds)
+	                           const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
+	                           std::size_t positionOffset)
 	{
 		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
 		for (const auto& block : model.blocks)
 		{
-			hiddenState = AddLLaMADecoderBlock(subgraph, block, hyperparameters, hiddenState);
+			hiddenState = AddLLaMADecoderBlock(subgraph, block, hyperparameters, hiddenState, positionOffset);
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		return Layer::AddLinear(subgraph, model.lmHead, normalized);
@@ -535,22 +540,22 @@ namespace LiteNN::GGUF
 
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model,
 	                            const LLaMAHyperparameters& hyperparameters,
-	                            std::size_t sequenceLength)
+	                            std::size_t sequenceLength, std::size_t positionOffset)
 	{
 		Subgraph subgraph;
 		const auto tokenIds = subgraph.AddParam(DataType::Int32, { sequenceLength });
-		const auto logits = AddLLaMACausalLM(subgraph, model, hyperparameters, { tokenIds, 0 });
+		const auto logits = AddLLaMACausalLM(subgraph, model, hyperparameters, { tokenIds, 0 }, positionOffset);
 		subgraph.SetResults({ logits });
 		return graph.AddSubgraph(std::move(subgraph));
 	}
 
-	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength)
+	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset)
 	{
 		auto graph = Graph{};
 		graph.SetMetadata(CopyMetadata(archive));
 		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
 		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters);
-		const auto forward = BuildLLaMACausalLM(graph, model, hyperparameters, sequenceLength);
+		const auto forward = BuildLLaMACausalLM(graph, model, hyperparameters, sequenceLength, positionOffset);
 		graph.SetForward(forward);
 		graph.SetInputNames({ "token_ids" });
 		graph.SetOutputNames({ "logits" });

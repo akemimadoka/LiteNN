@@ -253,9 +253,14 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(third_party/googletest)
 
+if(LITENN_BUILD_TOOLS)
+    add_subdirectory(tools/gguf)
+endif()
+
 if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
     add_subdirectory(example/carrier)
+    add_subdirectory(example/gguf)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
@@ -266,10 +271,6 @@ if(LITENN_BUILD_BENCHMARKS)
     set(BENCHMARK_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "Disable bundled benchmark dependency downloads" FORCE)
     add_subdirectory(third_party/benchmark EXCLUDE_FROM_ALL)
     add_subdirectory(benchmark)
-endif()
-
-if(LITENN_BUILD_TOOLS)
-    add_subdirectory(tools/gguf)
 endif()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
