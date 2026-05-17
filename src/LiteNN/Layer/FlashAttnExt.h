@@ -24,6 +24,8 @@ namespace LiteNN::Layer
 		std::size_t headIndex = 0;
 		std::size_t headCount = 1;
 		bool causal = false;
+		std::size_t keyPositionOffset = 0;
+		std::size_t queryPositionOffset = 0;
 	};
 
 	namespace Detail
@@ -163,12 +165,8 @@ namespace LiteNN::Layer
 
 		if (options.causal)
 		{
-			const auto scoreInfo = subgraph.GetOutputInfo(scoreOutput);
-			if (scoreInfo.shape[0] != scoreInfo.shape[1])
-			{
-				throw std::runtime_error("FlashAttnExt causal mode requires a square score matrix");
-			}
-			scoreOutput = AddCausalMask(subgraph, scoreOutput);
+			scoreOutput = AddCausalMask(subgraph, scoreOutput, -1.0e9, options.keyPositionOffset,
+			                            options.queryPositionOffset);
 		}
 
 		std::optional<NodeOutput> typedSinks;

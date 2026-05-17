@@ -929,9 +929,13 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "ArgsortNode does not support Bool tensors");
 			}
-			if (input.shape[0] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			if (node.axis >= input.shape.size())
 			{
-				Fail(subgraphId, nodeId, "ArgsortNode first dimension exceeds Int32 index range");
+				Fail(subgraphId, nodeId, std::format("ArgsortNode axis {} out of range for rank {}", node.axis, input.shape.size()));
+			}
+			if (input.shape[node.axis] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode sort dimension exceeds Int32 index range");
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Int32, input.shape }, "ArgsortNode output");
 		}

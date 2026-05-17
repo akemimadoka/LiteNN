@@ -7,6 +7,9 @@
 
 namespace LiteNN::Layer
 {
+	// Add ggml-compatible MUL_MAT_ID lowering. Shapes follow ggml order:
+	// as=[k, m, expertCount], b=[k, usedExpertSlots, tokenCount], ids=[usedExperts, tokenCount].
+	// The result is always Float32 [m, usedExperts, tokenCount] to match the interpreter accumulator.
 	inline NodeOutput AddMulMatId(Subgraph& subgraph, NodeOutput as, NodeOutput b, NodeOutput ids)
 	{
 		const auto asInfo = subgraph.GetOutputInfo(as);

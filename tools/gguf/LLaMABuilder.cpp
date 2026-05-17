@@ -112,7 +112,7 @@ namespace LiteNN::GGUF
 				totalElements *= dim;
 			}
 
-			const auto rowSize = params.expressedShape.front();
+			const auto rowSize = params.expressedShape.back();
 			if (rowSize == 0 || totalElements % rowSize != 0)
 			{
 				throw std::runtime_error(std::format(
@@ -209,41 +209,79 @@ namespace LiteNN::GGUF
 		Layer::LinearLayer MakeLinearFromArchive(Graph& target, const Graph& archive, std::string_view name,
 		                                       std::size_t inFeatures, std::size_t outFeatures)
 		{
-			const auto variableIndex = ImportNamedVariable(target, archive, name);
-			const auto& variable = RequirePlainFloatingVariable(target, variableIndex, name);
-			if (variable.Data().Shape().NumDim() != 2 || variable.Data().Shape()[0] != inFeatures ||
-			    variable.Data().Shape()[1] != outFeatures)
+			const auto sourceIndex = archive.FindVariable(name);
+			if (!sourceIndex)
 			{
-				throw std::runtime_error(std::format(
-				    "GGUF tensor '{}' must have shape [{}, {}] for current LLaMA block lowering", name, inFeatures,
-				    outFeatures));
+				throw std::runtime_error(std::format("Missing GGUF tensor '{}'", name));
 			}
 
+			auto materialized = MaterializeArchiveVariable(archive, *sourceIndex, name);
+			if (materialized->IsQuantized() || !IsFloatingDataType(materialized->Data().DType()))
+			{
+				throw std::runtime_error(std::format(
+				    "GGUF tensor '{}' must be floating-point for current LLaMA block lowering", name));
+			}
+
+			auto data = materialized->Data().CopyToDevice(CPU{});
+			if (data.Shape().NumDim() == 2 && data.Shape()[0] == outFeatures && data.Shape()[1] == inFeatures)
+			{
+				data = data.Transpose();
+				materialized = Variable::Create(std::move(data));
+			}
+			else if (data.Shape().NumDim() != 2 || data.Shape()[0] != inFeatures || data.Shape()[1] != outFeatures)
+			{
+				throw std::runtime_error(std::format(
+				    "GGUF tensor '{}' must have LiteNN shape [{}, {}] or imported GGUF shape [{}, {}] for current LLaMA block lowering",
+				    name, inFeatures, outFeatures, outFeatures, inFeatures));
+			}
+
+			const auto variableIndex = target.AddVariable(std::move(materialized));
+			target.SetVariableName(variableIndex, std::string(name));
 			return {
 				.weightVariable = variableIndex,
 				.biasVariable = std::nullopt,
 				.inFeatures = inFeatures,
 				.outFeatures = outFeatures,
-				.dtype = variable.Data().DType(),
+				.dtype = target.GetVariable(variableIndex)->Data().DType(),
 			};
 		}
 
 		Layer::RMSNormLayer MakeRMSNormFromArchive(Graph& target, const Graph& archive, std::string_view name,
 		                                         std::size_t featureSize, double eps)
 		{
-			const auto variableIndex = ImportNamedVariable(target, archive, name);
-			const auto& variable = RequirePlainFloatingVariable(target, variableIndex, name);
-			if (variable.Data().Shape().NumDim() != 2 || variable.Data().Shape()[0] != 1 ||
-			    variable.Data().Shape()[1] != featureSize)
+			const auto sourceIndex = archive.FindVariable(name);
+			if (!sourceIndex)
 			{
-				throw std::runtime_error(std::format(
-				    "GGUF tensor '{}' must have shape [1, {}] for current LLaMA block lowering", name, featureSize));
+				throw std::runtime_error(std::format("Missing GGUF tensor '{}'", name));
 			}
 
+			auto materialized = MaterializeArchiveVariable(archive, *sourceIndex, name);
+			if (materialized->IsQuantized() || !IsFloatingDataType(materialized->Data().DType()))
+			{
+				throw std::runtime_error(std::format(
+				    "GGUF tensor '{}' must be floating-point for current LLaMA block lowering", name));
+			}
+
+			auto data = materialized->Data().CopyToDevice(CPU{});
+			const auto shape = data.Shape();
+			if (shape.NumDim() == 1 && shape[0] == featureSize)
+			{
+				data.Reshape({ 1, featureSize });
+				materialized = Variable::Create(std::move(data));
+			}
+			else if (!(shape.NumDim() == 2 && shape[0] == 1 && shape[1] == featureSize))
+			{
+				throw std::runtime_error(std::format(
+				    "GGUF tensor '{}' must have shape [{}] or [1, {}] for current LLaMA block lowering", name,
+				    featureSize, featureSize));
+			}
+
+			const auto variableIndex = target.AddVariable(std::move(materialized));
+			target.SetVariableName(variableIndex, std::string(name));
 			return {
 				.weightVariable = variableIndex,
 				.featureSize = featureSize,
-				.dtype = variable.Data().DType(),
+				.dtype = target.GetVariable(variableIndex)->Data().DType(),
 				.eps = eps,
 			};
 		}
@@ -261,7 +299,7 @@ namespace LiteNN::GGUF
 		}
 
 		NodeOutput AddSingleHeadAttention(Subgraph& subgraph, NodeOutput queries, NodeOutput keys, NodeOutput values,
-		                                 double ropeFrequencyBase)
+		                                 const LLaMAHyperparameters& hyperparameters)
 		{
 			const auto queryInfo = subgraph.GetOutputInfo(queries);
 			if (queryInfo.shape.size() != 2 || queryInfo.shape != subgraph.GetOutputInfo(keys).shape)
@@ -273,9 +311,19 @@ namespace LiteNN::GGUF
 			{
 				throw std::runtime_error("Single-head attention expects value tensor shape [sequence, headDim]");
 			}
+			if (hyperparameters.ropeDimensionCount != queryInfo.shape[1])
+			{
+				throw std::runtime_error(
+				    "Current LLaMA lowering only supports full-head RoPE; unsupported rope.dimension_count");
+			}
+			if (hyperparameters.ropeFrequencyScale != 1.0)
+			{
+				throw std::runtime_error(
+				    "Current LLaMA lowering does not yet support non-default rope.freq_scale");
+			}
 
-			const auto rotatedQueries = Layer::AddRoPE(subgraph, queries, ropeFrequencyBase);
-			const auto rotatedKeys = Layer::AddRoPE(subgraph, keys, ropeFrequencyBase);
+			const auto rotatedQueries = Layer::AddRoPE(subgraph, queries, hyperparameters.ropeFrequencyBase);
+			const auto rotatedKeys = Layer::AddRoPE(subgraph, keys, hyperparameters.ropeFrequencyBase);
 
 			Layer::FlashAttnExtOptions options;
 			options.scale = 1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1]));
@@ -361,7 +409,7 @@ namespace LiteNN::GGUF
 			                                    { OutputInfo{ hiddenInfo.dtype, { hiddenInfo.shape[0], headDim } } }),
 			                                0 };
 			headContexts.push_back(
-			    AddSingleHeadAttention(subgraph, queryHead, keyHead, valueHead, hyperparameters.ropeFrequencyBase));
+			    AddSingleHeadAttention(subgraph, queryHead, keyHead, valueHead, hyperparameters));
 		}
 
 		NodeOutput mergedContext = headContexts.front();
@@ -399,13 +447,20 @@ namespace LiteNN::GGUF
 	{
 		const auto tokenEmbeddingVariable = ImportNamedVariable(graph, archive, "token_embd.weight");
 		const auto& tokenEmbedding = RequirePlainFloatingVariable(graph, tokenEmbeddingVariable, "token_embd.weight");
-		if (tokenEmbedding.Data().Shape().NumDim() != 2 || tokenEmbedding.Data().Shape()[0] != hyperparameters.embeddingLength)
+		if (tokenEmbedding.Data().Shape().NumDim() != 2)
+		{
+			throw std::runtime_error("GGUF tensor 'token_embd.weight' must be 2D for current LLaMA lowering");
+		}
+		const auto tokenEmbeddingShape = tokenEmbedding.Data().Shape();
+		const auto vocabMajor = tokenEmbeddingShape[1] == hyperparameters.embeddingLength;
+		const auto featureMajor = tokenEmbeddingShape[0] == hyperparameters.embeddingLength;
+		if (!vocabMajor && !featureMajor)
 		{
 			throw std::runtime_error(std::format(
-			    "GGUF tensor 'token_embd.weight' must have shape [{}, vocab] for current LLaMA lowering",
-			    hyperparameters.embeddingLength));
+			    "GGUF tensor 'token_embd.weight' must have LiteNN shape [vocab, {}] or legacy shape [{}, vocab] for current LLaMA lowering",
+			    hyperparameters.embeddingLength, hyperparameters.embeddingLength));
 		}
-		const auto vocabSize = tokenEmbedding.Data().Shape()[1];
+		const auto vocabSize = vocabMajor ? tokenEmbeddingShape[0] : tokenEmbeddingShape[1];
 		if (vocabSize == 0)
 		{
 			throw std::runtime_error("GGUF tensor 'token_embd.weight' must have a non-zero vocabulary dimension");
@@ -414,6 +469,7 @@ namespace LiteNN::GGUF
 		LLaMACausalLM model;
 		model.tokenEmbeddingVariable = tokenEmbeddingVariable;
 		model.vocabSize = vocabSize;
+		model.tokenEmbeddingIsVocabMajor = vocabMajor;
 		model.dtype = tokenEmbedding.Data().DType();
 		model.blocks.reserve(hyperparameters.blockCount);
 		for (std::size_t blockIndex = 0; blockIndex < hyperparameters.blockCount; ++blockIndex)
@@ -450,12 +506,17 @@ namespace LiteNN::GGUF
 			throw std::runtime_error("LLaMA token id input must be 1D [sequence] with Int32 or Int64 dtype");
 		}
 
-		const std::vector<std::size_t> tokenEmbeddingShape{ model.outputNorm.featureSize, model.vocabSize };
+		const std::vector<std::size_t> tokenEmbeddingShape = model.tokenEmbeddingIsVocabMajor
+		                                                       ? std::vector<std::size_t>{ model.vocabSize,
+		                                                                                   model.outputNorm.featureSize }
+		                                                       : std::vector<std::size_t>{ model.outputNorm.featureSize,
+		                                                                                   model.vocabSize };
 		const auto tokenEmbedding = subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
 		                                           { OutputInfo{ model.dtype, tokenEmbeddingShape } });
-		const auto tokenEmbeddingT = AddTranspose(subgraph, { tokenEmbedding, 0 });
+		const auto tokenEmbeddingRows =
+		    model.tokenEmbeddingIsVocabMajor ? NodeOutput{ tokenEmbedding, 0 } : AddTranspose(subgraph, { tokenEmbedding, 0 });
 		const auto hiddenState = subgraph.AddNode(
-		    GetRowsNode{ tokenEmbeddingT, tokenIds },
+		    GetRowsNode{ tokenEmbeddingRows, tokenIds },
 		    { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
 		return { hiddenState, 0 };
 	}

@@ -210,14 +210,16 @@ namespace LiteNN
 			NodeOutput indices;
 		};
 
-		// 沿第一维对每个 trailing position 独立排序，输出对应的 Int32 索引
+		// 沿指定轴对每个剩余位置独立排序，输出对应的 Int32 索引
 		struct ArgsortNode
 		{
 			NodeOutput input;
+			std::size_t axis = 0;
 			SortOrder order;
 		};
 
-		// 多 expert 矩阵中按 ids 选择对应矩阵，与每个 token 的输入向量做矩阵乘。
+		// ggml-compatible MoE helper: 多 expert 矩阵中按 ids 选择对应矩阵，与每个 token 的输入向量做矩阵乘。
+		// 该节点保留 ggml MUL_MAT_ID 的维度约定，并使用 Float32 累加/输出。
 		struct MulMatIdNode
 		{
 			NodeOutput as;

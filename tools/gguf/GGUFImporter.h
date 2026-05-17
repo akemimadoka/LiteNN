@@ -19,6 +19,8 @@ namespace LiteNN::GGUF
 		std::size_t attentionHeadCountKV{};
 		double rmsNormEpsilon{};
 		double ropeFrequencyBase{ 10000.0 };
+		double ropeFrequencyScale{ 1.0 };
+		std::size_t ropeDimensionCount{};
 
 		std::size_t HeadDimension() const;
 		std::size_t QueryGroupsPerKVHead() const;

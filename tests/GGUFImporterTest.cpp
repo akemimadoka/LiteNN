@@ -113,15 +113,15 @@ namespace
 		gguf_set_val_u32(gguf.get(), "llama.context_length", 4096);
 		gguf_set_val_f32(gguf.get(), "llama.rope.freq_base", 500000.0F);
 
-		const char* tokens[] = { "<s>", "hello" };
-		gguf_set_arr_str(gguf.get(), "tokenizer.ggml.tokens", tokens, 2);
+		const char* tokens[] = { "<s>", "hello", "world" };
+		gguf_set_arr_str(gguf.get(), "tokenizer.ggml.tokens", tokens, 3);
 
-		const std::array<std::int32_t, 2> tokenTypes = { 1, 3 };
+		const std::array<std::int32_t, 3> tokenTypes = { 1, 3, 3 };
 		gguf_set_arr_data(gguf.get(), "tokenizer.ggml.token_type", GGUF_TYPE_INT32, tokenTypes.data(),
 		                  tokenTypes.size());
 
-		const std::array<float, 4> embedding = { 1.0F, 2.0F, 3.0F, 4.0F };
-		const std::array<std::int64_t, 2> embeddingShape = { 2, 2 };
+		const std::array<float, 6> embedding = { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F };
+		const std::array<std::int64_t, 2> embeddingShape = { 2, 3 };
 		AddTensor(gguf.get(), ggml.get(), GGML_TYPE_F32, "token_embd.weight", embeddingShape, embedding.data());
 
 		const std::array<std::uint8_t, 18> q4Payload = {
@@ -424,21 +424,26 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	const auto* tokens = imported.graph.FindMetadata("tokenizer.ggml.tokens");
 	ASSERT_NE(tokens, nullptr);
 	const auto& tokenList = std::get<std::vector<std::string>>(tokens->value);
-	ASSERT_EQ(tokenList.size(), 2);
+	ASSERT_EQ(tokenList.size(), 3);
 	EXPECT_EQ(tokenList[0], "<s>");
 	EXPECT_EQ(tokenList[1], "hello");
+	EXPECT_EQ(tokenList[2], "world");
 
 	const auto* tokenTypes = imported.graph.FindMetadata("tokenizer.ggml.token_type");
 	ASSERT_NE(tokenTypes, nullptr);
 	const auto& tokenTypeList = std::get<std::vector<std::int64_t>>(tokenTypes->value);
-	ASSERT_EQ(tokenTypeList.size(), 2);
+	ASSERT_EQ(tokenTypeList.size(), 3);
 	EXPECT_EQ(tokenTypeList[0], 1);
 	EXPECT_EQ(tokenTypeList[1], 3);
+	EXPECT_EQ(tokenTypeList[2], 3);
 
+	ASSERT_EQ(imported.graph.GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
 	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 0), 1.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 1), 2.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 2), 3.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 3), 4.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 4), 5.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 5), 6.0F);
 
 	const auto& quantized = *imported.graph.GetVariable(1);
 	ASSERT_TRUE(quantized.IsQuantized());
@@ -499,11 +504,13 @@ TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 	const auto* tokens = loaded.FindMetadata("tokenizer.ggml.tokens");
 	ASSERT_NE(tokens, nullptr);
 	const auto& tokenList = std::get<std::vector<std::string>>(tokens->value);
-	ASSERT_EQ(tokenList.size(), 2);
+	ASSERT_EQ(tokenList.size(), 3);
 	EXPECT_EQ(tokenList[0], "<s>");
 	EXPECT_EQ(tokenList[1], "hello");
+	EXPECT_EQ(tokenList[2], "world");
 
 	EXPECT_FLOAT_EQ(ReadFloat(loaded.GetVariable(0)->Data(), 0), 1.0F);
+	EXPECT_EQ(loaded.GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
 	EXPECT_TRUE(loaded.GetVariable(1)->IsQuantized());
 	EXPECT_EQ(loaded.GetVariable(1)->Quantization()->blockFormat, QuantizedBlockFormat::GGML_Q4_0);
 }
@@ -531,7 +538,9 @@ TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 	EXPECT_EQ(hyperparameters.attentionHeadCountKV, 8u);
 	EXPECT_DOUBLE_EQ(hyperparameters.rmsNormEpsilon, 1.0e-5);
 	EXPECT_DOUBLE_EQ(hyperparameters.ropeFrequencyBase, 10000.0);
+	EXPECT_DOUBLE_EQ(hyperparameters.ropeFrequencyScale, 1.0);
 	EXPECT_EQ(hyperparameters.HeadDimension(), 16u);
+	EXPECT_EQ(hyperparameters.ropeDimensionCount, 16u);
 	EXPECT_EQ(hyperparameters.QueryGroupsPerKVHead(), 1u);
 }
 
@@ -548,11 +557,14 @@ TEST(GGUFLLaMAHyperparameters, UsesExplicitKVHeadCountAndRopeBase)
 	    { "llama.attention.head_count_kv", std::uint64_t{ 2 } },
 	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
 	    { "llama.rope.freq_base", 500000.0 },
+	    { "llama.rope.freq_scale", 1.0 },
+	    { "llama.rope.dimension_count", std::uint64_t{ 32 } },
 	});
 
 	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
 	EXPECT_EQ(hyperparameters.attentionHeadCountKV, 2u);
 	EXPECT_DOUBLE_EQ(hyperparameters.ropeFrequencyBase, 500000.0);
+	EXPECT_EQ(hyperparameters.ropeDimensionCount, 32u);
 	EXPECT_EQ(hyperparameters.HeadDimension(), 32u);
 	EXPECT_EQ(hyperparameters.QueryGroupsPerKVHead(), 4u);
 }

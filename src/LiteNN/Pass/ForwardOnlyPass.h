@@ -171,7 +171,7 @@ namespace LiteNN
 						    }
 						    else if constexpr (std::same_as<T, ArgsortNode>)
 						    {
-							    return ArgsortNode{ remapOutput(node.input), node.order };
+							    return ArgsortNode{ remapOutput(node.input), node.axis, node.order };
 						    }
 						    else if constexpr (std::same_as<T, MulMatIdNode>)
 						    {

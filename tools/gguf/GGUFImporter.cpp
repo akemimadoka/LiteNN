@@ -189,7 +189,7 @@ namespace LiteNN::GGUF
 			const auto rank = ggml_n_dims(&tensor);
 			std::vector<std::size_t> shape;
 			shape.reserve(rank);
-			for (int i = 0; i < rank; ++i)
+			for (int i = rank - 1; i >= 0; --i)
 			{
 				if (tensor.ne[i] <= 0)
 				{
@@ -505,6 +505,8 @@ namespace LiteNN::GGUF
 			.attentionHeadCountKV = 0,
 			.rmsNormEpsilon = ReadDoubleValue(RequireMetadata(graph, key("attention.layer_norm_rms_epsilon"))),
 			.ropeFrequencyBase = 10000.0,
+			.ropeFrequencyScale = 1.0,
+			.ropeDimensionCount = 0,
 		};
 
 		if (const auto headCountKV = FindMetadata(graph, key("attention.head_count_kv")))
@@ -520,6 +522,14 @@ namespace LiteNN::GGUF
 		{
 			hyperparameters.ropeFrequencyBase = ReadDoubleValue(**ropeFrequencyBase);
 		}
+		if (const auto ropeFrequencyScale = FindMetadata(graph, key("rope.freq_scale")))
+		{
+			hyperparameters.ropeFrequencyScale = ReadDoubleValue(**ropeFrequencyScale);
+		}
+		if (const auto ropeDimensionCount = FindMetadata(graph, key("rope.dimension_count")))
+		{
+			hyperparameters.ropeDimensionCount = ReadSizeValue(**ropeDimensionCount);
+		}
 
 		if (hyperparameters.contextLength == 0 || hyperparameters.embeddingLength == 0 ||
 		    hyperparameters.blockCount == 0 || hyperparameters.feedForwardLength == 0)
@@ -534,8 +544,20 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("LLaMA rope.freq_base must be greater than zero");
 		}
+		if (!(hyperparameters.ropeFrequencyScale > 0.0))
+		{
+			throw std::runtime_error("LLaMA rope.freq_scale must be greater than zero");
+		}
 
-		static_cast<void>(hyperparameters.HeadDimension());
+		const auto headDimension = hyperparameters.HeadDimension();
+		if (hyperparameters.ropeDimensionCount == 0)
+		{
+			hyperparameters.ropeDimensionCount = headDimension;
+		}
+		if (hyperparameters.ropeDimensionCount > headDimension || (hyperparameters.ropeDimensionCount % 2) != 0)
+		{
+			throw std::runtime_error("LLaMA rope.dimension_count must be an even value in [2, headDim]");
+		}
 		static_cast<void>(hyperparameters.QueryGroupsPerKVHead());
 		return hyperparameters;
 	}

@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 9;
+		constexpr std::uint32_t kModelVersion = 10;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -705,6 +705,7 @@ namespace LiteNN::Serialization
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Argsort));
 					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.order));
 				    }
 				    else if constexpr (std::same_as<T, MulMatIdNode>)
@@ -818,8 +819,9 @@ namespace LiteNN::Serialization
 			}
 			case NodeKind::Argsort: {
 				const auto input = ReadNodeOutput(in);
+				const auto axis = version >= 10 ? ReadSize(in) : 0uz;
 				const auto order = static_cast<SortOrder>(ReadScalar<std::uint32_t>(in));
-				return ArgsortNode{ input, order };
+				return ArgsortNode{ input, axis, order };
 			}
 			case NodeKind::MulMatId: {
 				const auto as = ReadNodeOutput(in);

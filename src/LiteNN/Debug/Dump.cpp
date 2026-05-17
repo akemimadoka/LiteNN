@@ -333,8 +333,8 @@ namespace
 				}
 				else if constexpr (std::same_as<T, ArgsortNode>)
 				{
-					return std::format("ArgsortNode(input={}, order={})", FormatValueRef(value.input),
-					                   SortOrderToString(value.order));
+					return std::format("ArgsortNode(input={}, axis={}, order={})", FormatValueRef(value.input),
+					                   value.axis, SortOrderToString(value.order));
 				}
 				else if constexpr (std::same_as<T, MulMatIdNode>)
 				{

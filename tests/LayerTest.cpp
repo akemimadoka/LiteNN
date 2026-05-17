@@ -73,6 +73,8 @@ namespace
 		struct FlashAttnReferenceOptions
 		{
 			bool causal = false;
+			std::size_t keyPositionOffset = 0;
+			std::size_t queryPositionOffset = 0;
 			std::vector<float> mask;
 			bool hasMask = false;
 			float scale = 1.0f;
@@ -132,7 +134,7 @@ namespace
 					{
 						score += slope * static_cast<double>(options.mask[row * keyLength + col]);
 					}
-					if (options.causal && col > row)
+					if (options.causal && options.keyPositionOffset + col > options.queryPositionOffset + row)
 					{
 						score += -1.0e9;
 					}
@@ -309,6 +311,44 @@ TEST(LayerFlashAttnExt, AppliesCausalMaskBeforeSoftmax)
 	{
 		EXPECT_NEAR(ReadFloat(outputs[0], i), expected[i], 1e-5f);
 	}
+}
+
+TEST(LayerFlashAttnExt, SupportsRectangularCausalDecodeMask)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto queries = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto keys = sg.AddParam(DataType::Float32, { 3, 2 });
+	const auto values = sg.AddParam(DataType::Float32, { 3, 1 });
+
+	Layer::FlashAttnExtOptions options;
+	options.causal = true;
+	options.queryPositionOffset = 1;
+	const auto output = Layer::AddFlashAttnExt(sg, { queries, 0 }, { keys, 0 }, { values, 0 }, options);
+	sg.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const std::vector<float> queryData{ 1.0f, 0.0f };
+	const std::vector<float> keyData{ 1.0f, 0.0f,
+	                                0.0f, 1.0f,
+	                                10.0f, 0.0f };
+	const std::vector<float> valueData{ 2.0f,
+	                                  5.0f,
+	                                  1000.0f };
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Optimizer::MakeFloatTensor(queryData, { 1, 2 }));
+	inputs.emplace_back(Optimizer::MakeFloatTensor(keyData, { 3, 2 }));
+	inputs.emplace_back(Optimizer::MakeFloatTensor(valueData, { 3, 1 }));
+
+	const auto outputs = RunWithInputs(graph, std::move(inputs));
+	ASSERT_EQ(outputs.size(), 1u);
+	FlashAttnReferenceOptions referenceOptions;
+	referenceOptions.causal = true;
+	referenceOptions.queryPositionOffset = 1;
+	const auto expected = ComputeFlashAttnExpected(queryData, 1, keyData, 3, 2, valueData, 1, referenceOptions);
+	EXPECT_NEAR(ReadFloat(outputs[0], 0), expected[0], 1e-5f);
+	EXPECT_LT(ReadFloat(outputs[0], 0), 5.0f);
 }
 
 TEST(LayerFlashAttnExt, AppliesMaskSoftcapAndSinks)
@@ -524,6 +564,29 @@ TEST(LayerTopK, ReturnsLeadingDescendingIndices)
 	EXPECT_EQ(ReadInt32(result, 1), 2);
 	EXPECT_EQ(ReadInt32(result, 2), 3);
 	EXPECT_EQ(ReadInt32(result, 3), 0);
+}
+
+TEST(LayerTopK, SupportsExplicitLastAxis)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 4 });
+	const auto out = Layer::AddTopK(sg, { input, 0 }, 2, 1);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 0.5f, 4.0f, -1.0f, 2.0f,
+	                                        3.0f, 1.0f, 5.0f, 5.0f },
+	                                { 2, 4 });
+
+	ASSERT_EQ(result.DType(), DataType::Int32);
+	ASSERT_EQ(result.Shape().NumDim(), 2u);
+	EXPECT_EQ(result.Shape()[0], 2u);
+	EXPECT_EQ(result.Shape()[1], 2u);
+	EXPECT_EQ(ReadInt32(result, 0), 1);
+	EXPECT_EQ(ReadInt32(result, 1), 3);
+	EXPECT_EQ(ReadInt32(result, 2), 2);
+	EXPECT_EQ(ReadInt32(result, 3), 3);
 }
 
 TEST(LayerPad, AppendsZerosAlongEachAxis)
@@ -1323,12 +1386,19 @@ TEST(LayerCausalMask, MasksStrictUpperTriangle)
 	EXPECT_LT(ReadFloat(result, 5), -1.0e8f);
 }
 
-TEST(LayerCausalMask, RejectsNonSquareMatrix)
+TEST(LayerCausalMask, SupportsRectangularDecodeMask)
 {
 	Graph graph;
 	Subgraph sg;
-	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
-	EXPECT_THROW(static_cast<void>(Layer::AddCausalMask(sg, { input, 0 })), std::runtime_error);
+	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
+	const auto out = Layer::AddCausalMask(sg, { input, 0 }, -1.0e9, 0, 1);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f }, { 1, 3 });
+	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), 2.0f, 1e-5f);
+	EXPECT_LT(ReadFloat(result, 2), -1.0e8f);
 }
 
 TEST(LayerKVCache, AppendConcatenatesPastAndPresent)

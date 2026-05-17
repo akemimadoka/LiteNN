@@ -25,6 +25,7 @@ namespace LiteNN::GGUF
 	{
 		std::size_t tokenEmbeddingVariable{};
 		std::size_t vocabSize{};
+		bool tokenEmbeddingIsVocabMajor = true;
 		DataType dtype{ DataType::Float32 };
 		std::vector<LLaMADecoderBlock> blocks;
 		Layer::RMSNormLayer outputNorm;

@@ -160,24 +160,33 @@ namespace LiteNN::Runtime
 			return lhsIndex < rhsIndex;
 		}
 
-		static Tensor<CPU> EvalArgsort(const Tensor<CPU>& input, SortOrder order)
+		static Tensor<CPU> EvalArgsort(const Tensor<CPU>& input, SortOrder order, std::size_t axis)
 		{
 			if (input.Shape().NumDim() == 0)
 			{
 				throw std::runtime_error("ArgsortNode requires a rank >= 1 tensor");
 			}
-			if (input.Shape()[0] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			if (axis >= input.Shape().NumDim())
 			{
-				throw std::runtime_error("ArgsortNode first dimension exceeds Int32 index range");
+				throw std::runtime_error("ArgsortNode axis out of range");
+			}
+			if (input.Shape()[axis] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				throw std::runtime_error("ArgsortNode sort dimension exceeds Int32 index range");
 			}
 
 			CPU cpu;
 			Tensor<CPU> result(Uninitialized, input.Shape(), DataType::Int32, cpu);
-			const auto rowCount = input.Shape()[0];
-			auto rowSize = 1uz;
-			for (auto dim = 1uz; dim < input.Shape().NumDim(); ++dim)
+			const auto axisSize = input.Shape()[axis];
+			auto outerSize = 1uz;
+			for (auto dim = 0uz; dim < axis; ++dim)
 			{
-				rowSize *= input.Shape()[dim];
+				outerSize *= input.Shape()[dim];
+			}
+			auto innerSize = 1uz;
+			for (auto dim = axis + 1; dim < input.Shape().NumDim(); ++dim)
+			{
+				innerSize *= input.Shape()[dim];
 			}
 
 			EnumDispatch(input.DType(), [&]<DataType TypeValue> {
@@ -190,20 +199,23 @@ namespace LiteNN::Runtime
 				{
 					const auto* src = static_cast<const T*>(input.RawData());
 					auto* dst = static_cast<std::int32_t*>(result.RawData());
-					std::vector<std::int32_t> orderIndices(rowCount);
+					std::vector<std::int32_t> orderIndices(axisSize);
 
-					for (auto offset = 0uz; offset < rowSize; ++offset)
+					for (auto outer = 0uz; outer < outerSize; ++outer)
 					{
-						std::iota(orderIndices.begin(), orderIndices.end(), std::int32_t{ 0 });
-						std::stable_sort(orderIndices.begin(), orderIndices.end(), [&](std::int32_t lhs, std::int32_t rhs) {
-							const auto lhsValue = src[static_cast<std::size_t>(lhs) * rowSize + offset];
-							const auto rhsValue = src[static_cast<std::size_t>(rhs) * rowSize + offset];
-							return ArgsortComesBefore<TypeValue>(lhsValue, lhs, rhsValue, rhs, order);
-						});
-
-						for (auto row = 0uz; row < rowCount; ++row)
+						for (auto inner = 0uz; inner < innerSize; ++inner)
 						{
-							dst[row * rowSize + offset] = orderIndices[row];
+							std::iota(orderIndices.begin(), orderIndices.end(), std::int32_t{ 0 });
+							std::stable_sort(orderIndices.begin(), orderIndices.end(), [&](std::int32_t lhs, std::int32_t rhs) {
+								const auto lhsOffset = (outer * axisSize + static_cast<std::size_t>(lhs)) * innerSize + inner;
+								const auto rhsOffset = (outer * axisSize + static_cast<std::size_t>(rhs)) * innerSize + inner;
+								return ArgsortComesBefore<TypeValue>(src[lhsOffset], lhs, src[rhsOffset], rhs, order);
+							});
+
+							for (auto index = 0uz; index < axisSize; ++index)
+							{
+								dst[(outer * axisSize + index) * innerSize + inner] = orderIndices[index];
+							}
 						}
 					}
 				}
@@ -547,7 +559,7 @@ namespace LiteNN::Runtime
 		{
 			const auto& input = GetValue(slots, node.input);
 			const auto cpuInput = input.CopyToDevice(CPU{});
-			auto cpuResult = EvalArgsort(cpuInput, node.order);
+			auto cpuResult = EvalArgsort(cpuInput, node.order, node.axis);
 
 			if constexpr (std::same_as<D, CPU>)
 			{
