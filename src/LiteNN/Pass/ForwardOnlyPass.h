@@ -165,6 +165,18 @@ namespace LiteNN
 						    {
 							    return SliceNode{ remapOutput(node.input), node.axis, node.start, node.length };
 						    }
+						    else if constexpr (std::same_as<T, GetRowsNode>)
+						    {
+							    return GetRowsNode{ remapOutput(node.data), remapOutput(node.indices) };
+						    }
+						    else if constexpr (std::same_as<T, ArgsortNode>)
+						    {
+							    return ArgsortNode{ remapOutput(node.input), node.order };
+						    }
+						    else if constexpr (std::same_as<T, MulMatIdNode>)
+						    {
+							    return MulMatIdNode{ remapOutput(node.as), remapOutput(node.b), remapOutput(node.ids) };
+						    }
 						    else if constexpr (std::same_as<T, FusedOpNode>)
 						    {
 							    return FusedOpNode{ node.pattern, CloneSubgraph(node.body), remapList(node.args) };

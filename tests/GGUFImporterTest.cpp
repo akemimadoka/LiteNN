@@ -57,6 +57,25 @@ namespace
 		return ReadFloat(tensor.CopyToDevice(CPU{}), index);
 	}
 
+	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
+	                           std::initializer_list<std::size_t> shape)
+	{
+		CPU device;
+		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.RawData(), DataType::Int32, values.begin(),
+		                              values.size());
+		return tensor;
+	}
+
+	Tensor<CPU> MakeFloatTensor(std::span<const float> values, std::initializer_list<std::size_t> shape)
+	{
+		CPU device;
+		Tensor<CPU> tensor(Uninitialized, shape, DataType::Float32, device);
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Float32, tensor.RawData(), DataType::Float32, values.data(),
+		                              values.size());
+		return tensor;
+	}
+
 	GGMLContextPtr CreateTensorContext()
 	{
 		ggml_init_params params{};
@@ -228,6 +247,123 @@ namespace
 		                                                    0.0f, 0.0f, 0.0f, 0.0f },
 		                                                  { 8, 4 }));
 		return graph;
+	}
+
+	Graph BuildQuantizedFriendlyLLaMAArchive()
+	{
+		constexpr std::size_t kEmbeddingLength = 32;
+		constexpr std::size_t kFeedForwardLength = 64;
+
+		Graph graph;
+		graph.SetMetadata({
+		    { "general.architecture", std::string("llama") },
+		    { "llama.context_length", std::uint64_t{ 16 } },
+		    { "llama.embedding_length", std::uint64_t{ kEmbeddingLength } },
+		    { "llama.block_count", std::uint64_t{ 1 } },
+		    { "llama.feed_forward_length", std::uint64_t{ kFeedForwardLength } },
+		    { "llama.attention.head_count", std::uint64_t{ 4 } },
+		    { "llama.attention.head_count_kv", std::uint64_t{ 4 } },
+		    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+		    { "llama.rope.freq_base", 10000.0 },
+		});
+
+		std::vector<float> identity(kEmbeddingLength * kEmbeddingLength, 0.0f);
+		for (std::size_t i = 0; i < kEmbeddingLength; ++i)
+		{
+			identity[i * kEmbeddingLength + i] = 1.0f;
+		}
+		const std::vector<float> ones(kEmbeddingLength, 1.0f);
+		const std::vector<float> zeros32x32(kEmbeddingLength * kEmbeddingLength, 0.0f);
+		const std::vector<float> zeros32x64(kEmbeddingLength * kFeedForwardLength, 0.0f);
+		const std::vector<float> zeros64x32(kFeedForwardLength * kEmbeddingLength, 0.0f);
+
+		AddNamedVariable(graph, "token_embd.weight", MakeFloatTensor(identity, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "output_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
+		AddNamedVariable(graph, "output.weight", MakeFloatTensor(identity, { kEmbeddingLength, kEmbeddingLength }));
+
+		AddNamedVariable(graph, "blk.0.attn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.ffn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_q.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_k.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_v.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_output.weight",
+		                MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.ffn_gate.weight", MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		AddNamedVariable(graph, "blk.0.ffn_up.weight", MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		AddNamedVariable(graph, "blk.0.ffn_down.weight", MakeFloatTensor(zeros64x32, { kFeedForwardLength, kEmbeddingLength }));
+		return graph;
+	}
+
+	std::shared_ptr<Variable> QuantizeQ80Variable(const Variable& source)
+	{
+		const auto data = source.Data().CopyToDevice(CPU{});
+		if (data.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("QuantizeQ80Variable expects Float32 source tensors");
+		}
+		if (data.Shape().NumDim() == 0)
+		{
+			throw std::runtime_error("QuantizeQ80Variable requires at least 1D tensors");
+		}
+
+		const auto* traits = ggml_get_type_traits(GGML_TYPE_Q8_0);
+		if (!traits || !traits->from_float_ref)
+		{
+			throw std::runtime_error("GGML_TYPE_Q8_0 reference quantizer is unavailable");
+		}
+
+		const auto rowSize = data.Shape()[0];
+		if ((rowSize % static_cast<std::size_t>(traits->blck_size)) != 0)
+		{
+			throw std::runtime_error("QuantizeQ80Variable requires the leading dimension to be a multiple of 32");
+		}
+
+		const auto rowCount = data.NumElements() / rowSize;
+		const auto rowBytes = (rowSize / static_cast<std::size_t>(traits->blck_size)) * traits->type_size;
+		Tensor<CPU> storage(Uninitialized, { rowCount * rowBytes }, DataType::UInt8);
+		const auto* src = static_cast<const float*>(data.RawData());
+		auto* dst = static_cast<std::uint8_t*>(storage.RawData());
+		for (std::size_t row = 0; row < rowCount; ++row)
+		{
+			traits->from_float_ref(src + row * rowSize, dst + row * rowBytes, static_cast<int64_t>(rowSize));
+		}
+
+		return Variable::CreateQuantized(
+		    std::move(storage),
+		    BlockQuantization(QuantizedBlockFormat::GGML_Q8_0, data.Shape().ToOwned(), DataType::Float32));
+	}
+
+	bool IsQ80QuantizationTarget(std::string_view name)
+	{
+		return name == "blk.0.attn_q.weight" || name == "blk.0.attn_k.weight" || name == "blk.0.attn_v.weight" ||
+		       name == "blk.0.attn_output.weight" || name == "blk.0.ffn_gate.weight" ||
+		       name == "blk.0.ffn_up.weight" || name == "blk.0.ffn_down.weight";
+	}
+
+	bool ShouldQuantizeQ80Weight(std::string_view name, const Variable& variable)
+	{
+		if (variable.IsQuantized() || !IsFloatingDataType(variable.Data().DType()) ||
+		    variable.Data().Shape().NumDim() < 1)
+		{
+			return false;
+		}
+
+		return IsQ80QuantizationTarget(name);
+	}
+
+	Graph QuantizeQ80Weights(const Graph& archive)
+	{
+		Graph copy;
+		copy.SetMetadata(std::vector<ModelMetadataEntry>(archive.Metadata().begin(), archive.Metadata().end()));
+		for (std::size_t i = 0; i < archive.VariableCount(); ++i)
+		{
+			const auto& variable = *archive.GetVariable(i);
+			const auto name = archive.VariableName(i);
+			const auto shouldQuantize = ShouldQuantizeQ80Weight(name, variable);
+			const auto index = copy.AddVariable(shouldQuantize ? QuantizeQ80Variable(variable) : archive.GetVariable(i));
+			copy.SetVariableName(index, name);
+		}
+		return copy;
 	}
 
 	Graph CopyArchiveExcludingVariables(const Graph& archive, std::initializer_list<std::string_view> excludedNames)
@@ -489,18 +625,16 @@ TEST(GGUFLLaMADecoderBlock, RejectsMissingNamedWeights)
 	             std::runtime_error);
 }
 
-TEST(GGUFLLaMACausalLM, LowersFullGraphAndRunsCPUForwardOnTokenPlanes)
+TEST(GGUFLLaMACausalLM, LowersFullGraphAndRunsCPUForwardOnTokenIds)
 {
 	const auto archive = BuildTinyLLaMAArchive();
 	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
 
-	EXPECT_EQ(lowered.InputName(0), "token_plane");
+	EXPECT_EQ(lowered.InputName(0), "token_ids");
 	EXPECT_EQ(lowered.OutputName(0), "logits");
 
 	Runtime::Interpreter<CPU> interpreter;
-	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 1.0f, 0.0f, 0.0f,
-	                                                   0.0f, 1.0f, 0.0f },
-	                                                  { 2, 3 }) };
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
 	const auto outputs = interpreter.RunForward(lowered, inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().NumElements(), 6u);
@@ -521,7 +655,7 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 	const auto lowered = GGUF::LowerLLaMACausalLM(tiedArchive, 1);
 
 	Runtime::Interpreter<CPU> interpreter;
-	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 0.0f, 0.0f, 1.0f }, { 1, 3 }) };
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 2 }, { 1 }) };
 	const auto outputs = interpreter.RunForward(lowered, inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().NumElements(), 3u);
@@ -530,4 +664,36 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 0.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 1), 0.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 2), expected, 1e-4f);
+}
+
+TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)
+{
+	const auto archive = BuildQuantizedFriendlyLLaMAArchive();
+	const auto quantizedArchive = QuantizeQ80Weights(archive);
+	const auto plainLowered = GGUF::LowerLLaMACausalLM(archive, 2);
+	const auto quantizedLowered = GGUF::LowerLLaMACausalLM(quantizedArchive, 2);
+
+	for (std::size_t i = 0; i < quantizedArchive.VariableCount(); ++i)
+	{
+		if (IsQ80QuantizationTarget(quantizedArchive.VariableName(i)))
+		{
+			ASSERT_TRUE(quantizedArchive.GetVariable(i)->IsQuantized());
+		}
+	}
+	for (std::size_t i = 0; i < quantizedLowered.VariableCount(); ++i)
+	{
+		EXPECT_FALSE(quantizedLowered.GetVariable(i)->IsQuantized());
+	}
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
+	const auto plainOutputs = interpreter.RunForward(plainLowered, inputs);
+	const auto quantizedOutputs = interpreter.RunForward(quantizedLowered, inputs);
+	ASSERT_EQ(plainOutputs.size(), 1u);
+	ASSERT_EQ(quantizedOutputs.size(), 1u);
+	ASSERT_EQ(plainOutputs[0].NumElements(), quantizedOutputs[0].NumElements());
+	for (std::size_t i = 0; i < plainOutputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(quantizedOutputs[0], i), ReadFloat(plainOutputs[0], i), 1e-6f);
+	}
 }

@@ -17,7 +17,8 @@ namespace LiteNN
 	template <typename T>
 	concept Device =
 	    requires(T& device, const T& constDevice, DataType type, std::size_t size, ShapeView shape, void* ptr,
-	             void* dst, const void* src1, const void* src2, UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
+	             void* dst, const void* src1, const void* src2, DataType indexType, ShapeView indexShape,
+	             UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
 		    // TODO: 无法过编译，猜测是因为无法表达 type 是一个 constexpr 参数的问题
 		    // typename DeviceTraits<T>::template DataTypeMapping<type>;
 
@@ -57,6 +58,10 @@ namespace LiteNN
 		    } -> std::same_as<void>;
 		    // dst = slice(src, axis, start, length)
 		    { DeviceTraits<T>::DoSliceOp(device, dst, type, shape, src1, size, size, size) } -> std::same_as<void>;
+		    // dst = get_rows(data, indices)
+		    {
+			    DeviceTraits<T>::DoGetRowsOp(device, dst, type, shape, src1, indexType, indexShape, src2)
+		    } -> std::same_as<void>;
 	    };
 
 	// 擦除了类型的 Device
@@ -128,6 +133,8 @@ namespace LiteNN
 			                        const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) = 0;
 			virtual void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
 			                       std::size_t axis, std::size_t start, std::size_t length) = 0;
+			virtual void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
+			                        DataType indexType, ShapeView indexShape, const void* indices) = 0;
 			virtual bool IsSameDevice(const Interface& other) const = 0;
 		};
 
@@ -206,6 +213,11 @@ namespace LiteNN
 			{
 				DeviceTraits<D>::DoSliceOp(device_, dst, type, srcShape, src, axis, start, length);
 			}
+			void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
+			                DataType indexType, ShapeView indexShape, const void* indices) override
+			{
+				DeviceTraits<D>::DoGetRowsOp(device_, dst, dataType, dataShape, data, indexType, indexShape, indices);
+			}
 			bool IsSameDevice(const Interface& other) const override
 			{
 				if (other.TypeKey() == TypeKey())
@@ -257,6 +269,8 @@ namespace LiteNN
 		                       const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis);
 		static void DoSliceOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 		                      std::size_t axis, std::size_t start, std::size_t length);
+		static void DoGetRowsOp(PolymorphicDevice& device, void* dst, DataType dataType, ShapeView dataShape,
+		                       const void* data, DataType indexType, ShapeView indexShape, const void* indices);
 	};
 
 	struct CPU
@@ -487,6 +501,14 @@ namespace LiteNN
 							for (auto i = 0uz; i < totalElements; ++i)
 							{
 								static_cast<ResultType*>(dst)[i] = !static_cast<const T*>(src)[i];
+							}
+							break;
+						}
+						case UnaryOp::Erf: {
+							const auto totalElements = shape.NumElements();
+							for (auto i = 0uz; i < totalElements; ++i)
+							{
+								static_cast<ResultType*>(dst)[i] = std::erf(static_cast<const T*>(src)[i]);
 							}
 							break;
 						}
@@ -783,6 +805,66 @@ namespace LiteNN
 				for (auto o = 0uz; o < outer; ++o)
 				{
 					std::copy_n(srcPtr + o * srcStride + start * inner, dstStride, dstPtr + o * dstStride);
+				}
+			});
+		}
+
+		static constexpr void DoGetRowsOp(CPU& device, void* dst, DataType dataType, ShapeView dataShape,
+		                                  const void* data, DataType indexType, ShapeView indexShape,
+		                                  const void* indices)
+		{
+			if (dataShape.NumDim() == 0)
+			{
+				throw std::runtime_error("GetRows requires a rank >= 1 data tensor");
+			}
+
+			const auto rowCount = dataShape[0];
+			auto rowSize = 1uz;
+			for (auto dim = 1uz; dim < dataShape.NumDim(); ++dim)
+			{
+				rowSize *= dataShape[dim];
+			}
+			const auto indexCount = indexShape.NumElements();
+
+			auto copyRows = [&]<typename T, typename IndexT>() {
+				const auto* dataPtr = static_cast<const T*>(data);
+				const auto* indexPtr = static_cast<const IndexT*>(indices);
+				auto* dstPtr = static_cast<T*>(dst);
+
+				for (auto i = 0uz; i < indexCount; ++i)
+				{
+					const auto rawIndex = indexPtr[i];
+					if constexpr (std::is_signed_v<IndexT>)
+					{
+						if (rawIndex < 0)
+						{
+							throw std::runtime_error("GetRows index out of range");
+						}
+					}
+
+					const auto rowIndex = static_cast<std::size_t>(rawIndex);
+					if (rowIndex >= rowCount)
+					{
+						throw std::runtime_error(
+						    std::format("GetRows index {} out of range for {} rows", rowIndex, rowCount));
+					}
+
+					std::copy_n(dataPtr + rowIndex * rowSize, rowSize, dstPtr + i * rowSize);
+				}
+			};
+
+			EnumDispatch(dataType, [&]<DataType DataTypeValue> {
+				using T = DataTypeMapping<DataTypeValue>;
+				switch (indexType)
+				{
+				case DataType::Int32:
+					copyRows.template operator()<T, std::int32_t>();
+					break;
+				case DataType::Int64:
+					copyRows.template operator()<T, std::int64_t>();
+					break;
+				default:
+					throw std::runtime_error("GetRows indices must have dtype Int32 or Int64");
 				}
 			});
 		}

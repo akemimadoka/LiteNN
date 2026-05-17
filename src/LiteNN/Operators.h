@@ -27,6 +27,7 @@ namespace LiteNN
 		Transpose,
 
 		LogicalNegation,
+		Erf,
 	};
 
 	enum class BinaryOp
@@ -47,6 +48,12 @@ namespace LiteNN
 		Less,
 		Greater,
 		Equal,
+	};
+
+	enum class SortOrder
+	{
+		Ascending,
+		Descending,
 	};
 
 	template <UnaryOp Op>

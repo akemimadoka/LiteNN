@@ -126,6 +126,15 @@ namespace LiteNN
 			return result;
 		}
 
+		static Tensor<CPU> EvalGetRows(const Tensor<CPU>& data, const Tensor<CPU>& indices, const OutputInfo& outInfo)
+		{
+			CPU device;
+			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
+			DeviceTraits<CPU>::DoGetRowsOp(device, result.RawData(), data.DType(), data.Shape(), data.RawData(),
+			                              indices.DType(), indices.Shape(), indices.RawData());
+			return result;
+		}
+
 		// ---- 常量检测工具 ----
 
 		static bool IsZeroTensor(const Tensor<CPU>& t)
@@ -243,6 +252,18 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return SliceNode{ remap(n.input), n.axis, n.start, n.length };
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ remap(n.data), remap(n.indices) };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ remap(n.input), n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ remap(n.as), remap(n.b), remap(n.ids) };
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
@@ -378,6 +399,21 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    markInput(node.data);
+					    markInput(node.indices);
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    markInput(node.as);
+					    markInput(node.b);
+					    markInput(node.ids);
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
@@ -531,6 +567,24 @@ namespace LiteNN
 							    const auto& input = GetConstValue(constValues, node.input);
 							    constValues[nodeId] = EvalSlice(input, node, entry.outputInfos[0]);
 						    }
+					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    if (isConst[node.data.node] && isConst[node.indices.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& data = GetConstValue(constValues, node.data);
+							    const auto& indices = GetConstValue(constValues, node.indices);
+							    constValues[nodeId] = EvalGetRows(data, indices, entry.outputInfos[0]);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    // Argsort currently only runs through the interpreter execution path.
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    // MulMatId currently only runs through the interpreter execution path.
 					    }
 					    // CallNode, CondNode, FusedOpNode, WhileNode, TapeSaveActivationNode, TapeLoadActivationNode: 不折叠
 				    },

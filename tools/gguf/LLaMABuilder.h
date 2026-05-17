@@ -41,9 +41,9 @@ namespace LiteNN::GGUF
 	                                std::size_t sequenceLength);
 	LLaMACausalLM CreateLLaMACausalLM(Graph& graph, const Graph& archive,
 	                                 const LLaMAHyperparameters& hyperparameters);
-	NodeOutput AddLLaMATokenEmbedding(Subgraph& subgraph, const LLaMACausalLM& model, NodeOutput tokenPlane);
+	NodeOutput AddLLaMATokenEmbedding(Subgraph& subgraph, const LLaMACausalLM& model, NodeOutput tokenIds);
 	NodeOutput AddLLaMACausalLM(Subgraph& subgraph, const LLaMACausalLM& model,
-	                           const LLaMAHyperparameters& hyperparameters, NodeOutput tokenPlane);
+	                           const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds);
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model,
 	                            const LLaMAHyperparameters& hyperparameters,
 	                            std::size_t sequenceLength);

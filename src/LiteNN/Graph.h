@@ -203,6 +203,28 @@ namespace LiteNN
 			std::size_t length; // 切片长度
 		};
 
+		// 按第一维做行查找，输出 shape = indices.shape + data.shape[1:]
+		struct GetRowsNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+		};
+
+		// 沿第一维对每个 trailing position 独立排序，输出对应的 Int32 索引
+		struct ArgsortNode
+		{
+			NodeOutput input;
+			SortOrder order;
+		};
+
+		// 多 expert 矩阵中按 ids 选择对应矩阵，与每个 token 的输入向量做矩阵乘。
+		struct MulMatIdNode
+		{
+			NodeOutput as;
+			NodeOutput b;
+			NodeOutput ids;
+		};
+
 		// 融合操作：语义等价于执行 body 子图，
 		// 但向后端发出信号以生成优化的融合内核
 		// body 子图参数与 args 按序 1:1 对应

@@ -484,6 +484,28 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
+	void emitNode(const Subgraph&, NodeId, const GetRowsNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error(
+		    "GraphToMLIR does not support GetRowsNode yet; use the interpreter path for token-id embedding lookup");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const ArgsortNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support ArgsortNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support MulMatIdNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph&, NodeId nodeId, const FusedOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>& activationMap,
 	              std::map<std::size_t, Value>& tapeMap)

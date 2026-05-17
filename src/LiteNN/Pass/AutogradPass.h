@@ -276,6 +276,21 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    ++counts[{ node.as.node, node.as.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+						    ++counts[{ node.ids.node, node.ids.port }];
+					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    ++counts[{ node.condition.node, node.condition.port }];
@@ -324,6 +339,10 @@ namespace LiteNN
 						    {
 							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
 						    }
+						    else if (node.op == UnaryOp::Erf)
+						    {
+							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
+						    }
 						    else if (node.op == UnaryOp::Sqrt || node.op == UnaryOp::Exp)
 						    {
 							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved, insideLoop); // 保存输出
@@ -357,6 +376,10 @@ namespace LiteNN
 					    {
 						    // Concat/Slice 反向只需要 shape/axis/start/length 信息，
 						    // 全部在前向图中静态可知，无需保存激活值
+					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    // GetRows 目前未接入自动求导；这里不额外保存前向激活
 					    }
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
@@ -632,6 +655,21 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return SliceNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.start, n.length };
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ { nodeMap[n.data.node], n.data.port },
+					                        { nodeMap[n.indices.node], n.indices.port } };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ { nodeMap[n.input.node], n.input.port }, n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ { nodeMap[n.as.node], n.as.port },
+					                         { nodeMap[n.b.node], n.b.port },
+					                         { nodeMap[n.ids.node], n.ids.port } };
 				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
@@ -911,6 +949,18 @@ namespace LiteNN
 					    {
 						    EmitSliceGrad(fwdSg, bwdSg, node, dy, gradContribs);
 					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: GetRowsNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ArgsortNode differentiation is not implemented");
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: MulMatIdNode differentiation is not implemented");
+					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    EmitCondGrad(fwdSg, graph, bwdSg, node, dy, calleeInfo, saved, loadMap, gradContribs,
@@ -1092,6 +1142,23 @@ namespace LiteNN
 				auto sum = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Add, { one, 0 }, { x2, 0 } },
 				                         { OutputInfo{ inInfo.dtype, inInfo.shape } });
 				auto id = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Divide, dy, { sum, 0 } },
+				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				dst.push_back({ id, 0 });
+				break;
+			}
+			case UnaryOp::Erf: {
+				// dx = dy * (2 / sqrt(pi)) * exp(-x^2)
+				auto xVal = GetForwardValue(fwdSg, bwdSg, node.input.node, node.input.port, saved, loadMap);
+				auto coeff = MakeScalarConstant(bwdSg, inInfo.dtype, inInfo.shape, 1.1283791670955126);
+				auto x2 = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { xVal, 0 }, { xVal, 0 } },
+				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto negX2 = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x2, 0 } },
+				                          { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto expNegX2 = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Exp, { negX2, 0 } },
+				                             { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto scaled = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { coeff, 0 }, { expNegX2, 0 } },
+				                           { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto id = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { scaled, 0 } },
 				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
 				dst.push_back({ id, 0 });
 				break;

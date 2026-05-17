@@ -1,8 +1,14 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
+
+#include <algorithm>
+#include <cmath>
 #include <format>
+#include <limits>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #ifndef LITENN_RUNTIME_INTERPRETER_H
@@ -121,6 +127,165 @@ namespace LiteNN::Runtime
 				const auto cpuTensor = tensor.CopyToDevice(CPU{});
 				return *static_cast<const bool*>(cpuTensor.RawData());
 			}
+		}
+
+		template <DataType TypeValue, typename T>
+		static bool ArgsortComesBefore(const T& lhsValue, std::int32_t lhsIndex, const T& rhsValue,
+		                              std::int32_t rhsIndex, SortOrder order)
+		{
+			if constexpr (TypeValue == DataType::Float32 || TypeValue == DataType::Float64 ||
+			              TypeValue == DataType::Float16 || TypeValue == DataType::BFloat16 ||
+			              TypeValue == DataType::Float8E4M3 || TypeValue == DataType::Float8E5M2)
+			{
+				const auto lhsIsNan = std::isnan(static_cast<double>(lhsValue));
+				const auto rhsIsNan = std::isnan(static_cast<double>(rhsValue));
+				if (lhsIsNan != rhsIsNan)
+				{
+					return !lhsIsNan;
+				}
+				if (lhsIsNan && rhsIsNan)
+				{
+					return lhsIndex < rhsIndex;
+				}
+			}
+
+			if (lhsValue < rhsValue)
+			{
+				return order == SortOrder::Ascending;
+			}
+			if (rhsValue < lhsValue)
+			{
+				return order == SortOrder::Descending;
+			}
+			return lhsIndex < rhsIndex;
+		}
+
+		static Tensor<CPU> EvalArgsort(const Tensor<CPU>& input, SortOrder order)
+		{
+			if (input.Shape().NumDim() == 0)
+			{
+				throw std::runtime_error("ArgsortNode requires a rank >= 1 tensor");
+			}
+			if (input.Shape()[0] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				throw std::runtime_error("ArgsortNode first dimension exceeds Int32 index range");
+			}
+
+			CPU cpu;
+			Tensor<CPU> result(Uninitialized, input.Shape(), DataType::Int32, cpu);
+			const auto rowCount = input.Shape()[0];
+			auto rowSize = 1uz;
+			for (auto dim = 1uz; dim < input.Shape().NumDim(); ++dim)
+			{
+				rowSize *= input.Shape()[dim];
+			}
+
+			EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+				if constexpr (TypeValue == DataType::Bool)
+				{
+					throw std::runtime_error("ArgsortNode does not support Bool tensors");
+				}
+				else
+				{
+					const auto* src = static_cast<const T*>(input.RawData());
+					auto* dst = static_cast<std::int32_t*>(result.RawData());
+					std::vector<std::int32_t> orderIndices(rowCount);
+
+					for (auto offset = 0uz; offset < rowSize; ++offset)
+					{
+						std::iota(orderIndices.begin(), orderIndices.end(), std::int32_t{ 0 });
+						std::stable_sort(orderIndices.begin(), orderIndices.end(), [&](std::int32_t lhs, std::int32_t rhs) {
+							const auto lhsValue = src[static_cast<std::size_t>(lhs) * rowSize + offset];
+							const auto rhsValue = src[static_cast<std::size_t>(rhs) * rowSize + offset];
+							return ArgsortComesBefore<TypeValue>(lhsValue, lhs, rhsValue, rhs, order);
+						});
+
+						for (auto row = 0uz; row < rowCount; ++row)
+						{
+							dst[row * rowSize + offset] = orderIndices[row];
+						}
+					}
+				}
+			});
+
+			return result;
+		}
+
+		static Tensor<CPU> EvalMulMatId(const Tensor<CPU>& as, const Tensor<CPU>& b, const Tensor<CPU>& ids)
+		{
+			CPU cpu;
+			Tensor<CPU> result(Uninitialized, { as.Shape()[1], ids.Shape()[0], b.Shape()[2] }, DataType::Float32, cpu);
+			auto* dst = static_cast<float*>(result.RawData());
+
+			EnumDispatch(as.DType(), [&]<DataType AsTypeValue> {
+				using AsT = typename DeviceTraits<CPU>::template DataTypeMapping<AsTypeValue>;
+				EnumDispatch(b.DType(), [&]<DataType BTypeValue> {
+					using BT = typename DeviceTraits<CPU>::template DataTypeMapping<BTypeValue>;
+
+					auto run = [&]<typename IdT>() {
+						const auto* asPtr = static_cast<const AsT*>(as.RawData());
+						const auto* bPtr = static_cast<const BT*>(b.RawData());
+						const auto* idsPtr = static_cast<const IdT*>(ids.RawData());
+
+						const auto k = as.Shape()[0];
+						const auto m = as.Shape()[1];
+						const auto matCount = as.Shape()[2];
+						const auto usedExperts = ids.Shape()[0];
+						const auto tokenCount = ids.Shape()[1];
+						const auto bUsed = b.Shape()[1];
+
+						for (auto outM = 0uz; outM < m; ++outM)
+						{
+							for (auto used = 0uz; used < usedExperts; ++used)
+							{
+								for (auto token = 0uz; token < tokenCount; ++token)
+								{
+									const auto rawId = idsPtr[used * tokenCount + token];
+									if constexpr (std::is_signed_v<IdT>)
+									{
+										if (rawId < 0)
+										{
+											throw std::runtime_error("MulMatIdNode ids must be non-negative");
+										}
+									}
+
+									const auto expertId = static_cast<std::size_t>(rawId);
+									if (expertId >= matCount)
+									{
+										throw std::runtime_error("MulMatIdNode id out of range for expert tensor");
+									}
+
+									float acc = 0.0f;
+									const auto bSlot = used % bUsed;
+									for (auto kk = 0uz; kk < k; ++kk)
+									{
+										const auto asIndex = ((kk * m) + outM) * matCount + expertId;
+										const auto bIndex = ((kk * bUsed) + bSlot) * tokenCount + token;
+										acc += static_cast<float>(asPtr[asIndex]) * static_cast<float>(bPtr[bIndex]);
+									}
+
+									dst[((outM * usedExperts) + used) * tokenCount + token] = acc;
+								}
+							}
+						}
+					};
+
+					switch (ids.DType())
+					{
+					case DataType::Int32:
+						run.template operator()<std::int32_t>();
+						break;
+					case DataType::Int64:
+						run.template operator()<std::int64_t>();
+						break;
+					default:
+						throw std::runtime_error("MulMatIdNode ids must have dtype Int32 or Int64");
+					}
+				});
+			});
+
+			return result;
 		}
 
 		// 各节点类型的执行逻辑
@@ -362,6 +527,57 @@ namespace LiteNN::Runtime
 			DeviceTraits<D>::DoSliceOp(device, result.RawData(), outputInfo.dtype, input.Shape(), input.RawData(),
 			                           node.axis, node.start, node.length);
 			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const GetRowsNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& data = GetValue(slots, node.data);
+			const auto& indices = GetValue(slots, node.indices);
+			const auto& outputInfo = entry.outputInfos[0];
+
+			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
+			DeviceTraits<D>::DoGetRowsOp(device, result.RawData(), data.DType(), data.Shape(), data.RawData(),
+			                            indices.DType(), indices.Shape(), indices.RawData());
+			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ArgsortNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			const auto cpuInput = input.CopyToDevice(CPU{});
+			auto cpuResult = EvalArgsort(cpuInput, node.order);
+
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const MulMatIdNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& as = GetValue(slots, node.as);
+			const auto& b = GetValue(slots, node.b);
+			const auto& ids = GetValue(slots, node.ids);
+			const auto cpuAs = as.CopyToDevice(CPU{});
+			const auto cpuB = b.CopyToDevice(CPU{});
+			const auto cpuIds = ids.CopyToDevice(CPU{});
+			auto cpuResult = EvalMulMatId(cpuAs, cpuB, cpuIds);
+
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const FusedOpNode& node,

@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 6;
+		constexpr std::uint32_t kModelVersion = 9;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -62,6 +62,9 @@ namespace LiteNN::Serialization
 			QuantizedConstant,
 			Quantize,
 			Dequantize,
+			GetRows,
+			Argsort,
+			MulMatId,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -692,6 +695,25 @@ namespace LiteNN::Serialization
 					    WriteSize(out, node.start);
 					    WriteSize(out, node.length);
 				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::GetRows));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Argsort));
+					    WriteNodeOutput(out, node.input);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.order));
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::MulMatId));
+					    WriteNodeOutput(out, node.as);
+					    WriteNodeOutput(out, node.b);
+					    WriteNodeOutput(out, node.ids);
+				    }
 				    else if constexpr (std::same_as<T, FusedOpNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::FusedOp));
@@ -788,6 +810,22 @@ namespace LiteNN::Serialization
 				const auto axis = ReadSize(in);
 				const auto start = ReadSize(in);
 				return SliceNode{ input, axis, start, ReadSize(in) };
+			}
+			case NodeKind::GetRows: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				return GetRowsNode{ data, indices };
+			}
+			case NodeKind::Argsort: {
+				const auto input = ReadNodeOutput(in);
+				const auto order = static_cast<SortOrder>(ReadScalar<std::uint32_t>(in));
+				return ArgsortNode{ input, order };
+			}
+			case NodeKind::MulMatId: {
+				const auto as = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto ids = ReadNodeOutput(in);
+				return MulMatIdNode{ as, b, ids };
 			}
 			case NodeKind::FusedOp: {
 				const auto pattern = static_cast<FusionPattern>(ReadScalar<std::uint32_t>(in));

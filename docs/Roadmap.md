@@ -90,21 +90,23 @@ Audit source: `third_party/llama.cpp/ggml/include/ggml.h` `ggml_op`, `ggml_unary
 
 P0: required for common LLaMA-family decode/inference:
 
-- [ ] Embedding / row lookup: `GET_ROWS`, `GET_ROWS_BACK` lowering or a dedicated embedding node.
-- [ ] RMSNorm: `RMS_NORM` plus epsilon metadata; backward can remain deferred for inference-only import.
-- [ ] RoPE: `ROPE` with mode, base, scale, and position handling compatible with llama.cpp metadata.
-- [ ] Attention mask and softmax: `SOFT_MAX`, `DIAG_MASK_INF`, `TRI`, scale, and causal masking behavior.
-- [ ] Quantized weight MatMul: `MUL_MAT` over GGML block formats with dequantization or fused low-precision kernels.
-- [ ] KV cache updates/views: `VIEW`, `CPY`, `SET`, `CONT`, `RESHAPE`, `PERMUTE`, `TRANSPOSE`, and slicing semantics, or a higher-level KV cache op.
-- [ ] MLP activation path: `SILU`, `GLU` / `SWIGLU`, `MUL`, `ADD`, `SCALE`, and broadcast helpers such as `REPEAT` / `ADD1`.
+- [x] Embedding / row lookup: `GET_ROWS`, `GET_ROWS_BACK` lowering or a dedicated embedding node.
+- [x] RMSNorm: `RMS_NORM` plus epsilon metadata; backward can remain deferred for inference-only import.
+- [x] RoPE: `ROPE` with mode, base, scale, and position handling compatible with llama.cpp metadata.
+- [x] Attention mask and softmax: `SOFT_MAX`, `DIAG_MASK_INF`, `TRI`, scale, and causal masking behavior.
+- [x] Quantized weight MatMul: `MUL_MAT` over supported GGML block formats now lowers by dequantizing archive weights during import.
+- [x] KV cache updates/views: `VIEW`, `CPY`, `SET`, `CONT`, `RESHAPE`, `PERMUTE`, `TRANSPOSE`, and slicing semantics, or a higher-level KV cache op.
+- [x] MLP activation path: `SILU`, `GLU` / `SWIGLU`, `MUL`, `ADD`, `SCALE`, and broadcast helpers such as `REPEAT` / `ADD1`.
 
 P1: needed by popular variants, MoE models, or efficient attention:
 
-- [ ] MoE routing: `MUL_MAT_ID`, `ADD_ID`, `TOP_K`, `ARGSORT`, and gather/scatter style row selection.
-- [ ] Additional normalizations: `NORM`, `GROUP_NORM`, `L2_NORM`.
-- [ ] Fused attention option: `FLASH_ATTN_EXT` as either a fused op or a converter rewrite to LiteNN attention primitives.
-- [ ] Activation coverage: `GELU`, `GELU_ERF`, `GELU_QUICK`, `SIGMOID`, `TANH`, `RELU`, `LEAKY_RELU`, `CLAMP`, `HARDSWISH`, `HARDSIGMOID`.
-- [ ] Shape/data movement: `CONCAT`, `PAD`, `ROLL`, `ARANGE`, `CUMSUM`, `SUM_ROWS`, and robust broadcast semantics.
+- [x] MoE routing: `MUL_MAT_ID`, `ADD_ID`, `TOP_K`, `ARGSORT`, and gather/scatter style row selection.
+- [x] Existing additional normalization coverage: LayerNorm-style `NORM` and `L2_NORM` helper paths are now present alongside the already-completed `RMS_NORM` helper path.
+- [x] `GROUP_NORM` helper coverage is now present for the remaining normalization gap in common GGML import paths.
+- [x] `FLASH_ATTN_EXT` now lowers through a LiteNN attention-helper rewrite for the current single-head 2D path, including scale, causal/additive mask, softcap, and sinks semantics.
+- [x] Activation coverage: `GELU`, `GELU_ERF`, `GELU_QUICK`, `SIGMOID`, `TANH`, `RELU`, `LEAKY_RELU`, `CLAMP`, `HARDSWISH`, `HARDSIGMOID`.
+- [x] Existing shape/data movement coverage already includes `CONCAT`, `RESHAPE`, slicing/view patterns, `TRANSPOSE`, `GET_ROWS`, and broadcast-based rewrites used by current LLaMA lowering.
+- [x] `PAD` and `CUMSUM` helper coverage closes the remaining shape/data movement gaps used by current llama.cpp-style lowering.
 
 P2: architecture-specific model families and multimodal support:
 
@@ -123,7 +125,7 @@ P3: unsupported in the first converter unless a real model requires them:
 
 Status: completed on 2026-05-17. The checklist below is now the source of truth for P4 completion tracking.
 
-Completed note: the first end-to-end LLaMA-family forward graph currently accepts one-hot token planes as input and lowers token embedding through existing MatMul/Transpose primitives. Dedicated token-id row lookup remains tracked separately in P0.
+Completed note: the end-to-end LLaMA-family forward graph now accepts token ids as input and lowers token embedding through `GetRowsNode` over `token_embd.weight^T`. Supported GGML block-quantized `MUL_MAT` weights are now dequantized during import/lowering, keeping the executable target graph on LiteNN's existing floating-point runtime path.
 
 #### P4-A: Layer and Graph Helper Checklist
 

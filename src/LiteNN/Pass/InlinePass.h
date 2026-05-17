@@ -93,6 +93,18 @@ namespace LiteNN
 				    {
 					    return SliceNode{ remap(n.input), n.axis, n.start, n.length };
 				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ remap(n.data), remap(n.indices) };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ remap(n.input), n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ remap(n.as), remap(n.b), remap(n.ids) };
+				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
 					    return SaveActivationNode{ remap(n.input), n.slotId };

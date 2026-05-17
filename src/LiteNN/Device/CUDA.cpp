@@ -655,6 +655,21 @@ namespace LiteNN
 			return resultShape;
 		}
 
+		std::vector<std::size_t> ResolveGetRowsResultShape(ShapeView dataShape, ShapeView indexShape)
+		{
+			if (dataShape.NumDim() == 0)
+			{
+				throw std::runtime_error("GetRows requires a rank >= 1 data tensor");
+			}
+
+			auto resultShape = indexShape.ToOwned();
+			for (auto dim = 1uz; dim < dataShape.NumDim(); ++dim)
+			{
+				resultShape.push_back(dataShape[dim]);
+			}
+			return resultShape;
+		}
+
 		void SynchronizeCUDAStream(void* stream, std::string_view action)
 		{
 			CheckCUDA(cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream)), action);
@@ -1302,6 +1317,24 @@ namespace LiteNN
 		CPU cpu;
 		DeviceTraits<CPU>::DoSliceOp(cpu, hostDst.data(), type, srcShape, hostSrc.data(), axis, start, length);
 		CopyFromCPU(device, type, dst, type, hostDst.data(), ShapeView{ resultShape }.NumElements());
+	}
+
+	void DeviceTraits<CUDA>::DoGetRowsOp(CUDA& device, void* dst, DataType dataType, ShapeView dataShape,
+	                                    const void* data, DataType indexType, ShapeView indexShape,
+	                                    const void* indices)
+	{
+		const auto resultShape = ResolveGetRowsResultShape(dataShape, indexShape);
+		auto hostData = MakeHostBuffer(dataType, dataShape.NumElements());
+		auto hostIndices = MakeHostBuffer(indexType, indexShape.NumElements());
+		auto hostDst = MakeHostBuffer(dataType, ShapeView{ resultShape }.NumElements());
+
+		CopyToCPU(device, dataType, data, dataShape.NumElements(), dataType, hostData.data());
+		CopyToCPU(device, indexType, indices, indexShape.NumElements(), indexType, hostIndices.data());
+
+		CPU cpu;
+		DeviceTraits<CPU>::DoGetRowsOp(cpu, hostDst.data(), dataType, dataShape, hostData.data(), indexType,
+		                              indexShape, hostIndices.data());
+		CopyFromCPU(device, dataType, dst, dataType, hostDst.data(), ShapeView{ resultShape }.NumElements());
 	}
 } // namespace LiteNN
 

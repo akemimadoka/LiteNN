@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <span>
 #include <stdexcept>
@@ -53,6 +54,7 @@ namespace LiteNN::Validation
 		case UnaryOp::Arctan:
 		case UnaryOp::Transpose:
 		case UnaryOp::LogicalNegation:
+		case UnaryOp::Erf:
 			return true;
 		}
 		return false;
@@ -97,6 +99,17 @@ namespace LiteNN::Validation
 		case FusionPattern::MatMulBiasAdd:
 		case FusionPattern::ElementWiseChain:
 		case FusionPattern::MatMulBiasAddReLU:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidSortOrder(SortOrder order)
+	{
+		switch (order)
+		{
+		case SortOrder::Ascending:
+		case SortOrder::Descending:
 			return true;
 		}
 		return false;
@@ -173,6 +186,12 @@ namespace LiteNN::Validation
 				    return "ConcatNode";
 			    else if constexpr (std::same_as<T, SliceNode>)
 				    return "SliceNode";
+			    else if constexpr (std::same_as<T, GetRowsNode>)
+				    return "GetRowsNode";
+			    else if constexpr (std::same_as<T, ArgsortNode>)
+				    return "ArgsortNode";
+			    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    return "MulMatIdNode";
 			    else if constexpr (std::same_as<T, FusedOpNode>)
 				    return "FusedOpNode";
 			    else
@@ -867,6 +886,92 @@ namespace LiteNN::Validation
 			auto outputShape = input.shape;
 			outputShape[node.axis] = node.length;
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "SliceNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GetRowsNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "GetRowsNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "GetRowsNode indices", true);
+
+			if (data.shape.empty())
+			{
+				Fail(subgraphId, nodeId, "GetRowsNode data input must have rank >= 1");
+			}
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("GetRowsNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+
+			auto outputShape = indices.shape;
+			outputShape.insert(outputShape.end(), data.shape.begin() + 1, data.shape.end());
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, outputShape }, "GetRowsNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ArgsortNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidSortOrder(node.order))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid SortOrder {}", static_cast<int>(node.order)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "ArgsortNode input", true);
+			if (input.shape.empty())
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode input must have rank >= 1");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode does not support Bool tensors");
+			}
+			if (input.shape[0] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode first dimension exceeds Int32 index range");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Int32, input.shape }, "ArgsortNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const MulMatIdNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto as = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.as, "MulMatIdNode as", true);
+			const auto b = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.b, "MulMatIdNode b", true);
+			const auto ids = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.ids, "MulMatIdNode ids", true);
+
+			if (as.shape.size() != 3 || b.shape.size() != 3 || ids.shape.size() != 2)
+			{
+				Fail(subgraphId, nodeId,
+				     "MulMatIdNode expects a rank-3 expert tensor, a rank-3 input tensor, and a rank-2 id tensor");
+			}
+			if (!IsFloatingDataType(as.dtype) || !IsFloatingDataType(b.dtype))
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires floating-point as and b tensors");
+			}
+			if (ids.dtype != DataType::Int32 && ids.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode ids must have dtype Int32 or Int64");
+			}
+			if (as.shape[0] != b.shape[0])
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires as.shape[0] == b.shape[0]");
+			}
+			if (ids.shape[1] != b.shape[2])
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires ids.shape[1] == b.shape[2]");
+			}
+			if (ids.shape[0] % b.shape[1] != 0)
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires ids.shape[0] to be divisible by b.shape[1]");
+			}
+
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, { as.shape[1], ids.shape[0], b.shape[2] } },
+			           "MulMatIdNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

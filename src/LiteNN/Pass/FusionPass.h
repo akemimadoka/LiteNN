@@ -159,6 +159,21 @@ namespace LiteNN
 					    {
 						    countInput(node.input);
 					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    countInput(node.data);
+						    countInput(node.indices);
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    countInput(node.input);
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    countInput(node.as);
+						    countInput(node.b);
+						    countInput(node.ids);
+					    }
 					    else if constexpr (std::same_as<T, SaveActivationNode>)
 					    {
 						    countInput(node.input);
@@ -593,6 +608,18 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return SliceNode{ remap(n.input), n.axis, n.start, n.length };
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ remap(n.data), remap(n.indices) };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ remap(n.input), n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ remap(n.as), remap(n.b), remap(n.ids) };
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {

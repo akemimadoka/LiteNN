@@ -112,6 +112,8 @@ namespace
 			return "UnaryOp::Transpose";
 		case UnaryOp::LogicalNegation:
 			return "UnaryOp::LogicalNegation";
+		case UnaryOp::Erf:
+			return "UnaryOp::Erf";
 		}
 		return std::format("UnaryOp::<invalid:{}>", static_cast<int>(op));
 	}
@@ -172,6 +174,18 @@ namespace
 			return "FusionPattern::MatMulBiasAddReLU";
 		}
 		return std::format("FusionPattern::<invalid:{}>", static_cast<int>(pattern));
+	}
+
+	std::string SortOrderToString(SortOrder order)
+	{
+		switch (order)
+		{
+		case SortOrder::Ascending:
+			return "SortOrder::Ascending";
+		case SortOrder::Descending:
+			return "SortOrder::Descending";
+		}
+		return std::format("SortOrder::<invalid:{}>", static_cast<int>(order));
 	}
 
 	std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
@@ -311,6 +325,21 @@ namespace
 				{
 					return std::format("SliceNode(input={}, axis={}, start={}, length={})", FormatValueRef(value.input),
 					                   value.axis, value.start, value.length);
+				}
+				else if constexpr (std::same_as<T, GetRowsNode>)
+				{
+					return std::format("GetRowsNode(data={}, indices={})", FormatValueRef(value.data),
+					                   FormatValueRef(value.indices));
+				}
+				else if constexpr (std::same_as<T, ArgsortNode>)
+				{
+					return std::format("ArgsortNode(input={}, order={})", FormatValueRef(value.input),
+					                   SortOrderToString(value.order));
+				}
+				else if constexpr (std::same_as<T, MulMatIdNode>)
+				{
+					return std::format("MulMatIdNode(as={}, b={}, ids={})", FormatValueRef(value.as),
+					                   FormatValueRef(value.b), FormatValueRef(value.ids));
 				}
 				else if constexpr (std::same_as<T, FusedOpNode>)
 				{
