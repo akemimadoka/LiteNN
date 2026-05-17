@@ -1,5 +1,5 @@
+#include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
-#include <LiteNN/Layer/LayerUtils.h>
 
 #include <span>
 #include <stdexcept>
@@ -10,41 +10,25 @@
 
 namespace LiteNN::Layer
 {
-	// 在每个轴的末尾追加零填充，paddings.size() 必须等于输入 rank。
+	inline NodeOutput AddPad(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> lowPads,
+	                         std::span<const std::size_t> highPads,
+	                         PadMode mode = PadMode::Constant, double constantValue = 0.0)
+	{
+		const auto info = subgraph.GetOutputInfo(input);
+		auto low = std::vector<std::size_t>(lowPads.begin(), lowPads.end());
+		auto high = std::vector<std::size_t>(highPads.begin(), highPads.end());
+		auto outputShape = ::LiteNN::Detail::PadOutputShape(info.shape, low, high);
+		const auto result = subgraph.AddNode(PadNode{ input, std::move(low), std::move(high), mode, constantValue },
+		                                     { OutputInfo{ info.dtype, std::move(outputShape) } });
+		return { result, 0 };
+	}
+
+	// Backward-compatible helper: append zero padding at the end of each axis.
 	inline NodeOutput AddPad(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> paddings)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
-		if (info.shape.empty())
-		{
-			throw std::runtime_error("Pad input must have rank >= 1");
-		}
-		if (paddings.size() != info.shape.size())
-		{
-			throw std::runtime_error("Pad paddings rank must match input rank");
-		}
-
-		auto current = input;
-		auto currentShape = info.shape;
-		for (std::size_t axis = 0; axis < paddings.size(); ++axis)
-		{
-			if (paddings[axis] == 0)
-			{
-				continue;
-			}
-
-			auto padShape = currentShape;
-			padShape[axis] = paddings[axis];
-			const auto zeroPad = Detail::AddConstant(subgraph, Detail::MakeFilledTensor(padShape, info.dtype, 0.0));
-
-			auto outputShape = currentShape;
-			outputShape[axis] += paddings[axis];
-			const auto concatId = subgraph.AddNode(ConcatNode{ { current, { zeroPad, 0 } }, axis },
-			                                      { OutputInfo{ info.dtype, outputShape } });
-			current = { concatId, 0 };
-			currentShape = std::move(outputShape);
-		}
-
-		return current;
+		std::vector<std::size_t> lowPads(info.shape.size(), 0uz);
+		return AddPad(subgraph, input, lowPads, paddings, PadMode::Constant, 0.0);
 	}
 
 	inline SubgraphId BuildPad(Graph& graph, DataType dtype, ShapeView shape, std::span<const std::size_t> paddings)
@@ -52,6 +36,17 @@ namespace LiteNN::Layer
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddPad(subgraph, { input, 0 }, paddings);
+		subgraph.SetResults({ result });
+		return graph.AddSubgraph(std::move(subgraph));
+	}
+
+	inline SubgraphId BuildPad(Graph& graph, DataType dtype, ShapeView shape, std::span<const std::size_t> lowPads,
+	                           std::span<const std::size_t> highPads,
+	                           PadMode mode = PadMode::Constant, double constantValue = 0.0)
+	{
+		Subgraph subgraph;
+		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
+		const auto result = AddPad(subgraph, { input, 0 }, lowPads, highPads, mode, constantValue);
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
 	}

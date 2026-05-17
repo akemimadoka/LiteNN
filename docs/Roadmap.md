@@ -266,6 +266,136 @@ single-thread, CPU multithread, CUDA, AOT, PyTorch, and llama.cpp baselines.
 - [ ] Keep `bench.py` execution notes explicit for Windows/Python 3.11 environments.
 - [x] Add a self-contained GGUF conversion example that creates a tiny GGUF fixture, imports it, lowers it, saves `.ltnn` artifacts, and runs CPU prefill/decode.
 
+### G5: Core Node Expansion
+
+Purpose: 补全 LiteNN 作为通用神经网络框架仍缺失的基础原语 Node，使 G2.2 P2
+所列 ggml 算子能以"Node 组合 + Layer 包装"的健康方式落地，而非以兼容专用的
+catch-all 桩节点伪装"已支持"。同时也把一部分明显应当作为 Node 的常用热点路径
+（Softmax、归一化、批量 MatMul 等）从纯 Layer 实现升级为 Node，便于后端原生
+优化与 MLIR 端到端编译。
+
+设计原则：
+
+- 任何 P2/兼容算子若可由通用 Node 组合实现，就以 Layer 实现，不新增 Node。
+- 真正需要新增 Node 的两类情况：
+  1. 现有原语在表达上**无法**干净表达（如任意维度转置、关联扫描、Im2Col 窗口、稀疏 gather/scatter）；
+  2. 用 Layer 可以表达但**性能/数值/可微性收益足够高**（如 Softmax、归一化、批量 MatMul）。
+- 新增 Node 必须一次完成完整的 14 个 touch points，否则视为污染（参考 G5.0）。
+- 仅在 ggml 内部出现、无任何通用 NN 含义的工件（如 `WIN_PART`、`GET_REL_POS`），
+  以 Layer 形式落地在 ggml 兼容路径，并明确标注为 compatibility-only。
+
+#### G5.0 Add-a-Node Touch Point Checklist
+
+每新增一个 Node 必须同时完成以下 14 项；缺失任何一项即视为"半成品 Node"，应拒绝合入。
+
+本 checklist 在 `PermuteNode` 落地时被首次端到端走通，作为 reference implementation 固化；
+后续每个 G5 Node 都必须复用同一流程。每条目下注明 PermuteNode 中对应位置以便对照。
+
+- [x] `src/LiteNN/Graph.h`: struct 定义并加入 `Node` 命名空间（自动进入 `NodeVariant`）。
+      Ref: `PermuteNode { NodeOutput input; std::vector<std::size_t> permutation; }`。
+- [x] `src/LiteNN/Debug/Dump.cpp`: 格式化文本与 node-kind 名称。
+- [x] `src/LiteNN/Validation/GraphValidator.h`: name 映射、输入引用校验、输出 shape/dtype 校验。
+      Ref: 校验 permutation 是 input rank 的合法排列，`output.shape[d] == input.shape[permutation[d]]`。
+- [x] `src/LiteNN/Serialization/ModelIO.h`: 写入/读取分支；如新字段不兼容旧版本需 bump 文件版本。
+      Ref: `kModelVersion` bump 至 11；新增 `NodeKind::Permute`。
+- [x] `src/LiteNN/Pass/ConstFoldPass.h`: clone + 可选常量折叠求值（3 处分支）。
+      Ref: clone / markInput / Eval 三处 + `EvalPermute` helper。
+- [x] `src/LiteNN/Pass/ForwardOnlyPass.h`: clone 分支（注意用 `remapOutput` 而非 `remap`）。
+- [x] `src/LiteNN/Pass/FusionPass.h`: clone + 候选模式分类（2 处分支）。
+- [x] `src/LiteNN/Pass/InlinePass.h`: clone 分支。
+- [x] `src/LiteNN/Pass/AutogradPass.h`: 输入依赖、clone、反向梯度（3 处分支）。
+      Ref: `EmitPermuteGrad` 用逆置换 `inverse[permutation[d]] = d`。
+- [x] `src/LiteNN/Runtime/Interpreter.h`: `Execute` 重载，至少覆盖 CPU 参考实现。
+- [x] `src/LiteNN/Compiler/Translation/GraphToMLIR.cpp`(+ `LiteNNDialect.td` 若需要新 op): MLIR 下沉。
+      Ref: PermuteNode 暂为显式 stub（抛 "not supported"），复用解释器路径——
+      允许 native lowering 滞后于 Node 主体，但必须显式 stub，不得静默通过。
+- [x] `src/LiteNN/Device/*` (CUDA 等): 后端原生路径或显式 fallback。
+      Ref: CPU 写 native kernel；CUDA 非热点走 host fallback
+      （`MakeHostBuffer + CopyToCPU + CPU traits + CopyFromCPU`），热点 Node 必须写 native kernel。
+- [x] `src/LiteNN/Layer/`: 至少一个 Layer 包装，确保上层调用方走 Layer 而非裸 Node。
+      Ref: `Layer/Permute.h` (`AddPermute` / `BuildPermute` / `AddTranspose`)。
+- [x] `tests/`: 形状/dtype/数值正确性测试；若可微，需 AutogradPass 单测；若可编译，需 AOT smoke。
+      Ref: `tests/PermuteNodeTest.cpp` 6 用例覆盖 forward (2D/3D/identity) + Layer 包装 + backward + ConstFold。
+
+#### G5.1 Foundation Data Movement Nodes
+
+- [x] `PermuteNode`: 任意维度转置，输入 + permutation；替代仅 2D 的 `UnaryOp::Transpose`，
+      `UnaryOp::Transpose` 保留作为兼容别名直到调用方迁移完成。
+      解锁：multi-head 批量注意力、`PERMUTE`/`TRANSPOSE` 通用语义、`WIN_PART`/`WIN_UNPART` 的 Layer 实现。
+      （已完成：CPU 内核 + CUDA host fallback + Validator/Dump/ModelIO v11/Interpreter +
+      全部 Pass clone + ConstFold + AutogradPass `EmitPermuteGrad`（逆置换） +
+      `Layer/Permute.h`（含 `AddTranspose`）+ `PermuteNodeTest` 6 个用例全部通过；
+      MLIR lowering 暂为 stub，复用解释器路径。）
+- [x] `BroadcastToNode`: 显式将某些维度从 1 扩到指定大小（含插入前导单位维），
+      不复制数据但暴露明确的 shape 推导；替代 BinaryOp 隐式广播作为前置步骤。
+      解锁：`REPEAT`、`UPSCALE-Nearest` 的 Layer 实现。
+      （已完成：Graph/Validator/Dump/ModelIO v12/Interpreter CPU reference + non-CPU host fallback
+      through interpreter、ConstFold、ForwardOnly/Fusion/Inline/Autograd clone/dependency 接入、
+      `Layer/BroadcastTo.h`、`DataMovementNodeTest` 覆盖前导维插入与 singleton dim 扩展；
+      MLIR lowering 与 Autograd differentiation 暂为显式 stub。）
+- [x] `PadNode`: 任意轴前/后填充，模式 = constant/reflect/replicate，含填充值；
+      取代 `Layer::AddPad` 走 zero-Constant + 多次 Concat 的低效路径。
+      解锁：`PAD` 与 Conv 边界、注意力 mask 边界。
+      （已完成：旧 `Layer::AddPad(input, paddings)` 保持兼容并改走 `PadNode`；
+      新增 low/high/mode/value 接口；CPU reference 支持 constant/reflect/replicate；
+      ModelIO v12、ConstFold、pass clone/dependency、`DataMovementNodeTest` 已覆盖三种模式；
+      MLIR lowering 与 Autograd differentiation 暂为显式 stub。）
+- [x] `GatherNode`: 任意轴 gather，indices 任意 rank；`GetRowsNode` 成为 axis=0 的特例。
+      解锁：`GET_REL_POS`、稀疏 KV 访问、tokenwise routing 的真实路径。
+      （已完成：CPU reference 支持任意 axis 与 indices 任意 rank，indices dtype 为 Int32/Int64；
+      新增 `Layer/Gather.h`；ModelIO v12、ConstFold、pass clone/dependency、`DataMovementNodeTest`
+      已覆盖 axis=1 gather；MLIR lowering 与 Autograd differentiation 暂为显式 stub。）
+- [x] `ScatterNode`: 任意轴 scatter（加性/替换两种模式），对应 `GET_ROWS_BACK`、KV-cache `SET`。
+      （已完成：CPU reference 支持 update/add 两种模式，重复 index 在 update 模式下后写覆盖、
+      add 模式下累加；Bool add 被显式拒绝；新增 `Layer/Scatter.h`；
+      ModelIO v12、ConstFold、pass clone/dependency、`DataMovementNodeTest` 已覆盖 update/add
+      与序列化 roundtrip；MLIR lowering 与 Autograd differentiation 暂为显式 stub。）
+
+#### G5.2 Scan and Recurrence Nodes
+
+- [ ] `ScanNode`: 沿指定轴的关联扫描（先支持 sum/max；预留 prod、logsumexp 接口）。
+      取代 `Layer::AddCumsum` 的 O(N) 串行 slice+add+concat 路径。
+      解锁：高效 `CUMSUM`、`SSM_SCAN` 的可向量化基线。
+- [ ] `SSMScanNode`: Mamba 风格 selective scan（state, dt, A, B, C 五元 + 可选 D）。
+      仅当首个真实 Mamba/SSM 目标模型确定后实现；MVP 走 CPU 参考实现，CUDA 留 TODO。
+- [ ] `RWKVWKVNode`: 抽象 RWKV/GLA/GatedDeltaNet 的 token-by-token 递推核；待第一个真实
+      RWKV 目标模型确定后再具体化输入签名，避免提前过度抽象。
+
+#### G5.3 Hot-path Fused Nodes
+
+- [ ] `SoftmaxNode`: 沿指定轴的数值稳定 softmax；取代 `Layer::AddSoftmax` 的
+      max-subtract + exp + reduce + divide 五次访存。CUDA/MLIR 可一次性下沉为 fused kernel。
+- [ ] `NormalizationNode`: 统一 `LayerNorm` / `RMSNorm` / `GroupNorm` 三种归一化，
+      参数 = mode + axis（或 group 数）+ eps + 可选 affine。取代三个 Layer 中各自展开
+      的 reduce+broadcast+sqrt+divide 链。
+- [ ] `BatchMatMulNode`: 显式批量 MatMul，支持 >2D 输入与前导维广播；
+      解锁多头注意力的真实表达，并使 cuBLAS strided batched GEMM 可被原生映射。
+      在该 Node 落地后，`FlashAttnExt` 与 LLaMA decoder 由 2D 路径升级为 multi-head 批量路径。
+
+#### G5.4 Convolution and Pooling Nodes
+
+- [ ] `Im2ColNode`: 通用滑窗展开（1D/2D/3D 由 spatial rank 参数决定）。
+      `Conv*` 的 Layer 实现 = `Im2Col` + reshape + `MatMul`；首要目标是表达正确性而非性能。
+- [ ] `Conv2DNode`: 直接卷积原语，与 Im2Col-Layer 路径互为参考；CUDA 后端绑定 cuDNN。
+- [ ] `ConvTranspose2DNode`: 转置卷积；表达上可借助 padded Conv，但 CUDA 上 cuDNN 有原生 kernel，
+      因此独立成 Node。
+- [ ] `Pool2DNode`: max/average 池化，含 1D 退化形式（kernel 高度 = 1 即 Pool1D）。
+- [ ] `UpsampleNode`: nearest/bilinear/bicubic 插值；nearest 可由 `BroadcastTo` + `Reshape` 表达
+      并作为参考，但 bilinear/bicubic 的数值表达过于复杂，必须以 Node 形式存在。
+
+#### G5.5 P2 Coverage Driven by New Nodes
+
+Status: 待 G5.1–G5.4 推进过程中分批勾选；这里只列对应关系，避免重复列表。
+
+- [ ] G2.2 P2 `PAD`、`CUMSUM`、`REPEAT`：由 G5.1 / G5.2 的新 Node 直接驱动 Layer 重写。
+- [ ] G2.2 P2 `WIN_PART`、`WIN_UNPART`、`GET_REL_POS`、`ADD_REL_POS`：以 ggml 兼容 Layer 落地，
+      明确标注为 compatibility-only，不引入新 Node。
+- [ ] G2.2 P2 `CONV_1D/2D/3D`、`CONV_TRANSPOSE_*`、`IM2COL`、`POOL_*`、`UPSCALE`：由 G5.4 驱动。
+- [ ] G2.2 P2 `SSM_CONV`、`SSM_SCAN`：由 G5.2 `SSMScanNode` 驱动，等待真实 Mamba 目标模型。
+- [ ] G2.2 P2 `RWKV_WKV6/7`、`GATED_LINEAR_ATTN`、`GATED_DELTA_NET`：由 G5.2 `RWKVWKVNode` 驱动，
+      等待真实 RWKV 目标模型。
+- [ ] G2.2 P2 训练/反向相关算子：与 G5 各 Node 的 autograd 实现一并推进，仅当真实训练用例出现时启用。
+
 ## Hidden Requirements
 
 - Low precision support is not only an enum addition. Tensor allocation, CPU conversion, serialization, graph validation, compiler type lowering, compiled artifact metadata, tests, and debugging output all need one source of dtype truth.

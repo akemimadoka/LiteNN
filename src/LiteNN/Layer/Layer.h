@@ -5,10 +5,12 @@
 #include <LiteNN/Layer/AddId.h>
 #include <LiteNN/Layer/Argsort.h>
 #include <LiteNN/Layer/Arange.h>
+#include <LiteNN/Layer/BroadcastTo.h>
 #include <LiteNN/Layer/CausalMask.h>
 #include <LiteNN/Layer/Cumsum.h>
 #include <LiteNN/Layer/FlashAttnExt.h>
 #include <LiteNN/Layer/Flatten.h>
+#include <LiteNN/Layer/Gather.h>
 #include <LiteNN/Layer/GroupNorm.h>
 #include <LiteNN/Layer/KVCache.h>
 #include <LiteNN/Layer/L2Norm.h>
@@ -16,10 +18,12 @@
 #include <LiteNN/Layer/Linear.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Pad.h>
+#include <LiteNN/Layer/Permute.h>
 #include <LiteNN/Layer/ReLU.h>
 #include <LiteNN/Layer/RMSNorm.h>
 #include <LiteNN/Layer/Roll.h>
 #include <LiteNN/Layer/RoPE.h>
+#include <LiteNN/Layer/Scatter.h>
 #include <LiteNN/Layer/Softmax.h>
 #include <LiteNN/Layer/SumRows.h>
 #include <LiteNN/Layer/SwiGLU.h>

@@ -159,6 +159,8 @@ namespace LiteNN
 		                      std::size_t axis, std::size_t start, std::size_t length);
 		static void DoGetRowsOp(CUDA& device, void* dst, DataType dataType, ShapeView dataShape, const void* data,
 		                       DataType indexType, ShapeView indexShape, const void* indices);
+		static void DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                       ShapeView permutation);
 	};
 } // namespace LiteNN
 

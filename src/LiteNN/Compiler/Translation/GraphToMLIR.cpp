@@ -538,6 +538,41 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support ArgsortNode yet; use the interpreter path");
 	}
 
+	void emitNode(const Subgraph&, NodeId, const PermuteNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support PermuteNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const BroadcastToNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support BroadcastToNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const PadNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support PadNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const GatherNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support GatherNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const ScatterNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support ScatterNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)

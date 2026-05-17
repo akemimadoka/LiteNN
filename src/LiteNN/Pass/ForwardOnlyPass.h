@@ -157,6 +157,28 @@ namespace LiteNN
 						    {
 							    return ReshapeNode{ remapOutput(node.input), node.targetShape };
 						    }
+						    else if constexpr (std::same_as<T, PermuteNode>)
+						    {
+							    return PermuteNode{ remapOutput(node.input), node.permutation };
+						    }
+						    else if constexpr (std::same_as<T, BroadcastToNode>)
+						    {
+							    return BroadcastToNode{ remapOutput(node.input), node.targetShape };
+						    }
+						    else if constexpr (std::same_as<T, PadNode>)
+						    {
+							    return PadNode{ remapOutput(node.input), node.lowPads, node.highPads, node.mode,
+							                    node.constantValue };
+						    }
+						    else if constexpr (std::same_as<T, GatherNode>)
+						    {
+							    return GatherNode{ remapOutput(node.data), remapOutput(node.indices), node.axis };
+						    }
+						    else if constexpr (std::same_as<T, ScatterNode>)
+						    {
+							    return ScatterNode{ remapOutput(node.data), remapOutput(node.indices),
+							                        remapOutput(node.updates), node.axis, node.mode };
+						    }
 						    else if constexpr (std::same_as<T, ConcatNode>)
 						    {
 							    return ConcatNode{ remapList(node.inputs), node.axis };

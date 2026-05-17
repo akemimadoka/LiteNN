@@ -56,6 +56,19 @@ namespace LiteNN
 		Descending,
 	};
 
+	enum class PadMode
+	{
+		Constant,
+		Reflect,
+		Replicate,
+	};
+
+	enum class ScatterMode
+	{
+		Update,
+		Add,
+	};
+
 	template <UnaryOp Op>
 	struct DefaultUnaryOpTraits
 	{

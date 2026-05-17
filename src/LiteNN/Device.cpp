@@ -93,4 +93,10 @@ namespace LiteNN
 	{
 		device.impl_->DoGetRowsOp(dst, dataType, dataShape, data, indexType, indexShape, indices);
 	}
+
+	void DeviceTraits<PolymorphicDevice>::DoPermuteOp(PolymorphicDevice& device, void* dst, DataType type,
+	                                                 ShapeView srcShape, const void* src, ShapeView permutation)
+	{
+		device.impl_->DoPermuteOp(dst, type, srcShape, src, permutation);
+	}
 } // namespace LiteNN

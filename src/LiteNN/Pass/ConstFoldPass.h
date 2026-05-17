@@ -1,3 +1,4 @@
+#include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Pass.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -97,6 +98,37 @@ namespace LiteNN
 			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), outInfo.dtype,
 			                            result.RawData());
 			return result;
+		}
+
+		static Tensor<CPU> EvalPermute(const Tensor<CPU>& input, const std::vector<std::size_t>& permutation,
+		                              const OutputInfo& outInfo)
+		{
+			CPU device;
+			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
+			DeviceTraits<CPU>::DoPermuteOp(device, result.RawData(), input.DType(), input.Shape(), input.RawData(),
+			                              ShapeView{ permutation });
+			return result;
+		}
+
+		static Tensor<CPU> EvalBroadcastTo(const Tensor<CPU>& input, const BroadcastToNode& node)
+		{
+			return Detail::EvalBroadcastTo(input, node.targetShape);
+		}
+
+		static Tensor<CPU> EvalPad(const Tensor<CPU>& input, const PadNode& node)
+		{
+			return Detail::EvalPad(input, node.lowPads, node.highPads, node.mode, node.constantValue);
+		}
+
+		static Tensor<CPU> EvalGather(const Tensor<CPU>& data, const Tensor<CPU>& indices, const GatherNode& node)
+		{
+			return Detail::EvalGather(data, indices, node.axis);
+		}
+
+		static Tensor<CPU> EvalScatter(const Tensor<CPU>& data, const Tensor<CPU>& indices, const Tensor<CPU>& updates,
+		                              const ScatterNode& node)
+		{
+			return Detail::EvalScatter(data, indices, updates, node.axis, node.mode);
 		}
 
 		static Tensor<CPU> EvalConcat(const std::vector<std::optional<Tensor<CPU>>>& constValues,
@@ -239,6 +271,26 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    return ReshapeNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ remap(n.input), n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ remap(n.input), n.lowPads, n.highPads, n.mode, n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return GatherNode{ remap(n.data), remap(n.indices), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return ScatterNode{ remap(n.data), remap(n.indices), remap(n.updates), n.axis, n.mode };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -388,6 +440,29 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    markInput(node.data);
+					    markInput(node.indices);
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    markInput(node.data);
+					    markInput(node.indices);
+					    markInput(node.updates);
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -540,6 +615,54 @@ namespace LiteNN
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    constValues[nodeId] = EvalReshape(input, entry.outputInfos[0]);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalPermute(input, node.permutation, entry.outputInfos[0]);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalBroadcastTo(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    constValues[nodeId] = EvalPad(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    if (isConst[node.data.node] && isConst[node.indices.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& data = GetConstValue(constValues, node.data);
+							    const auto& indices = GetConstValue(constValues, node.indices);
+							    constValues[nodeId] = EvalGather(data, indices, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    if (isConst[node.data.node] && isConst[node.indices.node] && isConst[node.updates.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& data = GetConstValue(constValues, node.data);
+							    const auto& indices = GetConstValue(constValues, node.indices);
+							    const auto& updates = GetConstValue(constValues, node.updates);
+							    constValues[nodeId] = EvalScatter(data, indices, updates, node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)

@@ -188,6 +188,32 @@ namespace
 		return std::format("SortOrder::<invalid:{}>", static_cast<int>(order));
 	}
 
+	std::string PadModeToString(PadMode mode)
+	{
+		switch (mode)
+		{
+		case PadMode::Constant:
+			return "PadMode::Constant";
+		case PadMode::Reflect:
+			return "PadMode::Reflect";
+		case PadMode::Replicate:
+			return "PadMode::Replicate";
+		}
+		return std::format("PadMode::<invalid:{}>", static_cast<int>(mode));
+	}
+
+	std::string ScatterModeToString(ScatterMode mode)
+	{
+		switch (mode)
+		{
+		case ScatterMode::Update:
+			return "ScatterMode::Update";
+		case ScatterMode::Add:
+			return "ScatterMode::Add";
+		}
+		return std::format("ScatterMode::<invalid:{}>", static_cast<int>(mode));
+	}
+
 	std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
 	{
 		if (!options.includeConstantValues)
@@ -316,6 +342,34 @@ namespace
 				{
 					return std::format("ReshapeNode(input={}, targetShape={})", FormatValueRef(value.input),
 					                   Validation::ShapeToString(value.targetShape));
+				}
+				else if constexpr (std::same_as<T, PermuteNode>)
+				{
+					return std::format("PermuteNode(input={}, permutation={})", FormatValueRef(value.input),
+					                   Validation::ShapeToString(value.permutation));
+				}
+				else if constexpr (std::same_as<T, BroadcastToNode>)
+				{
+					return std::format("BroadcastToNode(input={}, targetShape={})", FormatValueRef(value.input),
+					                   Validation::ShapeToString(value.targetShape));
+				}
+				else if constexpr (std::same_as<T, PadNode>)
+				{
+					return std::format("PadNode(input={}, lowPads={}, highPads={}, mode={}, constantValue={})",
+					                   FormatValueRef(value.input), Validation::ShapeToString(value.lowPads),
+					                   Validation::ShapeToString(value.highPads), PadModeToString(value.mode),
+					                   value.constantValue);
+				}
+				else if constexpr (std::same_as<T, GatherNode>)
+				{
+					return std::format("GatherNode(data={}, indices={}, axis={})", FormatValueRef(value.data),
+					                   FormatValueRef(value.indices), value.axis);
+				}
+				else if constexpr (std::same_as<T, ScatterNode>)
+				{
+					return std::format("ScatterNode(data={}, indices={}, updates={}, axis={}, mode={})",
+					                   FormatValueRef(value.data), FormatValueRef(value.indices),
+					                   FormatValueRef(value.updates), value.axis, ScatterModeToString(value.mode));
 				}
 				else if constexpr (std::same_as<T, ConcatNode>)
 				{

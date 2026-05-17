@@ -62,6 +62,10 @@ namespace LiteNN
 		    {
 			    DeviceTraits<T>::DoGetRowsOp(device, dst, type, shape, src1, indexType, indexShape, src2)
 		    } -> std::same_as<void>;
+		    // dst = permute(src, permutation)
+		    // permutation[d] 给出输出 axis d 对应的输入 axis（与 numpy/torch 一致）。
+		    // dst.shape[d] == src.shape[permutation[d]]
+		    { DeviceTraits<T>::DoPermuteOp(device, dst, type, shape, src1, shape) } -> std::same_as<void>;
 	    };
 
 	// 擦除了类型的 Device
@@ -135,6 +139,8 @@ namespace LiteNN
 			                       std::size_t axis, std::size_t start, std::size_t length) = 0;
 			virtual void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
 			                        DataType indexType, ShapeView indexShape, const void* indices) = 0;
+			virtual void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			                        ShapeView permutation) = 0;
 			virtual bool IsSameDevice(const Interface& other) const = 0;
 		};
 
@@ -218,6 +224,11 @@ namespace LiteNN
 			{
 				DeviceTraits<D>::DoGetRowsOp(device_, dst, dataType, dataShape, data, indexType, indexShape, indices);
 			}
+			void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			                ShapeView permutation) override
+			{
+				DeviceTraits<D>::DoPermuteOp(device_, dst, type, srcShape, src, permutation);
+			}
 			bool IsSameDevice(const Interface& other) const override
 			{
 				if (other.TypeKey() == TypeKey())
@@ -271,6 +282,8 @@ namespace LiteNN
 		                      std::size_t axis, std::size_t start, std::size_t length);
 		static void DoGetRowsOp(PolymorphicDevice& device, void* dst, DataType dataType, ShapeView dataShape,
 		                       const void* data, DataType indexType, ShapeView indexShape, const void* indices);
+		static void DoPermuteOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape,
+		                       const void* src, ShapeView permutation);
 	};
 
 	struct CPU
@@ -865,6 +878,89 @@ namespace LiteNN
 					break;
 				default:
 					throw std::runtime_error("GetRows indices must have dtype Int32 or Int64");
+				}
+			});
+		}
+
+		static void DoPermuteOp(CPU& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                       ShapeView permutation)
+		{
+			const auto rank = srcShape.NumDim();
+			if (permutation.NumDim() != rank)
+			{
+				throw std::runtime_error(std::format(
+				    "Permute permutation rank {} does not match input rank {}", permutation.NumDim(), rank));
+			}
+			if (rank == 0)
+			{
+				EnumDispatch(type, [&]<DataType TypeValue> {
+					using T = DataTypeMapping<TypeValue>;
+					*static_cast<T*>(dst) = *static_cast<const T*>(src);
+				});
+				return;
+			}
+
+			// 验证是合法置换
+			std::vector<bool> seen(rank, false);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				const auto p = permutation[d];
+				if (p >= rank || seen[p])
+				{
+					throw std::runtime_error("Permute permutation must be a valid permutation of [0, rank)");
+				}
+				seen[p] = true;
+			}
+
+			// 计算输入与输出的行主序 stride
+			std::vector<std::size_t> srcStrides(rank, 1uz);
+			for (auto d = rank; d-- > 1;)
+			{
+				srcStrides[d - 1] = srcStrides[d] * srcShape[d];
+			}
+			std::vector<std::size_t> dstShape(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				dstShape[d] = srcShape[permutation[d]];
+			}
+			std::vector<std::size_t> dstStrides(rank, 1uz);
+			for (auto d = rank; d-- > 1;)
+			{
+				dstStrides[d - 1] = dstStrides[d] * dstShape[d];
+			}
+			// permutedSrcStrides[d] = srcStrides[permutation[d]]：在输出 axis d 上走一步，在输入里该走多少元素
+			std::vector<std::size_t> permutedSrcStrides(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				permutedSrcStrides[d] = srcStrides[permutation[d]];
+			}
+
+			const auto total = srcShape.NumElements();
+
+			EnumDispatch(type, [&]<DataType TypeValue> {
+				using T = DataTypeMapping<TypeValue>;
+				const auto* srcPtr = static_cast<const T*>(src);
+				auto* dstPtr = static_cast<T*>(dst);
+
+				std::vector<std::size_t> coord(rank, 0uz);
+				for (auto linear = 0uz; linear < total; ++linear)
+				{
+					auto srcOffset = 0uz;
+					for (auto d = 0uz; d < rank; ++d)
+					{
+						srcOffset += coord[d] * permutedSrcStrides[d];
+					}
+					dstPtr[linear] = srcPtr[srcOffset];
+
+					// 递增输出坐标（行主序）
+					for (auto d = rank; d-- > 0;)
+					{
+						if (++coord[d] < dstShape[d])
+						{
+							break;
+						}
+						coord[d] = 0;
+					}
 				}
 			});
 		}

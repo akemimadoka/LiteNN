@@ -186,6 +186,52 @@ namespace LiteNN
 			std::vector<std::size_t> targetShape;
 		};
 
+		// 按 permutation 重排 axes（多维转置）
+		// 约定：output.shape[d] == input.shape[permutation[d]]
+		// permutation 必须是 [0, rank) 的合法置换
+		struct PermuteNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> permutation;
+		};
+
+		// 显式广播到 targetShape，按 trailing dimensions 对齐。
+		// 输入维度必须等于目标维度或为 1；target 可插入前导维。
+		struct BroadcastToNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> targetShape;
+		};
+
+		// 任意轴 padding。lowPads/highPads 长度必须等于输入 rank。
+		struct PadNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			PadMode mode{ PadMode::Constant };
+			double constantValue{ 0.0 };
+		};
+
+		// 沿 axis 做 gather，输出 shape = data[:axis] + indices.shape + data[axis+1:].
+		struct GatherNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+			std::size_t axis;
+		};
+
+		// 沿 axis 写回 updates，输出 shape 与 data 相同。
+		// updates.shape 必须等于 data[:axis] + indices.shape + data[axis+1:]。
+		struct ScatterNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+			NodeOutput updates;
+			std::size_t axis;
+			ScatterMode mode{ ScatterMode::Update };
+		};
+
 		// 沿指定轴拼接多个张量
 		// 所有输入除 axis 维度外 shape 必须相同
 		struct ConcatNode

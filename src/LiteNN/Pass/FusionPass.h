@@ -148,6 +148,29 @@ namespace LiteNN
 					    {
 						    countInput(node.input);
 					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    countInput(node.input);
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    countInput(node.input);
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    countInput(node.input);
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    countInput(node.data);
+						    countInput(node.indices);
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    countInput(node.data);
+						    countInput(node.indices);
+						    countInput(node.updates);
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    for (const auto& input : node.inputs)
@@ -595,6 +618,26 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    return ReshapeNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ remap(n.input), n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ remap(n.input), n.lowPads, n.highPads, n.mode, n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return GatherNode{ remap(n.data), remap(n.indices), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return ScatterNode{ remap(n.data), remap(n.indices), remap(n.updates), n.axis, n.mode };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {

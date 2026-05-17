@@ -265,6 +265,29 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+						    ++counts[{ node.updates.node, node.updates.port }];
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    for (const auto& input : node.inputs)
@@ -376,6 +399,12 @@ namespace LiteNN
 					    {
 						    // Concat/Slice 反向只需要 shape/axis/start/length 信息，
 						    // 全部在前向图中静态可知，无需保存激活值
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
+					                      std::same_as<T, GatherNode> || std::same_as<T, ScatterNode>)
+					    {
+						    // G5.1 data movement nodes do not need extra saved activations here.
+						    // Differentiation is still explicitly gated below.
 					    }
 					    else if constexpr (std::same_as<T, GetRowsNode>)
 					    {
@@ -642,6 +671,30 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    return ReshapeNode{ { nodeMap[n.input.node], n.input.port }, n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ { nodeMap[n.input.node], n.input.port }, n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ { nodeMap[n.input.node], n.input.port }, n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ { nodeMap[n.input.node], n.input.port }, n.lowPads, n.highPads, n.mode,
+					                    n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return GatherNode{ { nodeMap[n.data.node], n.data.port },
+					                       { nodeMap[n.indices.node], n.indices.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return ScatterNode{ { nodeMap[n.data.node], n.data.port },
+					                        { nodeMap[n.indices.node], n.indices.port },
+					                        { nodeMap[n.updates.node], n.updates.port }, n.axis, n.mode };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -940,6 +993,26 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ReshapeNode>)
 					    {
 						    EmitReshapeGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    EmitPermuteGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: BroadcastToNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: PadNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: GatherNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ScatterNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
@@ -1818,6 +1891,24 @@ namespace LiteNN
 			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
 			// Reshape gradient: just reshape back to the input shape
 			auto id = bwdSg.AddNode(ReshapeNode{ dy, inInfo.shape }, { OutputInfo{ inInfo.dtype, inInfo.shape } });
+			gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
+		}
+
+		// Permute gradient: 反向传播 = 用逆置换再做一次 Permute
+		// 正向：y.shape[d] = x.shape[p[d]]
+		// 反向：dx.shape[k] = dy.shape[q[k]]，其中 q = p^{-1}
+		static void EmitPermuteGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const PermuteNode& node, NodeOutput dy,
+		                            std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
+		{
+			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
+			const auto rank = node.permutation.size();
+			std::vector<std::size_t> inverse(rank, 0uz);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				inverse[node.permutation[d]] = d;
+			}
+			auto id = bwdSg.AddNode(PermuteNode{ dy, std::move(inverse) },
+			                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
 			gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
 		}
 

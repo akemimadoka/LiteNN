@@ -156,6 +156,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 litenn_enable_sanitizers(LiteNN)
 
+litenn_detect_msys2_mingw(using_msys2_mingw)
+if(using_msys2_mingw)
+    target_compile_options(LiteNN PUBLIC -Wa,-mbig-obj)
+endif()
+
 if(LITENN_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
     target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_CUDA=1)

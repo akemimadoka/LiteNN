@@ -1,3 +1,4 @@
+#include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -505,6 +506,83 @@ namespace LiteNN::Runtime
 			DeviceTraits<D>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), outputInfo.dtype,
 			                           result.RawData());
 			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const PermuteNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			const auto& outputInfo = entry.outputInfos[0];
+
+			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
+			DeviceTraits<D>::DoPermuteOp(device, result.RawData(), input.DType(), input.Shape(), input.RawData(),
+			                            ShapeView{ node.permutation });
+			slots[nodeId].push_back(std::move(result));
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const BroadcastToNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			auto cpuResult = Detail::EvalBroadcastTo(input.CopyToDevice(CPU{}), node.targetShape);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const PadNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& input = GetValue(slots, node.input);
+			auto cpuResult = Detail::EvalPad(input.CopyToDevice(CPU{}), node.lowPads, node.highPads, node.mode,
+			                                 node.constantValue);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const GatherNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& data = GetValue(slots, node.data);
+			const auto& indices = GetValue(slots, node.indices);
+			auto cpuResult = Detail::EvalGather(data.CopyToDevice(CPU{}), indices.CopyToDevice(CPU{}), node.axis);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ScatterNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto& data = GetValue(slots, node.data);
+			const auto& indices = GetValue(slots, node.indices);
+			const auto& updates = GetValue(slots, node.updates);
+			auto cpuResult = Detail::EvalScatter(data.CopyToDevice(CPU{}), indices.CopyToDevice(CPU{}),
+			                                     updates.CopyToDevice(CPU{}), node.axis, node.mode);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
 		}
 
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConcatNode& node,

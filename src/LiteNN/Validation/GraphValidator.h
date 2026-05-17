@@ -1,3 +1,4 @@
+#include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 
 #include <algorithm>
@@ -115,6 +116,29 @@ namespace LiteNN::Validation
 		return false;
 	}
 
+	inline bool IsValidPadMode(PadMode mode)
+	{
+		switch (mode)
+		{
+		case PadMode::Constant:
+		case PadMode::Reflect:
+		case PadMode::Replicate:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidScatterMode(ScatterMode mode)
+	{
+		switch (mode)
+		{
+		case ScatterMode::Update:
+		case ScatterMode::Add:
+			return true;
+		}
+		return false;
+	}
+
 	inline std::string ShapeToString(std::span<const std::size_t> shape)
 	{
 		std::string result = "[";
@@ -182,6 +206,16 @@ namespace LiteNN::Validation
 				    return "ReduceOpNode";
 			    else if constexpr (std::same_as<T, ReshapeNode>)
 				    return "ReshapeNode";
+			    else if constexpr (std::same_as<T, PermuteNode>)
+				    return "PermuteNode";
+			    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    return "BroadcastToNode";
+			    else if constexpr (std::same_as<T, PadNode>)
+				    return "PadNode";
+			    else if constexpr (std::same_as<T, GatherNode>)
+				    return "GatherNode";
+			    else if constexpr (std::same_as<T, ScatterNode>)
+				    return "ScatterNode";
 			    else if constexpr (std::same_as<T, ConcatNode>)
 				    return "ConcatNode";
 			    else if constexpr (std::same_as<T, SliceNode>)
@@ -828,6 +862,123 @@ namespace LiteNN::Validation
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, node.targetShape },
 			           "ReshapeNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const PermuteNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PermuteNode input", true);
+			const auto rank = input.shape.size();
+			if (node.permutation.size() != rank)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("PermuteNode permutation rank {} does not match input rank {}",
+				                 node.permutation.size(), rank));
+				return;
+			}
+			std::vector<bool> seen(rank, false);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				const auto p = node.permutation[d];
+				if (p >= rank || seen[p])
+				{
+					Fail(subgraphId, nodeId,
+					     std::format("PermuteNode permutation must be a valid permutation of [0, {})", rank));
+					return;
+				}
+				seen[p] = true;
+			}
+			std::vector<std::size_t> outputShape(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				outputShape[d] = input.shape[node.permutation[d]];
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "PermuteNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const BroadcastToNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "BroadcastToNode input", true);
+			ValidateShape(node.targetShape,
+			              std::format("subgraph {} node {} BroadcastToNode target", subgraphId, nodeId));
+			const auto outputShape = Detail::BroadcastToShape(input.shape, node.targetShape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape },
+			           "BroadcastToNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const PadNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidPadMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid PadMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PadNode input", true);
+			const auto outputShape = Detail::PadOutputShape(input.shape, node.lowPads, node.highPads);
+			if (node.mode == PadMode::Reflect)
+			{
+				for (std::size_t dim = 0; dim < input.shape.size(); ++dim)
+				{
+					if ((node.lowPads[dim] != 0 || node.highPads[dim] != 0) && input.shape[dim] < 2)
+					{
+						Fail(subgraphId, nodeId,
+						     std::format("PadNode reflect mode requires input dim {} to have size >= 2", dim));
+					}
+				}
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "PadNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GatherNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "GatherNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "GatherNode indices", true);
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("GatherNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+			const auto outputShape = Detail::GatherOutputShape(data.shape, indices.shape, node.axis);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, outputShape }, "GatherNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ScatterNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidScatterMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid ScatterMode {}", static_cast<int>(node.mode)));
+			}
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "ScatterNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "ScatterNode indices", true);
+			const auto updates =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.updates, "ScatterNode updates", true);
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("ScatterNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+			if (node.mode == ScatterMode::Add && data.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ScatterNode Add mode does not support Bool tensors");
+			}
+			const auto expectedUpdatesShape = Detail::ScatterUpdatesShape(data.shape, indices.shape, node.axis);
+			ExpectInfo(subgraphId, nodeId, { updates.dtype, updates.shape }, { data.dtype, expectedUpdatesShape },
+			           "ScatterNode updates");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, data.shape }, "ScatterNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

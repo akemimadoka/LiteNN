@@ -1336,6 +1336,19 @@ namespace LiteNN
 		                              indexShape, hostIndices.data());
 		CopyFromCPU(device, dataType, dst, dataType, hostDst.data(), ShapeView{ resultShape }.NumElements());
 	}
+
+	void DeviceTraits<CUDA>::DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape,
+	                                    const void* src, ShapeView permutation)
+	{
+		const auto numElements = srcShape.NumElements();
+		auto hostSrc = MakeHostBuffer(type, numElements);
+		auto hostDst = MakeHostBuffer(type, numElements);
+		CopyToCPU(device, type, src, numElements, type, hostSrc.data());
+
+		CPU cpu;
+		DeviceTraits<CPU>::DoPermuteOp(cpu, hostDst.data(), type, srcShape, hostSrc.data(), permutation);
+		CopyFromCPU(device, type, dst, type, hostDst.data(), numElements);
+	}
 } // namespace LiteNN
 
 #endif

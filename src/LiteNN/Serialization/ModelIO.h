@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 10;
+		constexpr std::uint32_t kModelVersion = 12;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -65,6 +65,11 @@ namespace LiteNN::Serialization
 			GetRows,
 			Argsort,
 			MulMatId,
+			Permute,
+			BroadcastTo,
+			Pad,
+			Gather,
+			Scatter,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -681,6 +686,43 @@ namespace LiteNN::Serialization
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.targetShape);
 				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Permute));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.permutation);
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BroadcastTo));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.targetShape);
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pad));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteScalar(out, node.constantValue);
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Gather));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+					    WriteSize(out, node.axis);
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scatter));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+					    WriteNodeOutput(out, node.updates);
+					    WriteSize(out, node.axis);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Concat));
@@ -801,6 +843,35 @@ namespace LiteNN::Serialization
 			case NodeKind::Reshape: {
 				const auto input = ReadNodeOutput(in);
 				return ReshapeNode{ input, ReadShape(in) };
+			}
+			case NodeKind::Permute: {
+				const auto input = ReadNodeOutput(in);
+				return PermuteNode{ input, ReadShape(in) };
+			}
+			case NodeKind::BroadcastTo: {
+				const auto input = ReadNodeOutput(in);
+				return BroadcastToNode{ input, ReadShape(in) };
+			}
+			case NodeKind::Pad: {
+				const auto input = ReadNodeOutput(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto mode = static_cast<PadMode>(ReadScalar<std::uint32_t>(in));
+				const auto constantValue = ReadScalar<double>(in);
+				return PadNode{ input, std::move(lowPads), std::move(highPads), mode, constantValue };
+			}
+			case NodeKind::Gather: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				return GatherNode{ data, indices, ReadSize(in) };
+			}
+			case NodeKind::Scatter: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				const auto updates = ReadNodeOutput(in);
+				const auto axis = ReadSize(in);
+				const auto mode = static_cast<ScatterMode>(ReadScalar<std::uint32_t>(in));
+				return ScatterNode{ data, indices, updates, axis, mode };
 			}
 			case NodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);
