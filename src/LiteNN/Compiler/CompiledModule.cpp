@@ -304,6 +304,14 @@ namespace
 
 		llvm::TargetOptions options;
 		auto relocModel = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
+		auto codeModel = std::optional<llvm::CodeModel::Model>();
+		const llvm::Triple targetTriple(triple);
+		if (targetTriple.isOSDarwin() && targetTriple.getArch() == llvm::Triple::aarch64)
+		{
+			// MCJIT may place code outside ARM64 branch26 range from libSystem; use
+			// address materialization for external calls instead of direct BL relocations.
+			codeModel = llvm::CodeModel::Large;
+		}
 		auto cpuName = llvm::sys::getHostCPUName();
 		std::string cpu = cpuName.empty() ? std::string("generic") : cpuName.str();
 
@@ -316,7 +324,7 @@ namespace
 		std::string features = hostFeatureSet.getString();
 
 		auto targetMachine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-		    llvm::Triple(triple), cpu, features, options, relocModel, std::nullopt, llvm::CodeGenOptLevel::Aggressive));
+		    targetTriple, cpu, features, options, relocModel, codeModel, llvm::CodeGenOptLevel::Aggressive));
 		if (!targetMachine)
 		{
 			throw std::runtime_error("Failed to create native LLVM target machine");
@@ -1332,13 +1340,22 @@ namespace
 		EntryFn entry{};
 	};
 
+	void RegisterJITRuntimeSymbol(std::string_view name, void* address)
+	{
+		const auto symbolName = std::string(name);
+		llvm::sys::DynamicLibrary::AddSymbol(symbolName, address);
+		llvm::sys::DynamicLibrary::AddSymbol("_" + symbolName, address);
+	}
+
 	LoadedJIT LoadJIT(std::span<const std::byte> instructions)
 	{
 		InitializeNativeLLVM();
-		llvm::sys::DynamicLibrary::AddSymbol("litenn_cpu_parallel_for_u64",
-		                                      reinterpret_cast<void*>(&litenn_cpu_parallel_for_u64));
-		llvm::sys::DynamicLibrary::AddSymbol("litenn_cpu_matmul_bias_relu_f32",
-		                                      reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_f32));
+		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*)(std::size_t)>(&std::malloc)));
+		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
+		RegisterJITRuntimeSymbol("litenn_cpu_parallel_for_u64",
+		                         reinterpret_cast<void*>(&litenn_cpu_parallel_for_u64));
+		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_f32));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -1369,7 +1386,12 @@ namespace
 		    llvm::object::OwningBinary<llvm::object::ObjectFile>(std::move(object), std::move(buffer)));
 		loaded.engine->finalizeObject();
 
-		const auto address = loaded.engine->getFunctionAddress(std::string(kEntrySymbol));
+		const auto mangledEntrySymbol = "_" + std::string(kEntrySymbol);
+		auto address = loaded.engine->getFunctionAddress(mangledEntrySymbol);
+		if (address == 0)
+		{
+			address = loaded.engine->getFunctionAddress(std::string(kEntrySymbol));
+		}
 		if (address == 0)
 		{
 			throw std::runtime_error("Failed to lookup LiteNN entry symbol");

@@ -75,14 +75,15 @@ namespace LiteNN
 		template <Device D>
 		bool Is() const
 		{
-			return dynamic_cast<Impl<D>*>(impl_.get()) != nullptr;
+			return impl_->TypeKey() == DeviceTypeKey<D>();
 		}
 
 		template <Device D>
 		D* As()
 		{
-			if (const auto impl = dynamic_cast<Impl<D>*>(impl_.get()))
+			if (Is<D>())
 			{
+				const auto impl = static_cast<Impl<D>*>(impl_.get());
 				return std::addressof(impl->device_);
 			}
 			else
@@ -93,7 +94,7 @@ namespace LiteNN
 
 		bool IsSameDeviceType(const PolymorphicDevice& other) const
 		{
-			return typeid(*impl_) == typeid(*other.impl_);
+			return impl_->TypeKey() == other.impl_->TypeKey();
 		}
 
 		bool IsSameDevice(const PolymorphicDevice& other) const
@@ -105,6 +106,7 @@ namespace LiteNN
 		struct Interface
 		{
 			virtual ~Interface();
+			virtual const void* TypeKey() const = 0;
 			virtual std::unique_ptr<Interface> Clone() const = 0;
 			virtual std::string_view Name() const = 0;
 			virtual std::string_view Info() const = 0;
@@ -137,6 +139,11 @@ namespace LiteNN
 			{
 			}
 			~Impl() override = default;
+
+			const void* TypeKey() const override
+			{
+				return DeviceTypeKey<D>();
+			}
 
 			std::unique_ptr<Interface> Clone() const override
 			{
@@ -201,9 +208,9 @@ namespace LiteNN
 			}
 			bool IsSameDevice(const Interface& other) const override
 			{
-				if (auto* p = dynamic_cast<const Impl<D>*>(&other))
+				if (other.TypeKey() == TypeKey())
 				{
-					return device_ == p->device_;
+					return device_ == static_cast<const Impl<D>&>(other).device_;
 				}
 				return false;
 			}
@@ -212,6 +219,13 @@ namespace LiteNN
 			friend class PolymorphicDevice;
 			D device_;
 		};
+
+		template <Device D>
+		static const void* DeviceTypeKey()
+		{
+			static const int key = 0;
+			return std::addressof(key);
+		}
 
 		std::unique_ptr<Interface> impl_;
 		mutable std::string infoCache_;

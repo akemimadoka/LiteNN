@@ -17,6 +17,10 @@ file(GLOB_RECURSE LITENN_COMPILER_SOURCES CONFIGURE_DEPENDS
     *.h
 )
 
+if(NOT LITENN_ENABLE_CUDA)
+    list(FILTER LITENN_COMPILER_SOURCES EXCLUDE REGEX "CUDANativeCodegen\\.(cpp|h)$")
+endif()
+
 add_library(LiteNNCompiler
     ${LITENN_COMPILER_SOURCES}
 )
@@ -24,6 +28,14 @@ add_library(LiteNNCompiler
 add_library(LiteNN::LiteNNCompiler ALIAS LiteNNCompiler)
 
 add_dependencies(LiteNNCompiler LiteNNCompilerIncGen)
+
+if(DEFINED LLVM_ENABLE_RTTI AND NOT LLVM_ENABLE_RTTI)
+    if(MSVC)
+        target_compile_options(LiteNNCompiler PRIVATE /GR-)
+    else()
+        target_compile_options(LiteNNCompiler PRIVATE -fno-rtti)
+    endif()
+endif()
 
 target_include_directories(LiteNNCompiler PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -36,12 +48,9 @@ target_include_directories(LiteNNCompiler PUBLIC
 )
 
 target_link_libraries(LiteNNCompiler PUBLIC LiteNN)
-llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS
+set(LITENN_LLVM_COMPONENTS
     native
     nativecodegen
-    nvptxcodegen
-    nvptxdesc
-    nvptxinfo
     mcjit
     executionengine
     runtimedyld
@@ -59,11 +68,21 @@ llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS
     vectorize
     targetparser
 )
-target_link_libraries(LiteNNCompiler PUBLIC
+
+if(LITENN_ENABLE_CUDA)
+    list(APPEND LITENN_LLVM_COMPONENTS
+        nvptxcodegen
+        nvptxdesc
+        nvptxinfo
+    )
+endif()
+
+llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS ${LITENN_LLVM_COMPONENTS})
+
+set(LITENN_MLIR_LIBS
     MLIRIR
     MLIRSupport
     MLIRFuncDialect
-    MLIRGPUDialect
     MLIRArithDialect
     MLIRParser
     MLIRPass
@@ -77,7 +96,6 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRLinalgDialect
     MLIRLinalgTransforms
     MLIRArithTransforms
-    MLIRGPUToNVVMTransforms
     MLIRSCFTransforms
     MLIRMathDialect
     MLIRSCFDialect
@@ -104,10 +122,21 @@ target_link_libraries(LiteNNCompiler PUBLIC
     MLIRReconcileUnrealizedCasts
     MLIRTargetLLVMIRExport
     MLIRLLVMToLLVMIRTranslation
-    MLIRNVVMToLLVMIRTranslation
     MLIRLLVMDialect
-    MLIRNVVMDialect
     MLIRLLVMCommonConversion
+)
+
+if(LITENN_ENABLE_CUDA)
+    list(APPEND LITENN_MLIR_LIBS
+        MLIRGPUDialect
+        MLIRGPUToNVVMTransforms
+        MLIRNVVMToLLVMIRTranslation
+        MLIRNVVMDialect
+    )
+endif()
+
+target_link_libraries(LiteNNCompiler PUBLIC
+    ${LITENN_MLIR_LIBS}
     LLVMCore
     LLVMAsmPrinter
     ${LITENN_LLVM_NATIVE_LIBS}

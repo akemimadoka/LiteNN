@@ -2,10 +2,13 @@
 
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
-#include <LiteNN/Compiler/CUDANativeCodegen.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+
+#ifdef LITENN_ENABLE_CUDA
+#include <LiteNN/Compiler/CUDANativeCodegen.h>
+#endif
 
 #include <array>
 #include <cstddef>
@@ -342,6 +345,7 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
 	EXPECT_EQ(decoded.kernels[0].arguments[3].kind, CUDANativeArgumentKind::Scalar);
 }
 
+#ifdef LITENN_ENABLE_CUDA
 TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 {
 	const std::array<std::size_t, 2> outputShape{ 2, 3 };
@@ -613,6 +617,7 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesBroadcastBinaryPTX)
 	EXPECT_NE(maxPtx.find("max.ftz.f32"), std::string::npos);
 	EXPECT_NE(maxPtx.find("st.global"), std::string::npos);
 }
+#endif
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadAllowsLibraryCallWithoutBinaryImage)
 {
