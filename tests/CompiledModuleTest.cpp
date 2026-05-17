@@ -68,6 +68,28 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGetRowsGraph()
+	{
+		Graph graph;
+		const auto tableIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 10.0f, 11.0f,
+		                                                                      20.0f, 21.0f,
+		                                                                      30.0f, 31.0f,
+		                                                                      40.0f, 41.0f },
+		                                                                     { 4, 2 }, DataType::Float32)));
+
+		Subgraph sg;
+		const auto indices = sg.AddParam(DataType::Int32, { 3 });
+		const auto table =
+		    sg.AddNode(VariableRefNode{ tableIndex }, { OutputInfo{ DataType::Float32, { 4, 2 } } });
+		const auto gathered = sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 3, 2 } } });
+		sg.SetResults({ { gathered, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "token_ids" });
+		graph.SetOutputNames({ "embeddings" });
+		return graph;
+	}
+
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
 		Graph graph;
@@ -259,6 +281,28 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
+{
+	auto graph = BuildGetRowsGraph();
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32)
+	};
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto loaded = artifact.Load();
+	const auto outputs = loaded.Run(inputs);
+
+	ASSERT_EQ(expected.size(), 1u);
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
+	}
 }
 
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)

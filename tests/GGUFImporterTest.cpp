@@ -3,6 +3,9 @@
 #include <GGUFImporter.h>
 #include <LLaMABuilder.h>
 
+#ifdef LITENN_ENABLE_MLIR
+#include <LiteNN/Compiler/CompiledModule.h>
+#endif
 #include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
@@ -70,6 +73,23 @@ namespace
 			const auto actual = ReadFloat(tensor, i);
 			const auto allowed = tolerance.absolute + tolerance.relative * std::fabs(expected[i]);
 			EXPECT_LE(std::fabs(actual - expected[i]), allowed) << "at element " << i;
+		}
+	}
+
+	template <Device ActualDevice, Device ExpectedDevice>
+	void ExpectTensorNear(const Tensor<ActualDevice>& actual, const Tensor<ExpectedDevice>& expected,
+	                      GGUF::LLaMAParityTolerance tolerance)
+	{
+		const auto actualCpu = actual.CopyToDevice(CPU{});
+		const auto expectedCpu = expected.CopyToDevice(CPU{});
+		ASSERT_EQ(actualCpu.Shape().ToOwned(), expectedCpu.Shape().ToOwned());
+		ASSERT_EQ(actualCpu.NumElements(), expectedCpu.NumElements());
+		for (std::size_t i = 0; i < actualCpu.NumElements(); ++i)
+		{
+			const auto actualValue = ReadFloat(actualCpu, i);
+			const auto expectedValue = ReadFloat(expectedCpu, i);
+			const auto allowed = tolerance.absolute + tolerance.relative * std::fabs(expectedValue);
+			EXPECT_LE(std::fabs(actualValue - expectedValue), allowed) << "at element " << i;
 		}
 	}
 
@@ -767,6 +787,36 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 	EXPECT_NEAR(ReadFloat(outputs[0], 2), expected, 1e-4f);
 }
 
+TEST(GGUFLLaMACausalLM, TransposesImportedNonSquareLinearWeightsIntoLiteNNLayout)
+{
+	auto archive = CopyArchiveExcludingVariables(BuildTinyLLaMAArchive(), { "output.weight" });
+	AddNamedVariable(archive, "output.weight", Tensor<CPU>({
+		1.0f, 2.0f, 3.0f, 4.0f,
+		5.0f, 6.0f, 7.0f, 8.0f,
+		9.0f, 10.0f, 11.0f, 12.0f,
+	}, { 3, 4 }));
+
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
+	const auto outputWeightIndex = lowered.FindVariable("output.weight");
+	ASSERT_TRUE(outputWeightIndex.has_value());
+
+	const auto loweredWeight = lowered.GetVariable(*outputWeightIndex)->Data().CopyToDevice(CPU{});
+	ASSERT_EQ(loweredWeight.Shape().NumDim(), 2u);
+	EXPECT_EQ(loweredWeight.Shape()[0], 4u);
+	EXPECT_EQ(loweredWeight.Shape()[1], 3u);
+
+	const std::array<float, 12> expected = {
+		1.0f, 5.0f, 9.0f,
+		2.0f, 6.0f, 10.0f,
+		3.0f, 7.0f, 11.0f,
+		4.0f, 8.0f, 12.0f,
+	};
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(loweredWeight, i), expected[i], 1e-5f);
+	}
+}
+
 TEST(GGUFLLaMACausalLM, LowersDecodeGraphWithExplicitKVCacheInputsAndOutputs)
 {
 	const auto archive = BuildTinyLLaMAArchive();
@@ -846,6 +896,71 @@ TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 	};
 	ExpectTensorNear(secondOutputs[0], fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
 }
+
+#ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
+
+	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	EXPECT_EQ(artifact.InputSpecs().size(), 1u);
+	EXPECT_EQ(artifact.OutputSpecs().size(), 1u);
+	auto compiled = artifact.Load();
+	EXPECT_EQ(compiled.InputSpecs().size(), 1u);
+	EXPECT_EQ(compiled.OutputSpecs().size(), 1u);
+	EXPECT_EQ(compiled.FindInput("token_ids"), 0u);
+	EXPECT_EQ(compiled.FindOutput("logits"), 0u);
+}
+
+TEST(GGUFLLaMACausalLM, CompilesSingleTokenFullGraphToCPUArtifactAndMatchesInterpreter)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 1);
+	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 2 }, { 1 }) };
+	const auto expected = interpreter.RunForward(lowered, inputs);
+
+	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto compiled = artifact.Load();
+	const auto outputs = compiled.Run(inputs);
+
+	ASSERT_EQ(expected.size(), 1u);
+	ASSERT_EQ(outputs.size(), 1u);
+	ExpectTensorNear(outputs[0], expected[0], tolerance);
+}
+
+TEST(GGUFLLaMACausalLM, CompilesDecodeGraphToCPUArtifactAndMatchesInterpreter)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto lowered = GGUF::LowerLLaMACausalLMDecode(archive, 1, 1, 1);
+	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+
+	Runtime::Interpreter<CPU> interpreter;
+	const std::vector<float> zeroCache{ 0.0f, 0.0f };
+	std::array<Tensor<CPU>, 3> inputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
+	};
+	const auto expected = interpreter.RunForward(lowered, inputs);
+
+	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	EXPECT_EQ(artifact.InputSpecs().size(), 3u);
+	EXPECT_EQ(artifact.OutputSpecs().size(), 3u);
+	auto compiled = artifact.Load();
+	const auto outputs = compiled.Run(inputs);
+
+	ASSERT_EQ(expected.size(), 3u);
+	ASSERT_EQ(outputs.size(), 3u);
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		ExpectTensorNear(outputs[i], expected[i], tolerance);
+	}
+}
+#endif
 
 TEST(GGUFLLaMACausalLM, LowersLinearRopeScaling)
 {

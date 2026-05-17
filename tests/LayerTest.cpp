@@ -208,6 +208,31 @@ TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 	EXPECT_NEAR(ReadFloat(outputs[0], 5), 41.0f, 1e-5f);
 }
 
+TEST(LayerTranspose, SwapsAxesForNonSquareMatrices)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto output = sg.AddNode(UnaryOpNode{ UnaryOp::Transpose, { input, 0 } },
+	                              { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f,
+	                                        4.0f, 5.0f, 6.0f },
+	                                { 2, 3 });
+
+	ASSERT_EQ(result.Shape().NumDim(), 2u);
+	EXPECT_EQ(result.Shape()[0], 3u);
+	EXPECT_EQ(result.Shape()[1], 2u);
+	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), 4.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 2), 2.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 3), 5.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 4), 3.0f, 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 5), 6.0f, 1e-5f);
+}
+
 // ─────────────────────────────────────────────
 //  Softmax 测试
 // ─────────────────────────────────────────────

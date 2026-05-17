@@ -292,6 +292,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     if(TEST_NAME STREQUAL "GGUFImporterTest")
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNGGUFImporter LiteNNGGMLVendor GTest::gtest_main)
+        if(LITENN_ENABLE_MLIR)
+            target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler)
+        endif()
     elseif(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
        OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
        OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"

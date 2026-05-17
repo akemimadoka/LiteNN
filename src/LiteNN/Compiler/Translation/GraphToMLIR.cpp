@@ -5,6 +5,9 @@
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -484,12 +487,48 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const GetRowsNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const GetRowsNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error(
-		    "GraphToMLIR does not support GetRowsNode yet; use the interpreter path for token-id embedding lookup");
+		auto loc = builder_.getUnknownLoc();
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		auto data = getVal(valueMap, node.data);
+		auto indices = getVal(valueMap, node.indices);
+		auto indicesType = cast<RankedTensorType>(indices.getType());
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+
+		SmallVector<AffineExpr> indexExprs;
+		for (int64_t dim = 0; dim < indicesType.getRank(); ++dim)
+		{
+			indexExprs.push_back(getAffineDimExpr(dim, &ctx_));
+		}
+		auto indexMap = AffineMap::get(resultType.getRank(), 0, indexExprs, &ctx_);
+		auto outputMap = AffineMap::getMultiDimIdentityMap(resultType.getRank(), &ctx_);
+		SmallVector<AffineMap> maps = { indexMap, outputMap };
+		SmallVector<utils::IteratorType> iterTypes(resultType.getRank(), utils::IteratorType::parallel);
+		const auto indexRank = indicesType.getRank();
+		const auto resultRank = resultType.getRank();
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty }, maps, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			Value rowIndex = args[0];
+			if (!isa<IndexType>(rowIndex.getType()))
+			{
+				rowIndex = b.create<arith::IndexCastOp>(l, b.getIndexType(), rowIndex);
+			}
+
+			SmallVector<Value> dataCoords{ rowIndex };
+			for (int64_t dim = indexRank; dim < resultRank; ++dim)
+			{
+				dataCoords.push_back(b.create<linalg::IndexOp>(l, dim).getResult());
+			}
+
+			auto element = b.create<tensor::ExtractOp>(l, data, dataCoords).getResult();
+			b.create<linalg::YieldOp>(l, element);
+		});
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const ArgsortNode&, std::span<const OutputInfo>,

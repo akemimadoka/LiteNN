@@ -98,6 +98,7 @@ Completed notes:
 Known risks from review:
 
 - Completed on 2026-05-17: GGUF import now reverses ggml `ne[]` dimensions into LiteNN row-major semantic shape. The non-square token embedding fixture validates real ggml payload order, and GGML block dequantization now treats the last LiteNN dimension as the ggml row width.
+- Completed on 2026-05-17: real tiny LLaMA decode graphs are now re-audited across both the CPU interpreter path and CPU `CompileArtifact().Load()` artifact path, covering token-id embedding lookup, explicit KV-cache ABI, RoPE offset handling, and decode-logit parity against the interpreter.
 
 #### G2.2 llama.cpp Operator Coverage
 
@@ -112,7 +113,7 @@ P0: required for common LLaMA-family decode/inference:
 - [x] Quantized weight MatMul: `MUL_MAT` over supported GGML block formats now lowers by dequantizing archive weights during import.
 - [x] KV cache updates/views: `VIEW`, `CPY`, `SET`, `CONT`, `RESHAPE`, `PERMUTE`, `TRANSPOSE`, and slicing semantics, or a higher-level KV cache op.
 - [x] MLP activation path: `SILU`, `GLU` / `SWIGLU`, `MUL`, `ADD`, `SCALE`, and broadcast helpers such as `REPEAT` / `ADD1`.
-- [ ] Re-audit P0 completion against real decode graphs, because helper presence does not yet guarantee llama.cpp-equivalent layout, cache, RoPE, or axis semantics.
+- [x] Re-audit P0 completion against real decode graphs, because helper presence does not yet guarantee llama.cpp-equivalent layout, cache, RoPE, or axis semantics.
 
 P1: needed by popular variants, MoE models, or efficient attention:
 
@@ -218,18 +219,20 @@ Known risks from review:
 
 #### G2.6 Axis, Shape, and Layout Compatibility
 
-Status: open hardening item.
+Status: completed for axis/layout hardening coverage and compatibility-only operator documentation on 2026-05-17.
 
 - [x] Define global conventions for LiteNN semantic shape order versus ggml `ne[]` order.
 - [x] Add import-time conversion utilities for ggml tensor layouts if LiteNN keeps row-major semantic tensors.
 - [x] Add explicit axis fields to ops that currently assume axis 0 but may be used as general LiteNN layers.
-- [ ] Add tests using non-square dimensions for `TopK`, `Argsort`, `GetRows`, `MulMatId`, transposition, and imported linear weights.
-- [ ] Document compatibility-only operators separately from general-purpose LiteNN operators.
+- [x] Add tests using non-square dimensions for `TopK`, `Argsort`, `GetRows`, `MulMatId`, transposition, and imported linear weights.
+- [x] Document compatibility-only operators separately from general-purpose LiteNN operators.
 
 Known risks from review:
 
 - Completed on 2026-05-17: `ArgsortNode` now carries an explicit axis through validation, dumping, serialization, pass cloning, and interpreter execution. `TopK` exposes the same axis and has last-axis coverage.
 - Completed on 2026-05-17: `MulMatId` is now documented as a ggml-compatible helper with ggml shape order and Float32 accumulator/output semantics. Existing non-square tests cover the interpreter path.
+- Completed on 2026-05-17: focused tests now explicitly cover non-square `GetRows`, `Argsort`, `TopK`, `MulMatId`, 2D `Transpose`, and imported GGUF linear-weight transposition into LiteNN layout.
+- Completed on 2026-05-17: [GGMLCompatibility.md](GGMLCompatibility.md) separates compatibility-only ggml surfaces such as `AddId` and `MulMatId` from general-purpose LiteNN operators used by GGUF lowering.
 
 ### G3: AOT LLM Artifacts
 
@@ -237,11 +240,19 @@ Purpose: compile converted models to embeddable CPU/CUDA artifacts while
 preserving rodata/instruction separation and metadata needed by static/shared
 library loading.
 
+Status: in progress. On 2026-05-17, LiteNN's CPU AOT path now covers tiny token-id LLaMA-family artifacts end-to-end for static decode graphs and for a minimal single-token full-graph prefill run; two-token full-graph prefill is additionally covered through artifact compile/load smoke. CUDA artifact parity and broader multi-token prefill runtime coverage remain tracked here.
+
 - [ ] Compile converted models to CPU/CUDA AOT artifacts with rodata/instruction separation.
 - [ ] Preserve quantized and low-precision metadata in compiled signatures.
 - [ ] Add runtime loader examples for static/shared library embedding.
 - [ ] Support CUDA backend selection for lowered LLaMA graphs once G2 decode semantics are stable.
 - [ ] Validate that AOT artifacts can consume externally provided weights/cache buffers without interpreter-only assumptions.
+
+Known progress from review:
+
+- Completed on 2026-05-17: `GraphToMLIR` now lowers `GetRowsNode`, unblocking token-id embedding lookup for CPU AOT compilation of lowered LLaMA graphs.
+- Completed on 2026-05-17: tiny LLaMA full-graph CPU artifacts now have compile/load smoke coverage for 2-token prefill, and 1-token prefill is validated end-to-end against the CPU interpreter after `CompileArtifact().Load()`.
+- Completed on 2026-05-17: tiny static decode graphs now execute through CPU `CompileArtifact().Load()` with explicit `past_key_N`/`past_value_N` inputs and updated-cache outputs, matching the interpreter without hidden interpreter-only cache state.
 
 ### G4: Validation and Benchmarks
 
