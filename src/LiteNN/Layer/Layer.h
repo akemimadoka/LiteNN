@@ -9,6 +9,7 @@
 #include <LiteNN/Layer/BroadcastTo.h>
 #include <LiteNN/Layer/CausalMask.h>
 #include <LiteNN/Layer/Conv2D.h>
+#include <LiteNN/Layer/ConvTranspose2D.h>
 #include <LiteNN/Layer/Cumsum.h>
 #include <LiteNN/Layer/FlashAttnExt.h>
 #include <LiteNN/Layer/Flatten.h>
@@ -36,5 +37,6 @@
 #include <LiteNN/Layer/SumRows.h>
 #include <LiteNN/Layer/SwiGLU.h>
 #include <LiteNN/Layer/TopK.h>
+#include <LiteNN/Layer/Upsample.h>
 
 #endif

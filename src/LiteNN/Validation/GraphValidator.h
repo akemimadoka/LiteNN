@@ -177,6 +177,18 @@ namespace LiteNN::Validation
 		return false;
 	}
 
+	inline bool IsValidUpsampleMode(UpsampleMode mode)
+	{
+		switch (mode)
+		{
+		case UpsampleMode::Nearest:
+		case UpsampleMode::Bilinear:
+		case UpsampleMode::Bicubic:
+			return true;
+		}
+		return false;
+	}
+
 	inline std::string ShapeToString(std::span<const std::size_t> shape)
 	{
 		std::string result = "[";
@@ -270,8 +282,12 @@ namespace LiteNN::Validation
 				    return "Im2ColNode";
 			    else if constexpr (std::same_as<T, Conv2DNode>)
 				    return "Conv2DNode";
+			    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    return "ConvTranspose2DNode";
 			    else if constexpr (std::same_as<T, Pool2DNode>)
 				    return "Pool2DNode";
+			    else if constexpr (std::same_as<T, UpsampleNode>)
+				    return "UpsampleNode";
 			    else if constexpr (std::same_as<T, ConcatNode>)
 				    return "ConcatNode";
 			    else if constexpr (std::same_as<T, SliceNode>)
@@ -1275,6 +1291,39 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ConvTranspose2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "ConvTranspose2DNode input", true);
+			const auto weight =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.weight, "ConvTranspose2DNode weight", true);
+			if (input.dtype != weight.dtype)
+			{
+				Fail(subgraphId, nodeId, "ConvTranspose2DNode input and weight dtypes must match");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ConvTranspose2DNode does not support Bool tensors");
+			}
+			const auto outputShape = Detail::ConvTranspose2DOutputShape(input.shape, weight.shape, node.strides,
+			                                                            node.dilations, node.lowPads, node.highPads,
+			                                                            node.outputPads, node.groupCount);
+			if (node.bias)
+			{
+				const auto bias =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.bias, "ConvTranspose2DNode bias", true);
+				if (bias.dtype != input.dtype)
+				{
+					Fail(subgraphId, nodeId, "ConvTranspose2DNode bias dtype must match input dtype");
+				}
+				Detail::ValidateConv2DBiasShape(bias.shape, outputShape[1]);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape },
+			           "ConvTranspose2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const Pool2DNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
@@ -1290,6 +1339,23 @@ namespace LiteNN::Validation
 			const auto outputShape =
 			    Detail::Pool2DOutputShape(input.shape, node.kernelShape, node.strides, node.lowPads, node.highPads);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Pool2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const UpsampleNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidUpsampleMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid UpsampleMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "UpsampleNode input", true);
+			if (input.dtype == DataType::Bool && node.mode != UpsampleMode::Nearest)
+			{
+				Fail(subgraphId, nodeId, "UpsampleNode only supports Bool tensors in nearest mode");
+			}
+			const auto outputShape = Detail::UpsampleOutputShape(input.shape, node.outputSpatialShape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "UpsampleNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

@@ -140,10 +140,28 @@ namespace LiteNN
 					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
 					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
 				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    return ConvTranspose2DNode{
+					        remap(n.input),
+					        remap(n.weight),
+					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.outputPads,
+					        n.groupCount
+					    };
+				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
 					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
 					                       n.lowPads, n.highPads, n.countIncludePad };
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    return UpsampleNode{ remap(n.input), n.mode, n.outputSpatialShape, n.alignCorners };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {

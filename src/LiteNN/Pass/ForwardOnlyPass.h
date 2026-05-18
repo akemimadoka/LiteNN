@@ -230,10 +230,29 @@ namespace LiteNN
 							        node.groupCount
 							    };
 						    }
+						    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+						    {
+							    return ConvTranspose2DNode{
+							        remapOutput(node.input),
+							        remapOutput(node.weight),
+							        node.bias ? std::optional<NodeOutput>{ remapOutput(*node.bias) } : std::nullopt,
+							        node.strides,
+							        node.dilations,
+							        node.lowPads,
+							        node.highPads,
+							        node.outputPads,
+							        node.groupCount
+							    };
+						    }
 						    else if constexpr (std::same_as<T, Pool2DNode>)
 						    {
 							    return Pool2DNode{ remapOutput(node.input), node.mode, node.kernelShape,
 							                       node.strides, node.lowPads, node.highPads, node.countIncludePad };
+						    }
+						    else if constexpr (std::same_as<T, UpsampleNode>)
+						    {
+							    return UpsampleNode{ remapOutput(node.input), node.mode, node.outputSpatialShape,
+							                         node.alignCorners };
 						    }
 						    else if constexpr (std::same_as<T, ConcatNode>)
 						    {

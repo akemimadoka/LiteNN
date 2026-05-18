@@ -706,6 +706,67 @@ namespace LiteNN::Detail
 		}
 	}
 
+	inline std::vector<std::size_t> ConvTranspose2DOutputShape(std::span<const std::size_t> inputShape,
+	                                                           std::span<const std::size_t> weightShape,
+	                                                           std::span<const std::size_t> strides,
+	                                                           std::span<const std::size_t> dilations,
+	                                                           std::span<const std::size_t> lowPads,
+	                                                           std::span<const std::size_t> highPads,
+	                                                           std::span<const std::size_t> outputPads,
+	                                                           std::size_t groupCount)
+	{
+		if (inputShape.size() != 4 || weightShape.size() != 4)
+		{
+			throw std::runtime_error(
+			    "ConvTranspose2D input must be [batch, channels, height, width] and weight [in, out/group, kh, kw]");
+		}
+		if (groupCount == 0)
+		{
+			throw std::runtime_error("ConvTranspose2D groupCount must be > 0");
+		}
+		if (strides.size() != 2 || dilations.size() != 2 || lowPads.size() != 2 || highPads.size() != 2 ||
+		    outputPads.size() != 2)
+		{
+			throw std::runtime_error("ConvTranspose2D parameter ranks must be 2");
+		}
+		if (inputShape[1] != weightShape[0])
+		{
+			throw std::runtime_error("ConvTranspose2D weight input channels must match input channels");
+		}
+		if (inputShape[1] % groupCount != 0)
+		{
+			throw std::runtime_error("ConvTranspose2D input channels must be divisible by groupCount");
+		}
+		const std::size_t kernelStorage[] = { weightShape[2], weightShape[3] };
+		ValidateSlidingWindowParams(kernelStorage, strides, dilations, lowPads, highPads, "ConvTranspose2D");
+		for (auto dim = 0uz; dim < 2uz; ++dim)
+		{
+			if (outputPads[dim] >= strides[dim])
+			{
+				throw std::runtime_error("ConvTranspose2D output padding must be smaller than stride");
+			}
+		}
+
+		std::vector<std::size_t> output{ inputShape[0], weightShape[1] * groupCount, 0uz, 0uz };
+		for (auto dim = 0uz; dim < 2uz; ++dim)
+		{
+			const auto inputSpatial = inputShape[dim + 2];
+			if (inputSpatial == 0)
+			{
+				throw std::runtime_error("ConvTranspose2D input spatial dimensions must be > 0");
+			}
+			const auto expanded = (inputSpatial - 1) * strides[dim] + (kernelStorage[dim] - 1) * dilations[dim] +
+			                      outputPads[dim] + 1;
+			const auto pads = lowPads[dim] + highPads[dim];
+			if (expanded <= pads)
+			{
+				throw std::runtime_error("ConvTranspose2D output dimensions must be > 0");
+			}
+			output[dim + 2] = expanded - pads;
+		}
+		return output;
+	}
+
 	inline std::vector<std::size_t> Pool2DOutputShape(std::span<const std::size_t> inputShape,
 	                                                 std::span<const std::size_t> kernelShape,
 	                                                 std::span<const std::size_t> strides,
@@ -721,6 +782,20 @@ namespace LiteNN::Detail
 		    SlidingOutputSpatialShape(inputShape.subspan(2), kernelShape, strides, dilationStorage, lowPads, highPads,
 		                              "Pool2D");
 		return { inputShape[0], inputShape[1], outputSpatial[0], outputSpatial[1] };
+	}
+
+	inline std::vector<std::size_t> UpsampleOutputShape(std::span<const std::size_t> inputShape,
+	                                                   std::span<const std::size_t> outputSpatialShape)
+	{
+		if (inputShape.size() != 4)
+		{
+			throw std::runtime_error("Upsample input must have shape [batch, channels, height, width]");
+		}
+		if (outputSpatialShape.size() != 2 || outputSpatialShape[0] == 0 || outputSpatialShape[1] == 0)
+		{
+			throw std::runtime_error("Upsample output spatial shape must be [height, width] with non-zero dimensions");
+		}
+		return { inputShape[0], inputShape[1], outputSpatialShape[0], outputSpatialShape[1] };
 	}
 
 	inline Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, std::span<const std::size_t> kernelShape,
@@ -905,6 +980,127 @@ namespace LiteNN::Detail
 		return result;
 	}
 
+	inline Tensor<CPU> EvalConvTranspose2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
+	                                      const Tensor<CPU>* bias,
+	                                      std::span<const std::size_t> strides,
+	                                      std::span<const std::size_t> dilations,
+	                                      std::span<const std::size_t> lowPads,
+	                                      std::span<const std::size_t> highPads,
+	                                      std::span<const std::size_t> outputPads,
+	                                      std::size_t groupCount)
+	{
+		if (input.DType() == DataType::Bool)
+		{
+			throw std::runtime_error("ConvTranspose2D does not support Bool tensors");
+		}
+		if (input.DType() != weight.DType() || (bias != nullptr && input.DType() != bias->DType()))
+		{
+			throw std::runtime_error("ConvTranspose2D input, weight, and bias dtypes must match");
+		}
+
+		const auto outputShape = ConvTranspose2DOutputShape(input.Shape().Dims, weight.Shape().Dims, strides, dilations,
+		                                                    lowPads, highPads, outputPads, groupCount);
+		if (bias != nullptr)
+		{
+			ValidateConv2DBiasShape(bias->Shape().Dims, outputShape[1]);
+		}
+
+		const auto batch = input.Shape()[0];
+		const auto inputChannels = input.Shape()[1];
+		const auto inputHeight = input.Shape()[2];
+		const auto inputWidth = input.Shape()[3];
+		const auto outputChannels = outputShape[1];
+		const auto outputHeight = outputShape[2];
+		const auto outputWidth = outputShape[3];
+		const auto inputChannelsPerGroup = inputChannels / groupCount;
+		const auto outputChannelsPerGroup = weight.Shape()[1];
+		const auto kernelHeight = weight.Shape()[2];
+		const auto kernelWidth = weight.Shape()[3];
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.RawData());
+			const auto* filter = static_cast<const T*>(weight.RawData());
+			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+
+			std::fill(dst, dst + result.NumElements(), static_cast<T>(0));
+			if (biasData != nullptr)
+			{
+				for (auto n = 0uz; n < batch; ++n)
+				{
+					for (auto oc = 0uz; oc < outputChannels; ++oc)
+					{
+						for (auto oh = 0uz; oh < outputHeight; ++oh)
+						{
+							for (auto ow = 0uz; ow < outputWidth; ++ow)
+							{
+								dst[((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow] = biasData[oc];
+							}
+						}
+					}
+				}
+			}
+
+			for (auto n = 0uz; n < batch; ++n)
+			{
+				for (auto ic = 0uz; ic < inputChannels; ++ic)
+				{
+					const auto group = ic / inputChannelsPerGroup;
+					const auto outputChannelBegin = group * outputChannelsPerGroup;
+					for (auto ih = 0uz; ih < inputHeight; ++ih)
+					{
+						for (auto iw = 0uz; iw < inputWidth; ++iw)
+						{
+							const auto inputValue = static_cast<double>(
+							    src[((n * inputChannels + ic) * inputHeight + ih) * inputWidth + iw]);
+							for (auto ocg = 0uz; ocg < outputChannelsPerGroup; ++ocg)
+							{
+								const auto oc = outputChannelBegin + ocg;
+								for (auto kh = 0uz; kh < kernelHeight; ++kh)
+								{
+									const auto paddedH = ih * strides[0] + kh * dilations[0];
+									if (paddedH < lowPads[0])
+									{
+										continue;
+									}
+									const auto oh = paddedH - lowPads[0];
+									if (oh >= outputHeight)
+									{
+										continue;
+									}
+									for (auto kw = 0uz; kw < kernelWidth; ++kw)
+									{
+										const auto paddedW = iw * strides[1] + kw * dilations[1];
+										if (paddedW < lowPads[1])
+										{
+											continue;
+										}
+										const auto ow = paddedW - lowPads[1];
+										if (ow >= outputWidth)
+										{
+											continue;
+										}
+										const auto weightIndex =
+										    ((ic * outputChannelsPerGroup + ocg) * kernelHeight + kh) * kernelWidth + kw;
+										const auto outputIndex =
+										    ((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow;
+										const auto acc = static_cast<double>(dst[outputIndex]) +
+										                 inputValue * static_cast<double>(filter[weightIndex]);
+										dst[outputIndex] = static_cast<T>(acc);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		});
+		return result;
+	}
+
 	inline Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, PoolMode mode,
 	                             std::span<const std::size_t> kernelShape,
 	                             std::span<const std::size_t> strides,
@@ -981,6 +1177,137 @@ namespace LiteNN::Detail
 								acc = 0.0;
 							}
 							dst[((n * channels + c) * outHeight + oh) * outWidth + ow] = static_cast<T>(acc);
+						}
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline double UpsampleSourceCoordinate(std::size_t outputIndex, std::size_t inputSize, std::size_t outputSize,
+	                                      bool alignCorners)
+	{
+		if (alignCorners)
+		{
+			return outputSize == 1 ? 0.0 : static_cast<double>(outputIndex) * static_cast<double>(inputSize - 1) /
+			                                static_cast<double>(outputSize - 1);
+		}
+		const auto coordinate = (static_cast<double>(outputIndex) + 0.5) * static_cast<double>(inputSize) /
+		                        static_cast<double>(outputSize) - 0.5;
+		return std::max(0.0, coordinate);
+	}
+
+	inline std::size_t ClampSpatialIndex(long long index, std::size_t size)
+	{
+		if (index < 0)
+		{
+			return 0uz;
+		}
+		const auto asSize = static_cast<std::size_t>(index);
+		return std::min(asSize, size - 1);
+	}
+
+	inline double CubicInterpolationWeight(double x)
+	{
+		constexpr auto alpha = -0.75;
+		x = std::abs(x);
+		if (x <= 1.0)
+		{
+			return (alpha + 2.0) * x * x * x - (alpha + 3.0) * x * x + 1.0;
+		}
+		if (x < 2.0)
+		{
+			return alpha * x * x * x - 5.0 * alpha * x * x + 8.0 * alpha * x - 4.0 * alpha;
+		}
+		return 0.0;
+	}
+
+	inline Tensor<CPU> EvalUpsample(const Tensor<CPU>& input, UpsampleMode mode,
+	                               std::span<const std::size_t> outputSpatialShape,
+	                               bool alignCorners)
+	{
+		const auto outputShape = UpsampleOutputShape(input.Shape().Dims, outputSpatialShape);
+		const auto batch = input.Shape()[0];
+		const auto channels = input.Shape()[1];
+		const auto inputHeight = input.Shape()[2];
+		const auto inputWidth = input.Shape()[3];
+		const auto outputHeight = outputShape[2];
+		const auto outputWidth = outputShape[3];
+
+		if (input.DType() == DataType::Bool && mode != UpsampleMode::Nearest)
+		{
+			throw std::runtime_error("Upsample only supports Bool tensors in nearest mode");
+		}
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+
+			for (auto n = 0uz; n < batch; ++n)
+			{
+				for (auto c = 0uz; c < channels; ++c)
+				{
+					for (auto oh = 0uz; oh < outputHeight; ++oh)
+					{
+						const auto sourceY = UpsampleSourceCoordinate(oh, inputHeight, outputHeight, alignCorners);
+						for (auto ow = 0uz; ow < outputWidth; ++ow)
+						{
+							const auto sourceX = UpsampleSourceCoordinate(ow, inputWidth, outputWidth, alignCorners);
+							const auto outputIndex = ((n * channels + c) * outputHeight + oh) * outputWidth + ow;
+							if (mode == UpsampleMode::Nearest)
+							{
+								const auto nearestY = alignCorners ? std::llround(sourceY)
+								                                  : static_cast<long long>((oh * inputHeight) / outputHeight);
+								const auto nearestX = alignCorners ? std::llround(sourceX)
+								                                  : static_cast<long long>((ow * inputWidth) / outputWidth);
+								const auto iy = ClampSpatialIndex(nearestY, inputHeight);
+								const auto ix = ClampSpatialIndex(nearestX, inputWidth);
+								dst[outputIndex] = src[((n * channels + c) * inputHeight + iy) * inputWidth + ix];
+							}
+							else if (mode == UpsampleMode::Bilinear)
+							{
+								const auto y0 = ClampSpatialIndex(static_cast<long long>(std::floor(sourceY)), inputHeight);
+								const auto x0 = ClampSpatialIndex(static_cast<long long>(std::floor(sourceX)), inputWidth);
+								const auto y1 = std::min(y0 + 1, inputHeight - 1);
+								const auto x1 = std::min(x0 + 1, inputWidth - 1);
+								const auto wy = sourceY - std::floor(sourceY);
+								const auto wx = sourceX - std::floor(sourceX);
+								const auto v00 = static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x0]);
+								const auto v01 = static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x1]);
+								const auto v10 = static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x0]);
+								const auto v11 = static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x1]);
+								const auto top = v00 * (1.0 - wx) + v01 * wx;
+								const auto bottom = v10 * (1.0 - wx) + v11 * wx;
+								dst[outputIndex] = static_cast<T>(top * (1.0 - wy) + bottom * wy);
+							}
+							else if (mode == UpsampleMode::Bicubic)
+							{
+								const auto yBase = static_cast<long long>(std::floor(sourceY));
+								const auto xBase = static_cast<long long>(std::floor(sourceX));
+								auto acc = 0.0;
+								for (auto ky = -1; ky <= 2; ++ky)
+								{
+									const auto iy = ClampSpatialIndex(yBase + ky, inputHeight);
+									const auto wy = CubicInterpolationWeight(sourceY - static_cast<double>(yBase + ky));
+									for (auto kx = -1; kx <= 2; ++kx)
+									{
+										const auto ix = ClampSpatialIndex(xBase + kx, inputWidth);
+										const auto wx = CubicInterpolationWeight(sourceX - static_cast<double>(xBase + kx));
+										const auto value =
+										    static_cast<double>(src[((n * channels + c) * inputHeight + iy) * inputWidth + ix]);
+										acc += value * wy * wx;
+									}
+								}
+								dst[outputIndex] = static_cast<T>(acc);
+							}
+							else
+							{
+								throw std::runtime_error("Unsupported UpsampleMode");
+							}
 						}
 					}
 				}

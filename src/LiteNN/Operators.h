@@ -90,6 +90,13 @@ namespace LiteNN
 		Average,
 	};
 
+	enum class UpsampleMode
+	{
+		Nearest,
+		Bilinear,
+		Bicubic,
+	};
+
 	template <UnaryOp Op>
 	struct DefaultUnaryOpTraits
 	{

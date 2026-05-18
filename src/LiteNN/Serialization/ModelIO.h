@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 15;
+		constexpr std::uint32_t kModelVersion = 16;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -79,6 +79,8 @@ namespace LiteNN::Serialization
 			Im2Col,
 			Conv2D,
 			Pool2D,
+			ConvTranspose2D,
+			Upsample,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -826,6 +828,19 @@ namespace LiteNN::Serialization
 					    WriteShape(out, node.highPads);
 					    WriteSize(out, node.groupCount);
 				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::ConvTranspose2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteNodeOutput(out, node.weight);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteShape(out, node.outputPads);
+					    WriteSize(out, node.groupCount);
+				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pool2D));
@@ -836,6 +851,14 @@ namespace LiteNN::Serialization
 					    WriteShape(out, node.lowPads);
 					    WriteShape(out, node.highPads);
 					    WriteScalar(out, node.countIncludePad);
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Upsample));
+					    WriteNodeOutput(out, node.input);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteShape(out, node.outputSpatialShape);
+					    WriteScalar(out, node.alignCorners);
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -1050,6 +1073,20 @@ namespace LiteNN::Serialization
 				return Conv2DNode{ input, weight, std::move(bias), std::move(strides), std::move(dilations),
 				                   std::move(lowPads), std::move(highPads), groupCount };
 			}
+			case NodeKind::ConvTranspose2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto weight = ReadNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				auto outputPads = ReadShape(in);
+				const auto groupCount = ReadSize(in);
+				return ConvTranspose2DNode{ input, weight, std::move(bias), std::move(strides),
+				                            std::move(dilations), std::move(lowPads), std::move(highPads),
+				                            std::move(outputPads), groupCount };
+			}
 			case NodeKind::Pool2D: {
 				const auto input = ReadNodeOutput(in);
 				const auto mode = static_cast<PoolMode>(ReadScalar<std::uint32_t>(in));
@@ -1060,6 +1097,13 @@ namespace LiteNN::Serialization
 				const auto countIncludePad = ReadScalar<bool>(in);
 				return Pool2DNode{ input, mode, std::move(kernelShape), std::move(strides), std::move(lowPads),
 				                   std::move(highPads), countIncludePad };
+			}
+			case NodeKind::Upsample: {
+				const auto input = ReadNodeOutput(in);
+				const auto mode = static_cast<UpsampleMode>(ReadScalar<std::uint32_t>(in));
+				auto outputSpatialShape = ReadShape(in);
+				const auto alignCorners = ReadScalar<bool>(in);
+				return UpsampleNode{ input, mode, std::move(outputSpatialShape), alignCorners };
 			}
 			case NodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);

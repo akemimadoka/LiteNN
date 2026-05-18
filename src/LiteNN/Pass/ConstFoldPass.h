@@ -180,10 +180,22 @@ namespace LiteNN
 			                          node.lowPads, node.highPads, node.groupCount);
 		}
 
+		static Tensor<CPU> EvalConvTranspose2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
+		                                       const Tensor<CPU>* bias, const ConvTranspose2DNode& node)
+		{
+			return Detail::EvalConvTranspose2D(input, weight, bias, node.strides, node.dilations,
+			                                   node.lowPads, node.highPads, node.outputPads, node.groupCount);
+		}
+
 		static Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, const Pool2DNode& node)
 		{
 			return Detail::EvalPool2D(input, node.mode, node.kernelShape, node.strides,
 			                          node.lowPads, node.highPads, node.countIncludePad);
+		}
+
+		static Tensor<CPU> EvalUpsample(const Tensor<CPU>& input, const UpsampleNode& node)
+		{
+			return Detail::EvalUpsample(input, node.mode, node.outputSpatialShape, node.alignCorners);
 		}
 
 		static Tensor<CPU> EvalConcat(const std::vector<std::optional<Tensor<CPU>>>& constValues,
@@ -387,10 +399,28 @@ namespace LiteNN
 					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
 					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
 				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    return ConvTranspose2DNode{
+					        remap(n.input),
+					        remap(n.weight),
+					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.outputPads,
+					        n.groupCount
+					    };
+				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
 					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
 					                       n.lowPads, n.highPads, n.countIncludePad };
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    return UpsampleNode{ remap(n.input), n.mode, n.outputSpatialShape, n.alignCorners };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -622,7 +652,20 @@ namespace LiteNN
 						    markInput(*node.bias);
 					    }
 				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    markInput(node.input);
+					    markInput(node.weight);
+					    if (node.bias)
+					    {
+						    markInput(*node.bias);
+					    }
+				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
 					    markInput(node.input);
 				    }
@@ -920,12 +963,35 @@ namespace LiteNN
 							    constValues[nodeId] = EvalConv2D(input, weight, bias, node);
 						    }
 					    }
+					    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+					    {
+						    const auto allConst =
+						        isConst[node.input.node] && isConst[node.weight.node] &&
+						        (!node.bias || isConst[node.bias->node]);
+						    if (allConst)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    const auto& weight = GetConstValue(constValues, node.weight);
+							    const auto* bias =
+							        node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
+							    constValues[nodeId] = EvalConvTranspose2D(input, weight, bias, node);
+						    }
+					    }
 					    else if constexpr (std::same_as<T, Pool2DNode>)
 					    {
 						    if (isConst[node.input.node])
 						    {
 							    isConst[nodeId] = true;
 							    constValues[nodeId] = EvalPool2D(GetConstValue(constValues, node.input), node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, UpsampleNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] = EvalUpsample(GetConstValue(constValues, node.input), node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)

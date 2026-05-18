@@ -742,11 +742,25 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support Conv2DNode yet; use the interpreter path");
 	}
 
+	void emitNode(const Subgraph&, NodeId, const ConvTranspose2DNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support ConvTranspose2DNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph&, NodeId, const Pool2DNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support Pool2DNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const UpsampleNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support UpsampleNode yet; use the interpreter path");
 	}
 
 	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,

@@ -320,6 +320,21 @@ namespace LiteNN
 			std::size_t groupCount{ 1 };
 		};
 
+		// 2D channel-first transposed convolution over [batch, channels, height, width].
+		// weight shape is [inChannels, outChannelsPerGroup, kernelHeight, kernelWidth].
+		struct ConvTranspose2DNode
+		{
+			NodeOutput input;
+			NodeOutput weight;
+			std::optional<NodeOutput> bias;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			std::vector<std::size_t> outputPads;
+			std::size_t groupCount{ 1 };
+		};
+
 		// 2D channel-first pooling over [batch, channels, height, width].
 		struct Pool2DNode
 		{
@@ -330,6 +345,15 @@ namespace LiteNN
 			std::vector<std::size_t> lowPads;
 			std::vector<std::size_t> highPads;
 			bool countIncludePad{ false };
+		};
+
+		// 2D channel-first upsampling/interpolation over [batch, channels, height, width].
+		struct UpsampleNode
+		{
+			NodeOutput input;
+			UpsampleMode mode{ UpsampleMode::Nearest };
+			std::vector<std::size_t> outputSpatialShape;
+			bool alignCorners{ false };
 		};
 
 		// 沿指定轴拼接多个张量

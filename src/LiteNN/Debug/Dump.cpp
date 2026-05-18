@@ -261,6 +261,20 @@ namespace
 		return std::format("PoolMode::<invalid:{}>", static_cast<int>(mode));
 	}
 
+	std::string UpsampleModeToString(UpsampleMode mode)
+	{
+		switch (mode)
+		{
+		case UpsampleMode::Nearest:
+			return "UpsampleMode::Nearest";
+		case UpsampleMode::Bilinear:
+			return "UpsampleMode::Bilinear";
+		case UpsampleMode::Bicubic:
+			return "UpsampleMode::Bicubic";
+		}
+		return std::format("UpsampleMode::<invalid:{}>", static_cast<int>(mode));
+	}
+
 	std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
 	{
 		if (!options.includeConstantValues)
@@ -469,6 +483,15 @@ namespace
 					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
 					    value.groupCount);
 				}
+				else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				{
+					return std::format(
+					    "ConvTranspose2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, lowPads={}, highPads={}, outputPads={}, groupCount={})",
+					    FormatValueRef(value.input), FormatValueRef(value.weight), FormatOptionalValueRef(value.bias),
+					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
+					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
+					    Validation::ShapeToString(value.outputPads), value.groupCount);
+				}
 				else if constexpr (std::same_as<T, Pool2DNode>)
 				{
 					return std::format(
@@ -477,6 +500,12 @@ namespace
 					    Validation::ShapeToString(value.kernelShape), Validation::ShapeToString(value.strides),
 					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
 					    value.countIncludePad);
+				}
+				else if constexpr (std::same_as<T, UpsampleNode>)
+				{
+					return std::format("UpsampleNode(input={}, mode={}, outputSpatialShape={}, alignCorners={})",
+					                   FormatValueRef(value.input), UpsampleModeToString(value.mode),
+					                   Validation::ShapeToString(value.outputSpatialShape), value.alignCorners);
 				}
 				else if constexpr (std::same_as<T, ConcatNode>)
 				{

@@ -58,6 +58,8 @@ namespace
 		const auto input = subgraph.AddParam(DataType::Float32, { 1, 1, 3, 3 });
 		const auto convWeight = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
 		const auto convBias = subgraph.AddParam(DataType::Float32, { 1 });
+		const auto deconvInput = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
+		const auto deconvWeight = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
 
 		const auto im2col = Layer::AddIm2Col(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 0, 0 },
 		                                     { 0, 0 });
@@ -65,7 +67,11 @@ namespace
 		const auto maxPool = Layer::AddMaxPool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
 		const auto avgPool = Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 0, 0 },
 		                                             { 0, 0 }, false);
-		subgraph.SetResults({ im2col, conv, maxPool, avgPool });
+		const auto deconv = Layer::AddConvTranspose2D(subgraph, { deconvInput, 0 }, { deconvWeight, 0 });
+		const auto nearest = Layer::AddNearestUpsample2D(subgraph, { deconvInput, 0 }, { 4, 4 });
+		const auto bilinear = Layer::AddBilinearUpsample2D(subgraph, { deconvInput, 0 }, { 3, 3 }, true);
+		const auto bicubic = Layer::AddBicubicUpsample2D(subgraph, { deconvInput, 0 }, { 2, 2 }, true);
+		subgraph.SetResults({ im2col, conv, maxPool, avgPool, deconv, nearest, bilinear, bicubic });
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 		return graph;
 	}
@@ -79,6 +85,12 @@ namespace
 		                                { 1, 1, 3, 3 }));
 		inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F }, { 1, 1, 2, 2 }));
 		inputs.emplace_back(Tensor<CPU>({ 10.0F }, { 1 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F,
+		                                  3.0F, 4.0F },
+		                                { 1, 1, 2, 2 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 1.0F,
+		                                  1.0F, 1.0F },
+		                                { 1, 1, 2, 2 }));
 		return inputs;
 	}
 } // namespace
@@ -89,7 +101,7 @@ TEST(ConvolutionPoolingNode, Im2ColConv2DAndPoolExecute)
 	Validation::ValidateGraph(graph);
 
 	const auto outputs = RunGraph(graph, MakeG54Inputs());
-	ASSERT_EQ(outputs.size(), 4u);
+	ASSERT_EQ(outputs.size(), 8u);
 
 	ExpectShape(outputs[0].Shape(), { 1, 4, 4 });
 	ExpectTensorNear(outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F,
@@ -105,6 +117,25 @@ TEST(ConvolutionPoolingNode, Im2ColConv2DAndPoolExecute)
 
 	ExpectShape(outputs[3].Shape(), { 1, 1, 2, 2 });
 	ExpectTensorNear(outputs[3], { 3.0F, 4.0F, 6.0F, 7.0F });
+
+	ExpectShape(outputs[4].Shape(), { 1, 1, 3, 3 });
+	ExpectTensorNear(outputs[4], { 1.0F, 3.0F, 2.0F,
+	                               4.0F, 10.0F, 6.0F,
+	                               3.0F, 7.0F, 4.0F });
+
+	ExpectShape(outputs[5].Shape(), { 1, 1, 4, 4 });
+	ExpectTensorNear(outputs[5], { 1.0F, 1.0F, 2.0F, 2.0F,
+	                               1.0F, 1.0F, 2.0F, 2.0F,
+	                               3.0F, 3.0F, 4.0F, 4.0F,
+	                               3.0F, 3.0F, 4.0F, 4.0F });
+
+	ExpectShape(outputs[6].Shape(), { 1, 1, 3, 3 });
+	ExpectTensorNear(outputs[6], { 1.0F, 1.5F, 2.0F,
+	                               2.0F, 2.5F, 3.0F,
+	                               3.0F, 3.5F, 4.0F });
+
+	ExpectShape(outputs[7].Shape(), { 1, 1, 2, 2 });
+	ExpectTensorNear(outputs[7], { 1.0F, 2.0F, 3.0F, 4.0F }, 1e-4F);
 }
 
 TEST(ConvolutionPoolingNode, GroupedConv2DExecutesPerGroup)
@@ -161,7 +192,7 @@ TEST(ConvolutionPoolingNode, AveragePoolPaddingControlsDenominator)
 	                               0.75F, 1.75F, 1.0F });
 }
 
-TEST(ConvolutionPoolingNode, ConstFoldHandlesIm2ColAndPool2D)
+TEST(ConvolutionPoolingNode, ConstFoldHandlesG54Nodes)
 {
 	Graph graph;
 	Subgraph subgraph;
@@ -175,7 +206,17 @@ TEST(ConvolutionPoolingNode, ConstFoldHandlesIm2ColAndPool2D)
 	const auto bias = AddFloatConstant(subgraph, { 10.0F }, { 1 });
 	const auto conv = Layer::AddConv2D(subgraph, input, weight, bias);
 	const auto maxPool = Layer::AddMaxPool2D(subgraph, input, { 2, 2 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
-	subgraph.SetResults({ im2col, conv, maxPool });
+	const auto deconvInput = AddFloatConstant(subgraph,
+	                                          { 1.0F, 2.0F,
+	                                            3.0F, 4.0F },
+	                                          { 1, 1, 2, 2 });
+	const auto deconvWeight = AddFloatConstant(subgraph,
+	                                           { 1.0F, 1.0F,
+	                                             1.0F, 1.0F },
+	                                           { 1, 1, 2, 2 });
+	const auto deconv = Layer::AddConvTranspose2D(subgraph, deconvInput, deconvWeight);
+	const auto nearest = Layer::AddNearestUpsample2D(subgraph, deconvInput, { 4, 4 });
+	subgraph.SetResults({ im2col, conv, maxPool, deconv, nearest });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
 	ConstFoldPass pass;
@@ -189,13 +230,20 @@ TEST(ConvolutionPoolingNode, ConstFoldHandlesIm2ColAndPool2D)
 	}
 
 	const auto outputs = RunGraph(graph, {});
-	ASSERT_EQ(outputs.size(), 3u);
+	ASSERT_EQ(outputs.size(), 5u);
 	ExpectTensorNear(outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F,
 	                               2.0F, 3.0F, 5.0F, 6.0F,
 	                               4.0F, 5.0F, 7.0F, 8.0F,
 	                               5.0F, 6.0F, 8.0F, 9.0F });
 	ExpectTensorNear(outputs[1], { 16.0F, 18.0F, 22.0F, 24.0F });
 	ExpectTensorNear(outputs[2], { 5.0F, 6.0F, 8.0F, 9.0F });
+	ExpectTensorNear(outputs[3], { 1.0F, 3.0F, 2.0F,
+	                               4.0F, 10.0F, 6.0F,
+	                               3.0F, 7.0F, 4.0F });
+	ExpectTensorNear(outputs[4], { 1.0F, 1.0F, 2.0F, 2.0F,
+	                               1.0F, 1.0F, 2.0F, 2.0F,
+	                               3.0F, 3.0F, 4.0F, 4.0F,
+	                               3.0F, 3.0F, 4.0F, 4.0F });
 }
 
 TEST(ConvolutionPoolingNode, SerializationRoundTripAndDumpPreserveG54Nodes)
@@ -206,7 +254,9 @@ TEST(ConvolutionPoolingNode, SerializationRoundTripAndDumpPreserveG54Nodes)
 	const auto dump = Debug::DumpGraph(graph);
 	EXPECT_NE(dump.find("Im2ColNode"), std::string::npos);
 	EXPECT_NE(dump.find("Conv2DNode"), std::string::npos);
+	EXPECT_NE(dump.find("ConvTranspose2DNode"), std::string::npos);
 	EXPECT_NE(dump.find("Pool2DNode"), std::string::npos);
+	EXPECT_NE(dump.find("UpsampleNode"), std::string::npos);
 
 	const auto path = std::filesystem::path("litenn_g54_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
