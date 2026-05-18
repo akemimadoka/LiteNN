@@ -691,6 +691,59 @@ namespace LiteNN::Runtime
 			}
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Im2ColNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalIm2Col(GetValue(slots, node.input).CopyToDevice(CPU{}),
+			                                    node.kernelShape, node.strides, node.dilations,
+			                                    node.lowPads, node.highPads);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Conv2DNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuInput = GetValue(slots, node.input).CopyToDevice(CPU{});
+			auto cpuWeight = GetValue(slots, node.weight).CopyToDevice(CPU{});
+			auto cpuBiasStorage = node.bias ? std::optional<Tensor<CPU>>{ GetValue(slots, *node.bias).CopyToDevice(CPU{}) }
+			                                : std::nullopt;
+			auto cpuResult = Detail::EvalConv2D(cpuInput, cpuWeight,
+			                                    cpuBiasStorage ? &*cpuBiasStorage : nullptr,
+			                                    node.strides, node.dilations, node.lowPads, node.highPads,
+			                                    node.groupCount);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Pool2DNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalPool2D(GetValue(slots, node.input).CopyToDevice(CPU{}),
+			                                    node.mode, node.kernelShape, node.strides,
+			                                    node.lowPads, node.highPads, node.countIncludePad);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConcatNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{

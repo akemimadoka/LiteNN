@@ -293,6 +293,45 @@ namespace LiteNN
 			NodeOutput rhs;
 		};
 
+		// Channel-first sliding-window extraction.
+		// Input shape is [batch, channels, spatial...]; output shape is
+		// [batch, outputPositions, channels * product(kernelShape)].
+		struct Im2ColNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> kernelShape;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+		};
+
+		// Direct 2D channel-first convolution over [batch, channels, height, width].
+		// weight shape is [outChannels, inChannelsPerGroup, kernelHeight, kernelWidth].
+		struct Conv2DNode
+		{
+			NodeOutput input;
+			NodeOutput weight;
+			std::optional<NodeOutput> bias;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			std::size_t groupCount{ 1 };
+		};
+
+		// 2D channel-first pooling over [batch, channels, height, width].
+		struct Pool2DNode
+		{
+			NodeOutput input;
+			PoolMode mode{ PoolMode::Max };
+			std::vector<std::size_t> kernelShape;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			bool countIncludePad{ false };
+		};
+
 		// 沿指定轴拼接多个张量
 		// 所有输入除 axis 维度外 shape 必须相同
 		struct ConcatNode

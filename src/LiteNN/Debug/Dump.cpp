@@ -249,6 +249,18 @@ namespace
 		return std::format("NormalizationMode::<invalid:{}>", static_cast<int>(mode));
 	}
 
+	std::string PoolModeToString(PoolMode mode)
+	{
+		switch (mode)
+		{
+		case PoolMode::Max:
+			return "PoolMode::Max";
+		case PoolMode::Average:
+			return "PoolMode::Average";
+		}
+		return std::format("PoolMode::<invalid:{}>", static_cast<int>(mode));
+	}
+
 	std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
 	{
 		if (!options.includeConstantValues)
@@ -439,6 +451,32 @@ namespace
 				{
 					return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
 					                   FormatValueRef(value.rhs));
+				}
+				else if constexpr (std::same_as<T, Im2ColNode>)
+				{
+					return std::format(
+					    "Im2ColNode(input={}, kernelShape={}, strides={}, dilations={}, lowPads={}, highPads={})",
+					    FormatValueRef(value.input), Validation::ShapeToString(value.kernelShape),
+					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
+					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads));
+				}
+				else if constexpr (std::same_as<T, Conv2DNode>)
+				{
+					return std::format(
+					    "Conv2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, lowPads={}, highPads={}, groupCount={})",
+					    FormatValueRef(value.input), FormatValueRef(value.weight), FormatOptionalValueRef(value.bias),
+					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
+					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
+					    value.groupCount);
+				}
+				else if constexpr (std::same_as<T, Pool2DNode>)
+				{
+					return std::format(
+					    "Pool2DNode(input={}, mode={}, kernelShape={}, strides={}, lowPads={}, highPads={}, countIncludePad={})",
+					    FormatValueRef(value.input), PoolModeToString(value.mode),
+					    Validation::ShapeToString(value.kernelShape), Validation::ShapeToString(value.strides),
+					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
+					    value.countIncludePad);
 				}
 				else if constexpr (std::same_as<T, ConcatNode>)
 				{

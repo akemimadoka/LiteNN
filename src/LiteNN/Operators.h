@@ -84,6 +84,12 @@ namespace LiteNN
 		GroupNorm,
 	};
 
+	enum class PoolMode
+	{
+		Max,
+		Average,
+	};
+
 	template <UnaryOp Op>
 	struct DefaultUnaryOpTraits
 	{

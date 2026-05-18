@@ -333,6 +333,23 @@ namespace LiteNN
 						    ++counts[{ node.lhs.node, node.lhs.port }];
 						    ++counts[{ node.rhs.node, node.rhs.port }];
 					    }
+					    else if constexpr (std::same_as<T, Im2ColNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, Conv2DNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    ++counts[{ node.weight.node, node.weight.port }];
+						    if (node.bias)
+						    {
+							    ++counts[{ node.bias->node, node.bias->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, Pool2DNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    for (const auto& input : node.inputs)
@@ -453,9 +470,11 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                      std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
-					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode>)
+					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
+					                      std::same_as<T, Im2ColNode> || std::same_as<T, Conv2DNode> ||
+					                      std::same_as<T, Pool2DNode>)
 					    {
-						    // G5.2/G5.3 nodes use explicit differentiation gates below for now.
+						    // G5.2/G5.3/G5.4 nodes use explicit differentiation gates below for now.
 					    }
 					    else if constexpr (std::same_as<T, GetRowsNode>)
 					    {
@@ -786,6 +805,38 @@ namespace LiteNN
 				    {
 					    return BatchMatMulNode{ { nodeMap[n.lhs.node], n.lhs.port },
 					                            { nodeMap[n.rhs.node], n.rhs.port } };
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    return Im2ColNode{ { nodeMap[n.input.node], n.input.port },
+					                       n.kernelShape,
+					                       n.strides,
+					                       n.dilations,
+					                       n.lowPads,
+					                       n.highPads };
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    return Conv2DNode{
+					        { nodeMap[n.input.node], n.input.port },
+					        { nodeMap[n.weight.node], n.weight.port },
+					        n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.groupCount
+					    };
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    return Pool2DNode{ { nodeMap[n.input.node], n.input.port },
+					                       n.mode,
+					                       n.kernelShape,
+					                       n.strides,
+					                       n.lowPads,
+					                       n.highPads,
+					                       n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -1128,6 +1179,18 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, BatchMatMulNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: BatchMatMulNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Im2ColNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Im2ColNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Conv2DNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Conv2DNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Pool2DNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Pool2DNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {

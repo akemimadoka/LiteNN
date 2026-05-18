@@ -166,6 +166,17 @@ namespace LiteNN::Validation
 		return false;
 	}
 
+	inline bool IsValidPoolMode(PoolMode mode)
+	{
+		switch (mode)
+		{
+		case PoolMode::Max:
+		case PoolMode::Average:
+			return true;
+		}
+		return false;
+	}
+
 	inline std::string ShapeToString(std::span<const std::size_t> shape)
 	{
 		std::string result = "[";
@@ -255,6 +266,12 @@ namespace LiteNN::Validation
 				    return "NormalizationNode";
 			    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    return "BatchMatMulNode";
+			    else if constexpr (std::same_as<T, Im2ColNode>)
+				    return "Im2ColNode";
+			    else if constexpr (std::same_as<T, Conv2DNode>)
+				    return "Conv2DNode";
+			    else if constexpr (std::same_as<T, Pool2DNode>)
+				    return "Pool2DNode";
 			    else if constexpr (std::same_as<T, ConcatNode>)
 				    return "ConcatNode";
 			    else if constexpr (std::same_as<T, SliceNode>)
@@ -1216,6 +1233,63 @@ namespace LiteNN::Validation
 			}
 			const auto outputShape = Detail::BatchMatMulOutputShape(lhs.shape, rhs.shape);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { lhs.dtype, outputShape }, "BatchMatMulNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Im2ColNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Im2ColNode input", true);
+			const auto outputShape = Detail::Im2ColOutputShape(input.shape, node.kernelShape, node.strides,
+			                                                   node.dilations, node.lowPads, node.highPads);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Im2ColNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Conv2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Conv2DNode input", true);
+			const auto weight =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.weight, "Conv2DNode weight", true);
+			if (input.dtype != weight.dtype)
+			{
+				Fail(subgraphId, nodeId, "Conv2DNode input and weight dtypes must match");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "Conv2DNode does not support Bool tensors");
+			}
+			const auto outputShape = Detail::Conv2DOutputShape(input.shape, weight.shape, node.strides, node.dilations,
+			                                                   node.lowPads, node.highPads, node.groupCount);
+			if (node.bias)
+			{
+				const auto bias = ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.bias, "Conv2DNode bias", true);
+				if (bias.dtype != input.dtype)
+				{
+					Fail(subgraphId, nodeId, "Conv2DNode bias dtype must match input dtype");
+				}
+				Detail::ValidateConv2DBiasShape(bias.shape, outputShape[1]);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Conv2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Pool2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidPoolMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid PoolMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Pool2DNode input", true);
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "Pool2DNode does not support Bool tensors");
+			}
+			const auto outputShape =
+			    Detail::Pool2DOutputShape(input.shape, node.kernelShape, node.strides, node.lowPads, node.highPads);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Pool2DNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

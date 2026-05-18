@@ -589,6 +589,405 @@ namespace LiteNN::Detail
 		});
 		return result;
 	}
+
+	inline void ValidateSlidingWindowParams(std::span<const std::size_t> kernelShape,
+	                                        std::span<const std::size_t> strides,
+	                                        std::span<const std::size_t> dilations,
+	                                        std::span<const std::size_t> lowPads,
+	                                        std::span<const std::size_t> highPads,
+	                                        std::string_view label)
+	{
+		const auto rank = kernelShape.size();
+		if (rank == 0)
+		{
+			throw std::runtime_error(std::format("{} spatial rank must be >= 1", label));
+		}
+		if (strides.size() != rank || dilations.size() != rank || lowPads.size() != rank || highPads.size() != rank)
+		{
+			throw std::runtime_error(std::format("{} parameter ranks must match kernel rank", label));
+		}
+		for (auto dim = 0uz; dim < rank; ++dim)
+		{
+			if (kernelShape[dim] == 0 || strides[dim] == 0 || dilations[dim] == 0)
+			{
+				throw std::runtime_error(std::format("{} kernel/stride/dilation values must be > 0", label));
+			}
+		}
+	}
+
+	inline std::vector<std::size_t> SlidingOutputSpatialShape(std::span<const std::size_t> inputSpatial,
+	                                                         std::span<const std::size_t> kernelShape,
+	                                                         std::span<const std::size_t> strides,
+	                                                         std::span<const std::size_t> dilations,
+	                                                         std::span<const std::size_t> lowPads,
+	                                                         std::span<const std::size_t> highPads,
+	                                                         std::string_view label)
+	{
+		ValidateSlidingWindowParams(kernelShape, strides, dilations, lowPads, highPads, label);
+		if (inputSpatial.size() != kernelShape.size())
+		{
+			throw std::runtime_error(std::format("{} input spatial rank does not match kernel rank", label));
+		}
+
+		std::vector<std::size_t> output(inputSpatial.size(), 0uz);
+		for (auto dim = 0uz; dim < inputSpatial.size(); ++dim)
+		{
+			const auto effectiveKernel = (kernelShape[dim] - 1) * dilations[dim] + 1;
+			const auto padded = inputSpatial[dim] + lowPads[dim] + highPads[dim];
+			if (padded < effectiveKernel)
+			{
+				throw std::runtime_error(std::format("{} padded input is smaller than effective kernel", label));
+			}
+			output[dim] = (padded - effectiveKernel) / strides[dim] + 1;
+			if (output[dim] == 0)
+			{
+				throw std::runtime_error(std::format("{} output dimensions must be > 0", label));
+			}
+		}
+		return output;
+	}
+
+	inline std::vector<std::size_t> Im2ColOutputShape(std::span<const std::size_t> inputShape,
+	                                                 std::span<const std::size_t> kernelShape,
+	                                                 std::span<const std::size_t> strides,
+	                                                 std::span<const std::size_t> dilations,
+	                                                 std::span<const std::size_t> lowPads,
+	                                                 std::span<const std::size_t> highPads)
+	{
+		const auto spatialRank = kernelShape.size();
+		if (inputShape.size() != spatialRank + 2)
+		{
+			throw std::runtime_error("Im2Col input must have shape [batch, channels, spatial...]");
+		}
+		const auto inputSpatial = inputShape.subspan(2);
+		const auto outputSpatial =
+		    SlidingOutputSpatialShape(inputSpatial, kernelShape, strides, dilations, lowPads, highPads, "Im2Col");
+		return { inputShape[0], Product(outputSpatial), inputShape[1] * Product(kernelShape) };
+	}
+
+	inline std::vector<std::size_t> Conv2DOutputShape(std::span<const std::size_t> inputShape,
+	                                                 std::span<const std::size_t> weightShape,
+	                                                 std::span<const std::size_t> strides,
+	                                                 std::span<const std::size_t> dilations,
+	                                                 std::span<const std::size_t> lowPads,
+	                                                 std::span<const std::size_t> highPads,
+	                                                 std::size_t groupCount)
+	{
+		if (inputShape.size() != 4 || weightShape.size() != 4)
+		{
+			throw std::runtime_error("Conv2D input must be [batch, channels, height, width] and weight [out, in/group, kh, kw]");
+		}
+		if (groupCount == 0)
+		{
+			throw std::runtime_error("Conv2D groupCount must be > 0");
+		}
+		if (inputShape[1] % groupCount != 0 || weightShape[0] % groupCount != 0)
+		{
+			throw std::runtime_error("Conv2D input/output channels must be divisible by groupCount");
+		}
+		if (weightShape[1] != inputShape[1] / groupCount)
+		{
+			throw std::runtime_error("Conv2D weight inChannelsPerGroup does not match input channels/groupCount");
+		}
+		const std::size_t kernelStorage[] = { weightShape[2], weightShape[3] };
+		const auto outputSpatial =
+		    SlidingOutputSpatialShape(inputShape.subspan(2), kernelStorage, strides, dilations, lowPads, highPads,
+		                              "Conv2D");
+		return { inputShape[0], weightShape[0], outputSpatial[0], outputSpatial[1] };
+	}
+
+	inline void ValidateConv2DBiasShape(std::span<const std::size_t> biasShape, std::size_t outputChannels)
+	{
+		const std::size_t channelBias[] = { outputChannels };
+		const std::size_t nchwBias[] = { 1uz, outputChannels, 1uz, 1uz };
+		if (!std::ranges::equal(biasShape, channelBias) && !std::ranges::equal(biasShape, nchwBias))
+		{
+			throw std::runtime_error("Conv2D bias must have shape [outChannels] or [1, outChannels, 1, 1]");
+		}
+	}
+
+	inline std::vector<std::size_t> Pool2DOutputShape(std::span<const std::size_t> inputShape,
+	                                                 std::span<const std::size_t> kernelShape,
+	                                                 std::span<const std::size_t> strides,
+	                                                 std::span<const std::size_t> lowPads,
+	                                                 std::span<const std::size_t> highPads)
+	{
+		if (inputShape.size() != 4)
+		{
+			throw std::runtime_error("Pool2D input must have shape [batch, channels, height, width]");
+		}
+		const std::size_t dilationStorage[] = { 1uz, 1uz };
+		const auto outputSpatial =
+		    SlidingOutputSpatialShape(inputShape.subspan(2), kernelShape, strides, dilationStorage, lowPads, highPads,
+		                              "Pool2D");
+		return { inputShape[0], inputShape[1], outputSpatial[0], outputSpatial[1] };
+	}
+
+	inline Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, std::span<const std::size_t> kernelShape,
+	                             std::span<const std::size_t> strides,
+	                             std::span<const std::size_t> dilations,
+	                             std::span<const std::size_t> lowPads,
+	                             std::span<const std::size_t> highPads)
+	{
+		const auto outputShape = Im2ColOutputShape(input.Shape().Dims, kernelShape, strides, dilations, lowPads, highPads);
+		const auto spatialRank = kernelShape.size();
+		const auto outputSpatial = SlidingOutputSpatialShape(input.Shape().Dims.subspan(2), kernelShape, strides,
+		                                                     dilations, lowPads, highPads, "Im2Col");
+		const auto inputStrides = RowMajorStrides(input.Shape().Dims);
+		const auto outputSpatialStrides = RowMajorStrides(outputSpatial);
+		const auto kernelStrides = RowMajorStrides(kernelShape);
+		const auto batch = input.Shape()[0];
+		const auto channels = input.Shape()[1];
+		const auto outputPositions = outputShape[1];
+		const auto kernelVolume = Product(kernelShape);
+		const auto columns = outputShape[2];
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+			std::vector<std::size_t> outCoord(spatialRank, 0uz);
+			std::vector<std::size_t> kernelCoord(spatialRank, 0uz);
+
+			for (auto n = 0uz; n < batch; ++n)
+			{
+				for (auto outPos = 0uz; outPos < outputPositions; ++outPos)
+				{
+					auto remainingOut = outPos;
+					for (auto dim = 0uz; dim < spatialRank; ++dim)
+					{
+						outCoord[dim] = outputSpatialStrides.empty() ? 0uz : remainingOut / outputSpatialStrides[dim];
+						if (!outputSpatialStrides.empty())
+						{
+							remainingOut %= outputSpatialStrides[dim];
+						}
+					}
+
+					for (auto col = 0uz; col < columns; ++col)
+					{
+						const auto channel = col / kernelVolume;
+						auto kernelLinear = col % kernelVolume;
+						for (auto dim = 0uz; dim < spatialRank; ++dim)
+						{
+							kernelCoord[dim] = kernelStrides.empty() ? 0uz : kernelLinear / kernelStrides[dim];
+							if (!kernelStrides.empty())
+							{
+								kernelLinear %= kernelStrides[dim];
+							}
+						}
+
+						auto inBounds = channel < channels;
+						auto inputOffset = n * inputStrides[0] + channel * inputStrides[1];
+						for (auto dim = 0uz; dim < spatialRank; ++dim)
+						{
+							const auto paddedCoord = outCoord[dim] * strides[dim] + kernelCoord[dim] * dilations[dim];
+							if (paddedCoord < lowPads[dim])
+							{
+								inBounds = false;
+								break;
+							}
+							const auto inputCoord = paddedCoord - lowPads[dim];
+							if (inputCoord >= input.Shape()[dim + 2])
+							{
+								inBounds = false;
+								break;
+							}
+							inputOffset += inputCoord * inputStrides[dim + 2];
+						}
+						dst[(n * outputPositions + outPos) * columns + col] =
+						    inBounds ? src[inputOffset] : static_cast<T>(0);
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
+	                             const Tensor<CPU>* bias,
+	                             std::span<const std::size_t> strides,
+	                             std::span<const std::size_t> dilations,
+	                             std::span<const std::size_t> lowPads,
+	                             std::span<const std::size_t> highPads,
+	                             std::size_t groupCount)
+	{
+		if (input.DType() == DataType::Bool)
+		{
+			throw std::runtime_error("Conv2D does not support Bool tensors");
+		}
+		if (input.DType() != weight.DType() || (bias != nullptr && input.DType() != bias->DType()))
+		{
+			throw std::runtime_error("Conv2D input, weight, and bias dtypes must match");
+		}
+
+		const auto outputShape =
+		    Conv2DOutputShape(input.Shape().Dims, weight.Shape().Dims, strides, dilations, lowPads, highPads,
+		                      groupCount);
+		if (bias != nullptr)
+		{
+			ValidateConv2DBiasShape(bias->Shape().Dims, outputShape[1]);
+		}
+
+		const auto batch = input.Shape()[0];
+		const auto inputChannels = input.Shape()[1];
+		const auto inputHeight = input.Shape()[2];
+		const auto inputWidth = input.Shape()[3];
+		const auto outputChannels = weight.Shape()[0];
+		const auto inputChannelsPerGroup = weight.Shape()[1];
+		const auto kernelHeight = weight.Shape()[2];
+		const auto kernelWidth = weight.Shape()[3];
+		const auto outputHeight = outputShape[2];
+		const auto outputWidth = outputShape[3];
+		const auto outputChannelsPerGroup = outputChannels / groupCount;
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.RawData());
+			const auto* filter = static_cast<const T*>(weight.RawData());
+			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+
+			for (auto n = 0uz; n < batch; ++n)
+			{
+				for (auto oc = 0uz; oc < outputChannels; ++oc)
+				{
+					const auto group = oc / outputChannelsPerGroup;
+					const auto inputChannelBegin = group * inputChannelsPerGroup;
+					for (auto oh = 0uz; oh < outputHeight; ++oh)
+					{
+						for (auto ow = 0uz; ow < outputWidth; ++ow)
+						{
+							auto acc = biasData == nullptr ? 0.0 : static_cast<double>(biasData[oc]);
+							for (auto icg = 0uz; icg < inputChannelsPerGroup; ++icg)
+							{
+								const auto ic = inputChannelBegin + icg;
+								for (auto kh = 0uz; kh < kernelHeight; ++kh)
+								{
+									const auto paddedH = oh * strides[0] + kh * dilations[0];
+									if (paddedH < lowPads[0])
+									{
+										continue;
+									}
+									const auto ih = paddedH - lowPads[0];
+									if (ih >= inputHeight)
+									{
+										continue;
+									}
+									for (auto kw = 0uz; kw < kernelWidth; ++kw)
+									{
+										const auto paddedW = ow * strides[1] + kw * dilations[1];
+										if (paddedW < lowPads[1])
+										{
+											continue;
+										}
+										const auto iw = paddedW - lowPads[1];
+										if (iw >= inputWidth)
+										{
+											continue;
+										}
+										const auto inputIndex = ((n * inputChannels + ic) * inputHeight + ih) * inputWidth + iw;
+										const auto weightIndex =
+										    ((oc * inputChannelsPerGroup + icg) * kernelHeight + kh) * kernelWidth + kw;
+										acc += static_cast<double>(src[inputIndex]) * static_cast<double>(filter[weightIndex]);
+									}
+								}
+							}
+							dst[((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow] = static_cast<T>(acc);
+						}
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, PoolMode mode,
+	                             std::span<const std::size_t> kernelShape,
+	                             std::span<const std::size_t> strides,
+	                             std::span<const std::size_t> lowPads,
+	                             std::span<const std::size_t> highPads,
+	                             bool countIncludePad)
+	{
+		if (input.DType() == DataType::Bool)
+		{
+			throw std::runtime_error("Pool2D does not support Bool tensors");
+		}
+		const auto outputShape = Pool2DOutputShape(input.Shape().Dims, kernelShape, strides, lowPads, highPads);
+		const auto batch = input.Shape()[0];
+		const auto channels = input.Shape()[1];
+		const auto height = input.Shape()[2];
+		const auto width = input.Shape()[3];
+		const auto outHeight = outputShape[2];
+		const auto outWidth = outputShape[3];
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+			for (auto n = 0uz; n < batch; ++n)
+			{
+				for (auto c = 0uz; c < channels; ++c)
+				{
+					for (auto oh = 0uz; oh < outHeight; ++oh)
+					{
+						for (auto ow = 0uz; ow < outWidth; ++ow)
+						{
+							double acc = mode == PoolMode::Max ? -std::numeric_limits<double>::infinity() : 0.0;
+							auto count = 0uz;
+							auto sawValue = false;
+							for (auto kh = 0uz; kh < kernelShape[0]; ++kh)
+							{
+								const auto paddedH = oh * strides[0] + kh;
+								const auto validH = paddedH >= lowPads[0] && paddedH - lowPads[0] < height;
+								for (auto kw = 0uz; kw < kernelShape[1]; ++kw)
+								{
+									const auto paddedW = ow * strides[1] + kw;
+									const auto validW = paddedW >= lowPads[1] && paddedW - lowPads[1] < width;
+									if (!validH || !validW)
+									{
+										if (mode == PoolMode::Average && countIncludePad)
+										{
+											++count;
+										}
+										continue;
+									}
+									const auto ih = paddedH - lowPads[0];
+									const auto iw = paddedW - lowPads[1];
+									const auto value = static_cast<double>(src[((n * channels + c) * height + ih) * width + iw]);
+									sawValue = true;
+									if (mode == PoolMode::Max)
+									{
+										acc = std::max(acc, value);
+									}
+									else
+									{
+										acc += value;
+										++count;
+									}
+								}
+							}
+							if (mode == PoolMode::Average)
+							{
+								acc = count == 0 ? 0.0 : acc / static_cast<double>(count);
+							}
+							else if (!sawValue)
+							{
+								acc = 0.0;
+							}
+							dst[((n * channels + c) * outHeight + oh) * outWidth + ow] = static_cast<T>(acc);
+						}
+					}
+				}
+			}
+		});
+		return result;
+	}
 } // namespace LiteNN::Detail
 
 #endif

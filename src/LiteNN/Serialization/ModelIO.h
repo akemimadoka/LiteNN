@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 13;
+		constexpr std::uint32_t kModelVersion = 15;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -76,6 +76,9 @@ namespace LiteNN::Serialization
 			Softmax,
 			Normalization,
 			BatchMatMul,
+			Im2Col,
+			Conv2D,
+			Pool2D,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -801,6 +804,39 @@ namespace LiteNN::Serialization
 					    WriteNodeOutput(out, node.lhs);
 					    WriteNodeOutput(out, node.rhs);
 				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Im2Col));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.kernelShape);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Conv2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteNodeOutput(out, node.weight);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteSize(out, node.groupCount);
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pool2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteShape(out, node.kernelShape);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteScalar(out, node.countIncludePad);
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Concat));
@@ -991,6 +1027,39 @@ namespace LiteNN::Serialization
 				const auto lhs = ReadNodeOutput(in);
 				const auto rhs = ReadNodeOutput(in);
 				return BatchMatMulNode{ lhs, rhs };
+			}
+			case NodeKind::Im2Col: {
+				const auto input = ReadNodeOutput(in);
+				auto kernelShape = ReadShape(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				return Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
+				                   std::move(lowPads), std::move(highPads) };
+			}
+			case NodeKind::Conv2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto weight = ReadNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto groupCount = ReadSize(in);
+				return Conv2DNode{ input, weight, std::move(bias), std::move(strides), std::move(dilations),
+				                   std::move(lowPads), std::move(highPads), groupCount };
+			}
+			case NodeKind::Pool2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto mode = static_cast<PoolMode>(ReadScalar<std::uint32_t>(in));
+				auto kernelShape = ReadShape(in);
+				auto strides = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto countIncludePad = ReadScalar<bool>(in);
+				return Pool2DNode{ input, mode, std::move(kernelShape), std::move(strides), std::move(lowPads),
+				                   std::move(highPads), countIncludePad };
 			}
 			case NodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);

@@ -167,6 +167,25 @@ namespace LiteNN
 			return Detail::EvalBatchMatMul(lhs, rhs);
 		}
 
+		static Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, const Im2ColNode& node)
+		{
+			return Detail::EvalIm2Col(input, node.kernelShape, node.strides, node.dilations,
+			                          node.lowPads, node.highPads);
+		}
+
+		static Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
+		                              const Tensor<CPU>* bias, const Conv2DNode& node)
+		{
+			return Detail::EvalConv2D(input, weight, bias, node.strides, node.dilations,
+			                          node.lowPads, node.highPads, node.groupCount);
+		}
+
+		static Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, const Pool2DNode& node)
+		{
+			return Detail::EvalPool2D(input, node.mode, node.kernelShape, node.strides,
+			                          node.lowPads, node.highPads, node.countIncludePad);
+		}
+
 		static Tensor<CPU> EvalConcat(const std::vector<std::optional<Tensor<CPU>>>& constValues,
 		                              const ConcatNode& node, const OutputInfo& outInfo)
 		{
@@ -356,6 +375,22 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
 					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
+					                       n.lowPads, n.highPads };
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    return Conv2DNode{ remap(n.input), remap(n.weight),
+					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
+					                       n.lowPads, n.highPads, n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -573,6 +608,23 @@ namespace LiteNN
 				    {
 					    markInput(node.lhs);
 					    markInput(node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    markInput(node.input);
+					    markInput(node.weight);
+					    if (node.bias)
+					    {
+						    markInput(*node.bias);
+					    }
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    markInput(node.input);
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -843,6 +895,37 @@ namespace LiteNN
 							    const auto& lhs = GetConstValue(constValues, node.lhs);
 							    const auto& rhs = GetConstValue(constValues, node.rhs);
 							    constValues[nodeId] = EvalBatchMatMul(lhs, rhs);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, Im2ColNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] = EvalIm2Col(GetConstValue(constValues, node.input), node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, Conv2DNode>)
+					    {
+						    const auto allConst =
+						        isConst[node.input.node] && isConst[node.weight.node] &&
+						        (!node.bias || isConst[node.bias->node]);
+						    if (allConst)
+						    {
+							    isConst[nodeId] = true;
+							    const auto& input = GetConstValue(constValues, node.input);
+							    const auto& weight = GetConstValue(constValues, node.weight);
+							    const auto* bias =
+							        node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
+							    constValues[nodeId] = EvalConv2D(input, weight, bias, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, Pool2DNode>)
+					    {
+						    if (isConst[node.input.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] = EvalPool2D(GetConstValue(constValues, node.input), node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)

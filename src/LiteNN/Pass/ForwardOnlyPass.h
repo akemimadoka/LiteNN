@@ -212,6 +212,29 @@ namespace LiteNN
 						    {
 							    return BatchMatMulNode{ remapOutput(node.lhs), remapOutput(node.rhs) };
 						    }
+						    else if constexpr (std::same_as<T, Im2ColNode>)
+						    {
+							    return Im2ColNode{ remapOutput(node.input), node.kernelShape, node.strides,
+							                       node.dilations, node.lowPads, node.highPads };
+						    }
+						    else if constexpr (std::same_as<T, Conv2DNode>)
+						    {
+							    return Conv2DNode{
+							        remapOutput(node.input),
+							        remapOutput(node.weight),
+							        node.bias ? std::optional<NodeOutput>{ remapOutput(*node.bias) } : std::nullopt,
+							        node.strides,
+							        node.dilations,
+							        node.lowPads,
+							        node.highPads,
+							        node.groupCount
+							    };
+						    }
+						    else if constexpr (std::same_as<T, Pool2DNode>)
+						    {
+							    return Pool2DNode{ remapOutput(node.input), node.mode, node.kernelShape,
+							                       node.strides, node.lowPads, node.highPads, node.countIncludePad };
+						    }
 						    else if constexpr (std::same_as<T, ConcatNode>)
 						    {
 							    return ConcatNode{ remapList(node.inputs), node.axis };

@@ -8,11 +8,13 @@
 #include <LiteNN/Layer/BatchMatMul.h>
 #include <LiteNN/Layer/BroadcastTo.h>
 #include <LiteNN/Layer/CausalMask.h>
+#include <LiteNN/Layer/Conv2D.h>
 #include <LiteNN/Layer/Cumsum.h>
 #include <LiteNN/Layer/FlashAttnExt.h>
 #include <LiteNN/Layer/Flatten.h>
 #include <LiteNN/Layer/Gather.h>
 #include <LiteNN/Layer/GroupNorm.h>
+#include <LiteNN/Layer/Im2Col.h>
 #include <LiteNN/Layer/KVCache.h>
 #include <LiteNN/Layer/L2Norm.h>
 #include <LiteNN/Layer/LayerNorm.h>
@@ -21,6 +23,7 @@
 #include <LiteNN/Layer/Normalization.h>
 #include <LiteNN/Layer/Pad.h>
 #include <LiteNN/Layer/Permute.h>
+#include <LiteNN/Layer/Pool2D.h>
 #include <LiteNN/Layer/ReLU.h>
 #include <LiteNN/Layer/RMSNorm.h>
 #include <LiteNN/Layer/RWKVWKV.h>
