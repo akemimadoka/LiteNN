@@ -349,9 +349,8 @@ std::vector<Tensor<CPU>> AllocateCPUOutputs(const CompiledModule<CPU>& module)
 }
 
 void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind, std::size_t batch,
-                                    bool enableFastPath, const char* threadCount)
+                                    const char* threadCount)
 {
-	ScopedEnvVar fastPathEnv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", enableFastPath ? "1" : "0");
 	std::optional<ScopedEnvVar> threadCountEnv;
 	if (threadCount != nullptr)
 	{
@@ -380,17 +379,17 @@ void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind
 
 void BMTrainCPUAOTForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, false, nullptr);
+	BMTrainCPUAOTForwardConfigured(state, kind, batch, nullptr);
 }
 
-void BMTrainCPUAOTFastPathForwardT1(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+void BMTrainCPUAOTForwardT1(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, true, "1");
+	BMTrainCPUAOTForwardConfigured(state, kind, batch, "1");
 }
 
-void BMTrainCPUAOTFastPathForwardT16(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+void BMTrainCPUAOTForwardT16(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, true, "16");
+	BMTrainCPUAOTForwardConfigured(state, kind, batch, "16");
 }
 
 #ifdef LITENN_ENABLE_CUDA
@@ -514,10 +513,10 @@ void RegisterTrainBenchmarks()
 #ifdef LITENN_TRAIN_BENCH_HAS_AOT
 			RegisterTrainBenchmark("TrainCPUAOT", "Forward", kind, batch,
 			    [=](benchmark::State& state) { BMTrainCPUAOTForward(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUAOTFastPathT1", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUAOTFastPathForwardT1(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUAOTFastPathT16", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUAOTFastPathForwardT16(state, kind, batch); });
+			RegisterTrainBenchmark("TrainCPUAOTT1", "Forward", kind, batch,
+			    [=](benchmark::State& state) { BMTrainCPUAOTForwardT1(state, kind, batch); });
+			RegisterTrainBenchmark("TrainCPUAOTT16", "Forward", kind, batch,
+			    [=](benchmark::State& state) { BMTrainCPUAOTForwardT16(state, kind, batch); });
 			RegisterTrainBenchmark("TrainCUDACPUFallback", "Forward", kind, batch,
 			    [=](benchmark::State& state) { BMTrainCUDACPUFallbackForward(state, kind, batch); });
 			RegisterTrainBenchmark("TrainCUDANative", "Forward", kind, batch,

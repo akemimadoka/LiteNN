@@ -112,6 +112,45 @@ namespace
 		return graph;
 	}
 
+	std::vector<double> MakePatternValues(std::size_t count, double scale)
+	{
+		std::vector<double> values(count);
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const auto centered = static_cast<int>(i % 17) - 8;
+			values[i] = static_cast<double>(centered) * scale;
+		}
+		return values;
+	}
+
+	Graph BuildWideLinearChainGraph(std::size_t batch)
+	{
+		constexpr std::size_t kInput = 64;
+		constexpr std::size_t kHidden = 64;
+		constexpr std::size_t kOutput = 32;
+
+		Graph graph;
+		auto w1 = MakePatternValues(kInput * kHidden, 0.005);
+		auto b1 = MakePatternValues(kHidden, 0.001);
+		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
+		auto b2 = MakePatternValues(kOutput, 0.001);
+		const auto h1 = Layer::CreateLinear(graph,
+		    Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		    Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
+		const auto h2 = Layer::CreateLinear(graph,
+		    Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
+		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, kInput });
+		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
+		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
 	class ScopedEnvVar
 	{
 	public:
@@ -866,7 +905,6 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 		}
 	}
 }
-
 TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 {
 	Graph graph;
@@ -1110,22 +1148,32 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 	}
 }
 
-TEST(CompiledModuleTest, CPULinearChainFastPathMatchesInterpreter)
+TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 {
-	ScopedEnvVar enableFastPath("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", "1");
-	auto graph = BuildTinyLinearChainGraph(4);
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	constexpr std::size_t kBatch = 128;
+	constexpr std::size_t kInput = 64;
+	constexpr std::size_t kOutput = 32;
+	auto graph = BuildWideLinearChainGraph(kBatch);
+	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
 	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 1.0, -2.0, 0.5, -1.0, 0.25, 2.0, 0.5, 0.5, -0.5, 3.0, -1.0, 1.0 },
-		            { 4, 3 }, DataType::Float32)
+		Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput }, DataType::Float32)
 	};
+
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto module = Compiler<CPU>::Compile(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+	                               artifact.Instructions().size());
+	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
+
+	auto module = artifact.Load();
 	std::array<Tensor<CPU>, 1> outputs = {
-		Tensor<CPU>(Uninitialized, { 4, 2 }, DataType::Float32)
+		Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32)
 	};
 	module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 
@@ -1133,6 +1181,6 @@ TEST(CompiledModuleTest, CPULinearChainFastPathMatchesInterpreter)
 	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
 	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
 	{
-		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
 	}
 }

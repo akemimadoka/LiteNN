@@ -61,6 +61,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -81,6 +82,25 @@ using namespace LiteNN;
 
 namespace
 {
+#if defined(__GNUC__) || defined(__clang__)
+#define LITENN_RESTRICT __restrict__
+#define LITENN_GCC_IVDEP _Pragma("GCC ivdep")
+#else
+#define LITENN_RESTRICT
+#define LITENN_GCC_IVDEP
+#endif
+
+	bool IsCUDANativeAOTDisabled()
+	{
+		const char* value = std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT");
+		if (!value)
+		{
+			return false;
+		}
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
 	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
 
 	std::size_t LiteNNCPUAOTThreadCount()
@@ -98,135 +118,253 @@ namespace
 		return hardware == 0 ? 1 : static_cast<std::size_t>(hardware);
 	}
 
-	bool IsCPULinearChainFastPathEnabled()
+	std::size_t LiteNNCPUMaxThreadCount()
 	{
-		const char* value = std::getenv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH");
-		if (!value)
-		{
-			return false;
-		}
-		const std::string_view text = value;
-		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+		const auto hardware = std::thread::hardware_concurrency();
+		return hardware == 0 ? 1 : static_cast<std::size_t>(hardware);
 	}
 
-	bool IsCUDANativeAOTDisabled()
+	std::uint64_t LiteNNCPUParallelMinFlops()
 	{
-		const char* value = std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT");
-		if (!value)
+		if (const char* value = std::getenv("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
 		{
-			return false;
+			char* end = nullptr;
+			const auto parsed = std::strtoull(value, &end, 10);
+			if (end != value)
+			{
+				return static_cast<std::uint64_t>(parsed);
+			}
 		}
-		const std::string_view text = value;
-		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+		return 1ull << 28;
+	}
+
+	class LiteNNCPUThreadPool
+	{
+	public:
+		explicit LiteNNCPUThreadPool(std::size_t threadCount)
+		{
+			const auto workerCount = threadCount > 1 ? threadCount - 1 : 0;
+			workers_.reserve(workerCount);
+			for (std::size_t i = 0; i < workerCount; ++i)
+			{
+				workers_.emplace_back([this, i] { WorkerLoop(i); });
+			}
+		}
+
+		~LiteNNCPUThreadPool()
+		{
+			{
+				std::lock_guard lock(mutex_);
+				stopping_ = true;
+				++generation_;
+			}
+			start_.notify_all();
+			for (auto& worker : workers_)
+			{
+				if (worker.joinable())
+				{
+					worker.join();
+				}
+			}
+		}
+
+		LiteNNCPUThreadPool(const LiteNNCPUThreadPool&) = delete;
+		LiteNNCPUThreadPool& operator=(const LiteNNCPUThreadPool&) = delete;
+
+		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
+		                 LiteNNCPUParallelForBody body, void* userData, std::size_t requestedThreads)
+		{
+			if (begin >= end)
+			{
+				return;
+			}
+			grain = std::max<std::uint64_t>(1, grain);
+			const auto taskCount = (end - begin + grain - 1) / grain;
+			const auto participantCount = std::min<std::uint64_t>(
+			    std::max<std::uint64_t>(1, static_cast<std::uint64_t>(requestedThreads)), taskCount);
+			if (participantCount <= 1 || workers_.empty())
+			{
+				body(begin, end, userData);
+				return;
+			}
+
+			std::unique_lock runLock(runMutex_);
+			const auto desiredWorkers = std::min<std::size_t>(
+			    static_cast<std::size_t>(participantCount - 1), workers_.size());
+			{
+				std::lock_guard lock(mutex_);
+				begin_ = begin;
+				end_ = end;
+				grain_ = grain;
+				body_ = body;
+				userData_ = userData;
+				next_.store(begin, std::memory_order_relaxed);
+				workersDone_ = 0;
+				desiredWorkers_ = desiredWorkers;
+				++generation_;
+			}
+			start_.notify_all();
+			RunTasks();
+
+			std::unique_lock lock(mutex_);
+			done_.wait(lock, [&] { return workersDone_ == desiredWorkers; });
+		}
+
+	private:
+		void RunTasks()
+		{
+			while (true)
+			{
+				const auto taskBegin = next_.fetch_add(grain_, std::memory_order_relaxed);
+				if (taskBegin >= end_)
+				{
+					break;
+				}
+				const auto taskEnd = std::min<std::uint64_t>(taskBegin + grain_, end_);
+				body_(taskBegin, taskEnd, userData_);
+			}
+		}
+
+		void WorkerLoop(std::size_t workerIndex)
+		{
+			std::uint64_t seenGeneration = 0;
+			while (true)
+			{
+				bool participate = false;
+				{
+					std::unique_lock lock(mutex_);
+					start_.wait(lock, [&] { return stopping_ || generation_ != seenGeneration; });
+					if (stopping_)
+					{
+						return;
+					}
+					seenGeneration = generation_;
+					participate = workerIndex < desiredWorkers_;
+				}
+
+				if (participate)
+				{
+					RunTasks();
+
+					std::lock_guard lock(mutex_);
+					++workersDone_;
+					if (workersDone_ == desiredWorkers_)
+					{
+						done_.notify_one();
+					}
+				}
+			}
+		}
+
+		std::vector<std::thread> workers_;
+		std::mutex runMutex_;
+		std::mutex mutex_;
+		std::condition_variable start_;
+		std::condition_variable done_;
+		std::atomic<std::uint64_t> next_{ 0 };
+		std::uint64_t begin_{};
+		std::uint64_t end_{};
+		std::uint64_t grain_{ 1 };
+		LiteNNCPUParallelForBody body_{};
+		void* userData_{};
+		std::size_t desiredWorkers_{};
+		std::size_t workersDone_{};
+		std::uint64_t generation_{};
+		bool stopping_{};
+	};
+
+	LiteNNCPUThreadPool& GetLiteNNCPUThreadPool()
+	{
+		static LiteNNCPUThreadPool pool(LiteNNCPUMaxThreadCount());
+		return pool;
 	}
 
 	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
 	                          LiteNNCPUParallelForBody body, void* userData)
 	{
-		if (begin >= end)
-		{
-			return;
-		}
-		grain = std::max<std::uint64_t>(1, grain);
-		const auto range = end - begin;
-		const auto taskCount = (range + grain - 1) / grain;
-		const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), taskCount);
-		if (threadCount <= 1)
-		{
-			body(begin, end, userData);
-			return;
-		}
-
-		std::atomic<std::uint64_t> next{ begin };
-		auto worker = [&] {
-			while (true)
-			{
-				const auto taskBegin = next.fetch_add(grain, std::memory_order_relaxed);
-				if (taskBegin >= end)
-				{
-					break;
-				}
-				const auto taskEnd = std::min<std::uint64_t>(taskBegin + grain, end);
-				body(taskBegin, taskEnd, userData);
-			}
-		};
-
-		std::vector<std::thread> workers;
-		workers.reserve(static_cast<std::size_t>(threadCount - 1));
-		for (std::uint64_t i = 1; i < threadCount; ++i)
-		{
-			workers.emplace_back(worker);
-		}
-		worker();
-		for (auto& thread : workers)
-		{
-			thread.join();
-		}
+		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, LiteNNCPUAOTThreadCount());
 	}
 
-	void LiteNNCPUMatMulBiasReLURange(const float* lhs, const float* rhs, const float* bias, float* out,
+	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
+	                                  const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out,
 	                                  std::uint64_t rowBegin, std::uint64_t rowEnd, std::uint64_t k,
-	                                  std::uint64_t n, bool relu)
+	                                  std::uint64_t n, std::uint64_t biasRows, bool relu)
 	{
 		for (std::uint64_t row = rowBegin; row < rowEnd; ++row)
 		{
-			for (std::uint64_t col = 0; col < n; ++col)
+			float* outRow = out + row * n;
+			const float* biasRow = bias + (biasRows == 1 ? 0 : row) * n;
+			std::memcpy(outRow, biasRow, static_cast<std::size_t>(n) * sizeof(float));
+
+			for (std::uint64_t kk = 0; kk < k; ++kk)
 			{
-				float value = bias[col];
-				for (std::uint64_t kk = 0; kk < k; ++kk)
+				const float a = lhs[row * k + kk];
+				const float* rhsRow = rhs + kk * n;
+				LITENN_GCC_IVDEP
+				for (std::uint64_t col = 0; col < n; ++col)
 				{
-					value += lhs[row * k + kk] * rhs[kk * n + col];
+					outRow[col] += a * rhsRow[col];
 				}
-				if (relu && value < 0.0f)
+			}
+
+			if (relu)
+			{
+				LITENN_GCC_IVDEP
+				for (std::uint64_t col = 0; col < n; ++col)
 				{
-					value = 0.0f;
+					if (outRow[col] < 0.0f)
+					{
+						outRow[col] = 0.0f;
+					}
 				}
-				out[row * n + col] = value;
 			}
 		}
 	}
-}
 
-extern "C" void litenn_cpu_parallel_for_u64(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
-                                            LiteNNCPUParallelForBody body, void* userData)
-{
-	LiteNNCPUParallelFor(begin, end, grain, body, userData);
-}
-
-extern "C" void litenn_cpu_matmul_bias_relu_f32(const float* lhs, const float* rhs, const float* bias,
-                                                float* out, std::uint64_t m, std::uint64_t k,
-                                                std::uint64_t n, bool relu)
-{
-	const auto flops = m * k * n * 2;
-	const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), m);
-	if (threadCount <= 1 || flops < (1ull << 20))
+	void LiteNNCPUMatMulBiasReLUParallel(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
+	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out,
+	                                     std::uint64_t m, std::uint64_t k, std::uint64_t n,
+	                                     std::uint64_t biasRows, bool relu)
 	{
-		LiteNNCPUMatMulBiasReLURange(lhs, rhs, bias, out, 0, m, k, n, relu);
-		return;
+		const auto flops = m * k * n * 2;
+		const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), m);
+		if (threadCount <= 1 || flops < (1ull << 20))
+		{
+			LiteNNCPUMatMulBiasReLURange(lhs, rhs, bias, out, 0, m, k, n, biasRows, relu);
+			return;
+		}
+
+		struct Context
+		{
+			const float* lhs{};
+			const float* rhs{};
+			const float* bias{};
+			float* out{};
+			std::uint64_t k{};
+			std::uint64_t n{};
+			std::uint64_t biasRows{};
+			bool relu{};
+		};
+		Context context{ lhs, rhs, bias, out, k, n, biasRows, relu };
+		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
+			const auto& ctx = *static_cast<const Context*>(userData);
+			LiteNNCPUMatMulBiasReLURange(ctx.lhs, ctx.rhs, ctx.bias, ctx.out, begin, end,
+			                             ctx.k, ctx.n, ctx.biasRows, ctx.relu);
+		};
+
+		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
+		LiteNNCPUParallelFor(0, m, grain, body, &context);
 	}
 
-	struct Context
+	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs,
+	                                                         const float* bias, float* out,
+	                                                         std::uint64_t m, std::uint64_t k,
+	                                                         std::uint64_t n, std::uint64_t biasRows,
+	                                                         bool relu)
 	{
-		const float* lhs{};
-		const float* rhs{};
-		const float* bias{};
-		float* out{};
-		std::uint64_t k{};
-		std::uint64_t n{};
-		bool relu{};
-	};
-	Context context{ lhs, rhs, bias, out, k, n, relu };
-	const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
-		const auto& ctx = *static_cast<const Context*>(userData);
-		LiteNNCPUMatMulBiasReLURange(ctx.lhs, ctx.rhs, ctx.bias, ctx.out, begin, end, ctx.k, ctx.n, ctx.relu);
-	};
+		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, relu);
+	}
 
-	const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
-	LiteNNCPUParallelFor(0, m, grain, body, &context);
-}
-
-namespace
-{
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
 	constexpr std::array<std::byte, 8> kRodataMagic = {
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
@@ -642,6 +780,28 @@ namespace
 		std::vector<CompiledTensorSpec> outputSpecs;
 	};
 
+	std::uint64_t SaturatedMulU64(std::uint64_t lhs, std::uint64_t rhs)
+	{
+		if (lhs == 0 || rhs == 0)
+		{
+			return 0;
+		}
+		if (lhs > std::numeric_limits<std::uint64_t>::max() / rhs)
+		{
+			return std::numeric_limits<std::uint64_t>::max();
+		}
+		return lhs * rhs;
+	}
+
+	std::uint64_t SaturatedAddU64(std::uint64_t lhs, std::uint64_t rhs)
+	{
+		if (lhs > std::numeric_limits<std::uint64_t>::max() - rhs)
+		{
+			return std::numeric_limits<std::uint64_t>::max();
+		}
+		return lhs + rhs;
+	}
+
 	std::optional<std::uint64_t> ShapeNumElementsU64(std::span<const std::size_t> shape)
 	{
 		std::uint64_t count = 1;
@@ -714,8 +874,13 @@ namespace
 		return builder.CreateInBoundsGEP(arrayType, global, { zero, zero });
 	}
 
-	std::optional<CompiledArtifactParts> TryCompileCPULinearChainF32(const Graph& graph)
+	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32(const Graph& graph)
 	{
+		if (LiteNNCPUAOTThreadCount() <= 1)
+		{
+			return std::nullopt;
+		}
+
 		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
 		    graph.SubgraphCount() == 0)
 		{
@@ -738,11 +903,10 @@ namespace
 			llvm::Value* ptr{};
 			DataType dtype{ DataType::Float32 };
 			std::vector<std::size_t> shape;
-			bool heapOwned{};
 		};
 
 		llvm::LLVMContext ctx;
-		auto module = std::make_unique<llvm::Module>("litenn_cpu_linear_chain", ctx);
+		auto module = std::make_unique<llvm::Module>("litenn_cpu_parallel_linear_chain", ctx);
 		auto* voidTy = llvm::Type::getVoidTy(ctx);
 		auto* ptrTy = llvm::PointerType::get(ctx, 0);
 		auto* i64Ty = llvm::Type::getInt64Ty(ctx);
@@ -759,12 +923,13 @@ namespace
 		auto mallocFn = module->getOrInsertFunction("malloc", llvm::FunctionType::get(ptrTy, { i64Ty }, false));
 		auto freeFn = module->getOrInsertFunction("free", llvm::FunctionType::get(voidTy, { ptrTy }, false));
 		auto kernelFn = module->getOrInsertFunction(
-		    "litenn_cpu_matmul_bias_relu_f32",
-		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i1Ty }, false));
+		    "litenn_cpu_matmul_bias_relu_parallel_f32",
+		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty }, false));
 
 		std::vector<std::optional<ValueRef>> values(subgraph.NodeCount());
 		std::vector<llvm::Value*> heapAllocations;
 		std::size_t fusedLayerCount = 0;
+		std::uint64_t totalFlops = 0;
 
 		const auto loadArrayPointer = [&](llvm::Value* array, std::size_t index) {
 			auto* slot = builder.CreateGEP(ptrTy, array, builder.getInt64(index));
@@ -855,7 +1020,6 @@ namespace
 			}
 
 			llvm::Value* outPtr = nullptr;
-			bool heapOwned = false;
 			if (nodeId == finalResult.node)
 			{
 				outPtr = loadArrayPointer(outputArray, 0);
@@ -864,20 +1028,22 @@ namespace
 			{
 				outPtr = builder.CreateCall(mallocFn, { builder.getInt64(tensorBytes(output)) });
 				heapAllocations.push_back(outPtr);
-				heapOwned = true;
 			}
 
-			const auto m = output.shape[0];
-			const auto k = lhs->shape[1];
-			const auto n = output.shape[1];
+			const auto m = static_cast<std::uint64_t>(output.shape[0]);
+			const auto k = static_cast<std::uint64_t>(lhs->shape[1]);
+			const auto n = static_cast<std::uint64_t>(output.shape[1]);
+			const auto layerFlops = SaturatedMulU64(SaturatedMulU64(SaturatedMulU64(m, k), n), 2);
+			totalFlops = SaturatedAddU64(totalFlops, layerFlops);
 			builder.CreateCall(kernelFn, { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m),
 			                               builder.getInt64(k), builder.getInt64(n),
+			                               builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
 			                               builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
-			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape, .heapOwned = heapOwned };
+			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;
 		}
 
-		if (fusedLayerCount == 0 || !values[finalResult.node])
+		if (fusedLayerCount == 0 || !values[finalResult.node] || totalFlops < LiteNNCPUParallelMinFlops())
 		{
 			return std::nullopt;
 		}
@@ -1343,10 +1509,8 @@ namespace
 		InitializeNativeLLVM();
 		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*)(std::size_t)>(&std::malloc)));
 		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
-		RegisterJITRuntimeSymbol("litenn_cpu_parallel_for_u64",
-		                         reinterpret_cast<void*>(&litenn_cpu_parallel_for_u64));
-		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_f32",
-		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -4424,14 +4588,11 @@ void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, st
 
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
-	if (IsCPULinearChainFastPathEnabled())
+	if (auto parallelParts = TryCompileCPUParallelLinearChainF32(graph))
 	{
-		if (auto nativeParts = TryCompileCPULinearChainF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CPUNative);
-		}
+		return CompiledModuleArtifact(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
+		                              std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
+		                              CompiledModuleBackend::CPUNative);
 	}
 
 	mlir::MLIRContext ctx;

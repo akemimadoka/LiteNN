@@ -697,7 +697,6 @@ void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind, std::size
 
 void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	ScopedEnvVar disableFastPath("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", "0");
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
@@ -723,10 +722,8 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 	SetThroughputCounters(state, batch);
 }
 
-void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch,
-                            bool enableFastPath, const char* threadCount)
+void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch, const char* threadCount)
 {
-	ScopedEnvVar fastPathEnv("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", enableFastPath ? "1" : "0");
 	std::optional<ScopedEnvVar> threadCountEnv;
 	if (threadCount != nullptr)
 	{
@@ -760,17 +757,17 @@ void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t
 
 void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	BMAOTRunIntoConfigured(state, kind, batch, false, nullptr);
+	BMAOTRunIntoConfigured(state, kind, batch, nullptr);
 }
 
-void BMAOTFastPathRunIntoT1(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMAOTRunIntoT1(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	BMAOTRunIntoConfigured(state, kind, batch, true, "1");
+	BMAOTRunIntoConfigured(state, kind, batch, "1");
 }
 
-void BMAOTFastPathRunIntoT16(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMAOTRunIntoT16(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	BMAOTRunIntoConfigured(state, kind, batch, true, "16");
+	BMAOTRunIntoConfigured(state, kind, batch, "16");
 }
 #endif
 
@@ -792,10 +789,10 @@ void RegisterBenchmarks()
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
-			RegisterBenchmarkCase("AOTFastPathRunIntoT1", kind, batch,
-			    [=](benchmark::State& state) { BMAOTFastPathRunIntoT1(state, kind, batch); });
-			RegisterBenchmarkCase("AOTFastPathRunIntoT16", kind, batch,
-			    [=](benchmark::State& state) { BMAOTFastPathRunIntoT16(state, kind, batch); });
+			RegisterBenchmarkCase("AOTRunIntoT1", kind, batch,
+			    [=](benchmark::State& state) { BMAOTRunIntoT1(state, kind, batch); });
+			RegisterBenchmarkCase("AOTRunIntoT16", kind, batch,
+			    [=](benchmark::State& state) { BMAOTRunIntoT16(state, kind, batch); });
 			RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMCUDACPUFallbackRunInto(state, kind, batch); });
 			RegisterBenchmarkCase("CUDANativeRunInto", kind, batch,
