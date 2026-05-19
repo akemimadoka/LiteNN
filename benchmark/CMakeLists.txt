@@ -1,5 +1,8 @@
+include(${PROJECT_SOURCE_DIR}/cmake/LiteNNGGMLVendor.cmake)
+litenn_ensure_ggml_vendor_target()
+
 add_executable(litenn_bench bench.cpp)
-target_link_libraries(litenn_bench PRIVATE LiteNN benchmark::benchmark_main)
+target_link_libraries(litenn_bench PRIVATE LiteNN LiteNNGGMLVendor benchmark::benchmark_main)
 
 add_executable(litenn_bench_train bench_train.cpp)
 target_link_libraries(litenn_bench_train PRIVATE LiteNN benchmark::benchmark_main)

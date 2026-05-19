@@ -9,16 +9,21 @@
 #include <LiteNN/Pass/InlinePass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <ggml-cpp.h>
+#include <ggml-cpu.h>
+
 #ifdef LITENN_BENCH_HAS_AOT
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <format>
 #include <optional>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -48,7 +53,32 @@ constexpr std::array<ModelKind, 3> kModelKinds = {
 };
 
 constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
+constexpr std::array<int, 2> kGGMLThreadCounts = { 1, 16 };
 constexpr int kWarmupIterations = 5;
+
+struct GGMLLayerSpec
+{
+	std::size_t inputWidth;
+	std::size_t outputWidth;
+	bool relu;
+};
+
+constexpr std::array<GGMLLayerSpec, 1> kGGMLLinearLayers = {
+	GGMLLayerSpec{ 784, 10, false },
+};
+
+constexpr std::array<GGMLLayerSpec, 2> kGGMLMLP128Layers = {
+	GGMLLayerSpec{ 784, 128, true },
+	GGMLLayerSpec{ 128, 10, false },
+};
+
+constexpr std::array<GGMLLayerSpec, 3> kGGMLMLP512Layers = {
+	GGMLLayerSpec{ 784, 512, true },
+	GGMLLayerSpec{ 512, 256, true },
+	GGMLLayerSpec{ 256, 10, false },
+};
+
+void SetThroughputCounters(benchmark::State& state, std::size_t batch);
 
 Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
@@ -133,6 +163,174 @@ std::vector<Tensor<CPU>> MakeInputs(const std::vector<float>& data, std::size_t 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
 	return inputs;
+}
+
+std::span<const GGMLLayerSpec> GetGGMLLayerSpecs(ModelKind kind)
+{
+	switch (kind)
+	{
+	case ModelKind::Linear:
+		return kGGMLLinearLayers;
+	case ModelKind::MLP128:
+		return kGGMLMLP128Layers;
+	case ModelKind::MLP512:
+		return kGGMLMLP512Layers;
+	}
+	throw std::invalid_argument("unsupported GGML benchmark model kind");
+}
+
+std::vector<float> MakeXavierUniform(std::size_t inputWidth, std::size_t outputWidth, std::mt19937& rng)
+{
+	const auto limit = std::sqrt(6.0f / static_cast<float>(inputWidth + outputWidth));
+	std::uniform_real_distribution<float> dist(-limit, limit);
+	std::vector<float> values(inputWidth * outputWidth);
+	for (auto& value : values)
+		value = dist(rng);
+	return values;
+}
+
+void UploadGGMLTensor(struct ggml_tensor* tensor, std::span<const float> values)
+{
+	ggml_backend_tensor_set(tensor, values.data(), 0, values.size() * sizeof(float));
+}
+
+class GGMLModelRunner
+{
+public:
+	GGMLModelRunner(ModelKind kind, std::size_t batch, int threadCount)
+	    : graphBuffer_(ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead())
+	{
+		if (threadCount <= 0)
+			throw std::invalid_argument("GGML thread count must be positive");
+
+		backend_.reset(ggml_backend_cpu_init());
+		if (!backend_)
+			throw std::runtime_error("ggml_backend_cpu_init failed");
+		ggml_backend_cpu_set_n_threads(backend_.get(), threadCount);
+
+		const auto layerSpecs = GetGGMLLayerSpecs(kind);
+		const auto tensorCount = 1 + static_cast<int>(layerSpecs.size() * 2);
+		tensorContext_.reset(ggml_init({
+		    .mem_size = ggml_tensor_overhead() * tensorCount,
+		    .mem_buffer = nullptr,
+		    .no_alloc = true,
+		}));
+		if (!tensorContext_)
+			throw std::runtime_error("ggml_init failed for tensor context");
+
+		input_ = ggml_new_tensor_2d(tensorContext_.get(), GGML_TYPE_F32, 784, batch);
+		weights_.reserve(layerSpecs.size());
+		biases_.reserve(layerSpecs.size());
+		for (const auto& layer : layerSpecs)
+		{
+			weights_.push_back(
+			    ggml_new_tensor_2d(tensorContext_.get(), GGML_TYPE_F32, layer.inputWidth, layer.outputWidth));
+			biases_.push_back(ggml_new_tensor_2d(tensorContext_.get(), GGML_TYPE_F32, layer.outputWidth, 1));
+		}
+
+		tensorBuffer_.reset(ggml_backend_alloc_ctx_tensors(tensorContext_.get(), backend_.get()));
+		if (!tensorBuffer_)
+			throw std::runtime_error("ggml_backend_alloc_ctx_tensors failed");
+
+		UploadGGMLTensor(input_, MakeInputData(batch));
+		std::mt19937 rng(42);
+		for (auto i = 0uz; i < layerSpecs.size(); ++i)
+		{
+			const auto& layer = layerSpecs[i];
+			UploadGGMLTensor(weights_[i], MakeXavierUniform(layer.inputWidth, layer.outputWidth, rng));
+			UploadGGMLTensor(biases_[i], std::vector<float>(layer.outputWidth, 0.0f));
+		}
+
+		graphContext_.reset(ggml_init({
+		    .mem_size = graphBuffer_.size(),
+		    .mem_buffer = graphBuffer_.data(),
+		    .no_alloc = true,
+		}));
+		if (!graphContext_)
+			throw std::runtime_error("ggml_init failed for graph context");
+
+		graph_ = ggml_new_graph(graphContext_.get());
+		if (!graph_)
+			throw std::runtime_error("ggml_new_graph failed");
+
+		auto* current = input_;
+		for (auto i = 0uz; i < layerSpecs.size(); ++i)
+			current = AddLinearLayer(graphContext_.get(), current, weights_[i], biases_[i], layerSpecs[i].relu);
+
+		ggml_build_forward_expand(graph_, current);
+		result_ = ggml_graph_node(graph_, -1);
+		allocator_.reset(ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_.get())));
+		if (!allocator_)
+			throw std::runtime_error("ggml_gallocr_new failed");
+		if (!ggml_gallocr_alloc_graph(allocator_.get(), graph_))
+			throw std::runtime_error("ggml_gallocr_alloc_graph failed");
+	}
+
+	bool Run() const
+	{
+		return ggml_backend_graph_compute(backend_.get(), graph_) == GGML_STATUS_SUCCESS;
+	}
+
+	const void* ResultData() const
+	{
+		return ggml_get_data(result_);
+	}
+
+private:
+	static struct ggml_tensor* AddLinearLayer(struct ggml_context* ctx, struct ggml_tensor* input,
+	                                          struct ggml_tensor* weight, struct ggml_tensor* bias, bool relu)
+	{
+		auto* linear = ggml_mul_mat(ctx, weight, input);
+		auto* shifted = ggml_add(ctx, linear, ggml_repeat(ctx, bias, linear));
+		return relu ? ggml_relu(ctx, shifted) : shifted;
+	}
+
+	ggml_backend_ptr backend_;
+	ggml_gallocr_ptr allocator_;
+	ggml_context_ptr tensorContext_;
+	ggml_backend_buffer_ptr tensorBuffer_;
+	std::vector<std::byte> graphBuffer_;
+	ggml_context_ptr graphContext_;
+	struct ggml_cgraph* graph_{};
+	struct ggml_tensor* input_{};
+	std::vector<struct ggml_tensor*> weights_;
+	std::vector<struct ggml_tensor*> biases_;
+	struct ggml_tensor* result_{};
+};
+
+void BMLlamaCppGGML(benchmark::State& state, ModelKind kind, std::size_t batch, int threadCount)
+{
+	try
+	{
+		GGMLModelRunner runner(kind, batch, threadCount);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			if (!runner.Run())
+			{
+				state.SkipWithError("llama.cpp ggml graph compute failed during warmup");
+				return;
+			}
+			benchmark::DoNotOptimize(runner.ResultData());
+		}
+
+		for (auto _ : state)
+		{
+			if (!runner.Run())
+			{
+				state.SkipWithError("llama.cpp ggml graph compute failed");
+				return;
+			}
+			benchmark::DoNotOptimize(runner.ResultData());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+	}
+	catch (const std::exception& ex)
+	{
+		state.SkipWithError(ex.what());
+	}
 }
 
 #ifdef LITENN_ENABLE_CUDA
@@ -584,6 +782,11 @@ void RegisterBenchmarks()
 		{
 			RegisterBenchmarkCase("Interpreter", kind, batch,
 			    [=](benchmark::State& state) { BMInterpreter(state, kind, batch); });
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				RegisterBenchmarkCase(std::format("LlamaCppGGMLT{}", threadCount), kind, batch,
+				    [=](benchmark::State& state) { BMLlamaCppGGML(state, kind, batch, threadCount); });
+			}
 #ifdef LITENN_BENCH_HAS_AOT
 			RegisterBenchmarkCase("AOTRun", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });

@@ -1,46 +1,5 @@
-find_package(Threads REQUIRED)
-
-set(LITENN_GGML_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/ggml)
-set(LITENN_GGML_VENDOR_SOURCES
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml.c
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml.cpp
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-alloc.c
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-backend.cpp
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-backend-meta.cpp
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-opt.cpp
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-threading.cpp
-    ${LITENN_GGML_VENDOR_DIR}/src/ggml-quants.c
-    ${LITENN_GGML_VENDOR_DIR}/src/gguf.cpp
-)
-
-add_library(LiteNNGGMLVendor STATIC ${LITENN_GGML_VENDOR_SOURCES})
-target_include_directories(LiteNNGGMLVendor
-    PUBLIC
-        ${LITENN_GGML_VENDOR_DIR}/include
-    PRIVATE
-        ${LITENN_GGML_VENDOR_DIR}/src
-)
-target_compile_definitions(LiteNNGGMLVendor PRIVATE
-    GGML_VERSION="LiteNN-vendored"
-    GGML_COMMIT="vendored"
-)
-target_link_libraries(LiteNNGGMLVendor PRIVATE Threads::Threads)
-if(WIN32)
-    target_compile_definitions(LiteNNGGMLVendor PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
-    target_link_libraries(LiteNNGGMLVendor PRIVATE dl)
-endif()
-if(APPLE)
-    target_compile_definitions(LiteNNGGMLVendor PUBLIC _DARWIN_C_SOURCE)
-endif()
-if(NOT WIN32)
-    find_library(LITENN_GGML_MATH_LIBRARY m)
-    if(LITENN_GGML_MATH_LIBRARY)
-        target_link_libraries(LiteNNGGMLVendor PRIVATE ${LITENN_GGML_MATH_LIBRARY})
-    endif()
-endif()
-litenn_enable_sanitizers(LiteNNGGMLVendor)
+include(${PROJECT_SOURCE_DIR}/cmake/LiteNNGGMLVendor.cmake)
+litenn_ensure_ggml_vendor_target()
 
 add_library(LiteNNGGUFImporter STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.cpp
