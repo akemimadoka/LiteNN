@@ -18,8 +18,12 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#ifdef LITENN_ENABLE_NVRTC
+#include <nvrtc.h>
+#endif
 #include <memory>
 #include <mutex>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,6 +34,48 @@ namespace LiteNN
 {
 	namespace
 	{
+
+#ifdef LITENN_ENABLE_NVRTC
+		std::string_view NVRTCStatusName(nvrtcResult status)
+		{
+			switch (status)
+			{
+			case NVRTC_SUCCESS:
+				return "NVRTC_SUCCESS";
+			case NVRTC_ERROR_OUT_OF_MEMORY:
+				return "NVRTC_ERROR_OUT_OF_MEMORY";
+			case NVRTC_ERROR_PROGRAM_CREATION_FAILURE:
+				return "NVRTC_ERROR_PROGRAM_CREATION_FAILURE";
+			case NVRTC_ERROR_INVALID_INPUT:
+				return "NVRTC_ERROR_INVALID_INPUT";
+			case NVRTC_ERROR_INVALID_PROGRAM:
+				return "NVRTC_ERROR_INVALID_PROGRAM";
+			case NVRTC_ERROR_INVALID_OPTION:
+				return "NVRTC_ERROR_INVALID_OPTION";
+			case NVRTC_ERROR_COMPILATION:
+				return "NVRTC_ERROR_COMPILATION";
+			case NVRTC_ERROR_BUILTIN_OPERATION_FAILURE:
+				return "NVRTC_ERROR_BUILTIN_OPERATION_FAILURE";
+			case NVRTC_ERROR_NO_NAME_EXPRESSIONS_AFTER_COMPILATION:
+				return "NVRTC_ERROR_NO_NAME_EXPRESSIONS_AFTER_COMPILATION";
+			case NVRTC_ERROR_NO_LOWERED_NAMES_BEFORE_COMPILATION:
+				return "NVRTC_ERROR_NO_LOWERED_NAMES_BEFORE_COMPILATION";
+			case NVRTC_ERROR_NAME_EXPRESSION_NOT_VALID:
+				return "NVRTC_ERROR_NAME_EXPRESSION_NOT_VALID";
+			case NVRTC_ERROR_INTERNAL_ERROR:
+				return "NVRTC_ERROR_INTERNAL_ERROR";
+			}
+			return "NVRTC_ERROR_UNKNOWN";
+		}
+
+		void CheckNVRTC(nvrtcResult status, std::string_view action)
+		{
+			if (status != NVRTC_SUCCESS)
+			{
+				throw std::runtime_error(std::format("{} failed: {}", action, NVRTCStatusName(status)));
+			}
+		}
+#endif
 		std::size_t ElementSize(DataType type)
 		{
 			return ElementByteSize(type);
@@ -179,6 +225,15 @@ namespace LiteNN
 #endif
 		}
 
+		constexpr bool BuildHasNVRTC() noexcept
+		{
+#ifdef LITENN_ENABLE_NVRTC
+			return true;
+#else
+			return false;
+#endif
+		}
+
 		int ComputeCapabilityScore(int major, int minor) noexcept
 		{
 			return major * 10 + minor;
@@ -198,11 +253,483 @@ namespace LiteNN
 				.supportsBFloat16Storage = true,
 				.supportsBFloat16MatMul = cc >= 80 && BuildHasCUBLASBFloat16(),
 				.supportsFloat8Storage = true,
-				.supportsFloat8MatMul = false,
+				.supportsFloat8MatMul = BuildHasCUBLASLt() && cc >= 90,
 				.supportsInt8Storage = true,
 				.supportsInt8TensorCores = cc >= 75,
 			};
 		}
+
+		constexpr bool IsNativeCUDAConversionType(DataType type) noexcept
+		{
+			switch (type)
+			{
+			case DataType::Float32:
+			case DataType::Float64:
+			case DataType::Int32:
+			case DataType::Int64:
+			case DataType::Bool:
+			case DataType::Float16:
+			case DataType::BFloat16:
+			case DataType::Float8E4M3:
+			case DataType::Float8E5M2:
+			case DataType::Int8:
+			case DataType::UInt8:
+				return true;
+			}
+			return false;
+		}
+
+		bool CUDACanUseNativeConversion(DataType srcType, DataType dstType, int deviceIndex) noexcept
+		{
+			if (!(BuildHasNVRTC() && IsCUDADriverAvailable(deviceIndex) && IsNativeCUDAConversionType(srcType) &&
+			      IsNativeCUDAConversionType(dstType)))
+			{
+				return false;
+			}
+			if (srcType == dstType)
+			{
+				return true;
+			}
+			if (srcType == DataType::Float8E4M3 || srcType == DataType::Float8E5M2 || dstType == DataType::Float8E4M3 ||
+			    dstType == DataType::Float8E5M2)
+			{
+				const auto capabilities = TryGetCUDALowPrecisionCapabilities(deviceIndex);
+				return capabilities && capabilities->supportsFloat8MatMul;
+			}
+			return true;
+		}
+
+		class CUDATemporaryBuffer
+		{
+		public:
+			CUDATemporaryBuffer(CUDA& device, DataType type, std::size_t size) : deviceIndex_(device.deviceIndex)
+			{
+				int previousDevice = 0;
+				CheckCUDA(cudaGetDevice(&previousDevice), "cudaGetDevice before temporary buffer allocation");
+				if (previousDevice != deviceIndex_)
+				{
+					CheckCUDA(cudaSetDevice(deviceIndex_), "cudaSetDevice before temporary buffer allocation");
+				}
+				CheckCUDA(cudaMalloc(&ptr_, ElementSize(type) * size), "cudaMalloc temporary buffer");
+				if (previousDevice != deviceIndex_)
+				{
+					(void)cudaSetDevice(previousDevice);
+				}
+			}
+
+			~CUDATemporaryBuffer()
+			{
+				if (ptr_ != nullptr)
+				{
+					int previousDevice = 0;
+					if (cudaGetDevice(&previousDevice) == cudaSuccess)
+					{
+						if (previousDevice != deviceIndex_)
+						{
+							(void)cudaSetDevice(deviceIndex_);
+						}
+						(void)cudaFree(ptr_);
+						if (previousDevice != deviceIndex_)
+						{
+							(void)cudaSetDevice(previousDevice);
+						}
+						return;
+					}
+					(void)cudaFree(ptr_);
+				}
+			}
+
+			CUDATemporaryBuffer(const CUDATemporaryBuffer&) = delete;
+			CUDATemporaryBuffer& operator=(const CUDATemporaryBuffer&) = delete;
+
+			void* get() const noexcept
+			{
+				return ptr_;
+			}
+
+		private:
+			int deviceIndex_{};
+			void* ptr_{};
+		};
+
+#if defined(LITENN_ENABLE_CUDA_DRIVER) && defined(LITENN_ENABLE_NVRTC)
+		std::string CUDANativeConvertKernelSource()
+		{
+			return R"cuda(
+enum DataTypeId {
+	TypeFloat32 = 0,
+	TypeFloat64 = 1,
+	TypeInt32 = 2,
+	TypeInt64 = 3,
+	TypeBool = 4,
+	TypeFloat16 = 5,
+	TypeBFloat16 = 6,
+	TypeFloat8E4M3 = 7,
+	TypeFloat8E5M2 = 8,
+	TypeInt8 = 9,
+	TypeUInt8 = 10
+};
+
+__device__ __forceinline__ unsigned int litenn_float_to_bits(float value) {
+	return __float_as_uint(value);
+}
+
+__device__ __forceinline__ float litenn_bits_to_float(unsigned int bits) {
+	return __uint_as_float(bits);
+}
+
+__device__ __forceinline__ float litenn_ldexp(float value, int exponent) {
+	if (value == 0.0f) {
+		return 0.0f;
+	}
+	while (exponent > 0) {
+		value *= 2.0f;
+		--exponent;
+	}
+	while (exponent < 0) {
+		value *= 0.5f;
+		++exponent;
+	}
+	return value;
+}
+
+__device__ __forceinline__ unsigned int litenn_round_to_uint(float value) {
+	return static_cast<unsigned int>(value + 0.5f);
+}
+
+__device__ __forceinline__ unsigned short litenn_float32_to_float16_bits(float value) {
+	const unsigned int bits = litenn_float_to_bits(value);
+	const unsigned short sign = static_cast<unsigned short>((bits >> 16) & 0x8000u);
+	int exponent = static_cast<int>((bits >> 23) & 0xffu) - 127;
+	unsigned int mantissa = bits & 0x7fffffu;
+
+	if ((bits & 0x7fffffffu) == 0) {
+		return sign;
+	}
+	if (((bits >> 23) & 0xffu) == 0xffu) {
+		return static_cast<unsigned short>(sign | 0x7c00u | (mantissa ? 0x0200u : 0u));
+	}
+	if (exponent > 15) {
+		return static_cast<unsigned short>(sign | 0x7c00u);
+	}
+	if (exponent < -14) {
+		if (exponent < -24) {
+			return sign;
+		}
+		mantissa |= 0x800000u;
+		const unsigned int shift = static_cast<unsigned int>(-exponent - 14 + 13);
+		unsigned short halfMantissa = static_cast<unsigned short>(mantissa >> shift);
+		const unsigned int roundBit = 1u << (shift - 1);
+		if ((mantissa & roundBit) != 0) {
+			++halfMantissa;
+		}
+		return static_cast<unsigned short>(sign | halfMantissa);
+	}
+
+	unsigned short halfExponent = static_cast<unsigned short>((exponent + 15) << 10);
+	unsigned short halfMantissa = static_cast<unsigned short>(mantissa >> 13);
+	if ((mantissa & 0x1000u) != 0) {
+		++halfMantissa;
+		if ((halfMantissa & 0x0400u) != 0) {
+			halfMantissa = 0;
+			halfExponent = static_cast<unsigned short>(halfExponent + 0x0400u);
+			if (halfExponent >= 0x7c00u) {
+				halfExponent = 0x7c00u;
+			}
+		}
+	}
+	return static_cast<unsigned short>(sign | halfExponent | halfMantissa);
+}
+
+__device__ __forceinline__ float litenn_float16_bits_to_float32(unsigned short bits) {
+	const float sign = (bits & 0x8000u) ? -1.0f : 1.0f;
+	const int exponent = static_cast<int>((bits >> 10) & 0x1fu);
+	const unsigned int mantissa = static_cast<unsigned int>(bits & 0x03ffu);
+	if (exponent == 0) {
+		if (mantissa == 0) {
+			return sign * 0.0f;
+		}
+		return sign * litenn_ldexp(static_cast<float>(mantissa) / 1024.0f, -14);
+	}
+	if (exponent == 0x1f) {
+		if (mantissa == 0) {
+			return sign * (1.0f / 0.0f);
+		}
+		return __int_as_float(0x7fffffff);
+	}
+	return sign * litenn_ldexp(1.0f + static_cast<float>(mantissa) / 1024.0f, exponent - 15);
+}
+
+__device__ __forceinline__ unsigned short litenn_float32_to_bfloat16_bits(float value) {
+	const unsigned int bits = litenn_float_to_bits(value);
+	const unsigned int lsb = (bits >> 16) & 1u;
+	return static_cast<unsigned short>((bits + 0x7fffu + lsb) >> 16);
+}
+
+__device__ __forceinline__ float litenn_bfloat16_bits_to_float32(unsigned short bits) {
+	return litenn_bits_to_float(static_cast<unsigned int>(bits) << 16);
+}
+
+__device__ __forceinline__ unsigned char litenn_float32_to_float8_bits(float value, int exponentBits, int mantissaBits,
+																		int exponentBias) {
+	const unsigned int signBit = (litenn_float_to_bits(value) >> 24) & 0x80u;
+	float magnitude = value < 0.0f ? -value : value;
+	if (magnitude == 0.0f) {
+		return static_cast<unsigned char>(signBit);
+	}
+	const unsigned int magnitudeBits = litenn_float_to_bits(magnitude);
+	const unsigned int exponentField = (magnitudeBits >> 23) & 0xffu;
+	const unsigned int mantissaField = magnitudeBits & 0x7fffffu;
+	if (exponentField == 0xffu) {
+		const unsigned int maxExponent = (1u << exponentBits) - 1u;
+		return static_cast<unsigned char>(signBit | (maxExponent << mantissaBits));
+	}
+
+	int exponent = 0;
+	while (magnitude >= 2.0f) {
+		magnitude *= 0.5f;
+		++exponent;
+	}
+	while (magnitude < 1.0f) {
+		magnitude *= 2.0f;
+		--exponent;
+	}
+
+	const unsigned int maxExponent = (1u << exponentBits) - 1u;
+	const int storedExponent = exponent + exponentBias;
+	const float mantissaScale = static_cast<float>(1u << mantissaBits);
+	if (storedExponent >= static_cast<int>(maxExponent)) {
+		return static_cast<unsigned char>(signBit | (maxExponent << mantissaBits));
+	}
+	if (storedExponent <= 0) {
+		const float subnormal = litenn_ldexp(magnitude, exponent + exponentBias - 1);
+		const unsigned int maxMantissa = (1u << mantissaBits) - 1u;
+		const unsigned int roundedMantissa = litenn_round_to_uint(subnormal * mantissaScale);
+		const unsigned int mantissa = roundedMantissa < maxMantissa ? roundedMantissa : maxMantissa;
+		return static_cast<unsigned char>(signBit | mantissa);
+	}
+
+	unsigned int mantissa = litenn_round_to_uint((magnitude - 1.0f) * mantissaScale);
+	unsigned int stored = static_cast<unsigned int>(storedExponent);
+	if (mantissa == (1u << mantissaBits)) {
+		mantissa = 0;
+		++stored;
+		if (stored >= maxExponent) {
+			stored = maxExponent;
+		}
+	}
+	return static_cast<unsigned char>(signBit | (stored << mantissaBits) | mantissa);
+}
+
+__device__ __forceinline__ float litenn_float8_bits_to_float32(unsigned char bits, int exponentBits, int mantissaBits,
+																int exponentBias) {
+	const float sign = (bits & 0x80u) ? -1.0f : 1.0f;
+	const unsigned int exponentMask = (1u << exponentBits) - 1u;
+	const unsigned int exponentField = (bits >> mantissaBits) & exponentMask;
+	const unsigned int mantissa = bits & ((1u << mantissaBits) - 1u);
+	const float mantissaScale = static_cast<float>(1u << mantissaBits);
+	if (exponentField == 0) {
+		if (mantissa == 0) {
+			return sign * 0.0f;
+		}
+		return sign * litenn_ldexp(static_cast<float>(mantissa) / mantissaScale, 1 - exponentBias);
+	}
+	if (exponentField == exponentMask) {
+		if (mantissa == 0) {
+			return sign * (1.0f / 0.0f);
+		}
+		return __int_as_float(0x7fffffff);
+	}
+	return sign * litenn_ldexp(1.0f + static_cast<float>(mantissa) / mantissaScale,
+							   static_cast<int>(exponentField) - exponentBias);
+}
+
+struct Float16 {
+	unsigned short bits;
+	__device__ Float16() : bits(0) {}
+	template <typename T>
+	__device__ Float16(T value) : bits(litenn_float32_to_float16_bits(static_cast<float>(value))) {}
+	__device__ operator float() const { return litenn_float16_bits_to_float32(bits); }
+};
+
+struct BFloat16 {
+	unsigned short bits;
+	__device__ BFloat16() : bits(0) {}
+	template <typename T>
+	__device__ BFloat16(T value) : bits(litenn_float32_to_bfloat16_bits(static_cast<float>(value))) {}
+	__device__ operator float() const { return litenn_bfloat16_bits_to_float32(bits); }
+};
+
+struct Float8E4M3 {
+	unsigned char bits;
+	__device__ Float8E4M3() : bits(0) {}
+	template <typename T>
+	__device__ Float8E4M3(T value) : bits(litenn_float32_to_float8_bits(static_cast<float>(value), 4, 3, 7)) {}
+	__device__ operator float() const { return litenn_float8_bits_to_float32(bits, 4, 3, 7); }
+};
+
+struct Float8E5M2 {
+	unsigned char bits;
+	__device__ Float8E5M2() : bits(0) {}
+	template <typename T>
+	__device__ Float8E5M2(T value) : bits(litenn_float32_to_float8_bits(static_cast<float>(value), 5, 2, 15)) {}
+	__device__ operator float() const { return litenn_float8_bits_to_float32(bits, 5, 2, 15); }
+};
+
+template <typename Src>
+__device__ __forceinline__ void litenn_store_converted(const Src &value, int dstType, void *dst, unsigned long long index) {
+	switch (dstType) {
+		case TypeFloat32: static_cast<float *>(dst)[index] = static_cast<float>(value); break;
+		case TypeFloat64: static_cast<double *>(dst)[index] = static_cast<double>(value); break;
+		case TypeInt32: static_cast<int *>(dst)[index] = static_cast<int>(value); break;
+		case TypeInt64: static_cast<long long *>(dst)[index] = static_cast<long long>(value); break;
+		case TypeBool: static_cast<bool *>(dst)[index] = static_cast<bool>(value); break;
+		case TypeFloat16: static_cast<Float16 *>(dst)[index] = Float16(value); break;
+		case TypeBFloat16: static_cast<BFloat16 *>(dst)[index] = BFloat16(value); break;
+		case TypeFloat8E4M3: static_cast<Float8E4M3 *>(dst)[index] = Float8E4M3(value); break;
+		case TypeFloat8E5M2: static_cast<Float8E5M2 *>(dst)[index] = Float8E5M2(value); break;
+		case TypeInt8: static_cast<signed char *>(dst)[index] = static_cast<signed char>(value); break;
+		case TypeUInt8: static_cast<unsigned char *>(dst)[index] = static_cast<unsigned char>(value); break;
+	}
+}
+
+template <typename Src>
+__device__ __forceinline__ void litenn_convert_from(const void *src, int dstType, void *dst, unsigned long long index) {
+	const Src value = static_cast<const Src *>(src)[index];
+	litenn_store_converted(value, dstType, dst, index);
+}
+
+extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, void *dst, int dstType,
+												   unsigned long long count) {
+	const unsigned long long index = static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+	if (index >= count) {
+		return;
+	}
+	switch (srcType) {
+		case TypeFloat32: litenn_convert_from<float>(src, dstType, dst, index); break;
+		case TypeFloat64: litenn_convert_from<double>(src, dstType, dst, index); break;
+		case TypeInt32: litenn_convert_from<int>(src, dstType, dst, index); break;
+		case TypeInt64: litenn_convert_from<long long>(src, dstType, dst, index); break;
+		case TypeBool: litenn_convert_from<bool>(src, dstType, dst, index); break;
+		case TypeFloat16: litenn_convert_from<Float16>(src, dstType, dst, index); break;
+		case TypeBFloat16: litenn_convert_from<BFloat16>(src, dstType, dst, index); break;
+		case TypeFloat8E4M3: litenn_convert_from<Float8E4M3>(src, dstType, dst, index); break;
+		case TypeFloat8E5M2: litenn_convert_from<Float8E5M2>(src, dstType, dst, index); break;
+		case TypeInt8: litenn_convert_from<signed char>(src, dstType, dst, index); break;
+		case TypeUInt8: litenn_convert_from<unsigned char>(src, dstType, dst, index); break;
+	}
+}
+)cuda";
+		}
+
+		std::vector<std::byte> CompileCUDANativeConvertPTX(int deviceIndex)
+		{
+			nvrtcProgram program{};
+			auto source = CUDANativeConvertKernelSource();
+			CheckNVRTC(nvrtcCreateProgram(&program, source.c_str(), "litenn_convert_kernel.cu", 0, nullptr, nullptr),
+			           "nvrtcCreateProgram for CUDA conversion kernel");
+			const auto destroyProgram = [&] {
+				if (program != nullptr)
+				{
+					(void)nvrtcDestroyProgram(&program);
+				}
+			};
+
+			try
+			{
+				cudaDeviceProp properties{};
+				CheckCUDA(cudaGetDeviceProperties(&properties, deviceIndex), "cudaGetDeviceProperties for NVRTC conversion kernel");
+				const auto arch = std::format("--gpu-architecture=compute_{}{}", properties.major, properties.minor);
+				const std::array optionStorage{
+					std::string("--std=c++17"),
+					arch,
+				};
+				std::array<const char*, 2> options{ optionStorage[0].c_str(), optionStorage[1].c_str() };
+				const auto compileStatus = nvrtcCompileProgram(program, static_cast<int>(options.size()), options.data());
+
+				size_t logSize = 0;
+				(void)nvrtcGetProgramLogSize(program, &logSize);
+				std::string log;
+				if (logSize != 0)
+				{
+					log.resize(logSize);
+					(void)nvrtcGetProgramLog(program, log.data());
+				}
+				if (compileStatus != NVRTC_SUCCESS)
+				{
+					throw std::runtime_error(std::format(
+					    "nvrtcCompileProgram for CUDA conversion kernel failed: {}\n{}",
+					    NVRTCStatusName(compileStatus), log));
+				}
+
+				size_t ptxSize = 0;
+				CheckNVRTC(nvrtcGetPTXSize(program, &ptxSize), "nvrtcGetPTXSize for CUDA conversion kernel");
+				std::vector<char> ptx(ptxSize);
+				CheckNVRTC(nvrtcGetPTX(program, ptx.data()), "nvrtcGetPTX for CUDA conversion kernel");
+				destroyProgram();
+				return std::vector<std::byte>(reinterpret_cast<const std::byte*>(ptx.data()),
+				                              reinterpret_cast<const std::byte*>(ptx.data() + ptx.size()));
+			}
+			catch (...)
+			{
+				destroyProgram();
+				throw;
+			}
+		}
+
+		CUDADriverModule& NativeCUDAConvertModule(CUDA& device)
+		{
+			struct ModuleCacheEntry
+			{
+				int deviceIndex{};
+				std::unique_ptr<CUDADriverModule> module;
+			};
+
+			static std::mutex mutex;
+			static std::vector<ModuleCacheEntry> modules;
+			std::lock_guard lock(mutex);
+			for (auto& entry : modules)
+			{
+				if (entry.deviceIndex == device.deviceIndex)
+				{
+					return *entry.module;
+				}
+			}
+
+			auto ptx = CompileCUDANativeConvertPTX(device.deviceIndex);
+			auto module = std::make_unique<CUDADriverModule>(device, std::span<const std::byte>(ptx.data(), ptx.size()));
+			auto& ref = *module;
+			modules.push_back({ .deviceIndex = device.deviceIndex, .module = std::move(module) });
+			return ref;
+		}
+
+		void LaunchNativeCUDAConvert(CUDA& device, DataType srcType, const void* src, std::size_t size,
+		                            DataType dstType, void* dst, CUDAExecutionOptions options)
+		{
+			if (size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) * 256ull)
+			{
+				throw std::runtime_error("CUDA conversion size exceeds launch grid range");
+			}
+			auto& module = NativeCUDAConvertModule(device);
+			const auto srcTypeValue = static_cast<int>(srcType);
+			const auto dstTypeValue = static_cast<int>(dstType);
+			const auto count = static_cast<std::uint64_t>(size);
+			void* srcPtr = const_cast<void*>(src);
+			void* arguments[]{ &srcPtr, const_cast<int*>(&srcTypeValue), &dst, const_cast<int*>(&dstTypeValue),
+			                   const_cast<std::uint64_t*>(&count) };
+			constexpr unsigned int kBlockSize = 256;
+			const auto gridX = static_cast<unsigned int>((size + kBlockSize - 1) / kBlockSize);
+			module.Launch("litenn_convert_kernel",
+			              {
+			                  .grid = { .x = gridX, .y = 1, .z = 1 },
+			                  .block = { .x = kBlockSize, .y = 1, .z = 1 },
+			                  .sharedMemoryBytes = 0,
+			                  .stream = options.stream,
+			                  .synchronize = options.synchronize,
+			              },
+			              arguments);
+		}
+#endif
 
 		class CUDADeviceGuard
 		{
@@ -435,7 +962,8 @@ namespace LiteNN
 		                       DataType type2, ShapeView shape2, const void* src2, CUDAExecutionOptions options)
 		{
 			if (shape1.NumDim() != 2 || shape2.NumDim() != 2 || shape1[1] != shape2[0] || type1 != type2 ||
-			    type1 != DataType::Float32)
+			    (type1 != DataType::Float32 && type1 != DataType::Float8E4M3 && type1 != DataType::Float8E5M2 &&
+			     type1 != DataType::Int8 && type1 != DataType::UInt8))
 			{
 				return false;
 			}
@@ -449,6 +977,7 @@ namespace LiteNN
 			const auto m = static_cast<int>(shape1[0]);
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
+			const auto outputElements = static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
 			if (!ShouldTryCUBLASLtMatMul(m, k, n))
 			{
 				return false;
@@ -457,8 +986,83 @@ namespace LiteNN
 			CUDADeviceGuard guard(device.deviceIndex);
 			auto& handle = ThreadLocalCUBLASLtHandle(device.deviceIndex);
 
+			cublasComputeType_t computeType{};
+			cudaDataType_t scaleType{};
+			cudaDataType_t dataType{};
+			cudaDataType_t outputType{};
+			void* outputBuffer = dst;
+			std::unique_ptr<CUDATemporaryBuffer> outputScratch;
+			bool fastAccum = false;
+
+			switch (type1)
+			{
+			case DataType::Float32:
+				computeType = CUBLAS_COMPUTE_32F;
+				scaleType = CUDA_R_32F;
+				dataType = CUDA_R_32F;
+				outputType = CUDA_R_32F;
+				break;
+			case DataType::Float8E4M3:
+				if (!CUDASupportsNativeMatMul(type1, device.deviceIndex))
+				{
+					return false;
+				}
+				if (!CUDASupportsNativeConversion(DataType::Float32, type1, device.deviceIndex))
+				{
+					return false;
+				}
+				computeType = CUBLAS_COMPUTE_32F;
+				scaleType = CUDA_R_32F;
+				dataType = CUDA_R_8F_E4M3;
+				outputType = CUDA_R_32F;
+				outputScratch = std::make_unique<CUDATemporaryBuffer>(device, DataType::Float32, outputElements);
+				outputBuffer = outputScratch->get();
+				fastAccum = true;
+				break;
+			case DataType::Float8E5M2:
+				if (!CUDASupportsNativeMatMul(type1, device.deviceIndex))
+				{
+					return false;
+				}
+				if (!CUDASupportsNativeConversion(DataType::Float32, type1, device.deviceIndex))
+				{
+					return false;
+				}
+				computeType = CUBLAS_COMPUTE_32F;
+				scaleType = CUDA_R_32F;
+				dataType = CUDA_R_8F_E5M2;
+				outputType = CUDA_R_32F;
+				outputScratch = std::make_unique<CUDATemporaryBuffer>(device, DataType::Float32, outputElements);
+				outputBuffer = outputScratch->get();
+				fastAccum = true;
+				break;
+			case DataType::Int8:
+			case DataType::UInt8:
+				if (!CUDASupportsNativeMatMul(type1, device.deviceIndex))
+				{
+					return false;
+				}
+				if (!CUDASupportsNativeConversion(DataType::Int32, type1, device.deviceIndex))
+				{
+					return false;
+				}
+				computeType = CUBLAS_COMPUTE_32I;
+				scaleType = CUDA_R_32I;
+				dataType = type1 == DataType::Int8 ? CUDA_R_8I : CUDA_R_8U;
+				outputType = CUDA_R_32I;
+				outputScratch = std::make_unique<CUDATemporaryBuffer>(device, DataType::Int32, outputElements);
+				outputBuffer = outputScratch->get();
+				break;
+			default:
+				return false;
+			}
+			if (outputScratch && !options.synchronize)
+			{
+				return false;
+			}
+
 			cublasLtMatmulDesc_t operation{};
-			if (cublasLtMatmulDescCreate(&operation, CUBLAS_COMPUTE_32F, CUDA_R_32F) != CUBLAS_STATUS_SUCCESS)
+			if (cublasLtMatmulDescCreate(&operation, computeType, scaleType) != CUBLAS_STATUS_SUCCESS)
 			{
 				return false;
 			}
@@ -466,12 +1070,18 @@ namespace LiteNN
 			const cublasOperation_t opN = CUBLAS_OP_N;
 			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
 			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
+			if (fastAccum)
+			{
+				int fastAccumValue = 1;
+				(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_FAST_ACCUM,
+				                                     &fastAccumValue, sizeof(fastAccumValue));
+			}
 
 			const cublasLtOrder_t rowMajor = CUBLASLT_ORDER_ROW;
 			const auto makeLayout = [&](std::uint64_t rows, std::uint64_t cols, std::int64_t ld)
 			    -> CUBLASLtMatrixLayoutOwner {
 				cublasLtMatrixLayout_t layout{};
-				if (cublasLtMatrixLayoutCreate(&layout, CUDA_R_32F, rows, cols, ld) != CUBLAS_STATUS_SUCCESS)
+				if (cublasLtMatrixLayoutCreate(&layout, dataType, rows, cols, ld) != CUBLAS_STATUS_SUCCESS)
 				{
 					return {};
 				}
@@ -485,7 +1095,18 @@ namespace LiteNN
 			};
 			auto aLayout = makeLayout(static_cast<std::uint64_t>(m), static_cast<std::uint64_t>(k), k);
 			auto bLayout = makeLayout(static_cast<std::uint64_t>(k), static_cast<std::uint64_t>(n), n);
-			auto cLayout = makeLayout(static_cast<std::uint64_t>(m), static_cast<std::uint64_t>(n), n);
+			cublasLtMatrixLayout_t cLayoutRaw{};
+			if (cublasLtMatrixLayoutCreate(&cLayoutRaw, outputType, static_cast<std::uint64_t>(m),
+			                              static_cast<std::uint64_t>(n), n) != CUBLAS_STATUS_SUCCESS)
+			{
+				return false;
+			}
+			CUBLASLtMatrixLayoutOwner cLayout(cLayoutRaw);
+			if (cublasLtMatrixLayoutSetAttribute(cLayout.get(), CUBLASLT_MATRIX_LAYOUT_ORDER, &rowMajor,
+			                                     sizeof(rowMajor)) != CUBLAS_STATUS_SUCCESS)
+			{
+				return false;
+			}
 			if (!aLayout.get() || !bLayout.get() || !cLayout.get())
 			{
 				return false;
@@ -517,14 +1138,26 @@ namespace LiteNN
 				algo = handle.CachedAlgo(key);
 			}
 
-			const float alpha = 1.0F;
-			const float beta = 0.0F;
-			const auto status = cublasLtMatmul(handle.get(), operation, &alpha, src1, aLayout.get(), src2,
-			                                   bLayout.get(), &beta, dst, cLayout.get(), dst, cLayout.get(), algo,
-			                                   nullptr, 0, reinterpret_cast<cudaStream_t>(options.stream));
+			std::int32_t alphaI32 = 1;
+			std::int32_t betaI32 = 0;
+			float alphaF32 = 1.0F;
+			float betaF32 = 0.0F;
+			const void* alpha = scaleType == CUDA_R_32I ? static_cast<const void*>(&alphaI32)
+			                                           : static_cast<const void*>(&alphaF32);
+			const void* beta = scaleType == CUDA_R_32I ? static_cast<const void*>(&betaI32)
+			                                          : static_cast<const void*>(&betaF32);
+			const auto status = cublasLtMatmul(handle.get(), operation, alpha, src1, aLayout.get(), src2,
+			                                   bLayout.get(), beta, outputBuffer, cLayout.get(), outputBuffer,
+			                                   cLayout.get(), algo, nullptr, 0,
+			                                   reinterpret_cast<cudaStream_t>(options.stream));
 			if (status != CUBLAS_STATUS_SUCCESS)
 			{
 				return false;
+			}
+			if (outputBuffer != dst)
+			{
+				LaunchNativeCUDAConvert(device, outputType == CUDA_R_32I ? DataType::Int32 : DataType::Float32,
+				                        outputBuffer, outputElements, type1, dst, options);
 			}
 			if (options.synchronize)
 			{
@@ -860,28 +1493,37 @@ namespace LiteNN
 		case DataType::Float8E4M3:
 		case DataType::Float8E5M2:
 			return capabilities->supportsFloat8MatMul;
+			case DataType::Int8:
+			case DataType::UInt8:
+				return capabilities->hasCUBLASLt && capabilities->supportsInt8TensorCores;
 		case DataType::Float32:
 		case DataType::Float64:
 		case DataType::Int32:
 		case DataType::Int64:
-		case DataType::Int8:
-		case DataType::UInt8:
 		case DataType::Bool:
 			return false;
 		}
 		return false;
 	}
 
+	bool CUDASupportsNativeConversion(DataType srcType, DataType dstType, int deviceIndex) noexcept
+	{
+		return CUDACanUseNativeConversion(srcType, dstType, deviceIndex);
+	}
+
 	std::string FormatCUDALowPrecisionCapabilities(const CUDALowPrecisionCapabilities& capabilities)
 	{
 		return std::format(
 		    "CUDA device {} cc {}.{}: cuBLASLt={}, fp16(storage={}, matmul={}), "
-		    "bf16(storage={}, matmul={}), fp8(storage={}, matmul={}), int8(storage={}, tensorCores={})",
+		    "bf16(storage={}, matmul={}), fp8(storage={}, matmul={}), int8(storage={}, tensorCores={}, matmul={}), "
+		    "nativeConvert={}",
 		    capabilities.deviceIndex, capabilities.computeCapabilityMajor, capabilities.computeCapabilityMinor,
 		    capabilities.hasCUBLASLt, capabilities.supportsFloat16Storage, capabilities.supportsFloat16MatMul,
 		    capabilities.supportsBFloat16Storage, capabilities.supportsBFloat16MatMul,
 		    capabilities.supportsFloat8Storage, capabilities.supportsFloat8MatMul, capabilities.supportsInt8Storage,
-		    capabilities.supportsInt8TensorCores);
+		    capabilities.supportsInt8TensorCores,
+		    capabilities.hasCUBLASLt && capabilities.supportsInt8TensorCores,
+		    BuildHasNVRTC() && IsCUDADriverAvailable(capabilities.deviceIndex));
 	}
 
 #ifdef LITENN_ENABLE_CUDA_DRIVER
@@ -1159,6 +1801,16 @@ namespace LiteNN
 		{
 			throw std::runtime_error("Asynchronous CUDA D2H copy with data type conversion is not supported");
 		}
+		if (CUDACanUseNativeConversion(srcType, dstType, device.deviceIndex))
+		{
+			CUDATemporaryBuffer converted(device, dstType, size);
+			LaunchNativeCUDAConvert(device, srcType, src, size, dstType, converted.get(),
+			                        CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+			CheckCUDA(cudaMemcpyAsync(dst, converted.get(), ElementSize(dstType) * size, cudaMemcpyDeviceToHost, stream),
+			          "cudaMemcpyAsync converted D2H");
+			SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after converted D2H");
+			return;
+		}
 
 		auto hostSrc = MakeHostBuffer(srcType, size);
 		CheckCUDA(cudaMemcpyAsync(hostSrc.data(), src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost, stream),
@@ -1193,6 +1845,16 @@ namespace LiteNN
 		{
 			throw std::runtime_error("Asynchronous CUDA H2D copy with data type conversion is not supported");
 		}
+		if (CUDACanUseNativeConversion(srcType, dstType, device.deviceIndex))
+		{
+			CUDATemporaryBuffer uploaded(device, srcType, size);
+			CheckCUDA(cudaMemcpyAsync(uploaded.get(), src, ElementSize(srcType) * size, cudaMemcpyHostToDevice, stream),
+			          "cudaMemcpyAsync source H2D before converted H2D");
+			SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after source H2D before converted H2D");
+			LaunchNativeCUDAConvert(device, srcType, uploaded.get(), size, dstType, dst,
+			                        CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+			return;
+		}
 
 		auto hostDst = MakeHostBuffer(dstType, size);
 		CPU cpu;
@@ -1210,6 +1872,12 @@ namespace LiteNN
 		{
 			CheckCUDA(cudaMemcpy(dst, src, ElementSize(srcType) * size, cudaMemcpyDeviceToDevice),
 			          "cudaMemcpy D2D");
+			return;
+		}
+		if (CUDACanUseNativeConversion(srcType, dstType, device.deviceIndex))
+		{
+			LaunchNativeCUDAConvert(device, srcType, src, size, dstType, dst,
+			                        CUDAExecutionOptions{ .stream = nullptr, .synchronize = true });
 			return;
 		}
 

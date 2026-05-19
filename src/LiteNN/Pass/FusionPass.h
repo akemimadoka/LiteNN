@@ -420,7 +420,10 @@ namespace LiteNN
 
 		static bool CanLowerMatMulBiasAddReLU(const OutputInfo& info)
 		{
-			if (info.dtype != DataType::Float32 || info.shape.size() != 2)
+			const bool supportedDType = info.dtype == DataType::Float32 || info.dtype == DataType::Float16 ||
+			                            info.dtype == DataType::BFloat16 || info.dtype == DataType::Int8 ||
+			                            info.dtype == DataType::UInt8;
+			if (!supportedDType || info.shape.size() != 2)
 			{
 				return false;
 			}

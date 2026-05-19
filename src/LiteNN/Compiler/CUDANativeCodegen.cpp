@@ -282,6 +282,119 @@ namespace
 		}
 	}
 
+	bool IsSupportedCUDANativeCastScalarType(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float64:
+		case DataType::Float32:
+		case DataType::Float16:
+		case DataType::BFloat16:
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+		case DataType::Int64:
+		case DataType::Int32:
+		case DataType::Int8:
+		case DataType::UInt8:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsCUDANativeCastFloatType(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float64:
+		case DataType::Float32:
+		case DataType::Float16:
+		case DataType::BFloat16:
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsCUDANativeCastFloat8Type(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsSupportedCUDANativeMatMulBiasEpilogueType(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float32:
+		case DataType::Float16:
+		case DataType::BFloat16:
+		case DataType::Int8:
+		case DataType::UInt8:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	DataType CUDANativeMatMulBiasEpilogueComputeType(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float32:
+		case DataType::Float16:
+		case DataType::BFloat16:
+			return DataType::Float32;
+		case DataType::Int8:
+		case DataType::UInt8:
+			return DataType::Int32;
+		default:
+			throw std::runtime_error("Unsupported CUDA native MatMulBias epilogue dtype");
+		}
+	}
+
+	bool IsCUDANativeCastUnsignedIntegerType(DataType type)
+	{
+		return type == DataType::UInt8;
+	}
+
+	std::string_view CUDANativeDataTypeShortName(DataType type)
+	{
+		switch (type)
+		{
+		case DataType::Float64:
+			return "f64";
+		case DataType::Float32:
+			return "f32";
+		case DataType::Float16:
+			return "f16";
+		case DataType::BFloat16:
+			return "bf16";
+		case DataType::Float8E4M3:
+			return "f8e4m3";
+		case DataType::Float8E5M2:
+			return "f8e5m2";
+		case DataType::Int64:
+			return "i64";
+		case DataType::Int32:
+			return "i32";
+		case DataType::Int8:
+			return "i8";
+		case DataType::UInt8:
+			return "u8";
+		default:
+			throw std::runtime_error("Unsupported CUDA native cast dtype");
+		}
+	}
+
 	struct CUDANativeBroadcastStrides
 	{
 		std::vector<std::uint32_t> output;
@@ -561,16 +674,98 @@ namespace
 			return FinalizeModule(std::move(kernelModule.module));
 		}
 
+		mlir::OwningOpRef<mlir::ModuleOp> BuildCast(const CUDANativeCastCodegenSpec& spec)
+		{
+			if (!CUDANativeSupportsCast(spec.srcType, spec.dstType))
+			{
+				throw std::runtime_error("CUDA native cast codegen received an unsupported dtype pair");
+			}
+
+			auto kernelModule = CreateKernelModule();
+			llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_, i32Type_ };
+			auto func = CreateKernelFunc(kernelModule.gpuModule,
+			                            CUDANativeCastKernelName(spec.srcType, spec.dstType), argTypes);
+			auto blocks = EmitLinearIndexGuard(func, 2);
+
+			builder_.setInsertionPointToStart(blocks.body);
+			auto out = blocks.entry->getArgument(0);
+			auto in = blocks.entry->getArgument(1);
+			auto srcScalarType = GetCastScalarType(spec.srcType);
+			auto dstScalarType = GetCastScalarType(spec.dstType);
+			auto srcStorageType = GetCastStorageType(spec.srcType);
+			auto dstStorageType = GetCastStorageType(spec.dstType);
+			auto rawValue = EmitLoad(EmitTypedGEP(in, srcStorageType, blocks.index32), srcStorageType);
+			auto valueTypeId = spec.srcType;
+			auto valueType = srcScalarType;
+			auto value = rawValue;
+			if (IsCUDANativeCastFloat8Type(spec.srcType))
+			{
+				value = DecodeFloat8StorageValue(spec.srcType, rawValue);
+				valueTypeId = DataType::Float16;
+				valueType = builder_.getF16Type();
+			}
+			else
+			{
+				value = DecodeCastStorageValue(spec.srcType, srcScalarType, rawValue);
+			}
+
+			mlir::Value stored;
+			if (IsCUDANativeCastFloat8Type(spec.dstType))
+			{
+				auto f32Value = EmitCastValue(valueTypeId, DataType::Float32, valueType, f32Type_, value);
+				stored = EncodeFloat8StorageValue(spec.dstType, f32Value);
+			}
+			else
+			{
+				auto result = EmitCastValue(valueTypeId, spec.dstType, valueType, dstScalarType, value);
+				stored = EncodeCastStorageValue(spec.dstType, dstStorageType, result);
+			}
+			EmitStore(stored, EmitTypedGEP(out, dstStorageType, blocks.index32));
+			FinishLinearKernel(blocks);
+
+			return FinalizeModule(std::move(kernelModule.module));
+		}
+
 		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpilogueF32(
 		    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
 		{
+			return BuildMatMulBiasEpilogue({
+			    .kernelName = spec.kernelName,
+			    .dtype = DataType::Float32,
+			    .outputShape = spec.outputShape,
+			    .biasShape = spec.biasShape,
+			    .relu = spec.relu,
+			});
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpilogue(
+		    const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
+		{
 			auto kernelModule = CreateKernelModule();
-			EmitMatMulBiasEpilogueF32(kernelModule.gpuModule, spec);
+			EmitMatMulBiasEpilogue(kernelModule.gpuModule, spec);
 			return FinalizeModule(std::move(kernelModule.module));
 		}
 
 		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpiloguesF32(
 		    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
+		{
+			std::vector<CUDANativeMatMulBiasEpilogueCodegenSpec> genericSpecs;
+			genericSpecs.reserve(specs.size());
+			for (const auto& spec : specs)
+			{
+				genericSpecs.push_back({
+				    .kernelName = spec.kernelName,
+				    .dtype = DataType::Float32,
+				    .outputShape = spec.outputShape,
+				    .biasShape = spec.biasShape,
+				    .relu = spec.relu,
+				});
+			}
+			return BuildMatMulBiasEpilogues(genericSpecs);
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> BuildMatMulBiasEpilogues(
+		    std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs)
 		{
 			if (specs.empty())
 			{
@@ -579,15 +774,19 @@ namespace
 			auto kernelModule = CreateKernelModule();
 			for (const auto& spec : specs)
 			{
-				EmitMatMulBiasEpilogueF32(kernelModule.gpuModule, spec);
+				EmitMatMulBiasEpilogue(kernelModule.gpuModule, spec);
 			}
 			return FinalizeModule(std::move(kernelModule.module));
 		}
 
 	private:
-		void EmitMatMulBiasEpilogueF32(mlir::gpu::GPUModuleOp gpuModule,
-		                               const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
+		void EmitMatMulBiasEpilogue(mlir::gpu::GPUModuleOp gpuModule,
+		                           const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
 		{
+			if (!IsSupportedCUDANativeMatMulBiasEpilogueType(spec.dtype))
+			{
+				throw std::runtime_error("CUDA native MatMulBias epilogue received an unsupported dtype");
+			}
 			const auto outputStrides = ContiguousStridesU32(spec.outputShape);
 			const auto biasStrides = ContiguousStridesU32(spec.biasShape);
 			if (!outputStrides || !biasStrides || spec.outputShape.size() != spec.biasShape.size())
@@ -596,14 +795,17 @@ namespace
 			}
 
 			llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
-			const auto name = spec.kernelName.empty() ? std::string(CUDANativeMatMulBiasEpilogueF32KernelName(spec.relu))
-			                                          : spec.kernelName;
+			const auto name =
+			    spec.kernelName.empty() ? CUDANativeMatMulBiasEpilogueKernelName(spec.dtype, spec.relu) : spec.kernelName;
 			auto func = CreateKernelFunc(gpuModule, name, argTypes);
 			auto blocks = EmitLinearIndexGuard(func, 2);
 
 			builder_.setInsertionPointToStart(blocks.body);
 			auto out = blocks.entry->getArgument(0);
 			auto bias = blocks.entry->getArgument(1);
+			auto elementType = GetCastScalarType(spec.dtype);
+			const auto computeTypeId = CUDANativeMatMulBiasEpilogueComputeType(spec.dtype);
+			auto computeType = GetCastScalarType(computeTypeId);
 			auto biasOffset = EmitI32Constant(0);
 			for (std::size_t dim = 0; dim < spec.outputShape.size(); ++dim)
 			{
@@ -616,13 +818,17 @@ namespace
 				}
 			}
 
-			auto value = EmitF32Add(EmitLoadF32(EmitF32GEP(out, blocks.index32)),
-			                         EmitLoadF32(EmitF32GEP(bias, biasOffset)));
+			auto outputValue = EmitLoad(EmitTypedGEP(out, elementType, blocks.index32), elementType);
+			auto biasValue = EmitLoad(EmitTypedGEP(bias, elementType, biasOffset), elementType);
+			auto outputCompute = EmitCastValue(spec.dtype, computeTypeId, elementType, computeType, outputValue);
+			auto biasCompute = EmitCastValue(spec.dtype, computeTypeId, elementType, computeType, biasValue);
+			auto value = EmitScalarAdd(computeTypeId, computeType, outputCompute, biasCompute);
 			if (spec.relu)
 			{
-				value = EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ value, EmitF32Constant(0.0f) });
+				value = EmitReLU(computeTypeId, computeType, value);
 			}
-			EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
+			auto result = EmitCastValue(computeTypeId, spec.dtype, computeType, elementType, value);
+			EmitStore(result, EmitTypedGEP(out, elementType, blocks.index32));
 			FinishLinearKernel(blocks);
 		}
 
@@ -739,6 +945,11 @@ namespace
 			    .getResult(0);
 		}
 
+		mlir::Value EmitIntegerConstant(mlir::Type type, std::uint64_t value)
+		{
+			return builder_.create<mlir::arith::ConstantOp>(loc_, builder_.getIntegerAttr(type, value)).getResult();
+		}
+
 		mlir::Value EmitF32GEP(mlir::Value base, mlir::Value index)
 		{
 			return builder_
@@ -754,6 +965,246 @@ namespace
 		void EmitStoreF32(mlir::Value value, mlir::Value ptr)
 		{
 			builder_.create<mlir::LLVM::StoreOp>(loc_, value, ptr);
+		}
+
+		mlir::Type GetCastScalarType(DataType type)
+		{
+			switch (type)
+			{
+			case DataType::Float64:
+				return builder_.getF64Type();
+			case DataType::Float32:
+				return f32Type_;
+			case DataType::Float16:
+				return builder_.getF16Type();
+			case DataType::BFloat16:
+				return builder_.getBF16Type();
+			case DataType::Float8E4M3:
+				return mlir::Float8E4M3FNType::get(&context_);
+			case DataType::Float8E5M2:
+				return mlir::Float8E5M2Type::get(&context_);
+			case DataType::Int64:
+				return builder_.getI64Type();
+			case DataType::Int32:
+				return i32Type_;
+			case DataType::Int8:
+			case DataType::UInt8:
+				return builder_.getIntegerType(8);
+			default:
+				throw std::runtime_error("Unsupported CUDA native cast dtype");
+			}
+		}
+
+		mlir::Type GetCastStorageType(DataType type)
+		{
+			switch (type)
+			{
+			case DataType::Float8E4M3:
+			case DataType::Float8E5M2:
+				return builder_.getIntegerType(8);
+			default:
+				return GetCastScalarType(type);
+			}
+		}
+
+		mlir::Value EmitTypedGEP(mlir::Value base, mlir::Type elementType, mlir::Value index)
+		{
+			return builder_
+			    .create<mlir::LLVM::GEPOp>(loc_, ptrType_, elementType, base, mlir::ValueRange{ index })
+			    .getResult();
+		}
+
+		mlir::Value EmitLoad(mlir::Value ptr, mlir::Type type)
+		{
+			return builder_.create<mlir::LLVM::LoadOp>(loc_, type, ptr).getResult();
+		}
+
+		void EmitStore(mlir::Value value, mlir::Value ptr)
+		{
+			builder_.create<mlir::LLVM::StoreOp>(loc_, value, ptr);
+		}
+
+		mlir::Value DecodeCastStorageValue(DataType type, mlir::Type scalarType, mlir::Value value)
+		{
+			switch (type)
+			{
+			case DataType::Float8E4M3:
+			case DataType::Float8E5M2:
+				return builder_.create<mlir::arith::BitcastOp>(loc_, scalarType, value).getResult();
+			default:
+				return value;
+			}
+		}
+
+		mlir::NVVM::ConvertFP8Type GetNVVMConvertFP8Type(DataType type)
+		{
+			switch (type)
+			{
+			case DataType::Float8E4M3:
+				return mlir::NVVM::ConvertFP8Type::E4M3;
+			case DataType::Float8E5M2:
+				return mlir::NVVM::ConvertFP8Type::E5M2;
+			default:
+				throw std::runtime_error("Unsupported CUDA native float8 dtype");
+			}
+		}
+
+		std::string_view Float8ToF16IntrinsicName(DataType type)
+		{
+			switch (type)
+			{
+			case DataType::Float8E4M3:
+				return "llvm.nvvm.e4m3x2.to.f16x2.rn";
+			case DataType::Float8E5M2:
+				return "llvm.nvvm.e5m2x2.to.f16x2.rn";
+			default:
+				throw std::runtime_error("Unsupported CUDA native float8 dtype");
+			}
+		}
+
+		mlir::Value DuplicateByteToPackedI16(mlir::Value value)
+		{
+			auto i16Type = builder_.getIntegerType(16);
+			auto extended = builder_.create<mlir::arith::ExtUIOp>(loc_, i16Type, value).getResult();
+			auto shifted =
+			    builder_.create<mlir::arith::ShLIOp>(loc_, extended, EmitIntegerConstant(i16Type, 8)).getResult();
+			return builder_.create<mlir::arith::OrIOp>(loc_, extended, shifted).getResult();
+		}
+
+		mlir::Value DecodeFloat8StorageValue(DataType type, mlir::Value value)
+		{
+			auto packedType = builder_.getIntegerType(16);
+			auto packed = DuplicateByteToPackedI16(value);
+			auto lanesType = mlir::LLVM::getVectorType(builder_.getF16Type(), 2);
+			auto converted = builder_
+			                     .create<mlir::LLVM::CallIntrinsicOp>(loc_, lanesType,
+			                                                         builder_.getStringAttr(ToLLVMStringRef(
+			                                                             Float8ToF16IntrinsicName(type))),
+			                                                         mlir::ValueRange{ packed })
+			                     .getResult(0);
+			return builder_.create<mlir::LLVM::ExtractElementOp>(loc_, builder_.getF16Type(), converted,
+			                                                     EmitI32Constant(0))
+			    .getResult();
+		}
+
+		mlir::Value EncodeFloat8StorageValue(DataType type, mlir::Value value)
+		{
+			auto packed = builder_
+			                  .create<mlir::NVVM::ConvertF32x2ToF8x2Op>(loc_, builder_.getIntegerType(16),
+			                                                          GetNVVMConvertFP8Type(type), value, value,
+			                                                          mlir::NVVM::FPRoundingMode::RN,
+			                                                          mlir::NVVM::SaturationMode::SATFINITE)
+			                  .getDst();
+			return builder_.create<mlir::arith::TruncIOp>(loc_, builder_.getIntegerType(8), packed).getResult();
+		}
+
+		mlir::Value EncodeCastStorageValue(DataType type, mlir::Type storageType, mlir::Value value)
+		{
+			switch (type)
+			{
+			case DataType::Float8E4M3:
+			case DataType::Float8E5M2:
+				return builder_.create<mlir::arith::BitcastOp>(loc_, storageType, value).getResult();
+			default:
+				return value;
+			}
+		}
+
+		mlir::Value EmitScalarZero(DataType type, mlir::Type valueType)
+		{
+			if (IsCUDANativeCastFloatType(type))
+			{
+				auto floatType = mlir::cast<mlir::FloatType>(valueType);
+				return builder_.create<mlir::arith::ConstantFloatOp>(loc_, floatType, llvm::APFloat(floatType.getFloatSemantics(), 0)).getResult();
+			}
+			return builder_.create<mlir::arith::ConstantOp>(loc_, builder_.getIntegerAttr(valueType, 0)).getResult();
+		}
+
+		mlir::Value EmitScalarAdd(DataType type, mlir::Type valueType, mlir::Value lhs, mlir::Value rhs)
+		{
+			if (IsCUDANativeCastFloatType(type))
+			{
+				return builder_.create<mlir::arith::AddFOp>(loc_, lhs, rhs).getResult();
+			}
+			return builder_.create<mlir::arith::AddIOp>(loc_, lhs, rhs).getResult();
+		}
+
+		mlir::Value EmitReLU(DataType type, mlir::Type valueType, mlir::Value value)
+		{
+			auto zero = EmitScalarZero(type, valueType);
+			if (IsCUDANativeCastFloatType(type))
+			{
+				return builder_.create<mlir::arith::MaximumFOp>(loc_, value, zero).getResult();
+			}
+			return builder_.create<mlir::arith::MaxSIOp>(loc_, value, zero).getResult();
+		}
+
+		mlir::Value EmitCastValue(DataType srcType, DataType dstType, mlir::Type srcElemType,
+		                        mlir::Type dstElemType, mlir::Value value)
+		{
+			if (srcType == dstType)
+			{
+				return value;
+			}
+
+			const bool srcFloat = IsCUDANativeCastFloatType(srcType);
+			const bool dstFloat = IsCUDANativeCastFloatType(dstType);
+			const bool srcUnsigned = IsCUDANativeCastUnsignedIntegerType(srcType);
+			const bool dstUnsigned = IsCUDANativeCastUnsignedIntegerType(dstType);
+
+			if (srcFloat && dstFloat)
+			{
+				auto srcFloatTy = mlir::cast<mlir::FloatType>(srcElemType);
+				auto dstFloatTy = mlir::cast<mlir::FloatType>(dstElemType);
+				if (srcElemType == dstElemType)
+				{
+					return value;
+				}
+				if (srcFloatTy.getWidth() < dstFloatTy.getWidth())
+				{
+					return builder_.create<mlir::arith::ExtFOp>(loc_, dstElemType, value).getResult();
+				}
+				if (srcFloatTy.getWidth() > dstFloatTy.getWidth())
+				{
+					return builder_.create<mlir::arith::TruncFOp>(loc_, dstElemType, value).getResult();
+				}
+				auto widened = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, value).getResult();
+				return builder_.create<mlir::arith::TruncFOp>(loc_, dstElemType, widened).getResult();
+			}
+
+			if (srcFloat)
+			{
+				if (dstUnsigned)
+				{
+					return builder_.create<mlir::arith::FPToUIOp>(loc_, dstElemType, value).getResult();
+				}
+				return builder_.create<mlir::arith::FPToSIOp>(loc_, dstElemType, value).getResult();
+			}
+
+			if (dstFloat)
+			{
+				if (srcUnsigned)
+				{
+					return builder_.create<mlir::arith::UIToFPOp>(loc_, dstElemType, value).getResult();
+				}
+				return builder_.create<mlir::arith::SIToFPOp>(loc_, dstElemType, value).getResult();
+			}
+
+			auto srcIntTy = mlir::cast<mlir::IntegerType>(srcElemType);
+			auto dstIntTy = mlir::cast<mlir::IntegerType>(dstElemType);
+			if (srcIntTy.getWidth() < dstIntTy.getWidth())
+			{
+				if (srcUnsigned)
+				{
+					return builder_.create<mlir::arith::ExtUIOp>(loc_, dstElemType, value).getResult();
+				}
+				return builder_.create<mlir::arith::ExtSIOp>(loc_, dstElemType, value).getResult();
+			}
+			if (srcIntTy.getWidth() > dstIntTy.getWidth())
+			{
+				return builder_.create<mlir::arith::TruncIOp>(loc_, dstElemType, value).getResult();
+			}
+			return value;
 		}
 
 		mlir::Value EmitUnaryF32Result(UnaryOp op, mlir::Value value)
@@ -955,6 +1406,13 @@ namespace
 		});
 	}
 
+	std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildCast(spec);
+		});
+	}
+
 	std::string EmitMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
 	    const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
 	{
@@ -963,11 +1421,27 @@ namespace
 		});
 	}
 
+	std::string EmitMatMulBiasEpiloguePTXFromMLIRNVPTX(
+	    const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildMatMulBiasEpilogue(spec);
+		});
+	}
+
 	std::string EmitMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
 	    std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
 	{
 		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
 			return builder.BuildMatMulBiasEpiloguesF32(specs);
+		});
+	}
+
+	std::string EmitMatMulBiasEpiloguesPTXFromMLIRNVPTX(
+	    std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs)
+	{
+		return BuildAndEmitMLIRGPUToNVPTX([&](CUDANativeMLIRKernelBuilder& builder) {
+			return builder.BuildMatMulBiasEpilogues(specs);
 		});
 	}
 } // namespace
@@ -1043,6 +1517,36 @@ std::string_view CUDANativeSliceF32KernelName()
 std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
 {
 	return relu ? "litenn_matmul_bias_relu_epilogue_f32" : "litenn_matmul_bias_add_epilogue_f32";
+}
+
+std::string CUDANativeMatMulBiasEpilogueKernelName(DataType dtype, bool relu)
+{
+	if (!IsSupportedCUDANativeMatMulBiasEpilogueType(dtype))
+	{
+		throw std::runtime_error("Unsupported CUDA native MatMulBias epilogue dtype");
+	}
+	if (dtype == DataType::Float32)
+	{
+		return std::string(CUDANativeMatMulBiasEpilogueF32KernelName(relu));
+	}
+	return std::format("litenn_matmul_bias_{}_epilogue_{}", relu ? "relu" : "add",
+	                   CUDANativeDataTypeShortName(dtype));
+}
+
+bool CUDANativeSupportsCast(DataType srcType, DataType dstType)
+{
+	return srcType != dstType && IsSupportedCUDANativeCastScalarType(srcType) &&
+	       IsSupportedCUDANativeCastScalarType(dstType);
+}
+
+std::string CUDANativeCastKernelName(DataType srcType, DataType dstType)
+{
+	if (!CUDANativeSupportsCast(srcType, dstType))
+	{
+		throw std::runtime_error("Unsupported CUDA native cast dtype pair");
+	}
+	return std::format("litenn_cast_{}_to_{}", CUDANativeDataTypeShortName(srcType),
+	                   CUDANativeDataTypeShortName(dstType));
 }
 
 std::string CUDANativeNVPTXTargetChip()
@@ -1139,10 +1643,33 @@ std::optional<std::string> TryCUDANativeSliceF32PTXFromMLIRNVPTX(
 	}
 }
 
+std::string CUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
+{
+	return EmitCastPTXFromMLIRNVPTX(spec);
+}
+
+std::optional<std::string> TryCUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeCastPTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
 std::string CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
     const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec)
 {
 	return EmitMatMulBiasEpilogueF32PTXFromMLIRNVPTX(spec);
+}
+
+std::string CUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(
+	const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
+{
+	return EmitMatMulBiasEpiloguePTXFromMLIRNVPTX(spec);
 }
 
 std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
@@ -1158,10 +1685,33 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
 	}
 }
 
+std::optional<std::string> TryCUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(
+    const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
+{
+	try
+	{
+		return CUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(spec);
+	}
+	catch (const std::exception& ex)
+	{
+		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
+		{
+			llvm::errs() << "CUDA native MatMulBias epilogue codegen failed: " << ex.what() << '\n';
+		}
+		return std::nullopt;
+	}
+}
+
 std::string CUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
     std::span<const CUDANativeMatMulBiasEpilogueF32CodegenSpec> specs)
 {
 	return EmitMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(specs);
+}
+
+std::string CUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(
+    std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs)
+{
+	return EmitMatMulBiasEpiloguesPTXFromMLIRNVPTX(specs);
 }
 
 std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
@@ -1170,6 +1720,23 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
 	try
 	{
 		return CUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(specs);
+	}
+	catch (const std::exception& ex)
+	{
+		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
+		{
+			llvm::errs() << "CUDA native MatMulBias epilogue set codegen failed: " << ex.what() << '\n';
+		}
+		return std::nullopt;
+	}
+}
+
+std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(
+    std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs)
+{
+	try
+	{
+		return CUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(specs);
 	}
 	catch (const std::exception& ex)
 	{

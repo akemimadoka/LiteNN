@@ -52,21 +52,29 @@ Completed notes:
 
 #### G1.3 CUDA Low Precision Kernels
 
-Status: completed for capability reporting, CPU-bridge conversion coverage, fp16/bf16 GEMM attempts, and benchmark registration on 2026-05-17.
+Status: completed for runtime/device coverage plus formal CUDA AOT low-precision cast, MatMul, MatMulBias epilogue, linear-chain lowering, and dtype benchmark registration on 2026-05-20.
 
 - [x] Add CUDA capability detection for fp16, bf16, fp8, and int8 storage / matmul policy.
 - [x] Use cuBLAS/cuBLASLt for supported GEMM cases and explicit fallback paths for unsupported devices.
 - [x] Add conversion coverage for f32 <-> fp16/bf16/fp8/int8 through the existing synchronous CPU bridge.
 - [x] Add benchmark coverage per dtype for CUDA device MatMul, exposing native and fallback behavior.
-- [ ] Add native CUDA conversion kernels for low-precision dtype conversion.
-- [ ] Define and implement FP8/int8 native GEMM accumulation and output policy through cuBLASLt.
+- [x] Add native CUDA conversion kernels for low-precision dtype conversion.
+- [x] Define and implement FP8/int8 native GEMM accumulation and output policy through cuBLASLt.
+- [x] Add formal CUDA AOT cast kernels for supported low-precision scalar dtype pairs, including bf16/fp8 payload generation.
+- [x] Add formal CUDA AOT native low-precision MatMul payloads and dtype-aware MatMulBias / MatMulBiasAddReLU epilogues.
+- [x] Lower low-precision fused linear chains through the formal CUDA AOT path and expose benchmark coverage for native MatMul per dtype.
 
 Completed notes:
 
 - `CUDALowPrecisionCapabilities` reports compute capability, cuBLASLt build support, storage support, and native MatMul support for low-precision dtypes.
 - `DeviceTraits<CUDA>::DoBinaryOp(MatMul)` still keeps the existing fp32/fp64 cuBLAS path and now attempts fp16/bf16 `cublasGemmEx` when the build and device report support.
-- FP8 and int8 native GEMM are intentionally not marked as implemented yet. They need explicit accumulation/output semantics and cuBLASLt kernel policy before they are safe for production inference.
-- CUDA dtype conversion remains synchronous through CPU reference conversion. Dedicated CUDA conversion kernels are a later performance task, not a correctness blocker.
+- `DeviceTraits<CUDA>::CopyFromCPU`, `CopyToCPU`, and `ConvertTo` now use an NVRTC-compiled generic CUDA cast kernel when the CUDA driver and NVRTC are available, and otherwise retain the existing CPU bridge fallback.
+- `TryCUBLASLtMatMul` now defines explicit native policy for FP8 and int8/uint8: accumulate into Float32 or Int32 scratch output with cuBLASLt, then convert back to the public MatMul result dtype through the native CUDA conversion path.
+- `tests/CUDADeviceTest.cpp` now covers low-precision conversion entry points and validates supported FP8/int8 native MatMul against a high-precision accumulate-then-quantize CPU reference.
+- `Compiler<CUDA>::CompileArtifact` now emits formal CUDA native payloads for scalar cast kernels, pure low-precision MatMul library calls, and dtype-aware MatMulBias / MatMulBiasAddReLU epilogues used by low-precision linear chains.
+- `tests/CompiledModuleCUDATest.cpp` now covers compile-time payload exposure for bf16/fp8 cast plus runtime execution of native bf16 cast, low-precision MatMulBias payloads, and low-precision linear-chain payloads.
+- FP8 CUDA-native cast payload generation is available in the formal AOT path, but runtime execution is now gated by actual device native-conversion support; the current NVVM/PTX lowering requires SM90+ for FP8 convert instructions.
+- `benchmark/bench.cpp` now registers both `CUDADeviceMatMul/<dtype>` and formal `CUDANativeMatMul/<dtype>` benchmark families, so low-precision CUDA behavior is visible at both the device helper and formal AOT layers.
 
 ### G2: llama.cpp / GGUF Compatibility
 

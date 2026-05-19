@@ -29,6 +29,61 @@ static std::vector<float> ReadAsFloat32(const Tensor<CPU>& tensor)
 	return values;
 }
 
+static std::vector<float> QuantizeAsFloat32(std::span<const float> values, DataType dataType)
+{
+	Tensor<CPU> quantized(Uninitialized, { values.size() }, dataType);
+	CPU cpu;
+	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.RawData(), DataType::Float32, values.data(), values.size());
+	return ReadAsFloat32(quantized);
+}
+
+static std::vector<float> RoundTripFloat32ThroughCUDA(std::span<const float> values, DataType dataType)
+{
+	CUDA device{};
+	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
+	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
+	                                values.size());
+	std::vector<float> result(values.size());
+	DeviceTraits<CUDA>::CopyToCPU(device, dataType, quantized.RawData(), values.size(), DataType::Float32,
+	                              result.data());
+	return result;
+}
+
+static std::vector<float> ConvertCUDADeviceToFloat32(std::span<const float> values, DataType dataType)
+{
+	CUDA device{};
+	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
+	Tensor<CUDA> converted(Uninitialized, { values.size() }, DataType::Float32, device);
+	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
+	                                values.size());
+	DeviceTraits<CUDA>::ConvertTo(device, dataType, quantized.RawData(), values.size(), DataType::Float32,
+	                              converted.RawData());
+	std::vector<float> result(values.size());
+	DeviceTraits<CUDA>::CopyToCPU(device, DataType::Float32, converted.RawData(), values.size(), DataType::Float32,
+	                              result.data());
+	return result;
+}
+
+static std::vector<float> HighPrecisionMatMulReference(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs,
+	                                                    std::size_t m, std::size_t k, std::size_t n)
+{
+	const auto lhsValues = ReadAsFloat32(lhs);
+	const auto rhsValues = ReadAsFloat32(rhs);
+	std::vector<float> accumulated(m * n, 0.0F);
+	for (auto row = 0uz; row < m; ++row)
+	{
+		for (auto depth = 0uz; depth < k; ++depth)
+		{
+			const auto lhsValue = lhsValues[row * k + depth];
+			for (auto col = 0uz; col < n; ++col)
+			{
+				accumulated[row * n + col] += lhsValue * rhsValues[depth * n + col];
+			}
+		}
+	}
+	return QuantizeAsFloat32(accumulated, lhs.DType());
+}
+
 TEST(CUDADevice, RoundTripAndElementwiseFallback)
 {
 	if (!IsCUDADeviceAvailable())
@@ -91,9 +146,27 @@ TEST(CUDADevice, LowPrecisionCapabilitiesAreReported)
 	EXPECT_NE(summary.find("cc"), std::string::npos);
 	EXPECT_NE(summary.find("fp16"), std::string::npos);
 	EXPECT_NE(summary.find("bf16"), std::string::npos);
+	EXPECT_NE(summary.find("nativeConvert"), std::string::npos);
+
+	const std::array lowPrecisionTypes{
+		DataType::Float16,
+		DataType::BFloat16,
+		DataType::Float8E4M3,
+		DataType::Float8E5M2,
+		DataType::Int8,
+		DataType::UInt8,
+	};
+	const auto nativeConversionAvailable = CUDASupportsNativeConversion(DataType::Float32, DataType::Float16);
+	for (const auto dataType : lowPrecisionTypes)
+	{
+		EXPECT_EQ(CUDASupportsNativeConversion(DataType::Float32, dataType), nativeConversionAvailable)
+		    << DataTypeName(dataType);
+		EXPECT_EQ(CUDASupportsNativeConversion(dataType, DataType::Float32), nativeConversionAvailable)
+		    << DataTypeName(dataType);
+	}
 }
 
-TEST(CUDADevice, LowPrecisionConversionRoundTripUsesCPUBridge)
+TEST(CUDADevice, LowPrecisionConversionPathsMatchCPUReference)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -110,17 +183,23 @@ TEST(CUDADevice, LowPrecisionConversionRoundTripUsesCPUBridge)
 	};
 	for (const auto dataType : dataTypes)
 	{
-		Tensor<CPU> cpuTensor({ 0, 1, 2, 3, 4 }, { 5 }, dataType);
-		const auto expected = ReadAsFloat32(cpuTensor);
+		const std::vector<float> sourceValues = dataType == DataType::UInt8
+		                                          ? std::vector<float>{ 0.0F, 1.0F, 2.0F, 3.0F, 7.0F }
+		                                          : dataType == DataType::Int8
+		                                              ? std::vector<float>{ -5.0F, -1.0F, 0.0F, 3.0F, 7.0F }
+		                                              : std::vector<float>{ -2.25F, -1.0F, 0.0F, 1.5F, 3.75F };
+		const auto expected = QuantizeAsFloat32(sourceValues, dataType);
+		const auto roundTrip = RoundTripFloat32ThroughCUDA(sourceValues, dataType);
+		const auto converted = ConvertCUDADeviceToFloat32(sourceValues, dataType);
 
-		auto cudaTensor = cpuTensor.CopyToDevice(CUDA{});
-		auto backToCpu = cudaTensor.CopyToDevice(CPU{});
-		const auto actual = ReadAsFloat32(backToCpu);
-
-		ASSERT_EQ(actual.size(), expected.size());
-		for (auto i = 0uz; i < actual.size(); ++i)
+		ASSERT_EQ(roundTrip.size(), expected.size());
+		ASSERT_EQ(converted.size(), expected.size());
+		for (auto i = 0uz; i < expected.size(); ++i)
 		{
-			EXPECT_FLOAT_EQ(actual[i], expected[i]) << "dtype=" << DataTypeName(dataType) << ", index=" << i;
+			EXPECT_FLOAT_EQ(roundTrip[i], expected[i]) << "roundTrip dtype=" << DataTypeName(dataType)
+			                                         << ", index=" << i;
+			EXPECT_FLOAT_EQ(converted[i], expected[i]) << "deviceConvert dtype=" << DataTypeName(dataType)
+			                                          << ", index=" << i;
 		}
 	}
 }
@@ -149,6 +228,94 @@ TEST(CUDADevice, Float16MatMulMatchesCPU)
 	for (auto i = 0uz; i < actual.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CUDADevice, Float8MatMulMatchesHighPrecisionQuantizedReference)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	constexpr auto m = 2uz;
+	constexpr auto k = 3uz;
+	constexpr auto n = 2uz;
+	const std::vector<double> lhsValues{ 0.5, 1.5, -0.75, 2.25, 1.25, -1.0 };
+	const std::vector<double> rhsValues{ 1.0, -0.5, 0.25, 2.0, -1.5, 1.25 };
+	const std::array dataTypes{ DataType::Float8E4M3, DataType::Float8E5M2 };
+
+	std::size_t executedCases = 0;
+	for (const auto dataType : dataTypes)
+	{
+		if (!CUDASupportsNativeMatMul(dataType))
+		{
+			continue;
+		}
+		Tensor<CPU> lhs(std::span<const double>(lhsValues.data(), lhsValues.size()), { m, k }, dataType);
+		Tensor<CPU> rhs(std::span<const double>(rhsValues.data(), rhsValues.size()), { k, n }, dataType);
+		const auto expected = HighPrecisionMatMulReference(lhs, rhs, m, k, n);
+
+		auto cudaResult = lhs.CopyToDevice(CUDA{}).MatMul(rhs.CopyToDevice(CUDA{})).CopyToDevice(CPU{});
+		const auto actual = ReadAsFloat32(cudaResult);
+
+		ASSERT_EQ(actual.size(), expected.size());
+		for (auto i = 0uz; i < actual.size(); ++i)
+		{
+			EXPECT_FLOAT_EQ(actual[i], expected[i]) << "dtype=" << DataTypeName(dataType) << ", index=" << i;
+		}
+		++executedCases;
+	}
+
+	if (executedCases == 0)
+	{
+		GTEST_SKIP() << "CUDA device does not report native Float8 MatMul support";
+	}
+}
+
+TEST(CUDADevice, Int8MatMulMatchesHighPrecisionQuantizedReference)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	constexpr auto m = 2uz;
+	constexpr auto k = 3uz;
+	constexpr auto n = 2uz;
+	const std::array testCases{
+		std::pair{ DataType::Int8, std::pair{ std::vector<double>{ 1, 2, -3, 4, -1, 2 },
+		                                     std::vector<double>{ 2, -1, 1, 3, -2, 1 } } },
+		std::pair{ DataType::UInt8, std::pair{ std::vector<double>{ 1, 2, 3, 4, 1, 2 },
+		                                      std::vector<double>{ 2, 1, 1, 3, 2, 1 } } },
+	};
+
+	std::size_t executedCases = 0;
+	for (const auto& [dataType, inputs] : testCases)
+	{
+		if (!CUDASupportsNativeMatMul(dataType))
+		{
+			continue;
+		}
+		const auto& [lhsValues, rhsValues] = inputs;
+		Tensor<CPU> lhs(std::span<const double>(lhsValues.data(), lhsValues.size()), { m, k }, dataType);
+		Tensor<CPU> rhs(std::span<const double>(rhsValues.data(), rhsValues.size()), { k, n }, dataType);
+		const auto expected = HighPrecisionMatMulReference(lhs, rhs, m, k, n);
+
+		auto cudaResult = lhs.CopyToDevice(CUDA{}).MatMul(rhs.CopyToDevice(CUDA{})).CopyToDevice(CPU{});
+		const auto actual = ReadAsFloat32(cudaResult);
+
+		ASSERT_EQ(actual.size(), expected.size());
+		for (auto i = 0uz; i < actual.size(); ++i)
+		{
+			EXPECT_FLOAT_EQ(actual[i], expected[i]) << "dtype=" << DataTypeName(dataType) << ", index=" << i;
+		}
+		++executedCases;
+	}
+
+	if (executedCases == 0)
+	{
+		GTEST_SKIP() << "CUDA device does not report native Int8 MatMul support";
 	}
 }
 

@@ -1686,6 +1686,14 @@ namespace
 		std::uint32_t elementCount{};
 	};
 
+	struct CUDANativeCastPlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+		DataType srcType{ DataType::Float32 };
+		DataType dstType{ DataType::Float32 };
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -1732,6 +1740,7 @@ namespace
 
 	struct CUDANativeMatMulBiasPlan
 	{
+		DataType dtype{ DataType::Float32 };
 		std::uint32_t lhsInputIndex{};
 		std::uint32_t rhsInputIndex{};
 		std::uint32_t biasInputIndex{};
@@ -1759,7 +1768,7 @@ namespace
 
 	struct CUDANativeLinearChainPlan
 	{
-		std::vector<CUDANativeMatMulBiasEpilogueF32CodegenSpec> epilogues;
+		std::vector<CUDANativeMatMulBiasEpilogueCodegenSpec> epilogues;
 		CUDANativeInstructionPayload payload;
 	};
 
@@ -2152,6 +2161,149 @@ namespace
 		};
 	}
 
+	bool IsSupportedCUDANativeLowPrecisionMatMulType(DataType dtype)
+	{
+		switch (dtype)
+		{
+		case DataType::Float16:
+		case DataType::BFloat16:
+		case DataType::Float8E4M3:
+		case DataType::Float8E5M2:
+		case DataType::Int8:
+		case DataType::UInt8:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsSupportedCUDANativeMatMulBiasType(DataType dtype)
+	{
+		return dtype == DataType::Float32 || dtype == DataType::Float16 || dtype == DataType::BFloat16 ||
+		       dtype == DataType::Int8 || dtype == DataType::UInt8;
+	}
+
+	void AddCUDANativeMatMulFeatureFlag(CUDANativeInstructionPayload& payload, DataType dtype)
+	{
+		payload.featureFlags |=
+		    dtype == DataType::Float32 ? kCUDANativeFeatureMatMulCUBLASF32 : kCUDANativeFeatureMatMulCUBLASLowPrecision;
+	}
+
+	void AddCUDANativeMatMulBiasFeatureFlags(CUDANativeInstructionPayload& payload, DataType dtype, bool relu)
+	{
+		if (dtype == DataType::Float32)
+		{
+			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
+			                             : kCUDANativeFeatureMatMulBiasAddF32;
+			return;
+		}
+		payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLULowPrecision
+		                             : kCUDANativeFeatureMatMulBiasAddLowPrecision;
+	}
+
+	std::string_view CUDANativeMatMulLibraryCallKernelName(DataType dtype)
+	{
+		switch (dtype)
+		{
+		case DataType::Float32:
+			return "litenn_cublas_matmul_f32";
+		case DataType::Float16:
+			return "litenn_cublas_matmul_f16";
+		case DataType::BFloat16:
+			return "litenn_cublas_matmul_bf16";
+		case DataType::Float8E4M3:
+			return "litenn_cublas_matmul_f8e4m3";
+		case DataType::Float8E5M2:
+			return "litenn_cublas_matmul_f8e5m2";
+		case DataType::Int8:
+			return "litenn_cublas_matmul_i8";
+		case DataType::UInt8:
+			return "litenn_cublas_matmul_u8";
+		default:
+			throw std::runtime_error("Unsupported CUDA native MatMul library-call dtype");
+		}
+	}
+
+	std::optional<CUDANativeMatMulPlan> MatchCUDANativeMatMulLowPrecision(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
+		if (!binary || binary->op != BinaryOp::MatMul)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetParamIndex(subgraph, binary->lhs);
+		const auto rhsInputIndex = GetParamIndex(subgraph, binary->rhs);
+		if (!lhsInputIndex || !rhsInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (!IsSupportedCUDANativeLowPrecisionMatMulType(lhsParam.dtype) || lhsParam.dtype != rhsParam.dtype ||
+		    lhsParam.dtype != output.dtype || lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 ||
+		    output.shape.size() != 2 || lhsParam.shape[1] != rhsParam.shape[0] ||
+		    output.shape[0] != lhsParam.shape[0] || output.shape[1] != rhsParam.shape[1])
+		{
+			return std::nullopt;
+		}
+
+		const auto m = lhsParam.shape[0];
+		const auto k = lhsParam.shape[1];
+		const auto n = rhsParam.shape[1];
+		const auto maxInt = static_cast<std::size_t>(std::numeric_limits<int>::max());
+		if (m == 0 || k == 0 || n == 0 || m > maxInt || k > maxInt || n > maxInt)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = ShapeView{ lhsParam.shape }.NumElements();
+		const auto rhsElementCount = ShapeView{ rhsParam.shape }.NumElements();
+		const auto outputElementCount = ShapeView{ output.shape }.NumElements();
+		if (lhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    outputElementCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeMatMulPlan{
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsInputIndex = *rhsInputIndex,
+			.m = static_cast<std::uint32_t>(m),
+			.k = static_cast<std::uint32_t>(k),
+			.n = static_cast<std::uint32_t>(n),
+			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
+			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
+			.outputElementCount = static_cast<std::uint32_t>(outputElementCount),
+		};
+	}
+
 	std::optional<CUDANativeMatMulBiasPlan> MakeCUDANativeMatMulBiasPlan(
 	    const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
 	    std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
@@ -2159,8 +2311,8 @@ namespace
 		const auto& lhsParam = subgraph.Params()[lhsInputIndex];
 		const auto& rhsParam = subgraph.Params()[rhsInputIndex];
 		const auto& biasParam = subgraph.Params()[biasInputIndex];
-		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
-		    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 ||
+		if (lhsParam.dtype != rhsParam.dtype || rhsParam.dtype != biasParam.dtype || biasParam.dtype != output.dtype ||
+		    !IsSupportedCUDANativeMatMulBiasType(output.dtype) || lhsParam.shape.size() != 2 ||
 		    rhsParam.shape.size() != 2 || output.shape.size() != 2 || biasParam.shape.size() != output.shape.size() ||
 		    lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
 		    output.shape[1] != rhsParam.shape[1] ||
@@ -2188,6 +2340,7 @@ namespace
 		}
 
 		return CUDANativeMatMulBiasPlan{
+			.dtype = output.dtype,
 			.lhsInputIndex = lhsInputIndex,
 			.rhsInputIndex = rhsInputIndex,
 			.biasInputIndex = biasInputIndex,
@@ -2204,7 +2357,7 @@ namespace
 		};
 	}
 
-	bool IsZeroF32Constant(const Subgraph& subgraph, NodeOutput output)
+	bool IsZeroConstant(const Subgraph& subgraph, NodeOutput output)
 	{
 		if (output.port != 0 || output.node >= subgraph.NodeCount())
 		{
@@ -2216,14 +2369,13 @@ namespace
 			return false;
 		}
 		const auto cpuTensor = constant->value.CopyToDevice(CPU{});
-		if (cpuTensor.DType() != DataType::Float32)
+		std::vector<double> values(cpuTensor.NumElements());
+		CPU cpu;
+		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.RawData(), cpuTensor.NumElements(),
+		                             DataType::Float64, values.data());
+		for (double value : values)
 		{
-			return false;
-		}
-		const auto* data = static_cast<const float*>(cpuTensor.RawData());
-		for (std::size_t i = 0; i < cpuTensor.NumElements(); ++i)
-		{
-			if (data[i] != 0.0f)
+			if (value != 0.0)
 			{
 				return false;
 			}
@@ -2231,7 +2383,7 @@ namespace
 		return true;
 	}
 
-	std::optional<CUDANativeMatMulBiasPlan> MatchCUDANativeMatMulBiasF32(const Graph& graph)
+	std::optional<CUDANativeMatMulBiasPlan> MatchCUDANativeMatMulBias(const Graph& graph)
 	{
 		if (graph.Backward().has_value() || graph.VariableCount() != 0 || graph.ActivationSlotCount() != 0 ||
 		    graph.TapeSlotCount() != 0)
@@ -2280,11 +2432,11 @@ namespace
 		NodeOutput addOutput = result;
 		if (const auto* maxNode = std::get_if<BinaryOpNode>(&resultEntry.node); maxNode && maxNode->op == BinaryOp::Max)
 		{
-			if (IsZeroF32Constant(subgraph, maxNode->lhs))
+			if (IsZeroConstant(subgraph, maxNode->lhs))
 			{
 				addOutput = maxNode->rhs;
 			}
-			else if (IsZeroF32Constant(subgraph, maxNode->rhs))
+			else if (IsZeroConstant(subgraph, maxNode->rhs))
 			{
 				addOutput = maxNode->lhs;
 			}
@@ -2388,6 +2540,51 @@ namespace
 		}
 		return CUDANativeReducePlan{ reduce->op, *inputIndex, *inputElementCount, *outputElementCount,
 			                         reduce->axis, input.shape, output.shape };
+	}
+
+	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* castNode = std::get_if<CastNode>(&resultEntry.node);
+		if (!castNode || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, castNode->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (output.dtype != castNode->targetType || !SameShape(input.shape, output.shape) ||
+		    !CUDANativeSupportsCast(input.dtype, output.dtype))
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+		return CUDANativeCastPlan{ .inputIndex = *inputIndex,
+			                       .elementCount = *elementCount,
+			                       .srcType = input.dtype,
+			                       .dstType = output.dtype };
 	}
 
 	std::optional<CUDANativeConcatPlan> MatchCUDANativeConcatF32(const Graph& graph)
@@ -2563,8 +2760,8 @@ namespace
 		CUDANativeLinearChainPlan plan;
 		auto& payload = plan.payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureMatMulCUBLASF32 | kCUDANativeFeatureMultiKernelLaunch;
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMultiKernelLaunch;
 		payload.target = CUDANativeNVPTXTargetChip();
 
 		std::vector<std::optional<CUDANativeTensorRef>> values(subgraph.NodeCount());
@@ -2631,7 +2828,7 @@ namespace
 
 			if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
 			{
-				if (variable->variableIndex >= graph.VariableCount() || output.dtype != DataType::Float32)
+				if (variable->variableIndex >= graph.VariableCount())
 				{
 					return std::nullopt;
 				}
@@ -2654,10 +2851,6 @@ namespace
 
 			if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
 			{
-				if (output.dtype != DataType::Float32)
-				{
-					return std::nullopt;
-				}
 				const auto offset = AppendCUDANativeConstantTensor(payload, constant->value);
 				values[nodeId] = CUDANativeTensorRef{
 					.kind = CUDANativeArgumentKind::ConstantTensor,
@@ -2682,8 +2875,8 @@ namespace
 			auto lhs = requireValue(fused->args[0]);
 			auto rhs = requireValue(fused->args[1]);
 			auto bias = requireValue(fused->args[2]);
-			if (!lhs || !rhs || !bias || lhs->dtype != DataType::Float32 || rhs->dtype != DataType::Float32 ||
-			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+			if (!lhs || !rhs || !bias || lhs->dtype != rhs->dtype || rhs->dtype != bias->dtype ||
+			    bias->dtype != output.dtype || !IsSupportedCUDANativeMatMulBiasType(output.dtype) ||
 			    lhs->shape.size() != 2 || rhs->shape.size() != 2 || output.shape.size() != 2 ||
 			    bias->shape.size() != output.shape.size() || lhs->shape[1] != rhs->shape[0] ||
 			    output.shape[0] != lhs->shape[0] || output.shape[1] != rhs->shape[1] ||
@@ -2717,8 +2910,9 @@ namespace
 			const auto mArg = AppendU32ScalarArgument(payload, m);
 			const auto kArg = AppendU32ScalarArgument(payload, k);
 			const auto nArg = AppendU32ScalarArgument(payload, n);
+			AddCUDANativeMatMulFeatureFlag(payload, output.dtype);
 			payload.kernels.push_back({
-			    .name = "litenn_cublas_matmul_f32",
+			    .name = std::string(CUDANativeMatMulLibraryCallKernelName(output.dtype)),
 			    .grid = { .x = 1, .y = 1, .z = 1 },
 			    .block = { .x = 1, .y = 1, .z = 1 },
 			    .arguments = {
@@ -2732,8 +2926,9 @@ namespace
 			});
 
 			const bool relu = fused->pattern == FusionPattern::MatMulBiasAddReLU;
-			const auto epilogueName =
-			    std::format("litenn_matmul_bias_{}_epilogue_f32_{}", relu ? "relu" : "add", fusedLayerCount);
+			const auto epilogueName = std::format("{}_{}",
+			                                      CUDANativeMatMulBiasEpilogueKernelName(output.dtype, relu),
+			                                      fusedLayerCount);
 			const auto countArg = AppendU32ScalarArgument(payload, *outputElementCount);
 			const auto blockSize = std::min<std::uint32_t>(*outputElementCount, 256);
 			const auto gridSize = (*outputElementCount + blockSize - 1) / blockSize;
@@ -2749,12 +2944,12 @@ namespace
 			});
 			plan.epilogues.push_back({
 			    .kernelName = epilogueName,
+			    .dtype = output.dtype,
 			    .outputShape = output.shape,
 			    .biasShape = bias->shape,
 			    .relu = relu,
 			});
-			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
-			                             : kCUDANativeFeatureMatMulBiasAddF32;
+			AddCUDANativeMatMulBiasFeatureFlags(payload, output.dtype, relu);
 			values[nodeId] = std::move(target);
 			++fusedLayerCount;
 		}
@@ -2776,7 +2971,7 @@ namespace
 			payload.featureFlags |= kCUDANativeFeatureConstantTensor;
 		}
 
-		const auto ptx = TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(plan.epilogues);
+		const auto ptx = TryCUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(plan.epilogues);
 		if (!ptx)
 		{
 			return std::nullopt;
@@ -2789,7 +2984,7 @@ namespace
 #endif
 	}
 
-	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeLinearChainF32(const Graph& graph)
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeLinearChain(const Graph& graph)
 	{
 		auto plan = BuildCUDANativeLinearChainPlan(graph);
 		if (!plan)
@@ -2853,6 +3048,70 @@ namespace
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeCast(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeCast(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureCast;
+		payload.target = CUDANativeNVPTXTargetChip();
+		const auto mlirPtx = TryCUDANativeCastPTXFromMLIRNVPTX(
+		    CUDANativeCastCodegenSpec{ .srcType = plan->srcType, .dstType = plan->dstType });
+		if (!mlirPtx)
+		{
+			return std::nullopt;
+		}
+		payload.binary = CUDANativeTextBytes(*mlirPtx);
+		AppendU32(payload.scalarData, plan->elementCount);
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = CUDANativeCastKernelName(plan->srcType, plan->dstType),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .sharedMemoryBytes = 0,
+		    .workspaceBytes = 0,
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = TensorByteSize(outputSpecs[0].dtype, outputSpecs[0].shape) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .byteOffset = 0,
+		          .byteSize = TensorByteSize(inputSpecs[plan->inputIndex].dtype, inputSpecs[plan->inputIndex].shape) },
+		        { .kind = CUDANativeArgumentKind::Scalar,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
@@ -2977,7 +3236,7 @@ namespace
 		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
 		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
 		payload.kernels.push_back({
-		    .name = "litenn_cublas_matmul_f32",
+		    .name = std::string(CUDANativeMatMulLibraryCallKernelName(DataType::Float32)),
 		    .grid = { .x = 1, .y = 1, .z = 1 },
 		    .block = { .x = 1, .y = 1, .z = 1 },
 		    .sharedMemoryBytes = 0,
@@ -3008,17 +3267,73 @@ namespace
 		};
 	}
 
-	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulBiasF32(const Graph& graph)
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulLowPrecision(const Graph& graph)
 	{
-#ifdef LITENN_ENABLE_CUDA_DRIVER
-		const auto plan = MatchCUDANativeMatMulBiasF32(graph);
+		const auto plan = MatchCUDANativeMatMulLowPrecision(graph);
 		if (!plan)
 		{
 			return std::nullopt;
 		}
 
-		const auto epiloguePtx = TryCUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(
-		    CUDANativeMatMulBiasEpilogueF32CodegenSpec{
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		const auto dtype = outputSpecs[0].dtype;
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::LibraryCall;
+		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
+		                       kCUDANativeFeatureMatMulCUBLASLowPrecision;
+		payload.target = "cublas";
+		AppendU32(payload.scalarData, plan->m);
+		AppendU32(payload.scalarData, plan->k);
+		AppendU32(payload.scalarData, plan->n);
+
+		const auto elementByteSize = static_cast<std::uint64_t>(ElementByteSize(dtype));
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * elementByteSize;
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * elementByteSize;
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * elementByteSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeMatMulLibraryCallKernelName(dtype)),
+		    .grid = { .x = 1, .y = 1, .z = 1 },
+		    .block = { .x = 1, .y = 1, .z = 1 },
+		    .sharedMemoryBytes = 0,
+		    .workspaceBytes = 0,
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor, .index = 0, .byteOffset = 0, .byteSize = outputByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = lhsByteSize },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = rhsByteSize },
+		    },
+		});
+
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulBias(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeMatMulBias(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		const auto epiloguePtx = TryCUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(
+		    CUDANativeMatMulBiasEpilogueCodegenSpec{
+		        .dtype = plan->dtype,
 		        .outputShape = plan->outputShape,
 		        .biasShape = plan->biasShape,
 		        .relu = plan->relu,
@@ -3030,10 +3345,10 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureMatMulCUBLASF32 | kCUDANativeFeatureMultiKernelLaunch |
-		                       (plan->relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
-		                                   : kCUDANativeFeatureMatMulBiasAddF32);
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMultiKernelLaunch;
+		AddCUDANativeMatMulFeatureFlag(payload, plan->dtype);
+		AddCUDANativeMatMulBiasFeatureFlags(payload, plan->dtype, plan->relu);
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*epiloguePtx);
 		AppendU32(payload.scalarData, plan->m);
@@ -3042,12 +3357,13 @@ namespace
 		const auto epilogueCountOffset = payload.scalarData.size();
 		AppendU32(payload.scalarData, plan->outputElementCount);
 
-		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float);
-		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
-		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
-		const auto biasByteSize = static_cast<std::uint64_t>(plan->biasElementCount) * sizeof(float);
+		const auto elementByteSize = static_cast<std::uint64_t>(ElementByteSize(plan->dtype));
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * elementByteSize;
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * elementByteSize;
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * elementByteSize;
+		const auto biasByteSize = static_cast<std::uint64_t>(plan->biasElementCount) * elementByteSize;
 		payload.kernels.push_back({
-		    .name = "litenn_cublas_matmul_f32",
+		    .name = std::string(CUDANativeMatMulLibraryCallKernelName(plan->dtype)),
 		    .grid = { .x = 1, .y = 1, .z = 1 },
 		    .block = { .x = 1, .y = 1, .z = 1 },
 		    .arguments = {
@@ -3066,7 +3382,7 @@ namespace
 		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
 		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
 		payload.kernels.push_back({
-		    .name = std::string(CUDANativeMatMulBiasEpilogueF32KernelName(plan->relu)),
+		    .name = CUDANativeMatMulBiasEpilogueKernelName(plan->dtype, plan->relu),
 		    .grid = { .x = gridSize, .y = 1, .z = 1 },
 		    .block = { .x = blockSize, .y = 1, .z = 1 },
 		    .arguments = {
@@ -3398,7 +3714,27 @@ namespace
 
 	bool IsCUDANativeLibraryCallKernel(std::string_view name)
 	{
-		return name == "litenn_cublas_matmul_f32";
+		return name == CUDANativeMatMulLibraryCallKernelName(DataType::Float32) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::Float16) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::BFloat16) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::Float8E4M3) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::Float8E5M2) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::Int8) ||
+		       name == CUDANativeMatMulLibraryCallKernelName(DataType::UInt8);
+	}
+
+	std::optional<DataType> CUDANativeLibraryCallKernelDataType(std::string_view name)
+	{
+		for (const auto dtype : { DataType::Float32, DataType::Float16, DataType::BFloat16,
+		                         DataType::Float8E4M3, DataType::Float8E5M2, DataType::Int8,
+		                         DataType::UInt8 })
+		{
+			if (name == CUDANativeMatMulLibraryCallKernelName(dtype))
+			{
+				return dtype;
+			}
+		}
+		return std::nullopt;
 	}
 
 	CUDAExecutionOptions ToCUDAExecutionOptions(CompiledModuleCUDARunOptions options)
@@ -3625,7 +3961,8 @@ namespace
 	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
 	                              CompiledModuleCUDARunOptions options)
 	{
-		if (kernel.name != "litenn_cublas_matmul_f32")
+		const auto dtype = CUDANativeLibraryCallKernelDataType(kernel.name);
+		if (!dtype)
 		{
 			throw std::runtime_error(std::format("Unsupported CUDA native library call '{}'", kernel.name));
 		}
@@ -3657,10 +3994,9 @@ namespace
 			auto& output = outputs[outputArg.index];
 			const auto& lhs = inputs[lhsArg.index];
 			const auto& rhs = inputs[rhsArg.index];
-			if (output.DType() != DataType::Float32 || lhs.DType() != DataType::Float32 ||
-			    rhs.DType() != DataType::Float32)
+			if (output.DType() != *dtype || lhs.DType() != *dtype || rhs.DType() != *dtype)
 			{
-				throw std::runtime_error("CUDA native cuBLAS MatMul currently supports Float32 tensors only");
+				throw std::runtime_error("CUDA native MatMul library call tensor dtypes do not match payload kernel");
 			}
 
 			(void)TensorArgumentPointer(outputArg, output, "output");
@@ -3678,9 +4014,9 @@ namespace
 		void* outputPtr = CUDANativeDevicePointer(kernel.arguments[0], inputs, outputs, workspace, constants, "output");
 		void* lhsPtr = CUDANativeDevicePointer(kernel.arguments[1], inputs, outputs, workspace, constants, "lhs");
 		void* rhsPtr = CUDANativeDevicePointer(kernel.arguments[2], inputs, outputs, workspace, constants, "rhs");
-		Tensor<CUDA> outputView(outputPtr, { m, n }, DataType::Float32, device);
-		Tensor<CUDA> lhsView(lhsPtr, { m, k }, DataType::Float32, device);
-		Tensor<CUDA> rhsView(rhsPtr, { k, n }, DataType::Float32, device);
+		Tensor<CUDA> outputView(outputPtr, { m, n }, *dtype, device);
+		Tensor<CUDA> lhsView(lhsPtr, { m, k }, *dtype, device);
+		Tensor<CUDA> rhsView(rhsPtr, { k, n }, *dtype, device);
 		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.RawData(), lhsView.DType(),
 		                                lhsView.Shape(), lhsView.RawData(), rhsView.DType(), rhsView.Shape(),
 		                                rhsView.RawData(),
@@ -4631,25 +4967,37 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 	Validation::ValidateGraph(graph);
 	if (!IsCUDANativeAOTDisabled())
 	{
+		if (auto nativeParts = TryCompileCUDANativeCast(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
 		if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
 		{
 			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
 			                              CompiledModuleBackend::CUDANative);
 		}
-		if (auto nativeParts = TryCompileCUDANativeLinearChainF32(graph))
+		if (auto nativeParts = TryCompileCUDANativeLinearChain(graph))
 		{
 			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
 			                              CompiledModuleBackend::CUDANative);
 		}
-		if (auto nativeParts = TryCompileCUDANativeMatMulBiasF32(graph))
+		if (auto nativeParts = TryCompileCUDANativeMatMulBias(graph))
 		{
 			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
 			                              CompiledModuleBackend::CUDANative);
 		}
 		if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
+		{
+			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+			                              CompiledModuleBackend::CUDANative);
+		}
+		if (auto nativeParts = TryCompileCUDANativeMatMulLowPrecision(graph))
 		{
 			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),

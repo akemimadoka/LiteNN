@@ -47,6 +47,7 @@ namespace LiteNN
 	std::optional<CUDALowPrecisionCapabilities> TryGetCUDALowPrecisionCapabilities(int deviceIndex = 0) noexcept;
 	CUDALowPrecisionCapabilities GetCUDALowPrecisionCapabilities(int deviceIndex = 0);
 	bool CUDASupportsLowPrecisionStorage(DataType dtype, int deviceIndex = 0) noexcept;
+	bool CUDASupportsNativeConversion(DataType srcType, DataType dstType, int deviceIndex = 0) noexcept;
 	bool CUDASupportsNativeMatMul(DataType dtype, int deviceIndex = 0) noexcept;
 	std::string FormatCUDALowPrecisionCapabilities(const CUDALowPrecisionCapabilities& capabilities);
 

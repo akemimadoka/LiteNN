@@ -32,6 +32,15 @@ namespace
 		return static_cast<const float*>(t.RawData())[i];
 	}
 
+	std::vector<float> ReadAsFloat32(const Tensor<CPU>& tensor)
+	{
+		std::vector<float> values(tensor.NumElements());
+		CPU cpu;
+		DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.RawData(), tensor.NumElements(), DataType::Float32,
+		                             values.data());
+		return values;
+	}
+
 	std::uint32_t ReadU32LE(std::span<const std::byte> bytes, std::size_t offset)
 	{
 		std::uint32_t value = 0;
@@ -45,9 +54,10 @@ namespace
 	void ExpectTensorNear(const Tensor<CPU>& tensor, std::span<const float> expected, float tolerance = 1e-6f)
 	{
 		ASSERT_EQ(tensor.NumElements(), expected.size());
+		const auto actual = ReadAsFloat32(tensor);
 		for (std::size_t i = 0; i < expected.size(); ++i)
 		{
-			EXPECT_NEAR(ReadFloat(tensor, i), expected[i], tolerance);
+			EXPECT_NEAR(actual[i], expected[i], tolerance);
 		}
 	}
 
@@ -56,9 +66,11 @@ namespace
 		EXPECT_EQ(tensor.DType(), expected.DType());
 		EXPECT_EQ(tensor.Shape().ToOwned(), expected.Shape().ToOwned());
 		ASSERT_EQ(tensor.NumElements(), expected.NumElements());
+		const auto actualValues = ReadAsFloat32(tensor);
+		const auto expectedValues = ReadAsFloat32(expected);
 		for (std::size_t i = 0; i < expected.NumElements(); ++i)
 		{
-			EXPECT_NEAR(ReadFloat(tensor, i), ReadFloat(expected, i), tolerance);
+			EXPECT_NEAR(actualValues[i], expectedValues[i], tolerance);
 		}
 	}
 
@@ -118,19 +130,51 @@ namespace
 		return graph;
 	}
 
-	Graph BuildSimpleMatMulGraph()
+	Graph BuildCastGraph(DataType srcType, DataType dstType, std::vector<std::size_t> shape,
+	                    std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto a = sg.AddParam(DataType::Float32, { 2, 2 });
-		const auto b = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto input = sg.AddParam(srcType, shape);
+		const auto y = sg.AddNode(CastNode{ { input, 0 }, dstType }, { OutputInfo{ dstType, shape } });
+		sg.SetResults({ { y, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
+	Graph BuildSimpleMatMulGraph(DataType dtype = DataType::Float32, std::string outputName = "matmul")
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto a = sg.AddParam(dtype, { 2, 2 });
+		const auto b = sg.AddParam(dtype, { 2, 2 });
 		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { a, 0 }, { b, 0 } },
-		                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                          { OutputInfo{ dtype, { 2, 2 } } });
 		sg.SetResults({ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
 		graph.SetInputNames({ "lhs", "rhs" });
-		graph.SetOutputNames({ "matmul" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
+	Graph BuildMatMulGraph(DataType dtype, std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
+	                     std::vector<std::size_t> outputShape, std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(dtype, lhsShape);
+		const auto rhs = sg.AddParam(dtype, rhsShape);
+		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
+		                          { OutputInfo{ dtype, outputShape } });
+		sg.SetResults({ { y, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ std::move(outputName) });
 		return graph;
 	}
 
@@ -188,25 +232,25 @@ namespace
 		return graph;
 	}
 
-	Graph BuildMatMulBiasGraph(bool relu)
+	Graph BuildMatMulBiasGraph(bool relu, DataType dtype = DataType::Float32)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto lhs = sg.AddParam(DataType::Float32, { 2, 3 });
-		const auto rhs = sg.AddParam(DataType::Float32, { 3, 2 });
-		const auto bias = sg.AddParam(DataType::Float32, { 1, 2 });
+		const auto lhs = sg.AddParam(dtype, { 2, 3 });
+		const auto rhs = sg.AddParam(dtype, { 3, 2 });
+		const auto bias = sg.AddParam(dtype, { 1, 2 });
 		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
-		                              { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                              { OutputInfo{ dtype, { 2, 2 } } });
 		const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
-		                           { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                           { OutputInfo{ dtype, { 2, 2 } } });
 		NodeId result = add;
 		if (relu)
 		{
-			const auto zeroTensor = Tensor<CPU>({ 0.0 }, { 1 }, DataType::Float32);
+			const auto zeroTensor = Tensor<CPU>({ 0.0 }, { 1 }, dtype);
 			const auto zero = sg.AddNode(ConstantNode{ zeroTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-			                             { OutputInfo{ DataType::Float32, { 1 } } });
+			                             { OutputInfo{ dtype, { 1 } } });
 			result = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } },
-			                    { OutputInfo{ DataType::Float32, { 2, 2 } } });
+			                    { OutputInfo{ dtype, { 2, 2 } } });
 		}
 		sg.SetResults({ { result, 0 } });
 		graph.AddSubgraph(std::move(sg));
@@ -216,20 +260,20 @@ namespace
 		return graph;
 	}
 
-	Graph BuildTinyMLPGraph(std::size_t batch)
+	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
 		Graph graph;
 		const auto h1 = Layer::CreateLinear(graph,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 },
-		                { 3, 4 }, DataType::Float32),
-		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
+		                { 3, 4 }, dtype),
+		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, dtype));
 		const auto h2 = Layer::CreateLinear(graph,
 		    Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 },
-		                { 4, 2 }, DataType::Float32),
-		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
+		                { 4, 2 }, dtype),
+		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, dtype));
 
 		Subgraph sg;
-		const auto input = sg.AddParam(DataType::Float32, { batch, 3 });
+		const auto input = sg.AddParam(dtype, { batch, 3 });
 		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
 		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -292,6 +336,7 @@ namespace
 	{
 		std::vector<double> values;
 		std::vector<std::size_t> shape;
+		DataType dtype{ DataType::Float32 };
 	};
 
 	std::vector<Tensor<CPU>> MakeCPUInputs(std::span<const TensorInputSpec> specs)
@@ -301,7 +346,7 @@ namespace
 		for (const auto& spec : specs)
 		{
 			inputs.emplace_back(std::span<const double>(spec.values.data(), spec.values.size()), ShapeView{ spec.shape },
-			                    DataType::Float32);
+			                    spec.dtype);
 		}
 		return inputs;
 	}
@@ -313,7 +358,7 @@ namespace
 		for (const auto& spec : specs)
 		{
 			auto cpuInput = Tensor<CPU>(std::span<const double>(spec.values.data(), spec.values.size()),
-			                            ShapeView{ spec.shape }, DataType::Float32);
+			                            ShapeView{ spec.shape }, spec.dtype);
 			inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
 		}
 		return inputs;
@@ -842,6 +887,97 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	}
 
 	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(
+		    BuildCastGraph(DataType::Float32, DataType::Float16, { 2, 2 }, "cast_f16"));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureCast, kCUDANativeFeatureCast);
+		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeCastKernelName(DataType::Float32, DataType::Float16));
+		ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
+		EXPECT_EQ(payload.kernels[0].arguments[0].kind, CUDANativeArgumentKind::OutputTensor);
+		EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 8u);
+		EXPECT_EQ(payload.kernels[0].arguments[1].kind, CUDANativeArgumentKind::InputTensor);
+		EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 16u);
+		EXPECT_EQ(payload.kernels[0].arguments[2].kind, CUDANativeArgumentKind::Scalar);
+		EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, sizeof(std::uint32_t));
+	}
+
+	{
+		struct NativeCastArtifactCase
+		{
+			std::string name;
+			DataType srcType{ DataType::Float32 };
+			DataType dstType{ DataType::Float32 };
+		};
+
+		const std::vector<NativeCastArtifactCase> cases = {
+			{ .name = "cast_bf16", .srcType = DataType::Float32, .dstType = DataType::BFloat16 },
+			{ .name = "cast_f32_from_bf16", .srcType = DataType::BFloat16, .dstType = DataType::Float32 },
+			{ .name = "cast_f8e4m3", .srcType = DataType::Float32, .dstType = DataType::Float8E4M3 },
+			{ .name = "cast_f32_from_f8e4m3", .srcType = DataType::Float8E4M3, .dstType = DataType::Float32 },
+			{ .name = "cast_f8e5m2", .srcType = DataType::Float32, .dstType = DataType::Float8E5M2 },
+			{ .name = "cast_f32_from_f8e5m2", .srcType = DataType::Float8E5M2, .dstType = DataType::Float32 },
+		};
+
+		for (const auto& testCase : cases)
+		{
+			SCOPED_TRACE(testCase.name);
+			auto artifact = Compiler<CUDA>::CompileArtifact(
+			    BuildCastGraph(testCase.srcType, testCase.dstType, { 2, 2 }, testCase.name));
+			ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+			const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+			EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+			EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureCast, kCUDANativeFeatureCast);
+			EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
+			ASSERT_EQ(payload.kernels.size(), 1u);
+			EXPECT_EQ(payload.kernels[0].name, CUDANativeCastKernelName(testCase.srcType, testCase.dstType));
+			ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
+			EXPECT_EQ(payload.kernels[0].arguments[0].kind, CUDANativeArgumentKind::OutputTensor);
+			EXPECT_EQ(payload.kernels[0].arguments[0].byteSize,
+			          static_cast<std::uint32_t>(4u * ElementByteSize(testCase.dstType)));
+			EXPECT_EQ(payload.kernels[0].arguments[1].kind, CUDANativeArgumentKind::InputTensor);
+			EXPECT_EQ(payload.kernels[0].arguments[1].byteSize,
+			          static_cast<std::uint32_t>(4u * ElementByteSize(testCase.srcType)));
+			EXPECT_EQ(payload.kernels[0].arguments[2].kind, CUDANativeArgumentKind::Scalar);
+			EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, sizeof(std::uint32_t));
+		}
+	}
+
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildSimpleMatMulGraph(DataType::Float16, "matmul_f16"));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::LibraryCall);
+		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
+		          kCUDANativeFeatureMatMulCUBLASLowPrecision);
+		EXPECT_EQ(payload.target, "cublas");
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
+		EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 8u);
+		EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 8u);
+		EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 8u);
+	}
+
+	{
+		auto graph = BuildMatMulBiasGraph(true, DataType::Float16);
+		FusionPass{}.Run(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
+		          kCUDANativeFeatureMatMulCUBLASLowPrecision);
+		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLULowPrecision,
+		          kCUDANativeFeatureMatMulBiasAddReLULowPrecision);
+		ASSERT_EQ(payload.kernels.size(), 2u);
+		EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
+		EXPECT_EQ(payload.kernels[1].name, "litenn_matmul_bias_relu_epilogue_f16");
+	}
+
+	{
 		auto graph = BuildMatMulBiasGraph(true);
 		FusionPass{}.Run(graph);
 		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
@@ -859,6 +995,297 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 #else
 	GTEST_SKIP() << "CUDA driver support is not enabled";
 #endif
+}
+
+TEST(CompiledModuleCUDATest, CompilerArtifactsExposeLowPrecisionNativeLinearChainPayload)
+{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+	auto graph = BuildTinyMLPGraph(2, DataType::Float16);
+	FusionPass{}.Run(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
+	          kCUDANativeFeatureMatMulCUBLASLowPrecision);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddLowPrecision,
+	          kCUDANativeFeatureMatMulBiasAddLowPrecision);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLULowPrecision,
+	          kCUDANativeFeatureMatMulBiasAddReLULowPrecision);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureWorkspace, kCUDANativeFeatureWorkspace);
+	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureConstantTensor, kCUDANativeFeatureConstantTensor);
+	EXPECT_GT(payload.constantData.size(), 0u);
+	ASSERT_EQ(payload.kernels.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
+	EXPECT_EQ(payload.kernels[1].name, "litenn_matmul_bias_relu_epilogue_f16_0");
+	EXPECT_EQ(payload.kernels[2].name, "litenn_cublas_matmul_f16");
+	EXPECT_EQ(payload.kernels[3].name, "litenn_matmul_bias_add_epilogue_f16_1");
+#else
+	GTEST_SKIP() << "CUDA driver support is not enabled";
+#endif
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeCastPayloadsOnCUDA)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	struct NativeCastCase
+	{
+		std::string name;
+		DataType srcType{ DataType::Float32 };
+		DataType dstType{ DataType::Float32 };
+		std::vector<double> values;
+		float tolerance{ 1e-6f };
+		bool requiresNativeConversion{};
+	};
+
+	const std::vector<NativeCastCase> cases = {
+		{ .name = "f32_to_f16",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::Float16,
+		  .values = { 1.25, -2.5, 0.0625, 3.75 },
+		  .tolerance = 1e-3f },
+		{ .name = "f16_to_f32",
+		  .srcType = DataType::Float16,
+		  .dstType = DataType::Float32,
+		  .values = { 1.25, -2.5, 0.0625, 3.75 },
+		  .tolerance = 1e-3f },
+		{ .name = "f32_to_bf16",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::BFloat16,
+		  .values = { 1.25, -2.5, 0.0625, 3.75 },
+		  .tolerance = 2e-2f,
+		  .requiresNativeConversion = true },
+		{ .name = "bf16_to_f32",
+		  .srcType = DataType::BFloat16,
+		  .dstType = DataType::Float32,
+		  .values = { 1.25, -2.5, 0.0625, 3.75 },
+		  .tolerance = 2e-2f,
+		  .requiresNativeConversion = true },
+		{ .name = "f32_to_f8e4m3",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::Float8E4M3,
+		  .values = { 1.0, -2.0, 0.5, 4.0 },
+		  .tolerance = 2.5e-1f,
+		  .requiresNativeConversion = true },
+		{ .name = "f8e4m3_to_f32",
+		  .srcType = DataType::Float8E4M3,
+		  .dstType = DataType::Float32,
+		  .values = { 1.0, -2.0, 0.5, 4.0 },
+		  .tolerance = 2.5e-1f,
+		  .requiresNativeConversion = true },
+		{ .name = "f32_to_f8e5m2",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::Float8E5M2,
+		  .values = { 1.0, -2.0, 0.5, 4.0 },
+		  .tolerance = 5e-1f,
+		  .requiresNativeConversion = true },
+		{ .name = "f8e5m2_to_f32",
+		  .srcType = DataType::Float8E5M2,
+		  .dstType = DataType::Float32,
+		  .values = { 1.0, -2.0, 0.5, 4.0 },
+		  .tolerance = 5e-1f,
+		  .requiresNativeConversion = true },
+		{ .name = "f32_to_i8",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::Int8,
+		  .values = { 1.0, -2.0, 3.0, -4.0 } },
+		{ .name = "f32_to_u8",
+		  .srcType = DataType::Float32,
+		  .dstType = DataType::UInt8,
+		  .values = { 1.0, 2.0, 3.0, 4.0 } },
+		{ .name = "i8_to_f32",
+		  .srcType = DataType::Int8,
+		  .dstType = DataType::Float32,
+		  .values = { 1.0, -2.0, 3.0, -4.0 } },
+		{ .name = "u8_to_f32",
+		  .srcType = DataType::UInt8,
+		  .dstType = DataType::Float32,
+		  .values = { 1.0, 2.0, 3.0, 4.0 } },
+	};
+
+	for (const auto& testCase : cases)
+	{
+		if (testCase.requiresNativeConversion && !CUDASupportsNativeConversion(testCase.srcType, testCase.dstType))
+		{
+			continue;
+		}
+
+		SCOPED_TRACE(testCase.name);
+		auto graph = BuildCastGraph(testCase.srcType, testCase.dstType, { 2, 2 }, testCase.name);
+		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+
+		Runtime::Interpreter<CPU> interpreter;
+		std::vector<TensorInputSpec> inputSpecs = {
+			TensorInputSpec{ .values = testCase.values, .shape = { 2, 2 }, .dtype = testCase.srcType }
+		};
+		auto expectedInputs = MakeCPUInputs(inputSpecs);
+		const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+		auto module = artifact.Load(CUDA{});
+		auto cudaInputs = MakeCUDAInputs(inputSpecs);
+		auto cudaOutputs = module.Run(cudaInputs);
+		ASSERT_EQ(cudaOutputs.size(), 1u);
+		auto actual = cudaOutputs[0].CopyToDevice(CPU{});
+		ExpectTensorNear(actual, expected[0], testCase.tolerance);
+	}
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	struct LowPrecisionMatMulCase
+	{
+		std::string name;
+		DataType dtype{ DataType::Float16 };
+		std::vector<double> lhsValues;
+		std::vector<double> rhsValues;
+		float tolerance{ 1e-6f };
+	};
+
+	const std::vector<LowPrecisionMatMulCase> cases = {
+		{ .name = "matmul_f16",
+		  .dtype = DataType::Float16,
+		  .lhsValues = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 },
+		  .rhsValues = { 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 },
+		  .tolerance = 1e-3f },
+		{ .name = "matmul_i8",
+		  .dtype = DataType::Int8,
+		  .lhsValues = { 1.0, 2.0, -3.0, 4.0, -1.0, 2.0 },
+		  .rhsValues = { 2.0, -1.0, 1.0, 3.0, -2.0, 1.0 } },
+		{ .name = "matmul_u8",
+		  .dtype = DataType::UInt8,
+		  .lhsValues = { 1.0, 2.0, 3.0, 4.0, 1.0, 2.0 },
+		  .rhsValues = { 2.0, 1.0, 1.0, 3.0, 2.0, 1.0 } },
+	};
+
+	std::size_t executedCases = 0;
+	for (const auto& testCase : cases)
+	{
+		if (!CUDASupportsNativeMatMul(testCase.dtype))
+		{
+			continue;
+		}
+
+		SCOPED_TRACE(testCase.name);
+		auto graph = BuildMatMulGraph(testCase.dtype, { 2, 3 }, { 3, 2 }, { 2, 2 }, testCase.name);
+		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+
+		Runtime::Interpreter<CPU> interpreter;
+		std::vector<TensorInputSpec> inputSpecs = {
+			TensorInputSpec{ .values = testCase.lhsValues, .shape = { 2, 3 }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
+		};
+		auto expectedInputs = MakeCPUInputs(inputSpecs);
+		const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+		auto module = artifact.Load(CUDA{});
+		auto cudaInputs = MakeCUDAInputs(inputSpecs);
+		auto cudaOutputs = module.Run(cudaInputs);
+		ASSERT_EQ(cudaOutputs.size(), 1u);
+		ExpectTensorNear(cudaOutputs[0].CopyToDevice(CPU{}), expected[0], testCase.tolerance);
+		++executedCases;
+	}
+
+	if (executedCases == 0)
+	{
+		GTEST_SKIP() << "CUDA device does not report native low-precision MatMul support";
+	}
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	struct LowPrecisionMatMulBiasCase
+	{
+		std::string name;
+		DataType dtype{ DataType::Float16 };
+		bool relu{};
+		std::vector<double> lhsValues;
+		std::vector<double> rhsValues;
+		std::vector<double> biasValues;
+		float tolerance{ 1e-6f };
+	};
+
+	const std::vector<LowPrecisionMatMulBiasCase> cases = {
+		{ .name = "matmul_bias_relu_f16",
+		  .dtype = DataType::Float16,
+		  .relu = true,
+		  .lhsValues = { 1.0, -2.0, 3.0, -1.0, 2.0, -3.0 },
+		  .rhsValues = { 1.0, 2.0, -1.0, 3.0, 2.0, -2.0 },
+		  .biasValues = { 0.5, -0.75 },
+		  .tolerance = 1e-3f },
+		{ .name = "matmul_bias_i8",
+		  .dtype = DataType::Int8,
+		  .relu = false,
+		  .lhsValues = { 1.0, -2.0, 3.0, -1.0, 2.0, -3.0 },
+		  .rhsValues = { 1.0, 2.0, -1.0, 1.0, 2.0, -2.0 },
+		  .biasValues = { 1.0, -2.0 } },
+		{ .name = "matmul_bias_u8",
+		  .dtype = DataType::UInt8,
+		  .relu = true,
+		  .lhsValues = { 1.0, 2.0, 3.0, 1.0, 0.0, 2.0 },
+		  .rhsValues = { 1.0, 2.0, 1.0, 1.0, 2.0, 1.0 },
+		  .biasValues = { 1.0, 2.0 } },
+	};
+
+	std::size_t executedCases = 0;
+	for (const auto& testCase : cases)
+	{
+		if (!CUDASupportsNativeMatMul(testCase.dtype))
+		{
+			continue;
+		}
+
+		SCOPED_TRACE(testCase.name);
+		auto graph = BuildMatMulBiasGraph(testCase.relu, testCase.dtype);
+		FusionPass{}.Run(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+
+		Runtime::Interpreter<CPU> interpreter;
+		std::vector<TensorInputSpec> inputSpecs = {
+			TensorInputSpec{ .values = testCase.lhsValues, .shape = { 2, 3 }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.biasValues, .shape = { 1, 2 }, .dtype = testCase.dtype },
+		};
+		auto expectedInputs = MakeCPUInputs(inputSpecs);
+		const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+		auto module = artifact.Load(CUDA{});
+		auto cudaInputs = MakeCUDAInputs(inputSpecs);
+		auto cudaOutputs = module.Run(cudaInputs);
+		ASSERT_EQ(cudaOutputs.size(), 1u);
+		ExpectTensorNear(cudaOutputs[0].CopyToDevice(CPU{}), expected[0], testCase.tolerance);
+		++executedCases;
+	}
+
+	if (executedCases == 0)
+	{
+		GTEST_SKIP() << "CUDA device does not report native low-precision MatMul support";
+	}
 }
 
 TEST(CompiledModuleCUDATest, CompilerArtifactsExposeNativeLinearChainPayload)
@@ -1043,6 +1470,48 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 		cudaCPUOutputs.push_back(output.CopyToDevice(CPU{}));
 	}
 	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-4f);
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionLinearChainWithConstantsAndWorkspace)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+	if (!CUDASupportsNativeMatMul(DataType::Float16))
+	{
+		GTEST_SKIP() << "CUDA device does not report native float16 MatMul support";
+	}
+
+	auto graph = BuildTinyMLPGraph(2, DataType::Float16);
+	std::vector<TensorInputSpec> inputSpecs = {
+		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
+		                 .shape = { 2, 3 },
+		                 .dtype = DataType::Float16 }
+	};
+	auto expectedInputs = MakeCPUInputs(inputSpecs);
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, expectedInputs);
+
+	auto cudaGraph = graph;
+	FusionPass{}.Run(cudaGraph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(cudaGraph);
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(cudaGraph);
+	auto module = artifact.Load(CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	auto cudaInputs = MakeCUDAInputs(inputSpecs);
+	auto cudaOutputs = module.Run(cudaInputs);
+	std::vector<Tensor<CPU>> cudaCPUOutputs;
+	for (const auto& output : cudaOutputs)
+	{
+		cudaCPUOutputs.push_back(output.CopyToDevice(CPU{}));
+	}
+	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-3f);
 }
 
 TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)

@@ -336,9 +336,12 @@ void BMLlamaCppGGML(benchmark::State& state, ModelKind kind, std::size_t batch, 
 #ifdef LITENN_ENABLE_CUDA
 struct TensorInputSpec
 {
-	std::vector<float> values;
+	std::vector<double> values;
 	std::vector<std::size_t> shape;
+	DataType dtype = DataType::Float32;
 };
+
+std::vector<double> MakeCUDADeviceMatMulData(std::size_t count, DataType dtype);
 
 std::vector<Tensor<CUDA>> MakeCUDAInputs(const std::vector<float>& data, std::size_t batch)
 {
@@ -348,33 +351,27 @@ std::vector<Tensor<CUDA>> MakeCUDAInputs(const std::vector<float>& data, std::si
 	return inputs;
 }
 
-Graph BuildNativeMatMul(std::size_t batch, std::size_t width)
+Graph BuildNativeMatMul(std::size_t batch, std::size_t width, DataType dtype)
 {
 	Graph graph;
 	Subgraph fwd;
-	const auto lhs = fwd.AddParam(DataType::Float32, { batch, width });
-	const auto rhs = fwd.AddParam(DataType::Float32, { width, width });
+	const auto lhs = fwd.AddParam(dtype, { batch, width });
+	const auto rhs = fwd.AddParam(dtype, { width, width });
 	const auto out = fwd.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
-	                            { OutputInfo{ DataType::Float32, { batch, width } } });
+	                            { OutputInfo{ dtype, { batch, width } } });
 	fwd.SetResults({ { out, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
 	return graph;
 }
 
-std::vector<TensorInputSpec> MakeNativeMatMulInputs(std::size_t batch, std::size_t width)
+std::vector<TensorInputSpec> MakeNativeMatMulInputs(std::size_t batch, std::size_t width, DataType dtype)
 {
-	std::mt19937 rng(7);
-	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	std::vector<float> lhs(batch * width);
-	std::vector<float> rhs(width * width);
-	for (auto& value : lhs)
-		value = dist(rng);
-	for (auto& value : rhs)
-		value = dist(rng);
+	auto lhs = MakeCUDADeviceMatMulData(batch * width, dtype);
+	auto rhs = MakeCUDADeviceMatMulData(width * width, dtype);
 
 	std::vector<TensorInputSpec> specs;
-	specs.push_back(TensorInputSpec{ .values = std::move(lhs), .shape = { batch, width } });
-	specs.push_back(TensorInputSpec{ .values = std::move(rhs), .shape = { width, width } });
+	specs.push_back(TensorInputSpec{ .values = std::move(lhs), .shape = { batch, width }, .dtype = dtype });
+	specs.push_back(TensorInputSpec{ .values = std::move(rhs), .shape = { width, width }, .dtype = dtype });
 	return specs;
 }
 
@@ -384,7 +381,7 @@ std::vector<Tensor<CUDA>> MakeCUDAInputs(std::span<const TensorInputSpec> specs)
 	inputs.reserve(specs.size());
 	for (const auto& spec : specs)
 	{
-		auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(spec.values), ShapeView{ spec.shape });
+		Tensor<CPU> cpuInput(std::span<const double>(spec.values), ShapeView{ spec.shape }, spec.dtype);
 		inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
 	}
 	return inputs;
@@ -639,15 +636,20 @@ void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind kind, std:
 	BMCUDANativeModelRunInto(state, kind, batch);
 }
 
-void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width)
+void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
 {
 	if (!IsCUDADeviceAvailable())
 	{
 		state.SkipWithError("CUDA device is not available");
 		return;
 	}
+	if (dtype != DataType::Float32 && !CUDASupportsNativeMatMul(dtype))
+	{
+		state.SkipWithError("CUDA device does not support requested native MatMul dtype");
+		return;
+	}
 
-	auto graph = BuildNativeMatMul(batch, width);
+	auto graph = BuildNativeMatMul(batch, width, dtype);
 	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
@@ -655,7 +657,7 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 		return;
 	}
 
-	auto specs = MakeNativeMatMulInputs(batch, width);
+	auto specs = MakeNativeMatMulInputs(batch, width, dtype);
 	auto inputs = MakeCUDAInputs(specs);
 	auto outputs = AllocateCUDAOutputs(module);
 
@@ -679,7 +681,7 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind, std::size_t)
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
 
-void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t, std::size_t)
+void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t, std::size_t, DataType)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
@@ -805,12 +807,25 @@ void RegisterBenchmarks()
 
 #ifdef LITENN_BENCH_HAS_AOT
 	constexpr std::size_t nativeMatMulWidth = 128;
+	constexpr std::array nativeMatMulDTypes{
+		DataType::Float32,
+		DataType::Float16,
+		DataType::BFloat16,
+		DataType::Float8E4M3,
+		DataType::Float8E5M2,
+		DataType::Int8,
+		DataType::UInt8,
+	};
 	for (const auto batch : kBatchSizes)
 	{
-		auto* benchmarkCase = benchmark::RegisterBenchmark(
-		    std::format("CUDANativeMatMul/batch:{}/width:{}", batch, nativeMatMulWidth),
-		    [=](benchmark::State& state) { BMCUDANativeMatMulRunInto(state, batch, nativeMatMulWidth); });
-		benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+		for (const auto dtype : nativeMatMulDTypes)
+		{
+			auto* benchmarkCase = benchmark::RegisterBenchmark(
+			    std::format("CUDANativeMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch,
+			                nativeMatMulWidth),
+			    [=](benchmark::State& state) { BMCUDANativeMatMulRunInto(state, batch, nativeMatMulWidth, dtype); });
+			benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+		}
 	}
 #endif
 
