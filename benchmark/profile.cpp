@@ -1,7 +1,7 @@
 // LiteNN AOT 性能瓶颈分析工具
 //
 // 1) 测量 Run() 的分配开销 vs 纯 entry 调用开销
-// 2) 将编译产物 (.o) 写到磁盘，便于用 objdump -d 反汇编查看是否向量化
+// 2) 将编译产物 (.o) 写到磁盘，并用 objdump 生成 first-class 指令统计
 // 3) 测量 Compile() 自身的耗时（一次性成本）
 
 #include <LiteNN.h>
@@ -15,13 +15,18 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace LiteNN;
@@ -93,6 +98,241 @@ struct Timing
 	double throughput;
 };
 
+struct InstructionStats
+{
+	bool available{};
+	std::string message;
+	std::string function;
+	std::size_t lines{};
+	std::size_t packedFMA{};
+	std::size_t scalarFMA{};
+	std::size_t zmmPackedFMA{};
+	std::size_t ymmPackedFMA{};
+	std::size_t xmmPackedFMA{};
+	std::size_t gather{};
+	std::size_t scatter{};
+	std::size_t stackVectorOp{};
+	std::size_t vectorLoad{};
+	std::size_t scalarMove{};
+	std::size_t broadcast{};
+	std::size_t prefetch{};
+};
+
+struct CaseInstructionStats
+{
+	std::string name;
+	std::filesystem::path asmPath;
+	InstructionStats stats;
+};
+
+static bool EnvFlagEnabled(const char* name)
+{
+	if (const char* value = std::getenv(name))
+	{
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+	return false;
+}
+
+static std::string QuoteForShell(std::string_view text)
+{
+	std::string quoted;
+	quoted.reserve(text.size() + 2);
+	quoted.push_back('"');
+	for (const char ch : text)
+	{
+		if (ch == '"')
+		{
+			quoted += "\\\"";
+		}
+		else
+		{
+			quoted.push_back(ch);
+		}
+	}
+	quoted.push_back('"');
+	return quoted;
+}
+
+static std::string QuoteProgramForShell(std::string_view text)
+{
+#ifdef _WIN32
+	if (text.find_first_of(" \t\"") == std::string_view::npos)
+	{
+		return std::string(text);
+	}
+	return std::format("call {}", QuoteForShell(text));
+#else
+	return QuoteForShell(text);
+#endif
+}
+
+static std::string ToLowerASCII(std::string_view text)
+{
+	std::string lowered;
+	lowered.reserve(text.size());
+	for (const unsigned char ch : text)
+	{
+		lowered.push_back(static_cast<char>(std::tolower(ch)));
+	}
+	return lowered;
+}
+
+static bool IsObjdumpFunctionHeader(std::string_view line)
+{
+	std::size_t pos = 0;
+	while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])))
+	{
+		++pos;
+	}
+	const auto begin = pos;
+	while (pos < line.size() && std::isxdigit(static_cast<unsigned char>(line[pos])))
+	{
+		++pos;
+	}
+	return pos > begin && line.find('<', pos) != std::string_view::npos && line.find(">:", pos) != std::string_view::npos;
+}
+
+static std::string ObjdumpFunctionName(std::string_view line)
+{
+	const auto begin = line.find('<');
+	const auto end = line.find(">:", begin == std::string_view::npos ? 0 : begin);
+	if (begin == std::string_view::npos || end == std::string_view::npos || end <= begin + 1)
+	{
+		return {};
+	}
+	return std::string(line.substr(begin + 1, end - begin - 1));
+}
+
+static std::optional<std::size_t> FindFunctionHeader(std::span<const std::string> lines, std::string_view function)
+{
+	const auto needle = std::format("<{}>:", function);
+	for (std::size_t i = 0; i < lines.size(); ++i)
+	{
+		if (IsObjdumpFunctionHeader(lines[i]) && lines[i].find(needle) != std::string::npos)
+		{
+			return i;
+		}
+	}
+	return std::nullopt;
+}
+
+static std::optional<std::size_t> FindFirstFunctionHeader(std::span<const std::string> lines)
+{
+	for (std::size_t i = 0; i < lines.size(); ++i)
+	{
+		if (IsObjdumpFunctionHeader(lines[i]))
+		{
+			return i;
+		}
+	}
+	return std::nullopt;
+}
+
+static bool ContainsAny(std::string_view line, std::span<const std::string_view> needles)
+{
+	for (const auto needle : needles)
+	{
+		if (line.find(needle) != std::string_view::npos)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static void AccumulateInstructionLine(InstructionStats& stats, std::string_view line)
+{
+	const auto lower = ToLowerASCII(line);
+	const bool packedFma = lower.find("vfmadd") != std::string::npos && lower.find("ps") != std::string::npos;
+	if (packedFma)
+	{
+		++stats.packedFMA;
+		if (lower.find("zmm") != std::string::npos) ++stats.zmmPackedFMA;
+		if (lower.find("ymm") != std::string::npos) ++stats.ymmPackedFMA;
+		if (lower.find("xmm") != std::string::npos) ++stats.xmmPackedFMA;
+	}
+	if (lower.find("vfmadd") != std::string::npos && lower.find("ss") != std::string::npos)
+	{
+		++stats.scalarFMA;
+	}
+	if (lower.find("gather") != std::string::npos) ++stats.gather;
+	if (lower.find("scatter") != std::string::npos) ++stats.scatter;
+	if (lower.find("vmovups") != std::string::npos || lower.find("vmovaps") != std::string::npos) ++stats.vectorLoad;
+	if (lower.find("vmovss") != std::string::npos) ++stats.scalarMove;
+	if (lower.find("vbroadcast") != std::string::npos) ++stats.broadcast;
+	if (lower.find("prefetch") != std::string::npos) ++stats.prefetch;
+
+	constexpr std::string_view kVectorOps[] = { "vmov", "vadd", "vmul", "vfmadd" };
+	const bool stackReference = lower.find("[rsp") != std::string::npos || lower.find("[rbp") != std::string::npos;
+	if (stackReference && ContainsAny(lower, kVectorOps))
+	{
+		++stats.stackVectorOp;
+	}
+}
+
+static InstructionStats AnalyzeObjectInstructions(const std::filesystem::path& objectPath,
+                                                  const std::filesystem::path& asmPath,
+                                                  std::string_view function = "subgraph_0")
+{
+	if (EnvFlagEnabled("LITENN_PROFILE_SKIP_OBJDUMP"))
+	{
+		return { .message = "skipped by LITENN_PROFILE_SKIP_OBJDUMP" };
+	}
+
+	const char* objdumpEnv = std::getenv("LITENN_OBJDUMP");
+	const std::string objdump = objdumpEnv ? objdumpEnv : "objdump";
+	const auto errPath = asmPath.string() + ".err";
+	const auto command = std::format("{} -d -M intel {} > {} 2> {}",
+	    QuoteProgramForShell(objdump), QuoteForShell(objectPath.string()), QuoteForShell(asmPath.string()),
+	    QuoteForShell(errPath));
+	if (std::system(command.c_str()) != 0)
+	{
+		return { .message = std::format("objdump failed; set LITENN_OBJDUMP or inspect {}", errPath) };
+	}
+
+	std::ifstream file(asmPath);
+	if (!file)
+	{
+		return { .message = std::format("could not read {}", asmPath.string()) };
+	}
+
+	std::vector<std::string> lines;
+	std::string line;
+	while (std::getline(file, line))
+	{
+		lines.push_back(std::move(line));
+	}
+
+	auto start = FindFunctionHeader(lines, function);
+	if (!start)
+	{
+		start = FindFirstFunctionHeader(lines);
+		if (!start)
+		{
+			return { .message = "no function headers found in disassembly" };
+		}
+	}
+	std::size_t end = lines.size();
+	for (std::size_t i = *start + 1; i < lines.size(); ++i)
+	{
+		if (IsObjdumpFunctionHeader(lines[i]))
+		{
+			end = i;
+			break;
+		}
+	}
+
+	InstructionStats stats{ .available = true, .message = "ok",
+	                        .function = ObjdumpFunctionName(lines[*start]), .lines = end - *start };
+	for (std::size_t i = *start; i < end; ++i)
+	{
+		AccumulateInstructionLine(stats, lines[i]);
+	}
+	return stats;
+}
+
 static Timing TimedRun(const CompiledModule<CPU>& module,
                        std::span<const Tensor<CPU>> inputs,
                        std::size_t batch)
@@ -146,7 +386,8 @@ int main(int argc, char** argv)
 
 	std::cout << "LiteNN AOT Profile Report\n";
 	std::cout << "Object files written to: " << outDir.string() << "\n";
-	std::cout << std::string(86, '=') << "\n";
+	std::cout << "Instruction stats use objdump; set LITENN_OBJDUMP to override or LITENN_PROFILE_SKIP_OBJDUMP=1 to skip.\n";
+	std::cout << std::string(116, '=') << "\n";
 
 	std::vector<Case> cases = {
 	    { "linear_b1",   BuildLinear,  { 1,   10  } },
@@ -163,10 +404,13 @@ int main(int argc, char** argv)
 	    { "mlp512_b512", BuildMLP512,  { 512, 10  } },
 	};
 
-	std::cout << std::format("{:<14} {:>8} {:>10} {:>12} {:>12} {:>10} {:>12}\n",
+	std::vector<CaseInstructionStats> instructionStats;
+	instructionStats.reserve(cases.size());
+
+	std::cout << std::format("{:<14} {:>8} {:>10} {:>12} {:>12} {:>10} {:>12} {:>7} {:>7} {:>8}\n",
 	    "Case", "Batch", "Compile/ms", "Run/ms", "RunInto/ms",
-	    "Alloc/us", "Speedup");
-	std::cout << std::string(86, '-') << "\n";
+	    "Alloc/us", "Speedup", "FMAps", "VecLd", "StackVec");
+	std::cout << std::string(116, '-') << "\n";
 
 	for (const auto& c : cases)
 	{
@@ -183,12 +427,25 @@ int main(int argc, char** argv)
 
 		// Write the *raw* compiled object (the JIT-loaded code) for disassembly.
 		// Note: WriteObjectFile() emits a "carrier" wrapper, not the executable code.
+		const auto statsBeforeWrite = instructionStats.size();
 		try {
 			const auto bytes = compiled.Instructions();
-			std::ofstream f(outDir / (c.name + ".o"), std::ios::binary);
+			const auto objectPath = outDir / (c.name + ".o");
+			std::ofstream f(objectPath, std::ios::binary);
 			f.write(reinterpret_cast<const char*>(bytes.data()),
 			        static_cast<std::streamsize>(bytes.size()));
+			f.close();
+			if (!f)
+			{
+				throw std::runtime_error(std::format("failed to write {}", objectPath.string()));
+			}
+			instructionStats.push_back({ c.name, outDir / (c.name + ".s"),
+			                             AnalyzeObjectInstructions(objectPath, outDir / (c.name + ".s")) });
 		} catch (...) {}
+		if (instructionStats.size() == statsBeforeWrite)
+		{
+			instructionStats.push_back({ c.name, outDir / (c.name + ".s"), { .message = "object write failed" } });
+		}
 
 		// Build inputs once
 		std::mt19937 rng2(0);
@@ -208,14 +465,35 @@ int main(int argc, char** argv)
 		const double allocUs = (tRun.meanMs - tRunInto.meanMs) * 1000.0;
 		const double speedup = tRun.meanMs / std::max(tRunInto.meanMs, 1e-6);
 
-		std::cout << std::format("{:<14} {:>8} {:>9.2f}ms {:>10.4f}ms {:>10.4f}ms {:>8.2f}us {:>10.2f}x\n",
-		    c.name, batch, compileMs, tRun.meanMs, tRunInto.meanMs, allocUs, speedup);
+		const auto& stats = instructionStats.back().stats;
+		const auto packedFMA = stats.available ? std::format("{}", stats.packedFMA) : "n/a";
+		const auto vectorLoad = stats.available ? std::format("{}", stats.vectorLoad) : "n/a";
+		const auto stackVectorOp = stats.available ? std::format("{}", stats.stackVectorOp) : "n/a";
+		std::cout << std::format("{:<14} {:>8} {:>9.2f}ms {:>10.4f}ms {:>10.4f}ms {:>8.2f}us {:>10.2f}x {:>7} {:>7} {:>8}\n",
+		    c.name, batch, compileMs, tRun.meanMs, tRunInto.meanMs, allocUs, speedup,
+		    packedFMA, vectorLoad, stackVectorOp);
 	}
 
-	std::cout << std::string(86, '=') << "\n";
-	std::cout << "\nNext step: disassemble hot kernels:\n";
-	std::cout << "  objdump -d -M intel " << (outDir / "linear_b512.o").string()
-	          << " > linear_b512.s\n";
-	std::cout << "  Then look for SIMD ops (vmovups/vmulps/vfmadd...).\n";
+	std::cout << std::string(116, '=') << "\n";
+	std::cout << "\nInstruction stats for subgraph_0, falling back to the first function when needed\n";
+	std::cout << std::format("{:<14} {:<16} {:>7} {:>7} {:>7} {:>5} {:>5} {:>5} {:>7} {:>7} {:>7} {:>8} {:>7} {:>7}\n",
+	    "Case", "Function", "Lines", "FMAps", "FMAss", "zmm", "ymm", "xmm", "Gather", "Scatter", "VecLd",
+	    "ScalarMv", "Bcast", "StackV");
+	std::cout << std::string(132, '-') << "\n";
+	for (const auto& row : instructionStats)
+	{
+		const auto& s = row.stats;
+		if (!s.available)
+		{
+			std::cout << std::format("{:<14} {:<16} {}\n", row.name, "-", s.message);
+			continue;
+		}
+		std::cout << std::format("{:<14} {:<16} {:>7} {:>7} {:>7} {:>5} {:>5} {:>5} {:>7} {:>7} {:>7} {:>8} {:>7} {:>7}\n",
+		    row.name, s.function, s.lines, s.packedFMA, s.scalarFMA, s.zmmPackedFMA, s.ymmPackedFMA,
+		    s.xmmPackedFMA, s.gather, s.scatter, s.vectorLoad, s.scalarMove,
+		    s.broadcast, s.stackVectorOp);
+	}
+	std::cout << "\nAssembly files are written beside the object files when objdump succeeds.\n";
+	std::cout << "CUDA launch breakdowns are not collected by this CPU AOT profile executable yet.\n";
 	return 0;
 }

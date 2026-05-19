@@ -14,13 +14,17 @@
 #include <LiteNN/Layer/LayerNorm.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Pad.h>
+#include <LiteNN/Layer/RelativePosition.h>
+#include <LiteNN/Layer/Repeat.h>
 #include <LiteNN/Layer/RMSNorm.h>
 #include <LiteNN/Layer/Roll.h>
 #include <LiteNN/Layer/RoPE.h>
+#include <LiteNN/Layer/SSMConv.h>
 #include <LiteNN/Layer/Softmax.h>
 #include <LiteNN/Layer/SumRows.h>
 #include <LiteNN/Layer/SwiGLU.h>
 #include <LiteNN/Layer/TopK.h>
+#include <LiteNN/Layer/Window.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <cmath>
@@ -28,6 +32,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <ranges>
 
 using namespace LiteNN;
 
@@ -1507,4 +1512,123 @@ TEST(LayerKVCache, RejectsMismatchedSequenceLengths)
 	const auto values = sg.AddParam(DataType::Float32, { 3, 3 });
 	EXPECT_THROW(static_cast<void>(Layer::AddKVCacheView(sg, { { keys, 0 }, { values, 0 } }, 0, 2)),
 	             std::runtime_error);
+}
+
+TEST(LayerRepeat, TilesNonSingletonDimensions)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto repeated = Layer::AddRepeat(sg, { input, 0 }, { 4, 4 });
+	sg.SetResults({ repeated });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 });
+	ASSERT_TRUE(std::ranges::equal(result.Shape().Dims, std::vector<std::size_t>{ 4, 4 }));
+	const std::vector<float> expected{ 1.0f, 2.0f, 1.0f, 2.0f,
+	                                  3.0f, 4.0f, 3.0f, 4.0f,
+	                                  1.0f, 2.0f, 1.0f, 2.0f,
+	                                  3.0f, 4.0f, 3.0f, 4.0f };
+	for (auto index = 0uz; index < expected.size(); ++index)
+	{
+		EXPECT_NEAR(ReadFloat(result, index), expected[index], 1e-5f);
+	}
+}
+
+TEST(LayerWindow, PartitionAndUnpartitionRoundTripsPaddedImage)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 3, 2, 1 });
+	const auto partitioned = Layer::AddWindowPartition(sg, { input, 0 }, 2);
+	const auto restored = Layer::AddWindowUnpartition(sg, partitioned, 3, 2, 2);
+	sg.SetResults({ partitioned, restored });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto results = RunWithInputs(graph, { Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 1, 3, 2, 1 }) });
+	ASSERT_EQ(results.size(), 2u);
+	ASSERT_TRUE(std::ranges::equal(results[0].Shape().Dims, std::vector<std::size_t>{ 1, 2, 2, 2 }));
+	const std::vector<float> expectedPartition{ 1.0f, 5.0f, 2.0f, 6.0f, 3.0f, 0.0f, 4.0f, 0.0f };
+	for (auto index = 0uz; index < expectedPartition.size(); ++index)
+	{
+		EXPECT_NEAR(ReadFloat(results[0], index), expectedPartition[index], 1e-5f);
+	}
+	ASSERT_TRUE(std::ranges::equal(results[1].Shape().Dims, std::vector<std::size_t>{ 1, 3, 2, 1 }));
+	for (auto index = 0uz; index < 6uz; ++index)
+	{
+		EXPECT_NEAR(ReadFloat(results[1], index), static_cast<float>(index + 1uz), 1e-5f);
+	}
+}
+
+TEST(LayerRelativePosition, BuildsSAMStyleRelativePositionTable)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto table = sg.AddParam(DataType::Float32, { 3, 1 });
+	const auto relPos = Layer::AddGetRelativePosition(sg, { table, 0 }, 2, 2);
+	sg.SetResults({ relPos });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto result = RunSingleIO(graph, { 10.0f, 20.0f, 30.0f }, { 3, 1 });
+	ASSERT_TRUE(std::ranges::equal(result.Shape().Dims, std::vector<std::size_t>{ 2, 2, 1 }));
+	const std::vector<float> expected{ 20.0f, 10.0f, 30.0f, 20.0f };
+	for (auto index = 0uz; index < expected.size(); ++index)
+	{
+		EXPECT_NEAR(ReadFloat(result, index), expected[index], 1e-5f);
+	}
+}
+
+TEST(LayerRelativePosition, Adds2DRelativePositionBias)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto scores = sg.AddParam(DataType::Float32, { 1, 2, 1, 2, 1 });
+	const auto widthBias = sg.AddParam(DataType::Float32, { 2, 2, 1 });
+	const auto heightBias = sg.AddParam(DataType::Float32, { 1, 1, 1 });
+	const auto biased = Layer::AddRelativePositionBias2D(sg, { scores, 0 }, { widthBias, 0 }, { heightBias, 0 });
+	sg.SetResults({ biased });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto results = RunWithInputs(graph,
+	                            {
+	                                Tensor<CPU>({ 0.0f, 1.0f, 2.0f, 3.0f }, { 1, 2, 1, 2, 1 }),
+	                                Tensor<CPU>({ 10.0f, 20.0f, 30.0f, 40.0f }, { 2, 2, 1 }),
+	                                Tensor<CPU>({ 100.0f }, { 1, 1, 1 }),
+	                            });
+	ASSERT_EQ(results.size(), 1u);
+	const std::vector<float> expected{ 110.0f, 121.0f, 132.0f, 143.0f };
+	for (auto index = 0uz; index < expected.size(); ++index)
+	{
+		EXPECT_NEAR(ReadFloat(results[0], index), expected[index], 1e-5f);
+	}
+}
+
+TEST(LayerSSMConv, MatchesRowwiseDepthwiseConvolution)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto convInput = sg.AddParam(DataType::Float32, { 4, 2, 1 });
+	const auto weight = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto output = Layer::AddSSMConv(sg, { convInput, 0 }, { weight, 0 });
+	sg.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto results = RunWithInputs(graph,
+	                            {
+	                                Tensor<CPU>({ 1.0f, 10.0f,
+	                                             2.0f, 20.0f,
+	                                             3.0f, 30.0f,
+	                                             4.0f, 40.0f },
+	                                            { 4, 2, 1 }),
+	                                Tensor<CPU>({ 0.5f, 1.0f,
+	                                             1.5f, -1.0f },
+	                                            { 2, 2 }),
+	                            });
+	ASSERT_EQ(results.size(), 1u);
+	ASSERT_TRUE(std::ranges::equal(results[0].Shape().Dims, std::vector<std::size_t>{ 2, 3, 1 }));
+	const std::vector<float> expected{ 3.5f, 5.5f, 7.5f, -10.0f, -10.0f, -10.0f };
+	for (auto index = 0uz; index < expected.size(); ++index)
+	{
+		EXPECT_NEAR(ReadFloat(results[0], index), expected[index], 1e-5f);
+	}
 }

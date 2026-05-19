@@ -35,6 +35,30 @@ These surfaces intentionally preserve ggml contracts and should be treated as im
 - Internals: it rewrites through LiteNN `Transpose`, `GetRows`, `Reshape`, and `Add`, but the public shape contract remains tied to ggml expert/token ordering.
 - Reason it is compatibility-only: the helper is shaped around imported MoE routing layout rather than a general-purpose bias-add abstraction.
 
+### `Layer::AddRepeat`
+
+- Purpose: represent ggml `REPEAT` tiling without adding a dedicated repeat node.
+- Shape contract: target rank must be at least the input rank, and each target dimension must be an integer multiple of the corresponding input dimension after leading-one padding.
+- Internals: it rewrites through `Reshape + BroadcastTo + Reshape`, so non-singleton dimensions tile in row-major order.
+
+### `Layer::AddWindowPartition` and `Layer::AddWindowUnpartition`
+
+- Purpose: represent ggml `WIN_PART` / `WIN_UNPART` for vision-style local attention paths.
+- Shape contract: inputs use LiteNN row-major semantic `[channels, width, height, batch]`; partition output is `[channels, window, window, windows * batch]` with zero padding to a multiple of the window size.
+- Reason it is compatibility-only: the helper preserves the ggml/SAM-style channel-width-height-batch convention locally instead of introducing it as a general LiteNN image layout.
+
+### `Layer::AddGetRelativePosition` and `Layer::AddRelativePositionBias2D`
+
+- Purpose: represent ggml `GET_REL_POS` / `ADD_REL_POS` in vision attention lowering.
+- Shape contract: `AddGetRelativePosition` gathers from `[2 * size - 1, channels]` into `[query, key, channels]` for the ggml-compatible `query == key` case. `AddRelativePositionBias2D` adds width and height relative-position bias to scores shaped `[qH, qW, kH, kW, heads]`.
+- Internals: these helpers rewrite through constant `Gather`, `Reshape`, `BroadcastTo`, and `Add`.
+
+### `Layer::AddSSMConv`
+
+- Purpose: represent ggml `SSM_CONV` for Mamba-style depthwise causal convolution input buffers.
+- Shape contract: `convInput=[kernel - 1 + tokens, channels, batch]`, `weight=[kernel, channels]`, result `[channels, tokens, batch]`.
+- Internals: it rewrites through permutation, grouped `Conv2DNode`, and reshaping, keeping the operation on the existing convolution substrate.
+
 ## Practical Rule For New Lowering Work
 
 - If an operator can be expressed with normal LiteNN row-major tensors plus explicit axes or options, keep it as a general-purpose surface.

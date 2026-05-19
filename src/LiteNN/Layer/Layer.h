@@ -26,10 +26,14 @@
 #include <LiteNN/Layer/Permute.h>
 #include <LiteNN/Layer/Pool2D.h>
 #include <LiteNN/Layer/ReLU.h>
+#include <LiteNN/Layer/RelativePosition.h>
+#include <LiteNN/Layer/Repeat.h>
+#include <LiteNN/Layer/Reshape.h>
 #include <LiteNN/Layer/RMSNorm.h>
 #include <LiteNN/Layer/RWKVWKV.h>
 #include <LiteNN/Layer/Roll.h>
 #include <LiteNN/Layer/RoPE.h>
+#include <LiteNN/Layer/SSMConv.h>
 #include <LiteNN/Layer/SSMScan.h>
 #include <LiteNN/Layer/Scan.h>
 #include <LiteNN/Layer/Scatter.h>
@@ -38,5 +42,6 @@
 #include <LiteNN/Layer/SwiGLU.h>
 #include <LiteNN/Layer/TopK.h>
 #include <LiteNN/Layer/Upsample.h>
+#include <LiteNN/Layer/Window.h>
 
 #endif
