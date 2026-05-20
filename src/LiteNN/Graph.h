@@ -1,4 +1,6 @@
 #include <LiteNN/Device.h>
+#include <LiteNN/Metadata.h>
+#include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
 #include <deque>
 #include <memory>
@@ -59,6 +61,14 @@ namespace LiteNN
 			Tensor<PolymorphicDevice> value;
 		};
 
+		// 量化常量载荷：输出原始 storage tensor，同时携带其量化元数据。
+		// 对于 block 格式，storage 通常是 UInt8 raw byte payload，逻辑 shape 在 params.expressedShape 中。
+		struct QuantizedConstantNode
+		{
+			Tensor<PolymorphicDevice> storage;
+			QuantizationParams params;
+		};
+
 		// 引用 Graph 的第 variableIndex 个可训练参数
 		struct VariableRefNode
 		{
@@ -92,6 +102,21 @@ namespace LiteNN
 		{
 			NodeOutput input;
 			DataType targetType;
+		};
+
+		// 将浮点张量量化为 storage tensor。目前执行路径支持 scalar affine int8/uint8。
+		struct QuantizeNode
+		{
+			NodeOutput input;
+			QuantizationParams params;
+		};
+
+		// 将量化 storage tensor 还原到浮点张量。目前执行路径支持 scalar affine int8/uint8。
+		struct DequantizeNode
+		{
+			NodeOutput input;
+			QuantizationParams params;
+			DataType targetType{ DataType::Float32 };
 		};
 
 		// 条件节点：根据 condition 选择执行 thenBranch 或 elseBranch
@@ -161,6 +186,232 @@ namespace LiteNN
 			std::vector<std::size_t> targetShape;
 		};
 
+		// 按 permutation 重排 axes（多维转置）
+		// 约定：output.shape[d] == input.shape[permutation[d]]
+		// permutation 必须是 [0, rank) 的合法置换
+		struct PermuteNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> permutation;
+		};
+
+		// 显式广播到 targetShape，按 trailing dimensions 对齐。
+		// 输入维度必须等于目标维度或为 1；target 可插入前导维。
+		struct BroadcastToNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> targetShape;
+		};
+
+		// 任意轴 padding。lowPads/highPads 长度必须等于输入 rank。
+		struct PadNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			PadMode mode{ PadMode::Constant };
+			double constantValue{ 0.0 };
+		};
+
+		// 沿 axis 做 gather，输出 shape = data[:axis] + indices.shape + data[axis+1:].
+		struct GatherNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+			std::size_t axis;
+		};
+
+		// 沿 axis 写回 updates，输出 shape 与 data 相同。
+		// updates.shape 必须等于 data[:axis] + indices.shape + data[axis+1:]。
+		struct ScatterNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+			NodeOutput updates;
+			std::size_t axis;
+			ScatterMode mode{ ScatterMode::Update };
+		};
+
+		// Inclusive scan along an axis. Sum/max are the primary G5.2 targets;
+		// prod/logsumexp are kept as explicit interface values for future lowering.
+		struct ScanNode
+		{
+			NodeOutput input;
+			std::size_t axis;
+			ScanOp op{ ScanOp::Sum };
+		};
+
+		// Reference selective scan primitive for Mamba-style state-space layers.
+		// state, dt, a, b, c, and optional d must broadcast to state.shape.
+		struct SSMScanNode
+		{
+			NodeOutput state;
+			NodeOutput dt;
+			NodeOutput a;
+			NodeOutput b;
+			NodeOutput c;
+			std::optional<NodeOutput> d;
+		};
+
+		// RWKV-style weighted key/value recurrence. Inputs are key/value/receptance
+		// sequences plus time-decay/time-first parameters broadcast over channels.
+		struct RWKVWKVNode
+		{
+			NodeOutput key;
+			NodeOutput value;
+			NodeOutput receptance;
+			NodeOutput timeDecay;
+			NodeOutput timeFirst;
+		};
+
+		// Numerically stable softmax along one axis.
+		struct SoftmaxNode
+		{
+			NodeOutput input;
+			std::size_t axis;
+		};
+
+		// Hot-path normalization primitive. scale/bias are optional and broadcast
+		// to input.shape. GroupNorm keeps the existing ggml-oriented layout rule:
+		// rank-4 tensors use the last axis as batch and normalize per batch.
+		struct NormalizationNode
+		{
+			NodeOutput input;
+			std::optional<NodeOutput> scale;
+			std::optional<NodeOutput> bias;
+			NormalizationMode mode{ NormalizationMode::LayerNorm };
+			std::size_t axis;
+			std::size_t groupCount{ 1 };
+			double epsilon{ 1e-5 };
+		};
+
+		// Batch matmul with NumPy-style broadcasting on leading dimensions.
+		// lhs shape [..., M, K], rhs shape [..., K, N] -> [..., M, N].
+		struct BatchMatMulNode
+		{
+			NodeOutput lhs;
+			NodeOutput rhs;
+		};
+
+		// ggml-compatible outer-product contraction.
+		// lhs shape [..., M, K], rhs shape [..., N, K] -> [..., M, N].
+		struct OutProdNode
+		{
+			NodeOutput lhs;
+			NodeOutput rhs;
+		};
+
+		// Diffusion-style timestep embedding used by ggml.
+		// timesteps shape [T] -> [T, dim].
+		struct TimestepEmbeddingNode
+		{
+			NodeOutput timesteps;
+			std::size_t dim;
+			std::size_t maxPeriod{ 10000 };
+		};
+
+		// Lower-triangular left solve, matching the currently supported ggml
+		// SOLVE_TRI variant: a [..., N, N], b [..., N, K] -> [..., N, K].
+		struct SolveTriNode
+		{
+			NodeOutput a;
+			NodeOutput b;
+			bool lower{ true };
+			bool unitDiagonal{ false };
+		};
+
+		// Optimizer-only graph helper. Output 0 is the updated parameter;
+		// output 1 is present when momentum > 0 and carries the updated velocity.
+		struct SGDStepNode
+		{
+			NodeOutput parameter;
+			NodeOutput gradient;
+			std::optional<NodeOutput> velocity;
+			double learningRate{ 1e-3 };
+			double momentum{ 0.0 };
+			double weightDecay{ 0.0 };
+			bool nesterov{ false };
+		};
+
+		// AdamW graph helper. Outputs are updated parameter, first moment, and
+		// second moment, keeping optimizer state explicit in the graph.
+		struct AdamWStepNode
+		{
+			NodeOutput parameter;
+			NodeOutput gradient;
+			NodeOutput firstMoment;
+			NodeOutput secondMoment;
+			double learningRate{ 1e-3 };
+			double beta1{ 0.9 };
+			double beta2{ 0.999 };
+			double epsilon{ 1e-8 };
+			double weightDecay{ 0.01 };
+			std::size_t step{ 1 };
+		};
+
+		// Channel-first sliding-window extraction.
+		// Input shape is [batch, channels, spatial...]; output shape is
+		// [batch, outputPositions, channels * product(kernelShape)].
+		struct Im2ColNode
+		{
+			NodeOutput input;
+			std::vector<std::size_t> kernelShape;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+		};
+
+		// Direct 2D channel-first convolution over [batch, channels, height, width].
+		// weight shape is [outChannels, inChannelsPerGroup, kernelHeight, kernelWidth].
+		struct Conv2DNode
+		{
+			NodeOutput input;
+			NodeOutput weight;
+			std::optional<NodeOutput> bias;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			std::size_t groupCount{ 1 };
+		};
+
+		// 2D channel-first transposed convolution over [batch, channels, height, width].
+		// weight shape is [inChannels, outChannelsPerGroup, kernelHeight, kernelWidth].
+		struct ConvTranspose2DNode
+		{
+			NodeOutput input;
+			NodeOutput weight;
+			std::optional<NodeOutput> bias;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> dilations;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			std::vector<std::size_t> outputPads;
+			std::size_t groupCount{ 1 };
+		};
+
+		// 2D channel-first pooling over [batch, channels, height, width].
+		struct Pool2DNode
+		{
+			NodeOutput input;
+			PoolMode mode{ PoolMode::Max };
+			std::vector<std::size_t> kernelShape;
+			std::vector<std::size_t> strides;
+			std::vector<std::size_t> lowPads;
+			std::vector<std::size_t> highPads;
+			bool countIncludePad{ false };
+		};
+
+		// 2D channel-first upsampling/interpolation over [batch, channels, height, width].
+		struct UpsampleNode
+		{
+			NodeOutput input;
+			UpsampleMode mode{ UpsampleMode::Nearest };
+			std::vector<std::size_t> outputSpatialShape;
+			bool alignCorners{ false };
+		};
+
 		// 沿指定轴拼接多个张量
 		// 所有输入除 axis 维度外 shape 必须相同
 		struct ConcatNode
@@ -176,6 +427,30 @@ namespace LiteNN
 			std::size_t axis;
 			std::size_t start;  // 起始索引（含）
 			std::size_t length; // 切片长度
+		};
+
+		// 按第一维做行查找，输出 shape = indices.shape + data.shape[1:]
+		struct GetRowsNode
+		{
+			NodeOutput data;
+			NodeOutput indices;
+		};
+
+		// 沿指定轴对每个剩余位置独立排序，输出对应的 Int32 索引
+		struct ArgsortNode
+		{
+			NodeOutput input;
+			std::size_t axis = 0;
+			SortOrder order;
+		};
+
+		// ggml-compatible MoE helper: 多 expert 矩阵中按 ids 选择对应矩阵，与每个 token 的输入向量做矩阵乘。
+		// 该节点保留 ggml MUL_MAT_ID 的维度约定，并使用 Float32 累加/输出。
+		struct MulMatIdNode
+		{
+			NodeOutput as;
+			NodeOutput b;
+			NodeOutput ids;
 		};
 
 		// 融合操作：语义等价于执行 body 子图，
@@ -218,6 +493,20 @@ namespace LiteNN
 			return std::shared_ptr<Variable>(new Variable(std::move(data)));
 		}
 
+		template <Device D>
+		static std::shared_ptr<Variable> CreateQuantized(Tensor<D> storage, QuantizationParams quantization)
+		{
+			if constexpr (std::same_as<D, PolymorphicDevice>)
+			{
+				return std::shared_ptr<Variable>(new Variable(std::move(storage), std::move(quantization)));
+			}
+			else
+			{
+				return std::shared_ptr<Variable>(
+				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }), std::move(quantization)));
+			}
+		}
+
 		auto& Data(this auto&& self)
 		{
 			return self.data_;
@@ -228,12 +517,34 @@ namespace LiteNN
 			return self.grad_;
 		}
 
+		bool IsQuantized() const
+		{
+			return quantization_.has_value();
+		}
+
+		const std::optional<QuantizationParams>& Quantization() const
+		{
+			return quantization_;
+		}
+
+		void SetQuantization(std::optional<QuantizationParams> quantization)
+		{
+			quantization_ = std::move(quantization);
+		}
+
 	private:
 		Tensor<PolymorphicDevice> data_;
 		Tensor<PolymorphicDevice> grad_;
+		std::optional<QuantizationParams> quantization_;
 
 		Variable(Tensor<PolymorphicDevice> data)
-		    : data_(std::move(data)), grad_(data_.Shape(), data_.DType(), data_.CurDevice())
+		    : Variable(std::move(data), std::nullopt)
+		{
+		}
+
+		Variable(Tensor<PolymorphicDevice> data, std::optional<QuantizationParams> quantization)
+		    : data_(std::move(data)), grad_(data_.Shape(), data_.DType(), data_.CurDevice()),
+		      quantization_(std::move(quantization))
 		{
 		}
 
@@ -241,6 +552,7 @@ namespace LiteNN
 		Variable(Tensor<D> data) : Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }))
 		{
 		}
+
 	};
 
 	// 前向/反向共享的激活值存储槽位
@@ -381,6 +693,11 @@ namespace LiteNN
 			inputNames_ = std::move(names);
 		}
 
+		void SetVariableNames(std::vector<std::string> names)
+		{
+			variableNames_ = std::move(names);
+		}
+
 		void SetOutputNames(std::vector<std::string> names)
 		{
 			outputNames_ = std::move(names);
@@ -395,6 +712,15 @@ namespace LiteNN
 			inputNames_[index] = std::move(name);
 		}
 
+		void SetVariableName(std::size_t index, std::string name)
+		{
+			if (variableNames_.size() <= index)
+			{
+				variableNames_.resize(index + 1);
+			}
+			variableNames_[index] = std::move(name);
+		}
+
 		void SetOutputName(std::size_t index, std::string name)
 		{
 			if (outputNames_.size() <= index)
@@ -402,6 +728,24 @@ namespace LiteNN
 				outputNames_.resize(index + 1);
 			}
 			outputNames_[index] = std::move(name);
+		}
+
+		void SetMetadata(std::vector<ModelMetadataEntry> metadata)
+		{
+			metadata_ = std::move(metadata);
+		}
+
+		void SetMetadataEntry(std::string key, ModelMetadataValue value)
+		{
+			for (auto& entry : metadata_)
+			{
+				if (entry.key == key)
+				{
+					entry.value = std::move(value);
+					return;
+				}
+			}
+			metadata_.push_back({ std::move(key), std::move(value) });
 		}
 
 		SubgraphId Forward() const
@@ -424,6 +768,11 @@ namespace LiteNN
 			return inputNames_;
 		}
 
+		std::span<const std::string> VariableNames() const
+		{
+			return variableNames_;
+		}
+
 		std::span<const std::string> OutputNames() const
 		{
 			return outputNames_;
@@ -432,6 +781,11 @@ namespace LiteNN
 		std::string InputName(std::size_t index) const
 		{
 			return NameOrDefault(inputNames_, index, "input");
+		}
+
+		std::string VariableName(std::size_t index) const
+		{
+			return NameOrDefault(variableNames_, index, "variable");
 		}
 
 		std::string OutputName(std::size_t index) const
@@ -444,9 +798,31 @@ namespace LiteNN
 			return FindName(inputNames_, name);
 		}
 
+		std::optional<std::size_t> FindVariable(std::string_view name) const
+		{
+			return FindName(variableNames_, name);
+		}
+
 		std::optional<std::size_t> FindOutput(std::string_view name) const
 		{
 			return FindName(outputNames_, name);
+		}
+
+		const ModelMetadataEntry* FindMetadata(std::string_view key) const
+		{
+			for (const auto& entry : metadata_)
+			{
+				if (entry.key == key)
+				{
+					return &entry;
+				}
+			}
+			return nullptr;
+		}
+
+		std::span<const ModelMetadataEntry> Metadata() const
+		{
+			return metadata_;
 		}
 
 		TensorSpec InputSpec(std::size_t index) const
@@ -571,7 +947,9 @@ namespace LiteNN
 		std::vector<ActivationSlot> activationSlots_;
 		std::vector<TapeSlot> tapeSlots_;
 		std::vector<std::string> inputNames_;
+		std::vector<std::string> variableNames_;
 		std::vector<std::string> outputNames_;
+		std::vector<ModelMetadataEntry> metadata_;
 	};
 } // namespace LiteNN
 

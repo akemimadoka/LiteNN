@@ -17,7 +17,8 @@ namespace LiteNN
 	template <typename T>
 	concept Device =
 	    requires(T& device, const T& constDevice, DataType type, std::size_t size, ShapeView shape, void* ptr,
-	             void* dst, const void* src1, const void* src2, UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
+	             void* dst, const void* src1, const void* src2, DataType indexType, ShapeView indexShape,
+	             UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
 		    // TODO: 无法过编译，猜测是因为无法表达 type 是一个 constexpr 参数的问题
 		    // typename DeviceTraits<T>::template DataTypeMapping<type>;
 
@@ -57,6 +58,14 @@ namespace LiteNN
 		    } -> std::same_as<void>;
 		    // dst = slice(src, axis, start, length)
 		    { DeviceTraits<T>::DoSliceOp(device, dst, type, shape, src1, size, size, size) } -> std::same_as<void>;
+		    // dst = get_rows(data, indices)
+		    {
+			    DeviceTraits<T>::DoGetRowsOp(device, dst, type, shape, src1, indexType, indexShape, src2)
+		    } -> std::same_as<void>;
+		    // dst = permute(src, permutation)
+		    // permutation[d] 给出输出 axis d 对应的输入 axis（与 numpy/torch 一致）。
+		    // dst.shape[d] == src.shape[permutation[d]]
+		    { DeviceTraits<T>::DoPermuteOp(device, dst, type, shape, src1, shape) } -> std::same_as<void>;
 	    };
 
 	// 擦除了类型的 Device
@@ -128,6 +137,10 @@ namespace LiteNN
 			                        const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) = 0;
 			virtual void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
 			                       std::size_t axis, std::size_t start, std::size_t length) = 0;
+			virtual void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
+			                        DataType indexType, ShapeView indexShape, const void* indices) = 0;
+			virtual void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			                        ShapeView permutation) = 0;
 			virtual bool IsSameDevice(const Interface& other) const = 0;
 		};
 
@@ -206,6 +219,16 @@ namespace LiteNN
 			{
 				DeviceTraits<D>::DoSliceOp(device_, dst, type, srcShape, src, axis, start, length);
 			}
+			void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
+			                DataType indexType, ShapeView indexShape, const void* indices) override
+			{
+				DeviceTraits<D>::DoGetRowsOp(device_, dst, dataType, dataShape, data, indexType, indexShape, indices);
+			}
+			void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
+			                ShapeView permutation) override
+			{
+				DeviceTraits<D>::DoPermuteOp(device_, dst, type, srcShape, src, permutation);
+			}
 			bool IsSameDevice(const Interface& other) const override
 			{
 				if (other.TypeKey() == TypeKey())
@@ -257,6 +280,10 @@ namespace LiteNN
 		                       const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis);
 		static void DoSliceOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 		                      std::size_t axis, std::size_t start, std::size_t length);
+		static void DoGetRowsOp(PolymorphicDevice& device, void* dst, DataType dataType, ShapeView dataShape,
+		                       const void* data, DataType indexType, ShapeView indexShape, const void* indices);
+		static void DoPermuteOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape,
+		                       const void* src, ShapeView permutation);
 	};
 
 	struct CPU
@@ -275,10 +302,22 @@ namespace LiteNN
 				return ^^float;
 			case DataType::Float64:
 				return ^^double;
+			case DataType::Float16:
+				return ^^Float16;
+			case DataType::BFloat16:
+				return ^^BFloat16;
+			case DataType::Float8E4M3:
+				return ^^Float8E4M3;
+			case DataType::Float8E5M2:
+				return ^^Float8E5M2;
 			case DataType::Int32:
 				return ^^int32_t;
 			case DataType::Int64:
 				return ^^int64_t;
+			case DataType::Int8:
+				return ^^int8_t;
+			case DataType::UInt8:
+				return ^^uint8_t;
 			case DataType::Bool:
 				return ^^bool;
 			}
@@ -299,8 +338,7 @@ namespace LiteNN
 
 		static constexpr void* Allocate(CPU& device, DataType type, std::size_t size)
 		{
-			const auto typeSize = EnumDispatch(type, []<DataType type> { return sizeof(DataTypeMapping<type>); });
-			return ::operator new(size * typeSize);
+			return ::operator new(size * ElementByteSize(type));
 		}
 
 		static constexpr void Deallocate(CPU& device, void* ptr, DataType type, std::size_t size)
@@ -476,6 +514,14 @@ namespace LiteNN
 							for (auto i = 0uz; i < totalElements; ++i)
 							{
 								static_cast<ResultType*>(dst)[i] = !static_cast<const T*>(src)[i];
+							}
+							break;
+						}
+						case UnaryOp::Erf: {
+							const auto totalElements = shape.NumElements();
+							for (auto i = 0uz; i < totalElements; ++i)
+							{
+								static_cast<ResultType*>(dst)[i] = std::erf(static_cast<const T*>(src)[i]);
 							}
 							break;
 						}
@@ -772,6 +818,149 @@ namespace LiteNN
 				for (auto o = 0uz; o < outer; ++o)
 				{
 					std::copy_n(srcPtr + o * srcStride + start * inner, dstStride, dstPtr + o * dstStride);
+				}
+			});
+		}
+
+		static constexpr void DoGetRowsOp(CPU& device, void* dst, DataType dataType, ShapeView dataShape,
+		                                  const void* data, DataType indexType, ShapeView indexShape,
+		                                  const void* indices)
+		{
+			if (dataShape.NumDim() == 0)
+			{
+				throw std::runtime_error("GetRows requires a rank >= 1 data tensor");
+			}
+
+			const auto rowCount = dataShape[0];
+			auto rowSize = 1uz;
+			for (auto dim = 1uz; dim < dataShape.NumDim(); ++dim)
+			{
+				rowSize *= dataShape[dim];
+			}
+			const auto indexCount = indexShape.NumElements();
+
+			auto copyRows = [&]<typename T, typename IndexT>() {
+				const auto* dataPtr = static_cast<const T*>(data);
+				const auto* indexPtr = static_cast<const IndexT*>(indices);
+				auto* dstPtr = static_cast<T*>(dst);
+
+				for (auto i = 0uz; i < indexCount; ++i)
+				{
+					const auto rawIndex = indexPtr[i];
+					if constexpr (std::is_signed_v<IndexT>)
+					{
+						if (rawIndex < 0)
+						{
+							throw std::runtime_error("GetRows index out of range");
+						}
+					}
+
+					const auto rowIndex = static_cast<std::size_t>(rawIndex);
+					if (rowIndex >= rowCount)
+					{
+						throw std::runtime_error(
+						    std::format("GetRows index {} out of range for {} rows", rowIndex, rowCount));
+					}
+
+					std::copy_n(dataPtr + rowIndex * rowSize, rowSize, dstPtr + i * rowSize);
+				}
+			};
+
+			EnumDispatch(dataType, [&]<DataType DataTypeValue> {
+				using T = DataTypeMapping<DataTypeValue>;
+				switch (indexType)
+				{
+				case DataType::Int32:
+					copyRows.template operator()<T, std::int32_t>();
+					break;
+				case DataType::Int64:
+					copyRows.template operator()<T, std::int64_t>();
+					break;
+				default:
+					throw std::runtime_error("GetRows indices must have dtype Int32 or Int64");
+				}
+			});
+		}
+
+		static void DoPermuteOp(CPU& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+		                       ShapeView permutation)
+		{
+			const auto rank = srcShape.NumDim();
+			if (permutation.NumDim() != rank)
+			{
+				throw std::runtime_error(std::format(
+				    "Permute permutation rank {} does not match input rank {}", permutation.NumDim(), rank));
+			}
+			if (rank == 0)
+			{
+				EnumDispatch(type, [&]<DataType TypeValue> {
+					using T = DataTypeMapping<TypeValue>;
+					*static_cast<T*>(dst) = *static_cast<const T*>(src);
+				});
+				return;
+			}
+
+			// 验证是合法置换
+			std::vector<bool> seen(rank, false);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				const auto p = permutation[d];
+				if (p >= rank || seen[p])
+				{
+					throw std::runtime_error("Permute permutation must be a valid permutation of [0, rank)");
+				}
+				seen[p] = true;
+			}
+
+			// 计算输入与输出的行主序 stride
+			std::vector<std::size_t> srcStrides(rank, 1uz);
+			for (auto d = rank; d-- > 1;)
+			{
+				srcStrides[d - 1] = srcStrides[d] * srcShape[d];
+			}
+			std::vector<std::size_t> dstShape(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				dstShape[d] = srcShape[permutation[d]];
+			}
+			std::vector<std::size_t> dstStrides(rank, 1uz);
+			for (auto d = rank; d-- > 1;)
+			{
+				dstStrides[d - 1] = dstStrides[d] * dstShape[d];
+			}
+			// permutedSrcStrides[d] = srcStrides[permutation[d]]：在输出 axis d 上走一步，在输入里该走多少元素
+			std::vector<std::size_t> permutedSrcStrides(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				permutedSrcStrides[d] = srcStrides[permutation[d]];
+			}
+
+			const auto total = srcShape.NumElements();
+
+			EnumDispatch(type, [&]<DataType TypeValue> {
+				using T = DataTypeMapping<TypeValue>;
+				const auto* srcPtr = static_cast<const T*>(src);
+				auto* dstPtr = static_cast<T*>(dst);
+
+				std::vector<std::size_t> coord(rank, 0uz);
+				for (auto linear = 0uz; linear < total; ++linear)
+				{
+					auto srcOffset = 0uz;
+					for (auto d = 0uz; d < rank; ++d)
+					{
+						srcOffset += coord[d] * permutedSrcStrides[d];
+					}
+					dstPtr[linear] = srcPtr[srcOffset];
+
+					// 递增输出坐标（行主序）
+					for (auto d = rank; d-- > 0;)
+					{
+						if (++coord[d] < dstShape[d])
+						{
+							break;
+						}
+						coord[d] = 0;
+					}
 				}
 			});
 		}

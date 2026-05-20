@@ -1,6 +1,7 @@
 #include <expected>
 #include <vector>
 
+#include <LiteNN/DType.h>
 #include <LiteNN/Misc.h>
 
 #ifndef LITENN_OPERATORS_H
@@ -26,6 +27,7 @@ namespace LiteNN
 		Transpose,
 
 		LogicalNegation,
+		Erf,
 	};
 
 	enum class BinaryOp
@@ -48,13 +50,51 @@ namespace LiteNN
 		Equal,
 	};
 
-	enum class DataType
+	enum class SortOrder
 	{
-		Float32,
-		Float64,
-		Int32,
-		Int64,
-		Bool,
+		Ascending,
+		Descending,
+	};
+
+	enum class PadMode
+	{
+		Constant,
+		Reflect,
+		Replicate,
+	};
+
+	enum class ScatterMode
+	{
+		Update,
+		Add,
+	};
+
+	enum class ScanOp
+	{
+		Sum,
+		Max,
+		Prod,
+		LogSumExp,
+	};
+
+	enum class NormalizationMode
+	{
+		LayerNorm,
+		RMSNorm,
+		GroupNorm,
+	};
+
+	enum class PoolMode
+	{
+		Max,
+		Average,
+	};
+
+	enum class UpsampleMode
+	{
+		Nearest,
+		Bilinear,
+		Bicubic,
 	};
 
 	template <UnaryOp Op>

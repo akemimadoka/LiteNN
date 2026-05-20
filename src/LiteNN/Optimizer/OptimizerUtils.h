@@ -60,31 +60,13 @@ namespace LiteNN::Optimizer::Detail
 		return backwardResults[inputGradientCount + variableIndex];
 	}
 
-	inline std::size_t ElementByteSize(DataType dtype)
-	{
-		switch (dtype)
-		{
-		case DataType::Float32:
-			return sizeof(float);
-		case DataType::Float64:
-			return sizeof(double);
-		case DataType::Int32:
-			return sizeof(std::int32_t);
-		case DataType::Int64:
-			return sizeof(std::int64_t);
-		case DataType::Bool:
-			return sizeof(bool);
-		}
-		throw std::runtime_error("Invalid data type");
-	}
-
 	inline void ZeroTensor(Tensor<PolymorphicDevice>& tensor)
 	{
 		if (!tensor.CurDevice().template Is<CPU>())
 		{
 			throw std::runtime_error("CPU training utilities currently require CPU-backed tensors");
 		}
-		std::memset(tensor.RawData(), 0, tensor.AllocatedNumElements() * ElementByteSize(tensor.DType()));
+		std::memset(tensor.RawData(), 0, tensor.AllocatedNumElements() * LiteNN::ElementByteSize(tensor.DType()));
 	}
 } // namespace LiteNN::Optimizer::Detail
 

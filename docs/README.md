@@ -1,6 +1,7 @@
 # LiteNN 文档索引
 
 - [Architecture.md](Architecture.md): 核心架构、Roadmap、Pass/Runtime/AOT 设计概览。
+- [GGMLCompatibility.md](GGMLCompatibility.md): GGUF / llama.cpp lowering 中哪些 surface 是通用 LiteNN 语义，哪些是兼容性专用约定。
 - [PerformanceAnalysis.md](PerformanceAnalysis.md): 当前 CPU AOT 性能路径与瓶颈分析。
 - [PerformanceOptimizationRoadmap.md](PerformanceOptimizationRoadmap.md): 基于 benchmark 和性能分析拆出的优化执行路线图。
 - [Versioning.md](Versioning.md): 版本治理、兼容策略、弃用规则、序列化与 image 迁移约定。

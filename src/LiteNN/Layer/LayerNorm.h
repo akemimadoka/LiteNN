@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/Layer/Normalization.h>
 
 #include <stdexcept>
 #include <utility>
@@ -48,61 +49,15 @@ namespace LiteNN::Layer
 			    "LayerNorm input must be 2D with shape [batch, featureSize] and matching dtype");
 		}
 
-		const std::size_t batch = info.shape[0];
 		const std::size_t features = info.shape[1];
-		constexpr std::size_t kNormAxis = 1;
-
-		// 归约后的形状：[batch]（ReduceOp 移除 axis 维度）
-		const std::vector<std::size_t> reducedShape{ batch };
-		// 广播用形状：[batch, 1]
-		const std::vector<std::size_t> broadcastShape{ batch, 1 };
 		// 归一化参数形状：[1, features]
 		const std::vector<std::size_t> paramShape{ 1, features };
-
-		// --- 1. 均值 ---
-		const auto mean = subgraph.AddNode(ReduceOpNode{ ReduceOp::Mean, input, kNormAxis },
-		                                   { OutputInfo{ info.dtype, reducedShape } });
-		const auto meanBc = subgraph.AddNode(ReshapeNode{ { mean, 0 }, broadcastShape },
-		                                     { OutputInfo{ info.dtype, broadcastShape } });
-
-		// --- 2. 中心化：x - mean ---
-		const auto xCentered = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, input, { meanBc, 0 } },
-		                                        { OutputInfo{ info.dtype, info.shape } });
-
-		// --- 3. 方差：mean((x - mean)²) ---
-		const auto xCenteredSq =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { xCentered, 0 }, { xCentered, 0 } },
-		                     { OutputInfo{ info.dtype, info.shape } });
-		const auto variance = subgraph.AddNode(ReduceOpNode{ ReduceOp::Mean, { xCenteredSq, 0 }, kNormAxis },
-		                                       { OutputInfo{ info.dtype, reducedShape } });
-		const auto varianceBc = subgraph.AddNode(ReshapeNode{ { variance, 0 }, broadcastShape },
-		                                         { OutputInfo{ info.dtype, broadcastShape } });
-
-		// --- 4. 标准差：sqrt(variance + eps) ---
-		const auto epsC =
-		    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(broadcastShape, info.dtype, layer.eps));
-		const auto varPlusEps =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { varianceBc, 0 }, { epsC, 0 } },
-		                     { OutputInfo{ info.dtype, broadcastShape } });
-		const auto stdDev =
-		    subgraph.AddNode(UnaryOpNode{ UnaryOp::Sqrt, { varPlusEps, 0 } }, { OutputInfo{ info.dtype, broadcastShape } });
-
-		// --- 5. 归一化 ---
-		const auto xNorm = subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, { xCentered, 0 }, { stdDev, 0 } },
-		                                    { OutputInfo{ info.dtype, info.shape } });
-
-		// --- 6. 仿射变换：gamma * xNorm + beta ---
 		const auto gamma = subgraph.AddNode(VariableRefNode{ layer.gammaVariable },
 		                                    { OutputInfo{ layer.dtype, paramShape } });
 		const auto beta = subgraph.AddNode(VariableRefNode{ layer.betaVariable },
 		                                   { OutputInfo{ layer.dtype, paramShape } });
-
-		const auto scaled = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { gamma, 0 }, { xNorm, 0 } },
-		                                     { OutputInfo{ info.dtype, info.shape } });
-		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { beta, 0 } },
-		                                     { OutputInfo{ info.dtype, info.shape } });
-
-		return { result, 0 };
+		return AddNormalization(subgraph, input, NormalizationMode::LayerNorm, 1, layer.eps,
+		                        NodeOutput{ gamma, 0 }, NodeOutput{ beta, 0 });
 	}
 } // namespace LiteNN::Layer
 

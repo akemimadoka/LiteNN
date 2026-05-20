@@ -47,7 +47,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, VariableRefNode> || std::same_as<T, LoadActivationNode>)
+				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                  std::same_as<T, LoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -63,6 +64,14 @@ namespace LiteNN
 				    {
 					    return CastNode{ remap(n.input), n.targetType };
 				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return QuantizeNode{ remap(n.input), n.params };
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
+				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {
 					    return ReduceOpNode{ n.op, remap(n.input), n.axis };
@@ -70,6 +79,113 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    return ReshapeNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ remap(n.input), n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ remap(n.input), n.lowPads, n.highPads, n.mode, n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return GatherNode{ remap(n.data), remap(n.indices), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return ScatterNode{ remap(n.data), remap(n.indices), remap(n.updates), n.axis, n.mode };
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return ScanNode{ remap(n.input), n.axis, n.op };
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
+					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
+					                        remap(n.timeDecay), remap(n.timeFirst) };
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return SoftmaxNode{ remap(n.input), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return NormalizationNode{ remap(n.input),
+					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					                              n.mode, n.axis, n.groupCount, n.epsilon };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ remap(n.timesteps), n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ remap(n.a), remap(n.b), n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
+					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
+					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
+					                          n.epsilon, n.weightDecay, n.step };
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
+					                       n.lowPads, n.highPads };
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    return Conv2DNode{ remap(n.input), remap(n.weight),
+					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    return ConvTranspose2DNode{
+					        remap(n.input),
+					        remap(n.weight),
+					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.outputPads,
+					        n.groupCount
+					    };
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
+					                       n.lowPads, n.highPads, n.countIncludePad };
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    return UpsampleNode{ remap(n.input), n.mode, n.outputSpatialShape, n.alignCorners };
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -83,6 +199,18 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return SliceNode{ remap(n.input), n.axis, n.start, n.length };
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ remap(n.data), remap(n.indices) };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ remap(n.input), n.axis, n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ remap(n.as), remap(n.b), remap(n.ids) };
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {

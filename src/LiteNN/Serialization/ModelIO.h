@@ -23,7 +23,21 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 2;
+		constexpr std::uint32_t kModelVersion = 18;
+
+		enum class MetadataValueKind : std::uint32_t
+		{
+			Int64 = 0,
+			UInt64,
+			Float64,
+			Bool,
+			String,
+			Int64List,
+			UInt64List,
+			Float64List,
+			BoolList,
+			StringList,
+		};
 
 		enum class NodeKind : std::uint32_t
 		{
@@ -45,25 +59,34 @@ namespace LiteNN::Serialization
 			Concat,
 			Slice,
 			FusedOp,
+			QuantizedConstant,
+			Quantize,
+			Dequantize,
+			GetRows,
+			Argsort,
+			MulMatId,
+			Permute,
+			BroadcastTo,
+			Pad,
+			Gather,
+			Scatter,
+			Scan,
+			SSMScan,
+			RWKVWKV,
+			Softmax,
+			Normalization,
+			BatchMatMul,
+			Im2Col,
+			Conv2D,
+			Pool2D,
+			ConvTranspose2D,
+			Upsample,
+			OutProd,
+			TimestepEmbedding,
+			SolveTri,
+			SGDStep,
+			AdamWStep,
 		};
-
-		inline std::size_t ElementByteSize(DataType dtype)
-		{
-			switch (dtype)
-			{
-			case DataType::Float32:
-				return sizeof(float);
-			case DataType::Float64:
-				return sizeof(double);
-			case DataType::Int32:
-				return sizeof(std::int32_t);
-			case DataType::Int64:
-				return sizeof(std::int64_t);
-			case DataType::Bool:
-				return sizeof(bool);
-			}
-			throw std::runtime_error("Invalid data type");
-		}
 
 		inline void EnsureWrite(const std::ostream& out)
 		{
@@ -115,6 +138,203 @@ namespace LiteNN::Serialization
 		inline DataType ReadDataType(std::istream& in)
 		{
 			return static_cast<DataType>(ReadScalar<std::uint32_t>(in));
+		}
+
+		inline void WriteFloatList(std::ostream& out, std::span<const float> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<float> ReadFloatList(std::istream& in)
+		{
+			std::vector<float> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<float>(in);
+			}
+			return values;
+		}
+
+		inline void WriteI32List(std::ostream& out, std::span<const std::int32_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::int32_t> ReadI32List(std::istream& in)
+		{
+			std::vector<std::int32_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::int32_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteI64List(std::ostream& out, std::span<const std::int64_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::int64_t> ReadI64List(std::istream& in)
+		{
+			std::vector<std::int64_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::int64_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteU64List(std::ostream& out, std::span<const std::uint64_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<std::uint64_t> ReadU64List(std::istream& in)
+		{
+			std::vector<std::uint64_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<std::uint64_t>(in);
+			}
+			return values;
+		}
+
+		inline void WriteF64List(std::ostream& out, std::span<const double> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, value);
+			}
+		}
+
+		inline std::vector<double> ReadF64List(std::istream& in)
+		{
+			std::vector<double> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadScalar<double>(in);
+			}
+			return values;
+		}
+
+		inline void WriteBoolList(std::ostream& out, const std::vector<bool>& values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteScalar(out, static_cast<std::uint8_t>(value ? 1 : 0));
+			}
+		}
+
+		inline std::vector<bool> ReadBoolList(std::istream& in)
+		{
+			std::vector<bool> values(ReadSize(in));
+			for (std::size_t i = 0; i < values.size(); ++i)
+			{
+				const auto value = ReadScalar<std::uint8_t>(in);
+				if (value > 1)
+				{
+					throw std::runtime_error("Invalid boolean list value in LiteNN model metadata");
+				}
+				values[i] = value != 0;
+			}
+			return values;
+		}
+
+		inline void WriteSizeList(std::ostream& out, std::span<const std::size_t> values)
+		{
+			WriteSize(out, values.size());
+			for (const auto value : values)
+			{
+				WriteSize(out, value);
+			}
+		}
+
+		inline std::vector<std::size_t> ReadSizeList(std::istream& in)
+		{
+			std::vector<std::size_t> values(ReadSize(in));
+			for (auto& value : values)
+			{
+				value = ReadSize(in);
+			}
+			return values;
+		}
+
+		inline void WriteQuantizationParams(std::ostream& out, const QuantizationParams& params)
+		{
+			WriteScalar(out, static_cast<std::uint32_t>(params.scheme));
+			WriteScalar(out, static_cast<std::uint32_t>(params.granularity));
+			WriteScalar(out, static_cast<std::uint32_t>(params.blockFormat));
+			WriteDataType(out, params.storageType);
+			WriteDataType(out, params.expressedType);
+			WriteScalar(out, params.axis);
+			WriteSize(out, params.groupSize);
+			WriteFloatList(out, params.scales);
+			WriteI32List(out, params.zeroPoints);
+			WriteSizeList(out, params.expressedShape);
+		}
+
+		inline QuantizationParams ReadQuantizationParams(std::istream& in, std::uint32_t version)
+		{
+			QuantizationParams params;
+			params.scheme = static_cast<QuantizationScheme>(ReadScalar<std::uint32_t>(in));
+			params.granularity = static_cast<QuantizationGranularity>(ReadScalar<std::uint32_t>(in));
+			params.blockFormat = static_cast<QuantizedBlockFormat>(ReadScalar<std::uint32_t>(in));
+			params.storageType = ReadDataType(in);
+			params.expressedType = ReadDataType(in);
+			params.axis = ReadScalar<std::int64_t>(in);
+			params.groupSize = ReadSize(in);
+			params.scales = ReadFloatList(in);
+			params.zeroPoints = ReadI32List(in);
+			if (version >= 5)
+			{
+				params.expressedShape = ReadSizeList(in);
+			}
+			return params;
+		}
+
+		inline void WriteOptionalQuantizationParams(std::ostream& out,
+		                                            const std::optional<QuantizationParams>& params)
+		{
+			WriteScalar(out, static_cast<std::uint8_t>(params.has_value() ? 1 : 0));
+			if (!params)
+			{
+				return;
+			}
+			WriteQuantizationParams(out, *params);
+		}
+
+		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in,
+		                                                                        std::uint32_t version)
+		{
+			const auto hasValue = ReadScalar<std::uint8_t>(in);
+			if (hasValue == 0)
+			{
+				return std::nullopt;
+			}
+			if (hasValue != 1)
+			{
+				throw std::runtime_error("Invalid quantization metadata presence flag");
+			}
+			return ReadQuantizationParams(in, version);
 		}
 
 		inline void WriteShape(std::ostream& out, std::span<const std::size_t> shape)
@@ -170,6 +390,121 @@ namespace LiteNN::Serialization
 			return values;
 		}
 
+		inline void WriteMetadataValue(std::ostream& out, const ModelMetadataValue& value)
+		{
+			std::visit(
+			    [&](const auto& current) {
+				    using T = std::decay_t<decltype(current)>;
+				    if constexpr (std::same_as<T, std::int64_t>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Int64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::uint64_t>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::UInt64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, double>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Float64));
+					    WriteScalar(out, current);
+				    }
+				    else if constexpr (std::same_as<T, bool>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Bool));
+					    WriteScalar(out, static_cast<std::uint8_t>(current ? 1 : 0));
+				    }
+				    else if constexpr (std::same_as<T, std::string>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::String));
+					    WriteString(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::int64_t>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Int64List));
+					    WriteI64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::uint64_t>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::UInt64List));
+					    WriteU64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<double>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::Float64List));
+					    WriteF64List(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<bool>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::BoolList));
+					    WriteBoolList(out, current);
+				    }
+				    else if constexpr (std::same_as<T, std::vector<std::string>>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(MetadataValueKind::StringList));
+					    WriteStringList(out, current);
+				    }
+			    },
+			    value);
+		}
+
+		inline ModelMetadataValue ReadMetadataValue(std::istream& in)
+		{
+			const auto kind = static_cast<MetadataValueKind>(ReadScalar<std::uint32_t>(in));
+			switch (kind)
+			{
+			case MetadataValueKind::Int64:
+				return ReadScalar<std::int64_t>(in);
+			case MetadataValueKind::UInt64:
+				return ReadScalar<std::uint64_t>(in);
+			case MetadataValueKind::Float64:
+				return ReadScalar<double>(in);
+			case MetadataValueKind::Bool: {
+				const auto value = ReadScalar<std::uint8_t>(in);
+				if (value > 1)
+				{
+					throw std::runtime_error("Invalid boolean value in LiteNN model metadata");
+				}
+				return value != 0;
+			}
+			case MetadataValueKind::String:
+				return ReadString(in);
+			case MetadataValueKind::Int64List:
+				return ReadI64List(in);
+			case MetadataValueKind::UInt64List:
+				return ReadU64List(in);
+			case MetadataValueKind::Float64List:
+				return ReadF64List(in);
+			case MetadataValueKind::BoolList:
+				return ReadBoolList(in);
+			case MetadataValueKind::StringList:
+				return ReadStringList(in);
+			}
+			throw std::runtime_error("LiteNN model contains an unknown metadata value kind");
+		}
+
+		inline void WriteMetadataEntries(std::ostream& out, std::span<const ModelMetadataEntry> entries)
+		{
+			WriteSize(out, entries.size());
+			for (const auto& entry : entries)
+			{
+				WriteString(out, entry.key);
+				WriteMetadataValue(out, entry.value);
+			}
+		}
+
+		inline std::vector<ModelMetadataEntry> ReadMetadataEntries(std::istream& in)
+		{
+			std::vector<ModelMetadataEntry> entries(ReadSize(in));
+			for (auto& entry : entries)
+			{
+				entry.key = ReadString(in);
+				entry.value = ReadMetadataValue(in);
+			}
+			return entries;
+		}
+
 		inline void WriteNodeOutput(std::ostream& out, NodeOutput output)
 		{
 			WriteSize(out, output.node);
@@ -179,6 +514,29 @@ namespace LiteNN::Serialization
 		inline NodeOutput ReadNodeOutput(std::istream& in)
 		{
 			return { ReadSize(in), ReadSize(in) };
+		}
+
+		inline void WriteOptionalNodeOutput(std::ostream& out, const std::optional<NodeOutput>& output)
+		{
+			WriteScalar(out, static_cast<std::uint8_t>(output.has_value() ? 1 : 0));
+			if (output)
+			{
+				WriteNodeOutput(out, *output);
+			}
+		}
+
+		inline std::optional<NodeOutput> ReadOptionalNodeOutput(std::istream& in)
+		{
+			const auto hasValue = ReadScalar<std::uint8_t>(in);
+			if (hasValue == 0)
+			{
+				return std::nullopt;
+			}
+			if (hasValue != 1)
+			{
+				throw std::runtime_error("Invalid optional NodeOutput flag in LiteNN model");
+			}
+			return ReadNodeOutput(in);
 		}
 
 		inline void WriteNodeOutputList(std::ostream& out, std::span<const NodeOutput> outputs)
@@ -236,7 +594,7 @@ namespace LiteNN::Serialization
 			auto cpuTensor = tensor.CopyToDevice(CPU{});
 			WriteDataType(out, cpuTensor.DType());
 			WriteShape(out, cpuTensor.Shape().Dims);
-			const auto byteCount = cpuTensor.NumElements() * ElementByteSize(cpuTensor.DType());
+			const auto byteCount = cpuTensor.NumElements() * LiteNN::ElementByteSize(cpuTensor.DType());
 			out.write(static_cast<const char*>(cpuTensor.RawData()), static_cast<std::streamsize>(byteCount));
 			EnsureWrite(out);
 		}
@@ -246,7 +604,7 @@ namespace LiteNN::Serialization
 			const auto dtype = ReadDataType(in);
 			const auto shape = ReadShape(in);
 			Tensor<CPU> tensor(Uninitialized, ShapeView{ shape }, dtype, CPU{});
-			const auto byteCount = tensor.NumElements() * ElementByteSize(dtype);
+			const auto byteCount = tensor.NumElements() * LiteNN::ElementByteSize(dtype);
 			in.read(static_cast<char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
 			EnsureRead(in);
 			return tensor;
@@ -267,6 +625,12 @@ namespace LiteNN::Serialization
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Constant));
 					    WriteTensor(out, node.value);
+				    }
+				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::QuantizedConstant));
+					    WriteTensor(out, node.storage);
+					    WriteQuantizationParams(out, node.params);
 				    }
 				    else if constexpr (std::same_as<T, VariableRefNode>)
 				    {
@@ -296,6 +660,19 @@ namespace LiteNN::Serialization
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Cast));
 					    WriteNodeOutput(out, node.input);
+					    WriteDataType(out, node.targetType);
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Quantize));
+					    WriteNodeOutput(out, node.input);
+					    WriteQuantizationParams(out, node.params);
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Dequantize));
+					    WriteNodeOutput(out, node.input);
+					    WriteQuantizationParams(out, node.params);
 					    WriteDataType(out, node.targetType);
 				    }
 				    else if constexpr (std::same_as<T, CondNode>)
@@ -348,6 +725,192 @@ namespace LiteNN::Serialization
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.targetShape);
 				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Permute));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.permutation);
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BroadcastTo));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.targetShape);
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pad));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteScalar(out, node.constantValue);
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Gather));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+					    WriteSize(out, node.axis);
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scatter));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+					    WriteNodeOutput(out, node.updates);
+					    WriteSize(out, node.axis);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scan));
+					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SSMScan));
+					    WriteNodeOutput(out, node.state);
+					    WriteNodeOutput(out, node.dt);
+					    WriteNodeOutput(out, node.a);
+					    WriteNodeOutput(out, node.b);
+					    WriteNodeOutput(out, node.c);
+					    WriteOptionalNodeOutput(out, node.d);
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::RWKVWKV));
+					    WriteNodeOutput(out, node.key);
+					    WriteNodeOutput(out, node.value);
+					    WriteNodeOutput(out, node.receptance);
+					    WriteNodeOutput(out, node.timeDecay);
+					    WriteNodeOutput(out, node.timeFirst);
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Softmax));
+					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Normalization));
+					    WriteNodeOutput(out, node.input);
+					    WriteOptionalNodeOutput(out, node.scale);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteSize(out, node.axis);
+					    WriteSize(out, node.groupCount);
+					    WriteScalar(out, node.epsilon);
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BatchMatMul));
+					    WriteNodeOutput(out, node.lhs);
+					    WriteNodeOutput(out, node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::OutProd));
+					    WriteNodeOutput(out, node.lhs);
+					    WriteNodeOutput(out, node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::TimestepEmbedding));
+					    WriteNodeOutput(out, node.timesteps);
+					    WriteSize(out, node.dim);
+					    WriteSize(out, node.maxPeriod);
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SolveTri));
+					    WriteNodeOutput(out, node.a);
+					    WriteNodeOutput(out, node.b);
+					    WriteScalar(out, node.lower);
+					    WriteScalar(out, node.unitDiagonal);
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SGDStep));
+					    WriteNodeOutput(out, node.parameter);
+					    WriteNodeOutput(out, node.gradient);
+					    WriteOptionalNodeOutput(out, node.velocity);
+					    WriteScalar(out, node.learningRate);
+					    WriteScalar(out, node.momentum);
+					    WriteScalar(out, node.weightDecay);
+					    WriteScalar(out, node.nesterov);
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::AdamWStep));
+					    WriteNodeOutput(out, node.parameter);
+					    WriteNodeOutput(out, node.gradient);
+					    WriteNodeOutput(out, node.firstMoment);
+					    WriteNodeOutput(out, node.secondMoment);
+					    WriteScalar(out, node.learningRate);
+					    WriteScalar(out, node.beta1);
+					    WriteScalar(out, node.beta2);
+					    WriteScalar(out, node.epsilon);
+					    WriteScalar(out, node.weightDecay);
+					    WriteSize(out, node.step);
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Im2Col));
+					    WriteNodeOutput(out, node.input);
+					    WriteShape(out, node.kernelShape);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Conv2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteNodeOutput(out, node.weight);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteSize(out, node.groupCount);
+				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::ConvTranspose2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteNodeOutput(out, node.weight);
+					    WriteOptionalNodeOutput(out, node.bias);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.dilations);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteShape(out, node.outputPads);
+					    WriteSize(out, node.groupCount);
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pool2D));
+					    WriteNodeOutput(out, node.input);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteShape(out, node.kernelShape);
+					    WriteShape(out, node.strides);
+					    WriteShape(out, node.lowPads);
+					    WriteShape(out, node.highPads);
+					    WriteScalar(out, node.countIncludePad);
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Upsample));
+					    WriteNodeOutput(out, node.input);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
+					    WriteShape(out, node.outputSpatialShape);
+					    WriteScalar(out, node.alignCorners);
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Concat));
@@ -362,6 +925,26 @@ namespace LiteNN::Serialization
 					    WriteSize(out, node.start);
 					    WriteSize(out, node.length);
 				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::GetRows));
+					    WriteNodeOutput(out, node.data);
+					    WriteNodeOutput(out, node.indices);
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Argsort));
+					    WriteNodeOutput(out, node.input);
+					    WriteSize(out, node.axis);
+					    WriteScalar(out, static_cast<std::uint32_t>(node.order));
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::MulMatId));
+					    WriteNodeOutput(out, node.as);
+					    WriteNodeOutput(out, node.b);
+					    WriteNodeOutput(out, node.ids);
+				    }
 				    else if constexpr (std::same_as<T, FusedOpNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::FusedOp));
@@ -373,7 +956,7 @@ namespace LiteNN::Serialization
 			    entry.node);
 		}
 
-		inline NodeVariant ReadNodePayload(std::istream& in)
+		inline NodeVariant ReadNodePayload(std::istream& in, std::uint32_t version)
 		{
 			const auto kind = static_cast<NodeKind>(ReadScalar<std::uint32_t>(in));
 			switch (kind)
@@ -382,6 +965,11 @@ namespace LiteNN::Serialization
 				return ParamRefNode{ ReadSize(in) };
 			case NodeKind::Constant:
 				return ConstantNode{ ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }) };
+			case NodeKind::QuantizedConstant: {
+				auto storage = ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} });
+				auto params = ReadQuantizationParams(in, version);
+				return QuantizedConstantNode{ std::move(storage), std::move(params) };
+			}
 			case NodeKind::VariableRef:
 				return VariableRefNode{ ReadSize(in) };
 			case NodeKind::UnaryOp: {
@@ -401,6 +989,16 @@ namespace LiteNN::Serialization
 			case NodeKind::Cast: {
 				const auto input = ReadNodeOutput(in);
 				return CastNode{ input, ReadDataType(in) };
+			}
+			case NodeKind::Quantize: {
+				const auto input = ReadNodeOutput(in);
+				auto params = ReadQuantizationParams(in, version);
+				return QuantizeNode{ input, std::move(params) };
+			}
+			case NodeKind::Dequantize: {
+				const auto input = ReadNodeOutput(in);
+				auto params = ReadQuantizationParams(in, version);
+				return DequantizeNode{ input, std::move(params), ReadDataType(in) };
 			}
 			case NodeKind::Cond: {
 				const auto condition = ReadNodeOutput(in);
@@ -434,6 +1032,173 @@ namespace LiteNN::Serialization
 				const auto input = ReadNodeOutput(in);
 				return ReshapeNode{ input, ReadShape(in) };
 			}
+			case NodeKind::Permute: {
+				const auto input = ReadNodeOutput(in);
+				return PermuteNode{ input, ReadShape(in) };
+			}
+			case NodeKind::BroadcastTo: {
+				const auto input = ReadNodeOutput(in);
+				return BroadcastToNode{ input, ReadShape(in) };
+			}
+			case NodeKind::Pad: {
+				const auto input = ReadNodeOutput(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto mode = static_cast<PadMode>(ReadScalar<std::uint32_t>(in));
+				const auto constantValue = ReadScalar<double>(in);
+				return PadNode{ input, std::move(lowPads), std::move(highPads), mode, constantValue };
+			}
+			case NodeKind::Gather: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				return GatherNode{ data, indices, ReadSize(in) };
+			}
+			case NodeKind::Scatter: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				const auto updates = ReadNodeOutput(in);
+				const auto axis = ReadSize(in);
+				const auto mode = static_cast<ScatterMode>(ReadScalar<std::uint32_t>(in));
+				return ScatterNode{ data, indices, updates, axis, mode };
+			}
+			case NodeKind::Scan: {
+				const auto input = ReadNodeOutput(in);
+				const auto axis = ReadSize(in);
+				const auto op = static_cast<ScanOp>(ReadScalar<std::uint32_t>(in));
+				return ScanNode{ input, axis, op };
+			}
+			case NodeKind::SSMScan: {
+				const auto state = ReadNodeOutput(in);
+				const auto dt = ReadNodeOutput(in);
+				const auto a = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto c = ReadNodeOutput(in);
+				return SSMScanNode{ state, dt, a, b, c, ReadOptionalNodeOutput(in) };
+			}
+			case NodeKind::RWKVWKV: {
+				const auto key = ReadNodeOutput(in);
+				const auto value = ReadNodeOutput(in);
+				const auto receptance = ReadNodeOutput(in);
+				const auto timeDecay = ReadNodeOutput(in);
+				const auto timeFirst = ReadNodeOutput(in);
+				return RWKVWKVNode{ key, value, receptance, timeDecay, timeFirst };
+			}
+			case NodeKind::Softmax: {
+				const auto input = ReadNodeOutput(in);
+				return SoftmaxNode{ input, ReadSize(in) };
+			}
+			case NodeKind::Normalization: {
+				const auto input = ReadNodeOutput(in);
+				auto scale = ReadOptionalNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				const auto mode = static_cast<NormalizationMode>(ReadScalar<std::uint32_t>(in));
+				const auto axis = ReadSize(in);
+				const auto groupCount = ReadSize(in);
+				const auto epsilon = ReadScalar<double>(in);
+				return NormalizationNode{ input, std::move(scale), std::move(bias), mode, axis, groupCount, epsilon };
+			}
+			case NodeKind::BatchMatMul: {
+				const auto lhs = ReadNodeOutput(in);
+				const auto rhs = ReadNodeOutput(in);
+				return BatchMatMulNode{ lhs, rhs };
+			}
+			case NodeKind::OutProd: {
+				const auto lhs = ReadNodeOutput(in);
+				const auto rhs = ReadNodeOutput(in);
+				return OutProdNode{ lhs, rhs };
+			}
+			case NodeKind::TimestepEmbedding: {
+				const auto timesteps = ReadNodeOutput(in);
+				const auto dim = ReadSize(in);
+				const auto maxPeriod = ReadSize(in);
+				return TimestepEmbeddingNode{ timesteps, dim, maxPeriod };
+			}
+			case NodeKind::SolveTri: {
+				const auto a = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto lower = ReadScalar<bool>(in);
+				const auto unitDiagonal = ReadScalar<bool>(in);
+				return SolveTriNode{ a, b, lower, unitDiagonal };
+			}
+			case NodeKind::SGDStep: {
+				const auto parameter = ReadNodeOutput(in);
+				const auto gradient = ReadNodeOutput(in);
+				auto velocity = ReadOptionalNodeOutput(in);
+				const auto learningRate = ReadScalar<double>(in);
+				const auto momentum = ReadScalar<double>(in);
+				const auto weightDecay = ReadScalar<double>(in);
+				const auto nesterov = ReadScalar<bool>(in);
+				return SGDStepNode{ parameter, gradient, std::move(velocity), learningRate,
+				                    momentum, weightDecay, nesterov };
+			}
+			case NodeKind::AdamWStep: {
+				const auto parameter = ReadNodeOutput(in);
+				const auto gradient = ReadNodeOutput(in);
+				const auto firstMoment = ReadNodeOutput(in);
+				const auto secondMoment = ReadNodeOutput(in);
+				const auto learningRate = ReadScalar<double>(in);
+				const auto beta1 = ReadScalar<double>(in);
+				const auto beta2 = ReadScalar<double>(in);
+				const auto epsilon = ReadScalar<double>(in);
+				const auto weightDecay = ReadScalar<double>(in);
+				const auto step = ReadSize(in);
+				return AdamWStepNode{ parameter, gradient, firstMoment, secondMoment, learningRate,
+				                      beta1, beta2, epsilon, weightDecay, step };
+			}
+			case NodeKind::Im2Col: {
+				const auto input = ReadNodeOutput(in);
+				auto kernelShape = ReadShape(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				return Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
+				                   std::move(lowPads), std::move(highPads) };
+			}
+			case NodeKind::Conv2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto weight = ReadNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto groupCount = ReadSize(in);
+				return Conv2DNode{ input, weight, std::move(bias), std::move(strides), std::move(dilations),
+				                   std::move(lowPads), std::move(highPads), groupCount };
+			}
+			case NodeKind::ConvTranspose2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto weight = ReadNodeOutput(in);
+				auto bias = ReadOptionalNodeOutput(in);
+				auto strides = ReadShape(in);
+				auto dilations = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				auto outputPads = ReadShape(in);
+				const auto groupCount = ReadSize(in);
+				return ConvTranspose2DNode{ input, weight, std::move(bias), std::move(strides),
+				                            std::move(dilations), std::move(lowPads), std::move(highPads),
+				                            std::move(outputPads), groupCount };
+			}
+			case NodeKind::Pool2D: {
+				const auto input = ReadNodeOutput(in);
+				const auto mode = static_cast<PoolMode>(ReadScalar<std::uint32_t>(in));
+				auto kernelShape = ReadShape(in);
+				auto strides = ReadShape(in);
+				auto lowPads = ReadShape(in);
+				auto highPads = ReadShape(in);
+				const auto countIncludePad = ReadScalar<bool>(in);
+				return Pool2DNode{ input, mode, std::move(kernelShape), std::move(strides), std::move(lowPads),
+				                   std::move(highPads), countIncludePad };
+			}
+			case NodeKind::Upsample: {
+				const auto input = ReadNodeOutput(in);
+				const auto mode = static_cast<UpsampleMode>(ReadScalar<std::uint32_t>(in));
+				auto outputSpatialShape = ReadShape(in);
+				const auto alignCorners = ReadScalar<bool>(in);
+				return UpsampleNode{ input, mode, std::move(outputSpatialShape), alignCorners };
+			}
 			case NodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);
 				return ConcatNode{ std::move(inputs), ReadSize(in) };
@@ -443,6 +1208,23 @@ namespace LiteNN::Serialization
 				const auto axis = ReadSize(in);
 				const auto start = ReadSize(in);
 				return SliceNode{ input, axis, start, ReadSize(in) };
+			}
+			case NodeKind::GetRows: {
+				const auto data = ReadNodeOutput(in);
+				const auto indices = ReadNodeOutput(in);
+				return GetRowsNode{ data, indices };
+			}
+			case NodeKind::Argsort: {
+				const auto input = ReadNodeOutput(in);
+				const auto axis = version >= 10 ? ReadSize(in) : 0uz;
+				const auto order = static_cast<SortOrder>(ReadScalar<std::uint32_t>(in));
+				return ArgsortNode{ input, axis, order };
+			}
+			case NodeKind::MulMatId: {
+				const auto as = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto ids = ReadNodeOutput(in);
+				return MulMatIdNode{ as, b, ids };
 			}
 			case NodeKind::FusedOp: {
 				const auto pattern = static_cast<FusionPattern>(ReadScalar<std::uint32_t>(in));
@@ -470,7 +1252,7 @@ namespace LiteNN::Serialization
 			WriteNodeOutputList(out, subgraph.Results());
 		}
 
-		inline Subgraph ReadSubgraph(std::istream& in)
+		inline Subgraph ReadSubgraph(std::istream& in, std::uint32_t version)
 		{
 			Subgraph subgraph;
 			const auto paramCount = ReadSize(in);
@@ -489,7 +1271,7 @@ namespace LiteNN::Serialization
 			for (std::size_t nodeId = 0; nodeId < nodeCount; ++nodeId)
 			{
 				auto outputInfos = ReadOutputInfoList(in);
-				auto node = ReadNodePayload(in);
+				auto node = ReadNodePayload(in, version);
 				if (nodeId < paramCount)
 				{
 					const auto* param = std::get_if<ParamRefNode>(&node);
@@ -528,9 +1310,12 @@ namespace LiteNN::Serialization
 		Detail::WriteStringList(out, graph.OutputNames());
 
 		Detail::WriteSize(out, graph.VariableCount());
+		Detail::WriteStringList(out, graph.VariableNames());
+		Detail::WriteMetadataEntries(out, graph.Metadata());
 		for (const auto& variable : graph.Variables())
 		{
 			Detail::WriteTensor(out, variable->Data());
+			Detail::WriteOptionalQuantizationParams(out, variable->Quantization());
 		}
 
 		Detail::WriteSize(out, graph.ActivationSlotCount());
@@ -595,9 +1380,24 @@ namespace LiteNN::Serialization
 
 		Graph graph;
 		const auto variableCount = Detail::ReadSize(in);
+		std::vector<std::string> variableNames;
+		std::vector<ModelMetadataEntry> metadata;
+		if (version >= 6)
+		{
+			variableNames = Detail::ReadStringList(in);
+			metadata = Detail::ReadMetadataEntries(in);
+		}
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
-			graph.AddVariable(Variable::Create(Detail::ReadTensor(in)));
+			auto tensor = Detail::ReadTensor(in);
+			std::optional<QuantizationParams> quantization;
+			if (version >= 4)
+			{
+				quantization = Detail::ReadOptionalQuantizationParams(in, version);
+			}
+			auto variable = Variable::Create(std::move(tensor));
+			variable->SetQuantization(std::move(quantization));
+			graph.AddVariable(std::move(variable));
 		}
 
 		const auto activationSlotCount = Detail::ReadSize(in);
@@ -615,7 +1415,7 @@ namespace LiteNN::Serialization
 		const auto subgraphCount = Detail::ReadSize(in);
 		for (std::size_t i = 0; i < subgraphCount; ++i)
 		{
-			graph.AddSubgraph(Detail::ReadSubgraph(in));
+			graph.AddSubgraph(Detail::ReadSubgraph(in, version));
 		}
 		graph.SetForward(forward);
 		if (backward)
@@ -623,7 +1423,9 @@ namespace LiteNN::Serialization
 			graph.SetBackward(*backward);
 		}
 		graph.SetInputNames(std::move(inputNames));
+		graph.SetVariableNames(std::move(variableNames));
 		graph.SetOutputNames(std::move(outputNames));
+		graph.SetMetadata(std::move(metadata));
 
 		if (in.peek() != std::char_traits<char>::eof())
 		{

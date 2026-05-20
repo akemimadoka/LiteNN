@@ -3,6 +3,7 @@
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
+#include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
@@ -68,6 +69,44 @@ namespace
 		return graph;
 	}
 
+	Graph BuildQuantizedConstantOutputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -3);
+		Tensor<CPU> storage({ -3.0, 1.0, 5.0, 7.0 }, { 2, 2 }, DataType::Int8);
+		const auto quantized = sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }),
+		                                                         params },
+		                                  { OutputInfo{ DataType::Int8, { 2, 2 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetOutputNames({ "quantized_weight" });
+		return graph;
+	}
+
+	Graph BuildGetRowsGraph()
+	{
+		Graph graph;
+		const auto tableIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 10.0f, 11.0f,
+		                                                                      20.0f, 21.0f,
+		                                                                      30.0f, 31.0f,
+		                                                                      40.0f, 41.0f },
+		                                                                     { 4, 2 }, DataType::Float32)));
+
+		Subgraph sg;
+		const auto indices = sg.AddParam(DataType::Int32, { 3 });
+		const auto table =
+		    sg.AddNode(VariableRefNode{ tableIndex }, { OutputInfo{ DataType::Float32, { 4, 2 } } });
+		const auto gathered = sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 3, 2 } } });
+		sg.SetResults({ { gathered, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "token_ids" });
+		graph.SetOutputNames({ "embeddings" });
+		return graph;
+	}
+
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
 		Graph graph;
@@ -82,6 +121,45 @@ namespace
 
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { batch, 3 });
+		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
+		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
+	std::vector<double> MakePatternValues(std::size_t count, double scale)
+	{
+		std::vector<double> values(count);
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const auto centered = static_cast<int>(i % 17) - 8;
+			values[i] = static_cast<double>(centered) * scale;
+		}
+		return values;
+	}
+
+	Graph BuildWideLinearChainGraph(std::size_t batch)
+	{
+		constexpr std::size_t kInput = 64;
+		constexpr std::size_t kHidden = 64;
+		constexpr std::size_t kOutput = 32;
+
+		Graph graph;
+		auto w1 = MakePatternValues(kInput * kHidden, 0.005);
+		auto b1 = MakePatternValues(kHidden, 0.001);
+		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
+		auto b2 = MakePatternValues(kOutput, 0.001);
+		const auto h1 = Layer::CreateLinear(graph,
+		    Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		    Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
+		const auto h2 = Layer::CreateLinear(graph,
+		    Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
+		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, kInput });
 		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, h1, { input, 0 }));
 		sg.SetResults({ Layer::AddLinear(sg, h2, hidden) });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -261,6 +339,28 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
 }
 
+TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
+{
+	auto graph = BuildGetRowsGraph();
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32)
+	};
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto loaded = artifact.Load();
+	const auto outputs = loaded.Run(inputs);
+
+	ASSERT_EQ(expected.size(), 1u);
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
+	}
+}
+
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 {
 	auto graph = BuildSimpleAddGraph();
@@ -273,6 +373,40 @@ TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 	EXPECT_EQ(copied.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(loaded.Backend(), CompiledModuleBackend::CPUNative);
+}
+
+TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
+{
+	auto graph = BuildQuantizedConstantOutputGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	const auto& spec = artifact.OutputSpecs()[0];
+	EXPECT_EQ(spec.name, "quantized_weight");
+	EXPECT_EQ(spec.dtype, DataType::Int8);
+	EXPECT_EQ(spec.shape, (std::vector<std::size_t>{ 2, 2 }));
+	ASSERT_TRUE(spec.quantization.has_value());
+	EXPECT_EQ(spec.quantization->scheme, QuantizationScheme::Affine);
+	EXPECT_EQ(spec.quantization->storageType, DataType::Int8);
+	EXPECT_EQ(spec.quantization->expressedType, DataType::Float32);
+	ASSERT_EQ(spec.quantization->scales.size(), 1u);
+	EXPECT_FLOAT_EQ(spec.quantization->scales[0], 0.25F);
+	ASSERT_EQ(spec.quantization->zeroPoints.size(), 1u);
+	EXPECT_EQ(spec.quantization->zeroPoints[0], -3);
+
+	auto copied = CompiledModuleArtifact::CopyFromImage(artifact.Image());
+	ASSERT_EQ(copied.OutputSpecs().size(), 1u);
+	ASSERT_TRUE(copied.OutputSpecs()[0].quantization.has_value());
+	EXPECT_EQ(copied.OutputSpecs()[0].quantization->zeroPoints[0], -3);
+
+	auto loaded = CompiledModule<CPU>::Load(artifact.Image());
+	ASSERT_EQ(loaded.OutputSpecs().size(), 1u);
+	ASSERT_TRUE(loaded.OutputSpecs()[0].quantization.has_value());
+	EXPECT_EQ(loaded.OutputSpecs()[0].quantization->storageType, DataType::Int8);
+
+	const auto dump = Debug::DumpCompiledModuleMetadata(artifact);
+	EXPECT_NE(dump.find("quant=Affine"), std::string::npos);
+	EXPECT_NE(dump.find("expressed=Float32[2, 2]"), std::string::npos);
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
@@ -822,7 +956,6 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 		}
 	}
 }
-
 TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 {
 	Graph graph;
@@ -1066,22 +1199,32 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 	}
 }
 
-TEST(CompiledModuleTest, CPULinearChainFastPathMatchesInterpreter)
+TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 {
-	ScopedEnvVar enableFastPath("LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH", "1");
-	auto graph = BuildTinyLinearChainGraph(4);
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	constexpr std::size_t kBatch = 128;
+	constexpr std::size_t kInput = 64;
+	constexpr std::size_t kOutput = 32;
+	auto graph = BuildWideLinearChainGraph(kBatch);
+	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
 	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 1.0, -2.0, 0.5, -1.0, 0.25, 2.0, 0.5, 0.5, -0.5, 3.0, -1.0, 1.0 },
-		            { 4, 3 }, DataType::Float32)
+		Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput }, DataType::Float32)
 	};
+
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto module = Compiler<CPU>::Compile(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+	                               artifact.Instructions().size());
+	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
+
+	auto module = artifact.Load();
 	std::array<Tensor<CPU>, 1> outputs = {
-		Tensor<CPU>(Uninitialized, { 4, 2 }, DataType::Float32)
+		Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32)
 	};
 	module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 
@@ -1089,6 +1232,6 @@ TEST(CompiledModuleTest, CPULinearChainFastPathMatchesInterpreter)
 	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
 	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
 	{
-		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
 	}
 }

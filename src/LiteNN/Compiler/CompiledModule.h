@@ -31,6 +31,7 @@ namespace LiteNN
 		DataType dtype{};
 		std::vector<std::size_t> shape;
 		std::string name;
+		std::optional<QuantizationParams> quantization;
 	};
 
 	struct CompiledModuleImage

@@ -265,6 +265,134 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+						    ++counts[{ node.updates.node, node.updates.port }];
+					    }
+					    else if constexpr (std::same_as<T, ScanNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, SSMScanNode>)
+					    {
+						    ++counts[{ node.state.node, node.state.port }];
+						    ++counts[{ node.dt.node, node.dt.port }];
+						    ++counts[{ node.a.node, node.a.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+						    ++counts[{ node.c.node, node.c.port }];
+						    if (node.d)
+						    {
+							    ++counts[{ node.d->node, node.d->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, RWKVWKVNode>)
+					    {
+						    ++counts[{ node.key.node, node.key.port }];
+						    ++counts[{ node.value.node, node.value.port }];
+						    ++counts[{ node.receptance.node, node.receptance.port }];
+						    ++counts[{ node.timeDecay.node, node.timeDecay.port }];
+						    ++counts[{ node.timeFirst.node, node.timeFirst.port }];
+					    }
+					    else if constexpr (std::same_as<T, SoftmaxNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, NormalizationNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    if (node.scale)
+						    {
+							    ++counts[{ node.scale->node, node.scale->port }];
+						    }
+						    if (node.bias)
+						    {
+							    ++counts[{ node.bias->node, node.bias->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, BatchMatMulNode>)
+					    {
+						    ++counts[{ node.lhs.node, node.lhs.port }];
+						    ++counts[{ node.rhs.node, node.rhs.port }];
+					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    ++counts[{ node.lhs.node, node.lhs.port }];
+						    ++counts[{ node.rhs.node, node.rhs.port }];
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    ++counts[{ node.timesteps.node, node.timesteps.port }];
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    ++counts[{ node.a.node, node.a.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode>)
+					    {
+						    ++counts[{ node.parameter.node, node.parameter.port }];
+						    ++counts[{ node.gradient.node, node.gradient.port }];
+						    if (node.velocity)
+						    {
+							    ++counts[{ node.velocity->node, node.velocity->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, AdamWStepNode>)
+					    {
+						    ++counts[{ node.parameter.node, node.parameter.port }];
+						    ++counts[{ node.gradient.node, node.gradient.port }];
+						    ++counts[{ node.firstMoment.node, node.firstMoment.port }];
+						    ++counts[{ node.secondMoment.node, node.secondMoment.port }];
+					    }
+					    else if constexpr (std::same_as<T, Im2ColNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, Conv2DNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    ++counts[{ node.weight.node, node.weight.port }];
+						    if (node.bias)
+						    {
+							    ++counts[{ node.bias->node, node.bias->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    ++counts[{ node.weight.node, node.weight.port }];
+						    if (node.bias)
+						    {
+							    ++counts[{ node.bias->node, node.bias->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, Pool2DNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, UpsampleNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    for (const auto& input : node.inputs)
@@ -275,6 +403,21 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, SliceNode>)
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    ++counts[{ node.data.node, node.data.port }];
+						    ++counts[{ node.indices.node, node.indices.port }];
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    ++counts[{ node.as.node, node.as.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+						    ++counts[{ node.ids.node, node.ids.port }];
 					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
@@ -324,6 +467,10 @@ namespace LiteNN
 						    {
 							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
 						    }
+						    else if (node.op == UnaryOp::Erf)
+						    {
+							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
+						    }
 						    else if (node.op == UnaryOp::Sqrt || node.op == UnaryOp::Exp)
 						    {
 							    SaveIfNeeded(fwdSg, graph, { nodeId, 0 }, saved, insideLoop); // 保存输出
@@ -357,6 +504,28 @@ namespace LiteNN
 					    {
 						    // Concat/Slice 反向只需要 shape/axis/start/length 信息，
 						    // 全部在前向图中静态可知，无需保存激活值
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
+					                      std::same_as<T, GatherNode> || std::same_as<T, ScatterNode>)
+					    {
+						    // G5.1 data movement nodes do not need extra saved activations here.
+						    // Differentiation is still explicitly gated below.
+					    }
+					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
+					                      std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
+					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
+					                      std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
+					                      std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
+					                      std::same_as<T, AdamWStepNode> ||
+					                      std::same_as<T, Im2ColNode> || std::same_as<T, Conv2DNode> ||
+					                      std::same_as<T, ConvTranspose2DNode> || std::same_as<T, Pool2DNode> ||
+					                      std::same_as<T, UpsampleNode>)
+					    {
+						    // G5.2/G5.3/G5.4 nodes use explicit differentiation gates below for now.
+					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    // GetRows 目前未接入自动求导；这里不额外保存前向激活
 					    }
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
@@ -620,6 +789,156 @@ namespace LiteNN
 				    {
 					    return ReshapeNode{ { nodeMap[n.input.node], n.input.port }, n.targetShape };
 				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ { nodeMap[n.input.node], n.input.port }, n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ { nodeMap[n.input.node], n.input.port }, n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ { nodeMap[n.input.node], n.input.port }, n.lowPads, n.highPads, n.mode,
+					                    n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return GatherNode{ { nodeMap[n.data.node], n.data.port },
+					                       { nodeMap[n.indices.node], n.indices.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return ScatterNode{ { nodeMap[n.data.node], n.data.port },
+					                        { nodeMap[n.indices.node], n.indices.port },
+					                        { nodeMap[n.updates.node], n.updates.port }, n.axis, n.mode };
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return ScanNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.op };
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return SSMScanNode{ { nodeMap[n.state.node], n.state.port },
+					                        { nodeMap[n.dt.node], n.dt.port },
+					                        { nodeMap[n.a.node], n.a.port },
+					                        { nodeMap[n.b.node], n.b.port },
+					                        { nodeMap[n.c.node], n.c.port },
+					                        n.d ? std::optional<NodeOutput>{ { nodeMap[n.d->node], n.d->port } }
+					                            : std::nullopt };
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return RWKVWKVNode{ { nodeMap[n.key.node], n.key.port },
+					                        { nodeMap[n.value.node], n.value.port },
+					                        { nodeMap[n.receptance.node], n.receptance.port },
+					                        { nodeMap[n.timeDecay.node], n.timeDecay.port },
+					                        { nodeMap[n.timeFirst.node], n.timeFirst.port } };
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return SoftmaxNode{ { nodeMap[n.input.node], n.input.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return NormalizationNode{
+					        { nodeMap[n.input.node], n.input.port },
+					        n.scale ? std::optional<NodeOutput>{ { nodeMap[n.scale->node], n.scale->port } } : std::nullopt,
+					        n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } } : std::nullopt,
+					        n.mode, n.axis, n.groupCount, n.epsilon
+					    };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ { nodeMap[n.lhs.node], n.lhs.port },
+					                            { nodeMap[n.rhs.node], n.rhs.port } };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ { nodeMap[n.lhs.node], n.lhs.port },
+					                        { nodeMap[n.rhs.node], n.rhs.port } };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ { nodeMap[n.timesteps.node], n.timesteps.port },
+					                                  n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ { nodeMap[n.a.node], n.a.port },
+					                         { nodeMap[n.b.node], n.b.port },
+					                         n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{
+					        { nodeMap[n.parameter.node], n.parameter.port },
+					        { nodeMap[n.gradient.node], n.gradient.port },
+					        n.velocity ? std::optional<NodeOutput>{ { nodeMap[n.velocity->node], n.velocity->port } }
+					                   : std::nullopt,
+					        n.learningRate, n.momentum, n.weightDecay, n.nesterov
+					    };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ { nodeMap[n.parameter.node], n.parameter.port },
+					                          { nodeMap[n.gradient.node], n.gradient.port },
+					                          { nodeMap[n.firstMoment.node], n.firstMoment.port },
+					                          { nodeMap[n.secondMoment.node], n.secondMoment.port },
+					                          n.learningRate, n.beta1, n.beta2, n.epsilon,
+					                          n.weightDecay, n.step };
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    return Im2ColNode{ { nodeMap[n.input.node], n.input.port },
+					                       n.kernelShape,
+					                       n.strides,
+					                       n.dilations,
+					                       n.lowPads,
+					                       n.highPads };
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    return Conv2DNode{
+					        { nodeMap[n.input.node], n.input.port },
+					        { nodeMap[n.weight.node], n.weight.port },
+					        n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.groupCount
+					    };
+				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    return ConvTranspose2DNode{
+					        { nodeMap[n.input.node], n.input.port },
+					        { nodeMap[n.weight.node], n.weight.port },
+					        n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } } : std::nullopt,
+					        n.strides,
+					        n.dilations,
+					        n.lowPads,
+					        n.highPads,
+					        n.outputPads,
+					        n.groupCount
+					    };
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    return Pool2DNode{ { nodeMap[n.input.node], n.input.port },
+					                       n.mode,
+					                       n.kernelShape,
+					                       n.strides,
+					                       n.lowPads,
+					                       n.highPads,
+					                       n.countIncludePad };
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    return UpsampleNode{ { nodeMap[n.input.node], n.input.port }, n.mode, n.outputSpatialShape,
+					                         n.alignCorners };
+				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
 					    std::vector<NodeOutput> inputs;
@@ -632,6 +951,21 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return SliceNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.start, n.length };
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return GetRowsNode{ { nodeMap[n.data.node], n.data.port },
+					                        { nodeMap[n.indices.node], n.indices.port } };
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return ArgsortNode{ { nodeMap[n.input.node], n.input.port }, n.axis, n.order };
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return MulMatIdNode{ { nodeMap[n.as.node], n.as.port },
+					                         { nodeMap[n.b.node], n.b.port },
+					                         { nodeMap[n.ids.node], n.ids.port } };
 				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
@@ -903,6 +1237,90 @@ namespace LiteNN
 					    {
 						    EmitReshapeGrad(fwdSg, bwdSg, node, dy, gradContribs);
 					    }
+					    else if constexpr (std::same_as<T, PermuteNode>)
+					    {
+						    EmitPermuteGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, BroadcastToNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: BroadcastToNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, PadNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: PadNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, GatherNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: GatherNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ScatterNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ScatterNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ScanNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ScanNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SSMScanNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SSMScanNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, RWKVWKVNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: RWKVWKVNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SoftmaxNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SoftmaxNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, NormalizationNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: NormalizationNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, BatchMatMulNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: BatchMatMulNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: OutProdNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: TimestepEmbeddingNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SolveTriNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SGDStepNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, AdamWStepNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: AdamWStepNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Im2ColNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Im2ColNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Conv2DNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Conv2DNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ConvTranspose2DNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, Pool2DNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: Pool2DNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, UpsampleNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: UpsampleNode differentiation is not yet implemented");
+					    }
 					    else if constexpr (std::same_as<T, ConcatNode>)
 					    {
 						    EmitConcatGrad(fwdSg, bwdSg, node, dy, gradContribs);
@@ -910,6 +1328,18 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, SliceNode>)
 					    {
 						    EmitSliceGrad(fwdSg, bwdSg, node, dy, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, GetRowsNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: GetRowsNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ArgsortNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: ArgsortNode differentiation is not implemented");
+					    }
+					    else if constexpr (std::same_as<T, MulMatIdNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: MulMatIdNode differentiation is not implemented");
 					    }
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
@@ -1096,6 +1526,23 @@ namespace LiteNN
 				dst.push_back({ id, 0 });
 				break;
 			}
+			case UnaryOp::Erf: {
+				// dx = dy * (2 / sqrt(pi)) * exp(-x^2)
+				auto xVal = GetForwardValue(fwdSg, bwdSg, node.input.node, node.input.port, saved, loadMap);
+				auto coeff = MakeScalarConstant(bwdSg, inInfo.dtype, inInfo.shape, 1.1283791670955126);
+				auto x2 = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { xVal, 0 }, { xVal, 0 } },
+				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto negX2 = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x2, 0 } },
+				                          { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto expNegX2 = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Exp, { negX2, 0 } },
+				                             { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto scaled = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { coeff, 0 }, { expNegX2, 0 } },
+				                           { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				auto id = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { scaled, 0 } },
+				                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
+				dst.push_back({ id, 0 });
+				break;
+			}
 			case UnaryOp::LogicalNegation:
 				// Bool 输出，不可微
 				break;
@@ -1256,7 +1703,8 @@ namespace LiteNN
 		                         std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
 		{
 			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
-			if (inInfo.dtype == DataType::Bool || inInfo.dtype == DataType::Int32 || inInfo.dtype == DataType::Int64)
+			if (inInfo.dtype == DataType::Bool || inInfo.dtype == DataType::Int32 || inInfo.dtype == DataType::Int64 ||
+			    inInfo.dtype == DataType::Int8 || inInfo.dtype == DataType::UInt8)
 			{
 				return;
 			}
@@ -1750,6 +2198,24 @@ namespace LiteNN
 			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
 			// Reshape gradient: just reshape back to the input shape
 			auto id = bwdSg.AddNode(ReshapeNode{ dy, inInfo.shape }, { OutputInfo{ inInfo.dtype, inInfo.shape } });
+			gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
+		}
+
+		// Permute gradient: 反向传播 = 用逆置换再做一次 Permute
+		// 正向：y.shape[d] = x.shape[p[d]]
+		// 反向：dx.shape[k] = dy.shape[q[k]]，其中 q = p^{-1}
+		static void EmitPermuteGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const PermuteNode& node, NodeOutput dy,
+		                            std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
+		{
+			const auto& inInfo = fwdSg.GetOutputInfo(node.input);
+			const auto rank = node.permutation.size();
+			std::vector<std::size_t> inverse(rank, 0uz);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				inverse[node.permutation[d]] = d;
+			}
+			auto id = bwdSg.AddNode(PermuteNode{ dy, std::move(inverse) },
+			                        { OutputInfo{ inInfo.dtype, inInfo.shape } });
 			gc[{ node.input.node, node.input.port }].push_back({ id, 0 });
 		}
 

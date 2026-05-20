@@ -51,6 +51,10 @@ namespace LiteNN
 	inline constexpr std::uint64_t kCUDANativeFeatureMultiKernelLaunch = 1ull << 22;
 	inline constexpr std::uint64_t kCUDANativeFeatureWorkspace = 1ull << 23;
 	inline constexpr std::uint64_t kCUDANativeFeatureConstantTensor = 1ull << 24;
+	inline constexpr std::uint64_t kCUDANativeFeatureCast = 1ull << 25;
+	inline constexpr std::uint64_t kCUDANativeFeatureMatMulCUBLASLowPrecision = 1ull << 26;
+	inline constexpr std::uint64_t kCUDANativeFeatureMatMulBiasAddLowPrecision = 1ull << 27;
+	inline constexpr std::uint64_t kCUDANativeFeatureMatMulBiasAddReLULowPrecision = 1ull << 28;
 	inline constexpr std::uint64_t kCUDANativeKnownFeatureMask = kCUDANativeFeatureStaticShape |
 	                                                             kCUDANativeFeatureSingleSubgraph |
 	                                                             kCUDANativeFeatureElementwiseAddF32 |
@@ -75,7 +79,11 @@ namespace LiteNN
 	                                                             kCUDANativeFeatureMatMulBiasAddReLUF32 |
 	                                                             kCUDANativeFeatureMultiKernelLaunch |
 	                                                             kCUDANativeFeatureWorkspace |
-	                                                             kCUDANativeFeatureConstantTensor;
+	                                                             kCUDANativeFeatureConstantTensor |
+	                                                             kCUDANativeFeatureCast |
+	                                                             kCUDANativeFeatureMatMulCUBLASLowPrecision |
+	                                                             kCUDANativeFeatureMatMulBiasAddLowPrecision |
+	                                                             kCUDANativeFeatureMatMulBiasAddReLULowPrecision;
 
 	struct CUDANativeLaunchDim
 	{

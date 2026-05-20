@@ -6,12 +6,15 @@ those documents describe capability coverage, while this one tracks benchmark-dr
 
 ## Baseline
 
-- Benchmark source: `benchmark/results/backend_pytorch_comparison_cpu_threads_2026-05-16.md`
-- Main finding: default CPU AOT performance remains much stronger than the experimental CPU Linear-chain
-  fast path. The fast path now has explicit 1T/16T benchmark entries, but the current scalar row kernel and
-  per-call scratch allocation make it unsuitable as a default optimization path.
-- Main CUDA finding: CUDA native MatMul is dominated by per-call host overhead; CUDA CPU bridge fallback
-  is not GPU execution and should not be interpreted as CUDA backend throughput.
+- Benchmark sources:
+  - `benchmark/results/backend_pytorch_comparison_cpu_threads_2026-05-16.md`
+  - `docs/PerformanceAnalysis_2026-05-19.md`
+- CPU finding: default CPU AOT already emits packed AVX-512/zmm FMA kernels for the tested MNIST-like Linear/MLP
+  objects. The old scalar CPU fast path was retired on 2026-05-19. A guarded large-static-f32 intra-op path has landed,
+  but it is currently a modest improvement for the largest MLP case rather than the final CPU kernel strategy.
+- CUDA finding: native non-graph execution is still dominated by launch/library scheduling on small graphs. CUDA Graph
+  replay is the current fast path; on the local RTX 4090 run it matches PyTorch CUDA for
+  `MLP(784->512->256->10)/batch:512` and remains slower mainly on tiny workloads with a fixed `0.03-0.05 ms` floor.
 
 ## P0: CUDA Native Hot-Path Fixed Costs
 
@@ -70,49 +73,74 @@ P1 validation spot check:
 
 | Benchmark | AOT RunInto | CUDA Native RunInto |
 | --- | ---: | ---: |
-| `MLP(784->128->10)/batch:512` | `0.379 ms` | `0.347 ms` |
-| `MLP(784->512->256->10)/batch:512` | `2.324 ms` | `0.262 ms` |
+| `Linear(784->10)/batch:512` | `0.053 ms` | `0.060 ms` |
+| `MLP(784->128->10)/batch:512` | `0.336 ms` | `0.118 ms` |
+| `MLP(784->512->256->10)/batch:512` | `1.76 ms` | `0.234 ms` |
 
 P1 CUDA Graph replay spot check:
 
 | Benchmark | CUDA Native RunInto | CUDA Graph RunInto |
 | --- | ---: | ---: |
-| `MLP(784->128->10)/batch:512` | `0.347 ms` | `0.102 ms` |
-| `MLP(784->512->256->10)/batch:512` | `0.262 ms` | `0.078 ms` |
+| `Linear(784->10)/batch:512` | `0.060 ms` | `0.031 ms` |
+| `MLP(784->128->10)/batch:512` | `0.118 ms` | `0.054 ms` |
+| `MLP(784->512->256->10)/batch:512` | `0.234 ms` | `0.069 ms` |
 
 ## P2: CPU AOT Intra-Op Parallelism
 
 Goal: close the gap with PyTorch CPU 16T on large batch and large hidden sizes.
 
-Status: runtime ABI and an experimental fused Linear/MLP fast path landed on 2026-05-16, but the new path is
-opt-in via `LITENN_CPU_AOT_LINEAR_CHAIN_FASTPATH=1` because the current row kernel is a correctness/ABI proving
-step and does not yet reuse the existing MLIR micro-kernel pipeline. Default CPU AOT still uses the previous
-optimized object path to avoid benchmark regressions. The benchmark suite now tracks both experimental fast-path
-thread counts explicitly with `AOTFastPathRunIntoT1` and `AOTFastPathRunIntoT16`.
+Status: initial implementation landed on 2026-05-19. The old 2026-05-16 experimental Linear/MLP runtime fast path was
+removed after instruction-level profiling and focused benchmark validation. It lowered fused linear chains into calls
+to a scalar C++ row kernel plus per-call thread creation, bypassing the MLIR-generated packed/zmm FMA kernel. The new
+path keeps the small/medium default MLIR path and only tries a persistent-pool sidecar helper for large static f32 fused
+Linear/MLP chains.
 
-- [x] Add a small runtime `ParallelFor` ABI for compiled CPU modules.
-  - Implementation: exported `litenn_cpu_parallel_for_u64` plus JIT symbol registration.
-- [x] Split MatMul along the output row/batch dimension, keeping K serial to avoid partial-sum reduction.
-  - Implementation: experimental `litenn_cpu_matmul_bias_relu_f32` splits row ranges and calls the same serial row kernel
-    per range.
-- [x] Gate experimental parallel lowering by static FLOP and output-size thresholds.
-  - Implementation: fused Linear/MLP lowering is opt-in and only matches static-shape f32 chains; runtime execution stays
-    serial below `1 << 20` estimated FLOPs or when `LITENN_CPU_AOT_THREADS=1`.
-- [x] Verify small-batch serial performance does not regress.
-  - Validation: `CompiledModuleTest.CPULinearChainFastPathMatchesInterpreter` covers correctness with the opt-in path;
-    benchmark validation showed the naive row kernel is slower than the existing default CPU AOT path, so default
-    enablement is deferred.
+- [x] Profile the default CPU AOT object path at instruction level.
+  - Result: generated objects use packed `zmm` FMA instructions and have no gather/scatter in the tested MNIST-like
+    Linear/MLP cases.
+- [x] Investigate and retire the experimental fast path.
+  - Result: removed the extra runtime ABI, env controls, benchmark entries, and correctness test tied to the retired path.
+- [x] Add a persistent worker pool for CPU AOT helper kernels.
+  - Implementation: the pool is process-local, reuses worker threads, and only waits for workers participating in the
+    current operation.
+- [x] Add a guarded large-static-f32 fused Linear/MLP parallel path.
+  - Implementation: `TryCompileCPUParallelLinearChainF32` emits an object that calls
+    `litenn_cpu_matmul_bias_relu_parallel_f32`.
+  - Gating: `LITENN_CPU_AOT_THREADS=1` falls back to MLIR; `LITENN_CPU_AOT_PARALLEL_MIN_FLOPS` defaults to `1 << 28`.
+- [x] Improve the helper's local kernel quality enough for the large benchmark to benefit.
+  - Implementation: row-bias initialization uses `memcpy`; helper pointers carry restrict semantics; GCC is given
+    ivdep hints for the inner contiguous column loops.
+- [x] Add benchmark labels for CPU AOT thread-policy comparison.
+  - Implementation: `AOTRunIntoT1`, `AOTRunIntoT16`, `TrainCPUAOTT1`, and `TrainCPUAOTT16`.
+- [x] Add correctness coverage for the new branch.
+  - Validation: `CompiledModuleTest.CPUParallelLinearChainMatchesInterpreter` forces the branch and compares with the
+    interpreter.
+- [ ] Move the parallel work into the optimized MLIR/LLVM lowering path or a production GEMM backend.
+  - Requirement: the sidecar helper is acceptable as a first intra-op landing, but it does not preserve the MLIR
+    packed/zmm microkernel and should not become the long-term CPU kernel architecture.
 
-P2 validation spot check with the experimental path disabled by default:
+P2 retirement validation for the removed fast path:
 
 | Benchmark | Default AOT RunInto | FastPath 1T | FastPath 16T |
 | --- | ---: | ---: | ---: |
-| `Linear(784->10)/batch:512` | `0.063 ms` | `1.499 ms` | `7.612 ms` |
-| `MLP(784->128->10)/batch:512` | `0.372 ms` | `31.37 ms` | `16.13 ms` |
-| `MLP(784->512->256->10)/batch:512` | `2.219 ms` | `339.9 ms` | `47.40 ms` |
+| `Linear(784->10)/batch:512` | `0.061 ms` | `1.53 ms` | `7.56 ms` |
+| `MLP(784->128->10)/batch:512` | `0.393 ms` | `31.9 ms` | `16.1 ms` |
+| `MLP(784->512->256->10)/batch:512` | `2.42 ms` | `356 ms` | `40.5 ms` |
 
-Conclusion: the runtime thread-count plumbing is measurable again, but the fast path should stay opt-in until
-it reuses the packed/vectorized MLIR micro-kernel strategy or delegates to a production BLAS/oneDNN backend.
+Conclusion: default AOT already emits the better instruction stream. CPU multi-thread work should continue as a new
+optimized-lowering task, not as the retired fast path.
+
+P2 current validation:
+
+| Benchmark | T1 / MLIR fallback | Default hardware-thread AOT | T16 |
+| --- | ---: | ---: | ---: |
+| `Linear(784->10)/batch:512` | `0.054 ms` | `0.053 ms` | `0.053 ms` |
+| `MLP(784->128->10)/batch:512` | `0.337 ms` | `0.336 ms` | `0.357 ms` |
+| `MLP(784->512->256->10)/batch:512` | `2.52 ms` | `1.76 ms` | `2.42 ms` |
+
+Conclusion: intra-op parallelism is now implemented and guarded, but the present sidecar helper only helps the largest
+local CPU case modestly. The next CPU performance step should parallelize the optimized lowering itself or call a
+production GEMM backend.
 
 ## P3: CPU Kernel Refinement
 
@@ -172,10 +200,13 @@ P4 validation spot check:
 
 | Benchmark | Real time |
 | --- | ---: |
-| `CUDANativeMatMul/batch:1/width:128` | `0.044 ms` |
-| `CUDANativeMatMul/batch:512/width:128` | `0.041 ms` |
-| `CUDANativeGraphRunInto/MLP(784->128->10)/batch:512` | `0.102 ms` |
-| `CUDANativeGraphRunInto/MLP(784->512->256->10)/batch:512` | `0.078 ms` |
+| `CUDANativeMatMul/batch:1/width:128` | `0.036 ms` |
+| `CUDANativeMatMul/batch:32/width:128` | `0.047 ms` |
+| `CUDANativeMatMul/batch:128/width:128` | `0.038 ms` |
+| `CUDANativeMatMul/batch:512/width:128` | `0.031 ms` |
+| `CUDANativeGraphRunInto/Linear(784->10)/batch:512` | `0.031 ms` |
+| `CUDANativeGraphRunInto/MLP(784->128->10)/batch:512` | `0.054 ms` |
+| `CUDANativeGraphRunInto/MLP(784->512->256->10)/batch:512` | `0.069 ms` |
 
 ## P5: Training Benchmark Baseline
 
@@ -187,10 +218,10 @@ Status: implemented on 2026-05-16.
   - Implementation: `litenn_bench_train` covers synthetic MNIST-shaped MLP-128 and MLP-512 batches.
 - [x] Report forward, backward, optimizer step, and full step timings separately.
   - Implementation: `TrainCPUInterpreter/{Forward,Backward,OptimizerStep,FullStep}` benchmark families.
-- [x] Track CPU AOT, CPU AOT fast-path 1T/16T, CUDA CPU fallback, and CUDA native variants independently.
-  - Implementation: training forward baselines are registered as `TrainCPUAOT`, `TrainCUDACPUFallback`, and
-    `TrainCUDANative`; CUDA CPU fallback uses `LITENN_CUDA_DISABLE_NATIVE_AOT=1` to keep the bridge measurable
-    after native coverage expanded.
+- [x] Track CPU AOT T1/T16, CUDA CPU fallback, and CUDA native variants independently.
+  - Implementation: training forward baselines are registered as `TrainCPUAOT`, `TrainCPUAOTT1`,
+    `TrainCPUAOTT16`, `TrainCUDACPUFallback`, and `TrainCUDANative`; CUDA CPU fallback uses
+    `LITENN_CUDA_DISABLE_NATIVE_AOT=1` to keep the bridge measurable after native coverage expanded.
 
 P5 validation spot check:
 

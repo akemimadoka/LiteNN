@@ -16,6 +16,100 @@ static bool ReadBool(const Tensor<CPU>& t, std::size_t i)
 	return static_cast<const bool*>(t.RawData())[i];
 }
 
+static float ReadAsFloat(const Tensor<CPU>& t, std::size_t i)
+{
+	Tensor<CPU> converted(Uninitialized, t.Shape(), DataType::Float32);
+	CPU cpu;
+	DeviceTraits<CPU>::ConvertTo(cpu, t.DType(), t.RawData(), t.NumElements(), DataType::Float32,
+	                             converted.RawData());
+	return ReadFloat(converted, i);
+}
+
+TEST(DataType, LowPrecisionMetadata)
+{
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::Float16));
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::BFloat16));
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::Float8E4M3));
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::Float8E5M2));
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::Int8));
+	EXPECT_TRUE(IsValidDataTypeValue(DataType::UInt8));
+	EXPECT_TRUE(IsFloatingDataType(DataType::Float16));
+	EXPECT_TRUE(IsFloatingDataType(DataType::BFloat16));
+	EXPECT_TRUE(IsFloatingDataType(DataType::Float8E4M3));
+	EXPECT_TRUE(IsFloatingDataType(DataType::Float8E5M2));
+	EXPECT_FALSE(IsFloatingDataType(DataType::Int8));
+	EXPECT_FALSE(IsFloatingDataType(DataType::UInt8));
+	EXPECT_EQ(ElementByteSize(DataType::Float16), 2);
+	EXPECT_EQ(ElementByteSize(DataType::BFloat16), 2);
+	EXPECT_EQ(ElementByteSize(DataType::Float8E4M3), 1);
+	EXPECT_EQ(ElementByteSize(DataType::Float8E5M2), 1);
+	EXPECT_EQ(ElementByteSize(DataType::Int8), 1);
+	EXPECT_EQ(ElementByteSize(DataType::UInt8), 1);
+	EXPECT_EQ(DataTypeName(DataType::Float16), "Float16");
+	EXPECT_EQ(DataTypeName(DataType::BFloat16), "BFloat16");
+	EXPECT_EQ(DataTypeName(DataType::Float8E4M3), "Float8E4M3");
+	EXPECT_EQ(DataTypeName(DataType::Float8E5M2), "Float8E5M2");
+}
+
+TEST(Tensor, LowPrecisionCPUConversionRoundTrip)
+{
+	const Tensor<CPU> f16({ 1.0, -2.5, 0.5 }, { 3 }, DataType::Float16);
+	EXPECT_EQ(f16.DType(), DataType::Float16);
+	EXPECT_NEAR(ReadAsFloat(f16, 0), 1.0F, 1e-3F);
+	EXPECT_NEAR(ReadAsFloat(f16, 1), -2.5F, 1e-3F);
+	EXPECT_NEAR(ReadAsFloat(f16, 2), 0.5F, 1e-3F);
+
+	const Tensor<CPU> bf16({ 1.0, -2.5, 0.5 }, { 3 }, DataType::BFloat16);
+	EXPECT_EQ(bf16.DType(), DataType::BFloat16);
+	EXPECT_NEAR(ReadAsFloat(bf16, 0), 1.0F, 1e-2F);
+	EXPECT_NEAR(ReadAsFloat(bf16, 1), -2.5F, 1e-2F);
+	EXPECT_NEAR(ReadAsFloat(bf16, 2), 0.5F, 1e-2F);
+
+	const Tensor<CPU> e4m3({ 1.0, -2.0, 0.5 }, { 3 }, DataType::Float8E4M3);
+	EXPECT_EQ(e4m3.DType(), DataType::Float8E4M3);
+	EXPECT_NEAR(ReadAsFloat(e4m3, 0), 1.0F, 0.25F);
+	EXPECT_NEAR(ReadAsFloat(e4m3, 1), -2.0F, 0.25F);
+	EXPECT_NEAR(ReadAsFloat(e4m3, 2), 0.5F, 0.25F);
+
+	const Tensor<CPU> e5m2({ 1.0, -2.0, 0.5 }, { 3 }, DataType::Float8E5M2);
+	EXPECT_EQ(e5m2.DType(), DataType::Float8E5M2);
+	EXPECT_NEAR(ReadAsFloat(e5m2, 0), 1.0F, 0.25F);
+	EXPECT_NEAR(ReadAsFloat(e5m2, 1), -2.0F, 0.25F);
+	EXPECT_NEAR(ReadAsFloat(e5m2, 2), 0.5F, 0.25F);
+
+	const Tensor<CPU> i8({ -2.0, 0.0, 3.0 }, { 3 }, DataType::Int8);
+	EXPECT_FLOAT_EQ(ReadAsFloat(i8, 0), -2.0F);
+	EXPECT_FLOAT_EQ(ReadAsFloat(i8, 1), 0.0F);
+	EXPECT_FLOAT_EQ(ReadAsFloat(i8, 2), 3.0F);
+
+	const Tensor<CPU> u8({ 2.0, 0.0, 7.0 }, { 3 }, DataType::UInt8);
+	EXPECT_FLOAT_EQ(ReadAsFloat(u8, 0), 2.0F);
+	EXPECT_FLOAT_EQ(ReadAsFloat(u8, 1), 0.0F);
+	EXPECT_FLOAT_EQ(ReadAsFloat(u8, 2), 7.0F);
+}
+
+TEST(Tensor, LowPrecisionArithmeticUsesCPUReference)
+{
+	const Tensor<CPU> lhs({ 1.0, 2.0, 3.0 }, { 3 }, DataType::Float16);
+	const Tensor<CPU> rhs({ 0.5, 1.0, 1.5 }, { 3 }, DataType::Float16);
+	const auto sum = lhs + rhs;
+	EXPECT_EQ(sum.DType(), DataType::Float16);
+	EXPECT_NEAR(ReadAsFloat(sum, 0), 1.5F, 1e-3F);
+	EXPECT_NEAR(ReadAsFloat(sum, 1), 3.0F, 1e-3F);
+	EXPECT_NEAR(ReadAsFloat(sum, 2), 4.5F, 1e-3F);
+}
+
+TEST(Initializer, LowPrecisionFloatingInitializers)
+{
+	std::mt19937 rng(1234);
+	const auto f16 = Initializer::Uniform({ 4 }, -1.0, 1.0, rng, DataType::Float16);
+	EXPECT_EQ(f16.DType(), DataType::Float16);
+	const auto bf16 = Initializer::Ones({ 2 }, DataType::BFloat16);
+	EXPECT_EQ(bf16.DType(), DataType::BFloat16);
+	EXPECT_NEAR(ReadAsFloat(bf16, 0), 1.0F, 1e-2F);
+	EXPECT_THROW((void)Initializer::Uniform({ 4 }, -1.0, 1.0, rng, DataType::Int8), std::runtime_error);
+}
+
 // tensor = [[1,2,3],[4,5,6]]
 TEST(Tensor, BasicOperations)
 {

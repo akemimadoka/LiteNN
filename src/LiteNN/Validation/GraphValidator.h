@@ -1,8 +1,12 @@
+#include <LiteNN/ComputePrimitives.h>
+#include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <span>
 #include <stdexcept>
@@ -24,34 +28,16 @@ namespace LiteNN::Validation
 
 	inline std::string DataTypeToString(DataType dtype)
 	{
-		switch (dtype)
+		if (IsValidDataTypeValue(dtype))
 		{
-		case DataType::Float32:
-			return "Float32";
-		case DataType::Float64:
-			return "Float64";
-		case DataType::Int32:
-			return "Int32";
-		case DataType::Int64:
-			return "Int64";
-		case DataType::Bool:
-			return "Bool";
+			return std::string(DataTypeName(dtype));
 		}
 		return std::format("<invalid:{}>", static_cast<int>(dtype));
 	}
 
 	inline bool IsValidDataType(DataType dtype)
 	{
-		switch (dtype)
-		{
-		case DataType::Float32:
-		case DataType::Float64:
-		case DataType::Int32:
-		case DataType::Int64:
-		case DataType::Bool:
-			return true;
-		}
-		return false;
+		return IsValidDataTypeValue(dtype);
 	}
 
 	inline bool IsValidUnaryOp(UnaryOp op)
@@ -71,6 +57,7 @@ namespace LiteNN::Validation
 		case UnaryOp::Arctan:
 		case UnaryOp::Transpose:
 		case UnaryOp::LogicalNegation:
+		case UnaryOp::Erf:
 			return true;
 		}
 		return false;
@@ -120,6 +107,88 @@ namespace LiteNN::Validation
 		return false;
 	}
 
+	inline bool IsValidSortOrder(SortOrder order)
+	{
+		switch (order)
+		{
+		case SortOrder::Ascending:
+		case SortOrder::Descending:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidPadMode(PadMode mode)
+	{
+		switch (mode)
+		{
+		case PadMode::Constant:
+		case PadMode::Reflect:
+		case PadMode::Replicate:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidScatterMode(ScatterMode mode)
+	{
+		switch (mode)
+		{
+		case ScatterMode::Update:
+		case ScatterMode::Add:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidScanOp(ScanOp op)
+	{
+		switch (op)
+		{
+		case ScanOp::Sum:
+		case ScanOp::Max:
+		case ScanOp::Prod:
+		case ScanOp::LogSumExp:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidNormalizationMode(NormalizationMode mode)
+	{
+		switch (mode)
+		{
+		case NormalizationMode::LayerNorm:
+		case NormalizationMode::RMSNorm:
+		case NormalizationMode::GroupNorm:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidPoolMode(PoolMode mode)
+	{
+		switch (mode)
+		{
+		case PoolMode::Max:
+		case PoolMode::Average:
+			return true;
+		}
+		return false;
+	}
+
+	inline bool IsValidUpsampleMode(UpsampleMode mode)
+	{
+		switch (mode)
+		{
+		case UpsampleMode::Nearest:
+		case UpsampleMode::Bilinear:
+		case UpsampleMode::Bicubic:
+			return true;
+		}
+		return false;
+	}
+
 	inline std::string ShapeToString(std::span<const std::size_t> shape)
 	{
 		std::string result = "[";
@@ -155,6 +224,8 @@ namespace LiteNN::Validation
 				    return "ParamRefNode";
 			    else if constexpr (std::same_as<T, ConstantNode>)
 				    return "ConstantNode";
+			    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    return "QuantizedConstantNode";
 			    else if constexpr (std::same_as<T, VariableRefNode>)
 				    return "VariableRefNode";
 			    else if constexpr (std::same_as<T, UnaryOpNode>)
@@ -165,6 +236,10 @@ namespace LiteNN::Validation
 				    return "CallNode";
 			    else if constexpr (std::same_as<T, CastNode>)
 				    return "CastNode";
+			    else if constexpr (std::same_as<T, QuantizeNode>)
+				    return "QuantizeNode";
+			    else if constexpr (std::same_as<T, DequantizeNode>)
+				    return "DequantizeNode";
 			    else if constexpr (std::same_as<T, CondNode>)
 				    return "CondNode";
 			    else if constexpr (std::same_as<T, WhileNode>)
@@ -181,10 +256,58 @@ namespace LiteNN::Validation
 				    return "ReduceOpNode";
 			    else if constexpr (std::same_as<T, ReshapeNode>)
 				    return "ReshapeNode";
+			    else if constexpr (std::same_as<T, PermuteNode>)
+				    return "PermuteNode";
+			    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    return "BroadcastToNode";
+			    else if constexpr (std::same_as<T, PadNode>)
+				    return "PadNode";
+			    else if constexpr (std::same_as<T, GatherNode>)
+				    return "GatherNode";
+			    else if constexpr (std::same_as<T, ScatterNode>)
+				    return "ScatterNode";
+			    else if constexpr (std::same_as<T, ScanNode>)
+				    return "ScanNode";
+			    else if constexpr (std::same_as<T, SSMScanNode>)
+				    return "SSMScanNode";
+			    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    return "RWKVWKVNode";
+			    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    return "SoftmaxNode";
+			    else if constexpr (std::same_as<T, NormalizationNode>)
+				    return "NormalizationNode";
+			    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    return "BatchMatMulNode";
+			    else if constexpr (std::same_as<T, OutProdNode>)
+				    return "OutProdNode";
+			    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    return "TimestepEmbeddingNode";
+			    else if constexpr (std::same_as<T, SolveTriNode>)
+				    return "SolveTriNode";
+			    else if constexpr (std::same_as<T, SGDStepNode>)
+				    return "SGDStepNode";
+			    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    return "AdamWStepNode";
+			    else if constexpr (std::same_as<T, Im2ColNode>)
+				    return "Im2ColNode";
+			    else if constexpr (std::same_as<T, Conv2DNode>)
+				    return "Conv2DNode";
+			    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    return "ConvTranspose2DNode";
+			    else if constexpr (std::same_as<T, Pool2DNode>)
+				    return "Pool2DNode";
+			    else if constexpr (std::same_as<T, UpsampleNode>)
+				    return "UpsampleNode";
 			    else if constexpr (std::same_as<T, ConcatNode>)
 				    return "ConcatNode";
 			    else if constexpr (std::same_as<T, SliceNode>)
 				    return "SliceNode";
+			    else if constexpr (std::same_as<T, GetRowsNode>)
+				    return "GetRowsNode";
+			    else if constexpr (std::same_as<T, ArgsortNode>)
+				    return "ArgsortNode";
+			    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    return "MulMatIdNode";
 			    else if constexpr (std::same_as<T, FusedOpNode>)
 				    return "FusedOpNode";
 			    else
@@ -346,6 +469,18 @@ namespace LiteNN::Validation
 					                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
 					                 FormatInfo(data.DType(), data.Shape().Dims)));
 				}
+				if (variable->Quantization())
+				{
+					try
+					{
+						ValidateQuantizationParams(*variable->Quantization(), data.Shape(), data.DType());
+					}
+					catch (const std::runtime_error& ex)
+					{
+						Fail(std::format("Graph validation failed: variable {} quantization metadata is invalid: {}",
+						                 i, ex.what()));
+					}
+				}
 			}
 		}
 
@@ -397,7 +532,28 @@ namespace LiteNN::Validation
 		{
 			const auto& forward = graph_.GetSubgraph(graph_.Forward());
 			ValidateNameList(graph_.InputNames(), forward.Params().size(), "input");
+			ValidateNameList(graph_.VariableNames(), graph_.VariableCount(), "variable");
 			ValidateNameList(graph_.OutputNames(), forward.Results().size(), "output");
+			ValidateMetadataEntries();
+		}
+
+		void ValidateMetadataEntries() const
+		{
+			const auto metadata = graph_.Metadata();
+			for (std::size_t i = 0; i < metadata.size(); ++i)
+			{
+				if (metadata[i].key.empty())
+				{
+					Fail("Graph validation failed: metadata key is empty");
+				}
+				for (std::size_t j = i + 1; j < metadata.size(); ++j)
+				{
+					if (metadata[i].key == metadata[j].key)
+					{
+						Fail(std::format("Graph validation failed: duplicate metadata key '{}'", metadata[i].key));
+					}
+				}
+			}
 		}
 
 		void ValidateSubgraph(SubgraphId subgraphId) const
@@ -458,6 +614,23 @@ namespace LiteNN::Validation
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
 			           { node.value.DType(), node.value.Shape().ToOwned() }, "ConstantNode output");
+		}
+
+		void ValidateNode(const Subgraph&, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizedConstantNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { node.storage.DType(), node.storage.Shape().ToOwned() }, "QuantizedConstantNode output");
+			try
+			{
+				ValidateQuantizationParams(node.params, node.storage.Shape(), node.storage.DType());
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("QuantizedConstantNode metadata is invalid: {}", ex.what()));
+			}
 		}
 
 		void ValidateNode(const Subgraph&, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -546,6 +719,59 @@ namespace LiteNN::Validation
 			ValidateDataType(node.targetType, std::format("subgraph {} node {} CastNode target", subgraphId, nodeId));
 			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "CastNode input", true);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.targetType, input.shape }, "CastNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizeNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "QuantizeNode input", true);
+			if (!IsFloatingDataType(input.dtype))
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("QuantizeNode input must be floating-point, got {}",
+				                 FormatInfo(input.dtype, input.shape)));
+			}
+			if (node.params.scheme != QuantizationScheme::Affine)
+			{
+				Fail(subgraphId, nodeId, "QuantizeNode currently supports affine quantization only");
+			}
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ input.shape }, node.params.storageType);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("QuantizeNode metadata is invalid: {}", ex.what()));
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.params.storageType, input.shape },
+			           "QuantizeNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const DequantizeNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			ValidateDataType(node.targetType,
+			                 std::format("subgraph {} node {} DequantizeNode target", subgraphId, nodeId));
+			if (!IsFloatingDataType(node.targetType))
+			{
+				Fail(subgraphId, nodeId, "DequantizeNode target type must be floating-point");
+			}
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "DequantizeNode input", true);
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ input.shape }, input.dtype);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("DequantizeNode metadata is invalid: {}", ex.what()));
+			}
+			const auto outputShape =
+			    node.params.scheme == QuantizationScheme::Block ? node.params.expressedShape : input.shape;
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.targetType, outputShape },
+			           "DequantizeNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -721,6 +947,548 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const PermuteNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PermuteNode input", true);
+			const auto rank = input.shape.size();
+			if (node.permutation.size() != rank)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("PermuteNode permutation rank {} does not match input rank {}",
+				                 node.permutation.size(), rank));
+				return;
+			}
+			std::vector<bool> seen(rank, false);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				const auto p = node.permutation[d];
+				if (p >= rank || seen[p])
+				{
+					Fail(subgraphId, nodeId,
+					     std::format("PermuteNode permutation must be a valid permutation of [0, {})", rank));
+					return;
+				}
+				seen[p] = true;
+			}
+			std::vector<std::size_t> outputShape(rank);
+			for (auto d = 0uz; d < rank; ++d)
+			{
+				outputShape[d] = input.shape[node.permutation[d]];
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "PermuteNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const BroadcastToNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "BroadcastToNode input", true);
+			ValidateShape(node.targetShape,
+			              std::format("subgraph {} node {} BroadcastToNode target", subgraphId, nodeId));
+			const auto outputShape = Detail::BroadcastToShape(input.shape, node.targetShape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape },
+			           "BroadcastToNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const PadNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidPadMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid PadMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PadNode input", true);
+			const auto outputShape = Detail::PadOutputShape(input.shape, node.lowPads, node.highPads);
+			if (node.mode == PadMode::Reflect)
+			{
+				for (std::size_t dim = 0; dim < input.shape.size(); ++dim)
+				{
+					if ((node.lowPads[dim] != 0 || node.highPads[dim] != 0) && input.shape[dim] < 2)
+					{
+						Fail(subgraphId, nodeId,
+						     std::format("PadNode reflect mode requires input dim {} to have size >= 2", dim));
+					}
+				}
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "PadNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GatherNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "GatherNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "GatherNode indices", true);
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("GatherNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+			const auto outputShape = Detail::GatherOutputShape(data.shape, indices.shape, node.axis);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, outputShape }, "GatherNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ScatterNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidScatterMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid ScatterMode {}", static_cast<int>(node.mode)));
+			}
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "ScatterNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "ScatterNode indices", true);
+			const auto updates =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.updates, "ScatterNode updates", true);
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("ScatterNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+			if (node.mode == ScatterMode::Add && data.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ScatterNode Add mode does not support Bool tensors");
+			}
+			const auto expectedUpdatesShape = Detail::ScatterUpdatesShape(data.shape, indices.shape, node.axis);
+			ExpectInfo(subgraphId, nodeId, { updates.dtype, updates.shape }, { data.dtype, expectedUpdatesShape },
+			           "ScatterNode updates");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, data.shape }, "ScatterNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ScanNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidScanOp(node.op))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid ScanOp {}", static_cast<int>(node.op)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "ScanNode input", true);
+			if (input.shape.empty())
+			{
+				Fail(subgraphId, nodeId, "ScanNode input must have rank >= 1");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ScanNode does not support Bool tensors");
+			}
+			if (node.op == ScanOp::LogSumExp && !IsFloatingDataType(input.dtype))
+			{
+				Fail(subgraphId, nodeId, "ScanNode LogSumExp requires a floating-point input tensor");
+			}
+			if (node.axis >= input.shape.size())
+			{
+				Fail(subgraphId, nodeId, std::format("ScanNode axis {} out of range for rank {}", node.axis, input.shape.size()));
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape }, "ScanNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SSMScanNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto state = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.state, "SSMScanNode state", true);
+			const auto dt = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.dt, "SSMScanNode dt", true);
+			const auto a = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.a, "SSMScanNode a", true);
+			const auto b = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.b, "SSMScanNode b", true);
+			const auto c = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.c, "SSMScanNode c", true);
+			if (state.shape.size() != 2)
+			{
+				Fail(subgraphId, nodeId, "SSMScanNode state must be rank-2 [steps, channels]");
+			}
+			if (!IsFloatingDataType(state.dtype) || !IsFloatingDataType(dt.dtype) || !IsFloatingDataType(a.dtype) ||
+			    !IsFloatingDataType(b.dtype) || !IsFloatingDataType(c.dtype))
+			{
+				Fail(subgraphId, nodeId, "SSMScanNode requires floating-point tensors");
+			}
+			(void)Detail::BroadcastToShape(dt.shape, state.shape);
+			(void)Detail::BroadcastToShape(a.shape, state.shape);
+			(void)Detail::BroadcastToShape(b.shape, state.shape);
+			(void)Detail::BroadcastToShape(c.shape, state.shape);
+			if (node.d)
+			{
+				const auto d = ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.d, "SSMScanNode d", true);
+				if (!IsFloatingDataType(d.dtype))
+				{
+					Fail(subgraphId, nodeId, "SSMScanNode requires floating-point tensors");
+				}
+				(void)Detail::BroadcastToShape(d.shape, state.shape);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { state.dtype, state.shape }, "SSMScanNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const RWKVWKVNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto key = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.key, "RWKVWKVNode key", true);
+			const auto value = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.value, "RWKVWKVNode value", true);
+			const auto receptance =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.receptance, "RWKVWKVNode receptance", true);
+			const auto timeDecay =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timeDecay, "RWKVWKVNode timeDecay", true);
+			const auto timeFirst =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timeFirst, "RWKVWKVNode timeFirst", true);
+			if (key.shape.size() != 2)
+			{
+				Fail(subgraphId, nodeId, "RWKVWKVNode key must be rank-2 [steps, channels]");
+			}
+			if (key.dtype != value.dtype || key.dtype != receptance.dtype || !SameShape(key.shape, value.shape) ||
+			    !SameShape(key.shape, receptance.shape))
+			{
+				Fail(subgraphId, nodeId, "RWKVWKVNode key/value/receptance metadata must match");
+			}
+			if (!IsFloatingDataType(key.dtype) || !IsFloatingDataType(timeDecay.dtype) ||
+			    !IsFloatingDataType(timeFirst.dtype))
+			{
+				Fail(subgraphId, nodeId, "RWKVWKVNode requires floating-point tensors");
+			}
+			(void)Detail::BroadcastToShape(timeDecay.shape, key.shape);
+			(void)Detail::BroadcastToShape(timeFirst.shape, key.shape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { key.dtype, key.shape }, "RWKVWKVNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SoftmaxNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "SoftmaxNode input", true);
+			if (input.shape.empty() || node.axis >= input.shape.size())
+			{
+				Fail(subgraphId, nodeId, "SoftmaxNode axis out of range");
+			}
+			if (!IsFloatingDataType(input.dtype))
+			{
+				Fail(subgraphId, nodeId, "SoftmaxNode requires a floating-point input tensor");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape }, "SoftmaxNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const NormalizationNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidNormalizationMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid NormalizationMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "NormalizationNode input", true);
+			if (!IsFloatingDataType(input.dtype))
+			{
+				Fail(subgraphId, nodeId, "NormalizationNode requires a floating-point input tensor");
+			}
+			if (!std::isfinite(node.epsilon) || node.epsilon <= 0.0)
+			{
+				Fail(subgraphId, nodeId, "NormalizationNode epsilon must be finite and positive");
+			}
+			if (node.scale)
+			{
+				const auto scale =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.scale, "NormalizationNode scale", true);
+				if (!IsFloatingDataType(scale.dtype))
+				{
+					Fail(subgraphId, nodeId, "NormalizationNode scale must be floating-point");
+				}
+				(void)Detail::BroadcastToShape(scale.shape, input.shape);
+			}
+			if (node.bias)
+			{
+				const auto bias =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.bias, "NormalizationNode bias", true);
+				if (!IsFloatingDataType(bias.dtype))
+				{
+					Fail(subgraphId, nodeId, "NormalizationNode bias must be floating-point");
+				}
+				(void)Detail::BroadcastToShape(bias.shape, input.shape);
+			}
+			if (node.mode == NormalizationMode::LayerNorm || node.mode == NormalizationMode::RMSNorm)
+			{
+				if (input.shape.empty() || node.axis >= input.shape.size())
+				{
+					Fail(subgraphId, nodeId, "NormalizationNode axis out of range");
+				}
+			}
+			else
+			{
+				if (node.groupCount == 0)
+				{
+					Fail(subgraphId, nodeId, "NormalizationNode GroupNorm requires groupCount > 0");
+				}
+				if (input.shape.empty() || input.shape.size() > 4)
+				{
+					Fail(subgraphId, nodeId, "NormalizationNode GroupNorm input rank must be between 1 and 4");
+				}
+				auto groupedVolume = 1uz;
+				const auto groupedRank = std::min<std::size_t>(input.shape.size(), 3);
+				for (auto dim = 0uz; dim < groupedRank; ++dim)
+				{
+					groupedVolume *= input.shape[dim];
+				}
+				if (groupedVolume % node.groupCount != 0)
+				{
+					Fail(subgraphId, nodeId,
+					     "NormalizationNode GroupNorm grouped element count must be divisible by groupCount");
+				}
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape },
+			           "NormalizationNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const BatchMatMulNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto lhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.lhs, "BatchMatMulNode lhs", true);
+			const auto rhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.rhs, "BatchMatMulNode rhs", true);
+			if (lhs.dtype != rhs.dtype)
+			{
+				Fail(subgraphId, nodeId, "BatchMatMulNode inputs must have the same dtype");
+			}
+			if (lhs.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "BatchMatMulNode does not support Bool tensors");
+			}
+			const auto outputShape = Detail::BatchMatMulOutputShape(lhs.shape, rhs.shape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { lhs.dtype, outputShape }, "BatchMatMulNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const OutProdNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto lhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.lhs, "OutProdNode lhs", true);
+			const auto rhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.rhs, "OutProdNode rhs", true);
+			if (lhs.dtype != rhs.dtype)
+			{
+				Fail(subgraphId, nodeId, "OutProdNode inputs must have the same dtype");
+			}
+			if (!IsFloatingDataType(lhs.dtype))
+			{
+				Fail(subgraphId, nodeId, "OutProdNode requires floating-point tensors");
+			}
+			const auto outputShape = Detail::OutProdOutputShape(lhs.shape, rhs.shape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { lhs.dtype, outputShape }, "OutProdNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const TimestepEmbeddingNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto timesteps =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timesteps, "TimestepEmbeddingNode timesteps", true);
+			if (!IsFloatingDataType(timesteps.dtype))
+			{
+				Fail(subgraphId, nodeId, "TimestepEmbeddingNode requires floating-point timesteps");
+			}
+			const auto outputShape =
+			    Detail::TimestepEmbeddingOutputShape(timesteps.shape, node.dim, node.maxPeriod);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, outputShape },
+			           "TimestepEmbeddingNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SolveTriNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto a = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.a, "SolveTriNode a", true);
+			const auto b = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.b, "SolveTriNode b", true);
+			if (a.dtype != DataType::Float32 || b.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "SolveTriNode currently supports Float32 tensors only");
+			}
+			const auto outputShape = Detail::SolveTriOutputShape(a.shape, b.shape, node.lower, node.unitDiagonal);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, outputShape },
+			           "SolveTriNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SGDStepNode& node) const
+		{
+			const auto outputCount = Detail::SGDStepOutputCount(node.velocity.has_value(), node.momentum);
+			ExpectOutputCount(subgraphId, nodeId, entry, outputCount);
+			const auto parameter =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.parameter, "SGDStepNode parameter", true);
+			const auto gradient =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.gradient, "SGDStepNode gradient", true);
+			if (parameter.dtype != DataType::Float32 || gradient.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "SGDStepNode currently supports Float32 tensors only");
+			}
+			Detail::ValidateOptimizerStepShape(parameter.shape, gradient.shape, "SGDStepNode gradient");
+			if (node.velocity)
+			{
+				const auto velocity =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.velocity, "SGDStepNode velocity", true);
+				if (velocity.dtype != DataType::Float32)
+				{
+					Fail(subgraphId, nodeId, "SGDStepNode velocity must be Float32");
+				}
+				Detail::ValidateOptimizerStepShape(parameter.shape, velocity.shape, "SGDStepNode velocity");
+			}
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
+			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0)
+			{
+				Fail(subgraphId, nodeId, "SGDStepNode has invalid scalar hyperparameters");
+			}
+			for (auto output = 0uz; output < outputCount; ++output)
+			{
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
+				           { DataType::Float32, parameter.shape }, "SGDStepNode output");
+			}
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const AdamWStepNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 3);
+			const auto parameter =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.parameter, "AdamWStepNode parameter", true);
+			const auto gradient =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.gradient, "AdamWStepNode gradient", true);
+			const auto firstMoment =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.firstMoment, "AdamWStepNode firstMoment", true);
+			const auto secondMoment =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.secondMoment, "AdamWStepNode secondMoment", true);
+			if (parameter.dtype != DataType::Float32 || gradient.dtype != DataType::Float32 ||
+			    firstMoment.dtype != DataType::Float32 || secondMoment.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "AdamWStepNode currently supports Float32 tensors only");
+			}
+			Detail::ValidateOptimizerStepShape(parameter.shape, gradient.shape, "AdamWStepNode gradient");
+			Detail::ValidateOptimizerStepShape(parameter.shape, firstMoment.shape, "AdamWStepNode firstMoment");
+			Detail::ValidateOptimizerStepShape(parameter.shape, secondMoment.shape, "AdamWStepNode secondMoment");
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
+			    !std::isfinite(node.beta1) || !std::isfinite(node.beta2) ||
+			    node.beta1 < 0.0 || node.beta1 >= 1.0 || node.beta2 < 0.0 || node.beta2 >= 1.0 ||
+			    !std::isfinite(node.epsilon) || node.epsilon <= 0.0 ||
+			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0 || node.step == 0)
+			{
+				Fail(subgraphId, nodeId, "AdamWStepNode has invalid scalar hyperparameters");
+			}
+			for (auto output = 0uz; output < 3; ++output)
+			{
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
+				           { DataType::Float32, parameter.shape }, "AdamWStepNode output");
+			}
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Im2ColNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Im2ColNode input", true);
+			const auto outputShape = Detail::Im2ColOutputShape(input.shape, node.kernelShape, node.strides,
+			                                                   node.dilations, node.lowPads, node.highPads);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Im2ColNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Conv2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Conv2DNode input", true);
+			const auto weight =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.weight, "Conv2DNode weight", true);
+			if (input.dtype != weight.dtype)
+			{
+				Fail(subgraphId, nodeId, "Conv2DNode input and weight dtypes must match");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "Conv2DNode does not support Bool tensors");
+			}
+			const auto outputShape = Detail::Conv2DOutputShape(input.shape, weight.shape, node.strides, node.dilations,
+			                                                   node.lowPads, node.highPads, node.groupCount);
+			if (node.bias)
+			{
+				const auto bias = ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.bias, "Conv2DNode bias", true);
+				if (bias.dtype != input.dtype)
+				{
+					Fail(subgraphId, nodeId, "Conv2DNode bias dtype must match input dtype");
+				}
+				Detail::ValidateConv2DBiasShape(bias.shape, outputShape[1]);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Conv2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ConvTranspose2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "ConvTranspose2DNode input", true);
+			const auto weight =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.weight, "ConvTranspose2DNode weight", true);
+			if (input.dtype != weight.dtype)
+			{
+				Fail(subgraphId, nodeId, "ConvTranspose2DNode input and weight dtypes must match");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ConvTranspose2DNode does not support Bool tensors");
+			}
+			const auto outputShape = Detail::ConvTranspose2DOutputShape(input.shape, weight.shape, node.strides,
+			                                                            node.dilations, node.lowPads, node.highPads,
+			                                                            node.outputPads, node.groupCount);
+			if (node.bias)
+			{
+				const auto bias =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.bias, "ConvTranspose2DNode bias", true);
+				if (bias.dtype != input.dtype)
+				{
+					Fail(subgraphId, nodeId, "ConvTranspose2DNode bias dtype must match input dtype");
+				}
+				Detail::ValidateConv2DBiasShape(bias.shape, outputShape[1]);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape },
+			           "ConvTranspose2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const Pool2DNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidPoolMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid PoolMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "Pool2DNode input", true);
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "Pool2DNode does not support Bool tensors");
+			}
+			const auto outputShape =
+			    Detail::Pool2DOutputShape(input.shape, node.kernelShape, node.strides, node.lowPads, node.highPads);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "Pool2DNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const UpsampleNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidUpsampleMode(node.mode))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid UpsampleMode {}", static_cast<int>(node.mode)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "UpsampleNode input", true);
+			if (input.dtype == DataType::Bool && node.mode != UpsampleMode::Nearest)
+			{
+				Fail(subgraphId, nodeId, "UpsampleNode only supports Bool tensors in nearest mode");
+			}
+			const auto outputShape = Detail::UpsampleOutputShape(input.shape, node.outputSpatialShape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "UpsampleNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const ConcatNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
@@ -776,6 +1544,96 @@ namespace LiteNN::Validation
 			auto outputShape = input.shape;
 			outputShape[node.axis] = node.length;
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, outputShape }, "SliceNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GetRowsNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto data = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.data, "GetRowsNode data", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "GetRowsNode indices", true);
+
+			if (data.shape.empty())
+			{
+				Fail(subgraphId, nodeId, "GetRowsNode data input must have rank >= 1");
+			}
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("GetRowsNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+
+			auto outputShape = indices.shape;
+			outputShape.insert(outputShape.end(), data.shape.begin() + 1, data.shape.end());
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { data.dtype, outputShape }, "GetRowsNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ArgsortNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			if (!IsValidSortOrder(node.order))
+			{
+				Fail(subgraphId, nodeId, std::format("invalid SortOrder {}", static_cast<int>(node.order)));
+			}
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "ArgsortNode input", true);
+			if (input.shape.empty())
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode input must have rank >= 1");
+			}
+			if (input.dtype == DataType::Bool)
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode does not support Bool tensors");
+			}
+			if (node.axis >= input.shape.size())
+			{
+				Fail(subgraphId, nodeId, std::format("ArgsortNode axis {} out of range for rank {}", node.axis, input.shape.size()));
+			}
+			if (input.shape[node.axis] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				Fail(subgraphId, nodeId, "ArgsortNode sort dimension exceeds Int32 index range");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Int32, input.shape }, "ArgsortNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const MulMatIdNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto as = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.as, "MulMatIdNode as", true);
+			const auto b = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.b, "MulMatIdNode b", true);
+			const auto ids = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.ids, "MulMatIdNode ids", true);
+
+			if (as.shape.size() != 3 || b.shape.size() != 3 || ids.shape.size() != 2)
+			{
+				Fail(subgraphId, nodeId,
+				     "MulMatIdNode expects a rank-3 expert tensor, a rank-3 input tensor, and a rank-2 id tensor");
+			}
+			if (!IsFloatingDataType(as.dtype) || !IsFloatingDataType(b.dtype))
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires floating-point as and b tensors");
+			}
+			if (ids.dtype != DataType::Int32 && ids.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode ids must have dtype Int32 or Int64");
+			}
+			if (as.shape[0] != b.shape[0])
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires as.shape[0] == b.shape[0]");
+			}
+			if (ids.shape[1] != b.shape[2])
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires ids.shape[1] == b.shape[2]");
+			}
+			if (ids.shape[0] % b.shape[1] != 0)
+			{
+				Fail(subgraphId, nodeId, "MulMatIdNode requires ids.shape[0] to be divisible by b.shape[1]");
+			}
+
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, { as.shape[1], ids.shape[0], b.shape[2] } },
+			           "MulMatIdNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

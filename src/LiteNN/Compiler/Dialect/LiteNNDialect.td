@@ -34,7 +34,8 @@ def LiteNN_UnaryOpKind : I32EnumAttr<"UnaryOpKind", "litenn unary operation", [
   I32EnumAttrCase<"Arccos",           9>,
   I32EnumAttrCase<"Arctan",          10>,
   I32EnumAttrCase<"Transpose",       11>,
-  I32EnumAttrCase<"LogicalNegation", 12>
+  I32EnumAttrCase<"LogicalNegation", 12>,
+  I32EnumAttrCase<"Erf",             13>
 ]> {
   let cppNamespace = "::litenn";
 }

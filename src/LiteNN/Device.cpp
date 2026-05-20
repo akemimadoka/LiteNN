@@ -86,4 +86,17 @@ namespace LiteNN
 	{
 		device.impl_->DoSliceOp(dst, type, srcShape, src, axis, start, length);
 	}
+
+	void DeviceTraits<PolymorphicDevice>::DoGetRowsOp(PolymorphicDevice& device, void* dst, DataType dataType,
+	                                                 ShapeView dataShape, const void* data, DataType indexType,
+	                                                 ShapeView indexShape, const void* indices)
+	{
+		device.impl_->DoGetRowsOp(dst, dataType, dataShape, data, indexType, indexShape, indices);
+	}
+
+	void DeviceTraits<PolymorphicDevice>::DoPermuteOp(PolymorphicDevice& device, void* dst, DataType type,
+	                                                 ShapeView srcShape, const void* src, ShapeView permutation)
+	{
+		device.impl_->DoPermuteOp(dst, type, srcShape, src, permutation);
+	}
 } // namespace LiteNN
