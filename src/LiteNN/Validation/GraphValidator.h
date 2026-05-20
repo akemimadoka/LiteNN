@@ -278,6 +278,16 @@ namespace LiteNN::Validation
 				    return "NormalizationNode";
 			    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    return "BatchMatMulNode";
+			    else if constexpr (std::same_as<T, OutProdNode>)
+				    return "OutProdNode";
+			    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    return "TimestepEmbeddingNode";
+			    else if constexpr (std::same_as<T, SolveTriNode>)
+				    return "SolveTriNode";
+			    else if constexpr (std::same_as<T, SGDStepNode>)
+				    return "SGDStepNode";
+			    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    return "AdamWStepNode";
 			    else if constexpr (std::same_as<T, Im2ColNode>)
 				    return "Im2ColNode";
 			    else if constexpr (std::same_as<T, Conv2DNode>)
@@ -1249,6 +1259,126 @@ namespace LiteNN::Validation
 			}
 			const auto outputShape = Detail::BatchMatMulOutputShape(lhs.shape, rhs.shape);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { lhs.dtype, outputShape }, "BatchMatMulNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const OutProdNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto lhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.lhs, "OutProdNode lhs", true);
+			const auto rhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.rhs, "OutProdNode rhs", true);
+			if (lhs.dtype != rhs.dtype)
+			{
+				Fail(subgraphId, nodeId, "OutProdNode inputs must have the same dtype");
+			}
+			if (!IsFloatingDataType(lhs.dtype))
+			{
+				Fail(subgraphId, nodeId, "OutProdNode requires floating-point tensors");
+			}
+			const auto outputShape = Detail::OutProdOutputShape(lhs.shape, rhs.shape);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { lhs.dtype, outputShape }, "OutProdNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const TimestepEmbeddingNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto timesteps =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timesteps, "TimestepEmbeddingNode timesteps", true);
+			if (!IsFloatingDataType(timesteps.dtype))
+			{
+				Fail(subgraphId, nodeId, "TimestepEmbeddingNode requires floating-point timesteps");
+			}
+			const auto outputShape =
+			    Detail::TimestepEmbeddingOutputShape(timesteps.shape, node.dim, node.maxPeriod);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, outputShape },
+			           "TimestepEmbeddingNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SolveTriNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto a = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.a, "SolveTriNode a", true);
+			const auto b = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.b, "SolveTriNode b", true);
+			if (a.dtype != DataType::Float32 || b.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "SolveTriNode currently supports Float32 tensors only");
+			}
+			const auto outputShape = Detail::SolveTriOutputShape(a.shape, b.shape, node.lower, node.unitDiagonal);
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, outputShape },
+			           "SolveTriNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const SGDStepNode& node) const
+		{
+			const auto outputCount = Detail::SGDStepOutputCount(node.velocity.has_value(), node.momentum);
+			ExpectOutputCount(subgraphId, nodeId, entry, outputCount);
+			const auto parameter =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.parameter, "SGDStepNode parameter", true);
+			const auto gradient =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.gradient, "SGDStepNode gradient", true);
+			if (parameter.dtype != DataType::Float32 || gradient.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "SGDStepNode currently supports Float32 tensors only");
+			}
+			Detail::ValidateOptimizerStepShape(parameter.shape, gradient.shape, "SGDStepNode gradient");
+			if (node.velocity)
+			{
+				const auto velocity =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.velocity, "SGDStepNode velocity", true);
+				if (velocity.dtype != DataType::Float32)
+				{
+					Fail(subgraphId, nodeId, "SGDStepNode velocity must be Float32");
+				}
+				Detail::ValidateOptimizerStepShape(parameter.shape, velocity.shape, "SGDStepNode velocity");
+			}
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
+			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0)
+			{
+				Fail(subgraphId, nodeId, "SGDStepNode has invalid scalar hyperparameters");
+			}
+			for (auto output = 0uz; output < outputCount; ++output)
+			{
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
+				           { DataType::Float32, parameter.shape }, "SGDStepNode output");
+			}
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const AdamWStepNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 3);
+			const auto parameter =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.parameter, "AdamWStepNode parameter", true);
+			const auto gradient =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.gradient, "AdamWStepNode gradient", true);
+			const auto firstMoment =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.firstMoment, "AdamWStepNode firstMoment", true);
+			const auto secondMoment =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.secondMoment, "AdamWStepNode secondMoment", true);
+			if (parameter.dtype != DataType::Float32 || gradient.dtype != DataType::Float32 ||
+			    firstMoment.dtype != DataType::Float32 || secondMoment.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "AdamWStepNode currently supports Float32 tensors only");
+			}
+			Detail::ValidateOptimizerStepShape(parameter.shape, gradient.shape, "AdamWStepNode gradient");
+			Detail::ValidateOptimizerStepShape(parameter.shape, firstMoment.shape, "AdamWStepNode firstMoment");
+			Detail::ValidateOptimizerStepShape(parameter.shape, secondMoment.shape, "AdamWStepNode secondMoment");
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
+			    !std::isfinite(node.beta1) || !std::isfinite(node.beta2) ||
+			    node.beta1 < 0.0 || node.beta1 >= 1.0 || node.beta2 < 0.0 || node.beta2 >= 1.0 ||
+			    !std::isfinite(node.epsilon) || node.epsilon <= 0.0 ||
+			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0 || node.step == 0)
+			{
+				Fail(subgraphId, nodeId, "AdamWStepNode has invalid scalar hyperparameters");
+			}
+			for (auto output = 0uz; output < 3; ++output)
+			{
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
+				           { DataType::Float32, parameter.shape }, "AdamWStepNode output");
+			}
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

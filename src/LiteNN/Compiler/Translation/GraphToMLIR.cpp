@@ -728,6 +728,41 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support BatchMatMulNode yet; use the interpreter path");
 	}
 
+	void emitNode(const Subgraph&, NodeId, const OutProdNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support OutProdNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const TimestepEmbeddingNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support TimestepEmbeddingNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const SolveTriNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support SolveTriNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const SGDStepNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support SGDStepNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const AdamWStepNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support AdamWStepNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph&, NodeId, const Im2ColNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)

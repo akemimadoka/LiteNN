@@ -28,4 +28,12 @@ build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.segment.
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.decode.ltnn 1 16
 ```
 
+When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
+emitted as carrier objects with exported rodata/instruction symbols:
+
+```powershell
+build\tools\gguf\litenn_gguf_convert.exe --compile-cpu model.decode.ltnn model.decode.cpu.o litenn_llama_decode
+build\tools\gguf\litenn_gguf_convert.exe --compile-cuda model.decode.ltnn model.decode.cuda.o litenn_llama_decode
+```
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

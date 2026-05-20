@@ -50,7 +50,18 @@ namespace
 	std::string FormatCompiledSpec(const CompiledTensorSpec& spec, std::string_view fallbackPrefix, std::size_t index)
 	{
 		const auto name = spec.name.empty() ? std::format("{}{}", fallbackPrefix, index) : spec.name;
-		return std::format("{}: {}", name, Validation::FormatInfo(spec.dtype, spec.shape));
+		auto text = std::format("{}: {}", name, Validation::FormatInfo(spec.dtype, spec.shape));
+		if (spec.quantization)
+		{
+			text += std::format(" quant={} format={} expressed={}",
+			                    QuantizationSchemeName(spec.quantization->scheme),
+			                    QuantizedBlockFormatName(spec.quantization->blockFormat),
+			                    Validation::FormatInfo(spec.quantization->expressedType,
+			                                           spec.quantization->expressedShape.empty()
+			                                               ? spec.shape
+			                                               : spec.quantization->expressedShape));
+		}
+		return text;
 	}
 
 	std::string_view FormatBackend(CompiledModuleBackend backend)

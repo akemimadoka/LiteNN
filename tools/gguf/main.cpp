@@ -1,6 +1,9 @@
 #include "GGUFImporter.h"
 #include "LLaMABuilder.h"
 
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+#include <LiteNN/Compiler/CompiledModule.h>
+#endif
 #include <LiteNN/Serialization/ModelIO.h>
 
 #include <charconv>
@@ -17,6 +20,8 @@ namespace
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
 		          << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
+		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
+		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
 	}
 
@@ -33,6 +38,28 @@ namespace
 		}
 		return value;
 	}
+
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	std::string_view BackendName(LiteNN::CompiledModuleBackend backend)
+	{
+		switch (backend)
+		{
+			case LiteNN::CompiledModuleBackend::CPUNative:
+				return "cpu_native";
+			case LiteNN::CompiledModuleBackend::CUDANative:
+				return "cuda_native";
+		}
+		return "unknown";
+	}
+
+	void PrintArtifactSummary(const LiteNN::CompiledModuleArtifact& artifact, std::string_view outputPath)
+	{
+		std::cout << "Wrote AOT carrier object " << outputPath
+		          << " backend=" << BackendName(artifact.Backend())
+		          << " rodata=" << artifact.Rodata().size()
+		          << " bytes instructions=" << artifact.Instructions().size() << " bytes\n";
+	}
+#endif
 } // namespace
 
 int main(int argc, char** argv)
@@ -68,6 +95,46 @@ int main(int argc, char** argv)
 			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
 			          << " metadata entries\n";
 			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cpu")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
+			artifact.WriteObjectFile(argv[3], symbolPrefix);
+			PrintArtifactSummary(artifact, argv[3]);
+			return 0;
+#else
+			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cuda")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
+			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph);
+			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
+			artifact.WriteObjectFile(argv[3], symbolPrefix);
+			PrintArtifactSummary(artifact, argv[3]);
+			return 0;
+#elif defined(LITENN_GGUF_CONVERT_ENABLE_AOT)
+			throw std::runtime_error("CUDA AOT support is not enabled in this build; configure with LITENN_ENABLE_CUDA=ON");
+#else
+			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
 		}
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama")

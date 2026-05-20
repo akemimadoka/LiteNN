@@ -66,6 +66,101 @@ namespace LiteNN::Detail
 		return outputShape;
 	}
 
+	inline std::vector<std::size_t> OutProdOutputShape(std::span<const std::size_t> lhsShape,
+	                                                   std::span<const std::size_t> rhsShape)
+	{
+		if (lhsShape.size() < 2 || rhsShape.size() < 2)
+		{
+			throw std::runtime_error("OutProd inputs must have rank >= 2");
+		}
+		const auto lhsK = lhsShape[lhsShape.size() - 1];
+		const auto rhsK = rhsShape[rhsShape.size() - 1];
+		if (lhsK != rhsK)
+		{
+			throw std::runtime_error("OutProd contraction dimensions do not match");
+		}
+
+		const auto lhsLead = lhsShape.subspan(0, lhsShape.size() - 2);
+		const auto rhsLead = rhsShape.subspan(0, rhsShape.size() - 2);
+		auto outputShape = BroadcastShapesTrailing(lhsLead, rhsLead, "OutProd leading dimensions");
+		outputShape.push_back(lhsShape[lhsShape.size() - 2]);
+		outputShape.push_back(rhsShape[rhsShape.size() - 2]);
+		return outputShape;
+	}
+
+	inline std::vector<std::size_t> TimestepEmbeddingOutputShape(std::span<const std::size_t> timestepShape,
+	                                                            std::size_t dim, std::size_t maxPeriod)
+	{
+		if (timestepShape.size() != 1)
+		{
+			throw std::runtime_error("TimestepEmbedding timesteps must be rank-1");
+		}
+		if (dim == 0 || maxPeriod == 0)
+		{
+			throw std::runtime_error("TimestepEmbedding dim and maxPeriod must be positive");
+		}
+		return { timestepShape[0], dim };
+	}
+
+	inline std::vector<std::size_t> SolveTriOutputShape(std::span<const std::size_t> aShape,
+	                                                    std::span<const std::size_t> bShape,
+	                                                    bool lower, bool unitDiagonal)
+	{
+		if (!lower || unitDiagonal)
+		{
+			throw std::runtime_error("SolveTri currently supports only lower, non-unit diagonal solves");
+		}
+		if (aShape.size() < 2 || bShape.size() < 2)
+		{
+			throw std::runtime_error("SolveTri inputs must have rank >= 2");
+		}
+		if (aShape.size() != bShape.size())
+		{
+			throw std::runtime_error("SolveTri inputs must have the same rank");
+		}
+		const auto rank = aShape.size();
+		const auto n = aShape[rank - 1];
+		if (aShape[rank - 2] != n)
+		{
+			throw std::runtime_error("SolveTri matrix input must be square");
+		}
+		if (bShape[rank - 2] != n)
+		{
+			throw std::runtime_error("SolveTri rhs row dimension must match matrix size");
+		}
+		for (auto dim = 0uz; dim + 2 < rank; ++dim)
+		{
+			if (aShape[dim] != bShape[dim])
+			{
+				throw std::runtime_error("SolveTri batch dimensions must match exactly");
+			}
+		}
+		return std::vector<std::size_t>{ bShape.begin(), bShape.end() };
+	}
+
+	inline std::size_t SGDStepOutputCount(bool hasVelocity, double momentum)
+	{
+		if (momentum < 0.0)
+		{
+			throw std::runtime_error("SGDStep momentum must be non-negative");
+		}
+		if (momentum == 0.0 && hasVelocity)
+		{
+			throw std::runtime_error("SGDStep velocity requires momentum > 0");
+		}
+		return momentum > 0.0 ? 2uz : 1uz;
+	}
+
+	inline void ValidateOptimizerStepShape(std::span<const std::size_t> parameterShape,
+	                                       std::span<const std::size_t> otherShape,
+	                                       std::string_view label)
+	{
+		if (!std::ranges::equal(parameterShape, otherShape))
+		{
+			throw std::runtime_error(std::format("{} shape must match parameter shape", label));
+		}
+	}
+
 	inline std::size_t BroadcastOffsetForLinear(const Tensor<CPU>& tensor, std::span<const std::size_t> targetShape,
 	                                            std::size_t targetLinear)
 	{
@@ -194,6 +289,312 @@ namespace LiteNN::Detail
 			}
 		});
 		return result;
+	}
+
+	inline Tensor<CPU> EvalOutProd(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs)
+	{
+		const auto outputShape = OutProdOutputShape(lhs.Shape().Dims, rhs.Shape().Dims);
+		if (lhs.DType() != rhs.DType())
+		{
+			throw std::runtime_error("OutProd inputs must have the same dtype");
+		}
+		if (!IsFloatingDataType(lhs.DType()))
+		{
+			throw std::runtime_error("OutProd requires floating-point tensors");
+		}
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, lhs.DType(), cpu);
+
+		const auto lhsRank = lhs.Shape().NumDim();
+		const auto rhsRank = rhs.Shape().NumDim();
+		const auto outputRank = outputShape.size();
+		const auto leadRank = outputRank - 2;
+		const auto m = outputShape[outputRank - 2];
+		const auto n = outputShape[outputRank - 1];
+		const auto k = lhs.Shape()[lhsRank - 1];
+		const auto outputShapeView = std::span<const std::size_t>{ outputShape };
+		const auto batchCount = Product(outputShapeView.subspan(0, leadRank));
+		const auto outputLeadStrides = RowMajorStrides(outputShapeView.subspan(0, leadRank));
+		const auto lhsStrides = RowMajorStrides(lhs.Shape().Dims);
+		const auto rhsStrides = RowMajorStrides(rhs.Shape().Dims);
+		const auto lhsLeadRank = lhsRank - 2;
+		const auto rhsLeadRank = rhsRank - 2;
+		const auto lhsLeadDelta = leadRank - lhsLeadRank;
+		const auto rhsLeadDelta = leadRank - rhsLeadRank;
+
+		EnumDispatch(lhs.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* lhsPtr = static_cast<const T*>(lhs.RawData());
+			const auto* rhsPtr = static_cast<const T*>(rhs.RawData());
+			auto* dst = static_cast<T*>(result.RawData());
+
+			std::vector<std::size_t> coord(leadRank, 0uz);
+			for (auto batch = 0uz; batch < batchCount; ++batch)
+			{
+				auto remaining = batch;
+				for (auto dim = 0uz; dim < leadRank; ++dim)
+				{
+					coord[dim] = outputLeadStrides.empty() ? 0uz : remaining / outputLeadStrides[dim];
+					if (!outputLeadStrides.empty())
+					{
+						remaining %= outputLeadStrides[dim];
+					}
+				}
+
+				auto lhsBase = 0uz;
+				for (auto dim = 0uz; dim < lhsLeadRank; ++dim)
+				{
+					const auto outCoord = coord[lhsLeadDelta + dim];
+					const auto lhsCoord = lhs.Shape()[dim] == 1 ? 0uz : outCoord;
+					lhsBase += lhsCoord * lhsStrides[dim];
+				}
+				auto rhsBase = 0uz;
+				for (auto dim = 0uz; dim < rhsLeadRank; ++dim)
+				{
+					const auto outCoord = coord[rhsLeadDelta + dim];
+					const auto rhsCoord = rhs.Shape()[dim] == 1 ? 0uz : outCoord;
+					rhsBase += rhsCoord * rhsStrides[dim];
+				}
+
+				for (auto row = 0uz; row < m; ++row)
+				{
+					for (auto col = 0uz; col < n; ++col)
+					{
+						double acc = 0.0;
+						for (auto kk = 0uz; kk < k; ++kk)
+						{
+							const auto lhsOffset = lhsBase + row * lhsStrides[lhsRank - 2] + kk * lhsStrides[lhsRank - 1];
+							const auto rhsOffset = rhsBase + col * rhsStrides[rhsRank - 2] + kk * rhsStrides[rhsRank - 1];
+							acc += static_cast<double>(lhsPtr[lhsOffset]) * static_cast<double>(rhsPtr[rhsOffset]);
+						}
+						dst[(batch * m + row) * n + col] = static_cast<T>(acc);
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalTimestepEmbedding(const Tensor<CPU>& timesteps, std::size_t dim, std::size_t maxPeriod)
+	{
+		const auto outputShape = TimestepEmbeddingOutputShape(timesteps.Shape().Dims, dim, maxPeriod);
+		if (!IsFloatingDataType(timesteps.DType()))
+		{
+			throw std::runtime_error("TimestepEmbedding requires floating-point timesteps");
+		}
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, DataType::Float32, cpu);
+		auto* dst = static_cast<float*>(result.RawData());
+		const auto count = timesteps.Shape()[0];
+		const auto half = dim / 2;
+
+		EnumDispatch(timesteps.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(timesteps.RawData());
+			for (auto i = 0uz; i < count; ++i)
+			{
+				const auto timestep = static_cast<float>(src[i]);
+				auto* row = dst + i * dim;
+				for (auto j = 0uz; j < half; ++j)
+				{
+					const auto freq = half == 0 ? 0.0F
+					                            : std::exp(-std::log(static_cast<float>(maxPeriod)) *
+					                                       static_cast<float>(j) / static_cast<float>(half));
+					const auto arg = timestep * freq;
+					row[j] = std::cos(arg);
+					row[j + half] = std::sin(arg);
+				}
+				if (dim % 2 != 0)
+				{
+					row[2 * half] = 0.0F;
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalSolveTri(const Tensor<CPU>& a, const Tensor<CPU>& b, bool lower, bool unitDiagonal)
+	{
+		const auto outputShape = SolveTriOutputShape(a.Shape().Dims, b.Shape().Dims, lower, unitDiagonal);
+		if (a.DType() != DataType::Float32 || b.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("SolveTri currently supports Float32 tensors only");
+		}
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, outputShape, DataType::Float32, cpu);
+		const auto rank = a.Shape().NumDim();
+		const auto n = a.Shape()[rank - 1];
+		const auto rhsCols = b.Shape()[rank - 1];
+		const auto batchCount = Product(std::span<const std::size_t>{ outputShape }.subspan(0, rank - 2));
+		const auto* aPtr = static_cast<const float*>(a.RawData());
+		const auto* bPtr = static_cast<const float*>(b.RawData());
+		auto* dst = static_cast<float*>(result.RawData());
+
+		for (auto batch = 0uz; batch < batchCount; ++batch)
+		{
+			const auto aBase = batch * n * n;
+			const auto bBase = batch * n * rhsCols;
+			const auto dstBase = bBase;
+			for (auto col = 0uz; col < rhsCols; ++col)
+			{
+				for (auto row = 0uz; row < n; ++row)
+				{
+					float sum = 0.0F;
+					for (auto prev = 0uz; prev < row; ++prev)
+					{
+						sum += aPtr[aBase + row * n + prev] * dst[dstBase + prev * rhsCols + col];
+					}
+					const auto diag = aPtr[aBase + row * n + row];
+					if (diag == 0.0F)
+					{
+						throw std::runtime_error("SolveTri diagonal contains zero");
+					}
+					dst[dstBase + row * rhsCols + col] = (bPtr[bBase + row * rhsCols + col] - sum) / diag;
+				}
+			}
+		}
+		return result;
+	}
+
+	inline std::vector<Tensor<CPU>> EvalSGDStep(const Tensor<CPU>& parameter, const Tensor<CPU>& gradient,
+	                                            const Tensor<CPU>* velocity, double learningRate,
+	                                            double momentum, double weightDecay, bool nesterov)
+	{
+		if (parameter.DType() != DataType::Float32 || gradient.DType() != DataType::Float32 ||
+		    (velocity && velocity->DType() != DataType::Float32))
+		{
+			throw std::runtime_error("SGDStep currently supports Float32 tensors only");
+		}
+		ValidateOptimizerStepShape(parameter.Shape().Dims, gradient.Shape().Dims, "SGDStep gradient");
+		if (velocity)
+		{
+			ValidateOptimizerStepShape(parameter.Shape().Dims, velocity->Shape().Dims, "SGDStep velocity");
+		}
+		if (!std::isfinite(learningRate) || learningRate <= 0.0)
+		{
+			throw std::runtime_error("SGDStep learningRate must be finite and positive");
+		}
+		if (!std::isfinite(momentum) || momentum < 0.0)
+		{
+			throw std::runtime_error("SGDStep momentum must be finite and non-negative");
+		}
+		if (!std::isfinite(weightDecay) || weightDecay < 0.0)
+		{
+			throw std::runtime_error("SGDStep weightDecay must be finite and non-negative");
+		}
+		(void)SGDStepOutputCount(velocity != nullptr, momentum);
+
+		CPU cpu;
+		Tensor<CPU> updatedParameter(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
+		std::optional<Tensor<CPU>> updatedVelocity;
+		if (momentum > 0.0)
+		{
+			updatedVelocity.emplace(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
+		}
+
+		const auto* parameterPtr = static_cast<const float*>(parameter.RawData());
+		const auto* gradientPtr = static_cast<const float*>(gradient.RawData());
+		const auto* velocityPtr = velocity ? static_cast<const float*>(velocity->RawData()) : nullptr;
+		auto* parameterOut = static_cast<float*>(updatedParameter.RawData());
+		auto* velocityOut = updatedVelocity ? static_cast<float*>(updatedVelocity->RawData()) : nullptr;
+		for (auto index = 0uz; index < parameter.NumElements(); ++index)
+		{
+			const auto decayedGradient =
+			    static_cast<float>(static_cast<double>(gradientPtr[index]) + weightDecay * parameterPtr[index]);
+			float update = decayedGradient;
+			if (momentum > 0.0)
+			{
+				const auto previousVelocity = velocityPtr ? velocityPtr[index] : 0.0F;
+				const auto nextVelocity =
+				    static_cast<float>(momentum * previousVelocity + static_cast<double>(decayedGradient));
+				velocityOut[index] = nextVelocity;
+				update = nesterov ? static_cast<float>(decayedGradient + momentum * nextVelocity) : nextVelocity;
+			}
+			parameterOut[index] = static_cast<float>(parameterPtr[index] - learningRate * update);
+		}
+
+		std::vector<Tensor<CPU>> outputs;
+		outputs.push_back(std::move(updatedParameter));
+		if (updatedVelocity)
+		{
+			outputs.push_back(std::move(*updatedVelocity));
+		}
+		return outputs;
+	}
+
+	inline std::vector<Tensor<CPU>> EvalAdamWStep(const Tensor<CPU>& parameter, const Tensor<CPU>& gradient,
+	                                             const Tensor<CPU>& firstMoment,
+	                                             const Tensor<CPU>& secondMoment,
+	                                             double learningRate, double beta1, double beta2,
+	                                             double epsilon, double weightDecay, std::size_t step)
+	{
+		if (parameter.DType() != DataType::Float32 || gradient.DType() != DataType::Float32 ||
+		    firstMoment.DType() != DataType::Float32 || secondMoment.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("AdamWStep currently supports Float32 tensors only");
+		}
+		ValidateOptimizerStepShape(parameter.Shape().Dims, gradient.Shape().Dims, "AdamWStep gradient");
+		ValidateOptimizerStepShape(parameter.Shape().Dims, firstMoment.Shape().Dims, "AdamWStep firstMoment");
+		ValidateOptimizerStepShape(parameter.Shape().Dims, secondMoment.Shape().Dims, "AdamWStep secondMoment");
+		if (!std::isfinite(learningRate) || learningRate <= 0.0)
+		{
+			throw std::runtime_error("AdamWStep learningRate must be finite and positive");
+		}
+		if (!std::isfinite(beta1) || !std::isfinite(beta2) || beta1 < 0.0 || beta1 >= 1.0 ||
+		    beta2 < 0.0 || beta2 >= 1.0)
+		{
+			throw std::runtime_error("AdamWStep beta values must be finite and in [0, 1)");
+		}
+		if (!std::isfinite(epsilon) || epsilon <= 0.0)
+		{
+			throw std::runtime_error("AdamWStep epsilon must be finite and positive");
+		}
+		if (!std::isfinite(weightDecay) || weightDecay < 0.0)
+		{
+			throw std::runtime_error("AdamWStep weightDecay must be finite and non-negative");
+		}
+		if (step == 0)
+		{
+			throw std::runtime_error("AdamWStep step must be positive");
+		}
+
+		CPU cpu;
+		Tensor<CPU> updatedParameter(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
+		Tensor<CPU> updatedFirstMoment(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
+		Tensor<CPU> updatedSecondMoment(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
+
+		const auto* parameterPtr = static_cast<const float*>(parameter.RawData());
+		const auto* gradientPtr = static_cast<const float*>(gradient.RawData());
+		const auto* firstPtr = static_cast<const float*>(firstMoment.RawData());
+		const auto* secondPtr = static_cast<const float*>(secondMoment.RawData());
+		auto* parameterOut = static_cast<float*>(updatedParameter.RawData());
+		auto* firstOut = static_cast<float*>(updatedFirstMoment.RawData());
+		auto* secondOut = static_cast<float*>(updatedSecondMoment.RawData());
+		const auto biasCorrection1 = 1.0 - std::pow(beta1, static_cast<double>(step));
+		const auto biasCorrection2 = 1.0 - std::pow(beta2, static_cast<double>(step));
+		for (auto index = 0uz; index < parameter.NumElements(); ++index)
+		{
+			const auto grad = static_cast<double>(gradientPtr[index]);
+			const auto first = beta1 * static_cast<double>(firstPtr[index]) + (1.0 - beta1) * grad;
+			const auto second = beta2 * static_cast<double>(secondPtr[index]) + (1.0 - beta2) * grad * grad;
+			firstOut[index] = static_cast<float>(first);
+			secondOut[index] = static_cast<float>(second);
+			const auto firstHat = first / biasCorrection1;
+			const auto secondHat = second / biasCorrection2;
+			const auto decayedParameter = static_cast<double>(parameterPtr[index]) *
+			                              (1.0 - learningRate * weightDecay);
+			parameterOut[index] = static_cast<float>(
+			    decayedParameter - learningRate * firstHat / (std::sqrt(secondHat) + epsilon));
+		}
+
+		std::vector<Tensor<CPU>> outputs;
+		outputs.push_back(std::move(updatedParameter));
+		outputs.push_back(std::move(updatedFirstMoment));
+		outputs.push_back(std::move(updatedSecondMoment));
+		return outputs;
 	}
 
 	inline Tensor<CPU> EvalSoftmax(const Tensor<CPU>& input, std::size_t axis)

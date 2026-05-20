@@ -3,6 +3,7 @@
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
+#include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
@@ -65,6 +66,22 @@ namespace
 		graph.SetForward(0);
 		graph.SetInputNames({ "lhs", "rhs" });
 		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
+	Graph BuildQuantizedConstantOutputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -3);
+		Tensor<CPU> storage({ -3.0, 1.0, 5.0, 7.0 }, { 2, 2 }, DataType::Int8);
+		const auto quantized = sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }),
+		                                                         params },
+		                                  { OutputInfo{ DataType::Int8, { 2, 2 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetOutputNames({ "quantized_weight" });
 		return graph;
 	}
 
@@ -356,6 +373,40 @@ TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 	EXPECT_EQ(copied.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(loaded.Backend(), CompiledModuleBackend::CPUNative);
+}
+
+TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
+{
+	auto graph = BuildQuantizedConstantOutputGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	const auto& spec = artifact.OutputSpecs()[0];
+	EXPECT_EQ(spec.name, "quantized_weight");
+	EXPECT_EQ(spec.dtype, DataType::Int8);
+	EXPECT_EQ(spec.shape, (std::vector<std::size_t>{ 2, 2 }));
+	ASSERT_TRUE(spec.quantization.has_value());
+	EXPECT_EQ(spec.quantization->scheme, QuantizationScheme::Affine);
+	EXPECT_EQ(spec.quantization->storageType, DataType::Int8);
+	EXPECT_EQ(spec.quantization->expressedType, DataType::Float32);
+	ASSERT_EQ(spec.quantization->scales.size(), 1u);
+	EXPECT_FLOAT_EQ(spec.quantization->scales[0], 0.25F);
+	ASSERT_EQ(spec.quantization->zeroPoints.size(), 1u);
+	EXPECT_EQ(spec.quantization->zeroPoints[0], -3);
+
+	auto copied = CompiledModuleArtifact::CopyFromImage(artifact.Image());
+	ASSERT_EQ(copied.OutputSpecs().size(), 1u);
+	ASSERT_TRUE(copied.OutputSpecs()[0].quantization.has_value());
+	EXPECT_EQ(copied.OutputSpecs()[0].quantization->zeroPoints[0], -3);
+
+	auto loaded = CompiledModule<CPU>::Load(artifact.Image());
+	ASSERT_EQ(loaded.OutputSpecs().size(), 1u);
+	ASSERT_TRUE(loaded.OutputSpecs()[0].quantization.has_value());
+	EXPECT_EQ(loaded.OutputSpecs()[0].quantization->storageType, DataType::Int8);
+
+	const auto dump = Debug::DumpCompiledModuleMetadata(artifact);
+	EXPECT_NE(dump.find("quant=Affine"), std::string::npos);
+	EXPECT_NE(dump.find("expressed=Float32[2, 2]"), std::string::npos);
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)

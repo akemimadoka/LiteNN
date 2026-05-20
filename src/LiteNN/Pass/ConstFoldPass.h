@@ -167,6 +167,21 @@ namespace LiteNN
 			return Detail::EvalBatchMatMul(lhs, rhs);
 		}
 
+		static Tensor<CPU> EvalOutProd(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs)
+		{
+			return Detail::EvalOutProd(lhs, rhs);
+		}
+
+		static Tensor<CPU> EvalTimestepEmbedding(const Tensor<CPU>& timesteps, const TimestepEmbeddingNode& node)
+		{
+			return Detail::EvalTimestepEmbedding(timesteps, node.dim, node.maxPeriod);
+		}
+
+		static Tensor<CPU> EvalSolveTri(const Tensor<CPU>& a, const Tensor<CPU>& b, const SolveTriNode& node)
+		{
+			return Detail::EvalSolveTri(a, b, node.lower, node.unitDiagonal);
+		}
+
 		static Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, const Im2ColNode& node)
 		{
 			return Detail::EvalIm2Col(input, node.kernelShape, node.strides, node.dilations,
@@ -387,6 +402,30 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
 					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ remap(n.timesteps), n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ remap(n.a), remap(n.b), n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
+					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
+					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
+					                          n.epsilon, n.weightDecay, n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
@@ -638,6 +677,36 @@ namespace LiteNN
 				    {
 					    markInput(node.lhs);
 					    markInput(node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    markInput(node.lhs);
+					    markInput(node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    markInput(node.timesteps);
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    markInput(node.a);
+					    markInput(node.b);
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    markInput(node.parameter);
+					    markInput(node.gradient);
+					    if (node.velocity)
+					    {
+						    markInput(*node.velocity);
+					    }
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    markInput(node.parameter);
+					    markInput(node.gradient);
+					    markInput(node.firstMoment);
+					    markInput(node.secondMoment);
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
@@ -939,6 +1008,40 @@ namespace LiteNN
 							    const auto& rhs = GetConstValue(constValues, node.rhs);
 							    constValues[nodeId] = EvalBatchMatMul(lhs, rhs);
 						    }
+					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    if (isConst[node.lhs.node] && isConst[node.rhs.node])
+						    {
+							    isConst[nodeId] = true;
+							    const auto& lhs = GetConstValue(constValues, node.lhs);
+							    const auto& rhs = GetConstValue(constValues, node.rhs);
+							    constValues[nodeId] = EvalOutProd(lhs, rhs);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    if (isConst[node.timesteps.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] = EvalTimestepEmbedding(GetConstValue(constValues, node.timesteps), node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    if (isConst[node.a.node] && isConst[node.b.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] = EvalSolveTri(GetConstValue(constValues, node.a),
+							                                        GetConstValue(constValues, node.b), node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode> ||
+					                      std::same_as<T, AdamWStepNode>)
+					    {
+						    // Optimizer step nodes may have multiple outputs and represent state
+						    // transitions, so the current single-output const-fold table leaves
+						    // them explicit.
 					    }
 					    else if constexpr (std::same_as<T, Im2ColNode>)
 					    {

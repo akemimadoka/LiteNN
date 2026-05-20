@@ -212,6 +212,34 @@ namespace LiteNN
 						    {
 							    return BatchMatMulNode{ remapOutput(node.lhs), remapOutput(node.rhs) };
 						    }
+						    else if constexpr (std::same_as<T, OutProdNode>)
+						    {
+							    return OutProdNode{ remapOutput(node.lhs), remapOutput(node.rhs) };
+						    }
+						    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+						    {
+							    return TimestepEmbeddingNode{ remapOutput(node.timesteps), node.dim, node.maxPeriod };
+						    }
+						    else if constexpr (std::same_as<T, SolveTriNode>)
+						    {
+							    return SolveTriNode{ remapOutput(node.a), remapOutput(node.b),
+							                         node.lower, node.unitDiagonal };
+						    }
+						    else if constexpr (std::same_as<T, SGDStepNode>)
+						    {
+							    return SGDStepNode{
+							        remapOutput(node.parameter), remapOutput(node.gradient),
+							        node.velocity ? std::optional<NodeOutput>{ remapOutput(*node.velocity) } : std::nullopt,
+							        node.learningRate, node.momentum, node.weightDecay, node.nesterov
+							    };
+						    }
+						    else if constexpr (std::same_as<T, AdamWStepNode>)
+						    {
+							    return AdamWStepNode{ remapOutput(node.parameter), remapOutput(node.gradient),
+							                          remapOutput(node.firstMoment), remapOutput(node.secondMoment),
+							                          node.learningRate, node.beta1, node.beta2, node.epsilon,
+							                          node.weightDecay, node.step };
+						    }
 						    else if constexpr (std::same_as<T, Im2ColNode>)
 						    {
 							    return Im2ColNode{ remapOutput(node.input), node.kernelShape, node.strides,

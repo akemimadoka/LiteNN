@@ -6,6 +6,9 @@
 
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
+#ifdef LITENN_ENABLE_CUDA
+#include <LiteNN/Compiler/CUDANativePayload.h>
+#endif
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Optimizer/Loss.h>
@@ -27,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace LiteNN;
@@ -123,6 +127,56 @@ struct CaseInstructionStats
 	std::string name;
 	std::filesystem::path asmPath;
 	InstructionStats stats;
+};
+
+class ScopedEnvVar
+{
+public:
+	ScopedEnvVar(const char* name, const char* value) : name_(name)
+	{
+		if (const char* current = std::getenv(name))
+		{
+			oldValue_ = current;
+		}
+		Set(name_, value);
+	}
+
+	~ScopedEnvVar()
+	{
+		if (oldValue_)
+		{
+			Set(name_, oldValue_->c_str());
+		}
+		else
+		{
+			Unset(name_);
+		}
+	}
+
+	ScopedEnvVar(const ScopedEnvVar&) = delete;
+	ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+	static void Set(const std::string& name, const char* value)
+	{
+#ifdef _WIN32
+		_putenv_s(name.c_str(), value);
+#else
+		setenv(name.c_str(), value, 1);
+#endif
+	}
+
+	static void Unset(const std::string& name)
+	{
+#ifdef _WIN32
+		_putenv_s(name.c_str(), "");
+#else
+		unsetenv(name.c_str());
+#endif
+	}
+
+	std::string name_;
+	std::optional<std::string> oldValue_;
 };
 
 static bool EnvFlagEnabled(const char* name)
@@ -370,12 +424,181 @@ static Timing TimedRunInto(const CompiledModule<CPU>& module,
 	return { total / iters, batch * iters / (total * 1e-3) };
 }
 
+template <typename Fn>
+static double TimedOnceMs(Fn&& fn)
+{
+	auto begin = Clock::now();
+	std::forward<Fn>(fn)();
+	auto end = Clock::now();
+	return clk::duration<double, std::milli>(end - begin).count();
+}
+
+template <typename Fn>
+static Timing TimedRepeated(Fn&& fn, std::size_t batch, double targetMs = 500.0)
+{
+	for (int i = 0; i < 5; ++i) std::forward<Fn>(fn)();
+	const double probeMs = std::max(TimedOnceMs(fn), 0.001);
+	const auto iters = static_cast<std::size_t>(std::clamp(targetMs / probeMs, 10.0, 2000.0));
+	auto begin = Clock::now();
+	for (std::size_t i = 0; i < iters; ++i)
+	{
+		std::forward<Fn>(fn)();
+	}
+	auto end = Clock::now();
+	const double totalMs = clk::duration<double, std::milli>(end - begin).count();
+	return { totalMs / iters, batch * iters / (totalMs * 1e-3) };
+}
+
 struct Case
 {
 	std::string name;
 	Graph (*build)(std::size_t, std::mt19937&);
 	std::vector<std::size_t> outShape;  // single-output models
 };
+
+#ifdef LITENN_ENABLE_CUDA
+struct CUDALaunchBreakdown
+{
+	std::string name;
+	std::size_t batch{};
+	std::string backend;
+	std::string binaryKind;
+	std::uint64_t featureFlags{};
+	std::size_t kernelCount{};
+	std::size_t libraryKernelCount{};
+	std::size_t ptxKernelCount{};
+	std::size_t workspaceBytes{};
+	double compileMs{};
+	double loadMs{};
+	double nativeFirstMs{};
+	double nativeMeanMs{};
+	double graphFirstMs{};
+	double graphMeanMs{};
+	std::string message;
+};
+
+static std::string CUDABinaryKindName(CUDANativeBinaryKind kind)
+{
+	switch (kind)
+	{
+	case CUDANativeBinaryKind::PTX:
+		return "ptx";
+	case CUDANativeBinaryKind::Cubin:
+		return "cubin";
+	case CUDANativeBinaryKind::Fatbin:
+		return "fatbin";
+	case CUDANativeBinaryKind::LibraryCall:
+		return "library";
+	}
+	return "unknown";
+}
+
+static std::vector<Tensor<CUDA>> MakeCUDAProfileInputs(std::size_t batch)
+{
+	std::mt19937 rng(0);
+	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+	std::vector<float> data(batch * 784);
+	for (auto& value : data)
+	{
+		value = dist(rng);
+	}
+	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
+	std::vector<Tensor<CUDA>> inputs;
+	inputs.emplace_back(cpuInput.CopyToDevice(CUDA{}));
+	return inputs;
+}
+
+static std::vector<Tensor<CUDA>> AllocateCUDAProfileOutputs(const CompiledModule<CUDA>& module)
+{
+	std::vector<Tensor<CUDA>> outputs;
+	outputs.reserve(module.OutputSpecs().size());
+	for (const auto& spec : module.OutputSpecs())
+	{
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+	}
+	return outputs;
+}
+
+static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
+{
+	CUDALaunchBreakdown result{ .name = profileCase.name, .batch = profileCase.outShape[0] };
+	if (!IsCUDADeviceAvailable())
+	{
+		result.message = "CUDA device is not available";
+		return result;
+	}
+
+	try
+	{
+		std::mt19937 rng(0);
+		Graph graph = profileCase.build(result.batch, rng);
+		Optimize(graph);
+
+		CompiledModuleArtifact artifact;
+		{
+			ScopedEnvVar disableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "0");
+			auto begin = Clock::now();
+			artifact = Compiler<CUDA>::CompileArtifact(graph);
+			auto end = Clock::now();
+			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
+		}
+		result.backend = artifact.Backend() == CompiledModuleBackend::CUDANative ? "cuda_native" : "cpu_bridge";
+		if (artifact.Backend() != CompiledModuleBackend::CUDANative)
+		{
+			result.message = "compiled artifact did not use CUDA native backend";
+			return result;
+		}
+
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		result.binaryKind = CUDABinaryKindName(payload.binaryKind);
+		result.featureFlags = payload.featureFlags;
+		result.kernelCount = payload.kernels.size();
+		result.workspaceBytes = static_cast<std::size_t>(payload.workspaceBytes);
+		if (payload.binaryKind == CUDANativeBinaryKind::LibraryCall)
+		{
+			result.libraryKernelCount = payload.kernels.size();
+		}
+		else
+		{
+			result.ptxKernelCount = payload.kernels.size();
+		}
+		for (const auto& kernel : payload.kernels)
+		{
+			result.workspaceBytes = std::max(result.workspaceBytes, static_cast<std::size_t>(kernel.workspaceBytes));
+		}
+
+		auto loadBegin = Clock::now();
+		auto module = artifact.Load(CUDA{});
+		auto loadEnd = Clock::now();
+		result.loadMs = clk::duration<double, std::milli>(loadEnd - loadBegin).count();
+
+		auto inputs = MakeCUDAProfileInputs(result.batch);
+		auto outputs = AllocateCUDAProfileOutputs(module);
+		const auto runInto = [&] {
+			module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		};
+
+		{
+			ScopedEnvVar disableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "0");
+			result.nativeFirstMs = TimedOnceMs(runInto);
+			const auto timing = TimedRepeated(runInto, result.batch, 300.0);
+			result.nativeMeanMs = timing.meanMs;
+		}
+		{
+			ScopedEnvVar enableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
+			result.graphFirstMs = TimedOnceMs(runInto);
+			const auto timing = TimedRepeated(runInto, result.batch, 300.0);
+			result.graphMeanMs = timing.meanMs;
+		}
+		result.message = "ok";
+	}
+	catch (const std::exception& ex)
+	{
+		result.message = ex.what();
+	}
+	return result;
+}
+#endif
 
 int main(int argc, char** argv)
 {
@@ -494,6 +717,38 @@ int main(int argc, char** argv)
 		    s.broadcast, s.stackVectorOp);
 	}
 	std::cout << "\nAssembly files are written beside the object files when objdump succeeds.\n";
-	std::cout << "CUDA launch breakdowns are not collected by this CPU AOT profile executable yet.\n";
+
+	std::cout << "\nCUDA launch breakdowns\n";
+#ifdef LITENN_ENABLE_CUDA
+	if (EnvFlagEnabled("LITENN_PROFILE_SKIP_CUDA"))
+	{
+		std::cout << "Skipped by LITENN_PROFILE_SKIP_CUDA.\n";
+	}
+	else if (!IsCUDADeviceAvailable())
+	{
+		std::cout << "CUDA device is not available.\n";
+	}
+	else
+	{
+		std::cout << std::format(
+		    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>10} {:>10} {}\n",
+		    "Case", "Batch", "Backend", "Binary", "Kernels", "Lib", "PTX", "Workspace", "Compile",
+		    "Load", "Native1", "NativeAvg", "Graph1", "GraphAvg", "Status");
+		std::cout << std::string(170, '-') << "\n";
+		for (const auto& c : cases)
+		{
+			const auto row = ProfileCUDALaunches(c);
+			std::cout << std::format(
+			    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>8.4f}ms {:>8.4f}ms {}\n",
+			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.binaryKind.empty() ? "-" : row.binaryKind,
+			    row.kernelCount, row.libraryKernelCount, row.ptxKernelCount, row.workspaceBytes,
+			    row.compileMs, row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs, row.message);
+		}
+		std::cout << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
+		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with LITENN_CUDA_ENABLE_GRAPH_REPLAY=1.\n";
+	}
+#else
+	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";
+#endif
 	return 0;
 }

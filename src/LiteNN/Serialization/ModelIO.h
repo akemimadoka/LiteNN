@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 16;
+		constexpr std::uint32_t kModelVersion = 18;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -81,6 +81,11 @@ namespace LiteNN::Serialization
 			Pool2D,
 			ConvTranspose2D,
 			Upsample,
+			OutProd,
+			TimestepEmbedding,
+			SolveTri,
+			SGDStep,
+			AdamWStep,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -806,6 +811,52 @@ namespace LiteNN::Serialization
 					    WriteNodeOutput(out, node.lhs);
 					    WriteNodeOutput(out, node.rhs);
 				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::OutProd));
+					    WriteNodeOutput(out, node.lhs);
+					    WriteNodeOutput(out, node.rhs);
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::TimestepEmbedding));
+					    WriteNodeOutput(out, node.timesteps);
+					    WriteSize(out, node.dim);
+					    WriteSize(out, node.maxPeriod);
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SolveTri));
+					    WriteNodeOutput(out, node.a);
+					    WriteNodeOutput(out, node.b);
+					    WriteScalar(out, node.lower);
+					    WriteScalar(out, node.unitDiagonal);
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SGDStep));
+					    WriteNodeOutput(out, node.parameter);
+					    WriteNodeOutput(out, node.gradient);
+					    WriteOptionalNodeOutput(out, node.velocity);
+					    WriteScalar(out, node.learningRate);
+					    WriteScalar(out, node.momentum);
+					    WriteScalar(out, node.weightDecay);
+					    WriteScalar(out, node.nesterov);
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::AdamWStep));
+					    WriteNodeOutput(out, node.parameter);
+					    WriteNodeOutput(out, node.gradient);
+					    WriteNodeOutput(out, node.firstMoment);
+					    WriteNodeOutput(out, node.secondMoment);
+					    WriteScalar(out, node.learningRate);
+					    WriteScalar(out, node.beta1);
+					    WriteScalar(out, node.beta2);
+					    WriteScalar(out, node.epsilon);
+					    WriteScalar(out, node.weightDecay);
+					    WriteSize(out, node.step);
+				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Im2Col));
@@ -1050,6 +1101,49 @@ namespace LiteNN::Serialization
 				const auto lhs = ReadNodeOutput(in);
 				const auto rhs = ReadNodeOutput(in);
 				return BatchMatMulNode{ lhs, rhs };
+			}
+			case NodeKind::OutProd: {
+				const auto lhs = ReadNodeOutput(in);
+				const auto rhs = ReadNodeOutput(in);
+				return OutProdNode{ lhs, rhs };
+			}
+			case NodeKind::TimestepEmbedding: {
+				const auto timesteps = ReadNodeOutput(in);
+				const auto dim = ReadSize(in);
+				const auto maxPeriod = ReadSize(in);
+				return TimestepEmbeddingNode{ timesteps, dim, maxPeriod };
+			}
+			case NodeKind::SolveTri: {
+				const auto a = ReadNodeOutput(in);
+				const auto b = ReadNodeOutput(in);
+				const auto lower = ReadScalar<bool>(in);
+				const auto unitDiagonal = ReadScalar<bool>(in);
+				return SolveTriNode{ a, b, lower, unitDiagonal };
+			}
+			case NodeKind::SGDStep: {
+				const auto parameter = ReadNodeOutput(in);
+				const auto gradient = ReadNodeOutput(in);
+				auto velocity = ReadOptionalNodeOutput(in);
+				const auto learningRate = ReadScalar<double>(in);
+				const auto momentum = ReadScalar<double>(in);
+				const auto weightDecay = ReadScalar<double>(in);
+				const auto nesterov = ReadScalar<bool>(in);
+				return SGDStepNode{ parameter, gradient, std::move(velocity), learningRate,
+				                    momentum, weightDecay, nesterov };
+			}
+			case NodeKind::AdamWStep: {
+				const auto parameter = ReadNodeOutput(in);
+				const auto gradient = ReadNodeOutput(in);
+				const auto firstMoment = ReadNodeOutput(in);
+				const auto secondMoment = ReadNodeOutput(in);
+				const auto learningRate = ReadScalar<double>(in);
+				const auto beta1 = ReadScalar<double>(in);
+				const auto beta2 = ReadScalar<double>(in);
+				const auto epsilon = ReadScalar<double>(in);
+				const auto weightDecay = ReadScalar<double>(in);
+				const auto step = ReadSize(in);
+				return AdamWStepNode{ parameter, gradient, firstMoment, secondMoment, learningRate,
+				                      beta1, beta2, epsilon, weightDecay, step };
 			}
 			case NodeKind::Im2Col: {
 				const auto input = ReadNodeOutput(in);

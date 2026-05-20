@@ -691,6 +691,97 @@ namespace LiteNN::Runtime
 			}
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const OutProdNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalOutProd(GetValue(slots, node.lhs).CopyToDevice(CPU{}),
+			                                     GetValue(slots, node.rhs).CopyToDevice(CPU{}));
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TimestepEmbeddingNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalTimestepEmbedding(GetValue(slots, node.timesteps).CopyToDevice(CPU{}),
+			                                               node.dim, node.maxPeriod);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SolveTriNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalSolveTri(GetValue(slots, node.a).CopyToDevice(CPU{}),
+			                                      GetValue(slots, node.b).CopyToDevice(CPU{}),
+			                                      node.lower, node.unitDiagonal);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SGDStepNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const Tensor<D>* velocity = node.velocity ? &GetValue(slots, *node.velocity) : nullptr;
+			const auto cpuVelocity = velocity ? std::optional{ velocity->CopyToDevice(CPU{}) } : std::nullopt;
+			auto cpuResults = Detail::EvalSGDStep(GetValue(slots, node.parameter).CopyToDevice(CPU{}),
+			                                      GetValue(slots, node.gradient).CopyToDevice(CPU{}),
+			                                      cpuVelocity ? &*cpuVelocity : nullptr,
+			                                      node.learningRate, node.momentum, node.weightDecay,
+			                                      node.nesterov);
+			for (auto& cpuResult : cpuResults)
+			{
+				if constexpr (std::same_as<D, CPU>)
+				{
+					slots[nodeId].push_back(std::move(cpuResult));
+				}
+				else
+				{
+					slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+				}
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const AdamWStepNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResults = Detail::EvalAdamWStep(GetValue(slots, node.parameter).CopyToDevice(CPU{}),
+			                                        GetValue(slots, node.gradient).CopyToDevice(CPU{}),
+			                                        GetValue(slots, node.firstMoment).CopyToDevice(CPU{}),
+			                                        GetValue(slots, node.secondMoment).CopyToDevice(CPU{}),
+			                                        node.learningRate, node.beta1, node.beta2, node.epsilon,
+			                                        node.weightDecay, node.step);
+			for (auto& cpuResult : cpuResults)
+			{
+				if constexpr (std::same_as<D, CPU>)
+				{
+					slots[nodeId].push_back(std::move(cpuResult));
+				}
+				else
+				{
+					slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+				}
+			}
+		}
+
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Im2ColNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{

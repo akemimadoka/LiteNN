@@ -22,6 +22,7 @@
 #include <LiteNN/Layer/Linear.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/Layer/OutProd.h>
 #include <LiteNN/Layer/Pad.h>
 #include <LiteNN/Layer/Permute.h>
 #include <LiteNN/Layer/Pool2D.h>
@@ -37,9 +38,11 @@
 #include <LiteNN/Layer/SSMScan.h>
 #include <LiteNN/Layer/Scan.h>
 #include <LiteNN/Layer/Scatter.h>
+#include <LiteNN/Layer/SolveTri.h>
 #include <LiteNN/Layer/Softmax.h>
 #include <LiteNN/Layer/SumRows.h>
 #include <LiteNN/Layer/SwiGLU.h>
+#include <LiteNN/Layer/TimestepEmbedding.h>
 #include <LiteNN/Layer/TopK.h>
 #include <LiteNN/Layer/Upsample.h>
 #include <LiteNN/Layer/Window.h>

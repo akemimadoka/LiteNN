@@ -466,6 +466,39 @@ namespace
 					return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
 					                   FormatValueRef(value.rhs));
 				}
+				else if constexpr (std::same_as<T, OutProdNode>)
+				{
+					return std::format("OutProdNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
+					                   FormatValueRef(value.rhs));
+				}
+				else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				{
+					return std::format("TimestepEmbeddingNode(timesteps={}, dim={}, maxPeriod={})",
+					                   FormatValueRef(value.timesteps), value.dim, value.maxPeriod);
+				}
+				else if constexpr (std::same_as<T, SolveTriNode>)
+				{
+					return std::format("SolveTriNode(a={}, b={}, lower={}, unitDiagonal={})",
+					                   FormatValueRef(value.a), FormatValueRef(value.b), value.lower,
+					                   value.unitDiagonal);
+				}
+				else if constexpr (std::same_as<T, SGDStepNode>)
+				{
+					return std::format(
+					    "SGDStepNode(parameter={}, gradient={}, velocity={}, learningRate={}, momentum={}, weightDecay={}, nesterov={})",
+					    FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+					    FormatOptionalValueRef(value.velocity), value.learningRate, value.momentum,
+					    value.weightDecay, value.nesterov);
+				}
+				else if constexpr (std::same_as<T, AdamWStepNode>)
+				{
+					return std::format(
+					    "AdamWStepNode(parameter={}, gradient={}, firstMoment={}, secondMoment={}, learningRate={}, beta1={}, beta2={}, epsilon={}, weightDecay={}, step={})",
+					    FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+					    FormatValueRef(value.firstMoment), FormatValueRef(value.secondMoment),
+					    value.learningRate, value.beta1, value.beta2, value.epsilon,
+					    value.weightDecay, value.step);
+				}
 				else if constexpr (std::same_as<T, Im2ColNode>)
 				{
 					return std::format(

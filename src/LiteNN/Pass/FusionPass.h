@@ -216,6 +216,36 @@ namespace LiteNN
 						    countInput(node.lhs);
 						    countInput(node.rhs);
 					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    countInput(node.lhs);
+						    countInput(node.rhs);
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    countInput(node.timesteps);
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    countInput(node.a);
+						    countInput(node.b);
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode>)
+					    {
+						    countInput(node.parameter);
+						    countInput(node.gradient);
+						    if (node.velocity)
+						    {
+							    countInput(*node.velocity);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, AdamWStepNode>)
+					    {
+						    countInput(node.parameter);
+						    countInput(node.gradient);
+						    countInput(node.firstMoment);
+						    countInput(node.secondMoment);
+					    }
 					    else if constexpr (std::same_as<T, Im2ColNode>)
 					    {
 						    countInput(node.input);
@@ -745,6 +775,30 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
 					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ remap(n.timesteps), n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ remap(n.a), remap(n.b), n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
+					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
+					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
+					                          n.epsilon, n.weightDecay, n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {

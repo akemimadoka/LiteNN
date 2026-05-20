@@ -333,6 +333,36 @@ namespace LiteNN
 						    ++counts[{ node.lhs.node, node.lhs.port }];
 						    ++counts[{ node.rhs.node, node.rhs.port }];
 					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    ++counts[{ node.lhs.node, node.lhs.port }];
+						    ++counts[{ node.rhs.node, node.rhs.port }];
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    ++counts[{ node.timesteps.node, node.timesteps.port }];
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    ++counts[{ node.a.node, node.a.port }];
+						    ++counts[{ node.b.node, node.b.port }];
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode>)
+					    {
+						    ++counts[{ node.parameter.node, node.parameter.port }];
+						    ++counts[{ node.gradient.node, node.gradient.port }];
+						    if (node.velocity)
+						    {
+							    ++counts[{ node.velocity->node, node.velocity->port }];
+						    }
+					    }
+					    else if constexpr (std::same_as<T, AdamWStepNode>)
+					    {
+						    ++counts[{ node.parameter.node, node.parameter.port }];
+						    ++counts[{ node.gradient.node, node.gradient.port }];
+						    ++counts[{ node.firstMoment.node, node.firstMoment.port }];
+						    ++counts[{ node.secondMoment.node, node.secondMoment.port }];
+					    }
 					    else if constexpr (std::same_as<T, Im2ColNode>)
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
@@ -484,6 +514,9 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                      std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
 					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
+					                      std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
+					                      std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
+					                      std::same_as<T, AdamWStepNode> ||
 					                      std::same_as<T, Im2ColNode> || std::same_as<T, Conv2DNode> ||
 					                      std::same_as<T, ConvTranspose2DNode> || std::same_as<T, Pool2DNode> ||
 					                      std::same_as<T, UpsampleNode>)
@@ -819,6 +852,41 @@ namespace LiteNN
 				    {
 					    return BatchMatMulNode{ { nodeMap[n.lhs.node], n.lhs.port },
 					                            { nodeMap[n.rhs.node], n.rhs.port } };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ { nodeMap[n.lhs.node], n.lhs.port },
+					                        { nodeMap[n.rhs.node], n.rhs.port } };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ { nodeMap[n.timesteps.node], n.timesteps.port },
+					                                  n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ { nodeMap[n.a.node], n.a.port },
+					                         { nodeMap[n.b.node], n.b.port },
+					                         n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{
+					        { nodeMap[n.parameter.node], n.parameter.port },
+					        { nodeMap[n.gradient.node], n.gradient.port },
+					        n.velocity ? std::optional<NodeOutput>{ { nodeMap[n.velocity->node], n.velocity->port } }
+					                   : std::nullopt,
+					        n.learningRate, n.momentum, n.weightDecay, n.nesterov
+					    };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ { nodeMap[n.parameter.node], n.parameter.port },
+					                          { nodeMap[n.gradient.node], n.gradient.port },
+					                          { nodeMap[n.firstMoment.node], n.firstMoment.port },
+					                          { nodeMap[n.secondMoment.node], n.secondMoment.port },
+					                          n.learningRate, n.beta1, n.beta2, n.epsilon,
+					                          n.weightDecay, n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
@@ -1212,6 +1280,26 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, BatchMatMulNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: BatchMatMulNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, OutProdNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: OutProdNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: TimestepEmbeddingNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SolveTriNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SolveTriNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, SGDStepNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: SGDStepNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, AdamWStepNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: AdamWStepNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, Im2ColNode>)
 					    {

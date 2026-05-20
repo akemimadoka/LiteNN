@@ -293,6 +293,62 @@ namespace LiteNN
 			NodeOutput rhs;
 		};
 
+		// ggml-compatible outer-product contraction.
+		// lhs shape [..., M, K], rhs shape [..., N, K] -> [..., M, N].
+		struct OutProdNode
+		{
+			NodeOutput lhs;
+			NodeOutput rhs;
+		};
+
+		// Diffusion-style timestep embedding used by ggml.
+		// timesteps shape [T] -> [T, dim].
+		struct TimestepEmbeddingNode
+		{
+			NodeOutput timesteps;
+			std::size_t dim;
+			std::size_t maxPeriod{ 10000 };
+		};
+
+		// Lower-triangular left solve, matching the currently supported ggml
+		// SOLVE_TRI variant: a [..., N, N], b [..., N, K] -> [..., N, K].
+		struct SolveTriNode
+		{
+			NodeOutput a;
+			NodeOutput b;
+			bool lower{ true };
+			bool unitDiagonal{ false };
+		};
+
+		// Optimizer-only graph helper. Output 0 is the updated parameter;
+		// output 1 is present when momentum > 0 and carries the updated velocity.
+		struct SGDStepNode
+		{
+			NodeOutput parameter;
+			NodeOutput gradient;
+			std::optional<NodeOutput> velocity;
+			double learningRate{ 1e-3 };
+			double momentum{ 0.0 };
+			double weightDecay{ 0.0 };
+			bool nesterov{ false };
+		};
+
+		// AdamW graph helper. Outputs are updated parameter, first moment, and
+		// second moment, keeping optimizer state explicit in the graph.
+		struct AdamWStepNode
+		{
+			NodeOutput parameter;
+			NodeOutput gradient;
+			NodeOutput firstMoment;
+			NodeOutput secondMoment;
+			double learningRate{ 1e-3 };
+			double beta1{ 0.9 };
+			double beta2{ 0.999 };
+			double epsilon{ 1e-8 };
+			double weightDecay{ 0.01 };
+			std::size_t step{ 1 };
+		};
+
 		// Channel-first sliding-window extraction.
 		// Input shape is [batch, channels, spatial...]; output shape is
 		// [batch, outputPositions, channels * product(kernelShape)].

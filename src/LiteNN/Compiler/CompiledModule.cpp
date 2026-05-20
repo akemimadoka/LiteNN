@@ -370,7 +370,7 @@ namespace
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 		std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
 	};
-	constexpr std::uint32_t kRodataVersion = 3;
+	constexpr std::uint32_t kRodataVersion = 4;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
 	constexpr std::uint32_t kRodataBigEndian = 2;
 
@@ -536,6 +536,21 @@ namespace
 		}
 	}
 
+	void AppendI64(std::vector<std::byte>& out, std::int64_t value)
+	{
+		AppendU64(out, std::bit_cast<std::uint64_t>(value));
+	}
+
+	void AppendI32(std::vector<std::byte>& out, std::int32_t value)
+	{
+		AppendU32(out, std::bit_cast<std::uint32_t>(value));
+	}
+
+	void AppendF32(std::vector<std::byte>& out, float value)
+	{
+		AppendU32(out, std::bit_cast<std::uint32_t>(value));
+	}
+
 	void AppendString(std::vector<std::byte>& out, std::string_view value)
 	{
 		AppendU64(out, static_cast<std::uint64_t>(value.size()));
@@ -573,6 +588,21 @@ namespace
 		return value;
 	}
 
+	std::int64_t ReadI64(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		return std::bit_cast<std::int64_t>(ReadU64(bytes, offset));
+	}
+
+	std::int32_t ReadI32(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		return std::bit_cast<std::int32_t>(ReadU32(bytes, offset));
+	}
+
+	float ReadF32(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		return std::bit_cast<float>(ReadU32(bytes, offset));
+	}
+
 	std::string ReadString(std::span<const std::byte> bytes, std::size_t& offset)
 	{
 		const auto size = ReadU64(bytes, offset);
@@ -584,6 +614,86 @@ namespace
 		std::string value(reinterpret_cast<const char*>(bytes.data() + offset), stringSize);
 		offset += stringSize;
 		return value;
+	}
+
+	void AppendQuantizationParams(std::vector<std::byte>& out, const QuantizationParams& params)
+	{
+		AppendU32(out, static_cast<std::uint32_t>(params.scheme));
+		AppendU32(out, static_cast<std::uint32_t>(params.granularity));
+		AppendU32(out, static_cast<std::uint32_t>(params.blockFormat));
+		AppendU32(out, static_cast<std::uint32_t>(params.storageType));
+		AppendU32(out, static_cast<std::uint32_t>(params.expressedType));
+		AppendI64(out, params.axis);
+		AppendU64(out, static_cast<std::uint64_t>(params.groupSize));
+
+		AppendU64(out, static_cast<std::uint64_t>(params.scales.size()));
+		for (const auto scale : params.scales)
+		{
+			AppendF32(out, scale);
+		}
+
+		AppendU64(out, static_cast<std::uint64_t>(params.zeroPoints.size()));
+		for (const auto zeroPoint : params.zeroPoints)
+		{
+			AppendI32(out, zeroPoint);
+		}
+
+		AppendU64(out, static_cast<std::uint64_t>(params.expressedShape.size()));
+		for (const auto dim : params.expressedShape)
+		{
+			AppendU64(out, static_cast<std::uint64_t>(dim));
+		}
+	}
+
+	QuantizationParams ReadQuantizationParams(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		QuantizationParams params;
+		params.scheme = static_cast<QuantizationScheme>(ReadU32(bytes, offset));
+		params.granularity = static_cast<QuantizationGranularity>(ReadU32(bytes, offset));
+		params.blockFormat = static_cast<QuantizedBlockFormat>(ReadU32(bytes, offset));
+		params.storageType = static_cast<DataType>(ReadU32(bytes, offset));
+		params.expressedType = static_cast<DataType>(ReadU32(bytes, offset));
+		params.axis = ReadI64(bytes, offset);
+		params.groupSize = static_cast<std::size_t>(ReadU64(bytes, offset));
+
+		const auto scaleCount = ReadU64(bytes, offset);
+		if (scaleCount > std::numeric_limits<std::size_t>::max())
+		{
+			throw std::runtime_error("Compiled module rodata quantization scale count is too large");
+		}
+		params.scales.reserve(static_cast<std::size_t>(scaleCount));
+		for (std::uint64_t i = 0; i < scaleCount; ++i)
+		{
+			params.scales.push_back(ReadF32(bytes, offset));
+		}
+
+		const auto zeroPointCount = ReadU64(bytes, offset);
+		if (zeroPointCount > std::numeric_limits<std::size_t>::max())
+		{
+			throw std::runtime_error("Compiled module rodata quantization zero-point count is too large");
+		}
+		params.zeroPoints.reserve(static_cast<std::size_t>(zeroPointCount));
+		for (std::uint64_t i = 0; i < zeroPointCount; ++i)
+		{
+			params.zeroPoints.push_back(ReadI32(bytes, offset));
+		}
+
+		const auto expressedRank = ReadU64(bytes, offset);
+		if (expressedRank > std::numeric_limits<std::size_t>::max())
+		{
+			throw std::runtime_error("Compiled module rodata quantization expressed rank is too large");
+		}
+		params.expressedShape.reserve(static_cast<std::size_t>(expressedRank));
+		for (std::uint64_t i = 0; i < expressedRank; ++i)
+		{
+			const auto dim = ReadU64(bytes, offset);
+			if (dim > std::numeric_limits<std::size_t>::max())
+			{
+				throw std::runtime_error("Compiled module rodata quantization expressed dimension is too large");
+			}
+			params.expressedShape.push_back(static_cast<std::size_t>(dim));
+		}
+		return params;
 	}
 
 	std::uint32_t NativeEndianTag()
@@ -637,6 +747,11 @@ namespace
 				AppendU64(rodata, static_cast<std::uint64_t>(dim));
 			}
 			AppendString(rodata, spec.name);
+			AppendU32(rodata, spec.quantization ? 1u : 0u);
+			if (spec.quantization)
+			{
+				AppendQuantizationParams(rodata, *spec.quantization);
+			}
 		};
 
 		for (const auto& spec : inputs)
@@ -717,6 +832,19 @@ namespace
 			{
 				spec.name = ReadString(rodata, offset);
 			}
+			if (version >= 4 && ReadU32(rodata, offset) != 0)
+			{
+				spec.quantization = ReadQuantizationParams(rodata, offset);
+				try
+				{
+					ValidateQuantizationParams(*spec.quantization, ShapeView{ spec.shape }, spec.dtype);
+				}
+				catch (const std::exception& ex)
+				{
+					throw std::runtime_error(std::format("Compiled module rodata quantization metadata is invalid: {}",
+					                                     ex.what()));
+				}
+			}
 			return spec;
 		};
 
@@ -759,6 +887,33 @@ namespace
 		return specs;
 	}
 
+	std::optional<QuantizationParams> InferOutputQuantization(const Graph& graph, const Subgraph& subgraph,
+	                                                          NodeOutput output)
+	{
+		const auto& entry = subgraph.GetNodeEntry(output.node);
+		return std::visit(
+		    [&](const auto& node) -> std::optional<QuantizationParams> {
+			    using T = std::decay_t<decltype(node)>;
+			    if constexpr (std::same_as<T, QuantizedConstantNode>)
+			    {
+				    return node.params;
+			    }
+			    else if constexpr (std::same_as<T, QuantizeNode>)
+			    {
+				    return node.params;
+			    }
+			    else if constexpr (std::same_as<T, VariableRefNode>)
+			    {
+				    return graph.GetVariable(node.variableIndex)->Quantization();
+			    }
+			    else
+			    {
+				    return std::nullopt;
+			    }
+		    },
+		    entry.node);
+	}
+
 	std::vector<CompiledTensorSpec> BuildOutputSpecs(const Graph& graph)
 	{
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
@@ -766,8 +921,9 @@ namespace
 		specs.reserve(subgraph.Results().size());
 		for (std::size_t i = 0; i < subgraph.Results().size(); ++i)
 		{
-			const auto& info = subgraph.GetOutputInfo(subgraph.Results()[i]);
-			specs.push_back({ info.dtype, info.shape, graph.OutputName(i) });
+			const auto output = subgraph.Results()[i];
+			const auto& info = subgraph.GetOutputInfo(output);
+			specs.push_back({ info.dtype, info.shape, graph.OutputName(i), InferOutputQuantization(graph, subgraph, output) });
 		}
 		return specs;
 	}

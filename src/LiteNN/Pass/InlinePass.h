@@ -129,6 +129,30 @@ namespace LiteNN
 				    {
 					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
 				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return TimestepEmbeddingNode{ remap(n.timesteps), n.dim, n.maxPeriod };
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return SolveTriNode{ remap(n.a), remap(n.b), n.lower, n.unitDiagonal };
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
+					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
+					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
+					                          n.epsilon, n.weightDecay, n.step };
+				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
 					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
