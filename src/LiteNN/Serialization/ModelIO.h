@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 18;
+		constexpr std::uint32_t kModelVersion = 19;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -86,6 +86,8 @@ namespace LiteNN::Serialization
 			SolveTri,
 			SGDStep,
 			AdamWStep,
+			CrossEntropyLoss,
+			CrossEntropyLossBackward,
 		};
 
 		inline void EnsureWrite(const std::ostream& out)
@@ -794,6 +796,19 @@ namespace LiteNN::Serialization
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::CrossEntropyLoss));
+					    WriteNodeOutput(out, node.logits);
+					    WriteNodeOutput(out, node.labels);
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    {
+					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::CrossEntropyLossBackward));
+					    WriteNodeOutput(out, node.grad);
+					    WriteNodeOutput(out, node.logits);
+					    WriteNodeOutput(out, node.labels);
+				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Normalization));
@@ -1086,6 +1101,17 @@ namespace LiteNN::Serialization
 			case NodeKind::Softmax: {
 				const auto input = ReadNodeOutput(in);
 				return SoftmaxNode{ input, ReadSize(in) };
+			}
+			case NodeKind::CrossEntropyLoss: {
+				const auto logits = ReadNodeOutput(in);
+				const auto labels = ReadNodeOutput(in);
+				return CrossEntropyLossNode{ logits, labels };
+			}
+			case NodeKind::CrossEntropyLossBackward: {
+				const auto grad = ReadNodeOutput(in);
+				const auto logits = ReadNodeOutput(in);
+				const auto labels = ReadNodeOutput(in);
+				return CrossEntropyLossBackwardNode{ grad, logits, labels };
 			}
 			case NodeKind::Normalization: {
 				const auto input = ReadNodeOutput(in);

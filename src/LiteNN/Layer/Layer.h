@@ -20,6 +20,7 @@
 #include <LiteNN/Layer/L2Norm.h>
 #include <LiteNN/Layer/LayerNorm.h>
 #include <LiteNN/Layer/Linear.h>
+#include <LiteNN/Layer/Loss.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Normalization.h>
 #include <LiteNN/Layer/OutProd.h>

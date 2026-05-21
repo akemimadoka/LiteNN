@@ -271,6 +271,24 @@ namespace LiteNN
 			std::size_t axis;
 		};
 
+		// ggml-compatible soft-label cross entropy over the last dimension.
+		// logits and labels have the same Float32 shape [..., classes];
+		// output is a single-element Float32 tensor containing mean loss.
+		struct CrossEntropyLossNode
+		{
+			NodeOutput logits;
+			NodeOutput labels;
+		};
+
+		// Backward helper for CrossEntropyLossNode.
+		// grad must be a single-element Float32 tensor; output shape matches logits.
+		struct CrossEntropyLossBackwardNode
+		{
+			NodeOutput grad;
+			NodeOutput logits;
+			NodeOutput labels;
+		};
+
 		// Hot-path normalization primitive. scale/bias are optional and broadcast
 		// to input.shape. GroupNorm keeps the existing ggml-oriented layout rule:
 		// rank-4 tensors use the last axis as batch and normalize per batch.

@@ -454,6 +454,17 @@ namespace
 				{
 					return std::format("SoftmaxNode(input={}, axis={})", FormatValueRef(value.input), value.axis);
 				}
+				else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				{
+					return std::format("CrossEntropyLossNode(logits={}, labels={})",
+					                   FormatValueRef(value.logits), FormatValueRef(value.labels));
+				}
+				else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				{
+					return std::format("CrossEntropyLossBackwardNode(grad={}, logits={}, labels={})",
+					                   FormatValueRef(value.grad), FormatValueRef(value.logits),
+					                   FormatValueRef(value.labels));
+				}
 				else if constexpr (std::same_as<T, NormalizationNode>)
 				{
 					return std::format(

@@ -991,6 +991,99 @@ namespace LiteNN::Detail
 		return result;
 	}
 
+	inline void ValidateCrossEntropyInputs(const Tensor<CPU>& logits, const Tensor<CPU>& labels)
+	{
+		if (logits.DType() != DataType::Float32 || labels.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("CrossEntropyLoss requires Float32 logits and labels");
+		}
+		if (logits.Shape().NumDim() == 0 || logits.NumElements() == 0)
+		{
+			throw std::runtime_error("CrossEntropyLoss expects shape [..., classes]");
+		}
+		if (!std::ranges::equal(logits.Shape().Dims, labels.Shape().Dims))
+		{
+			throw std::runtime_error("CrossEntropyLoss logits and labels shapes must match");
+		}
+		if (logits.Shape().Dims.back() == 0)
+		{
+			throw std::runtime_error("CrossEntropyLoss class dimension must be non-empty");
+		}
+	}
+
+	inline Tensor<CPU> EvalCrossEntropyLoss(const Tensor<CPU>& logits, const Tensor<CPU>& labels)
+	{
+		ValidateCrossEntropyInputs(logits, labels);
+		const auto classCount = logits.Shape().Dims.back();
+		const auto rowCount = logits.NumElements() / classCount;
+		const auto* logitsPtr = static_cast<const float*>(logits.RawData());
+		const auto* labelsPtr = static_cast<const float*>(labels.RawData());
+		double totalLoss = 0.0;
+
+		for (auto row = 0uz; row < rowCount; ++row)
+		{
+			const auto rowOffset = row * classCount;
+			const auto* logitsRow = logitsPtr + rowOffset;
+			const auto* labelsRow = labelsPtr + rowOffset;
+			const auto maxLogit = *std::max_element(logitsRow, logitsRow + classCount);
+			double sumExp = 0.0;
+			for (auto col = 0uz; col < classCount; ++col)
+			{
+				sumExp += std::exp(static_cast<double>(logitsRow[col] - maxLogit));
+			}
+			const auto logSumExp = std::log(sumExp) + static_cast<double>(maxLogit);
+			for (auto col = 0uz; col < classCount; ++col)
+			{
+				totalLoss -= static_cast<double>(labelsRow[col]) *
+				             (static_cast<double>(logitsRow[col]) - logSumExp);
+			}
+		}
+
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, { 1 }, DataType::Float32, cpu);
+		*static_cast<float*>(result.RawData()) = static_cast<float>(totalLoss / static_cast<double>(rowCount));
+		return result;
+	}
+
+	inline Tensor<CPU> EvalCrossEntropyLossBackward(const Tensor<CPU>& grad, const Tensor<CPU>& logits,
+	                                                const Tensor<CPU>& labels)
+	{
+		ValidateCrossEntropyInputs(logits, labels);
+		if (grad.DType() != DataType::Float32 || grad.NumElements() != 1)
+		{
+			throw std::runtime_error("CrossEntropyLossBackward grad must be a single Float32 value");
+		}
+
+		const auto classCount = logits.Shape().Dims.back();
+		const auto rowCount = logits.NumElements() / classCount;
+		const auto scale = static_cast<double>(*static_cast<const float*>(grad.RawData())) /
+		                   static_cast<double>(rowCount);
+		const auto* logitsPtr = static_cast<const float*>(logits.RawData());
+		const auto* labelsPtr = static_cast<const float*>(labels.RawData());
+		CPU cpu;
+		Tensor<CPU> result(Uninitialized, logits.Shape(), DataType::Float32, cpu);
+		auto* dst = static_cast<float*>(result.RawData());
+
+		for (auto row = 0uz; row < rowCount; ++row)
+		{
+			const auto rowOffset = row * classCount;
+			const auto* logitsRow = logitsPtr + rowOffset;
+			const auto* labelsRow = labelsPtr + rowOffset;
+			const auto maxLogit = *std::max_element(logitsRow, logitsRow + classCount);
+			double sumExp = 0.0;
+			for (auto col = 0uz; col < classCount; ++col)
+			{
+				sumExp += std::exp(static_cast<double>(logitsRow[col] - maxLogit));
+			}
+			for (auto col = 0uz; col < classCount; ++col)
+			{
+				const auto probability = std::exp(static_cast<double>(logitsRow[col] - maxLogit)) / sumExp;
+				dst[rowOffset + col] = static_cast<float>((probability - static_cast<double>(labelsRow[col])) * scale);
+			}
+		}
+		return result;
+	}
+
 	inline void ValidateSlidingWindowParams(std::span<const std::size_t> kernelShape,
 	                                        std::span<const std::size_t> strides,
 	                                        std::span<const std::size_t> dilations,

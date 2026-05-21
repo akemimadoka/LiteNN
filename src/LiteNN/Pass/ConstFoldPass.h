@@ -155,6 +155,17 @@ namespace LiteNN
 			return Detail::EvalSoftmax(input, node.axis);
 		}
 
+		static Tensor<CPU> EvalCrossEntropyLoss(const Tensor<CPU>& logits, const Tensor<CPU>& labels)
+		{
+			return Detail::EvalCrossEntropyLoss(logits, labels);
+		}
+
+		static Tensor<CPU> EvalCrossEntropyLossBackward(const Tensor<CPU>& grad, const Tensor<CPU>& logits,
+		                                                const Tensor<CPU>& labels)
+		{
+			return Detail::EvalCrossEntropyLossBackward(grad, logits, labels);
+		}
+
 		static Tensor<CPU> EvalNormalization(const Tensor<CPU>& input, const Tensor<CPU>* scale,
 		                                    const Tensor<CPU>* bias, const NormalizationNode& node)
 		{
@@ -391,6 +402,14 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    return SoftmaxNode{ remap(n.input), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    {
+					    return CrossEntropyLossNode{ remap(n.logits), remap(n.labels) };
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    {
+					    return CrossEntropyLossBackwardNode{ remap(n.grad), remap(n.logits), remap(n.labels) };
 				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
@@ -660,6 +679,17 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    {
+					    markInput(node.logits);
+					    markInput(node.labels);
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    {
+					    markInput(node.grad);
+					    markInput(node.logits);
+					    markInput(node.labels);
 				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
@@ -984,6 +1014,27 @@ namespace LiteNN
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    constValues[nodeId] = EvalSoftmax(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+					    {
+						    if (isConst[node.logits.node] && isConst[node.labels.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] =
+							        EvalCrossEntropyLoss(GetConstValue(constValues, node.logits),
+							                             GetConstValue(constValues, node.labels));
+						    }
+					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+					    {
+						    if (isConst[node.grad.node] && isConst[node.logits.node] && isConst[node.labels.node])
+						    {
+							    isConst[nodeId] = true;
+							    constValues[nodeId] =
+							        EvalCrossEntropyLossBackward(GetConstValue(constValues, node.grad),
+							                                     GetConstValue(constValues, node.logits),
+							                                     GetConstValue(constValues, node.labels));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, NormalizationNode>)

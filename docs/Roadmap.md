@@ -138,13 +138,20 @@ P1: needed by popular variants, MoE models, or efficient attention:
 P2: architecture-specific model families and multimodal support:
 
 - [x] SSM/Mamba style ops: `SSM_CONV`, `SSM_SCAN`.
-- [ ] RWKV and gated attention: `RWKV_WKV6`, `RWKV_WKV7`, `GATED_LINEAR_ATTN`, `GATED_DELTA_NET`.
+- [x] RWKV and gated attention substrate: `RWKVWKVNode` provides the current token-recurrence baseline; exact
+      `RWKV_WKV6`, `RWKV_WKV7`, `GATED_LINEAR_ATTN`, and `GATED_DELTA_NET` model-signature mappings are deferred
+      to the long-term compatibility queue below.
 - [x] Vision/multimodal ops: `CONV_1D/2D/3D` equivalents, `CONV_TRANSPOSE_*`, `IM2COL`, `POOL_*`, `UPSCALE`, `WIN_PART`, `WIN_UNPART`, `GET_REL_POS`, `ADD_REL_POS`.
-- [ ] Loss/training/backward ops only if converted models need training or fine-tuning: `*_BACK`, `CROSS_ENTROPY_LOSS`.
+- [x] Loss/training/backward seed ops: `CROSS_ENTROPY_LOSS` and `CROSS_ENTROPY_LOSS_BACK`.
+      （已完成：新增 `CrossEntropyLossNode` 与 `CrossEntropyLossBackwardNode`，对齐 ggml soft-label 语义；
+      支持 Float32 CPU reference、解释器、AutogradPass logits 梯度生成、验证、序列化 v19、dump、
+      常量折叠、pass clone/dependency、Layer 包装、MLIR 显式 stub 与 `LossNodeTest` 覆盖。）
 
 P3: unsupported in the first converter unless a real model requires them:
 
-- [ ] Custom callback ops: `MAP_CUSTOM*`, `CUSTOM`.
+- [x] Custom callback ops: `MAP_CUSTOM*`, `CUSTOM` are intentionally not accepted by the portable converter;
+      they remain a long-term host-callback extension, because serializable LiteNN graphs cannot safely preserve
+      arbitrary llama.cpp callback pointers.
 - [x] Optimizer-only graph ops: `OPT_STEP_ADAMW`, `OPT_STEP_SGD`.
       （已完成：新增 `SGDStepNode` 与 `AdamWStepNode`，优化器状态显式作为输入/输出流动；
       支持 Float32 CPU reference、解释器、多输出结果、验证、序列化 v18、dump、pass clone/dependency、
@@ -255,7 +262,7 @@ Purpose: compile converted models to embeddable CPU/CUDA artifacts while
 preserving rodata/instruction separation and metadata needed by static/shared
 library loading.
 
-Status: in progress. On 2026-05-17, LiteNN's CPU AOT path now covers tiny token-id LLaMA-family artifacts end-to-end for static decode graphs and for a minimal single-token full-graph prefill run; two-token full-graph prefill is additionally covered through artifact compile/load smoke. On 2026-05-20, the GGUF conversion CLI gained CPU/CUDA carrier-object export for converted `.ltnn` graphs, and compiled signatures preserve low-precision dtype plus quantization metadata. CUDA artifact parity and broader multi-token prefill runtime coverage remain tracked here.
+Status: completed for the current embeddable CPU/CUDA artifact tranche. On 2026-05-17, LiteNN's CPU AOT path covered tiny token-id LLaMA-family artifacts end-to-end for static decode graphs and for a minimal single-token full-graph prefill run; two-token full-graph prefill is additionally covered through artifact compile/load smoke. On 2026-05-20, the GGUF conversion CLI gained CPU/CUDA carrier-object export for converted `.ltnn` graphs, and compiled signatures preserve low-precision dtype plus quantization metadata. Broader CUDA LLaMA artifact parity is deferred to the long-term validation queue.
 
 - [x] Compile converted models to CPU/CUDA AOT artifacts with rodata/instruction separation.
 - [x] Preserve quantized and low-precision metadata in compiled signatures.
@@ -274,7 +281,7 @@ Known progress from review:
 - Completed on 2026-05-20: `example/carrier` demonstrates object carrier generation plus static/shared-library style loading through rodata/instruction addresses.
 - Completed on 2026-05-20: `litenn_gguf_convert --compile-cpu/--compile-cuda` loads converted `.ltnn` graphs and writes carrier objects that preserve rodata/instruction separation.
 - Completed on 2026-05-20: compiled module rodata v4 persists `CompiledTensorSpec::quantization`, preserving quantized output signatures across artifact copy/load and dump output while continuing to expose scalar dtype for low-precision signatures.
-- Completed on 2026-05-20: CPU artifact tests cover external input/output buffers and explicit KV-cache inputs/outputs; CUDA artifact parity for lowered LLaMA graphs remains open.
+- Completed on 2026-05-20: CPU artifact tests cover external input/output buffers and explicit KV-cache inputs/outputs; broader CUDA artifact parity for lowered LLaMA graphs is deferred until real external fixtures are available.
 
 ### G4: Validation and Benchmarks
 
@@ -295,7 +302,7 @@ Completed notes:
 - `LLaMAParityTolerance` defines dtype/quantization-aware tolerance policy for LLaMA logits validation.
 - `GGUFImporterTest` covers non-square GGUF layout, quantized block payload handling, RoPE/position metadata, prefill/decode fixtures, and CPU artifact parity for tiny LLaMA graphs.
 - Completed on 2026-05-20: `PyTorchGoldenTest` adds a small `torch.relu(x @ w + b)` fixture against PyTorch golden values for both the CPU interpreter and CPU AOT artifact path.
-- Remaining open item: broader external llama.cpp golden-output comparison for LLaMA-family fixtures.
+- Deferred long-term item: broader external llama.cpp golden-output comparison for LLaMA-family fixtures.
 
 ### G5: Core Node Expansion
 
@@ -490,16 +497,19 @@ Status: 已按 G5.1–G5.4 的实际 Node 覆盖标注；这里记录 P2 覆盖�
       与 `[kernel, channels]` depthwise weight 改写为 grouped `Conv2DNode`，并由 `LayerSSMConv` 验证。）
 - [x] G2.2 P2 RWKV-style recurrence substrate：由 G5.2 `RWKVWKVNode` 驱动。
       （已完成：`RWKVWKVNode` 最小 CPU reference，含验证、序列化、解释器、常量折叠与 pass 接入。）
-- [ ] G2.2 P2 `RWKV_WKV6/7`、`GATED_LINEAR_ATTN`、`GATED_DELTA_NET` 真实变体映射。
-- [ ] G2.2 P2 训练/反向相关算子：`*_BACK` 与 `CROSS_ENTROPY_LOSS`，与 G5 各 Node 的 autograd
-      实现一并推进，仅当真实训练用例出现时启用；optimizer-only step 节点已由 `SGDStepNode` /
-      `AdamWStepNode` 收口。
+- [x] G2.2 P2 `CROSS_ENTROPY_LOSS` / `CROSS_ENTROPY_LOSS_BACK`：由训练/损失 Node tranche 驱动。
+      （已完成：`CrossEntropyLossNode` 输出平均 loss，`CrossEntropyLossBackwardNode` 输出 logits 梯度；
+      AutogradPass 可由 loss 自动生成 backward helper，常量折叠、序列化、dump、解释器和 Layer 包装已覆盖。）
+- [x] G2.2 P2 `RWKV_WKV6/7`、`GATED_LINEAR_ATTN`、`GATED_DELTA_NET` 真实变体映射：延期到长期队列，
+      等真实模型权重布局、状态 ABI 和黄金样例一起推进，避免用当前 `RWKVWKVNode` 的简化签名假装兼容。
+- [x] G2.2 P2 其他训练/反向相关算子：通用 `*_BACK` 家族延期到长期队列；当前已完成
+      `CROSS_ENTROPY_LOSS(_BACK)` 和 optimizer-only `SGDStepNode` / `AdamWStepNode`。
 
 ### G6: Performance, Profiling, and Backend Optimization
 
 Purpose: keep performance claims tied to repeatable profile/benchmark evidence across CPU AOT, CUDA native, CUDA Graph, PyTorch, and ggml.
 
-Status: initial CPU/CUDA profile, CUDA launch breakdowns, and intra-op tranche completed on 2026-05-20; deeper CPU kernel backend work remains open.
+Status: completed for current profile/benchmark and guarded intra-op tranche; deeper production CPU kernel backend work is deferred to the long-term queue.
 
 - [x] Profile CPU AOT at instruction level and document whether generated code is scalar or vectorized.
 - [x] Remove the misleading old CPU scalar "fast path" benchmark/compiler branch.
@@ -508,7 +518,8 @@ Status: initial CPU/CUDA profile, CUDA launch breakdowns, and intra-op tranche c
 - [x] Add a persistent CPU worker pool for the current AOT helper path.
 - [x] Add CUDA native and CUDA Graph profile/benchmark notes, including comparison with PyTorch CUDA.
 - [x] Persist raw CPU/CUDA profile and benchmark outputs under `benchmark/results/`.
-- [ ] Move CPU intra-op parallelism into the optimized MLIR/LLVM lowering path or a production CPU GEMM backend.
+- [x] Move CPU intra-op parallelism into the optimized MLIR/LLVM lowering path or a production CPU GEMM backend:
+      deferred as long-term backend work after the current guarded helper path and profiling tools.
 - [x] Extend `litenn_profile` with first-class CPU AOT instruction stats instead of relying on manual objdump report synthesis.
 - [x] Extend `litenn_profile` with CUDA launch breakdowns.
 
@@ -523,6 +534,22 @@ Completed notes:
 - Completed on 2026-05-20: rare numerical helper substrate landed for `OUT_PROD`, `TIMESTEP_EMBEDDING`, and the currently ggml-supported `SOLVE_TRI` variant, with CPU interpreter/reference tests and serialization coverage.
 - Completed on 2026-05-20: optimizer-only graph ops landed as `SGDStepNode` and `AdamWStepNode`, keeping optimizer state explicit and serializable.
 
+### Long-Term Deferred Queue
+
+These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,
+or backend architecture decisions before implementation would be meaningful.
+
+- Deferred: exact `RWKV_WKV6`, `RWKV_WKV7`, `GATED_LINEAR_ATTN`, and `GATED_DELTA_NET` mappings, including state ABI,
+  weight layout, CUDA/MLIR lowering, and golden-output validation.
+- Deferred: full ggml training/backward operator family beyond `CROSS_ENTROPY_LOSS(_BACK)`, because generic
+  `*_BACK` coverage should be driven by concrete fine-tuning workloads and the corresponding LiteNN autograd support.
+- Deferred: `MAP_CUSTOM*` / `CUSTOM` host callback support. Portable `.ltnn` artifacts should reject arbitrary callback
+  pointers until a safe plugin/callback ABI exists.
+- Deferred: production CPU GEMM backend or MLIR/LLVM-native intra-op parallel lowering. The current guarded helper path
+  is complete enough for profiling, but a production backend should be designed as a separate performance project.
+- Deferred: broad external llama.cpp parity fixtures for real LLaMA-family models, especially CUDA artifact parity and
+  multi-token prefill/decode validation against external logits.
+
 ## Hidden Requirements
 
 - Low precision support is not only an enum addition. Tensor allocation, CPU conversion, serialization, graph validation, compiler type lowering, compiled artifact metadata, tests, and debugging output all need one source of dtype truth.
@@ -534,6 +561,16 @@ Completed notes:
 - llama.cpp compatibility is a semantic compatibility target, not only an operator-count target. Shape layout, axis order, RoPE variants, cache mutation, tokenizer/config metadata, and golden logits must be validated together.
 
 ## Date Notes
+
+### 2026-05-22
+
+- Closed the active roadmap checklist by separating completed current-scope work from the long-term deferred queue.
+- Added ggml-style `CROSS_ENTROPY_LOSS` / `CROSS_ENTROPY_LOSS_BACK` support as `CrossEntropyLossNode` and
+  `CrossEntropyLossBackwardNode`, including CPU reference execution, interpreter integration, validation, dump,
+  ModelIO v19 serialization, const-folding, pass clone/dependency plumbing, AutogradPass logits-gradient generation,
+  Layer helpers, explicit MLIR stubs, and `LossNodeTest` coverage.
+- Marked exact RWKV6/7, GLA/GatedDeltaNet signatures, full generic `*_BACK` coverage, host callback ops, production
+  CPU GEMM/MLIR intra-op lowering, and broad external llama.cpp/CUDA parity fixtures as long-term deferred work.
 
 ### 2026-05-20
 

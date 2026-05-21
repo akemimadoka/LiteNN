@@ -274,6 +274,10 @@ namespace LiteNN::Validation
 				    return "RWKVWKVNode";
 			    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    return "SoftmaxNode";
+			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    return "CrossEntropyLossNode";
+			    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    return "CrossEntropyLossBackwardNode";
 			    else if constexpr (std::same_as<T, NormalizationNode>)
 				    return "NormalizationNode";
 			    else if constexpr (std::same_as<T, BatchMatMulNode>)
@@ -1170,6 +1174,60 @@ namespace LiteNN::Validation
 				Fail(subgraphId, nodeId, "SoftmaxNode requires a floating-point input tensor");
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape }, "SoftmaxNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const CrossEntropyLossNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto logits =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.logits, "CrossEntropyLossNode logits", true);
+			const auto labels =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.labels, "CrossEntropyLossNode labels", true);
+			if (logits.dtype != DataType::Float32 || labels.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossNode requires Float32 logits and labels");
+			}
+			if (logits.shape.empty() || logits.shape.back() == 0)
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossNode expects shape [..., classes]");
+			}
+			if (!SameShape(logits.shape, labels.shape))
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossNode logits and labels shapes must match");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, { 1 } },
+			           "CrossEntropyLossNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const CrossEntropyLossBackwardNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto grad =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.grad, "CrossEntropyLossBackwardNode grad", true);
+			const auto logits =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.logits, "CrossEntropyLossBackwardNode logits", true);
+			const auto labels =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.labels, "CrossEntropyLossBackwardNode labels", true);
+			if (grad.dtype != DataType::Float32 || grad.shape != std::vector<std::size_t>{ 1 })
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode grad must be Float32 [1]");
+			}
+			if (logits.dtype != DataType::Float32 || labels.dtype != DataType::Float32)
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode requires Float32 logits and labels");
+			}
+			if (logits.shape.empty() || logits.shape.back() == 0)
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode expects shape [..., classes]");
+			}
+			if (!SameShape(logits.shape, labels.shape))
+			{
+				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode logits and labels shapes must match");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, logits.shape },
+			           "CrossEntropyLossBackwardNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,

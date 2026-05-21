@@ -675,6 +675,20 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support SoftmaxNode yet; use the interpreter path");
 	}
 
+	void emitNode(const Subgraph&, NodeId, const CrossEntropyLossNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support CrossEntropyLossNode yet; use the interpreter path");
+	}
+
+	void emitNode(const Subgraph&, NodeId, const CrossEntropyLossBackwardNode&, std::span<const OutputInfo>,
+	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		throw std::runtime_error("GraphToMLIR does not support CrossEntropyLossBackwardNode yet; use the interpreter path");
+	}
+
 	void emitNode(const Subgraph& sg, NodeId nodeId, const NormalizationNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)

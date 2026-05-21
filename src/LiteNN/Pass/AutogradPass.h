@@ -316,6 +316,17 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+					    {
+						    ++counts[{ node.logits.node, node.logits.port }];
+						    ++counts[{ node.labels.node, node.labels.port }];
+					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+					    {
+						    ++counts[{ node.grad.node, node.grad.port }];
+						    ++counts[{ node.logits.node, node.logits.port }];
+						    ++counts[{ node.labels.node, node.labels.port }];
+					    }
 					    else if constexpr (std::same_as<T, NormalizationNode>)
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
@@ -511,8 +522,14 @@ namespace LiteNN
 						    // G5.1 data movement nodes do not need extra saved activations here.
 						    // Differentiation is still explicitly gated below.
 					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+					    {
+						    SaveIfNeeded(fwdSg, graph, node.logits, saved, insideLoop);
+						    SaveIfNeeded(fwdSg, graph, node.labels, saved, insideLoop);
+					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                      std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
+					                      std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                      std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
 					                      std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
 					                      std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
@@ -838,6 +855,17 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    return SoftmaxNode{ { nodeMap[n.input.node], n.input.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    {
+					    return CrossEntropyLossNode{ { nodeMap[n.logits.node], n.logits.port },
+					                                 { nodeMap[n.labels.node], n.labels.port } };
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    {
+					    return CrossEntropyLossBackwardNode{ { nodeMap[n.grad.node], n.grad.port },
+					                                         { nodeMap[n.logits.node], n.logits.port },
+					                                         { nodeMap[n.labels.node], n.labels.port } };
 				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
@@ -1272,6 +1300,15 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: SoftmaxNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+					    {
+						    EmitCrossEntropyLossGrad(fwdSg, bwdSg, node, dy, saved, loadMap, gradContribs);
+					    }
+					    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: CrossEntropyLossBackwardNode differentiation is not implemented");
 					    }
 					    else if constexpr (std::same_as<T, NormalizationNode>)
 					    {
@@ -2190,6 +2227,19 @@ namespace LiteNN
 				break;
 			}
 			}
+		}
+
+		void EmitCrossEntropyLossGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const CrossEntropyLossNode& node,
+		                              NodeOutput dy, const SavedSlotMap& saved,
+		                              std::map<NodeOutputKey, NodeId>& loadMap,
+		                              std::map<NodeOutputKey, std::vector<NodeOutput>>& gc)
+		{
+			const auto& logitsInfo = fwdSg.GetOutputInfo(node.logits);
+			auto logits = GetForwardValue(fwdSg, bwdSg, node.logits.node, node.logits.port, saved, loadMap);
+			auto labels = GetForwardValue(fwdSg, bwdSg, node.labels.node, node.labels.port, saved, loadMap);
+			auto grad = bwdSg.AddNode(CrossEntropyLossBackwardNode{ dy, { logits, 0 }, { labels, 0 } },
+			                          { OutputInfo{ DataType::Float32, logitsInfo.shape } });
+			gc[{ node.logits.node, node.logits.port }].push_back({ grad, 0 });
 		}
 
 		static void EmitReshapeGrad(const Subgraph& fwdSg, Subgraph& bwdSg, const ReshapeNode& node, NodeOutput dy,

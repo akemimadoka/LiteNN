@@ -655,6 +655,38 @@ namespace LiteNN::Runtime
 			}
 		}
 
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CrossEntropyLossNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalCrossEntropyLoss(GetValue(slots, node.logits).CopyToDevice(CPU{}),
+			                                             GetValue(slots, node.labels).CopyToDevice(CPU{}));
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId,
+		             const CrossEntropyLossBackwardNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto cpuResult = Detail::EvalCrossEntropyLossBackward(GetValue(slots, node.grad).CopyToDevice(CPU{}),
+			                                                     GetValue(slots, node.logits).CopyToDevice(CPU{}),
+			                                                     GetValue(slots, node.labels).CopyToDevice(CPU{}));
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
 		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const NormalizationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
