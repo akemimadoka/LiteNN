@@ -563,6 +563,158 @@ Completed notes:
 - Completed on 2026-05-20: rare numerical helper substrate landed for `OUT_PROD`, `TIMESTEP_EMBEDDING`, and the currently ggml-supported `SOLVE_TRI` variant, with CPU interpreter/reference tests and serialization coverage.
 - Completed on 2026-05-20: optimizer-only graph ops landed as `SGDStepNode` and `AdamWStepNode`, keeping optimizer state explicit and serializable.
 
+### G7: Heterogeneous Execution
+
+Purpose: allow one graph to execute across multiple devices/backends while keeping graph semantics deterministic,
+buffer ownership explicit, and compiled artifacts loadable without interpreter-only hidden state.
+
+#### G7.1 Device Placement Contract
+
+- [ ] Add graph-level device-placement metadata for params, variables, intermediate values, and results.
+- [ ] Define automatic placement defaults: keep current single-device behavior when no placement metadata is present.
+- [ ] Add explicit copy/transfer edges or runtime transfer plans instead of hiding cross-device moves inside arbitrary nodes.
+- [ ] Validate placement consistency, unsupported device ops, and illegal host/device aliasing with actionable diagnostics.
+
+#### G7.2 Runtime Scheduling
+
+- [ ] Split execution into per-device segments with explicit input/output buffer boundaries.
+- [ ] Add a CPU/CUDA mixed-execution smoke test where only a subgraph segment runs on CUDA and the rest remains on CPU.
+- [ ] Track synchronization points and stream/event ownership for CUDA segments.
+- [ ] Add profiling output that reports per-device time, transfer time, and synchronization overhead.
+
+#### G7.3 AOT and Artifact Support
+
+- [ ] Extend compiled artifact metadata with per-segment backend kind, required device capabilities, and transfer ABI.
+- [ ] Support loading heterogeneous artifacts from separated rodata/instruction regions.
+- [ ] Reject artifacts when a required backend/device capability is unavailable, with fallback policy documented.
+
+### G8: E-Graph Optimization
+
+Purpose: add equality-saturation based graph optimization for algebraic rewrites, layout rewrites, and backend-aware
+fusion without baking every pattern into ad-hoc passes.
+
+#### G8.1 E-Graph Substrate
+
+- [ ] Choose or implement a small C++ e-graph/e-class substrate compatible with LiteNN's `Graph`/`NodeOutput` model.
+- [ ] Define canonical e-graph terms for pure tensor ops, constants, shapes, dtypes, and layout annotations.
+- [ ] Add import/export between LiteNN subgraphs and e-graph terms while preserving multi-output nodes where needed.
+- [ ] Keep stateful/runtime-only ops outside the first e-graph tranche unless explicit purity rules exist.
+
+#### G8.2 Rewrite Rule Sets
+
+- [ ] Add safe algebraic rewrites for elementwise identities, associativity/commutativity where numerically acceptable, and constant folding handoff.
+- [ ] Add NN-specific rewrites: matmul+bias+activation fusion, reshape/permute/broadcast canonicalization, and redundant copy removal.
+- [ ] Add backend-aware cost models for CPU AOT, CUDA native, and interpreter fallback.
+- [ ] Add numerical-safety flags so aggressive rewrites can be disabled for strict reproducibility.
+
+#### G8.3 Validation
+
+- [ ] Add golden graph tests comparing original and optimized graphs on randomized inputs.
+- [ ] Add rewrite explain/dump tooling so an optimization result can be reviewed.
+- [ ] Add guardrails for e-graph blow-up: iteration limits, node limits, timeout, and deterministic extraction.
+
+### G9: Rodata and Weight Separation
+
+Purpose: make model weights, constants, compiled metadata, and executable instructions separable so static/shared
+library embedding, memory mapping, hot weight swapping, and mobile packaging do not depend on one monolithic blob.
+
+#### G9.1 Artifact Layout
+
+- [ ] Split compiled artifact storage into instruction bytes, immutable metadata, constant rodata, and external weight references.
+- [ ] Define stable section names and exported symbols for each region in carrier object output.
+- [ ] Add alignment, endian, version, and checksum fields per region.
+- [ ] Preserve dtype, quantization, shape, and variable-name metadata across separated regions.
+
+#### G9.2 Loading and Binding
+
+- [ ] Add APIs to load instructions/metadata once and bind rodata/weights from separate addresses.
+- [ ] Add APIs to rebind compatible weight regions without recompiling instructions.
+- [ ] Validate region compatibility with detailed mismatch errors.
+- [ ] Add tests for static object, shared library, memory-mapped file, and in-memory byte span loading.
+
+#### G9.3 Importer Integration
+
+- [ ] Let GGUF/LiteNN conversion emit archive-only, executable graph, compiled artifact, and separated-rodata variants.
+- [ ] Support large-weight packaging without exceeding PE/COFF section/object limits.
+- [ ] Document recommended packaging layouts for desktop, mobile, static library, and shared library users.
+
+### G10: LoRA and Adapter Support
+
+Purpose: support parameter-efficient adaptation without requiring full model rewrites, while preserving AOT compatibility
+and clear base-weight versus adapter-weight ownership.
+
+#### G10.1 Graph Representation
+
+- [ ] Add a LoRA metadata model: target module/name, rank, alpha, dropout policy, dtype, and merge mode.
+- [ ] Add Layer helpers that apply LoRA as `base(x) + scale * (x @ A @ B)` for linear layers.
+- [ ] Support both unmerged runtime adapters and merged-weight export.
+- [ ] Define compatibility rules for quantized base weights and low-precision adapter weights.
+
+#### G10.2 Import and Serialization
+
+- [ ] Add LiteNN serialization for adapter tensors and adapter metadata.
+- [ ] Add safetensors LoRA import for common naming schemes used by Hugging Face/PEFT-style adapters.
+- [ ] Add diagnostics for unmatched target names, shape/rank mismatches, and unsupported adapter variants.
+- [ ] Add roundtrip tests for saving/loading base model plus one or more adapters.
+
+#### G10.3 Runtime and AOT
+
+- [ ] Add interpreter execution tests for unmerged LoRA.
+- [ ] Add CPU AOT tests for merged LoRA export.
+- [ ] Add optional runtime adapter binding for AOT when adapter weights are kept separate from base rodata.
+- [ ] Add benchmark coverage for merged versus unmerged adapters.
+
+### G11: Mobile Support and Test Matrix
+
+Purpose: make LiteNN usable on mobile targets with constrained memory, predictable binary size, and repeatable device tests.
+
+#### G11.1 Build and Portability
+
+- [ ] Define supported first targets: Android arm64-v8a and iOS arm64 simulator/device if toolchains are available.
+- [ ] Make compiler/MLIR/CUDA features optional so a minimal interpreter/runtime build is possible.
+- [ ] Audit C++ standard library, filesystem, reflection, dynamic loading, and thread usage for mobile constraints.
+- [ ] Add CMake presets or toolchain documentation for mobile builds.
+
+#### G11.2 Runtime Constraints
+
+- [ ] Add allocator hooks or arena-style allocation for predictable memory usage.
+- [ ] Add binary-size and model-size reporting for mobile builds.
+- [ ] Add CPU feature detection for ARM NEON and future mobile GPU/NNAPI/CoreML delegation points.
+- [ ] Define unsupported features explicitly, such as CUDA-only paths and desktop object loading where unavailable.
+
+#### G11.3 Testing
+
+- [ ] Add host-side cross-compile smoke tests in CI once toolchains are available.
+- [ ] Add on-device or emulator smoke tests for tensor ops, model loading, and a small inference graph.
+- [ ] Add mobile package examples using separated rodata/weights from G9.
+- [ ] Track performance and memory baselines for at least one small MLP/CNN and one tiny transformer block.
+
+### G12: Torch and Safetensors Import
+
+Purpose: provide a practical bridge from PyTorch/Hugging Face artifacts into LiteNN graph/model formats, starting with
+safetensors weights and expanding toward torch-exported graph structure.
+
+#### G12.1 Safetensors Reader
+
+- [ ] Implement a safetensors metadata and tensor-payload reader with bounds checks and dtype/shape validation.
+- [ ] Map safetensors dtypes to LiteNN dtypes, including fp16/bf16/fp8/int storage where available.
+- [ ] Preserve tensor names and provide rename/transpose hooks for common PyTorch weight layouts.
+- [ ] Add tests with minimal safetensors fixtures and corrupted-header/error-path fixtures.
+
+#### G12.2 Torch Weight Import
+
+- [ ] Add a CLI/import API to convert safetensors weights into LiteNN variables or separated rodata regions.
+- [ ] Add mapping presets for common module names: Linear, Embedding, LayerNorm/RMSNorm, attention projections, and LoRA adapters.
+- [ ] Add diagnostics for missing tensors, extra tensors, dtype mismatch, shape mismatch, and layout mismatch.
+- [ ] Add golden tests against PyTorch for small exported MLP/attention fixtures.
+
+#### G12.3 Torch Graph Support
+
+- [ ] Decide first graph source: `torch.export`, `torch.fx`, ONNX, or a LiteNN-specific JSON manifest paired with safetensors.
+- [ ] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
+- [ ] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
+- [ ] Add roundtrip examples showing PyTorch weights plus graph manifest imported to LiteNN and compiled through CPU AOT.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,
@@ -588,11 +740,25 @@ or backend architecture decisions before implementation would be meaningful.
 - AOT support must preserve dtype metadata in rodata/instruction-loaded modules so static/shared library embedding can validate buffers before execution.
 - GGUF conversion is also an operator-coverage project. llama.cpp can express more graph ops than LiteNN currently owns, so the converter must either lower them to existing primitives, add LiteNN ops, or reject models with actionable diagnostics.
 - llama.cpp compatibility is a semantic compatibility target, not only an operator-count target. Shape layout, axis order, RoPE variants, cache mutation, tokenizer/config metadata, and golden logits must be validated together.
+- Heterogeneous execution is not only "choose CUDA for some ops"; it requires explicit placement, transfer, synchronization,
+  profiling, and artifact capability metadata so hidden data movement does not make performance or correctness opaque.
+- E-graph optimization needs a cost model and numerical-safety policy. Algebraic equivalence is not automatically acceptable
+  for floating-point training/inference unless reproducibility and tolerance rules are explicit.
+- Separating rodata implies a binding ABI: instructions, metadata, constants, external weights, checksums, alignment, and
+  rebinding compatibility must be validated independently.
+- LoRA support is both a graph rewrite and a packaging problem: adapters may be merged, unmerged, quantized, stacked, or
+  loaded separately from base weights.
+- Mobile support needs a smallest-viable build profile. MLIR/CUDA/object-loading assumptions must be optional, and memory,
+  binary size, filesystem, dynamic loading, and thread behavior need separate validation.
+- Torch/safetensors support is not just a tensor reader. It requires dtype/layout/name mapping, graph-source selection,
+  diagnostics, golden PyTorch parity fixtures, and eventually integration with separated rodata and LoRA.
 
 ## Date Notes
 
 ### 2026-05-22
 
+- Added G7-G12 planning checklists for heterogeneous execution, e-graph optimization, separated rodata/weight
+  binding, LoRA/adapters, mobile support/testing, and Torch/safetensors import.
 - Closed the active roadmap checklist by separating completed current-scope work from the long-term deferred queue.
 - Added ggml-style `CROSS_ENTROPY_LOSS` / `CROSS_ENTROPY_LOSS_BACK` support as `CrossEntropyLossNode` and
   `CrossEntropyLossBackwardNode`, including CPU reference execution, interpreter integration, validation, dump,
