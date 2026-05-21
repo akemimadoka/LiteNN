@@ -156,9 +156,17 @@ TEST(CUDADevice, LowPrecisionCapabilitiesAreReported)
 		DataType::Int8,
 		DataType::UInt8,
 	};
-	const auto nativeConversionAvailable = CUDASupportsNativeConversion(DataType::Float32, DataType::Float16);
+	const auto baselineNativeConversionAvailable = CUDASupportsNativeConversion(DataType::Float32, DataType::Float16);
+	const auto expectedNativeConversion = [&](DataType dataType) {
+		if (dataType == DataType::Float8E4M3 || dataType == DataType::Float8E5M2)
+		{
+			return baselineNativeConversionAvailable && capabilities.supportsFloat8MatMul;
+		}
+		return baselineNativeConversionAvailable;
+	};
 	for (const auto dataType : lowPrecisionTypes)
 	{
+		const auto nativeConversionAvailable = expectedNativeConversion(dataType);
 		EXPECT_EQ(CUDASupportsNativeConversion(DataType::Float32, dataType), nativeConversionAvailable)
 		    << DataTypeName(dataType);
 		EXPECT_EQ(CUDASupportsNativeConversion(dataType, DataType::Float32), nativeConversionAvailable)
