@@ -11,8 +11,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -120,6 +123,13 @@ namespace
 		return GGMLContextPtr{ ggml_init(params) };
 	}
 
+	std::filesystem::path MakeTempFixturePath(std::string_view stem, std::string_view extension)
+	{
+		const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+		const auto salt = reinterpret_cast<std::uintptr_t>(&stem);
+		return std::filesystem::temp_directory_path() / std::format("{}_{}_{}{}", stem, now, salt, extension);
+	}
+
 	void AddTensor(gguf_context* gguf, ggml_context* ggml, ggml_type type, std::string_view name,
 	              std::span<const std::int64_t> dims, const void* data)
 	{
@@ -135,7 +145,7 @@ namespace
 
 	std::filesystem::path WriteSupportedFixture()
 	{
-		const auto path = std::filesystem::path("litenn_gguf_importer_fixture.gguf");
+		const auto path = MakeTempFixturePath("litenn_gguf_importer_fixture", ".gguf");
 		std::filesystem::remove(path);
 
 		GGUFContextPtr gguf{ gguf_init_empty() };
@@ -177,7 +187,7 @@ namespace
 
 	std::filesystem::path WriteUnsupportedFixture()
 	{
-		const auto path = std::filesystem::path("litenn_gguf_importer_unsupported_fixture.gguf");
+		const auto path = MakeTempFixturePath("litenn_gguf_importer_unsupported_fixture", ".gguf");
 		std::filesystem::remove(path);
 
 		GGUFContextPtr gguf{ gguf_init_empty() };
@@ -545,7 +555,7 @@ TEST(GGUFImporter, RejectsUnsupportedTensorTypes)
 TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 {
 	const auto inputPath = WriteSupportedFixture();
-	const auto outputPath = std::filesystem::path("litenn_gguf_imported_archive.ltnn");
+	const auto outputPath = MakeTempFixturePath("litenn_gguf_imported_archive", ".ltnn");
 	std::filesystem::remove(outputPath);
 
 	const auto summary = GGUF::ConvertGGUFArchive(inputPath, outputPath);
