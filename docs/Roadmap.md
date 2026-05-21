@@ -371,14 +371,15 @@ catch-all 桩节点伪装"已支持"。同时也把一部分明显应当作为 N
       （已完成：CPU 内核 + CUDA host fallback + Validator/Dump/ModelIO v11/Interpreter +
       全部 Pass clone + ConstFold + AutogradPass `EmitPermuteGrad`（逆置换） +
       `Layer/Permute.h`（含 `AddTranspose`）+ `PermuteNodeTest` 6 个用例全部通过；
-      MLIR lowering 暂为 stub，复用解释器路径。）
+      GraphToMLIR 现已直接展开为 `linalg.generic` 置换拷贝。）
 - [x] `BroadcastToNode`: 显式将某些维度从 1 扩到指定大小（含插入前导单位维），
       不复制数据但暴露明确的 shape 推导；替代 BinaryOp 隐式广播作为前置步骤。
       解锁：`REPEAT`、`UPSCALE-Nearest` 的 Layer 实现。
       （已完成：Graph/Validator/Dump/ModelIO v12/Interpreter CPU reference + non-CPU host fallback
       through interpreter、ConstFold、ForwardOnly/Fusion/Inline/Autograd clone/dependency 接入、
       `Layer/BroadcastTo.h`、`DataMovementNodeTest` 覆盖前导维插入与 singleton dim 扩展；
-      MLIR lowering 与 Autograd differentiation 暂为显式 stub。）
+      GraphToMLIR 现已直接展开为带 affine broadcast map 的 `linalg.generic`。Autograd
+      differentiation 暂为显式 stub。）
 - [x] `PadNode`: 任意轴前/后填充，模式 = constant/reflect/replicate，含填充值；
       取代 `Layer::AddPad` 走 zero-Constant + 多次 Concat 的低效路径。
       解锁：`PAD` 与 Conv 边界、注意力 mask 边界。
@@ -423,7 +424,8 @@ catch-all 桩节点伪装"已支持"。同时也把一部分明显应当作为 N
       max-subtract + exp + reduce + divide 五次访存。CUDA/MLIR 可一次性下沉为 fused kernel。
       （已完成：`Layer::AddSoftmax` 改走 `SoftmaxNode`；CPU reference 使用 max-subtract
       稳定路径；Validator/Dump/ModelIO v13/Interpreter/ConstFold/pass clone-dependency 接入。
-      CUDA/MLIR fused lowering 与 Autograd differentiation 暂为显式 stub。）
+      GraphToMLIR 现已展开为 max-reduce/subtract/exp/sum-reduce/divide 组合 lowering；
+      CUDA fused lowering 与 Autograd differentiation 暂为显式 stub。）
 - [x] `NormalizationNode`: 统一 `LayerNorm` / `RMSNorm` / `GroupNorm` 三种归一化，
       参数 = mode + axis（或 group 数）+ eps + 可选 affine。取代三个 Layer 中各自展开
       的 reduce+broadcast+sqrt+divide 链。
@@ -505,6 +507,33 @@ Status: 已按 G5.1–G5.4 的实际 Node 覆盖标注；这里记录 P2 覆盖�
 - [x] G2.2 P2 其他训练/反向相关算子：通用 `*_BACK` 家族延期到长期队列；当前已完成
       `CROSS_ENTROPY_LOSS(_BACK)` 和 optimizer-only `SGDStepNode` / `AdamWStepNode`。
 
+#### G5.6 GraphToMLIR Lowering Priority Queue
+
+Status: P0 shape/data-movement and attention/classification blockers completed on 2026-05-22.
+
+Priority rule: first implement nodes that unlock existing LLaMA/attention/classification AOT graphs
+without requiring new dialect ABI; next handle batched GEMM and irregular data movement; leave
+stateful recurrence, convolution families, and optimizer-only nodes to backend-specific projects.
+
+- [x] P0 `PermuteNode`: direct `linalg.generic` lowering with affine inverse-permutation map.
+- [x] P0 `BroadcastToNode`: direct `linalg.generic` lowering with affine broadcast map, including
+      leading-rank insertion and singleton-dimension expansion.
+- [x] P0 `SoftmaxNode`: numerically stable GraphToMLIR expansion through existing LiteNN dialect
+      primitives (`Reduce(Max)`, `Subtract`, `Exp`, `Reduce(Sum)`, `Divide`) so the normal lowering
+      pipeline can reach linalg/math ops without a dedicated softmax dialect op.
+- [x] P0 AOT smoke: `CompiledModuleTest.CPUDataMovementSoftmaxArtifactMatchesInterpreter` covers
+      `BroadcastTo -> Permute -> Softmax` through CPU artifact compile/load/run against interpreter output.
+- [ ] P1 `BatchMatMulNode`: lower to batched `linalg.generic` or a dedicated strided-batched GEMM
+      abstraction, then map CPU/CUDA backends to optimized kernels.
+- [ ] P1 `GatherNode` / `PadNode`: lower irregular indexing and boundary handling needed by more
+      complete transformer/multimodal AOT graphs.
+- [ ] P2 `CrossEntropyLossNode` / `CrossEntropyLossBackwardNode`: lower training-oriented loss helpers
+      after the inference hot path is stable.
+- [ ] P2 `Conv2DNode` / `ConvTranspose2DNode` / `Pool2DNode` / `UpsampleNode`: prefer backend-native
+      lowering plans because naive generic loops are unlikely to be production useful.
+- [ ] P2 `ScanNode` / `SSMScanNode` / `RWKVWKVNode` / `MulMatIdNode`: require real model signatures,
+      state ABI decisions, and golden-output validation before investing in MLIR lowering.
+
 ### G6: Performance, Profiling, and Backend Optimization
 
 Purpose: keep performance claims tied to repeatable profile/benchmark evidence across CPU AOT, CUDA native, CUDA Graph, PyTorch, and ggml.
@@ -569,6 +598,10 @@ or backend architecture decisions before implementation would be meaningful.
   `CrossEntropyLossBackwardNode`, including CPU reference execution, interpreter integration, validation, dump,
   ModelIO v19 serialization, const-folding, pass clone/dependency plumbing, AutogradPass logits-gradient generation,
   Layer helpers, explicit MLIR stubs, and `LossNodeTest` coverage.
+- Prioritized the remaining `GraphToMLIR` stubs under G5.6 and completed the first inference/AOT tranche:
+  `PermuteNode` and `BroadcastToNode` now lower directly to `linalg.generic`, while `SoftmaxNode` expands
+  to existing reduce/elementwise primitives for the normal lowering pipeline; added a CPU artifact smoke that
+  compares `BroadcastTo -> Permute -> Softmax` compiled output with the interpreter.
 - Marked exact RWKV6/7, GLA/GatedDeltaNet signatures, full generic `*_BACK` coverage, host callback ops, production
   CPU GEMM/MLIR intra-op lowering, and broad external llama.cpp/CUDA parity fixtures as long-term deferred work.
 

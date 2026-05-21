@@ -361,6 +361,48 @@ TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
 	}
 }
 
+TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1, 2, 3 });
+	const auto broadcast = sg.AddNode(BroadcastToNode{ { x, 0 }, { 4, 2, 3 } },
+	                                  { OutputInfo{ DataType::Float32, { 4, 2, 3 } } });
+	const auto permute = sg.AddNode(PermuteNode{ { broadcast, 0 }, { 1, 0, 2 } },
+	                                { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
+	const auto softmax = sg.AddNode(SoftmaxNode{ { permute, 0 }, 2 },
+	                                { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
+	sg.SetResults({ { softmax, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "logits" });
+	graph.SetOutputNames({ "probabilities" });
+
+	const std::vector<double> inputData = {
+		1.0, -2.0, 0.5,
+		3.0, 0.25, -1.0,
+	};
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>(std::span<const double>(inputData), { 1, 2, 3 }, DataType::Float32)
+	};
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(expected.size(), 1u);
+	ASSERT_EQ(outputs[0].Shape().NumDim(), expected[0].Shape().NumDim());
+	for (std::size_t dim = 0; dim < outputs[0].Shape().NumDim(); ++dim)
+	{
+		ASSERT_EQ(outputs[0].Shape()[dim], expected[0].Shape()[dim]);
+	}
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
+	}
+}
+
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 {
 	auto graph = BuildSimpleAddGraph();

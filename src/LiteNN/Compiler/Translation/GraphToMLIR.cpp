@@ -1,4 +1,5 @@
 #include "Translation/GraphToMLIR.h"
+#include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
 
 #include <LiteNN/Graph.h>
@@ -295,6 +296,38 @@ private:
 		auto resultType = convertTensorType(ctx_, dtype, shape);
 		auto op = builder_.create<ReshapeOp>(builder_.getUnknownLoc(), resultType, input);
 		return op.getResult();
+	}
+
+	Value emitBroadcastToValue(Value input, DataType dtype, std::span<const std::size_t> targetShape)
+	{
+		auto loc = builder_.getUnknownLoc();
+		auto inputType = cast<RankedTensorType>(input.getType());
+		auto resultType = convertTensorType(ctx_, dtype, targetShape);
+		const auto inputRank = inputType.getRank();
+		const auto resultRank = resultType.getRank();
+		const auto rankOffset = resultRank - inputRank;
+
+		SmallVector<AffineExpr> inputExprs;
+		inputExprs.reserve(inputRank);
+		for (int64_t dim = 0; dim < inputRank; ++dim)
+		{
+			const auto resultDim = rankOffset + dim;
+			const bool isBroadcastDim =
+			    inputType.getDimSize(dim) == 1 && resultType.getDimSize(resultDim) != 1;
+			inputExprs.push_back(isBroadcastDim ? getAffineConstantExpr(0, &ctx_)
+			                                    : getAffineDimExpr(resultDim, &ctx_));
+		}
+
+		auto inputMap = AffineMap::get(resultRank, 0, inputExprs, &ctx_);
+		auto outputMap = AffineMap::getMultiDimIdentityMap(resultRank, &ctx_);
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		SmallVector<utils::IteratorType> iterTypes(resultRank, utils::IteratorType::parallel);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ input }, ValueRange{ empty },
+		    SmallVector<AffineMap>{ inputMap, outputMap }, iterTypes,
+		    [](OpBuilder& b, Location l, ValueRange args) { b.create<linalg::YieldOp>(l, args[0]); });
+		return generic.getResult(0);
 	}
 
 	static std::vector<std::size_t> ReducedShape(ShapeView inputShape, std::size_t axis)
@@ -612,18 +645,46 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support ArgsortNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const PermuteNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const PermuteNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support PermuteNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto input = getVal(valueMap, node.input);
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto rank = resultType.getRank();
+
+		SmallVector<std::size_t> inverse(node.permutation.size());
+		for (auto outputAxis = 0uz; outputAxis < node.permutation.size(); ++outputAxis)
+		{
+			inverse[node.permutation[outputAxis]] = outputAxis;
+		}
+
+		SmallVector<AffineExpr> inputExprs;
+		inputExprs.reserve(rank);
+		for (int64_t inputAxis = 0; inputAxis < rank; ++inputAxis)
+		{
+			inputExprs.push_back(getAffineDimExpr(inverse[static_cast<std::size_t>(inputAxis)], &ctx_));
+		}
+
+		auto inputMap = AffineMap::get(rank, 0, inputExprs, &ctx_);
+		auto outputMap = AffineMap::getMultiDimIdentityMap(rank, &ctx_);
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		SmallVector<utils::IteratorType> iterTypes(rank, utils::IteratorType::parallel);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ input }, ValueRange{ empty },
+		    SmallVector<AffineMap>{ inputMap, outputMap }, iterTypes,
+		    [](OpBuilder& b, Location l, ValueRange args) { b.create<linalg::YieldOp>(l, args[0]); });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const BroadcastToNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const BroadcastToNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support BroadcastToNode yet; use the interpreter path");
+		auto input = getVal(valueMap, node.input);
+		valueMap[nodeId] = { emitBroadcastToValue(input, outputInfos[0].dtype, outputInfos[0].shape) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const PadNode&, std::span<const OutputInfo>,
@@ -668,11 +729,25 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support RWKVWKVNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const SoftmaxNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph& sg, NodeId nodeId, const SoftmaxNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support SoftmaxNode yet; use the interpreter path");
+		const auto inputInfo = sg.GetOutputInfo(node.input);
+		const auto dtype = outputInfos[0].dtype;
+		const auto inputShape = ShapeView{ inputInfo.shape };
+		const auto reducedShape = ReducedShape(inputShape, node.axis);
+		const auto broadcastShape = BroadcastShapeForAxis(inputShape, node.axis);
+		auto input = getVal(valueMap, node.input);
+
+		auto max = emitReduceValue(LiteNN::ReduceOp::Max, input, dtype, reducedShape, node.axis);
+		auto maxBroadcast = emitReshapeValue(max, dtype, broadcastShape);
+		auto shifted = emitBinaryValue(LiteNN::BinaryOp::Subtract, input, maxBroadcast, dtype, inputInfo.shape);
+		auto exp = emitUnaryValue(LiteNN::UnaryOp::Exp, shifted, dtype, inputInfo.shape);
+		auto denom = emitReduceValue(LiteNN::ReduceOp::Sum, exp, dtype, reducedShape, node.axis);
+		auto denomBroadcast = emitReshapeValue(denom, dtype, broadcastShape);
+		auto result = emitBinaryValue(LiteNN::BinaryOp::Divide, exp, denomBroadcast, dtype, outputInfos[0].shape);
+		valueMap[nodeId] = { result };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const CrossEntropyLossNode&, std::span<const OutputInfo>,
@@ -880,6 +955,7 @@ private:
 
 OwningOpRef<ModuleOp> translateGraphToMLIR(const Graph& graph, MLIRContext& ctx)
 {
+	ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect>();
 	Validation::ValidateGraph(graph);
 	GraphTranslator translator(graph, ctx);
 	return translator.translate();

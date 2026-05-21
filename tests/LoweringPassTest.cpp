@@ -182,6 +182,73 @@ TEST_F(LoweringPassTest, FusedMatMulBiasAddLowersWithoutSeparateAddLoop)
     EXPECT_EQ(rank3ReductionGenerics, 1) << "Expected fused M,K,N matmul accumulation";
 }
 
+TEST_F(LoweringPassTest, PermuteNode)
+{
+    Graph graph;
+    Subgraph sg;
+    const auto x = sg.AddParam(DataType::Float32, { 2, 3, 4 });
+    const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0, 2 } },
+                              { OutputInfo{ DataType::Float32, { 3, 2, 4 } } });
+    sg.SetResults({ { y, 0 } });
+    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+    auto module = translateAndLower(graph);
+    ASSERT_TRUE(module);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    expectNoLiteNNOps(*module);
+
+    bool hasRank3Generic = false;
+    module->walk([&](mlir::linalg::GenericOp generic) {
+        hasRank3Generic = hasRank3Generic || generic.getIteratorTypesArray().size() == 3;
+    });
+    EXPECT_TRUE(hasRank3Generic) << "Expected linalg.generic from PermuteNode";
+}
+
+TEST_F(LoweringPassTest, BroadcastToNode)
+{
+    Graph graph;
+    Subgraph sg;
+    const auto x = sg.AddParam(DataType::Float32, { 1, 3 });
+    const auto y = sg.AddNode(BroadcastToNode{ { x, 0 }, { 2, 3 } },
+                              { OutputInfo{ DataType::Float32, { 2, 3 } } });
+    sg.SetResults({ { y, 0 } });
+    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+    auto module = translateAndLower(graph);
+    ASSERT_TRUE(module);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    expectNoLiteNNOps(*module);
+
+    bool hasRank2Generic = false;
+    module->walk([&](mlir::linalg::GenericOp generic) {
+        hasRank2Generic = hasRank2Generic || generic.getIteratorTypesArray().size() == 2;
+    });
+    EXPECT_TRUE(hasRank2Generic) << "Expected linalg.generic from BroadcastToNode";
+}
+
+TEST_F(LoweringPassTest, SoftmaxNode)
+{
+    Graph graph;
+    Subgraph sg;
+    const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
+    const auto y = sg.AddNode(SoftmaxNode{ { x, 0 }, 1 },
+                              { OutputInfo{ DataType::Float32, { 2, 3 } } });
+    sg.SetResults({ { y, 0 } });
+    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+    auto module = translateAndLower(graph);
+    ASSERT_TRUE(module);
+    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+    expectNoLiteNNOps(*module);
+
+    int reduceCount = 0;
+    bool hasExp = false;
+    module->walk([&](mlir::linalg::ReduceOp) { ++reduceCount; });
+    module->walk([&](mlir::math::ExpOp) { hasExp = true; });
+    EXPECT_GE(reduceCount, 2) << "Expected max and sum reductions from SoftmaxNode";
+    EXPECT_TRUE(hasExp) << "Expected math.exp from SoftmaxNode";
+}
+
 TEST_F(LoweringPassTest, CondNode)
 {
     Graph graph;
