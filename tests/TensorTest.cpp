@@ -25,6 +25,18 @@ static float ReadAsFloat(const Tensor<CPU>& t, std::size_t i)
 	return ReadFloat(converted, i);
 }
 
+TEST(ShapeView, ComparesByDimensionValues)
+{
+	const std::vector<std::size_t> lhs{ 2, 3, 4 };
+	const std::vector<std::size_t> rhs{ 2, 3, 4 };
+	const std::vector<std::size_t> differentDim{ 2, 3, 5 };
+	const std::vector<std::size_t> differentRank{ 2, 3 };
+
+	EXPECT_EQ(ShapeView{ lhs }, ShapeView{ rhs });
+	EXPECT_NE(ShapeView{ lhs }, ShapeView{ differentDim });
+	EXPECT_NE(ShapeView{ lhs }, ShapeView{ differentRank });
+}
+
 TEST(DataType, LowPrecisionMetadata)
 {
 	EXPECT_TRUE(IsValidDataTypeValue(DataType::Float16));

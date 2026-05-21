@@ -26,8 +26,7 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> BroadcastShapesTrailing(std::span<const std::size_t> lhs,
-	                                                       std::span<const std::size_t> rhs,
-	                                                       std::string_view label)
+	                                                        std::span<const std::size_t> rhs, std::string_view label)
 	{
 		const auto rank = std::max(lhs.size(), rhs.size());
 		std::vector<std::size_t> result(rank, 1uz);
@@ -89,7 +88,7 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> TimestepEmbeddingOutputShape(std::span<const std::size_t> timestepShape,
-	                                                            std::size_t dim, std::size_t maxPeriod)
+	                                                             std::size_t dim, std::size_t maxPeriod)
 	{
 		if (timestepShape.size() != 1)
 		{
@@ -103,8 +102,8 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> SolveTriOutputShape(std::span<const std::size_t> aShape,
-	                                                    std::span<const std::size_t> bShape,
-	                                                    bool lower, bool unitDiagonal)
+	                                                    std::span<const std::size_t> bShape, bool lower,
+	                                                    bool unitDiagonal)
 	{
 		if (!lower || unitDiagonal)
 		{
@@ -151,11 +150,9 @@ namespace LiteNN::Detail
 		return momentum > 0.0 ? 2uz : 1uz;
 	}
 
-	inline void ValidateOptimizerStepShape(std::span<const std::size_t> parameterShape,
-	                                       std::span<const std::size_t> otherShape,
-	                                       std::string_view label)
+	inline void ValidateOptimizerStepShape(ShapeView parameterShape, ShapeView otherShape, std::string_view label)
 	{
-		if (!std::ranges::equal(parameterShape, otherShape))
+		if (parameterShape != otherShape)
 		{
 			throw std::runtime_error(std::format("{} shape must match parameter shape", label));
 		}
@@ -279,8 +276,10 @@ namespace LiteNN::Detail
 						double acc = 0.0;
 						for (auto kk = 0uz; kk < k; ++kk)
 						{
-							const auto lhsOffset = lhsBase + row * lhsStrides[lhsRank - 2] + kk * lhsStrides[lhsRank - 1];
-							const auto rhsOffset = rhsBase + kk * rhsStrides[rhsRank - 2] + col * rhsStrides[rhsRank - 1];
+							const auto lhsOffset =
+							    lhsBase + row * lhsStrides[lhsRank - 2] + kk * lhsStrides[lhsRank - 1];
+							const auto rhsOffset =
+							    rhsBase + kk * rhsStrides[rhsRank - 2] + col * rhsStrides[rhsRank - 1];
 							acc += static_cast<double>(lhsPtr[lhsOffset]) * static_cast<double>(rhsPtr[rhsOffset]);
 						}
 						dst[(batch * m + row) * n + col] = static_cast<T>(acc);
@@ -364,8 +363,10 @@ namespace LiteNN::Detail
 						double acc = 0.0;
 						for (auto kk = 0uz; kk < k; ++kk)
 						{
-							const auto lhsOffset = lhsBase + row * lhsStrides[lhsRank - 2] + kk * lhsStrides[lhsRank - 1];
-							const auto rhsOffset = rhsBase + col * rhsStrides[rhsRank - 2] + kk * rhsStrides[rhsRank - 1];
+							const auto lhsOffset =
+							    lhsBase + row * lhsStrides[lhsRank - 2] + kk * lhsStrides[lhsRank - 1];
+							const auto rhsOffset =
+							    rhsBase + col * rhsStrides[rhsRank - 2] + kk * rhsStrides[rhsRank - 1];
 							acc += static_cast<double>(lhsPtr[lhsOffset]) * static_cast<double>(rhsPtr[rhsOffset]);
 						}
 						dst[(batch * m + row) * n + col] = static_cast<T>(acc);
@@ -460,18 +461,18 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<Tensor<CPU>> EvalSGDStep(const Tensor<CPU>& parameter, const Tensor<CPU>& gradient,
-	                                            const Tensor<CPU>* velocity, double learningRate,
-	                                            double momentum, double weightDecay, bool nesterov)
+	                                            const Tensor<CPU>* velocity, double learningRate, double momentum,
+	                                            double weightDecay, bool nesterov)
 	{
 		if (parameter.DType() != DataType::Float32 || gradient.DType() != DataType::Float32 ||
 		    (velocity && velocity->DType() != DataType::Float32))
 		{
 			throw std::runtime_error("SGDStep currently supports Float32 tensors only");
 		}
-		ValidateOptimizerStepShape(parameter.Shape().Dims, gradient.Shape().Dims, "SGDStep gradient");
+		ValidateOptimizerStepShape(parameter.Shape(), gradient.Shape(), "SGDStep gradient");
 		if (velocity)
 		{
-			ValidateOptimizerStepShape(parameter.Shape().Dims, velocity->Shape().Dims, "SGDStep velocity");
+			ValidateOptimizerStepShape(parameter.Shape(), velocity->Shape(), "SGDStep velocity");
 		}
 		if (!std::isfinite(learningRate) || learningRate <= 0.0)
 		{
@@ -485,7 +486,7 @@ namespace LiteNN::Detail
 		{
 			throw std::runtime_error("SGDStep weightDecay must be finite and non-negative");
 		}
-		(void)SGDStepOutputCount(velocity != nullptr, momentum);
+		(void) SGDStepOutputCount(velocity != nullptr, momentum);
 
 		CPU cpu;
 		Tensor<CPU> updatedParameter(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
@@ -526,25 +527,24 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<Tensor<CPU>> EvalAdamWStep(const Tensor<CPU>& parameter, const Tensor<CPU>& gradient,
-	                                             const Tensor<CPU>& firstMoment,
-	                                             const Tensor<CPU>& secondMoment,
-	                                             double learningRate, double beta1, double beta2,
-	                                             double epsilon, double weightDecay, std::size_t step)
+	                                              const Tensor<CPU>& firstMoment, const Tensor<CPU>& secondMoment,
+	                                              double learningRate, double beta1, double beta2, double epsilon,
+	                                              double weightDecay, std::size_t step)
 	{
 		if (parameter.DType() != DataType::Float32 || gradient.DType() != DataType::Float32 ||
 		    firstMoment.DType() != DataType::Float32 || secondMoment.DType() != DataType::Float32)
 		{
 			throw std::runtime_error("AdamWStep currently supports Float32 tensors only");
 		}
-		ValidateOptimizerStepShape(parameter.Shape().Dims, gradient.Shape().Dims, "AdamWStep gradient");
-		ValidateOptimizerStepShape(parameter.Shape().Dims, firstMoment.Shape().Dims, "AdamWStep firstMoment");
-		ValidateOptimizerStepShape(parameter.Shape().Dims, secondMoment.Shape().Dims, "AdamWStep secondMoment");
+		ValidateOptimizerStepShape(parameter.Shape(), gradient.Shape(), "AdamWStep gradient");
+		ValidateOptimizerStepShape(parameter.Shape(), firstMoment.Shape(), "AdamWStep firstMoment");
+		ValidateOptimizerStepShape(parameter.Shape(), secondMoment.Shape(), "AdamWStep secondMoment");
 		if (!std::isfinite(learningRate) || learningRate <= 0.0)
 		{
 			throw std::runtime_error("AdamWStep learningRate must be finite and positive");
 		}
-		if (!std::isfinite(beta1) || !std::isfinite(beta2) || beta1 < 0.0 || beta1 >= 1.0 ||
-		    beta2 < 0.0 || beta2 >= 1.0)
+		if (!std::isfinite(beta1) || !std::isfinite(beta2) || beta1 < 0.0 || beta1 >= 1.0 || beta2 < 0.0 ||
+		    beta2 >= 1.0)
 		{
 			throw std::runtime_error("AdamWStep beta values must be finite and in [0, 1)");
 		}
@@ -584,10 +584,9 @@ namespace LiteNN::Detail
 			secondOut[index] = static_cast<float>(second);
 			const auto firstHat = first / biasCorrection1;
 			const auto secondHat = second / biasCorrection2;
-			const auto decayedParameter = static_cast<double>(parameterPtr[index]) *
-			                              (1.0 - learningRate * weightDecay);
-			parameterOut[index] = static_cast<float>(
-			    decayedParameter - learningRate * firstHat / (std::sqrt(secondHat) + epsilon));
+			const auto decayedParameter = static_cast<double>(parameterPtr[index]) * (1.0 - learningRate * weightDecay);
+			parameterOut[index] =
+			    static_cast<float>(decayedParameter - learningRate * firstHat / (std::sqrt(secondHat) + epsilon));
 		}
 
 		std::vector<Tensor<CPU>> outputs;
@@ -642,7 +641,8 @@ namespace LiteNN::Detail
 					}
 					for (auto a = 0uz; a < axisSize; ++a)
 					{
-						const auto value = std::exp(static_cast<double>(src[(o * axisSize + a) * inner + i]) - maxValue) / sum;
+						const auto value =
+						    std::exp(static_cast<double>(src[(o * axisSize + a) * inner + i]) - maxValue) / sum;
 						dst[(o * axisSize + a) * inner + i] = static_cast<T>(value);
 					}
 				}
@@ -725,9 +725,9 @@ namespace LiteNN::Detail
 		return result;
 	}
 
-	inline Tensor<CPU> EvalNormalization(const Tensor<CPU>& input, const Tensor<CPU>* scale,
-	                                     const Tensor<CPU>* bias, NormalizationMode mode, std::size_t axis,
-	                                     std::size_t groupCount, double epsilon)
+	inline Tensor<CPU> EvalNormalization(const Tensor<CPU>& input, const Tensor<CPU>* scale, const Tensor<CPU>* bias,
+	                                     NormalizationMode mode, std::size_t axis, std::size_t groupCount,
+	                                     double epsilon)
 	{
 		if (!IsFloatingDataType(input.DType()))
 		{
@@ -743,11 +743,11 @@ namespace LiteNN::Detail
 		}
 		if (scale)
 		{
-			(void)BroadcastToShape(scale->Shape().Dims, input.Shape().Dims);
+			(void) BroadcastToShape(scale->Shape().Dims, input.Shape().Dims);
 		}
 		if (bias)
 		{
-			(void)BroadcastToShape(bias->Shape().Dims, input.Shape().Dims);
+			(void) BroadcastToShape(bias->Shape().Dims, input.Shape().Dims);
 		}
 
 		CPU cpu;
@@ -890,7 +890,7 @@ namespace LiteNN::Detail
 			{
 				throw std::runtime_error("SSMScan requires floating-point tensors");
 			}
-			(void)BroadcastToShape(tensor->Shape().Dims, state.Shape().Dims);
+			(void) BroadcastToShape(tensor->Shape().Dims, state.Shape().Dims);
 		}
 		if (d)
 		{
@@ -898,7 +898,7 @@ namespace LiteNN::Detail
 			{
 				throw std::runtime_error("SSMScan requires floating-point tensors");
 			}
-			(void)BroadcastToShape(d->Shape().Dims, state.Shape().Dims);
+			(void) BroadcastToShape(d->Shape().Dims, state.Shape().Dims);
 		}
 
 		CPU cpu;
@@ -944,8 +944,7 @@ namespace LiteNN::Detail
 		{
 			throw std::runtime_error("RWKVWKV key/value/receptance must have the same dtype");
 		}
-		if (!std::ranges::equal(key.Shape().Dims, value.Shape().Dims) ||
-		    !std::ranges::equal(key.Shape().Dims, receptance.Shape().Dims))
+		if (key.Shape() != value.Shape() || key.Shape() != receptance.Shape())
 		{
 			throw std::runtime_error("RWKVWKV key/value/receptance shapes must match");
 		}
@@ -954,8 +953,8 @@ namespace LiteNN::Detail
 		{
 			throw std::runtime_error("RWKVWKV requires floating-point tensors");
 		}
-		(void)BroadcastToShape(timeDecay.Shape().Dims, key.Shape().Dims);
-		(void)BroadcastToShape(timeFirst.Shape().Dims, key.Shape().Dims);
+		(void) BroadcastToShape(timeDecay.Shape().Dims, key.Shape().Dims);
+		(void) BroadcastToShape(timeFirst.Shape().Dims, key.Shape().Dims);
 
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, key.Shape(), key.DType(), cpu);
@@ -1001,7 +1000,7 @@ namespace LiteNN::Detail
 		{
 			throw std::runtime_error("CrossEntropyLoss expects shape [..., classes]");
 		}
-		if (!std::ranges::equal(logits.Shape().Dims, labels.Shape().Dims))
+		if (logits.Shape() != labels.Shape())
 		{
 			throw std::runtime_error("CrossEntropyLoss logits and labels shapes must match");
 		}
@@ -1034,8 +1033,7 @@ namespace LiteNN::Detail
 			const auto logSumExp = std::log(sumExp) + static_cast<double>(maxLogit);
 			for (auto col = 0uz; col < classCount; ++col)
 			{
-				totalLoss -= static_cast<double>(labelsRow[col]) *
-				             (static_cast<double>(logitsRow[col]) - logSumExp);
+				totalLoss -= static_cast<double>(labelsRow[col]) * (static_cast<double>(logitsRow[col]) - logSumExp);
 			}
 		}
 
@@ -1056,8 +1054,8 @@ namespace LiteNN::Detail
 
 		const auto classCount = logits.Shape().Dims.back();
 		const auto rowCount = logits.NumElements() / classCount;
-		const auto scale = static_cast<double>(*static_cast<const float*>(grad.RawData())) /
-		                   static_cast<double>(rowCount);
+		const auto scale =
+		    static_cast<double>(*static_cast<const float*>(grad.RawData())) / static_cast<double>(rowCount);
 		const auto* logitsPtr = static_cast<const float*>(logits.RawData());
 		const auto* labelsPtr = static_cast<const float*>(labels.RawData());
 		CPU cpu;
@@ -1087,8 +1085,7 @@ namespace LiteNN::Detail
 	inline void ValidateSlidingWindowParams(std::span<const std::size_t> kernelShape,
 	                                        std::span<const std::size_t> strides,
 	                                        std::span<const std::size_t> dilations,
-	                                        std::span<const std::size_t> lowPads,
-	                                        std::span<const std::size_t> highPads,
+	                                        std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
 	                                        std::string_view label)
 	{
 		const auto rank = kernelShape.size();
@@ -1109,13 +1106,11 @@ namespace LiteNN::Detail
 		}
 	}
 
-	inline std::vector<std::size_t> SlidingOutputSpatialShape(std::span<const std::size_t> inputSpatial,
-	                                                         std::span<const std::size_t> kernelShape,
-	                                                         std::span<const std::size_t> strides,
-	                                                         std::span<const std::size_t> dilations,
-	                                                         std::span<const std::size_t> lowPads,
-	                                                         std::span<const std::size_t> highPads,
-	                                                         std::string_view label)
+	inline std::vector<std::size_t>
+	SlidingOutputSpatialShape(std::span<const std::size_t> inputSpatial, std::span<const std::size_t> kernelShape,
+	                          std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                          std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
+	                          std::string_view label)
 	{
 		ValidateSlidingWindowParams(kernelShape, strides, dilations, lowPads, highPads, label);
 		if (inputSpatial.size() != kernelShape.size())
@@ -1141,12 +1136,10 @@ namespace LiteNN::Detail
 		return output;
 	}
 
-	inline std::vector<std::size_t> Im2ColOutputShape(std::span<const std::size_t> inputShape,
-	                                                 std::span<const std::size_t> kernelShape,
-	                                                 std::span<const std::size_t> strides,
-	                                                 std::span<const std::size_t> dilations,
-	                                                 std::span<const std::size_t> lowPads,
-	                                                 std::span<const std::size_t> highPads)
+	inline std::vector<std::size_t>
+	Im2ColOutputShape(std::span<const std::size_t> inputShape, std::span<const std::size_t> kernelShape,
+	                  std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                  std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads)
 	{
 		const auto spatialRank = kernelShape.size();
 		if (inputShape.size() != spatialRank + 2)
@@ -1160,16 +1153,16 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> Conv2DOutputShape(std::span<const std::size_t> inputShape,
-	                                                 std::span<const std::size_t> weightShape,
-	                                                 std::span<const std::size_t> strides,
-	                                                 std::span<const std::size_t> dilations,
-	                                                 std::span<const std::size_t> lowPads,
-	                                                 std::span<const std::size_t> highPads,
-	                                                 std::size_t groupCount)
+	                                                  std::span<const std::size_t> weightShape,
+	                                                  std::span<const std::size_t> strides,
+	                                                  std::span<const std::size_t> dilations,
+	                                                  std::span<const std::size_t> lowPads,
+	                                                  std::span<const std::size_t> highPads, std::size_t groupCount)
 	{
 		if (inputShape.size() != 4 || weightShape.size() != 4)
 		{
-			throw std::runtime_error("Conv2D input must be [batch, channels, height, width] and weight [out, in/group, kh, kw]");
+			throw std::runtime_error(
+			    "Conv2D input must be [batch, channels, height, width] and weight [out, in/group, kh, kw]");
 		}
 		if (groupCount == 0)
 		{
@@ -1184,9 +1177,8 @@ namespace LiteNN::Detail
 			throw std::runtime_error("Conv2D weight inChannelsPerGroup does not match input channels/groupCount");
 		}
 		const std::size_t kernelStorage[] = { weightShape[2], weightShape[3] };
-		const auto outputSpatial =
-		    SlidingOutputSpatialShape(inputShape.subspan(2), kernelStorage, strides, dilations, lowPads, highPads,
-		                              "Conv2D");
+		const auto outputSpatial = SlidingOutputSpatialShape(inputShape.subspan(2), kernelStorage, strides, dilations,
+		                                                     lowPads, highPads, "Conv2D");
 		return { inputShape[0], weightShape[0], outputSpatial[0], outputSpatial[1] };
 	}
 
@@ -1200,14 +1192,11 @@ namespace LiteNN::Detail
 		}
 	}
 
-	inline std::vector<std::size_t> ConvTranspose2DOutputShape(std::span<const std::size_t> inputShape,
-	                                                           std::span<const std::size_t> weightShape,
-	                                                           std::span<const std::size_t> strides,
-	                                                           std::span<const std::size_t> dilations,
-	                                                           std::span<const std::size_t> lowPads,
-	                                                           std::span<const std::size_t> highPads,
-	                                                           std::span<const std::size_t> outputPads,
-	                                                           std::size_t groupCount)
+	inline std::vector<std::size_t>
+	ConvTranspose2DOutputShape(std::span<const std::size_t> inputShape, std::span<const std::size_t> weightShape,
+	                           std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                           std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
+	                           std::span<const std::size_t> outputPads, std::size_t groupCount)
 	{
 		if (inputShape.size() != 4 || weightShape.size() != 4)
 		{
@@ -1249,8 +1238,8 @@ namespace LiteNN::Detail
 			{
 				throw std::runtime_error("ConvTranspose2D input spatial dimensions must be > 0");
 			}
-			const auto expanded = (inputSpatial - 1) * strides[dim] + (kernelStorage[dim] - 1) * dilations[dim] +
-			                      outputPads[dim] + 1;
+			const auto expanded =
+			    (inputSpatial - 1) * strides[dim] + (kernelStorage[dim] - 1) * dilations[dim] + outputPads[dim] + 1;
 			const auto pads = lowPads[dim] + highPads[dim];
 			if (expanded <= pads)
 			{
@@ -1262,24 +1251,23 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> Pool2DOutputShape(std::span<const std::size_t> inputShape,
-	                                                 std::span<const std::size_t> kernelShape,
-	                                                 std::span<const std::size_t> strides,
-	                                                 std::span<const std::size_t> lowPads,
-	                                                 std::span<const std::size_t> highPads)
+	                                                  std::span<const std::size_t> kernelShape,
+	                                                  std::span<const std::size_t> strides,
+	                                                  std::span<const std::size_t> lowPads,
+	                                                  std::span<const std::size_t> highPads)
 	{
 		if (inputShape.size() != 4)
 		{
 			throw std::runtime_error("Pool2D input must have shape [batch, channels, height, width]");
 		}
 		const std::size_t dilationStorage[] = { 1uz, 1uz };
-		const auto outputSpatial =
-		    SlidingOutputSpatialShape(inputShape.subspan(2), kernelShape, strides, dilationStorage, lowPads, highPads,
-		                              "Pool2D");
+		const auto outputSpatial = SlidingOutputSpatialShape(inputShape.subspan(2), kernelShape, strides,
+		                                                     dilationStorage, lowPads, highPads, "Pool2D");
 		return { inputShape[0], inputShape[1], outputSpatial[0], outputSpatial[1] };
 	}
 
 	inline std::vector<std::size_t> UpsampleOutputShape(std::span<const std::size_t> inputShape,
-	                                                   std::span<const std::size_t> outputSpatialShape)
+	                                                    std::span<const std::size_t> outputSpatialShape)
 	{
 		if (inputShape.size() != 4)
 		{
@@ -1293,12 +1281,11 @@ namespace LiteNN::Detail
 	}
 
 	inline Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, std::span<const std::size_t> kernelShape,
-	                             std::span<const std::size_t> strides,
-	                             std::span<const std::size_t> dilations,
-	                             std::span<const std::size_t> lowPads,
-	                             std::span<const std::size_t> highPads)
+	                              std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                              std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads)
 	{
-		const auto outputShape = Im2ColOutputShape(input.Shape().Dims, kernelShape, strides, dilations, lowPads, highPads);
+		const auto outputShape =
+		    Im2ColOutputShape(input.Shape().Dims, kernelShape, strides, dilations, lowPads, highPads);
 		const auto spatialRank = kernelShape.size();
 		const auto outputSpatial = SlidingOutputSpatialShape(input.Shape().Dims.subspan(2), kernelShape, strides,
 		                                                     dilations, lowPads, highPads, "Im2Col");
@@ -1374,13 +1361,10 @@ namespace LiteNN::Detail
 		return result;
 	}
 
-	inline Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
-	                             const Tensor<CPU>* bias,
-	                             std::span<const std::size_t> strides,
-	                             std::span<const std::size_t> dilations,
-	                             std::span<const std::size_t> lowPads,
-	                             std::span<const std::size_t> highPads,
-	                             std::size_t groupCount)
+	inline Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight, const Tensor<CPU>* bias,
+	                              std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                              std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
+	                              std::size_t groupCount)
 	{
 		if (input.DType() == DataType::Bool)
 		{
@@ -1391,9 +1375,8 @@ namespace LiteNN::Detail
 			throw std::runtime_error("Conv2D input, weight, and bias dtypes must match");
 		}
 
-		const auto outputShape =
-		    Conv2DOutputShape(input.Shape().Dims, weight.Shape().Dims, strides, dilations, lowPads, highPads,
-		                      groupCount);
+		const auto outputShape = Conv2DOutputShape(input.Shape().Dims, weight.Shape().Dims, strides, dilations, lowPads,
+		                                           highPads, groupCount);
 		if (bias != nullptr)
 		{
 			ValidateConv2DBiasShape(bias->Shape().Dims, outputShape[1]);
@@ -1458,14 +1441,17 @@ namespace LiteNN::Detail
 										{
 											continue;
 										}
-										const auto inputIndex = ((n * inputChannels + ic) * inputHeight + ih) * inputWidth + iw;
+										const auto inputIndex =
+										    ((n * inputChannels + ic) * inputHeight + ih) * inputWidth + iw;
 										const auto weightIndex =
 										    ((oc * inputChannelsPerGroup + icg) * kernelHeight + kh) * kernelWidth + kw;
-										acc += static_cast<double>(src[inputIndex]) * static_cast<double>(filter[weightIndex]);
+										acc += static_cast<double>(src[inputIndex]) *
+										       static_cast<double>(filter[weightIndex]);
 									}
 								}
 							}
-							dst[((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow] = static_cast<T>(acc);
+							dst[((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow] =
+							    static_cast<T>(acc);
 						}
 					}
 				}
@@ -1474,14 +1460,10 @@ namespace LiteNN::Detail
 		return result;
 	}
 
-	inline Tensor<CPU> EvalConvTranspose2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
-	                                      const Tensor<CPU>* bias,
-	                                      std::span<const std::size_t> strides,
-	                                      std::span<const std::size_t> dilations,
-	                                      std::span<const std::size_t> lowPads,
-	                                      std::span<const std::size_t> highPads,
-	                                      std::span<const std::size_t> outputPads,
-	                                      std::size_t groupCount)
+	inline Tensor<CPU> EvalConvTranspose2D(const Tensor<CPU>& input, const Tensor<CPU>& weight, const Tensor<CPU>* bias,
+	                                       std::span<const std::size_t> strides, std::span<const std::size_t> dilations,
+	                                       std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
+	                                       std::span<const std::size_t> outputPads, std::size_t groupCount)
 	{
 		if (input.DType() == DataType::Bool)
 		{
@@ -1578,7 +1560,8 @@ namespace LiteNN::Detail
 											continue;
 										}
 										const auto weightIndex =
-										    ((ic * outputChannelsPerGroup + ocg) * kernelHeight + kh) * kernelWidth + kw;
+										    ((ic * outputChannelsPerGroup + ocg) * kernelHeight + kh) * kernelWidth +
+										    kw;
 										const auto outputIndex =
 										    ((n * outputChannels + oc) * outputHeight + oh) * outputWidth + ow;
 										const auto acc = static_cast<double>(dst[outputIndex]) +
@@ -1595,12 +1578,9 @@ namespace LiteNN::Detail
 		return result;
 	}
 
-	inline Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, PoolMode mode,
-	                             std::span<const std::size_t> kernelShape,
-	                             std::span<const std::size_t> strides,
-	                             std::span<const std::size_t> lowPads,
-	                             std::span<const std::size_t> highPads,
-	                             bool countIncludePad)
+	inline Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, PoolMode mode, std::span<const std::size_t> kernelShape,
+	                              std::span<const std::size_t> strides, std::span<const std::size_t> lowPads,
+	                              std::span<const std::size_t> highPads, bool countIncludePad)
 	{
 		if (input.DType() == DataType::Bool)
 		{
@@ -1649,7 +1629,8 @@ namespace LiteNN::Detail
 									}
 									const auto ih = paddedH - lowPads[0];
 									const auto iw = paddedW - lowPads[1];
-									const auto value = static_cast<double>(src[((n * channels + c) * height + ih) * width + iw]);
+									const auto value =
+									    static_cast<double>(src[((n * channels + c) * height + ih) * width + iw]);
 									sawValue = true;
 									if (mode == PoolMode::Max)
 									{
@@ -1680,15 +1661,17 @@ namespace LiteNN::Detail
 	}
 
 	inline double UpsampleSourceCoordinate(std::size_t outputIndex, std::size_t inputSize, std::size_t outputSize,
-	                                      bool alignCorners)
+	                                       bool alignCorners)
 	{
 		if (alignCorners)
 		{
-			return outputSize == 1 ? 0.0 : static_cast<double>(outputIndex) * static_cast<double>(inputSize - 1) /
-			                                static_cast<double>(outputSize - 1);
+			return outputSize == 1 ? 0.0
+			                       : static_cast<double>(outputIndex) * static_cast<double>(inputSize - 1) /
+			                             static_cast<double>(outputSize - 1);
 		}
 		const auto coordinate = (static_cast<double>(outputIndex) + 0.5) * static_cast<double>(inputSize) /
-		                        static_cast<double>(outputSize) - 0.5;
+		                            static_cast<double>(outputSize) -
+		                        0.5;
 		return std::max(0.0, coordinate);
 	}
 
@@ -1718,8 +1701,7 @@ namespace LiteNN::Detail
 	}
 
 	inline Tensor<CPU> EvalUpsample(const Tensor<CPU>& input, UpsampleMode mode,
-	                               std::span<const std::size_t> outputSpatialShape,
-	                               bool alignCorners)
+	                                std::span<const std::size_t> outputSpatialShape, bool alignCorners)
 	{
 		const auto outputShape = UpsampleOutputShape(input.Shape().Dims, outputSpatialShape);
 		const auto batch = input.Shape()[0];
@@ -1754,26 +1736,34 @@ namespace LiteNN::Detail
 							const auto outputIndex = ((n * channels + c) * outputHeight + oh) * outputWidth + ow;
 							if (mode == UpsampleMode::Nearest)
 							{
-								const auto nearestY = alignCorners ? std::llround(sourceY)
-								                                  : static_cast<long long>((oh * inputHeight) / outputHeight);
-								const auto nearestX = alignCorners ? std::llround(sourceX)
-								                                  : static_cast<long long>((ow * inputWidth) / outputWidth);
+								const auto nearestY = alignCorners
+								                          ? std::llround(sourceY)
+								                          : static_cast<long long>((oh * inputHeight) / outputHeight);
+								const auto nearestX = alignCorners
+								                          ? std::llround(sourceX)
+								                          : static_cast<long long>((ow * inputWidth) / outputWidth);
 								const auto iy = ClampSpatialIndex(nearestY, inputHeight);
 								const auto ix = ClampSpatialIndex(nearestX, inputWidth);
 								dst[outputIndex] = src[((n * channels + c) * inputHeight + iy) * inputWidth + ix];
 							}
 							else if (mode == UpsampleMode::Bilinear)
 							{
-								const auto y0 = ClampSpatialIndex(static_cast<long long>(std::floor(sourceY)), inputHeight);
-								const auto x0 = ClampSpatialIndex(static_cast<long long>(std::floor(sourceX)), inputWidth);
+								const auto y0 =
+								    ClampSpatialIndex(static_cast<long long>(std::floor(sourceY)), inputHeight);
+								const auto x0 =
+								    ClampSpatialIndex(static_cast<long long>(std::floor(sourceX)), inputWidth);
 								const auto y1 = std::min(y0 + 1, inputHeight - 1);
 								const auto x1 = std::min(x0 + 1, inputWidth - 1);
 								const auto wy = sourceY - std::floor(sourceY);
 								const auto wx = sourceX - std::floor(sourceX);
-								const auto v00 = static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x0]);
-								const auto v01 = static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x1]);
-								const auto v10 = static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x0]);
-								const auto v11 = static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x1]);
+								const auto v00 =
+								    static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x0]);
+								const auto v01 =
+								    static_cast<double>(src[((n * channels + c) * inputHeight + y0) * inputWidth + x1]);
+								const auto v10 =
+								    static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x0]);
+								const auto v11 =
+								    static_cast<double>(src[((n * channels + c) * inputHeight + y1) * inputWidth + x1]);
 								const auto top = v00 * (1.0 - wx) + v01 * wx;
 								const auto bottom = v10 * (1.0 - wx) + v11 * wx;
 								dst[outputIndex] = static_cast<T>(top * (1.0 - wy) + bottom * wy);
@@ -1790,9 +1780,10 @@ namespace LiteNN::Detail
 									for (auto kx = -1; kx <= 2; ++kx)
 									{
 										const auto ix = ClampSpatialIndex(xBase + kx, inputWidth);
-										const auto wx = CubicInterpolationWeight(sourceX - static_cast<double>(xBase + kx));
-										const auto value =
-										    static_cast<double>(src[((n * channels + c) * inputHeight + iy) * inputWidth + ix]);
+										const auto wx =
+										    CubicInterpolationWeight(sourceX - static_cast<double>(xBase + kx));
+										const auto value = static_cast<double>(
+										    src[((n * channels + c) * inputHeight + iy) * inputWidth + ix]);
 										acc += value * wy * wx;
 									}
 								}

@@ -32,7 +32,6 @@
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <ranges>
 
 using namespace LiteNN;
 
@@ -1524,7 +1523,8 @@ TEST(LayerRepeat, TilesNonSingletonDimensions)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 });
-	ASSERT_TRUE(std::ranges::equal(result.Shape().Dims, std::vector<std::size_t>{ 4, 4 }));
+	const std::vector<std::size_t> repeatedShape{ 4, 4 };
+	ASSERT_EQ(result.Shape(), ShapeView{ repeatedShape });
 	const std::vector<float> expected{ 1.0f, 2.0f, 1.0f, 2.0f,
 	                                  3.0f, 4.0f, 3.0f, 4.0f,
 	                                  1.0f, 2.0f, 1.0f, 2.0f,
@@ -1547,13 +1547,15 @@ TEST(LayerWindow, PartitionAndUnpartitionRoundTripsPaddedImage)
 
 	auto results = RunWithInputs(graph, { Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 1, 3, 2, 1 }) });
 	ASSERT_EQ(results.size(), 2u);
-	ASSERT_TRUE(std::ranges::equal(results[0].Shape().Dims, std::vector<std::size_t>{ 1, 2, 2, 2 }));
+	const std::vector<std::size_t> partitionedShape{ 1, 2, 2, 2 };
+	ASSERT_EQ(results[0].Shape(), ShapeView{ partitionedShape });
 	const std::vector<float> expectedPartition{ 1.0f, 5.0f, 2.0f, 6.0f, 3.0f, 0.0f, 4.0f, 0.0f };
 	for (auto index = 0uz; index < expectedPartition.size(); ++index)
 	{
 		EXPECT_NEAR(ReadFloat(results[0], index), expectedPartition[index], 1e-5f);
 	}
-	ASSERT_TRUE(std::ranges::equal(results[1].Shape().Dims, std::vector<std::size_t>{ 1, 3, 2, 1 }));
+	const std::vector<std::size_t> restoredShape{ 1, 3, 2, 1 };
+	ASSERT_EQ(results[1].Shape(), ShapeView{ restoredShape });
 	for (auto index = 0uz; index < 6uz; ++index)
 	{
 		EXPECT_NEAR(ReadFloat(results[1], index), static_cast<float>(index + 1uz), 1e-5f);
@@ -1570,7 +1572,8 @@ TEST(LayerRelativePosition, BuildsSAMStyleRelativePositionTable)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	auto result = RunSingleIO(graph, { 10.0f, 20.0f, 30.0f }, { 3, 1 });
-	ASSERT_TRUE(std::ranges::equal(result.Shape().Dims, std::vector<std::size_t>{ 2, 2, 1 }));
+	const std::vector<std::size_t> relPosShape{ 2, 2, 1 };
+	ASSERT_EQ(result.Shape(), ShapeView{ relPosShape });
 	const std::vector<float> expected{ 20.0f, 10.0f, 30.0f, 20.0f };
 	for (auto index = 0uz; index < expected.size(); ++index)
 	{
@@ -1625,7 +1628,8 @@ TEST(LayerSSMConv, MatchesRowwiseDepthwiseConvolution)
 	                                            { 2, 2 }),
 	                            });
 	ASSERT_EQ(results.size(), 1u);
-	ASSERT_TRUE(std::ranges::equal(results[0].Shape().Dims, std::vector<std::size_t>{ 2, 3, 1 }));
+	const std::vector<std::size_t> outputShape{ 2, 3, 1 };
+	ASSERT_EQ(results[0].Shape(), ShapeView{ outputShape });
 	const std::vector<float> expected{ 3.5f, 5.5f, 7.5f, -10.0f, -10.0f, -10.0f };
 	for (auto index = 0uz; index < expected.size(); ++index)
 	{

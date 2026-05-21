@@ -1159,15 +1159,10 @@ namespace LiteNN
 			return SumGradContributions(bwdSg, it->second, info);
 		}
 
-		static bool SameShape(const std::vector<std::size_t>& lhs, const std::vector<std::size_t>& rhs)
-		{
-			return lhs.size() == rhs.size() && std::ranges::equal(lhs, rhs);
-		}
-
 		static NodeOutput ReduceBroadcastGradient(Subgraph& bwdSg, NodeOutput grad, const OutputInfo& gradInfo,
 		                                          const OutputInfo& targetInfo)
 		{
-			if (SameShape(gradInfo.shape, targetInfo.shape))
+			if (gradInfo.shape == targetInfo.shape)
 			{
 				return grad;
 			}
@@ -1211,7 +1206,7 @@ namespace LiteNN
 				currentShape = std::move(reducedShape);
 			}
 
-			if (!SameShape(currentShape, targetInfo.shape))
+			if (currentShape != targetInfo.shape)
 			{
 				auto reshaped = bwdSg.AddNode(ReshapeNode{ grad, targetInfo.shape }, { targetInfo });
 				grad = { reshaped, 0 };

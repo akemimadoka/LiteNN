@@ -291,7 +291,8 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 	auto outputs = loaded.Run(inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].DType(), DataType::Float32);
-	ASSERT_TRUE(std::ranges::equal(outputs[0].Shape().Dims, std::vector<std::size_t>{ 2, 2 }));
+	const std::vector<std::size_t> expectedShape{ 2, 2 };
+	ASSERT_EQ(outputs[0].Shape(), ShapeView{ expectedShape });
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
@@ -392,11 +393,7 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(expected.size(), 1u);
-	ASSERT_EQ(outputs[0].Shape().NumDim(), expected[0].Shape().NumDim());
-	for (std::size_t dim = 0; dim < outputs[0].Shape().NumDim(); ++dim)
-	{
-		ASSERT_EQ(outputs[0].Shape()[dim], expected[0].Shape()[dim]);
-	}
+	ASSERT_EQ(outputs[0].Shape(), expected[0].Shape());
 	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
 	{
 		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);

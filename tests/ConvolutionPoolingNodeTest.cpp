@@ -4,7 +4,6 @@
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
-#include <algorithm>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
@@ -21,7 +20,7 @@ namespace
 
 	void ExpectShape(ShapeView shape, std::initializer_list<std::size_t> expected)
 	{
-		EXPECT_TRUE(std::equal(shape.Dims.begin(), shape.Dims.end(), expected.begin(), expected.end()));
+		EXPECT_EQ(shape, ShapeView{ expected });
 	}
 
 	void ExpectTensorNear(const Tensor<CPU>& tensor, std::initializer_list<float> expected, float tolerance = 1e-5F)

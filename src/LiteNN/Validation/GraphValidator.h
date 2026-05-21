@@ -200,11 +200,6 @@ namespace LiteNN::Validation
 		return result;
 	}
 
-	inline bool SameShape(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs)
-	{
-		return lhs.size() == rhs.size() && std::ranges::equal(lhs, rhs);
-	}
-
 	inline std::size_t NumElements(std::span<const std::size_t> shape)
 	{
 		return std::accumulate(shape.begin(), shape.end(), 1uz, std::multiplies{});
@@ -396,7 +391,7 @@ namespace LiteNN::Validation
 		static void ExpectInfo(SubgraphId subgraphId, NodeId nodeId, const OutputInfo& actual,
 		                       const OutputInfo& expected, std::string_view context)
 		{
-			if (actual.dtype != expected.dtype || !SameShape(actual.shape, expected.shape))
+			if (actual.dtype != expected.dtype || actual.shape != expected.shape)
 			{
 				Fail(subgraphId, nodeId,
 				     std::format("{} expected {}, got {}", context, FormatInfo(expected.dtype, expected.shape),
@@ -467,7 +462,7 @@ namespace LiteNN::Validation
 				ValidateShape(data.Shape().Dims, std::format("variable {} data", i));
 				ValidateDataType(grad.DType(), std::format("variable {} grad", i));
 				ValidateShape(grad.Shape().Dims, std::format("variable {} grad", i));
-				if (data.DType() != grad.DType() || !SameShape(data.Shape().Dims, grad.Shape().Dims))
+				if (data.DType() != grad.DType() || data.Shape().Dims != grad.Shape().Dims)
 				{
 					Fail(std::format("Graph validation failed: variable {} grad metadata {} does not match data {}",
 					                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
@@ -1145,8 +1140,8 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "RWKVWKVNode key must be rank-2 [steps, channels]");
 			}
-			if (key.dtype != value.dtype || key.dtype != receptance.dtype || !SameShape(key.shape, value.shape) ||
-			    !SameShape(key.shape, receptance.shape))
+			if (key.dtype != value.dtype || key.dtype != receptance.dtype || key.shape != value.shape ||
+			    key.shape != receptance.shape)
 			{
 				Fail(subgraphId, nodeId, "RWKVWKVNode key/value/receptance metadata must match");
 			}
@@ -1192,7 +1187,7 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "CrossEntropyLossNode expects shape [..., classes]");
 			}
-			if (!SameShape(logits.shape, labels.shape))
+			if (logits.shape != labels.shape)
 			{
 				Fail(subgraphId, nodeId, "CrossEntropyLossNode logits and labels shapes must match");
 			}
@@ -1222,7 +1217,7 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode expects shape [..., classes]");
 			}
-			if (!SameShape(logits.shape, labels.shape))
+			if (logits.shape != labels.shape)
 			{
 				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode logits and labels shapes must match");
 			}

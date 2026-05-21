@@ -66,7 +66,7 @@ namespace LiteNN::Runtime
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
 				const auto& param = subgraph.Params()[i];
-				if (inputs[i].DType() != param.dtype || !Validation::SameShape(inputs[i].Shape().Dims, param.shape))
+				if (inputs[i].DType() != param.dtype || inputs[i].Shape() != param.shape)
 				{
 					throw std::runtime_error(std::format(
 					    "RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,

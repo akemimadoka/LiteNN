@@ -300,7 +300,7 @@ namespace LiteNN::Detail
 	                              std::size_t axis, ScatterMode mode)
 	{
 		const auto expectedUpdatesShape = ScatterUpdatesShape(data.Shape().Dims, indices.Shape().Dims, axis);
-		if (updates.DType() != data.DType() || !std::ranges::equal(updates.Shape().Dims, expectedUpdatesShape))
+		if (updates.DType() != data.DType() || updates.Shape() != ShapeView{ expectedUpdatesShape })
 		{
 			throw std::runtime_error("Scatter updates shape or dtype does not match data/indices/axis");
 		}

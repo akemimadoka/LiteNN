@@ -43,8 +43,8 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -52,6 +52,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
+
 
 #ifdef LITENN_ENABLE_CUDA
 #include <cuda_runtime_api.h>
@@ -171,8 +172,8 @@ namespace
 		LiteNNCPUThreadPool(const LiteNNCPUThreadPool&) = delete;
 		LiteNNCPUThreadPool& operator=(const LiteNNCPUThreadPool&) = delete;
 
-		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
-		                 LiteNNCPUParallelForBody body, void* userData, std::size_t requestedThreads)
+		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain, LiteNNCPUParallelForBody body,
+		                 void* userData, std::size_t requestedThreads)
 		{
 			if (begin >= end)
 			{
@@ -189,8 +190,8 @@ namespace
 			}
 
 			std::unique_lock runLock(runMutex_);
-			const auto desiredWorkers = std::min<std::size_t>(
-			    static_cast<std::size_t>(participantCount - 1), workers_.size());
+			const auto desiredWorkers =
+			    std::min<std::size_t>(static_cast<std::size_t>(participantCount - 1), workers_.size());
 			{
 				std::lock_guard lock(mutex_);
 				begin_ = begin;
@@ -287,8 +288,8 @@ namespace
 
 	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
 	                                  const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out,
-	                                  std::uint64_t rowBegin, std::uint64_t rowEnd, std::uint64_t k,
-	                                  std::uint64_t n, std::uint64_t biasRows, bool relu)
+	                                  std::uint64_t rowBegin, std::uint64_t rowEnd, std::uint64_t k, std::uint64_t n,
+	                                  std::uint64_t biasRows, bool relu)
 	{
 		for (std::uint64_t row = rowBegin; row < rowEnd; ++row)
 		{
@@ -322,9 +323,8 @@ namespace
 	}
 
 	void LiteNNCPUMatMulBiasReLUParallel(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
-	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out,
-	                                     std::uint64_t m, std::uint64_t k, std::uint64_t n,
-	                                     std::uint64_t biasRows, bool relu)
+	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out, std::uint64_t m,
+	                                     std::uint64_t k, std::uint64_t n, std::uint64_t biasRows, bool relu)
 	{
 		const auto flops = m * k * n * 2;
 		const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), m);
@@ -348,19 +348,17 @@ namespace
 		Context context{ lhs, rhs, bias, out, k, n, biasRows, relu };
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
-			LiteNNCPUMatMulBiasReLURange(ctx.lhs, ctx.rhs, ctx.bias, ctx.out, begin, end,
-			                             ctx.k, ctx.n, ctx.biasRows, ctx.relu);
+			LiteNNCPUMatMulBiasReLURange(ctx.lhs, ctx.rhs, ctx.bias, ctx.out, begin, end, ctx.k, ctx.n, ctx.biasRows,
+			                             ctx.relu);
 		};
 
 		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
 		LiteNNCPUParallelFor(0, m, grain, body, &context);
 	}
 
-	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs,
-	                                                         const float* bias, float* out,
-	                                                         std::uint64_t m, std::uint64_t k,
-	                                                         std::uint64_t n, std::uint64_t biasRows,
-	                                                         bool relu)
+	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
+	                                                         float* out, std::uint64_t m, std::uint64_t k,
+	                                                         std::uint64_t n, std::uint64_t biasRows, bool relu)
 	{
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, relu);
 	}
@@ -716,12 +714,12 @@ namespace
 	{
 		switch (value)
 		{
-			case static_cast<std::uint32_t>(CompiledModuleBackend::CPUNative):
-				return CompiledModuleBackend::CPUNative;
-			case static_cast<std::uint32_t>(CompiledModuleBackend::CUDANative):
-				return CompiledModuleBackend::CUDANative;
-			default:
-				throw std::runtime_error("Compiled module rodata contains an invalid backend");
+		case static_cast<std::uint32_t>(CompiledModuleBackend::CPUNative):
+			return CompiledModuleBackend::CPUNative;
+		case static_cast<std::uint32_t>(CompiledModuleBackend::CUDANative):
+			return CompiledModuleBackend::CUDANative;
+		default:
+			throw std::runtime_error("Compiled module rodata contains an invalid backend");
 		}
 	}
 
@@ -841,8 +839,8 @@ namespace
 				}
 				catch (const std::exception& ex)
 				{
-					throw std::runtime_error(std::format("Compiled module rodata quantization metadata is invalid: {}",
-					                                     ex.what()));
+					throw std::runtime_error(
+					    std::format("Compiled module rodata quantization metadata is invalid: {}", ex.what()));
 				}
 			}
 			return spec;
@@ -923,7 +921,8 @@ namespace
 		{
 			const auto output = subgraph.Results()[i];
 			const auto& info = subgraph.GetOutputInfo(output);
-			specs.push_back({ info.dtype, info.shape, graph.OutputName(i), InferOutputQuantization(graph, subgraph, output) });
+			specs.push_back(
+			    { info.dtype, info.shape, graph.OutputName(i), InferOutputQuantization(graph, subgraph, output) });
 		}
 		return specs;
 	}
@@ -1008,7 +1007,7 @@ namespace
 	                                                    std::span<const std::size_t> expectedShape)
 	{
 		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		if (cpuTensor.DType() != DataType::Float32 || !Validation::SameShape(cpuTensor.Shape().Dims, expectedShape))
+		if (cpuTensor.DType() != DataType::Float32 || cpuTensor.Shape() != expectedShape)
 		{
 			return std::nullopt;
 		}
@@ -1098,9 +1097,7 @@ namespace
 			}
 			return *values[output.node];
 		};
-		const auto tensorBytes = [&](const OutputInfo& info) {
-			return TensorByteSizeForShape(info.dtype, info.shape);
-		};
+		const auto tensorBytes = [&](const OutputInfo& info) { return TensorByteSizeForShape(info.dtype, info.shape); };
 
 		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
 		{
@@ -1131,8 +1128,8 @@ namespace
 					return std::nullopt;
 				}
 				values[nodeId] = ValueRef{
-					.ptr = AddF32ConstantGlobal(*module, builder,
-					                            std::format("litenn_cpu_const_{}", nodeId), *constantData),
+					.ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
+					                            *constantData),
 					.dtype = output.dtype,
 					.shape = output.shape,
 				};
@@ -1146,8 +1143,8 @@ namespace
 					return std::nullopt;
 				}
 				values[nodeId] = ValueRef{
-					.ptr = AddF32ConstantGlobal(*module, builder,
-					                            std::format("litenn_cpu_const_{}", nodeId), *constantData),
+					.ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
+					                            *constantData),
 					.dtype = output.dtype,
 					.shape = output.shape,
 				};
@@ -1166,10 +1163,10 @@ namespace
 			auto rhs = requireValue(fused->args[1]);
 			auto bias = requireValue(fused->args[2]);
 			if (!lhs || !rhs || !bias || lhs->dtype != DataType::Float32 || rhs->dtype != DataType::Float32 ||
-			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-			    lhs->shape.size() != 2 || rhs->shape.size() != 2 || output.shape.size() != 2 ||
-			    bias->shape.size() != output.shape.size() || lhs->shape[1] != rhs->shape[0] ||
-			    output.shape[0] != lhs->shape[0] || output.shape[1] != rhs->shape[1] ||
+			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhs->shape.size() != 2 ||
+			    rhs->shape.size() != 2 || output.shape.size() != 2 || bias->shape.size() != output.shape.size() ||
+			    lhs->shape[1] != rhs->shape[0] || output.shape[0] != lhs->shape[0] ||
+			    output.shape[1] != rhs->shape[1] ||
 			    !IsSameRankBroadcastCompatibleShape(output.shape, bias->shape, output.shape))
 			{
 				return std::nullopt;
@@ -1191,10 +1188,10 @@ namespace
 			const auto n = static_cast<std::uint64_t>(output.shape[1]);
 			const auto layerFlops = SaturatedMulU64(SaturatedMulU64(SaturatedMulU64(m, k), n), 2);
 			totalFlops = SaturatedAddU64(totalFlops, layerFlops);
-			builder.CreateCall(kernelFn, { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m),
-			                               builder.getInt64(k), builder.getInt64(n),
-			                               builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
-			                               builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
+			builder.CreateCall(kernelFn,
+			                   { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m), builder.getInt64(k),
+			                     builder.getInt64(n), builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
+			                     builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
 			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;
 		}
@@ -1640,8 +1637,8 @@ namespace
 		std::memcpy(&rawSize, symbol, sizeof(rawSize));
 		if (rawSize > std::numeric_limits<std::size_t>::max())
 		{
-			throw std::runtime_error(std::format(
-			    "Compiled module exported symbol '{}' does not fit in size_t on this host", label));
+			throw std::runtime_error(
+			    std::format("Compiled module exported symbol '{}' does not fit in size_t on this host", label));
 		}
 		return static_cast<std::size_t>(rawSize);
 	}
@@ -1663,7 +1660,7 @@ namespace
 	LoadedJIT LoadJIT(std::span<const std::byte> instructions)
 	{
 		InitializeNativeLLVM();
-		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*)(std::size_t)>(&std::malloc)));
+		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*) (std::size_t)>(&std::malloc)));
 		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
@@ -1779,7 +1776,7 @@ namespace
 	template <Device D>
 	void ValidateTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
 	{
-		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
+		if (tensor.DType() != spec.dtype || tensor.Shape() != ShapeView{ spec.shape })
 		{
 			const auto label =
 			    spec.name.empty() ? std::to_string(inputIndex) : std::format("{} ('{}')", inputIndex, spec.name);
@@ -1793,7 +1790,7 @@ namespace
 	void ValidateOutputTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec,
 	                                     std::size_t outputIndex)
 	{
-		if (tensor.DType() != spec.dtype || !std::ranges::equal(tensor.Shape().Dims, spec.shape))
+		if (tensor.DType() != spec.dtype || tensor.Shape() != ShapeView{ spec.shape })
 		{
 			const auto label =
 			    spec.name.empty() ? std::to_string(outputIndex) : std::format("{} ('{}')", outputIndex, spec.name);
@@ -1950,11 +1947,6 @@ namespace
 			return std::nullopt;
 		}
 		return static_cast<std::uint32_t>(param->paramIndex);
-	}
-
-	bool SameShape(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs)
-	{
-		return std::ranges::equal(lhs, rhs);
 	}
 
 	bool IsSameRankBroadcastCompatible(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs,
@@ -2143,8 +2135,7 @@ namespace
 
 		const auto& param = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (param.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-		    !SameShape(param.shape, output.shape))
+		if (param.dtype != DataType::Float32 || output.dtype != DataType::Float32 || param.shape != output.shape)
 		{
 			return std::nullopt;
 		}
@@ -2216,9 +2207,9 @@ namespace
 		const auto elementCount = ShapeView{ output.shape }.NumElements();
 		const auto lhsElementCount = ShapeView{ lhsParam.shape }.NumElements();
 		const auto rhsElementCount = ShapeView{ rhsParam.shape }.NumElements();
-		if (elementCount == 0 || elementCount > std::numeric_limits<std::uint32_t>::max() ||
-		    lhsElementCount == 0 || lhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
-		    rhsElementCount == 0 || rhsElementCount > std::numeric_limits<std::uint32_t>::max())
+		if (elementCount == 0 || elementCount > std::numeric_limits<std::uint32_t>::max() || lhsElementCount == 0 ||
+		    lhsElementCount > std::numeric_limits<std::uint32_t>::max() || rhsElementCount == 0 ||
+		    rhsElementCount > std::numeric_limits<std::uint32_t>::max())
 		{
 			return std::nullopt;
 		}
@@ -2230,7 +2221,7 @@ namespace
 			.elementCount = static_cast<std::uint32_t>(elementCount),
 			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
 			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
-			.requiresBroadcast = !SameShape(lhsParam.shape, output.shape) || !SameShape(rhsParam.shape, output.shape),
+			.requiresBroadcast = lhsParam.shape != output.shape || rhsParam.shape != output.shape,
 			.outputShape = output.shape,
 			.lhsShape = lhsParam.shape,
 			.rhsShape = rhsParam.shape,
@@ -2349,12 +2340,11 @@ namespace
 	{
 		if (dtype == DataType::Float32)
 		{
-			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32
-			                             : kCUDANativeFeatureMatMulBiasAddF32;
+			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32 : kCUDANativeFeatureMatMulBiasAddF32;
 			return;
 		}
-		payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLULowPrecision
-		                             : kCUDANativeFeatureMatMulBiasAddLowPrecision;
+		payload.featureFlags |=
+		    relu ? kCUDANativeFeatureMatMulBiasAddReLULowPrecision : kCUDANativeFeatureMatMulBiasAddLowPrecision;
 	}
 
 	std::string_view CUDANativeMatMulLibraryCallKernelName(DataType dtype)
@@ -2460,9 +2450,9 @@ namespace
 		};
 	}
 
-	std::optional<CUDANativeMatMulBiasPlan> MakeCUDANativeMatMulBiasPlan(
-	    const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
-	    std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
+	std::optional<CUDANativeMatMulBiasPlan>
+	MakeCUDANativeMatMulBiasPlan(const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
+	                             std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
 	{
 		const auto& lhsParam = subgraph.Params()[lhsInputIndex];
 		const auto& rhsParam = subgraph.Params()[rhsInputIndex];
@@ -2580,8 +2570,8 @@ namespace
 				return std::nullopt;
 			}
 			return MakeCUDANativeMatMulBiasPlan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
-			                                   resultEntry.outputInfos[0],
-			                                   fused->pattern == FusionPattern::MatMulBiasAddReLU);
+			                                    resultEntry.outputInfos[0],
+			                                    fused->pattern == FusionPattern::MatMulBiasAddReLU);
 		}
 
 		bool relu = false;
@@ -2652,7 +2642,7 @@ namespace
 			return std::nullopt;
 		}
 		return MakeCUDANativeMatMulBiasPlan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
-		                                   resultEntry.outputInfos[0], relu);
+		                                    resultEntry.outputInfos[0], relu);
 	}
 
 	std::optional<CUDANativeReducePlan> MatchCUDANativeReduceF32(const Graph& graph)
@@ -2694,7 +2684,7 @@ namespace
 		{
 			return std::nullopt;
 		}
-		return CUDANativeReducePlan{ reduce->op, *inputIndex, *inputElementCount, *outputElementCount,
+		return CUDANativeReducePlan{ reduce->op,   *inputIndex, *inputElementCount, *outputElementCount,
 			                         reduce->axis, input.shape, output.shape };
 	}
 
@@ -2727,7 +2717,7 @@ namespace
 		}
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (output.dtype != castNode->targetType || !SameShape(input.shape, output.shape) ||
+		if (output.dtype != castNode->targetType || input.shape != output.shape ||
 		    !CUDANativeSupportsCast(input.dtype, output.dtype))
 		{
 			return std::nullopt;
@@ -2737,10 +2727,9 @@ namespace
 		{
 			return std::nullopt;
 		}
-		return CUDANativeCastPlan{ .inputIndex = *inputIndex,
-			                       .elementCount = *elementCount,
-			                       .srcType = input.dtype,
-			                       .dstType = output.dtype };
+		return CUDANativeCastPlan{
+			.inputIndex = *inputIndex, .elementCount = *elementCount, .srcType = input.dtype, .dstType = output.dtype
+		};
 	}
 
 	std::optional<CUDANativeConcatPlan> MatchCUDANativeConcatF32(const Graph& graph)
@@ -2845,8 +2834,8 @@ namespace
 		{
 			return std::nullopt;
 		}
-		return CUDANativeSlicePlan{ *inputIndex, *inputElementCount, *outputElementCount, slice->axis, slice->start,
-			                        input.shape, output.shape };
+		return CUDANativeSlicePlan{ *inputIndex,  *inputElementCount, *outputElementCount, slice->axis,
+			                        slice->start, input.shape,        output.shape };
 	}
 
 	std::uint64_t CUDANativeBinaryF32FeatureFlag(BinaryOp op)
@@ -2989,7 +2978,7 @@ namespace
 					return std::nullopt;
 				}
 				const auto& variableTensor = graph.GetVariable(variable->variableIndex)->Data();
-				if (variableTensor.DType() != output.dtype || !SameShape(variableTensor.Shape().Dims, output.shape))
+				if (variableTensor.DType() != output.dtype || variableTensor.Shape() != output.shape)
 				{
 					return std::nullopt;
 				}
@@ -3055,8 +3044,7 @@ namespace
 			{
 				return std::nullopt;
 			}
-			hasChainSpecificStorage = hasChainSpecificStorage ||
-			                          target.kind == CUDANativeArgumentKind::Workspace ||
+			hasChainSpecificStorage = hasChainSpecificStorage || target.kind == CUDANativeArgumentKind::Workspace ||
 			                          lhs->kind == CUDANativeArgumentKind::Workspace ||
 			                          rhs->kind == CUDANativeArgumentKind::Workspace ||
 			                          bias->kind == CUDANativeArgumentKind::Workspace ||
@@ -3082,9 +3070,8 @@ namespace
 			});
 
 			const bool relu = fused->pattern == FusionPattern::MatMulBiasAddReLU;
-			const auto epilogueName = std::format("{}_{}",
-			                                      CUDANativeMatMulBiasEpilogueKernelName(output.dtype, relu),
-			                                      fusedLayerCount);
+			const auto epilogueName =
+			    std::format("{}_{}", CUDANativeMatMulBiasEpilogueKernelName(output.dtype, relu), fusedLayerCount);
 			const auto countArg = AppendU32ScalarArgument(payload, *outputElementCount);
 			const auto blockSize = std::min<std::uint32_t>(*outputElementCount, 256);
 			const auto gridSize = (*outputElementCount + blockSize - 1) / blockSize;
@@ -3172,8 +3159,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       CUDANativeUnaryF32FeatureFlag(plan->op);
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | CUDANativeUnaryF32FeatureFlag(plan->op);
 		payload.target = CUDANativeNVPTXTargetChip();
 		const auto mlirPtx = TryCUDANativeUnaryF32PTXFromMLIRNVPTX(plan->op);
 		if (!mlirPtx)
@@ -3230,8 +3217,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureCast;
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureCast;
 		payload.target = CUDANativeNVPTXTargetChip();
 		const auto mlirPtx = TryCUDANativeCastPTXFromMLIRNVPTX(
 		    CUDANativeCastCodegenSpec{ .srcType = plan->srcType, .dstType = plan->dstType });
@@ -3294,8 +3281,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       CUDANativeBinaryF32FeatureFlag(plan->op);
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | CUDANativeBinaryF32FeatureFlag(plan->op);
 		if (plan->requiresBroadcast)
 		{
 			payload.featureFlags |= kCUDANativeFeatureElementwiseBroadcastF32;
@@ -3305,10 +3292,10 @@ namespace
 		if (plan->requiresBroadcast)
 		{
 			const auto spec = CUDANativeBroadcastBinaryF32CodegenSpec{
-			    .op = plan->op,
-			    .outputShape = plan->outputShape,
-			    .lhsShape = plan->lhsShape,
-			    .rhsShape = plan->rhsShape,
+				.op = plan->op,
+				.outputShape = plan->outputShape,
+				.lhsShape = plan->lhsShape,
+				.rhsShape = plan->rhsShape,
 			};
 			const auto mlirPtx = TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(spec);
 			if (!mlirPtx)
@@ -3487,8 +3474,8 @@ namespace
 			return std::nullopt;
 		}
 
-		const auto epiloguePtx = TryCUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(
-		    CUDANativeMatMulBiasEpilogueCodegenSpec{
+		const auto epiloguePtx =
+		    TryCUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(CUDANativeMatMulBiasEpilogueCodegenSpec{
 		        .dtype = plan->dtype,
 		        .outputShape = plan->outputShape,
 		        .biasShape = plan->biasShape,
@@ -3560,7 +3547,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-		                                std::move(outputSpecs) };
+			                            std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -3587,8 +3574,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureReduceF32;
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureReduceF32;
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*ptx);
 		AppendU32(payload.scalarData, plan->outputElementCount);
@@ -3618,7 +3605,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-		                                std::move(outputSpecs) };
+			                            std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -3683,7 +3670,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-		                                std::move(outputSpecs) };
+			                            std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -3711,8 +3698,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureSliceF32;
+		payload.featureFlags =
+		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureSliceF32;
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*ptx);
 		AppendU32(payload.scalarData, plan->outputElementCount);
@@ -3742,7 +3729,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-		                                std::move(outputSpecs) };
+			                            std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -3807,7 +3794,8 @@ namespace
 	class CUDANativeConstantBuffer
 	{
 	public:
-		CUDANativeConstantBuffer(CUDA& device, std::span<const std::byte> bytes) : device_(&device), byteSize_(bytes.size())
+		CUDANativeConstantBuffer(CUDA& device, std::span<const std::byte> bytes)
+		    : device_(&device), byteSize_(bytes.size())
 		{
 			if (byteSize_ == 0)
 			{
@@ -3817,8 +3805,7 @@ namespace
 			std::vector<std::uint32_t> padded(wordCount_);
 			std::memcpy(padded.data(), bytes.data(), bytes.size());
 			data_ = DeviceTraits<CUDA>::Allocate(device, DataType::Int32, wordCount_);
-			DeviceTraits<CUDA>::CopyFromCPU(device, DataType::Int32, data_, DataType::Int32, padded.data(),
-			                                wordCount_);
+			DeviceTraits<CUDA>::CopyFromCPU(device, DataType::Int32, data_, DataType::Int32, padded.data(), wordCount_);
 		}
 
 		CUDANativeConstantBuffer(const CUDANativeConstantBuffer&) = delete;
@@ -3881,9 +3868,8 @@ namespace
 
 	std::optional<DataType> CUDANativeLibraryCallKernelDataType(std::string_view name)
 	{
-		for (const auto dtype : { DataType::Float32, DataType::Float16, DataType::BFloat16,
-		                         DataType::Float8E4M3, DataType::Float8E5M2, DataType::Int8,
-		                         DataType::UInt8 })
+		for (const auto dtype : { DataType::Float32, DataType::Float16, DataType::BFloat16, DataType::Float8E4M3,
+		                          DataType::Float8E5M2, DataType::Int8, DataType::UInt8 })
 		{
 			if (name == CUDANativeMatMulLibraryCallKernelName(dtype))
 			{
@@ -3940,8 +3926,7 @@ namespace
 		}
 	};
 
-	CUDAGraphBindingKey MakeCUDAGraphBindingKey(std::span<const Tensor<CUDA>> inputs,
-	                                            std::span<Tensor<CUDA>> outputs)
+	CUDAGraphBindingKey MakeCUDAGraphBindingKey(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs)
 	{
 		CUDAGraphBindingKey key;
 		key.pointers.reserve(inputs.size() + outputs.size());
@@ -3972,7 +3957,7 @@ namespace
 		{
 			if (stream_ != nullptr)
 			{
-				(void)cudaStreamDestroy(stream_);
+				(void) cudaStreamDestroy(stream_);
 			}
 		}
 
@@ -4033,7 +4018,7 @@ namespace
 		{
 			if (exec_ != nullptr)
 			{
-				(void)cudaGraphExecDestroy(exec_);
+				(void) cudaGraphExecDestroy(exec_);
 				exec_ = nullptr;
 			}
 		}
@@ -4057,8 +4042,7 @@ namespace
 		return value;
 	}
 
-	void* TensorArgumentPointer(const CUDANativeArgumentSpec& argument, Tensor<CUDA>& tensor,
-	                            std::string_view label)
+	void* TensorArgumentPointer(const CUDANativeArgumentSpec& argument, Tensor<CUDA>& tensor, std::string_view label)
 	{
 		const auto tensorSize = TensorByteSize(tensor);
 		if (argument.byteOffset > tensorSize ||
@@ -4112,10 +4096,9 @@ namespace
 	}
 
 	void RunCUDANativeLibraryCall(CUDA& device, const CUDANativeKernelSpec& kernel,
-	                              const CUDANativeInstructionPayload& payload,
-	                              CUDANativeWorkspaceBuffer& workspace, CUDANativeConstantBuffer& constants,
-	                              std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
-	                              CompiledModuleCUDARunOptions options)
+	                              const CUDANativeInstructionPayload& payload, CUDANativeWorkspaceBuffer& workspace,
+	                              CUDANativeConstantBuffer& constants, std::span<const Tensor<CUDA>> inputs,
+	                              std::span<Tensor<CUDA>> outputs, CompiledModuleCUDARunOptions options)
 	{
 		const auto dtype = CUDANativeLibraryCallKernelDataType(kernel.name);
 		if (!dtype)
@@ -4155,12 +4138,12 @@ namespace
 				throw std::runtime_error("CUDA native MatMul library call tensor dtypes do not match payload kernel");
 			}
 
-			(void)TensorArgumentPointer(outputArg, output, "output");
-			(void)ConstTensorArgumentPointer(lhsArg, lhs, "input");
-			(void)ConstTensorArgumentPointer(rhsArg, rhs, "input");
+			(void) TensorArgumentPointer(outputArg, output, "output");
+			(void) ConstTensorArgumentPointer(lhsArg, lhs, "input");
+			(void) ConstTensorArgumentPointer(rhsArg, rhs, "input");
 			DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
-			                                lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
-			                                ToCUDAExecutionOptions(options));
+			                               lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
+			                               ToCUDAExecutionOptions(options));
 			return;
 		}
 
@@ -4173,15 +4156,13 @@ namespace
 		Tensor<CUDA> outputView(outputPtr, { m, n }, *dtype, device);
 		Tensor<CUDA> lhsView(lhsPtr, { m, k }, *dtype, device);
 		Tensor<CUDA> rhsView(rhsPtr, { k, n }, *dtype, device);
-		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.RawData(), lhsView.DType(),
-		                                lhsView.Shape(), lhsView.RawData(), rhsView.DType(), rhsView.Shape(),
-		                                rhsView.RawData(),
-		                                ToCUDAExecutionOptions(options));
+		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.RawData(), lhsView.DType(), lhsView.Shape(),
+		                               lhsView.RawData(), rhsView.DType(), rhsView.Shape(), rhsView.RawData(),
+		                               ToCUDAExecutionOptions(options));
 	}
 
-	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload,
-	                          const CUDADriverModule& module, CUDANativeWorkspaceBuffer& workspace,
-	                          CUDANativeConstantBuffer& constants,
+	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload, const CUDADriverModule& module,
+	                          CUDANativeWorkspaceBuffer& workspace, CUDANativeConstantBuffer& constants,
 	                          std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
 	                          CompiledModuleCUDARunOptions options)
 	{
@@ -4266,11 +4247,9 @@ namespace
 	}
 
 	CUDAGraphExecInstance CaptureCUDANativeGraph(CUDA& device, const CUDANativeInstructionPayload& payload,
-	                                             const CUDADriverModule& module,
-	                                             CUDANativeWorkspaceBuffer& workspace,
+	                                             const CUDADriverModule& module, CUDANativeWorkspaceBuffer& workspace,
 	                                             CUDANativeConstantBuffer& constants,
-	                                             std::span<const Tensor<CUDA>> inputs,
-	                                             std::span<Tensor<CUDA>> outputs)
+	                                             std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs)
 	{
 		CUDAGraphCaptureStream captureStream;
 		cudaGraph_t graph{};
@@ -4309,28 +4288,25 @@ namespace
 			if (capturing)
 			{
 				cudaGraph_t discardedGraph{};
-				(void)cudaStreamEndCapture(captureStream.Get(), &discardedGraph);
+				(void) cudaStreamEndCapture(captureStream.Get(), &discardedGraph);
 				if (discardedGraph != nullptr)
 				{
-					(void)cudaGraphDestroy(discardedGraph);
+					(void) cudaGraphDestroy(discardedGraph);
 				}
 			}
 			if (graph != nullptr)
 			{
-				(void)cudaGraphDestroy(graph);
+				(void) cudaGraphDestroy(graph);
 			}
 			throw;
 		}
 	}
 
-	void RunCUDANativePayloadWithGraphReplay(CUDAGraphReplayCache& cache,
-	                                         CUDA& device, const CUDANativeInstructionPayload& payload,
-	                                         const CUDADriverModule& module,
-	                                         CUDANativeWorkspaceBuffer& workspace,
-	                                         CUDANativeConstantBuffer& constants,
-	                                         std::span<const Tensor<CUDA>> inputs,
-	                                         std::span<Tensor<CUDA>> outputs,
-	                                         CompiledModuleCUDARunOptions options)
+	void RunCUDANativePayloadWithGraphReplay(CUDAGraphReplayCache& cache, CUDA& device,
+	                                         const CUDANativeInstructionPayload& payload,
+	                                         const CUDADriverModule& module, CUDANativeWorkspaceBuffer& workspace,
+	                                         CUDANativeConstantBuffer& constants, std::span<const Tensor<CUDA>> inputs,
+	                                         std::span<Tensor<CUDA>> outputs, CompiledModuleCUDARunOptions options)
 	{
 		auto key = MakeCUDAGraphBindingKey(inputs, outputs);
 		auto it = cache.find(key);
@@ -4396,16 +4372,12 @@ struct CompiledModule<CPU>::Impl
 
 CompiledModule<CPU>::CompiledModule() = default;
 
-CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata,
-	                                           std::vector<std::byte> instructions,
-	                                           std::vector<CompiledTensorSpec> inputSpecs,
-	                                           std::vector<CompiledTensorSpec> outputSpecs,
-	                                           CompiledModuleBackend backend)
-	: rodata_(std::move(rodata)),
-	  instructions_(std::move(instructions)),
-	  inputSpecs_(std::move(inputSpecs)),
-	  outputSpecs_(std::move(outputSpecs)),
-	  backend_(backend)
+CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
+                                               std::vector<CompiledTensorSpec> inputSpecs,
+                                               std::vector<CompiledTensorSpec> outputSpecs,
+                                               CompiledModuleBackend backend)
+    : rodata_(std::move(rodata)), instructions_(std::move(instructions)), inputSpecs_(std::move(inputSpecs)),
+      outputSpecs_(std::move(outputSpecs)), backend_(backend)
 {
 }
 
@@ -4899,8 +4871,8 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 		{
 			std::scoped_lock lock(impl_->cudaWorkspaceMutex, impl_->cudaGraphReplayMutex);
 			RunCUDANativePayloadWithGraphReplay(impl_->cudaGraphReplayCache, impl_->device, impl_->cudaPayload,
-			                                    impl_->cudaModule, *impl_->cudaWorkspace, *impl_->cudaConstants,
-			                                    inputs, outputs, options);
+			                                    impl_->cudaModule, *impl_->cudaWorkspace, *impl_->cudaConstants, inputs,
+			                                    outputs, options);
 			return;
 		}
 		if (impl_->cudaWorkspace->ByteSize() == 0)
@@ -4927,9 +4899,9 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	{
 		Tensor<CPU> cpuInput(Uninitialized, inputs[i].Shape(), inputs[i].DType(), CPU{});
 		auto inputDevice = inputs[i].CurDevice();
-		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].RawData(),
-		                                inputs[i].NumElements(), cpuInput.DType(), cpuInput.RawData(),
-		                                CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].RawData(), inputs[i].NumElements(),
+		                              cpuInput.DType(), cpuInput.RawData(),
+		                              CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
 		cpuInputs.push_back(std::move(cpuInput));
 	}
 

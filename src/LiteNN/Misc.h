@@ -145,6 +145,16 @@ namespace LiteNN
 		{
 			return std::vector(Dims.begin(), Dims.end());
 		}
+
+		friend constexpr bool operator==(ShapeView lhs, ShapeView rhs)
+		{
+			return std::ranges::equal(lhs.Dims, rhs.Dims);
+		}
+
+		friend constexpr bool operator!=(ShapeView lhs, ShapeView rhs)
+		{
+			return !(lhs == rhs);
+		}
 	};
 } // namespace LiteNN
 

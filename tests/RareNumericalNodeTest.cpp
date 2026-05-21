@@ -13,7 +13,6 @@
 #include <cmath>
 #include <filesystem>
 #include <initializer_list>
-#include <ranges>
 #include <vector>
 
 using namespace LiteNN;
@@ -27,7 +26,7 @@ namespace
 
 	void ExpectShape(ShapeView shape, std::initializer_list<std::size_t> expected)
 	{
-		EXPECT_TRUE(std::ranges::equal(shape.Dims, expected));
+		EXPECT_EQ(shape, ShapeView{ expected });
 	}
 
 	void ExpectTensorNear(const Tensor<CPU>& tensor, std::initializer_list<float> expected, float tolerance = 1e-5F)
