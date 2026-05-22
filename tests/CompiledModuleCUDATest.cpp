@@ -1289,6 +1289,49 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeNativeLinearChainPayload)
 #endif
 }
 
+TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstructions)
+{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+	auto graph = BuildTinyMLPGraph(2);
+	FusionPass{}.Run(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
+	const auto inlinePayload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+	ASSERT_GT(inlinePayload.constantData.size(), 0u);
+
+	auto separated = artifact.SeparateRodata();
+	EXPECT_GT(separated.Metadata().size(), 0u);
+	EXPECT_GT(separated.Constants().size(), 0u);
+	EXPECT_EQ(separated.Weights().size(), 0u);
+	const auto separatedPayload = DeserializeCUDANativeInstructionPayload(separated.Instructions());
+	EXPECT_EQ(separatedPayload.constantData.size(), 0u);
+
+	auto copied = CompiledModuleSeparatedArtifact::CopyFromImage(separated.Image());
+	EXPECT_EQ(copied.Backend(), CompiledModuleBackend::CUDANative);
+	EXPECT_EQ(copied.Constants().size(), inlinePayload.constantData.size());
+
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
+		                                                         .shape = { 2, 3 } } };
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
+	auto module = copied.Load(CUDA{});
+	auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
+	ASSERT_EQ(outputs.size(), expected.size());
+	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), expected[0], 1e-4f);
+#else
+	GTEST_SKIP() << "CUDA driver support is not enabled";
+#endif
+}
+
 TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 {
 	if (!IsCUDADeviceAvailable())

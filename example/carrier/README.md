@@ -10,6 +10,16 @@ This example demonstrates the production-oriented AOT path in three layers:
    `CompiledModuleArtifact::FromExportedSymbols`, then loads a runnable
    `CompiledModule<CPU>` with `artifact.Load()`.
 
+For packaging flows that need independent regions, call
+`CompiledModuleArtifact::SeparateRodata()` first. The separated artifact owns a
+metadata manifest plus constants, weights, and instructions regions; it can load
+from `CompiledModuleSeparatedImage`, validate region size/checksum compatibility,
+or write one combined separated carrier object / one object per region with
+`CompiledModuleSeparatedArtifact::WriteObjectFile(s)`. For memory-mapped or
+package-manager layouts, `WriteRegionFiles` writes raw `.metadata.bin`,
+`.constants.bin`, `.weights.bin`, and `.instructions.bin` files that can be
+mapped and passed back as a `CompiledModuleSeparatedImage`.
+
 The build generates a fixed add graph carrier object and exposes it through both:
 
 - `litenn_carrier_static`: links the carrier object through a static library and loads it via `extern` symbol addresses.

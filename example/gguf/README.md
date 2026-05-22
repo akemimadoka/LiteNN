@@ -36,4 +36,19 @@ build\tools\gguf\litenn_gguf_convert.exe --compile-cpu model.decode.ltnn model.d
 build\tools\gguf\litenn_gguf_convert.exe --compile-cuda model.decode.ltnn model.decode.cuda.o litenn_llama_decode
 ```
 
+For large models or packaging flows that should keep metadata, constants,
+weights, and instructions in separate regions, emit split carrier objects:
+
+```powershell
+build\tools\gguf\litenn_gguf_convert.exe --compile-cpu-separated model.decode.ltnn model.decode.cpu.parts litenn_llama_decode
+build\tools\gguf\litenn_gguf_convert.exe --compile-cuda-separated model.decode.ltnn model.decode.cuda.parts litenn_llama_decode
+```
+
+The separated form writes `<prefix>_metadata.o`, `<prefix>_constants.o`,
+`<prefix>_weights.o`, and `<prefix>_instructions.o`. This layout avoids a
+single large PE/COFF section and lets embedders bind each region from a static
+library, shared library, memory-mapped file, or in-memory span. Applications
+that prefer raw files can use `CompiledModuleSeparatedArtifact::WriteRegionFiles`
+after compiling through the C++ API.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

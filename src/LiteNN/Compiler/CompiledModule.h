@@ -42,12 +42,46 @@ namespace LiteNN
 		std::size_t instructionSize{};
 	};
 
+	struct CompiledModuleRegion
+	{
+		const void* data{};
+		std::size_t size{};
+	};
+
+	struct CompiledModuleSeparatedImage
+	{
+		CompiledModuleRegion metadata;
+		CompiledModuleRegion constants;
+		CompiledModuleRegion weights;
+		CompiledModuleRegion instructions;
+	};
+
 	struct CompiledModuleExportedSymbols
 	{
 		const void* rodata{};
 		const void* rodataSize{};
 		const void* instructions{};
 		const void* instructionSize{};
+	};
+
+	struct CompiledModuleSeparatedExportedSymbols
+	{
+		const void* metadata{};
+		const void* metadataSize{};
+		const void* constants{};
+		const void* constantsSize{};
+		const void* weights{};
+		const void* weightsSize{};
+		const void* instructions{};
+		const void* instructionsSize{};
+	};
+
+	struct CompiledModuleRegionInfo
+	{
+		std::string name;
+		std::uint64_t size{};
+		std::uint64_t alignment{ 1 };
+		std::uint64_t checksum{};
 	};
 
 	struct CompiledModuleInvocation
@@ -61,6 +95,66 @@ namespace LiteNN
 
 	template <Device D>
 	class Compiler;
+
+	class CompiledModuleSeparatedArtifact
+	{
+	public:
+		CompiledModuleSeparatedArtifact() = default;
+		CompiledModuleSeparatedArtifact(const CompiledModuleSeparatedArtifact&) = default;
+		CompiledModuleSeparatedArtifact(CompiledModuleSeparatedArtifact&&) noexcept = default;
+		CompiledModuleSeparatedArtifact& operator=(const CompiledModuleSeparatedArtifact&) = default;
+		CompiledModuleSeparatedArtifact& operator=(CompiledModuleSeparatedArtifact&&) noexcept = default;
+		~CompiledModuleSeparatedArtifact() = default;
+
+		static CompiledModuleSeparatedArtifact CopyFromImage(CompiledModuleSeparatedImage image);
+		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
+
+		CompiledModule<CPU> Load() const;
+#ifdef LITENN_ENABLE_CUDA
+		CompiledModule<CUDA> Load(CUDA device) const;
+#endif
+
+		CompiledModuleSeparatedArtifact WithReboundConstants(CompiledModuleRegion constants) const;
+		CompiledModuleSeparatedArtifact WithReboundWeights(CompiledModuleRegion weights) const;
+
+		CompiledModuleSeparatedImage Image() const;
+		std::span<const std::byte> Metadata() const;
+		std::span<const std::byte> Constants() const;
+		std::span<const std::byte> Weights() const;
+		std::span<const std::byte> Instructions() const;
+		std::vector<CompiledModuleRegionInfo> RegionInfos() const;
+		std::span<const CompiledTensorSpec> InputSpecs() const;
+		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		CompiledModuleBackend Backend() const;
+		std::optional<std::size_t> FindInput(std::string_view name) const;
+		std::optional<std::size_t> FindOutput(std::string_view name) const;
+
+		void WriteObjectFile(const std::filesystem::path& path,
+		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFiles(const std::filesystem::path& directory,
+		                      std::string_view symbolPrefix = "litenn_module") const;
+		void WriteRegionFiles(const std::filesystem::path& directory,
+		                      std::string_view filePrefix = "litenn_module") const;
+
+	private:
+		friend class CompiledModuleArtifact;
+
+		CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
+		                                std::vector<std::byte> constants,
+		                                std::vector<std::byte> weights,
+		                                std::vector<std::byte> instructions,
+		                                std::vector<CompiledTensorSpec> inputSpecs,
+		                                std::vector<CompiledTensorSpec> outputSpecs,
+		                                CompiledModuleBackend backend);
+
+		std::vector<std::byte> metadata_;
+		std::vector<std::byte> constants_;
+		std::vector<std::byte> weights_;
+		std::vector<std::byte> instructions_;
+		std::vector<CompiledTensorSpec> inputSpecs_;
+		std::vector<CompiledTensorSpec> outputSpecs_;
+		CompiledModuleBackend backend_{ CompiledModuleBackend::CPUNative };
+	};
 
 	class CompiledModuleArtifact
 	{
@@ -91,6 +185,7 @@ namespace LiteNN
 		CompiledModuleBackend Backend() const;
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
+		CompiledModuleSeparatedArtifact SeparateRodata() const;
 
 		void WriteObjectFile(const std::filesystem::path& path,
 		                     std::string_view symbolPrefix = "litenn_module") const;
@@ -128,6 +223,7 @@ namespace LiteNN
 		/// Loads a borrowed image by copying rodata/instruction bytes into module-owned storage.
 		/// The caller may release the original image memory after this returns.
 		static CompiledModule Load(CompiledModuleImage image);
+		static CompiledModule Load(CompiledModuleSeparatedImage image);
 
 		/// Runs the compiled entry point and returns newly allocated output tensors.
 		std::vector<Tensor<CPU>> Run(std::span<const Tensor<CPU>> inputs) const;
@@ -196,6 +292,7 @@ namespace LiteNN
 
 		/// Loads a borrowed CUDA module image. CPU-native images bridge through CPU AOT.
 		static CompiledModule Load(CompiledModuleImage image, CUDA device = CUDA{});
+		static CompiledModule Load(CompiledModuleSeparatedImage image, CUDA device = CUDA{});
 
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs,

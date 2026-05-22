@@ -367,9 +367,18 @@ namespace
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 		std::byte{ 'C' }, std::byte{ 'M' }, std::byte{ '0' }, std::byte{ 0 },
 	};
+	constexpr std::array<std::byte, 8> kSeparatedMetadataMagic = {
+		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
+		std::byte{ 'S' }, std::byte{ 'E' }, std::byte{ 'P' }, std::byte{ 0 },
+	};
 	constexpr std::uint32_t kRodataVersion = 4;
+	constexpr std::uint32_t kSeparatedMetadataVersion = 1;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
 	constexpr std::uint32_t kRodataBigEndian = 2;
+	constexpr std::string_view kMetadataRegionName = "metadata";
+	constexpr std::string_view kConstantsRegionName = "constants";
+	constexpr std::string_view kWeightsRegionName = "weights";
+	constexpr std::string_view kInstructionsRegionName = "instructions";
 
 	using EntryFn = void (*)(void**, void**);
 
@@ -386,6 +395,13 @@ namespace
 		CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
 		std::vector<CompiledTensorSpec> inputSpecs;
 		std::vector<CompiledTensorSpec> outputSpecs;
+	};
+
+	struct SeparatedMetadata
+	{
+		RodataMetadata legacyMetadata;
+		std::vector<std::byte> legacyRodata;
+		std::vector<CompiledModuleRegionInfo> regions;
 	};
 
 	std::string ToString(llvm::Error error)
@@ -555,6 +571,12 @@ namespace
 		out.insert(out.end(), data, data + value.size());
 	}
 
+	void AppendBytes(std::vector<std::byte>& out, std::span<const std::byte> value)
+	{
+		AppendU64(out, static_cast<std::uint64_t>(value.size()));
+		out.insert(out.end(), value.begin(), value.end());
+	}
+
 	std::uint32_t ReadU32(std::span<const std::byte> bytes, std::size_t& offset)
 	{
 		if (offset + 4 > bytes.size())
@@ -611,6 +633,42 @@ namespace
 		std::string value(reinterpret_cast<const char*>(bytes.data() + offset), stringSize);
 		offset += stringSize;
 		return value;
+	}
+
+	std::vector<std::byte> ReadBytes(std::span<const std::byte> bytes, std::size_t& offset, std::string_view label)
+	{
+		const auto size = ReadU64(bytes, offset);
+		if (size > std::numeric_limits<std::size_t>::max() || static_cast<std::size_t>(size) > bytes.size() - offset)
+		{
+			throw std::runtime_error(std::format("Compiled module {} region is truncated", label));
+		}
+		const auto byteSize = static_cast<std::size_t>(size);
+		std::vector<std::byte> value(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+		                             bytes.begin() + static_cast<std::ptrdiff_t>(offset + byteSize));
+		offset += byteSize;
+		return value;
+	}
+
+	std::uint64_t ChecksumBytes(std::span<const std::byte> bytes)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+		for (const auto byte : bytes)
+		{
+			hash ^= std::to_integer<std::uint8_t>(byte);
+			hash *= 1099511628211ull;
+		}
+		return hash;
+	}
+
+	CompiledModuleRegionInfo MakeRegionInfo(std::string_view name, std::span<const std::byte> bytes,
+	                                         std::uint64_t alignment = 1)
+	{
+		return {
+			.name = std::string(name),
+			.size = static_cast<std::uint64_t>(bytes.size()),
+			.alignment = alignment,
+			.checksum = ChecksumBytes(bytes),
+		};
 	}
 
 	void AppendQuantizationParams(std::vector<std::byte>& out, const QuantizationParams& params)
@@ -869,6 +927,180 @@ namespace
 			.inputSpecs = std::move(inputs),
 			.outputSpecs = std::move(outputs),
 		};
+	}
+
+	void AppendRegionInfo(std::vector<std::byte>& out, const CompiledModuleRegionInfo& info)
+	{
+		AppendString(out, info.name);
+		AppendU64(out, info.size);
+		AppendU64(out, info.alignment);
+		AppendU64(out, info.checksum);
+	}
+
+	CompiledModuleRegionInfo ReadRegionInfo(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		auto info = CompiledModuleRegionInfo{
+			.name = ReadString(bytes, offset),
+			.size = ReadU64(bytes, offset),
+			.alignment = ReadU64(bytes, offset),
+			.checksum = ReadU64(bytes, offset),
+		};
+		if (info.name.empty())
+		{
+			throw std::runtime_error("Compiled module separated metadata contains an empty region name");
+		}
+		if (info.alignment == 0)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated metadata region '{}' has zero alignment", info.name));
+		}
+		return info;
+	}
+
+	std::vector<CompiledModuleRegionInfo> MakeSeparatedRegionInfos(std::span<const std::byte> constants,
+	                                                               std::span<const std::byte> weights,
+	                                                               std::span<const std::byte> instructions)
+	{
+		return {
+			MakeRegionInfo(kConstantsRegionName, constants),
+			MakeRegionInfo(kWeightsRegionName, weights),
+			MakeRegionInfo(kInstructionsRegionName, instructions),
+		};
+	}
+
+	std::vector<std::byte> SerializeSeparatedMetadata(std::span<const std::byte> legacyRodata,
+	                                                  std::span<const std::byte> constants,
+	                                                  std::span<const std::byte> weights,
+	                                                  std::span<const std::byte> instructions)
+	{
+		std::vector<std::byte> metadata;
+		metadata.insert(metadata.end(), kSeparatedMetadataMagic.begin(), kSeparatedMetadataMagic.end());
+		AppendU32(metadata, kSeparatedMetadataVersion);
+		AppendU32(metadata, static_cast<std::uint32_t>(sizeof(void*)));
+		AppendU32(metadata, NativeEndianTag());
+		AppendBytes(metadata, legacyRodata);
+
+		const auto regions = MakeSeparatedRegionInfos(constants, weights, instructions);
+		AppendU32(metadata, static_cast<std::uint32_t>(regions.size()));
+		for (const auto& region : regions)
+		{
+			AppendRegionInfo(metadata, region);
+		}
+		return metadata;
+	}
+
+	const CompiledModuleRegionInfo& FindRegionInfo(std::span<const CompiledModuleRegionInfo> regions,
+	                                               std::string_view name)
+	{
+		for (const auto& region : regions)
+		{
+			if (region.name == name)
+			{
+				return region;
+			}
+		}
+		throw std::runtime_error(std::format("Compiled module separated metadata is missing '{}' region", name));
+	}
+
+	SeparatedMetadata DeserializeSeparatedMetadata(std::span<const std::byte> metadata)
+	{
+		if (metadata.size() < kSeparatedMetadataMagic.size() ||
+		    !std::equal(kSeparatedMetadataMagic.begin(), kSeparatedMetadataMagic.end(), metadata.begin()))
+		{
+			throw std::runtime_error("Compiled module separated metadata has an invalid magic header");
+		}
+
+		std::size_t offset = kSeparatedMetadataMagic.size();
+		const auto version = ReadU32(metadata, offset);
+		if (version == 0 || version > kSeparatedMetadataVersion)
+		{
+			throw std::runtime_error("Unsupported compiled module separated metadata version");
+		}
+		const auto pointerSize = ReadU32(metadata, offset);
+		if (pointerSize != sizeof(void*))
+		{
+			throw std::runtime_error("Compiled module separated metadata pointer size does not match this process");
+		}
+		const auto endianTag = ReadU32(metadata, offset);
+		if (endianTag != NativeEndianTag())
+		{
+			throw std::runtime_error("Compiled module separated metadata endianness does not match this process");
+		}
+
+		auto legacyRodata = ReadBytes(metadata, offset, "legacy metadata");
+		auto legacyMetadata = DeserializeRodata(legacyRodata);
+		const auto regionCount = ReadU32(metadata, offset);
+		std::vector<CompiledModuleRegionInfo> regions;
+		regions.reserve(regionCount);
+		for (std::uint32_t i = 0; i < regionCount; ++i)
+		{
+			auto info = ReadRegionInfo(metadata, offset);
+			for (const auto& existing : regions)
+			{
+				if (existing.name == info.name)
+				{
+					throw std::runtime_error(
+					    std::format("Compiled module separated metadata contains duplicate '{}' regions", info.name));
+				}
+			}
+			regions.push_back(std::move(info));
+		}
+		if (offset != metadata.size())
+		{
+			throw std::runtime_error("Compiled module separated metadata contains trailing bytes");
+		}
+
+		(void) FindRegionInfo(regions, kConstantsRegionName);
+		(void) FindRegionInfo(regions, kWeightsRegionName);
+		(void) FindRegionInfo(regions, kInstructionsRegionName);
+		return {
+			.legacyMetadata = std::move(legacyMetadata),
+			.legacyRodata = std::move(legacyRodata),
+			.regions = std::move(regions),
+		};
+	}
+
+	std::span<const std::byte> RegionBytes(CompiledModuleRegion region, std::string_view name)
+	{
+		if (region.size != 0 && region.data == nullptr)
+		{
+			throw std::runtime_error(std::format("Compiled module separated '{}' region has a null data pointer", name));
+		}
+		return { static_cast<const std::byte*>(region.data), region.size };
+	}
+
+	void ValidateSeparatedRegion(CompiledModuleRegion region, const CompiledModuleRegionInfo& expected)
+	{
+		const auto bytes = RegionBytes(region, expected.name);
+		if (bytes.size() != expected.size)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated '{}' region size mismatch: expected {}, got {}",
+			                expected.name, expected.size, bytes.size()));
+		}
+		if (expected.alignment > 1 && region.size != 0 &&
+		    reinterpret_cast<std::uintptr_t>(region.data) % expected.alignment != 0)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated '{}' region is not aligned to {} bytes",
+			                expected.name, expected.alignment));
+		}
+		const auto checksum = ChecksumBytes(bytes);
+		if (checksum != expected.checksum)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated '{}' region checksum mismatch", expected.name));
+		}
+	}
+
+	SeparatedMetadata ValidateSeparatedImage(CompiledModuleSeparatedImage image)
+	{
+		const auto metadataBytes = RegionBytes(image.metadata, kMetadataRegionName);
+		auto metadata = DeserializeSeparatedMetadata(metadataBytes);
+		ValidateSeparatedRegion(image.constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
+		ValidateSeparatedRegion(image.weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
+		ValidateSeparatedRegion(image.instructions, FindRegionInfo(metadata.regions, kInstructionsRegionName));
+		return metadata;
 	}
 
 	std::vector<CompiledTensorSpec> BuildInputSpecs(const Graph& graph)
@@ -1625,6 +1857,31 @@ namespace
 		return bytes;
 	}
 
+	std::vector<std::byte> ToByteVector(CompiledModuleRegion region, std::string_view name)
+	{
+		const auto bytes = RegionBytes(region, name);
+		return std::vector<std::byte>(bytes.begin(), bytes.end());
+	}
+
+	std::vector<std::byte> RestoreLegacyInstructionsFromSeparated(CompiledModuleBackend backend,
+	                                                              std::span<const std::byte> instructions,
+	                                                              std::span<const std::byte> constants)
+	{
+		std::vector<std::byte> restored(instructions.begin(), instructions.end());
+		if (backend != CompiledModuleBackend::CUDANative)
+		{
+			return restored;
+		}
+
+		auto payload = DeserializeCUDANativeInstructionPayload(restored);
+		if (!constants.empty())
+		{
+			payload.constantData.assign(constants.begin(), constants.end());
+			restored = SerializeCUDANativeInstructionPayload(payload);
+		}
+		return restored;
+	}
+
 	std::size_t ReadExportedSymbolSize(const void* symbol, std::string_view label)
 	{
 		if (symbol == nullptr)
@@ -1714,21 +1971,31 @@ namespace
 		    /*AddNull=*/false);
 	}
 
-	void AddByteArraySymbol(llvm::Module& module, std::string_view name, std::span<const std::byte> bytes)
+	void AddByteArraySymbol(llvm::Module& module, std::string_view name, std::span<const std::byte> bytes,
+	                        std::string_view section = {})
 	{
 		auto& ctx = module.getContext();
 		auto* init = ByteArrayConstant(ctx, bytes);
 		auto* global = new llvm::GlobalVariable(module, init->getType(), true, llvm::GlobalValue::ExternalLinkage, init,
 		                                        std::string(name));
 		global->setAlignment(llvm::Align(1));
+		if (!section.empty())
+		{
+			global->setSection(std::string(section));
+		}
 	}
 
-	void AddSizeSymbol(llvm::Module& module, std::string_view name, std::size_t size)
+	void AddSizeSymbol(llvm::Module& module, std::string_view name, std::size_t size, std::string_view section = {})
 	{
 		auto& ctx = module.getContext();
 		auto* i64Ty = llvm::Type::getInt64Ty(ctx);
 		auto* init = llvm::ConstantInt::get(i64Ty, static_cast<std::uint64_t>(size));
-		new llvm::GlobalVariable(module, i64Ty, true, llvm::GlobalValue::ExternalLinkage, init, std::string(name));
+		auto* global =
+		    new llvm::GlobalVariable(module, i64Ty, true, llvm::GlobalValue::ExternalLinkage, init, std::string(name));
+		if (!section.empty())
+		{
+			global->setSection(std::string(section));
+		}
 	}
 
 	std::vector<std::byte> EmitCarrierObject(std::span<const std::byte> rodata, std::span<const std::byte> instructions,
@@ -1743,6 +2010,42 @@ namespace
 		AddByteArraySymbol(module, prefix + "_instructions", instructions);
 		AddSizeSymbol(module, prefix + "_instructions_size", instructions.size());
 
+		return EmitObjectFile(module);
+	}
+
+	std::vector<std::byte> EmitSingleRegionCarrierObject(std::span<const std::byte> region,
+	                                                     std::string_view symbolPrefix,
+	                                                     std::string_view regionName,
+	                                                     std::string_view sectionName)
+	{
+		llvm::LLVMContext ctx;
+		llvm::Module module("litenn_compiled_module_region_carrier", ctx);
+
+		const auto prefix = std::string(symbolPrefix);
+		const auto name = std::string(regionName);
+		AddByteArraySymbol(module, prefix + "_" + name, region, sectionName);
+		AddSizeSymbol(module, prefix + "_" + name + "_size", region.size(), sectionName);
+		return EmitObjectFile(module);
+	}
+
+	std::vector<std::byte> EmitSeparatedCarrierObject(std::span<const std::byte> metadata,
+	                                                  std::span<const std::byte> constants,
+	                                                  std::span<const std::byte> weights,
+	                                                  std::span<const std::byte> instructions,
+	                                                  std::string_view symbolPrefix)
+	{
+		llvm::LLVMContext ctx;
+		llvm::Module module("litenn_compiled_module_separated_carrier", ctx);
+
+		const auto prefix = std::string(symbolPrefix);
+		AddByteArraySymbol(module, prefix + "_metadata", metadata, ".litenn_metadata");
+		AddSizeSymbol(module, prefix + "_metadata_size", metadata.size(), ".litenn_metadata");
+		AddByteArraySymbol(module, prefix + "_constants", constants, ".litenn_constants");
+		AddSizeSymbol(module, prefix + "_constants_size", constants.size(), ".litenn_constants");
+		AddByteArraySymbol(module, prefix + "_weights", weights, ".litenn_weights");
+		AddSizeSymbol(module, prefix + "_weights_size", weights.size(), ".litenn_weights");
+		AddByteArraySymbol(module, prefix + "_instructions", instructions, ".litenn_instructions");
+		AddSizeSymbol(module, prefix + "_instructions_size", instructions.size(), ".litenn_instructions");
 		return EmitObjectFile(module);
 	}
 
@@ -4372,6 +4675,193 @@ struct CompiledModule<CPU>::Impl
 
 CompiledModule<CPU>::CompiledModule() = default;
 
+CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
+                                                                 std::vector<std::byte> constants,
+                                                                 std::vector<std::byte> weights,
+                                                                 std::vector<std::byte> instructions,
+                                                                 std::vector<CompiledTensorSpec> inputSpecs,
+                                                                 std::vector<CompiledTensorSpec> outputSpecs,
+                                                                 CompiledModuleBackend backend)
+    : metadata_(std::move(metadata)), constants_(std::move(constants)), weights_(std::move(weights)),
+      instructions_(std::move(instructions)), inputSpecs_(std::move(inputSpecs)), outputSpecs_(std::move(outputSpecs)),
+      backend_(backend)
+{
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::CopyFromImage(CompiledModuleSeparatedImage image)
+{
+	auto separatedMetadata = ValidateSeparatedImage(image);
+	return CompiledModuleSeparatedArtifact(
+	    ToByteVector(image.metadata, kMetadataRegionName),
+	    ToByteVector(image.constants, kConstantsRegionName),
+	    ToByteVector(image.weights, kWeightsRegionName),
+	    ToByteVector(image.instructions, kInstructionsRegionName),
+	    std::move(separatedMetadata.legacyMetadata.inputSpecs),
+	    std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	    separatedMetadata.legacyMetadata.backend);
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromExportedSymbols(
+    CompiledModuleSeparatedExportedSymbols symbols)
+{
+	return CopyFromImage({
+	    .metadata = {
+	        .data = symbols.metadata,
+	        .size = ReadExportedSymbolSize(symbols.metadataSize, "metadata_size"),
+	    },
+	    .constants = {
+	        .data = symbols.constants,
+	        .size = ReadExportedSymbolSize(symbols.constantsSize, "constants_size"),
+	    },
+	    .weights = {
+	        .data = symbols.weights,
+	        .size = ReadExportedSymbolSize(symbols.weightsSize, "weights_size"),
+	    },
+	    .instructions = {
+	        .data = symbols.instructions,
+	        .size = ReadExportedSymbolSize(symbols.instructionsSize, "instructions_size"),
+	    },
+	});
+}
+
+CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() const
+{
+	return CompiledModule<CPU>::Load(Image());
+}
+
+#ifdef LITENN_ENABLE_CUDA
+CompiledModule<CUDA> CompiledModuleSeparatedArtifact::Load(CUDA device) const
+{
+	return CompiledModule<CUDA>::Load(Image(), std::move(device));
+}
+#endif
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundConstants(
+    CompiledModuleRegion constants) const
+{
+	auto metadata = DeserializeSeparatedMetadata(metadata_);
+	ValidateSeparatedRegion(constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
+	return CompiledModuleSeparatedArtifact(metadata_, ToByteVector(constants, kConstantsRegionName), weights_,
+	                                      instructions_, inputSpecs_, outputSpecs_, backend_);
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundWeights(CompiledModuleRegion weights) const
+{
+	auto metadata = DeserializeSeparatedMetadata(metadata_);
+	ValidateSeparatedRegion(weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
+	return CompiledModuleSeparatedArtifact(metadata_, constants_, ToByteVector(weights, kWeightsRegionName),
+	                                      instructions_, inputSpecs_, outputSpecs_, backend_);
+}
+
+CompiledModuleSeparatedImage CompiledModuleSeparatedArtifact::Image() const
+{
+	return {
+		.metadata = {
+		    .data = metadata_.data(),
+		    .size = metadata_.size(),
+		},
+		.constants = {
+		    .data = constants_.data(),
+		    .size = constants_.size(),
+		},
+		.weights = {
+		    .data = weights_.data(),
+		    .size = weights_.size(),
+		},
+		.instructions = {
+		    .data = instructions_.data(),
+		    .size = instructions_.size(),
+		},
+	};
+}
+
+std::span<const std::byte> CompiledModuleSeparatedArtifact::Metadata() const
+{
+	return metadata_;
+}
+
+std::span<const std::byte> CompiledModuleSeparatedArtifact::Constants() const
+{
+	return constants_;
+}
+
+std::span<const std::byte> CompiledModuleSeparatedArtifact::Weights() const
+{
+	return weights_;
+}
+
+std::span<const std::byte> CompiledModuleSeparatedArtifact::Instructions() const
+{
+	return instructions_;
+}
+
+std::vector<CompiledModuleRegionInfo> CompiledModuleSeparatedArtifact::RegionInfos() const
+{
+	auto infos = std::vector<CompiledModuleRegionInfo>{ MakeRegionInfo(kMetadataRegionName, metadata_) };
+	auto metadata = DeserializeSeparatedMetadata(metadata_);
+	infos.insert(infos.end(), metadata.regions.begin(), metadata.regions.end());
+	return infos;
+}
+
+std::span<const CompiledTensorSpec> CompiledModuleSeparatedArtifact::InputSpecs() const
+{
+	return inputSpecs_;
+}
+
+std::span<const CompiledTensorSpec> CompiledModuleSeparatedArtifact::OutputSpecs() const
+{
+	return outputSpecs_;
+}
+
+CompiledModuleBackend CompiledModuleSeparatedArtifact::Backend() const
+{
+	return backend_;
+}
+
+std::optional<std::size_t> CompiledModuleSeparatedArtifact::FindInput(std::string_view name) const
+{
+	return FindSpecIndex(inputSpecs_, name);
+}
+
+std::optional<std::size_t> CompiledModuleSeparatedArtifact::FindOutput(std::string_view name) const
+{
+	return FindSpecIndex(outputSpecs_, name);
+}
+
+void CompiledModuleSeparatedArtifact::WriteObjectFile(const std::filesystem::path& path,
+                                                      std::string_view symbolPrefix) const
+{
+	const auto objectBytes = EmitSeparatedCarrierObject(metadata_, constants_, weights_, instructions_, symbolPrefix);
+	WriteAllBytes(path, objectBytes);
+}
+
+void CompiledModuleSeparatedArtifact::WriteObjectFiles(const std::filesystem::path& directory,
+                                                       std::string_view symbolPrefix) const
+{
+	std::filesystem::create_directories(directory);
+	const auto prefix = std::string(symbolPrefix);
+	WriteAllBytes(directory / (prefix + "_metadata.o"),
+	              EmitSingleRegionCarrierObject(metadata_, symbolPrefix, kMetadataRegionName, ".litenn_metadata"));
+	WriteAllBytes(directory / (prefix + "_constants.o"),
+	              EmitSingleRegionCarrierObject(constants_, symbolPrefix, kConstantsRegionName, ".litenn_constants"));
+	WriteAllBytes(directory / (prefix + "_weights.o"),
+	              EmitSingleRegionCarrierObject(weights_, symbolPrefix, kWeightsRegionName, ".litenn_weights"));
+	WriteAllBytes(directory / (prefix + "_instructions.o"),
+	              EmitSingleRegionCarrierObject(instructions_, symbolPrefix, kInstructionsRegionName,
+	                                            ".litenn_instructions"));
+}
+
+void CompiledModuleSeparatedArtifact::WriteRegionFiles(const std::filesystem::path& directory,
+                                                       std::string_view filePrefix) const
+{
+	std::filesystem::create_directories(directory);
+	const auto prefix = std::string(filePrefix);
+	WriteAllBytes(directory / (prefix + ".metadata.bin"), metadata_);
+	WriteAllBytes(directory / (prefix + ".constants.bin"), constants_);
+	WriteAllBytes(directory / (prefix + ".weights.bin"), weights_);
+	WriteAllBytes(directory / (prefix + ".instructions.bin"), instructions_);
+}
+
 CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
                                                std::vector<CompiledTensorSpec> inputSpecs,
                                                std::vector<CompiledTensorSpec> outputSpecs,
@@ -4398,6 +4888,25 @@ CompiledModuleArtifact CompiledModuleArtifact::FromExportedSymbols(CompiledModul
 	    .instructions = symbols.instructions,
 	    .instructionSize = ReadExportedSymbolSize(symbols.instructionSize, "instructions_size"),
 	});
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleArtifact::SeparateRodata() const
+{
+	std::vector<std::byte> constants;
+	std::vector<std::byte> weights;
+	std::vector<std::byte> instructions(instructions_.begin(), instructions_.end());
+
+	if (backend_ == CompiledModuleBackend::CUDANative)
+	{
+		auto payload = DeserializeCUDANativeInstructionPayload(instructions_);
+		constants = std::move(payload.constantData);
+		payload.constantData.clear();
+		instructions = SerializeCUDANativeInstructionPayload(payload);
+	}
+
+	auto metadata = SerializeSeparatedMetadata(rodata_, constants, weights, instructions);
+	return CompiledModuleSeparatedArtifact(std::move(metadata), std::move(constants), std::move(weights),
+	                                      std::move(instructions), inputSpecs_, outputSpecs_, backend_);
 }
 
 CompiledModule<CPU> CompiledModuleArtifact::Load() const
@@ -4484,6 +4993,21 @@ CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleImage image)
 	impl->jit = std::move(loadedJit.engine);
 	impl->entry = loadedJit.entry;
 	return CompiledModule(std::move(impl));
+}
+
+CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleSeparatedImage image)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	auto constants = RegionBytes(image.constants, kConstantsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
+	                                                           constants);
+	return Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	});
 }
 
 std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> inputs) const
@@ -4786,6 +5310,21 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA 
 	}
 
 	return CompiledModule(std::move(impl));
+}
+
+CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage image, CUDA device)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	auto constants = RegionBytes(image.constants, kConstantsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
+	                                                           constants);
+	return Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	}, std::move(device));
 }
 
 std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const

@@ -620,23 +620,38 @@ library embedding, memory mapping, hot weight swapping, and mobile packaging do 
 
 #### G9.1 Artifact Layout
 
-- [ ] Split compiled artifact storage into instruction bytes, immutable metadata, constant rodata, and external weight references.
-- [ ] Define stable section names and exported symbols for each region in carrier object output.
-- [ ] Add alignment, endian, version, and checksum fields per region.
-- [ ] Preserve dtype, quantization, shape, and variable-name metadata across separated regions.
+- [x] Split compiled artifact storage into instruction bytes, immutable metadata, constant rodata, and external weight references.
+- [x] Define stable section names and exported symbols for each region in carrier object output.
+- [x] Add alignment, endian, version, and checksum fields per region.
+- [x] Preserve dtype, quantization, shape, and variable-name metadata across separated regions.
 
 #### G9.2 Loading and Binding
 
-- [ ] Add APIs to load instructions/metadata once and bind rodata/weights from separate addresses.
-- [ ] Add APIs to rebind compatible weight regions without recompiling instructions.
-- [ ] Validate region compatibility with detailed mismatch errors.
-- [ ] Add tests for static object, shared library, memory-mapped file, and in-memory byte span loading.
+- [x] Add APIs to load instructions/metadata once and bind rodata/weights from separate addresses.
+- [x] Add APIs to rebind compatible weight regions without recompiling instructions.
+- [x] Validate region compatibility with detailed mismatch errors.
+- [x] Add tests for static object, shared library, memory-mapped file, and in-memory byte span loading.
 
 #### G9.3 Importer Integration
 
-- [ ] Let GGUF/LiteNN conversion emit archive-only, executable graph, compiled artifact, and separated-rodata variants.
-- [ ] Support large-weight packaging without exceeding PE/COFF section/object limits.
-- [ ] Document recommended packaging layouts for desktop, mobile, static library, and shared library users.
+- [x] Let GGUF/LiteNN conversion emit archive-only, executable graph, compiled artifact, and separated-rodata variants.
+- [x] Support large-weight packaging without exceeding PE/COFF section/object limits.
+- [x] Document recommended packaging layouts for desktop, mobile, static library, and shared library users.
+
+Notes:
+
+- Completed on 2026-05-22: `CompiledModuleArtifact::SeparateRodata()` now creates an owning separated artifact with
+  metadata, constants, weights, and instructions regions. The metadata region contains a versioned/endian-checked
+  manifest with per-region size, alignment, and checksum validation.
+- Completed on 2026-05-22: CUDA native AOT constants are physically moved out of the instruction payload into the
+  separated constants region; CPU MLIR object constants remain instruction-owned until the compiler grows an external
+  global/weight pointer ABI.
+- Completed on 2026-05-22: separated artifacts can load from in-memory spans or exported symbol addresses, rebind
+  compatible constants/weights, and write either one combined separated carrier object or one object per region to avoid
+  PE/COFF large-section pressure. `WriteRegionFiles` additionally supports raw metadata/constants/weights/instructions
+  files for memory-mapped packaging.
+- Completed on 2026-05-22: `litenn_gguf_convert --compile-cpu-separated/--compile-cuda-separated` emits split carrier
+  objects for converted `.ltnn` graphs.
 
 ### G10: LoRA and Adapter Support
 
@@ -813,6 +828,8 @@ or backend architecture decisions before implementation would be meaningful.
   compares `BroadcastTo -> Permute -> Softmax` compiled output with the interpreter.
 - Added G13 for AOT training execution, covering the explicit train-step ABI, compiled backward/loss/optimizer support,
   Trainer execution policies, and parity/benchmark requirements.
+- Completed G9 separated rodata packaging: added separated artifact APIs, metadata/constant/weight/instruction regions,
+  region compatibility checks, object-per-region carrier output, GGUF separated compile commands, and CPU/CUDA coverage.
 - Marked exact RWKV6/7, GLA/GatedDeltaNet signatures, full generic `*_BACK` coverage, host callback ops, production
   CPU GEMM/MLIR intra-op lowering, and broad external llama.cpp/CUDA parity fixtures as long-term deferred work.
 

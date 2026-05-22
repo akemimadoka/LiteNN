@@ -22,6 +22,8 @@ namespace
 		          << "  " << executable << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
+		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
+		          << "  " << executable << " --compile-cuda-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
 		          << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
 	}
 
@@ -57,6 +59,17 @@ namespace
 		std::cout << "Wrote AOT carrier object " << outputPath
 		          << " backend=" << BackendName(artifact.Backend())
 		          << " rodata=" << artifact.Rodata().size()
+		          << " bytes instructions=" << artifact.Instructions().size() << " bytes\n";
+	}
+
+	void PrintSeparatedArtifactSummary(const LiteNN::CompiledModuleSeparatedArtifact& artifact,
+	                                   std::string_view outputDir)
+	{
+		std::cout << "Wrote separated AOT carrier objects " << outputDir
+		          << " backend=" << BackendName(artifact.Backend())
+		          << " metadata=" << artifact.Metadata().size()
+		          << " bytes constants=" << artifact.Constants().size()
+		          << " bytes weights=" << artifact.Weights().size()
 		          << " bytes instructions=" << artifact.Instructions().size() << " bytes\n";
 	}
 #endif
@@ -129,6 +142,46 @@ int main(int argc, char** argv)
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFile(argv[3], symbolPrefix);
 			PrintArtifactSummary(artifact, argv[3]);
+			return 0;
+#elif defined(LITENN_GGUF_CONVERT_ENABLE_AOT)
+			throw std::runtime_error("CUDA AOT support is not enabled in this build; configure with LITENN_ENABLE_CUDA=ON");
+#else
+			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cpu-separated")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph).SeparateRodata();
+			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
+			artifact.WriteObjectFiles(argv[3], symbolPrefix);
+			PrintSeparatedArtifactSummary(artifact, argv[3]);
+			return 0;
+#else
+			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cuda-separated")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
+			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph).SeparateRodata();
+			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
+			artifact.WriteObjectFiles(argv[3], symbolPrefix);
+			PrintSeparatedArtifactSummary(artifact, argv[3]);
 			return 0;
 #elif defined(LITENN_GGUF_CONVERT_ENABLE_AOT)
 			throw std::runtime_error("CUDA AOT support is not enabled in this build; configure with LITENN_ENABLE_CUDA=ON");

@@ -15,11 +15,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <future>
+#include <fstream>
+#include <iterator>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -51,6 +55,32 @@ namespace
 		const auto tripleSize = ReadU64LE(rodata, offset);
 		offset += kU64Size + static_cast<std::size_t>(tripleSize);
 		return offset;
+	}
+
+	const CompiledModuleRegionInfo* FindRegionInfo(std::span<const CompiledModuleRegionInfo> infos,
+	                                               std::string_view name)
+	{
+		for (const auto& info : infos)
+		{
+			if (info.name == name)
+			{
+				return &info;
+			}
+		}
+		return nullptr;
+	}
+
+	std::vector<std::byte> ReadFileBytes(const std::filesystem::path& path)
+	{
+		std::ifstream in(path, std::ios::binary);
+		if (!in)
+		{
+			throw std::runtime_error("failed to open test file");
+		}
+		const std::vector<char> chars{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		std::vector<std::byte> bytes(chars.size());
+		std::memcpy(bytes.data(), chars.data(), chars.size());
+		return bytes;
 	}
 
 	Graph BuildSimpleAddGraph()
@@ -334,6 +364,154 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, LoadsSeparatedArtifactFromIndependentRegions)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto separated = artifact.SeparateRodata();
+
+	ASSERT_GT(separated.Metadata().size(), 0u);
+	ASSERT_EQ(separated.Constants().size(), 0u);
+	ASSERT_EQ(separated.Weights().size(), 0u);
+	ASSERT_GT(separated.Instructions().size(), 0u);
+	ASSERT_EQ(separated.InputSpecs().size(), 2u);
+	ASSERT_EQ(separated.OutputSpecs().size(), 1u);
+	EXPECT_EQ(separated.FindInput("lhs"), 0u);
+	EXPECT_EQ(separated.FindOutput("sum"), 0u);
+
+	const auto regionInfos = separated.RegionInfos();
+	ASSERT_NE(FindRegionInfo(regionInfos, "metadata"), nullptr);
+	ASSERT_NE(FindRegionInfo(regionInfos, "constants"), nullptr);
+	ASSERT_NE(FindRegionInfo(regionInfos, "weights"), nullptr);
+	ASSERT_NE(FindRegionInfo(regionInfos, "instructions"), nullptr);
+	EXPECT_EQ(FindRegionInfo(regionInfos, "constants")->size, 0u);
+	EXPECT_EQ(FindRegionInfo(regionInfos, "weights")->size, 0u);
+	EXPECT_EQ(FindRegionInfo(regionInfos, "instructions")->size, separated.Instructions().size());
+
+	auto loaded = CompiledModule<CPU>::Load(separated.Image());
+	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+
+	auto outputs = loaded.Run(inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, LoadsSeparatedArtifactFromExportedSymbolAddresses)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+
+	const std::uint64_t metadataSize = separated.Metadata().size();
+	const std::uint64_t constantsSize = separated.Constants().size();
+	const std::uint64_t weightsSize = separated.Weights().size();
+	const std::uint64_t instructionSize = separated.Instructions().size();
+	auto exported = CompiledModuleSeparatedArtifact::FromExportedSymbols({
+	    .metadata = separated.Metadata().data(),
+	    .metadataSize = &metadataSize,
+	    .constants = separated.Constants().data(),
+	    .constantsSize = &constantsSize,
+	    .weights = separated.Weights().data(),
+	    .weightsSize = &weightsSize,
+	    .instructions = separated.Instructions().data(),
+	    .instructionsSize = &instructionSize,
+	});
+
+	EXPECT_EQ(exported.Backend(), CompiledModuleBackend::CPUNative);
+	ASSERT_EQ(exported.InputSpecs().size(), 2u);
+	EXPECT_EQ(exported.FindInput("rhs"), 1u);
+	auto loaded = exported.Load();
+	Tensor<CPU> a({ 3, 4, 5, 6 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 7, 8, 9, 10 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+	auto outputs = loaded.Run(inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 10.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 12.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 14.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 16.0f);
+}
+
+TEST(CompiledModuleTest, SeparatedArtifactValidatesRegionCompatibility)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+
+	EXPECT_NO_THROW((void) separated.WithReboundConstants({
+	    .data = separated.Constants().data(),
+	    .size = separated.Constants().size(),
+	}));
+	EXPECT_NO_THROW((void) separated.WithReboundWeights({
+	    .data = separated.Weights().data(),
+	    .size = separated.Weights().size(),
+	}));
+
+	std::array<std::byte, 1> wrongSize{ std::byte{ 1 } };
+	EXPECT_THROW((void) separated.WithReboundWeights({ .data = wrongSize.data(), .size = wrongSize.size() }),
+	             std::runtime_error);
+
+	std::vector<std::byte> instructions(separated.Instructions().begin(), separated.Instructions().end());
+	ASSERT_FALSE(instructions.empty());
+	instructions[0] ^= std::byte{ 0xff };
+	auto image = separated.Image();
+	image.instructions = { .data = instructions.data(), .size = instructions.size() };
+	try
+	{
+		(void) CompiledModuleSeparatedArtifact::CopyFromImage(image);
+		FAIL() << "expected separated instruction checksum validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("checksum"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, WritesSeparatedCarrierObjects)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+
+	const auto root = std::filesystem::temp_directory_path() / "litenn_separated_compiled_module_test";
+	std::filesystem::remove_all(root);
+	std::filesystem::create_directories(root);
+
+	const auto combinedPath = root / "combined.o";
+	separated.WriteObjectFile(combinedPath, "litenn_sep_test");
+	ASSERT_TRUE(std::filesystem::exists(combinedPath));
+	EXPECT_GT(std::filesystem::file_size(combinedPath), 0u);
+
+	const auto splitDir = root / "split";
+	separated.WriteObjectFiles(splitDir, "litenn_sep_test");
+	for (const auto& name : { "litenn_sep_test_metadata.o", "litenn_sep_test_constants.o",
+		                      "litenn_sep_test_weights.o", "litenn_sep_test_instructions.o" })
+	{
+		const auto path = splitDir / name;
+		ASSERT_TRUE(std::filesystem::exists(path)) << path.string();
+		EXPECT_GT(std::filesystem::file_size(path), 0u);
+	}
+
+	const auto rawDir = root / "raw";
+	separated.WriteRegionFiles(rawDir, "litenn_sep_test");
+	auto metadata = ReadFileBytes(rawDir / "litenn_sep_test.metadata.bin");
+	auto constants = ReadFileBytes(rawDir / "litenn_sep_test.constants.bin");
+	auto weights = ReadFileBytes(rawDir / "litenn_sep_test.weights.bin");
+	auto instructions = ReadFileBytes(rawDir / "litenn_sep_test.instructions.bin");
+	auto fileBacked = CompiledModuleSeparatedArtifact::CopyFromImage({
+	    .metadata = { .data = metadata.data(), .size = metadata.size() },
+	    .constants = { .data = constants.data(), .size = constants.size() },
+	    .weights = { .data = weights.data(), .size = weights.size() },
+	    .instructions = { .data = instructions.data(), .size = instructions.size() },
+	});
+	EXPECT_EQ(fileBacked.Backend(), CompiledModuleBackend::CPUNative);
+
+	std::filesystem::remove_all(root);
 }
 
 TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
