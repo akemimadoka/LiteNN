@@ -551,7 +551,7 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		result.binaryKind = CUDABinaryKindName(payload.binaryKind);
-		result.featureFlags = payload.featureFlags;
+		result.featureFlags = payload.featureSet.flags;
 		result.kernelCount = payload.kernels.size();
 		result.workspaceBytes = static_cast<std::size_t>(payload.workspaceBytes);
 		if (payload.binaryKind == CUDANativeBinaryKind::LibraryCall)

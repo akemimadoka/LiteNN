@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/CUDANativeCodegen.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
+#include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
@@ -13,9 +13,9 @@
 
 #include <array>
 #include <cmath>
-#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -90,17 +90,16 @@ namespace
 		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 	}
 
-	Graph BuildBinaryGraph(BinaryOp op, std::span<const std::size_t> lhsShape,
-	                       std::span<const std::size_t> rhsShape, std::span<const std::size_t> outputShape,
-	                       std::string outputName)
+	Graph BuildBinaryGraph(BinaryOp op, std::span<const std::size_t> lhsShape, std::span<const std::size_t> rhsShape,
+	                       std::span<const std::size_t> outputShape, std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
 		const auto a = sg.AddParam(DataType::Float32, std::vector<std::size_t>(lhsShape.begin(), lhsShape.end()));
 		const auto b = sg.AddParam(DataType::Float32, std::vector<std::size_t>(rhsShape.begin(), rhsShape.end()));
-		const auto y = sg.AddNode(BinaryOpNode{ op, { a, 0 }, { b, 0 } },
-		                          { OutputInfo{ DataType::Float32,
-		                                        std::vector<std::size_t>(outputShape.begin(), outputShape.end()) } });
+		const auto y = sg.AddNode(
+		    BinaryOpNode{ op, { a, 0 }, { b, 0 } },
+		    { OutputInfo{ DataType::Float32, std::vector<std::size_t>(outputShape.begin(), outputShape.end()) } });
 		sg.SetResults(std::vector<NodeOutput>{ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -120,8 +119,7 @@ namespace
 		Graph graph;
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
-		const auto y = sg.AddNode(UnaryOpNode{ op, { input, 0 } },
-		                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto y = sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -130,8 +128,7 @@ namespace
 		return graph;
 	}
 
-	Graph BuildCastGraph(DataType srcType, DataType dstType, std::vector<std::size_t> shape,
-	                    std::string outputName)
+	Graph BuildCastGraph(DataType srcType, DataType dstType, std::vector<std::size_t> shape, std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
@@ -151,8 +148,8 @@ namespace
 		Subgraph sg;
 		const auto a = sg.AddParam(dtype, { 2, 2 });
 		const auto b = sg.AddParam(dtype, { 2, 2 });
-		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { a, 0 }, { b, 0 } },
-		                          { OutputInfo{ dtype, { 2, 2 } } });
+		const auto y =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { a, 0 }, { b, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
 		sg.SetResults({ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -162,14 +159,14 @@ namespace
 	}
 
 	Graph BuildMatMulGraph(DataType dtype, std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
-	                     std::vector<std::size_t> outputShape, std::string outputName)
+	                       std::vector<std::size_t> outputShape, std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
 		const auto lhs = sg.AddParam(dtype, lhsShape);
 		const auto rhs = sg.AddParam(dtype, rhsShape);
-		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
-		                          { OutputInfo{ dtype, outputShape } });
+		const auto y =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ dtype, outputShape } });
 		sg.SetResults({ { y, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -183,8 +180,7 @@ namespace
 		return BuildSimpleBinaryGraph(BinaryOp::Pow, "pow");
 	}
 
-	Graph BuildReduceGraph(ReduceOp op, std::size_t axis, std::vector<std::size_t> outputShape,
-	                       std::string outputName)
+	Graph BuildReduceGraph(ReduceOp op, std::size_t axis, std::vector<std::size_t> outputShape, std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
@@ -216,8 +212,8 @@ namespace
 		return graph;
 	}
 
-	Graph BuildSliceGraph(std::size_t axis, std::size_t start, std::size_t length,
-	                      std::vector<std::size_t> outputShape, std::string outputName)
+	Graph BuildSliceGraph(std::size_t axis, std::size_t start, std::size_t length, std::vector<std::size_t> outputShape,
+	                      std::string outputName)
 	{
 		Graph graph;
 		Subgraph sg;
@@ -239,18 +235,18 @@ namespace
 		const auto lhs = sg.AddParam(dtype, { 2, 3 });
 		const auto rhs = sg.AddParam(dtype, { 3, 2 });
 		const auto bias = sg.AddParam(dtype, { 1, 2 });
-		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
-		                              { OutputInfo{ dtype, { 2, 2 } } });
-		const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
-		                           { OutputInfo{ dtype, { 2, 2 } } });
+		const auto matmul =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
+		const auto add =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
 		NodeId result = add;
 		if (relu)
 		{
 			const auto zeroTensor = Tensor<CPU>({ 0.0 }, { 1 }, dtype);
 			const auto zero = sg.AddNode(ConstantNode{ zeroTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
 			                             { OutputInfo{ dtype, { 1 } } });
-			result = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } },
-			                    { OutputInfo{ dtype, { 2, 2 } } });
+			result =
+			    sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
 		}
 		sg.SetResults({ { result, 0 } });
 		graph.AddSubgraph(std::move(sg));
@@ -263,13 +259,12 @@ namespace
 	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
 		Graph graph;
-		const auto h1 = Layer::CreateLinear(graph,
-		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 },
-		                { 3, 4 }, dtype),
+		const auto h1 = Layer::CreateLinear(
+		    graph,
+		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 }, dtype),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, dtype));
-		const auto h2 = Layer::CreateLinear(graph,
-		    Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 },
-		                { 4, 2 }, dtype),
+		const auto h2 = Layer::CreateLinear(
+		    graph, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, dtype),
 		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, dtype));
 
 		Subgraph sg;
@@ -345,8 +340,8 @@ namespace
 		inputs.reserve(specs.size());
 		for (const auto& spec : specs)
 		{
-			inputs.emplace_back(std::span<const double>(spec.values.data(), spec.values.size()), ShapeView{ spec.shape },
-			                    spec.dtype);
+			inputs.emplace_back(std::span<const double>(spec.values.data(), spec.values.size()),
+			                    ShapeView{ spec.shape }, spec.dtype);
 		}
 		return inputs;
 	}
@@ -379,8 +374,9 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::LibraryCall);
-		EXPECT_EQ(payload.featureFlags, kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                                    kCUDANativeFeatureMatMulCUBLASF32);
+		EXPECT_EQ(payload.featureSet,
+		          CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                               CUDANativeFeature::MatMulCUBLASF32));
 		EXPECT_EQ(payload.target, "cublas");
 		EXPECT_TRUE(payload.binary.empty());
 		ASSERT_EQ(payload.scalarData.size(), 3u * sizeof(std::uint32_t));
@@ -401,9 +397,8 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	{
 		const std::array outputShape{ 2uz, 3uz };
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildBinaryGraph(BinaryOp::Divide, std::array{ 2uz, 3uz },
-		                                                               std::array{ 1uz, 3uz }, outputShape,
-		                                                               "broadcast_divide"));
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildBinaryGraph(
+		    BinaryOp::Divide, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape, "broadcast_divide"));
 		EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		EXPECT_EQ(CompiledModuleArtifact::CopyFromImage(artifact.Image()).Backend(), CompiledModuleBackend::CUDANative);
 		ASSERT_EQ(artifact.InputSpecs().size(), 2u);
@@ -417,9 +412,10 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags, kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                                    kCUDANativeFeatureElementwiseDivideF32 |
-		                                    kCUDANativeFeatureElementwiseBroadcastF32);
+		EXPECT_EQ(payload.featureSet,
+		          CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                               CUDANativeFeature::ElementwiseDivideF32,
+		                               CUDANativeFeature::ElementwiseBroadcastF32));
 		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
 		ASSERT_FALSE(payload.binary.empty());
 		EXPECT_EQ(payload.binary.back(), std::byte{ 0 });
@@ -474,9 +470,7 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	ExpectTensorNear(cpuOutput, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 
 	auto loaded = CompiledModule<CUDA>::Load(compiled.Image(), CUDA{});
-	std::array<Tensor<CUDA>, 1> out = {
-		Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-	};
+	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 	loaded.RunInto(inputs, out);
 	auto cpuOutInto = out[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutInto, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
@@ -529,9 +523,7 @@ TEST(CompiledModuleCUDATest, RunsNativeMatMulWithCUBLAS)
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 
-	std::array<Tensor<CUDA>, 1> out = {
-		Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-	};
+	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 	module.RunInto(inputs, out);
 	ExpectTensorNear(out[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 }
@@ -584,9 +576,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBinaryOpsWithCUDATensors)
 		auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutput, testCase.expected);
 
-		std::array<Tensor<CUDA>, 1> out = {
-			Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-		};
+		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 		module.RunInto(inputs, out);
 		auto cpuOutInto = out[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutInto, testCase.expected);
@@ -677,23 +667,19 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBroadcastBinaryOpsWithCUDATens
 		EXPECT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 		EXPECT_EQ(module.FindOutput(testCase.outputName), 0u);
 
-		auto lhs =
-		    Tensor<CPU>(std::span<const double>(testCase.lhs.data(), testCase.lhs.size()),
-		                ShapeView{ testCase.lhsShape }, DataType::Float32)
-		        .CopyToDevice(CUDA{});
-		auto rhs =
-		    Tensor<CPU>(std::span<const double>(testCase.rhs.data(), testCase.rhs.size()),
-		                ShapeView{ testCase.rhsShape }, DataType::Float32)
-		        .CopyToDevice(CUDA{});
+		auto lhs = Tensor<CPU>(std::span<const double>(testCase.lhs.data(), testCase.lhs.size()),
+		                       ShapeView{ testCase.lhsShape }, DataType::Float32)
+		               .CopyToDevice(CUDA{});
+		auto rhs = Tensor<CPU>(std::span<const double>(testCase.rhs.data(), testCase.rhs.size()),
+		                       ShapeView{ testCase.rhsShape }, DataType::Float32)
+		               .CopyToDevice(CUDA{});
 		std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
 		auto outputs = module.Run(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), testCase.expected);
 
-		std::array<Tensor<CUDA>, 1> out = {
-			Tensor<CUDA>(Uninitialized, { 2, 3 }, DataType::Float32, CUDA{})
-		};
+		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 3 }, DataType::Float32, CUDA{}) };
 		module.RunInto(inputs, out);
 		ExpectTensorNear(out[0].CopyToDevice(CPU{}), testCase.expected);
 	}
@@ -726,32 +712,32 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		    UnaryOp::Exp,
 		    "exp",
 		    { 0.0, 1.0, -1.0, 2.0 },
-		    { static_cast<float>(std::exp(0.0)), static_cast<float>(std::exp(1.0)),
-		      static_cast<float>(std::exp(-1.0)), static_cast<float>(std::exp(2.0)) },
+		    { static_cast<float>(std::exp(0.0)), static_cast<float>(std::exp(1.0)), static_cast<float>(std::exp(-1.0)),
+		      static_cast<float>(std::exp(2.0)) },
 		    2e-3f,
 		},
 		Case{
 		    UnaryOp::Log,
 		    "log",
 		    { 1.0, 2.0, 4.0, 0.5 },
-		    { static_cast<float>(std::log(1.0)), static_cast<float>(std::log(2.0)),
-		      static_cast<float>(std::log(4.0)), static_cast<float>(std::log(0.5)) },
+		    { static_cast<float>(std::log(1.0)), static_cast<float>(std::log(2.0)), static_cast<float>(std::log(4.0)),
+		      static_cast<float>(std::log(0.5)) },
 		    2e-3f,
 		},
 		Case{
 		    UnaryOp::Sin,
 		    "sin",
 		    { 0.0, 0.5, -0.5, 1.0 },
-		    { static_cast<float>(std::sin(0.0)), static_cast<float>(std::sin(0.5)),
-		      static_cast<float>(std::sin(-0.5)), static_cast<float>(std::sin(1.0)) },
+		    { static_cast<float>(std::sin(0.0)), static_cast<float>(std::sin(0.5)), static_cast<float>(std::sin(-0.5)),
+		      static_cast<float>(std::sin(1.0)) },
 		    2e-3f,
 		},
 		Case{
 		    UnaryOp::Cos,
 		    "cos",
 		    { 0.0, 0.5, -0.5, 1.0 },
-		    { static_cast<float>(std::cos(0.0)), static_cast<float>(std::cos(0.5)),
-		      static_cast<float>(std::cos(-0.5)), static_cast<float>(std::cos(1.0)) },
+		    { static_cast<float>(std::cos(0.0)), static_cast<float>(std::cos(0.5)), static_cast<float>(std::cos(-0.5)),
+		      static_cast<float>(std::cos(1.0)) },
 		    2e-3f,
 		},
 	};
@@ -780,9 +766,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutput, testCase.expected, testCase.tolerance);
 
-		std::array<Tensor<CUDA>, 1> out = {
-			Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-		};
+		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 		module.RunInto(inputs, out);
 		auto cpuOutInto = out[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutInto, testCase.expected, testCase.tolerance);
@@ -807,9 +791,7 @@ TEST(CompiledModuleCUDATest, RunIntoHonorsExternalCUDAStreamForNativePayload)
 	auto lhs = Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	auto rhs = Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
-	std::array<Tensor<CUDA>, 1> outputs = {
-		Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-	};
+	std::array<Tensor<CUDA>, 1> outputs = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 
 	cudaStream_t stream{};
 	ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
@@ -832,9 +814,7 @@ TEST(CompiledModuleCUDATest, CPUBridgeRejectsAsynchronousRunOptions)
 	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
-	std::array<Tensor<CUDA>, 1> outputs = {
-		Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{})
-	};
+	std::array<Tensor<CUDA>, 1> outputs = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
 
 	try
 	{
@@ -857,20 +837,20 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureReduceF32, kCUDANativeFeatureReduceF32);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ReduceF32));
 		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
 		ASSERT_EQ(payload.kernels.size(), 1u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_reduce_mean_f32");
 	}
 
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(
-		    BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1"));
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1"));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureConcatF32, kCUDANativeFeatureConcatF32);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConcatF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MultiKernelLaunch));
 		ASSERT_EQ(payload.kernels.size(), 2u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_concat_f32_input_0");
 		EXPECT_EQ(payload.kernels[1].name, "litenn_concat_f32_input_1");
@@ -881,18 +861,18 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureSliceF32, kCUDANativeFeatureSliceF32);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::SliceF32));
 		ASSERT_EQ(payload.kernels.size(), 1u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_slice_f32");
 	}
 
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(
-		    BuildCastGraph(DataType::Float32, DataType::Float16, { 2, 2 }, "cast_f16"));
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(BuildCastGraph(DataType::Float32, DataType::Float16, { 2, 2 }, "cast_f16"));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureCast, kCUDANativeFeatureCast);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::Cast));
 		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
 		ASSERT_EQ(payload.kernels.size(), 1u);
 		EXPECT_EQ(payload.kernels[0].name, CUDANativeCastKernelName(DataType::Float32, DataType::Float16));
@@ -930,7 +910,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 			ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 			const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 			EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-			EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureCast, kCUDANativeFeatureCast);
+			EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::Cast));
 			EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
 			ASSERT_EQ(payload.kernels.size(), 1u);
 			EXPECT_EQ(payload.kernels[0].name, CUDANativeCastKernelName(testCase.srcType, testCase.dstType));
@@ -951,8 +931,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::LibraryCall);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
-		          kCUDANativeFeatureMatMulCUBLASLowPrecision);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASLowPrecision));
 		EXPECT_EQ(payload.target, "cublas");
 		ASSERT_EQ(payload.kernels.size(), 1u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
@@ -968,10 +947,8 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
-		          kCUDANativeFeatureMatMulCUBLASLowPrecision);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLULowPrecision,
-		          kCUDANativeFeatureMatMulBiasAddReLULowPrecision);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASLowPrecision));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddReLULowPrecision));
 		ASSERT_EQ(payload.kernels.size(), 2u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
 		EXPECT_EQ(payload.kernels[1].name, "litenn_matmul_bias_relu_epilogue_f16");
@@ -984,10 +961,9 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASF32, kCUDANativeFeatureMatMulCUBLASF32);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLUF32,
-		          kCUDANativeFeatureMatMulBiasAddReLUF32);
-		EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddReLUF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MultiKernelLaunch));
 		ASSERT_EQ(payload.kernels.size(), 2u);
 		EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f32");
 		EXPECT_EQ(payload.kernels[1].name, "litenn_matmul_bias_relu_epilogue_f32");
@@ -1006,15 +982,12 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeLowPrecisionNativeLinearChai
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASLowPrecision,
-	          kCUDANativeFeatureMatMulCUBLASLowPrecision);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddLowPrecision,
-	          kCUDANativeFeatureMatMulBiasAddLowPrecision);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLULowPrecision,
-	          kCUDANativeFeatureMatMulBiasAddReLULowPrecision);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureWorkspace, kCUDANativeFeatureWorkspace);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureConstantTensor, kCUDANativeFeatureConstantTensor);
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASLowPrecision));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddLowPrecision));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddReLULowPrecision));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MultiKernelLaunch));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::Workspace));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
 	EXPECT_GT(payload.constantData.size(), 0u);
 	ASSERT_EQ(payload.kernels.size(), 4u);
 	EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f16");
@@ -1125,9 +1098,8 @@ TEST(CompiledModuleCUDATest, RunsNativeCastPayloadsOnCUDA)
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
-		std::vector<TensorInputSpec> inputSpecs = {
-			TensorInputSpec{ .values = testCase.values, .shape = { 2, 2 }, .dtype = testCase.srcType }
-		};
+		std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{
+			.values = testCase.values, .shape = { 2, 2 }, .dtype = testCase.srcType } };
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
 		const auto expected = interpreter.RunForward(graph, expectedInputs);
 
@@ -1297,13 +1269,12 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeNativeLinearChainPayload)
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulCUBLASF32, kCUDANativeFeatureMatMulCUBLASF32);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddF32, kCUDANativeFeatureMatMulBiasAddF32);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMatMulBiasAddReLUF32,
-	          kCUDANativeFeatureMatMulBiasAddReLUF32);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureMultiKernelLaunch, kCUDANativeFeatureMultiKernelLaunch);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureWorkspace, kCUDANativeFeatureWorkspace);
-	EXPECT_EQ(payload.featureFlags & kCUDANativeFeatureConstantTensor, kCUDANativeFeatureConstantTensor);
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASF32));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddF32));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MatMulBiasAddReLUF32));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::MultiKernelLaunch));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::Workspace));
+	EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
 	EXPECT_GT(payload.constantData.size(), 0u);
 	ASSERT_EQ(payload.kernels.size(), 4u);
 	EXPECT_EQ(payload.kernels[0].name, "litenn_cublas_matmul_f32");
@@ -1373,14 +1344,14 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "slice_axis0",
 	    .graph = BuildSliceGraph(0, 1, 1, { 1, 5 }, "slice_axis0"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 },
-	                                .shape = { 2, 5 } } },
+	                                 .shape = { 2, 5 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "slice_axis1",
 	    .graph = BuildSliceGraph(1, 1, 3, { 2, 3 }, "slice_axis1"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 },
-	                                .shape = { 2, 5 } } },
+	                                 .shape = { 2, 5 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
@@ -1448,9 +1419,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 	}
 
 	auto graph = BuildTinyMLPGraph(2);
-	std::vector<TensorInputSpec> inputSpecs = {
-		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 } }
-	};
+	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
+		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, expectedInputs);
@@ -1488,11 +1458,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionLinearChainWithConstantsAndWo
 	}
 
 	auto graph = BuildTinyMLPGraph(2, DataType::Float16);
-	std::vector<TensorInputSpec> inputSpecs = {
-		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
-		                 .shape = { 2, 3 },
-		                 .dtype = DataType::Float16 }
-	};
+	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{
+		.values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 }, .dtype = DataType::Float16 } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, expectedInputs);
@@ -1528,9 +1495,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 	ScopedEnvVar enableGraphReplay("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
 
 	auto graph = BuildTinyMLPGraph(2);
-	std::vector<TensorInputSpec> inputSpecs = {
-		TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 } }
-	};
+	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
+		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, expectedInputs);
@@ -1597,8 +1563,8 @@ TEST(CompiledModuleCUDATest, RejectsInvalidCUDANativeTargetEnv)
 {
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	ScopedEnvVar env("LITENN_CUDA_AOT_TARGET", "compute_75");
-	EXPECT_THROW((void)CUDANativeNVPTXTargetChip(), std::runtime_error);
-	EXPECT_THROW((void)Compiler<CUDA>::CompileArtifact(BuildSimpleBinaryGraph(BinaryOp::Add, "add")),
+	EXPECT_THROW((void) CUDANativeNVPTXTargetChip(), std::runtime_error);
+	EXPECT_THROW((void) Compiler<CUDA>::CompileArtifact(BuildSimpleBinaryGraph(BinaryOp::Add, "add")),
 	             std::runtime_error);
 #else
 	GTEST_SKIP() << "CUDA driver support is not enabled";

@@ -53,7 +53,6 @@
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
 
-
 #ifdef LITENN_ENABLE_CUDA
 #include <cuda_runtime_api.h>
 #endif
@@ -2332,19 +2331,20 @@ namespace
 
 	void AddCUDANativeMatMulFeatureFlag(CUDANativeInstructionPayload& payload, DataType dtype)
 	{
-		payload.featureFlags |=
-		    dtype == DataType::Float32 ? kCUDANativeFeatureMatMulCUBLASF32 : kCUDANativeFeatureMatMulCUBLASLowPrecision;
+		payload.featureSet.AddFeature(dtype == DataType::Float32 ? CUDANativeFeature::MatMulCUBLASF32
+		                                                         : CUDANativeFeature::MatMulCUBLASLowPrecision);
 	}
 
 	void AddCUDANativeMatMulBiasFeatureFlags(CUDANativeInstructionPayload& payload, DataType dtype, bool relu)
 	{
 		if (dtype == DataType::Float32)
 		{
-			payload.featureFlags |= relu ? kCUDANativeFeatureMatMulBiasAddReLUF32 : kCUDANativeFeatureMatMulBiasAddF32;
+			payload.featureSet.AddFeature(relu ? CUDANativeFeature::MatMulBiasAddReLUF32
+			                                   : CUDANativeFeature::MatMulBiasAddF32);
 			return;
 		}
-		payload.featureFlags |=
-		    relu ? kCUDANativeFeatureMatMulBiasAddReLULowPrecision : kCUDANativeFeatureMatMulBiasAddLowPrecision;
+		payload.featureSet.AddFeature(relu ? CUDANativeFeature::MatMulBiasAddReLULowPrecision
+		                                   : CUDANativeFeature::MatMulBiasAddLowPrecision);
 	}
 
 	std::string_view CUDANativeMatMulLibraryCallKernelName(DataType dtype)
@@ -2838,45 +2838,45 @@ namespace
 			                        slice->start, input.shape,        output.shape };
 	}
 
-	std::uint64_t CUDANativeBinaryF32FeatureFlag(BinaryOp op)
+	CUDANativeFeature CUDANativeBinaryF32FeatureFlag(BinaryOp op)
 	{
 		switch (op)
 		{
 		case BinaryOp::Add:
-			return kCUDANativeFeatureElementwiseAddF32;
+			return CUDANativeFeature::ElementwiseAddF32;
 		case BinaryOp::Subtract:
-			return kCUDANativeFeatureElementwiseSubtractF32;
+			return CUDANativeFeature::ElementwiseSubtractF32;
 		case BinaryOp::Multiply:
-			return kCUDANativeFeatureElementwiseMultiplyF32;
+			return CUDANativeFeature::ElementwiseMultiplyF32;
 		case BinaryOp::Divide:
-			return kCUDANativeFeatureElementwiseDivideF32;
+			return CUDANativeFeature::ElementwiseDivideF32;
 		case BinaryOp::Max:
-			return kCUDANativeFeatureElementwiseMaxF32;
+			return CUDANativeFeature::ElementwiseMaxF32;
 		case BinaryOp::Min:
-			return kCUDANativeFeatureElementwiseMinF32;
+			return CUDANativeFeature::ElementwiseMinF32;
 		default:
 			throw std::runtime_error("Unsupported CUDA native binary op");
 		}
 	}
 
-	std::uint64_t CUDANativeUnaryF32FeatureFlag(UnaryOp op)
+	CUDANativeFeature CUDANativeUnaryF32FeatureFlag(UnaryOp op)
 	{
 		switch (op)
 		{
 		case UnaryOp::Negate:
-			return kCUDANativeFeatureElementwiseNegateF32;
+			return CUDANativeFeature::ElementwiseNegateF32;
 		case UnaryOp::Abs:
-			return kCUDANativeFeatureElementwiseAbsF32;
+			return CUDANativeFeature::ElementwiseAbsF32;
 		case UnaryOp::Sqrt:
-			return kCUDANativeFeatureElementwiseSqrtF32;
+			return CUDANativeFeature::ElementwiseSqrtF32;
 		case UnaryOp::Exp:
-			return kCUDANativeFeatureElementwiseExpF32;
+			return CUDANativeFeature::ElementwiseExpF32;
 		case UnaryOp::Log:
-			return kCUDANativeFeatureElementwiseLogF32;
+			return CUDANativeFeature::ElementwiseLogF32;
 		case UnaryOp::Sin:
-			return kCUDANativeFeatureElementwiseSinF32;
+			return CUDANativeFeature::ElementwiseSinF32;
 		case UnaryOp::Cos:
-			return kCUDANativeFeatureElementwiseCosF32;
+			return CUDANativeFeature::ElementwiseCosF32;
 		default:
 			throw std::runtime_error("Unsupported CUDA native unary op");
 		}
@@ -2905,8 +2905,8 @@ namespace
 		CUDANativeLinearChainPlan plan;
 		auto& payload = plan.payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMultiKernelLaunch;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::MultiKernelLaunch);
 		payload.target = CUDANativeNVPTXTargetChip();
 
 		std::vector<std::optional<CUDANativeTensorRef>> values(subgraph.NodeCount());
@@ -3107,11 +3107,11 @@ namespace
 		}
 		if (payload.workspaceBytes != 0)
 		{
-			payload.featureFlags |= kCUDANativeFeatureWorkspace;
+			payload.featureSet.AddFeature(CUDANativeFeature::Workspace);
 		}
 		if (!payload.constantData.empty())
 		{
-			payload.featureFlags |= kCUDANativeFeatureConstantTensor;
+			payload.featureSet.AddFeature(CUDANativeFeature::ConstantTensor);
 		}
 
 		const auto ptx = TryCUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(plan.epilogues);
@@ -3159,8 +3159,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | CUDANativeUnaryF32FeatureFlag(plan->op);
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeUnaryF32FeatureFlag(plan->op));
 		payload.target = CUDANativeNVPTXTargetChip();
 		const auto mlirPtx = TryCUDANativeUnaryF32PTXFromMLIRNVPTX(plan->op);
 		if (!mlirPtx)
@@ -3217,8 +3217,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureCast;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::Cast);
 		payload.target = CUDANativeNVPTXTargetChip();
 		const auto mlirPtx = TryCUDANativeCastPTXFromMLIRNVPTX(
 		    CUDANativeCastCodegenSpec{ .srcType = plan->srcType, .dstType = plan->dstType });
@@ -3281,11 +3281,11 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | CUDANativeBinaryF32FeatureFlag(plan->op);
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeBinaryF32FeatureFlag(plan->op));
 		if (plan->requiresBroadcast)
 		{
-			payload.featureFlags |= kCUDANativeFeatureElementwiseBroadcastF32;
+			payload.featureSet.AddFeature(CUDANativeFeature::ElementwiseBroadcastF32);
 		}
 		payload.target = CUDANativeNVPTXTargetChip();
 		std::string ptx;
@@ -3368,8 +3368,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::LibraryCall;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMatMulCUBLASF32;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::MatMulCUBLASF32);
 		payload.target = "cublas";
 		AppendU32(payload.scalarData, plan->m);
 		AppendU32(payload.scalarData, plan->k);
@@ -3424,8 +3424,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::LibraryCall;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureMatMulCUBLASLowPrecision;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::MatMulCUBLASLowPrecision);
 		payload.target = "cublas";
 		AppendU32(payload.scalarData, plan->m);
 		AppendU32(payload.scalarData, plan->k);
@@ -3488,8 +3488,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureMultiKernelLaunch;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::MultiKernelLaunch);
 		AddCUDANativeMatMulFeatureFlag(payload, plan->dtype);
 		AddCUDANativeMatMulBiasFeatureFlags(payload, plan->dtype, plan->relu);
 		payload.target = CUDANativeNVPTXTargetChip();
@@ -3574,8 +3574,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureReduceF32;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::ReduceF32);
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*ptx);
 		AppendU32(payload.scalarData, plan->outputElementCount);
@@ -3632,8 +3632,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-		                       kCUDANativeFeatureConcatF32 | kCUDANativeFeatureMultiKernelLaunch;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::ConcatF32, CUDANativeFeature::MultiKernelLaunch);
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*ptx);
 
@@ -3698,8 +3698,8 @@ namespace
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::PTX;
-		payload.featureFlags =
-		    kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | kCUDANativeFeatureSliceF32;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::SliceF32);
 		payload.target = CUDANativeNVPTXTargetChip();
 		payload.binary = CUDANativeTextBytes(*ptx);
 		AppendU32(payload.scalarData, plan->outputElementCount);

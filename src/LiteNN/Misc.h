@@ -74,8 +74,8 @@ namespace LiteNN
 	};
 
 	template <EnumToStringStyle Style, typename Enum>
-	    requires(std::is_enum_v<Enum>)
-	constexpr std::string_view EnumToString(Enum enumValue)
+	    requires(std::is_enum_v<Enum> || std::is_scoped_enum_v<Enum>)
+	constexpr std::optional<std::string_view> EnumToStringOpt(Enum enumValue)
 	{
 		template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^Enum)))
 		{
@@ -93,7 +93,20 @@ namespace LiteNN
 			}
 		}
 
-		throw std::runtime_error("Invalid enum value");
+		return std::nullopt;
+	}
+
+	template <EnumToStringStyle Style, typename Enum>
+	    requires(std::is_enum_v<Enum>)
+	constexpr std::string_view EnumToString(Enum enumValue)
+	{
+		const auto result = EnumToStringOpt<Style>(enumValue);
+		if (!result) [[unlikely]]
+		{
+			throw std::runtime_error("Invalid enum value");
+		}
+
+		return *result;
 	}
 
 	struct ShapeView

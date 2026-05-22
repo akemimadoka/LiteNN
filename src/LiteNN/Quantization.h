@@ -83,92 +83,27 @@ namespace LiteNN
 
 	inline std::string_view QuantizationSchemeName(QuantizationScheme scheme)
 	{
-		switch (scheme)
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(scheme))
 		{
-		case QuantizationScheme::Affine:
-			return "Affine";
-		case QuantizationScheme::Block:
-			return "Block";
+			return *name;
 		}
 		throw std::runtime_error("Invalid quantization scheme");
 	}
 
 	inline std::string_view QuantizationGranularityName(QuantizationGranularity granularity)
 	{
-		switch (granularity)
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(granularity))
 		{
-		case QuantizationGranularity::PerTensor:
-			return "PerTensor";
-		case QuantizationGranularity::PerAxis:
-			return "PerAxis";
-		case QuantizationGranularity::Grouped:
-			return "Grouped";
+			return *name;
 		}
 		throw std::runtime_error("Invalid quantization granularity");
 	}
 
 	inline std::string_view QuantizedBlockFormatName(QuantizedBlockFormat format)
 	{
-		switch (format)
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(format))
 		{
-		case QuantizedBlockFormat::Scalar:
-			return "Scalar";
-		case QuantizedBlockFormat::GGML_Q4_0:
-			return "GGML_Q4_0";
-		case QuantizedBlockFormat::GGML_Q4_1:
-			return "GGML_Q4_1";
-		case QuantizedBlockFormat::GGML_Q5_0:
-			return "GGML_Q5_0";
-		case QuantizedBlockFormat::GGML_Q5_1:
-			return "GGML_Q5_1";
-		case QuantizedBlockFormat::GGML_Q8_0:
-			return "GGML_Q8_0";
-		case QuantizedBlockFormat::GGML_Q8_1:
-			return "GGML_Q8_1";
-		case QuantizedBlockFormat::GGML_Q2_K:
-			return "GGML_Q2_K";
-		case QuantizedBlockFormat::GGML_Q3_K:
-			return "GGML_Q3_K";
-		case QuantizedBlockFormat::GGML_Q4_K:
-			return "GGML_Q4_K";
-		case QuantizedBlockFormat::GGML_Q5_K:
-			return "GGML_Q5_K";
-		case QuantizedBlockFormat::GGML_Q6_K:
-			return "GGML_Q6_K";
-		case QuantizedBlockFormat::GGML_Q8_K:
-			return "GGML_Q8_K";
-		case QuantizedBlockFormat::GGML_IQ2_XXS:
-			return "GGML_IQ2_XXS";
-		case QuantizedBlockFormat::GGML_IQ2_XS:
-			return "GGML_IQ2_XS";
-		case QuantizedBlockFormat::GGML_IQ3_XXS:
-			return "GGML_IQ3_XXS";
-		case QuantizedBlockFormat::GGML_IQ1_S:
-			return "GGML_IQ1_S";
-		case QuantizedBlockFormat::GGML_IQ4_NL:
-			return "GGML_IQ4_NL";
-		case QuantizedBlockFormat::GGML_IQ3_S:
-			return "GGML_IQ3_S";
-		case QuantizedBlockFormat::GGML_IQ2_S:
-			return "GGML_IQ2_S";
-		case QuantizedBlockFormat::GGML_IQ4_XS:
-			return "GGML_IQ4_XS";
-		case QuantizedBlockFormat::GGML_I8:
-			return "GGML_I8";
-		case QuantizedBlockFormat::GGML_I16:
-			return "GGML_I16";
-		case QuantizedBlockFormat::GGML_I32:
-			return "GGML_I32";
-		case QuantizedBlockFormat::GGML_I64:
-			return "GGML_I64";
-		case QuantizedBlockFormat::GGML_F16:
-			return "GGML_F16";
-		case QuantizedBlockFormat::GGML_BF16:
-			return "GGML_BF16";
-		case QuantizedBlockFormat::GGML_F32:
-			return "GGML_F32";
-		case QuantizedBlockFormat::GGML_F64:
-			return "GGML_F64";
+			return *name;
 		}
 		throw std::runtime_error("Invalid quantized block format");
 	}
@@ -427,8 +362,7 @@ namespace LiteNN
 		}
 	}
 
-	inline QuantizationParams PerTensorAffineQuantization(DataType storageType, float scale,
-	                                                      std::int32_t zeroPoint = 0,
+	inline QuantizationParams PerTensorAffineQuantization(DataType storageType, float scale, std::int32_t zeroPoint = 0,
 	                                                      DataType expressedType = DataType::Float32)
 	{
 		return {
@@ -466,8 +400,8 @@ namespace LiteNN
 		};
 	}
 
-	inline QuantizationParams GroupedAffineQuantization(DataType storageType, std::int64_t axis,
-	                                                    std::size_t groupSize, std::vector<float> scales,
+	inline QuantizationParams GroupedAffineQuantization(DataType storageType, std::int64_t axis, std::size_t groupSize,
+	                                                    std::vector<float> scales,
 	                                                    std::vector<std::int32_t> zeroPoints = {},
 	                                                    DataType expressedType = DataType::Float32)
 	{
@@ -528,8 +462,7 @@ namespace LiteNN
 				for (std::size_t i = 0; i < source.NumElements(); ++i)
 				{
 					const auto scaleIndex = QuantizationDetail::ScaleIndexForElement(params, source.Shape(), i);
-					const auto q = static_cast<std::int32_t>(
-					                   std::lround(src[i] / params.scales[scaleIndex])) +
+					const auto q = static_cast<std::int32_t>(std::lround(src[i] / params.scales[scaleIndex])) +
 					               QuantizationDetail::ZeroPointAt(params, scaleIndex);
 					dst[i] = static_cast<StorageT>(std::clamp(q, minValue, maxValue));
 				}
@@ -561,11 +494,11 @@ namespace LiteNN
 						auto* dst = static_cast<TargetT*>(result.RawData());
 						for (std::size_t i = 0; i < storage.NumElements(); ++i)
 						{
-							const auto scaleIndex = QuantizationDetail::ScaleIndexForElement(params, storage.Shape(), i);
-							const auto value =
-							    (static_cast<std::int32_t>(src[i]) -
-							     QuantizationDetail::ZeroPointAt(params, scaleIndex)) *
-							    params.scales[scaleIndex];
+							const auto scaleIndex =
+							    QuantizationDetail::ScaleIndexForElement(params, storage.Shape(), i);
+							const auto value = (static_cast<std::int32_t>(src[i]) -
+							                    QuantizationDetail::ZeroPointAt(params, scaleIndex)) *
+							                   params.scales[scaleIndex];
 							dst[i] = static_cast<TargetT>(value);
 						}
 					}
@@ -575,8 +508,7 @@ namespace LiteNN
 		return result;
 	}
 
-	inline Tensor<CPU> DequantizeAffine(const QuantizedTensor<CPU>& tensor,
-	                                    DataType targetType = DataType::Float32)
+	inline Tensor<CPU> DequantizeAffine(const QuantizedTensor<CPU>& tensor, DataType targetType = DataType::Float32)
 	{
 		return DequantizeAffine(tensor.Storage(), tensor.Params(), targetType);
 	}

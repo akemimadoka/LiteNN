@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
+#include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
@@ -15,8 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <format>
 #include <filesystem>
+#include <format>
 #include <future>
 #include <ranges>
 #include <span>
@@ -75,9 +75,9 @@ namespace
 		Subgraph sg;
 		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -3);
 		Tensor<CPU> storage({ -3.0, 1.0, 5.0, 7.0 }, { 2, 2 }, DataType::Int8);
-		const auto quantized = sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }),
-		                                                         params },
-		                                  { OutputInfo{ DataType::Int8, { 2, 2 } } });
+		const auto quantized =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::Int8, { 2, 2 } } });
 		sg.SetResults({ { quantized, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -88,18 +88,14 @@ namespace
 	Graph BuildGetRowsGraph()
 	{
 		Graph graph;
-		const auto tableIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 10.0f, 11.0f,
-		                                                                      20.0f, 21.0f,
-		                                                                      30.0f, 31.0f,
-		                                                                      40.0f, 41.0f },
-		                                                                     { 4, 2 }, DataType::Float32)));
+		const auto tableIndex = graph.AddVariable(Variable::Create(
+		    Tensor<CPU>({ 10.0f, 11.0f, 20.0f, 21.0f, 30.0f, 31.0f, 40.0f, 41.0f }, { 4, 2 }, DataType::Float32)));
 
 		Subgraph sg;
 		const auto indices = sg.AddParam(DataType::Int32, { 3 });
-		const auto table =
-		    sg.AddNode(VariableRefNode{ tableIndex }, { OutputInfo{ DataType::Float32, { 4, 2 } } });
-		const auto gathered = sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } },
-		                                { OutputInfo{ DataType::Float32, { 3, 2 } } });
+		const auto table = sg.AddNode(VariableRefNode{ tableIndex }, { OutputInfo{ DataType::Float32, { 4, 2 } } });
+		const auto gathered =
+		    sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 		sg.SetResults({ { gathered, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "token_ids" });
@@ -110,13 +106,13 @@ namespace
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
 		Graph graph;
-		const auto h1 = Layer::CreateLinear(graph,
-		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 },
-		                { 3, 4 }, DataType::Float32),
+		const auto h1 = Layer::CreateLinear(
+		    graph,
+		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 },
+		                DataType::Float32),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
-		const auto h2 = Layer::CreateLinear(graph,
-		    Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 },
-		                { 4, 2 }, DataType::Float32),
+		const auto h2 = Layer::CreateLinear(
+		    graph, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
 		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
 
 		Subgraph sg;
@@ -151,11 +147,11 @@ namespace
 		auto b1 = MakePatternValues(kHidden, 0.001);
 		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
 		auto b2 = MakePatternValues(kOutput, 0.001);
-		const auto h1 = Layer::CreateLinear(graph,
-		    Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
-		    Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
-		const auto h2 = Layer::CreateLinear(graph,
-		    Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
+		const auto h1 =
+		    Layer::CreateLinear(graph, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		                        Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
+		const auto h2 = Layer::CreateLinear(
+		    graph, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
 		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
 
 		Subgraph sg;
@@ -245,8 +241,8 @@ namespace
 					const auto expected = base + static_cast<float>(i + 1) + static_cast<float>((i + 1) * 10);
 					if (ReadFloat(outputs[0], i) != expected)
 					{
-						return { false, std::format("worker {} output {} mismatch at iteration {}", workerId, i,
-						                            iteration) };
+						return { false,
+							     std::format("worker {} output {} mismatch at iteration {}", workerId, i, iteration) };
 					}
 				}
 			}
@@ -343,9 +339,7 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
 {
 	auto graph = BuildGetRowsGraph();
-	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32)
-	};
+	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
@@ -367,24 +361,21 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 	Graph graph;
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 1, 2, 3 });
-	const auto broadcast = sg.AddNode(BroadcastToNode{ { x, 0 }, { 4, 2, 3 } },
-	                                  { OutputInfo{ DataType::Float32, { 4, 2, 3 } } });
-	const auto permute = sg.AddNode(PermuteNode{ { broadcast, 0 }, { 1, 0, 2 } },
-	                                { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
-	const auto softmax = sg.AddNode(SoftmaxNode{ { permute, 0 }, 2 },
-	                                { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
+	const auto broadcast =
+	    sg.AddNode(BroadcastToNode{ { x, 0 }, { 4, 2, 3 } }, { OutputInfo{ DataType::Float32, { 4, 2, 3 } } });
+	const auto permute =
+	    sg.AddNode(PermuteNode{ { broadcast, 0 }, { 1, 0, 2 } }, { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
+	const auto softmax = sg.AddNode(SoftmaxNode{ { permute, 0 }, 2 }, { OutputInfo{ DataType::Float32, { 2, 4, 3 } } });
 	sg.SetResults({ { softmax, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 	graph.SetInputNames({ "logits" });
 	graph.SetOutputNames({ "probabilities" });
 
 	const std::vector<double> inputData = {
-		1.0, -2.0, 0.5,
-		3.0, 0.25, -1.0,
+		1.0, -2.0, 0.5, 3.0, 0.25, -1.0,
 	};
-	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>(std::span<const double>(inputData), { 1, 2, 3 }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { 1, 2, 3 },
+		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
@@ -450,12 +441,10 @@ TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
 {
-	const auto binary = std::vector<std::byte>{
-		std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' }
-	};
+	const auto binary = std::vector<std::byte>{ std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' } };
 	const auto payload = CUDANativeInstructionPayload{
 	    .binaryKind = CUDANativeBinaryKind::PTX,
-	    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph,
+	    .featureSet = CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph),
 	    .target = "compute_75",
 	    .binary = binary,
 	    .scalarData = { std::byte{ 4 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
@@ -501,7 +490,8 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
 	auto decoded = DeserializeCUDANativeInstructionPayload(bytes);
 
 	EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::PTX);
-	EXPECT_EQ(decoded.featureFlags, kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph);
+	EXPECT_EQ(decoded.featureSet,
+	          CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph));
 	EXPECT_EQ(decoded.target, "compute_75");
 	EXPECT_EQ(decoded.binary, binary);
 	ASSERT_EQ(decoded.scalarData.size(), 4u);
@@ -549,8 +539,7 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 
 	const auto payload = CUDANativeInstructionPayload{
 	    .binaryKind = CUDANativeBinaryKind::PTX,
-	    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-	                    kCUDANativeFeatureElementwiseSubtractF32 | kCUDANativeFeatureElementwiseBroadcastF32,
+	    .featureSet = CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph, CUDANativeFeature::ElementwiseSubtractF32, CUDANativeFeature::ElementwiseBroadcastF32),
 	    .target = CUDANativeNVPTXTargetChip(),
 	    .binary = bytes,
 	    .scalarData = { std::byte{ 6 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
@@ -594,8 +583,7 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 	EXPECT_EQ(decoded.target, CUDANativeNVPTXTargetChip());
 	ASSERT_FALSE(decoded.binary.empty());
 	EXPECT_EQ(decoded.binary.back(), std::byte{ 0 });
-	EXPECT_EQ(decoded.featureFlags & kCUDANativeFeatureElementwiseBroadcastF32,
-	          kCUDANativeFeatureElementwiseBroadcastF32);
+	EXPECT_TRUE(decoded.featureSet.HasFeature(CUDANativeFeature::ElementwiseBroadcastF32));
 	ASSERT_EQ(decoded.kernels.size(), 1u);
 	EXPECT_EQ(decoded.kernels[0].name, "litenn_subtract_broadcast_f32");
 	ASSERT_EQ(decoded.kernels[0].arguments.size(), 4u);
@@ -615,16 +603,16 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesUnaryPTX)
 		UnaryOp op;
 		const char* kernelName;
 		const char* ptxNeedle;
-		std::uint64_t featureFlag;
+		CUDANativeFeature featureFlag;
 	};
 	const std::array cases = {
-		Case{ UnaryOp::Negate, "litenn_negate_f32", "neg.f32", kCUDANativeFeatureElementwiseNegateF32 },
-		Case{ UnaryOp::Abs, "litenn_abs_f32", "abs.ftz.f32", kCUDANativeFeatureElementwiseAbsF32 },
-		Case{ UnaryOp::Sqrt, "litenn_sqrt_f32", "sqrt.rn.ftz.f32", kCUDANativeFeatureElementwiseSqrtF32 },
-		Case{ UnaryOp::Exp, "litenn_exp_f32", "ex2.approx.ftz.f32", kCUDANativeFeatureElementwiseExpF32 },
-		Case{ UnaryOp::Log, "litenn_log_f32", "lg2.approx.ftz.f32", kCUDANativeFeatureElementwiseLogF32 },
-		Case{ UnaryOp::Sin, "litenn_sin_f32", "sin.approx.ftz.f32", kCUDANativeFeatureElementwiseSinF32 },
-		Case{ UnaryOp::Cos, "litenn_cos_f32", "cos.approx.ftz.f32", kCUDANativeFeatureElementwiseCosF32 },
+		Case{ UnaryOp::Negate, "litenn_negate_f32", "neg.f32", CUDANativeFeature::ElementwiseNegateF32 },
+		Case{ UnaryOp::Abs, "litenn_abs_f32", "abs.ftz.f32", CUDANativeFeature::ElementwiseAbsF32 },
+		Case{ UnaryOp::Sqrt, "litenn_sqrt_f32", "sqrt.rn.ftz.f32", CUDANativeFeature::ElementwiseSqrtF32 },
+		Case{ UnaryOp::Exp, "litenn_exp_f32", "ex2.approx.ftz.f32", CUDANativeFeature::ElementwiseExpF32 },
+		Case{ UnaryOp::Log, "litenn_log_f32", "lg2.approx.ftz.f32", CUDANativeFeature::ElementwiseLogF32 },
+		Case{ UnaryOp::Sin, "litenn_sin_f32", "sin.approx.ftz.f32", CUDANativeFeature::ElementwiseSinF32 },
+		Case{ UnaryOp::Cos, "litenn_cos_f32", "cos.approx.ftz.f32", CUDANativeFeature::ElementwiseCosF32 },
 	};
 
 	for (const auto& testCase : cases)
@@ -640,7 +628,7 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesUnaryPTX)
 
 		const auto payload = CUDANativeInstructionPayload{
 		    .binaryKind = CUDANativeBinaryKind::PTX,
-		    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | testCase.featureFlag,
+		    .featureSet = CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph, testCase.featureFlag),
 		    .target = "sm_30",
 		    .binary = CUDANativeTextBytes(ptx),
 		    .scalarData = { std::byte{ 4 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
@@ -676,7 +664,7 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesUnaryPTX)
 		const auto decoded = DeserializeCUDANativeInstructionPayload(SerializeCUDANativeInstructionPayload(payload));
 		EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::PTX);
 		EXPECT_EQ(decoded.binary.back(), std::byte{ 0 });
-		EXPECT_EQ(decoded.featureFlags & testCase.featureFlag, testCase.featureFlag);
+		EXPECT_TRUE(decoded.featureSet.HasFeature(testCase.featureFlag));
 		ASSERT_EQ(decoded.kernels.size(), 1u);
 		EXPECT_EQ(decoded.kernels[0].name, testCase.kernelName);
 	}
@@ -689,15 +677,15 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesSameShapeBinaryPTX)
 		BinaryOp op;
 		const char* kernelName;
 		const char* ptxNeedle;
-		std::uint64_t featureFlag;
+		CUDANativeFeature featureFlag;
 	};
 	const std::array cases = {
-		Case{ BinaryOp::Add, "litenn_add_f32", "add.rn.f32", kCUDANativeFeatureElementwiseAddF32 },
-		Case{ BinaryOp::Subtract, "litenn_subtract_f32", "sub.rn.f32", kCUDANativeFeatureElementwiseSubtractF32 },
-		Case{ BinaryOp::Multiply, "litenn_multiply_f32", "mul.rn.f32", kCUDANativeFeatureElementwiseMultiplyF32 },
-		Case{ BinaryOp::Divide, "litenn_divide_f32", "div.rn.f32", kCUDANativeFeatureElementwiseDivideF32 },
-		Case{ BinaryOp::Max, "litenn_max_f32", "max.ftz.f32", kCUDANativeFeatureElementwiseMaxF32 },
-		Case{ BinaryOp::Min, "litenn_min_f32", "min.ftz.f32", kCUDANativeFeatureElementwiseMinF32 },
+		Case{ BinaryOp::Add, "litenn_add_f32", "add.rn.f32", CUDANativeFeature::ElementwiseAddF32 },
+		Case{ BinaryOp::Subtract, "litenn_subtract_f32", "sub.rn.f32", CUDANativeFeature::ElementwiseSubtractF32 },
+		Case{ BinaryOp::Multiply, "litenn_multiply_f32", "mul.rn.f32", CUDANativeFeature::ElementwiseMultiplyF32 },
+		Case{ BinaryOp::Divide, "litenn_divide_f32", "div.rn.f32", CUDANativeFeature::ElementwiseDivideF32 },
+		Case{ BinaryOp::Max, "litenn_max_f32", "max.ftz.f32", CUDANativeFeature::ElementwiseMaxF32 },
+		Case{ BinaryOp::Min, "litenn_min_f32", "min.ftz.f32", CUDANativeFeature::ElementwiseMinF32 },
 	};
 
 	for (const auto& testCase : cases)
@@ -713,7 +701,7 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesSameShapeBinaryPTX)
 
 		const auto payload = CUDANativeInstructionPayload{
 		    .binaryKind = CUDANativeBinaryKind::PTX,
-		    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph | testCase.featureFlag,
+		    .featureSet = CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph, testCase.featureFlag),
 		    .target = "sm_30",
 		    .binary = CUDANativeTextBytes(ptx),
 		    .scalarData = { std::byte{ 4 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
@@ -755,7 +743,7 @@ TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesSameShapeBinaryPTX)
 		const auto decoded = DeserializeCUDANativeInstructionPayload(SerializeCUDANativeInstructionPayload(payload));
 		EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::PTX);
 		EXPECT_EQ(decoded.binary.back(), std::byte{ 0 });
-		EXPECT_EQ(decoded.featureFlags & testCase.featureFlag, testCase.featureFlag);
+		EXPECT_TRUE(decoded.featureSet.HasFeature(testCase.featureFlag));
 		ASSERT_EQ(decoded.kernels.size(), 1u);
 		EXPECT_EQ(decoded.kernels[0].name, testCase.kernelName);
 	}
@@ -796,8 +784,7 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadAllowsLibraryCallWithoutBin
 {
 	const auto payload = CUDANativeInstructionPayload{
 	    .binaryKind = CUDANativeBinaryKind::LibraryCall,
-	    .featureFlags = kCUDANativeFeatureStaticShape | kCUDANativeFeatureSingleSubgraph |
-	                    kCUDANativeFeatureMatMulCUBLASF32,
+	    .featureSet = CUDANativeFeatureSet(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph, CUDANativeFeature::MatMulCUBLASF32),
 	    .target = "cublas",
 	    .binary = {},
 	    .scalarData = { std::byte{ 2 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } },
@@ -836,20 +823,18 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadAllowsLibraryCallWithoutBin
 	EXPECT_EQ(decoded.binaryKind, CUDANativeBinaryKind::LibraryCall);
 	EXPECT_TRUE(decoded.binary.empty());
 	EXPECT_EQ(decoded.target, "cublas");
-	EXPECT_EQ(decoded.featureFlags & kCUDANativeFeatureMatMulCUBLASF32, kCUDANativeFeatureMatMulCUBLASF32);
+	EXPECT_TRUE(decoded.featureSet.HasFeature(CUDANativeFeature::MatMulCUBLASF32));
 	ASSERT_EQ(decoded.kernels.size(), 1u);
 	EXPECT_EQ(decoded.kernels[0].name, "litenn_cublas_matmul_f32");
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRejectsInvalidMagic)
 {
-	std::vector<std::byte> bytes = {
-		std::byte{ 'b' }, std::byte{ 'a' }, std::byte{ 'd' }, std::byte{ 0 }
-	};
+	std::vector<std::byte> bytes = { std::byte{ 'b' }, std::byte{ 'a' }, std::byte{ 'd' }, std::byte{ 0 } };
 
 	try
 	{
-		(void)DeserializeCUDANativeInstructionPayload(bytes);
+		(void) DeserializeCUDANativeInstructionPayload(bytes);
 		FAIL() << "expected CUDA native payload validation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -864,9 +849,9 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadRejectsUnknownFeatureFlags)
 	CUDANativeInstructionPayload payload;
 	payload.target = "sm_30";
 	payload.binary = { std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' } };
-	payload.featureFlags = 1ull << 63;
+	payload.featureSet.flags = 1ull << 63;
 
-	EXPECT_THROW((void)SerializeCUDANativeInstructionPayload(payload), std::runtime_error);
+	EXPECT_THROW((void) SerializeCUDANativeInstructionPayload(payload), std::runtime_error);
 }
 
 TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)
@@ -910,7 +895,7 @@ TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)
 
 	try
 	{
-		(void)compiled.Run(inputs);
+		(void) compiled.Run(inputs);
 		FAIL() << "expected CompiledModule input validation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -930,9 +915,7 @@ TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
 	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
 	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
 	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
-	std::array<Tensor<CPU>, 1> outputs = {
-		Tensor<CPU>(Uninitialized, { 2, 2 }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 2, 2 }, DataType::Float32) };
 
 	compiled.RunInto(inputs, outputs);
 
@@ -945,16 +928,13 @@ TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
 TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 {
 	Graph graph;
-	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
-	    { 1.0, -2.0, 0.5, 3.0, -1.0,
-	      0.25, 4.0, -1.5, 2.0, 0.75,
-	      -3.0, 1.0, 2.5, -0.5, 1.25 },
-	    { 3, 5 }, DataType::Float32)));
+	const auto weightIndex = graph.AddVariable(Variable::Create(
+	    Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, -1.0, 0.25, 4.0, -1.5, 2.0, 0.75, -3.0, 1.0, 2.5, -0.5, 1.25 }, { 3, 5 },
+	                DataType::Float32)));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 16, 3 });
-	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
-	                               { OutputInfo{ DataType::Float32, { 3, 5 } } });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 3, 5 } } });
 	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 	                               { OutputInfo{ DataType::Float32, { 16, 5 } } });
 	sg.SetResults({ { output, 0 } });
@@ -970,17 +950,15 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 	}
 	Tensor<CPU> x(std::span<const double>(inputData), { 16, 3 }, DataType::Float32);
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
-	std::array<Tensor<CPU>, 1> outputs = {
-	    Tensor<CPU>(Uninitialized, { 16, 5 }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 16, 5 }, DataType::Float32) };
 
 	auto compiled = Compiler<CPU>::Compile(graph);
 	compiled.RunInto(inputs, outputs);
 
 	const double weights[3][5] = {
-	    { 1.0, -2.0, 0.5, 3.0, -1.0 },
-	    { 0.25, 4.0, -1.5, 2.0, 0.75 },
-	    { -3.0, 1.0, 2.5, -0.5, 1.25 },
+		{ 1.0, -2.0, 0.5, 3.0, -1.0 },
+		{ 0.25, 4.0, -1.5, 2.0, 0.75 },
+		{ -3.0, 1.0, 2.5, -0.5, 1.25 },
 	};
 	for (std::size_t row = 0; row < 16; ++row)
 	{
@@ -1007,13 +985,12 @@ TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 			    (static_cast<double>((col % 17) + 1) * 0.03125) - static_cast<double>(k) * 0.125;
 		}
 	}
-	const auto weightIndex = graph.AddVariable(Variable::Create(
-	    Tensor<CPU>(std::span<const double>(weightData), { 3, 256 }, DataType::Float32)));
+	const auto weightIndex = graph.AddVariable(
+	    Variable::Create(Tensor<CPU>(std::span<const double>(weightData), { 3, 256 }, DataType::Float32)));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 8, 3 });
-	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
-	                               { OutputInfo{ DataType::Float32, { 3, 256 } } });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 3, 256 } } });
 	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 	                               { OutputInfo{ DataType::Float32, { 8, 256 } } });
 	sg.SetResults({ { output, 0 } });
@@ -1029,9 +1006,7 @@ TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 	}
 	Tensor<CPU> x(std::span<const double>(inputData), { 8, 3 }, DataType::Float32);
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
-	std::array<Tensor<CPU>, 1> outputs = {
-	    Tensor<CPU>(Uninitialized, { 8, 256 }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 8, 256 }, DataType::Float32) };
 
 	auto compiled = Compiler<CPU>::Compile(graph);
 	compiled.RunInto(inputs, outputs);
@@ -1061,18 +1036,17 @@ TEST(CompiledModuleTest, KPanelPackedWideMatMulMatchesReference)
 	{
 		for (std::size_t col = 0; col < nSize; ++col)
 		{
-			weightData[k * nSize + col] =
-			    static_cast<double>(static_cast<int>(k % 11) - 5) * 0.03125 +
-			    static_cast<double>(static_cast<int>(col % 7) - 3) * 0.015625;
+			weightData[k * nSize + col] = static_cast<double>(static_cast<int>(k % 11) - 5) * 0.03125 +
+			                              static_cast<double>(static_cast<int>(col % 7) - 3) * 0.015625;
 		}
 	}
-	const auto weightIndex = graph.AddVariable(Variable::Create(
-	    Tensor<CPU>(std::span<const double>(weightData), { kSize, nSize }, DataType::Float32)));
+	const auto weightIndex = graph.AddVariable(
+	    Variable::Create(Tensor<CPU>(std::span<const double>(weightData), { kSize, nSize }, DataType::Float32)));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { batch, kSize });
-	const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
-	                               { OutputInfo{ DataType::Float32, { kSize, nSize } } });
+	const auto weight =
+	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { kSize, nSize } } });
 	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 	                               { OutputInfo{ DataType::Float32, { batch, nSize } } });
 	sg.SetResults({ { output, 0 } });
@@ -1084,15 +1058,12 @@ TEST(CompiledModuleTest, KPanelPackedWideMatMulMatchesReference)
 	{
 		for (std::size_t k = 0; k < kSize; ++k)
 		{
-			inputData[row * kSize + k] =
-			    static_cast<double>((row + 1) * ((k % 13) + 1)) * 0.00390625;
+			inputData[row * kSize + k] = static_cast<double>((row + 1) * ((k % 13) + 1)) * 0.00390625;
 		}
 	}
 	Tensor<CPU> x(std::span<const double>(inputData), { batch, kSize }, DataType::Float32);
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
-	std::array<Tensor<CPU>, 1> outputs = {
-	    Tensor<CPU>(Uninitialized, { batch, nSize }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { batch, nSize }, DataType::Float32) };
 
 	auto compiled = Compiler<CPU>::Compile(graph);
 	compiled.RunInto(inputs, outputs);
@@ -1124,15 +1095,15 @@ TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 	rodata[15] = std::byte{ 0 };
 
 	const auto image = CompiledModuleImage{
-	    .rodata = rodata.data(),
-	    .rodataSize = rodata.size(),
-	    .instructions = compiled.Instructions().data(),
-	    .instructionSize = compiled.Instructions().size(),
+		.rodata = rodata.data(),
+		.rodataSize = rodata.size(),
+		.instructions = compiled.Instructions().data(),
+		.instructionSize = compiled.Instructions().size(),
 	};
 
 	try
 	{
-		(void)CompiledModule<CPU>::Load(image);
+		(void) CompiledModule<CPU>::Load(image);
 		FAIL() << "expected ABI metadata validation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -1156,15 +1127,15 @@ TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
 	rodata[backendOffset + 3] = std::byte{ 0xff };
 
 	const auto image = CompiledModuleImage{
-	    .rodata = rodata.data(),
-	    .rodataSize = rodata.size(),
-	    .instructions = compiled.Instructions().data(),
-	    .instructionSize = compiled.Instructions().size(),
+		.rodata = rodata.data(),
+		.rodataSize = rodata.size(),
+		.instructions = compiled.Instructions().data(),
+		.instructionSize = compiled.Instructions().size(),
 	};
 
 	try
 	{
-		(void)CompiledModule<CPU>::Load(image);
+		(void) CompiledModule<CPU>::Load(image);
 		FAIL() << "expected backend metadata validation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -1183,9 +1154,8 @@ TEST(CompiledModuleTest, ConcurrentRunUsesIndependentInputAndOutputBuffers)
 	std::vector<std::future<WorkerResult>> futures;
 	for (int workerId = 0; workerId < 4; ++workerId)
 	{
-		futures.push_back(std::async(std::launch::async, [&loaded, workerId] {
-			return RunCompiledModuleWorker(loaded, workerId);
-		}));
+		futures.push_back(
+		    std::async(std::launch::async, [&loaded, workerId] { return RunCompiledModuleWorker(loaded, workerId); }));
 	}
 
 	for (auto& future : futures)
@@ -1231,8 +1201,7 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 		const auto base = static_cast<float>(i * 100);
 		for (std::size_t element = 0; element < 4; ++element)
 		{
-			const auto expected = base + static_cast<float>(element + 1) +
-			                      static_cast<float>((element + 1) * 10);
+			const auto expected = base + static_cast<float>(element + 1) + static_cast<float>((element + 1) * 10);
 			EXPECT_FLOAT_EQ(ReadFloat(outputs[i][0], element), expected);
 		}
 	}
@@ -1247,9 +1216,8 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 	constexpr std::size_t kOutput = 32;
 	auto graph = BuildWideLinearChainGraph(kBatch);
 	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
-	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput },
+		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
@@ -1262,9 +1230,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
 
 	auto module = artifact.Load();
-	std::array<Tensor<CPU>, 1> outputs = {
-		Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32)
-	};
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32) };
 	module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 
 	ASSERT_EQ(expected.size(), 1u);
