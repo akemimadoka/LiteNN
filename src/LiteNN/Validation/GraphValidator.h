@@ -462,7 +462,7 @@ namespace LiteNN::Validation
 				ValidateShape(data.Shape().Dims, std::format("variable {} data", i));
 				ValidateDataType(grad.DType(), std::format("variable {} grad", i));
 				ValidateShape(grad.Shape().Dims, std::format("variable {} grad", i));
-				if (data.DType() != grad.DType() || data.Shape().Dims != grad.Shape().Dims)
+				if (data.DType() != grad.DType() || data.Shape() != grad.Shape())
 				{
 					Fail(std::format("Graph validation failed: variable {} grad metadata {} does not match data {}",
 					                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
