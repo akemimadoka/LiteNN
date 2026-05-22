@@ -14,9 +14,11 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -285,10 +287,110 @@ private:
 	Value emitReduceValue(LiteNN::ReduceOp opKind, Value input, DataType dtype,
 	                      std::span<const std::size_t> shape, std::size_t axis)
 	{
+		auto inputType = cast<RankedTensorType>(input.getType());
+		if (inputType.getRank() == 1 && axis == 0)
+		{
+			return emitRankOneReduceValue(opKind, input, dtype, shape);
+		}
+
 		auto resultType = convertTensorType(ctx_, dtype, shape);
 		auto op = builder_.create<litenn::ReduceOp>(builder_.getUnknownLoc(), resultType, convertReduceOp(opKind),
 		                                            input, static_cast<uint64_t>(axis));
 		return op.getResult();
+	}
+
+	Value emitRankOneReduceValue(LiteNN::ReduceOp opKind, Value input, DataType dtype,
+	                             std::span<const std::size_t> shape)
+	{
+		auto loc = builder_.getUnknownLoc();
+		auto inputType = cast<RankedTensorType>(input.getType());
+		auto resultType = convertTensorType(ctx_, dtype, shape);
+		auto elemType = resultType.getElementType();
+
+		Value initValue;
+		if (opKind == LiteNN::ReduceOp::Max)
+		{
+			if (auto floatType = dyn_cast<FloatType>(elemType))
+			{
+				initValue =
+				    builder_.create<arith::ConstantFloatOp>(loc, floatType,
+				                                            llvm::APFloat::getInf(floatType.getFloatSemantics(),
+				                                                                    /*negative=*/true));
+			}
+			else
+			{
+				auto intType = cast<IntegerType>(elemType);
+				initValue = builder_.create<arith::ConstantIntOp>(
+				    loc, elemType, llvm::APInt::getSignedMinValue(intType.getWidth()).getSExtValue());
+			}
+		}
+		else
+		{
+			initValue = emitScalarZero(builder_, loc, elemType);
+		}
+
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), elemType);
+		auto filled = builder_.create<linalg::FillOp>(loc, ValueRange{ initValue }, ValueRange{ empty }).getResult(0);
+		auto inputMap = AffineMap::getMultiDimIdentityMap(1, &ctx_);
+		auto outputMap = AffineMap::get(1, 0, { getAffineConstantExpr(0, &ctx_) }, &ctx_);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ input }, ValueRange{ filled },
+		    SmallVector<AffineMap>{ inputMap, outputMap },
+		    SmallVector<utils::IteratorType>{ utils::IteratorType::reduction },
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    Value result;
+			    if (opKind == LiteNN::ReduceOp::Max)
+			    {
+				    result = isa<FloatType>(elemType) ? b.create<arith::MaximumFOp>(l, args[1], args[0]).getResult()
+				                                      : b.create<arith::MaxSIOp>(l, args[1], args[0]).getResult();
+			    }
+			    else
+			    {
+				    result = emitScalarAdd(b, l, args[1], args[0], elemType);
+			    }
+			    b.create<linalg::YieldOp>(l, result);
+		    });
+
+		Value result = generic.getResult(0);
+		if (opKind == LiteNN::ReduceOp::Mean)
+		{
+			const auto divisor = emitFilledConstant(dtype, shape, static_cast<double>(inputType.getDimSize(0)));
+			result = emitBinaryValue(LiteNN::BinaryOp::Divide, result, divisor, dtype, shape);
+		}
+		return result;
+	}
+
+	Value emitReduceAllToSingleValue(LiteNN::ReduceOp opKind, Value input, DataType dtype,
+	                                 std::span<const std::size_t> shape)
+	{
+		(void) shape;
+		if (opKind != LiteNN::ReduceOp::Sum)
+		{
+			throw std::runtime_error("GraphToMLIR reduce-all helper currently supports Sum only");
+		}
+
+		auto loc = builder_.getUnknownLoc();
+		auto inputType = cast<RankedTensorType>(input.getType());
+		const auto inputRank = inputType.getRank();
+		const auto scalarShape = std::vector<std::size_t>{ 1 };
+		auto resultType = convertTensorType(ctx_, dtype, scalarShape);
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+		auto filled = builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+
+		auto inputMap = AffineMap::getMultiDimIdentityMap(inputRank, &ctx_);
+		auto outputMap = AffineMap::get(inputRank, 0, { getAffineConstantExpr(0, &ctx_) }, &ctx_);
+		SmallVector<utils::IteratorType> iterTypes(inputRank, utils::IteratorType::reduction);
+		auto elemType = resultType.getElementType();
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ input }, ValueRange{ filled },
+		    SmallVector<AffineMap>{ inputMap, outputMap }, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    b.create<linalg::YieldOp>(l, emitScalarAdd(b, l, args[1], args[0], elemType));
+		    });
+		return generic.getResult(0);
 	}
 
 	Value emitReshapeValue(Value input, DataType dtype, std::span<const std::size_t> shape)
@@ -296,6 +398,21 @@ private:
 		auto resultType = convertTensorType(ctx_, dtype, shape);
 		auto op = builder_.create<ReshapeOp>(builder_.getUnknownLoc(), resultType, input);
 		return op.getResult();
+	}
+
+	Value emitSoftmaxValue(Value input, DataType dtype, std::span<const std::size_t> shape, std::size_t axis)
+	{
+		const auto inputShape = ShapeView{ shape };
+		const auto reducedShape = ReducedShape(inputShape, axis);
+		const auto broadcastShape = BroadcastShapeForAxis(inputShape, axis);
+
+		auto max = emitReduceValue(LiteNN::ReduceOp::Max, input, dtype, reducedShape, axis);
+		auto maxBroadcast = emitReshapeValue(max, dtype, broadcastShape);
+		auto shifted = emitBinaryValue(LiteNN::BinaryOp::Subtract, input, maxBroadcast, dtype, shape);
+		auto exp = emitUnaryValue(LiteNN::UnaryOp::Exp, shifted, dtype, shape);
+		auto denom = emitReduceValue(LiteNN::ReduceOp::Sum, exp, dtype, reducedShape, axis);
+		auto denomBroadcast = emitReshapeValue(denom, dtype, broadcastShape);
+		return emitBinaryValue(LiteNN::BinaryOp::Divide, exp, denomBroadcast, dtype, shape);
 	}
 
 	Value emitBroadcastToValue(Value input, DataType dtype, std::span<const std::size_t> targetShape)
@@ -353,6 +470,85 @@ private:
 		auto result = inputShape.ToOwned();
 		result[axis] = 1;
 		return result;
+	}
+
+	Value emitScalarConstant(OpBuilder& b, Location loc, Type elemType, double value)
+	{
+		if (auto floatType = dyn_cast<FloatType>(elemType))
+		{
+			llvm::APFloat floatValue(value);
+			bool losesInfo = false;
+			floatValue.convert(floatType.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+			return b.create<arith::ConstantFloatOp>(loc, floatType, floatValue);
+		}
+		return b.create<arith::ConstantIntOp>(loc, elemType, static_cast<std::int64_t>(value));
+	}
+
+	Value emitScalarZero(OpBuilder& b, Location loc, Type elemType)
+	{
+		return emitScalarConstant(b, loc, elemType, 0.0);
+	}
+
+	Value emitScalarAdd(OpBuilder& b, Location loc, Value lhs, Value rhs, Type elemType)
+	{
+		return isa<FloatType>(elemType) ? b.create<arith::AddFOp>(loc, lhs, rhs).getResult()
+		                               : b.create<arith::AddIOp>(loc, lhs, rhs).getResult();
+	}
+
+	Value emitScalarMultiply(OpBuilder& b, Location loc, Value lhs, Value rhs, Type elemType)
+	{
+		return isa<FloatType>(elemType) ? b.create<arith::MulFOp>(loc, lhs, rhs).getResult()
+		                               : b.create<arith::MulIOp>(loc, lhs, rhs).getResult();
+	}
+
+	Value emitI64Constant(OpBuilder& b, Location loc, std::int64_t value)
+	{
+		return b.create<arith::ConstantIntOp>(loc, b.getI64Type(), value);
+	}
+
+	Value emitIndexAsI64(OpBuilder& b, Location loc, int64_t dim)
+	{
+		auto index = b.create<linalg::IndexOp>(loc, dim).getResult();
+		return b.create<arith::IndexCastOp>(loc, b.getI64Type(), index).getResult();
+	}
+
+	Value emitI64ToIndex(OpBuilder& b, Location loc, Value value)
+	{
+		return b.create<arith::IndexCastOp>(loc, b.getIndexType(), value).getResult();
+	}
+
+	Value emitI64Max(OpBuilder& b, Location loc, Value lhs, Value rhs)
+	{
+		auto greater = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, lhs, rhs).getResult();
+		return b.create<arith::SelectOp>(loc, greater, lhs, rhs).getResult();
+	}
+
+	Value emitI64Min(OpBuilder& b, Location loc, Value lhs, Value rhs)
+	{
+		auto less = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, lhs, rhs).getResult();
+		return b.create<arith::SelectOp>(loc, less, lhs, rhs).getResult();
+	}
+
+	Value emitClampedI64(OpBuilder& b, Location loc, Value value, std::int64_t lower, std::int64_t upper)
+	{
+		auto lo = emitI64Constant(b, loc, lower);
+		auto hi = emitI64Constant(b, loc, upper);
+		return emitI64Min(b, loc, emitI64Max(b, loc, value, lo), hi);
+	}
+
+	Value emitReflectedI64(OpBuilder& b, Location loc, Value value, std::int64_t size)
+	{
+		const auto periodValue = 2 * size - 2;
+		auto period = emitI64Constant(b, loc, periodValue);
+		auto mod = b.create<arith::RemSIOp>(loc, value, period).getResult();
+		auto zero = emitI64Constant(b, loc, 0);
+		auto isNegative = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, mod, zero).getResult();
+		auto normalized = b.create<arith::SelectOp>(
+		    loc, isNegative, b.create<arith::AddIOp>(loc, mod, period).getResult(), mod).getResult();
+		auto sizeConstant = emitI64Constant(b, loc, size);
+		auto inLowHalf = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, normalized, sizeConstant).getResult();
+		auto mirrored = b.create<arith::SubIOp>(loc, period, normalized).getResult();
+		return b.create<arith::SelectOp>(loc, inLowHalf, normalized, mirrored).getResult();
 	}
 
 	SmallVector<Type> convertOutputInfos(std::span<const OutputInfo> infos)
@@ -687,18 +883,129 @@ private:
 		valueMap[nodeId] = { emitBroadcastToValue(input, outputInfos[0].dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const PadNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const PadNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support PadNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto input = getVal(valueMap, node.input);
+		auto inputType = cast<RankedTensorType>(input.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto rank = resultType.getRank();
+		if (node.mode == PadMode::Reflect)
+		{
+			for (int64_t dim = 0; dim < inputType.getRank(); ++dim)
+			{
+				if (inputType.getDimSize(dim) < 2)
+				{
+					throw std::runtime_error("GraphToMLIR PadNode reflect mode requires padded input dims >= 2");
+				}
+			}
+		}
+
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto outputMap = AffineMap::getMultiDimIdentityMap(rank, &ctx_);
+		SmallVector<utils::IteratorType> iterTypes(rank, utils::IteratorType::parallel);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{}, ValueRange{ empty }, SmallVector<AffineMap>{ outputMap },
+		    iterTypes, [&](OpBuilder& b, Location l, ValueRange) {
+			    auto trueValue = b.create<arith::ConstantIntOp>(l, b.getI1Type(), static_cast<std::int64_t>(1));
+			    Value inBounds = trueValue;
+			    SmallVector<Value> inputCoords;
+			    inputCoords.reserve(rank);
+			    for (int64_t dim = 0; dim < rank; ++dim)
+			    {
+				    auto source = b.create<arith::SubIOp>(
+				        l, emitIndexAsI64(b, l, dim),
+				        emitI64Constant(b, l, static_cast<std::int64_t>(node.lowPads[static_cast<std::size_t>(dim)])))
+				                      .getResult();
+				    auto zero = emitI64Constant(b, l, 0);
+				    auto inputDim = emitI64Constant(b, l, inputType.getDimSize(dim));
+				    auto notBefore =
+				        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, source, zero).getResult();
+				    auto notAfter =
+				        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, source, inputDim).getResult();
+				    inBounds = b.create<arith::AndIOp>(l, inBounds, notBefore).getResult();
+				    inBounds = b.create<arith::AndIOp>(l, inBounds, notAfter).getResult();
+
+				    Value safeSource;
+				    switch (node.mode)
+				    {
+				    case PadMode::Constant:
+				    case PadMode::Replicate:
+					    safeSource = emitClampedI64(b, l, source, 0, inputType.getDimSize(dim) - 1);
+					    break;
+				    case PadMode::Reflect:
+					    safeSource = emitReflectedI64(b, l, source, inputType.getDimSize(dim));
+					    break;
+				    }
+				    inputCoords.push_back(emitI64ToIndex(b, l, safeSource));
+			    }
+
+			    auto inputElement = b.create<tensor::ExtractOp>(l, input, inputCoords).getResult();
+			    Value result = inputElement;
+			    if (node.mode == PadMode::Constant)
+			    {
+				    auto padValue = emitScalarConstant(b, l, resultType.getElementType(), node.constantValue);
+				    result = b.create<arith::SelectOp>(l, inBounds, inputElement, padValue).getResult();
+			    }
+			    b.create<linalg::YieldOp>(l, result);
+		    });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const GatherNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const GatherNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support GatherNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto data = getVal(valueMap, node.data);
+		auto indices = getVal(valueMap, node.indices);
+		auto indicesType = cast<RankedTensorType>(indices.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto indexRank = indicesType.getRank();
+		const auto resultRank = resultType.getRank();
+
+		SmallVector<AffineExpr> indexExprs;
+		indexExprs.reserve(indexRank);
+		for (int64_t dim = 0; dim < indexRank; ++dim)
+		{
+			indexExprs.push_back(getAffineDimExpr(static_cast<int64_t>(node.axis) + dim, &ctx_));
+		}
+		auto indexMap = AffineMap::get(resultRank, 0, indexExprs, &ctx_);
+		auto outputMap = AffineMap::getMultiDimIdentityMap(resultRank, &ctx_);
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		SmallVector<utils::IteratorType> iterTypes(resultRank, utils::IteratorType::parallel);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty },
+		    SmallVector<AffineMap>{ indexMap, outputMap }, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    Value gathered = args[0];
+			    if (!isa<IndexType>(gathered.getType()))
+			    {
+				    gathered = b.create<arith::IndexCastOp>(l, b.getIndexType(), gathered).getResult();
+			    }
+
+			    SmallVector<Value> dataCoords;
+			    dataCoords.reserve(resultRank - indexRank + 1);
+			    for (auto dim = 0uz; dim < node.axis; ++dim)
+			    {
+				    dataCoords.push_back(b.create<linalg::IndexOp>(l, static_cast<int64_t>(dim)).getResult());
+			    }
+			    dataCoords.push_back(gathered);
+			    const auto dataRank = resultRank - indexRank + 1;
+			    for (auto dataDim = node.axis + 1; dataDim < static_cast<std::size_t>(dataRank); ++dataDim)
+			    {
+				    const auto outputDim = dataDim + static_cast<std::size_t>(indexRank) - 1;
+				    dataCoords.push_back(b.create<linalg::IndexOp>(l, static_cast<int64_t>(outputDim)).getResult());
+			    }
+
+			    auto element = b.create<tensor::ExtractOp>(l, data, dataCoords).getResult();
+			    b.create<linalg::YieldOp>(l, element);
+		    });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const ScatterNode&, std::span<const OutputInfo>,
@@ -735,33 +1042,63 @@ private:
 	{
 		const auto inputInfo = sg.GetOutputInfo(node.input);
 		const auto dtype = outputInfos[0].dtype;
-		const auto inputShape = ShapeView{ inputInfo.shape };
-		const auto reducedShape = ReducedShape(inputShape, node.axis);
-		const auto broadcastShape = BroadcastShapeForAxis(inputShape, node.axis);
 		auto input = getVal(valueMap, node.input);
+		valueMap[nodeId] = { emitSoftmaxValue(input, dtype, inputInfo.shape, node.axis) };
+	}
 
-		auto max = emitReduceValue(LiteNN::ReduceOp::Max, input, dtype, reducedShape, node.axis);
+	void emitNode(const Subgraph& sg, NodeId nodeId, const CrossEntropyLossNode& node,
+	              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+	              std::map<std::size_t, Value>&,
+	              std::map<std::size_t, Value>&)
+	{
+		const auto logitsInfo = sg.GetOutputInfo(node.logits);
+		const auto dtype = outputInfos[0].dtype;
+		const auto logitsShape = ShapeView{ logitsInfo.shape };
+		const auto axis = logitsShape.NumDim() - 1;
+		const auto reducedShape = ReducedShape(logitsShape, axis);
+		const auto broadcastShape = BroadcastShapeForAxis(logitsShape, axis);
+		const auto classCount = logitsShape[axis];
+		const auto rowCount = logitsShape.NumElements() / classCount;
+
+		auto logits = getVal(valueMap, node.logits);
+		auto labels = getVal(valueMap, node.labels);
+		auto max = emitReduceValue(LiteNN::ReduceOp::Max, logits, dtype, reducedShape, axis);
 		auto maxBroadcast = emitReshapeValue(max, dtype, broadcastShape);
-		auto shifted = emitBinaryValue(LiteNN::BinaryOp::Subtract, input, maxBroadcast, dtype, inputInfo.shape);
-		auto exp = emitUnaryValue(LiteNN::UnaryOp::Exp, shifted, dtype, inputInfo.shape);
-		auto denom = emitReduceValue(LiteNN::ReduceOp::Sum, exp, dtype, reducedShape, node.axis);
-		auto denomBroadcast = emitReshapeValue(denom, dtype, broadcastShape);
-		auto result = emitBinaryValue(LiteNN::BinaryOp::Divide, exp, denomBroadcast, dtype, outputInfos[0].shape);
-		valueMap[nodeId] = { result };
+		auto shifted = emitBinaryValue(LiteNN::BinaryOp::Subtract, logits, maxBroadcast, dtype, logitsInfo.shape);
+		auto exp = emitUnaryValue(LiteNN::UnaryOp::Exp, shifted, dtype, logitsInfo.shape);
+		auto sumExp = emitReduceValue(LiteNN::ReduceOp::Sum, exp, dtype, reducedShape, axis);
+		auto logSum = emitUnaryValue(LiteNN::UnaryOp::Log, sumExp, dtype, reducedShape);
+		auto logSumExp = emitBinaryValue(LiteNN::BinaryOp::Add, logSum, max, dtype, reducedShape);
+		auto logSumExpBroadcast = emitReshapeValue(logSumExp, dtype, broadcastShape);
+		auto logProb = emitBinaryValue(LiteNN::BinaryOp::Subtract, logits, logSumExpBroadcast, dtype, logitsInfo.shape);
+		auto weighted = emitBinaryValue(LiteNN::BinaryOp::Multiply, labels, logProb, dtype, logitsInfo.shape);
+		auto negative = emitUnaryValue(LiteNN::UnaryOp::Negate, weighted, dtype, logitsInfo.shape);
+		auto total = emitReduceAllToSingleValue(LiteNN::ReduceOp::Sum, negative, dtype, logitsInfo.shape);
+		const auto scalarShape = std::vector<std::size_t>{ 1 };
+		auto divisor = emitFilledConstant(dtype, scalarShape, static_cast<double>(rowCount));
+		valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Divide, total, divisor, dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const CrossEntropyLossNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph& sg, NodeId nodeId, const CrossEntropyLossBackwardNode& node,
+	              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+	              std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support CrossEntropyLossNode yet; use the interpreter path");
-	}
+		const auto logitsInfo = sg.GetOutputInfo(node.logits);
+		const auto dtype = outputInfos[0].dtype;
+		const auto logitsShape = ShapeView{ logitsInfo.shape };
+		const auto classCount = logitsShape[logitsShape.NumDim() - 1];
+		const auto rowCount = logitsShape.NumElements() / classCount;
+		const auto scalarShape = std::vector<std::size_t>{ 1 };
 
-	void emitNode(const Subgraph&, NodeId, const CrossEntropyLossBackwardNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-	              std::map<std::size_t, Value>&)
-	{
-		throw std::runtime_error("GraphToMLIR does not support CrossEntropyLossBackwardNode yet; use the interpreter path");
+		auto grad = getVal(valueMap, node.grad);
+		auto logits = getVal(valueMap, node.logits);
+		auto labels = getVal(valueMap, node.labels);
+		auto probabilities = emitSoftmaxValue(logits, dtype, logitsInfo.shape, logitsShape.NumDim() - 1);
+		auto diff = emitBinaryValue(LiteNN::BinaryOp::Subtract, probabilities, labels, dtype, logitsInfo.shape);
+		auto divisor = emitFilledConstant(dtype, scalarShape, static_cast<double>(rowCount));
+		auto scale = emitBinaryValue(LiteNN::BinaryOp::Divide, grad, divisor, dtype, scalarShape);
+		valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, diff, scale, dtype, outputInfos[0].shape) };
 	}
 
 	void emitNode(const Subgraph& sg, NodeId nodeId, const NormalizationNode& node, std::span<const OutputInfo> outputInfos,
@@ -810,11 +1147,73 @@ private:
 		valueMap[nodeId] = { normalized };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const BatchMatMulNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const BatchMatMulNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support BatchMatMulNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto lhs = getVal(valueMap, node.lhs);
+		auto rhs = getVal(valueMap, node.rhs);
+		auto lhsType = cast<RankedTensorType>(lhs.getType());
+		auto rhsType = cast<RankedTensorType>(rhs.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto resultRank = resultType.getRank();
+		const auto leadRank = resultRank - 2;
+		const auto loopRank = leadRank + 3;
+		const auto lhsLeadRank = lhsType.getRank() - 2;
+		const auto rhsLeadRank = rhsType.getRank() - 2;
+
+		auto buildInputMap = [&](RankedTensorType inputType, int64_t inputLeadRank, bool isLhs) {
+			SmallVector<AffineExpr> exprs;
+			exprs.reserve(inputType.getRank());
+			for (int64_t dim = 0; dim < inputLeadRank; ++dim)
+			{
+				const auto outputDim = leadRank - inputLeadRank + dim;
+				const bool isBroadcast =
+				    inputType.getDimSize(dim) == 1 && resultType.getDimSize(outputDim) != 1;
+				exprs.push_back(isBroadcast ? getAffineConstantExpr(0, &ctx_) : getAffineDimExpr(outputDim, &ctx_));
+			}
+			exprs.push_back(getAffineDimExpr(isLhs ? leadRank : leadRank + 1, &ctx_));
+			exprs.push_back(getAffineDimExpr(isLhs ? leadRank + 1 : leadRank + 2, &ctx_));
+			return AffineMap::get(loopRank, 0, exprs, &ctx_);
+		};
+
+		SmallVector<AffineExpr> outputExprs;
+		outputExprs.reserve(resultRank);
+		for (int64_t dim = 0; dim < leadRank; ++dim)
+		{
+			outputExprs.push_back(getAffineDimExpr(dim, &ctx_));
+		}
+		outputExprs.push_back(getAffineDimExpr(leadRank, &ctx_));
+		outputExprs.push_back(getAffineDimExpr(leadRank + 2, &ctx_));
+
+		auto lhsMap = buildInputMap(lhsType, lhsLeadRank, true);
+		auto rhsMap = buildInputMap(rhsType, rhsLeadRank, false);
+		auto outputMap = AffineMap::get(loopRank, 0, outputExprs, &ctx_);
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+		auto filled = builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+
+		SmallVector<utils::IteratorType> iterTypes;
+		iterTypes.reserve(loopRank);
+		for (int64_t dim = 0; dim < leadRank; ++dim)
+		{
+			iterTypes.push_back(utils::IteratorType::parallel);
+		}
+		iterTypes.push_back(utils::IteratorType::parallel);
+		iterTypes.push_back(utils::IteratorType::reduction);
+		iterTypes.push_back(utils::IteratorType::parallel);
+
+		const auto elemType = resultType.getElementType();
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ lhs, rhs }, ValueRange{ filled },
+		    SmallVector<AffineMap>{ lhsMap, rhsMap, outputMap }, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    auto product = emitScalarMultiply(b, l, args[0], args[1], elemType);
+			    auto sum = emitScalarAdd(b, l, args[2], product, elemType);
+			    b.create<linalg::YieldOp>(l, sum);
+		    });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const OutProdNode&, std::span<const OutputInfo>,

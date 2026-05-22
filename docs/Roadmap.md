@@ -509,7 +509,10 @@ Status: 已按 G5.1–G5.4 的实际 Node 覆盖标注；这里记录 P2 覆盖�
 
 #### G5.6 GraphToMLIR Lowering Priority Queue
 
-Status: P0 shape/data-movement and attention/classification blockers completed on 2026-05-22.
+Status: completed for the practical generic-lowering tranche on 2026-05-23. Shape/data-movement,
+attention/classification, batched GEMM, irregular gather/pad, and cross-entropy loss helpers now
+have CPU AOT coverage. Stateful recurrence and convolution/pooling families remain explicitly
+deferred to backend-specific lowering projects rather than naive generic loops.
 
 Priority rule: first implement nodes that unlock existing LLaMA/attention/classification AOT graphs
 without requiring new dialect ABI; next handle batched GEMM and irregular data movement; leave
@@ -523,16 +526,23 @@ stateful recurrence, convolution families, and optimizer-only nodes to backend-s
       pipeline can reach linalg/math ops without a dedicated softmax dialect op.
 - [x] P0 AOT smoke: `CompiledModuleTest.CPUDataMovementSoftmaxArtifactMatchesInterpreter` covers
       `BroadcastTo -> Permute -> Softmax` through CPU artifact compile/load/run against interpreter output.
-- [ ] P1 `BatchMatMulNode`: lower to batched `linalg.generic` or a dedicated strided-batched GEMM
-      abstraction, then map CPU/CUDA backends to optimized kernels.
-- [ ] P1 `GatherNode` / `PadNode`: lower irregular indexing and boundary handling needed by more
-      complete transformer/multimodal AOT graphs.
-- [ ] P2 `CrossEntropyLossNode` / `CrossEntropyLossBackwardNode`: lower training-oriented loss helpers
-      after the inference hot path is stable.
-- [ ] P2 `Conv2DNode` / `ConvTranspose2DNode` / `Pool2DNode` / `UpsampleNode`: prefer backend-native
-      lowering plans because naive generic loops are unlikely to be production useful.
-- [ ] P2 `ScanNode` / `SSMScanNode` / `RWKVWKVNode` / `MulMatIdNode`: require real model signatures,
-      state ABI decisions, and golden-output validation before investing in MLIR lowering.
+- [x] P1 `BatchMatMulNode`: direct batched `linalg.generic` lowering with NumPy-style leading-dim
+      broadcasting and reduction over K. CPU/CUDA optimized strided-batched GEMM mapping remains a
+      performance backend task.
+- [x] P1 `GatherNode` / `PadNode`: direct `linalg.generic` lowering for arbitrary-axis gather and
+      constant/reflect/replicate pad boundary handling.
+- [x] P2 `CrossEntropyLossNode` / `CrossEntropyLossBackwardNode`: expanded through existing LiteNN
+      dialect primitives (`Max`, `Exp`, `Log`, `Sum`, elementwise ops) so training loss helper graphs
+      can compile through the normal CPU AOT pipeline.
+- [x] P2 AOT smoke: `CompiledModuleTest.CPUBatchMatMulArtifactMatchesInterpreter`,
+      `CPUGatherPadArtifactMatchesInterpreter`, `CPUCrossEntropyArtifactMatchesInterpreter`, and
+      `CPUCrossEntropyBackwardArtifactMatchesInterpreter` compare CPU artifacts against interpreter output;
+      `CPURankOneSoftmaxCrossEntropyArtifactMatchesInterpreter` covers the rank-1 reduce-to-`[1]`
+      boundary used by vector classification heads.
+- [x] P2 `Conv2DNode` / `ConvTranspose2DNode` / `Pool2DNode` / `UpsampleNode`: deferred to
+      backend-native lowering plans because naive generic loops are unlikely to be production useful.
+- [x] P2 `ScanNode` / `SSMScanNode` / `RWKVWKVNode` / `MulMatIdNode`: deferred until real model
+      signatures, state ABI decisions, and golden-output validation are available.
 
 ### G6: Performance, Profiling, and Backend Optimization
 

@@ -36,6 +36,32 @@ namespace
 		return static_cast<const float*>(t.RawData())[i];
 	}
 
+	void ExpectTensorNear(const Tensor<CPU>& actual, const Tensor<CPU>& expected, float tolerance = 1e-5f)
+	{
+		ASSERT_EQ(actual.DType(), expected.DType());
+		ASSERT_EQ(actual.Shape(), expected.Shape());
+		ASSERT_EQ(actual.NumElements(), expected.NumElements());
+		for (std::size_t i = 0; i < actual.NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(actual, i), ReadFloat(expected, i), tolerance);
+		}
+	}
+
+	void ExpectCompiledMatchesInterpreter(const Graph& graph, std::span<const Tensor<CPU>> inputs,
+	                                      float tolerance = 1e-5f)
+	{
+		Runtime::Interpreter<CPU> interpreter;
+		const auto expected = interpreter.RunForward(graph, inputs);
+		auto compiled = Compiler<CPU>::Compile(graph);
+		const auto outputs = compiled.Run(inputs);
+
+		ASSERT_EQ(outputs.size(), expected.size());
+		for (std::size_t i = 0; i < outputs.size(); ++i)
+		{
+			ExpectTensorNear(outputs[i], expected[i], tolerance);
+		}
+	}
+
 	std::uint64_t ReadU64LE(std::span<const std::byte> bytes, std::size_t offset)
 	{
 		std::uint64_t value = 0;
@@ -567,6 +593,124 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 	{
 		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
 	}
+}
+
+TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto lhs = sg.AddParam(DataType::Float32, { 2, 1, 2, 3 });
+	const auto rhs = sg.AddParam(DataType::Float32, { 1, 4, 3, 2 });
+	const auto out = sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } },
+	                            { OutputInfo{ DataType::Float32, { 2, 4, 2, 2 } } });
+	sg.SetResults({ { out, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const std::vector<double> lhsData = {
+		1.0,  -2.0, 0.5,  3.0,  0.25, -1.0,
+		0.75, 1.5,  -0.5, 2.0,  -1.25, 0.125,
+	};
+	const std::vector<double> rhsData = {
+		0.5,  -1.0,  1.5, 0.25, -0.75, 2.0,
+		1.0,  0.5,   -1.0, 1.25, 0.75,  -0.25,
+		-0.5, 2.0,   0.25, -1.5, 1.0,   0.75,
+		1.25, -0.75, 0.5, 0.5,  -1.25, 1.5,
+	};
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>(std::span<const double>(lhsData), { 2, 1, 2, 3 }, DataType::Float32),
+		Tensor<CPU>(std::span<const double>(rhsData), { 1, 4, 3, 2 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUGatherPadArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto data = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto indices = sg.AddParam(DataType::Int32, { 2 });
+	const auto gathered =
+	    sg.AddNode(GatherNode{ { data, 0 }, { indices, 0 }, 1 }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto constantPad =
+	    sg.AddNode(PadNode{ { gathered, 0 }, { 1, 1 }, { 0, 1 }, PadMode::Constant, -5.0 },
+	               { OutputInfo{ DataType::Float32, { 3, 4 } } });
+	const auto reflectPad =
+	    sg.AddNode(PadNode{ { data, 0 }, { 1, 2 }, { 1, 1 }, PadMode::Reflect, 0.0 },
+	               { OutputInfo{ DataType::Float32, { 4, 6 } } });
+	const auto replicatePad =
+	    sg.AddNode(PadNode{ { data, 0 }, { 1, 1 }, { 1, 2 }, PadMode::Replicate, 0.0 },
+	               { OutputInfo{ DataType::Float32, { 4, 6 } } });
+	sg.SetResults({ { constantPad, 0 }, { reflectPad, 0 }, { replicatePad, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32),
+		Tensor<CPU>({ 2, 0 }, { 2 }, DataType::Int32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUCrossEntropyArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto logits = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto labels = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto loss = sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } },
+	                             { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { loss, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 1.25, -0.5, 0.25, -1.0, 2.0, 0.5 }, { 2, 3 }, DataType::Float32),
+		Tensor<CPU>({ 0.7, 0.2, 0.1, 0.0, 1.0, 0.0 }, { 2, 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPURankOneSoftmaxCrossEntropyArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto logits = sg.AddParam(DataType::Float32, { 3 });
+	const auto labels = sg.AddParam(DataType::Float32, { 3 });
+	const auto probabilities =
+	    sg.AddNode(SoftmaxNode{ { logits, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto loss = sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } },
+	                             { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { probabilities, 0 }, { loss, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 1.25, -0.5, 0.25 }, { 3 }, DataType::Float32),
+		Tensor<CPU>({ 0.7, 0.2, 0.1 }, { 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUCrossEntropyBackwardArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto grad = sg.AddParam(DataType::Float32, { 1 });
+	const auto logits = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto labels = sg.AddParam(DataType::Float32, { 2, 3 });
+	const auto dx = sg.AddNode(CrossEntropyLossBackwardNode{ { grad, 0 }, { logits, 0 }, { labels, 0 } },
+	                           { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	sg.SetResults({ { dx, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 3> inputs = {
+		Tensor<CPU>({ 1.5 }, { 1 }, DataType::Float32),
+		Tensor<CPU>({ 1.25, -0.5, 0.25, -1.0, 2.0, 0.5 }, { 2, 3 }, DataType::Float32),
+		Tensor<CPU>({ 0.7, 0.2, 0.1, 0.0, 1.0, 0.0 }, { 2, 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
 }
 
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
