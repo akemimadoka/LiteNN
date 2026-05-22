@@ -5,6 +5,7 @@
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Optimizer/Loss.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
+#include <LiteNN/Pass/EGraphPass.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Pass/InlinePass.h>
 #include <LiteNN/Runtime/Interpreter.h>
@@ -55,6 +56,7 @@ constexpr std::array<ModelKind, 3> kModelKinds = {
 constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
 constexpr std::array<int, 2> kGGMLThreadCounts = { 1, 16 };
 constexpr int kWarmupIterations = 5;
+constexpr std::size_t kInputWidth = 784;
 
 struct GGMLLayerSpec
 {
@@ -87,7 +89,7 @@ Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 	    Initializer::XavierUniform({ 784, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
-	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
+	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
 	return graph;
@@ -103,7 +105,7 @@ Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	    Initializer::XavierUniform({ 128, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
-	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
+	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	fwd.SetResults({ Layer::AddLinear(fwd, h2, a1) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
@@ -123,7 +125,7 @@ Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	    Initializer::XavierUniform({ 256, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
-	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
+	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 	fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
@@ -135,6 +137,14 @@ void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
 	ConstFoldPass{}.Run(graph);
+	FusionPass{}.Run(graph);
+}
+
+void OptimizeWithEGraph(Graph& graph)
+{
+	InlinePass{}.Run(graph);
+	ConstFoldPass{}.Run(graph);
+	EGraphPass{}.Run(graph);
 	FusionPass{}.Run(graph);
 }
 
@@ -152,7 +162,7 @@ std::vector<float> MakeInputData(std::size_t batch)
 {
 	std::mt19937 rng(0);
 	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	std::vector<float> data(batch * 784);
+	std::vector<float> data(batch * kInputWidth);
 	for (float& value : data)
 		value = dist(rng);
 	return data;
@@ -161,8 +171,47 @@ std::vector<float> MakeInputData(std::size_t batch)
 std::vector<Tensor<CPU>> MakeInputs(const std::vector<float>& data, std::size_t batch)
 {
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
+	inputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth }));
 	return inputs;
+}
+
+NodeId AddFloatConstant(Subgraph& sg, std::vector<float> values, std::vector<std::size_t> shape)
+{
+	auto tensor = Optimizer::MakeFloatTensor(std::span<const float>(values), ShapeView{ shape })
+	                  .CopyToDevice(PolymorphicDevice{ CPU{} });
+	return sg.AddNode(ConstantNode{ std::move(tensor) }, { OutputInfo{ DataType::Float32, std::move(shape) } });
+}
+
+Graph BuildRedundantAOTGraph(std::size_t batch)
+{
+	Graph graph;
+	Subgraph fwd;
+	const std::vector<std::size_t> matrixShape{ batch, kInputWidth };
+	const auto elementCount = batch * kInputWidth;
+	const auto in = fwd.AddParam(DataType::Float32, matrixShape);
+	const auto zero = AddFloatConstant(fwd, std::vector<float>(elementCount, 0.0f), matrixShape);
+	const auto one = AddFloatConstant(fwd, std::vector<float>(elementCount, 1.0f), matrixShape);
+	const auto added = fwd.AddNode(BinaryOpNode{ BinaryOp::Add, { in, 0 }, { zero, 0 } },
+	                               { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto neg1 = fwd.AddNode(UnaryOpNode{ UnaryOp::Negate, { added, 0 } },
+	                              { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto neg2 = fwd.AddNode(UnaryOpNode{ UnaryOp::Negate, { neg1, 0 } },
+	                              { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto flat = fwd.AddNode(ReshapeNode{ { neg2, 0 }, { elementCount } },
+	                              { OutputInfo{ DataType::Float32, { elementCount } } });
+	const auto restoredShape = fwd.AddNode(ReshapeNode{ { flat, 0 }, matrixShape },
+	                                       { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto transposed = fwd.AddNode(PermuteNode{ { restoredShape, 0 }, { 1, 0 } },
+	                                    { OutputInfo{ DataType::Float32, { kInputWidth, batch } } });
+	const auto restoredOrder = fwd.AddNode(PermuteNode{ { transposed, 0 }, { 1, 0 } },
+	                                       { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto broadcast =
+	    fwd.AddNode(BroadcastToNode{ { restoredOrder, 0 }, matrixShape }, { OutputInfo{ DataType::Float32, matrixShape } });
+	const auto multiplied = fwd.AddNode(BinaryOpNode{ BinaryOp::Multiply, { broadcast, 0 }, { one, 0 } },
+	                                    { OutputInfo{ DataType::Float32, matrixShape } });
+	fwd.SetResults({ { multiplied, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
+	return graph;
 }
 
 std::span<const GGMLLayerSpec> GetGGMLLayerSpecs(ModelKind kind)
@@ -724,7 +773,8 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 	SetThroughputCounters(state, batch);
 }
 
-void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch, const char* threadCount)
+void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch, const char* threadCount,
+                            void (*optimizer)(Graph&) = Optimize)
 {
 	std::optional<ScopedEnvVar> threadCountEnv;
 	if (threadCount != nullptr)
@@ -734,7 +784,7 @@ void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t
 
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
-	Optimize(graph);
+	optimizer(graph);
 
 	auto compiled = Compiler<CPU>::Compile(graph);
 	auto module = CompiledModule<CPU>::Load(compiled.Image());
@@ -771,6 +821,50 @@ void BMAOTRunIntoT16(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
 	BMAOTRunIntoConfigured(state, kind, batch, "16");
 }
+
+void BMEGraphAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+{
+	BMAOTRunIntoConfigured(state, kind, batch, nullptr, OptimizeWithEGraph);
+}
+
+void BMAOTRedundantRunIntoConfigured(benchmark::State& state, std::size_t batch, bool enableEGraph)
+{
+	auto graph = BuildRedundantAOTGraph(batch);
+	if (enableEGraph)
+	{
+		EGraphPass{}.Run(graph);
+	}
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	auto module = CompiledModule<CPU>::Load(compiled.Image());
+	const auto inputData = MakeInputData(batch);
+	auto inputs = MakeInputs(inputData, batch);
+	auto outputs = AllocateOutputs(module);
+
+	for (int i = 0; i < kWarmupIterations; ++i)
+	{
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+	}
+
+	for (auto _ : state)
+	{
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		benchmark::DoNotOptimize(outputs.data());
+		benchmark::ClobberMemory();
+	}
+
+	SetThroughputCounters(state, batch);
+}
+
+void BMAOTRedundantRawRunInto(benchmark::State& state, std::size_t batch)
+{
+	BMAOTRedundantRunIntoConfigured(state, batch, false);
+}
+
+void BMEGraphAOTRedundantRunInto(benchmark::State& state, std::size_t batch)
+{
+	BMAOTRedundantRunIntoConfigured(state, batch, true);
+}
 #endif
 
 void RegisterBenchmarks()
@@ -791,6 +885,8 @@ void RegisterBenchmarks()
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
+			RegisterBenchmarkCase("EGraphAOTRunInto", kind, batch,
+			    [=](benchmark::State& state) { BMEGraphAOTRunInto(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunIntoT1", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunIntoT1(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunIntoT16", kind, batch,
@@ -806,6 +902,19 @@ void RegisterBenchmarks()
 	}
 
 #ifdef LITENN_BENCH_HAS_AOT
+	for (const auto batch : kBatchSizes)
+	{
+		auto* rawCase = benchmark::RegisterBenchmark(
+		    std::format("AOTRedundantRawRunInto/RedundantIdentity/batch:{}", batch),
+		    [=](benchmark::State& state) { BMAOTRedundantRawRunInto(state, batch); });
+		rawCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+		auto* egraphCase = benchmark::RegisterBenchmark(
+		    std::format("EGraphAOTRedundantRunInto/RedundantIdentity/batch:{}", batch),
+		    [=](benchmark::State& state) { BMEGraphAOTRedundantRunInto(state, batch); });
+		egraphCase->UseRealTime()->Unit(benchmark::kMillisecond);
+	}
+
 	constexpr std::size_t nativeMatMulWidth = 128;
 	constexpr std::array nativeMatMulDTypes{
 		DataType::Float32,

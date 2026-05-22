@@ -16,6 +16,7 @@
 #include <LiteNN/Optimizer/Optimizer.h>
 #include <LiteNN/Operators.h>
 #include <LiteNN/Pass.h>
+#include <LiteNN/Pass/EGraphPass.h>
 #include <LiteNN/Pass/ForwardOnlyPass.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Serialization/ModelIO.h>

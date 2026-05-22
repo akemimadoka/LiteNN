@@ -603,25 +603,57 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 Purpose: add equality-saturation based graph optimization for algebraic rewrites, layout rewrites, and backend-aware
 fusion without baking every pattern into ad-hoc passes.
 
+Status: first conservative e-graph tranche completed on 2026-05-23. LiteNN now has a small
+`EGraphPass` substrate for pure single-output tensor expressions, deterministic simplification,
+explain/dump reporting, guardrails, and randomized interpreter-parity tests. Backend-aware extraction
+and aggressive algebraic saturation remain long-term work. AOT benchmark hooks now include both normal-model
+`EGraphAOTRunInto` rows and a redundant pure-graph AOT microbenchmark to expose current rewrite wins separately
+from existing const-fold/fusion passes.
+
 #### G8.1 E-Graph Substrate
 
-- [ ] Choose or implement a small C++ e-graph/e-class substrate compatible with LiteNN's `Graph`/`NodeOutput` model.
-- [ ] Define canonical e-graph terms for pure tensor ops, constants, shapes, dtypes, and layout annotations.
-- [ ] Add import/export between LiteNN subgraphs and e-graph terms while preserving multi-output nodes where needed.
-- [ ] Keep stateful/runtime-only ops outside the first e-graph tranche unless explicit purity rules exist.
+- [x] Choose or implement a small C++ e-graph/e-class substrate compatible with LiteNN's `Graph`/`NodeOutput` model.
+      （已完成：`src/LiteNN/Pass/EGraphPass.h` 内置 `TinyEGraph`，以 term key + union-find
+      表达 e-class，并通过 `NodeOutput`/`OutputInfo` 连接 LiteNN 子图。）
+- [x] Define canonical e-graph terms for pure tensor ops, constants, shapes, dtypes, and layout annotations.
+      （已完成：首批覆盖 param/constant/variable、unary/binary、reshape/permute/broadcast/cast；
+      term key 含 dtype、shape 和 layout-like attributes。）
+- [x] Add import/export between LiteNN subgraphs and e-graph terms while preserving multi-output nodes where needed.
+      （已完成：纯单输出节点可导入并从 rewrite/extraction 重建子图；多输出节点和无法证明纯性的节点作为
+      opaque boundary 保留并通过输入重映射保持连通。）
+- [x] Keep stateful/runtime-only ops outside the first e-graph tranche unless explicit purity rules exist.
+      （已完成：optimizer step、activation/tape、control-flow、call/fused body 等不会进入首批 e-class
+      rewrite，只参与普通 dependency remap。）
 
 #### G8.2 Rewrite Rule Sets
 
-- [ ] Add safe algebraic rewrites for elementwise identities, associativity/commutativity where numerically acceptable, and constant folding handoff.
-- [ ] Add NN-specific rewrites: matmul+bias+activation fusion, reshape/permute/broadcast canonicalization, and redundant copy removal.
+- [x] Add safe algebraic rewrites for elementwise identities, associativity/commutativity where numerically acceptable, and constant folding handoff.
+      （已完成：`x+0`、`x-0`、`x*1`、`x*0`、`Negate(Negate(x))`；
+      commutative canonicalization is guarded by dtype/numerical-safety options. Full associativity remains disabled by default.）
+- [x] Add NN-specific rewrites: matmul+bias+activation fusion, reshape/permute/broadcast canonicalization, and redundant copy removal.
+      （已完成：reshape no-op/compose、permute identity/compose、broadcast no-op/compose；
+      matmul+bias+activation fusion remains owned by `FusionPass` until an e-graph cost model can choose it explicitly.）
 - [ ] Add backend-aware cost models for CPU AOT, CUDA native, and interpreter fallback.
-- [ ] Add numerical-safety flags so aggressive rewrites can be disabled for strict reproducibility.
+      （当前阻塞：需要 backend-calibrated latency/throughput data、layout/transfer/workspace memory model、
+      numerical-safety policy, and an extractor that can choose between fused/decomposed/materialized alternatives
+      rather than only applying local deterministic simplifications。）
+- [x] Add numerical-safety flags so aggressive rewrites can be disabled for strict reproducibility.
+      （已完成：`EGraphOptions::allowUnsafeFloatingRewrites` defaults to false; floating commutativity/associativity
+      is not broadly applied under strict mode.）
 
 #### G8.3 Validation
 
-- [ ] Add golden graph tests comparing original and optimized graphs on randomized inputs.
-- [ ] Add rewrite explain/dump tooling so an optimization result can be reviewed.
-- [ ] Add guardrails for e-graph blow-up: iteration limits, node limits, timeout, and deterministic extraction.
+- [x] Add golden graph tests comparing original and optimized graphs on randomized inputs.
+      （已完成：`tests/EGraphPassTest.cpp` compares original/optimized interpreter outputs across randomized inputs.）
+- [x] Add rewrite explain/dump tooling so an optimization result can be reviewed.
+      （已完成：`EGraphReport` records rewrite events and `DumpLastReport()` emits a reviewable text trace.）
+- [x] Add guardrails for e-graph blow-up: iteration limits, node limits, timeout, and deterministic extraction.
+      （已完成：`EGraphOptions` exposes iteration/term/e-class/timeout limits; extraction rebuild is deterministic
+      and covered by a hit-limit test.）
+- [x] Add AOT benchmark coverage for e-graph optimization.
+      （已完成：`benchmark/bench.cpp` registers `EGraphAOTRunInto` for the existing model matrix, plus
+      `AOTRedundantRawRunInto` / `EGraphAOTRedundantRunInto` for a pure redundant graph that is intentionally
+      sensitive to rewrite/extraction quality.）
 
 ### G9: Rodata and Weight Separation
 

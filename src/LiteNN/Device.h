@@ -81,6 +81,19 @@ namespace LiteNN
 		{
 		}
 
+		PolymorphicDevice(PolymorphicDevice&&) noexcept = default;
+
+		PolymorphicDevice& operator=(const PolymorphicDevice& other)
+		{
+			if (this != &other)
+			{
+				impl_ = other.impl_->Clone();
+			}
+			return *this;
+		}
+
+		PolymorphicDevice& operator=(PolymorphicDevice&&) noexcept = default;
+
 		template <Device D>
 		bool Is() const
 		{
