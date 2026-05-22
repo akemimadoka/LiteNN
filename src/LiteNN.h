@@ -20,6 +20,7 @@
 #include <LiteNN/Pass/ForwardOnlyPass.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/Serialization/Safetensors.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Training/Trainer.h>
 #include <LiteNN/Validation/GraphValidator.h>

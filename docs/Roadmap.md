@@ -751,23 +751,44 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 Purpose: provide a practical bridge from PyTorch/Hugging Face artifacts into LiteNN graph/model formats, starting with
 safetensors weights and expanding toward torch-exported graph structure.
 
+Status: started on 2026-05-23 with a native safetensors reader/import path using vendored `third_party/simdjson`
+for JSON header parsing. LiteNN can now read safetensors metadata and checked tensor payloads, map supported
+dtypes to `DataType`, import tensors as named variables with rename/rank-2 transpose hooks, and convert a
+safetensors weight file into a `.ltnn` variable archive through `litenn_safetensors_convert`.
+
 #### G12.1 Safetensors Reader
 
-- [ ] Implement a safetensors metadata and tensor-payload reader with bounds checks and dtype/shape validation.
-- [ ] Map safetensors dtypes to LiteNN dtypes, including fp16/bf16/fp8/int storage where available.
-- [ ] Preserve tensor names and provide rename/transpose hooks for common PyTorch weight layouts.
-- [ ] Add tests with minimal safetensors fixtures and corrupted-header/error-path fixtures.
+- [x] Implement a safetensors metadata and tensor-payload reader with bounds checks and dtype/shape validation.
+      （已完成：`LiteNN::Serialization::SafetensorsArchive` supports in-memory and file loading, validates header
+      length, JSON structure through `third_party/simdjson`, dtype, shape, byte-size, offset bounds, overlap,
+      and BOOL payload bytes.）
+- [x] Map safetensors dtypes to LiteNN dtypes, including fp16/bf16/fp8/int storage where available.
+      （已完成：supported mappings cover F64/F32/F16/BF16/F8_E4M3/F8_E5M2/I64/I32/I8/U8/BOOL; unsupported
+      safetensors integer widths are rejected explicitly until LiteNN adds matching storage types.）
+- [x] Preserve tensor names and provide rename/transpose hooks for common PyTorch weight layouts.
+      （已完成：`ImportSafetensorsVariables` preserves names by default and exposes `SafetensorsImportOptions`
+      hooks for renaming and rank-2 transposition.）
+- [x] Add tests with minimal safetensors fixtures and corrupted-header/error-path fixtures.
+      （已完成：`tests/SafetensorsTest.cpp` covers metadata/payload reading, rename+transpose variable import,
+      unsupported dtype, byte-size mismatch, offset overflow, and invalid BOOL payload paths.）
 
 #### G12.2 Torch Weight Import
 
-- [ ] Add a CLI/import API to convert safetensors weights into LiteNN variables or separated rodata regions.
+- [x] Add a CLI/import API to convert safetensors weights into LiteNN variables or separated rodata regions.
+      （已完成：library API imports to a variable-only LiteNN graph archive; `tools/torch/litenn_safetensors_convert`
+      writes `.ltnn` archives and supports repeated `--rename from=to` and `--transpose name` options. Separated
+      rodata export remains owned by G9 artifact packaging once graph manifests are available.）
 - [ ] Add mapping presets for common module names: Linear, Embedding, LayerNorm/RMSNorm, attention projections, and LoRA adapters.
 - [ ] Add diagnostics for missing tensors, extra tensors, dtype mismatch, shape mismatch, and layout mismatch.
+      （部分完成：reader/import paths already report unsupported dtype, shape/offset/byte-size/layout hook errors, and
+      duplicate output names; expected-tensor manifest diagnostics are pending G12.3.）
 - [ ] Add golden tests against PyTorch for small exported MLP/attention fixtures.
 
 #### G12.3 Torch Graph Support
 
-- [ ] Decide first graph source: `torch.export`, `torch.fx`, ONNX, or a LiteNN-specific JSON manifest paired with safetensors.
+- [x] Decide first graph source: `torch.export`, `torch.fx`, ONNX, or a LiteNN-specific JSON manifest paired with safetensors.
+      （决策：首个实现目标采用 LiteNN-specific JSON manifest + safetensors weights。原因是它最容易绑定
+      rename/transpose/expected-shape diagnostics，并可作为 torch.export/fx/ONNX 前端的稳定中间层。）
 - [ ] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
 - [ ] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
 - [ ] Add roundtrip examples showing PyTorch weights plus graph manifest imported to LiteNN and compiled through CPU AOT.
