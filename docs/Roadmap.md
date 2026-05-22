@@ -715,6 +715,46 @@ safetensors weights and expanding toward torch-exported graph structure.
 - [ ] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
 - [ ] Add roundtrip examples showing PyTorch weights plus graph manifest imported to LiteNN and compiled through CPU AOT.
 
+### G13: AOT Training Execution
+
+Purpose: make production training use compiled train-step artifacts instead of the interpreter. The interpreter remains the
+fast iteration path for graph validation, constant evaluation, debugging, and small reference tests.
+
+#### G13.1 Train-Step Graph Contract
+
+- [ ] Define an explicit train-step graph ABI: model inputs, targets/loss inputs, parameters, optimizer state, and updated
+  parameters/state must be visible as graph inputs/outputs or bindable state.
+- [ ] Remove hidden interpreter-only activation/tape dependencies from compiled training by representing saved activations
+  as explicit values, explicit workspace buffers, or a documented recomputation strategy.
+- [ ] Decide whether the first compiled trainer emits one fused train-step artifact or separate forward/loss/backward/
+  optimizer artifacts with a runtime scheduler.
+- [ ] Add validation diagnostics that reject AOT training when backward nodes still require interpreter-local state.
+
+#### G13.2 Compiler and Runtime Support
+
+- [ ] Extend compiled module metadata so artifacts can expose multiple named entry points such as `forward`, `loss`,
+  `backward`, and `optimizer_step`.
+- [ ] Teach the CPU AOT path to compile backward/loss subgraphs with stable tensor specs instead of wrapping only
+  `graph.Forward()`.
+- [ ] Add a CUDA AOT training path after CPU semantics are stable, including stream/workspace ownership and explicit
+  synchronization points.
+- [ ] Preserve rodata/instruction separation for training artifacts, including mutable parameter/state binding rules.
+
+#### G13.3 Trainer API
+
+- [ ] Add a trainer execution policy such as `Interpreter`, `AOT`, and `Auto`, with clear fallback/error behavior.
+- [ ] Keep `Trainer<Device, Optimizer>` as the high-level API, but route production-capable paths through compiled
+  train-step artifacts when available.
+- [ ] Keep a reference interpreter trainer for correctness checks, constant evaluation, and unsupported graph debugging.
+- [ ] Add examples that train the same small model through interpreter and AOT paths, then compare loss and updated weights.
+
+#### G13.4 Validation and Benchmarking
+
+- [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
+- [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
+- [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
+- [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,
@@ -752,6 +792,9 @@ or backend architecture decisions before implementation would be meaningful.
   binary size, filesystem, dynamic loading, and thread behavior need separate validation.
 - Torch/safetensors support is not just a tensor reader. It requires dtype/layout/name mapping, graph-source selection,
   diagnostics, golden PyTorch parity fixtures, and eventually integration with separated rodata and LoRA.
+- AOT training is not a direct `Interpreter::RunForward` replacement. Backward execution, saved activations, loss
+  gradients, mutable parameters, and optimizer state must be represented in the compiled ABI before Trainer can safely
+  use it as the production execution path.
 
 ## Date Notes
 
@@ -768,6 +811,8 @@ or backend architecture decisions before implementation would be meaningful.
   `PermuteNode` and `BroadcastToNode` now lower directly to `linalg.generic`, while `SoftmaxNode` expands
   to existing reduce/elementwise primitives for the normal lowering pipeline; added a CPU artifact smoke that
   compares `BroadcastTo -> Permute -> Softmax` compiled output with the interpreter.
+- Added G13 for AOT training execution, covering the explicit train-step ABI, compiled backward/loss/optimizer support,
+  Trainer execution policies, and parity/benchmark requirements.
 - Marked exact RWKV6/7, GLA/GatedDeltaNet signatures, full generic `*_BACK` coverage, host callback ops, production
   CPU GEMM/MLIR intra-op lowering, and broad external llama.cpp/CUDA parity fixtures as long-term deferred work.
 

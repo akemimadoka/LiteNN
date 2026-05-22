@@ -15,18 +15,23 @@
 
 namespace LiteNN::Training
 {
-	struct TrainStepResult
+	template <Device D>
+	struct BasicTrainStepResult
 	{
-		std::vector<Tensor<CPU>> outputs;
-		std::vector<Tensor<CPU>> backwardResults;
+		std::vector<Tensor<D>> outputs;
+		std::vector<Tensor<D>> backwardResults;
 	};
 
-	struct LossTrainStepResult
+	template <Device D>
+	struct BasicLossTrainStepResult
 	{
 		double loss{};
-		std::vector<Tensor<CPU>> outputs;
-		std::vector<Tensor<CPU>> backwardResults;
+		std::vector<Tensor<D>> outputs;
+		std::vector<Tensor<D>> backwardResults;
 	};
+
+	using TrainStepResult = BasicTrainStepResult<CPU>;
+	using LossTrainStepResult = BasicLossTrainStepResult<CPU>;
 
 	struct TrainerOptions
 	{
@@ -35,12 +40,12 @@ namespace LiteNN::Training
 		bool zeroVariableGradientsBeforeBackward{ true };
 	};
 
-	template <typename OptimizerT>
-	class CPUTrainer
+	template <Device D, typename OptimizerT>
+	class Trainer
 	{
 	public:
-		CPUTrainer(Graph& graph, OptimizerT optimizer, TrainerOptions options = {})
-		    : graph_(&graph), optimizer_(std::move(optimizer)), options_(options)
+		Trainer(Graph& graph, OptimizerT optimizer, TrainerOptions options = {}, D device = D{})
+		    : graph_(&graph), optimizer_(std::move(optimizer)), options_(options), device_(std::move(device))
 		{
 			if (options_.buildBackwardIfMissing && !graph_->Backward())
 			{
@@ -50,45 +55,52 @@ namespace LiteNN::Training
 			Validation::ValidateGraph(*graph_);
 		}
 
-		std::vector<Tensor<CPU>> Forward(std::span<const Tensor<CPU>> inputs)
+		Trainer(Graph& graph, OptimizerT optimizer, D device)
+		    : Trainer(graph, std::move(optimizer), TrainerOptions{}, std::move(device))
 		{
-			return interpreter_.RunForward(*graph_, inputs);
 		}
 
-		TrainStepResult Step(std::span<const Tensor<CPU>> inputs, std::span<const Tensor<CPU>> outputGradients)
+		std::vector<Tensor<D>> Forward(std::span<const Tensor<D>> inputs)
 		{
-			auto outputs = interpreter_.RunForward(*graph_, inputs);
+			return interpreter_.RunForward(*graph_, inputs, device_);
+		}
+
+		BasicTrainStepResult<D> Step(std::span<const Tensor<D>> inputs, std::span<const Tensor<D>> outputGradients)
+		{
+			auto outputs = interpreter_.RunForward(*graph_, inputs, device_);
 			auto backwardResults = BackwardAndStep(inputs, outputGradients);
 			return { std::move(outputs), std::move(backwardResults) };
 		}
 
-		LossTrainStepResult StepSoftmaxCrossEntropy(std::span<const Tensor<CPU>> inputs, std::size_t targetClass)
+		BasicLossTrainStepResult<D> StepSoftmaxCrossEntropy(std::span<const Tensor<D>> inputs, std::size_t targetClass)
 		{
-			auto outputs = interpreter_.RunForward(*graph_, inputs);
+			auto outputs = interpreter_.RunForward(*graph_, inputs, device_);
 			if (outputs.size() != 1)
 			{
 				throw std::runtime_error("StepSoftmaxCrossEntropy requires a graph with exactly one output");
 			}
 
-			auto lossGradient = LiteNN::Optimizer::SoftmaxCrossEntropyWithLogits(outputs[0], targetClass);
-			std::vector<Tensor<CPU>> outputGradients;
-			outputGradients.push_back(std::move(lossGradient.gradient));
+			auto lossGradient =
+			    LiteNN::Optimizer::SoftmaxCrossEntropyWithLogits(outputs[0].CopyToDevice(CPU{}), targetClass);
+			std::vector<Tensor<D>> outputGradients;
+			outputGradients.push_back(lossGradient.gradient.CopyToDevice(device_));
 			auto backwardResults = BackwardAndStep(inputs, outputGradients);
 			return { lossGradient.loss, std::move(outputs), std::move(backwardResults) };
 		}
 
-		LossTrainStepResult StepSoftmaxCrossEntropyBatch(std::span<const Tensor<CPU>> inputs,
-		                                                 std::span<const std::size_t> targetClasses)
+		BasicLossTrainStepResult<D> StepSoftmaxCrossEntropyBatch(std::span<const Tensor<D>> inputs,
+		                                                         std::span<const std::size_t> targetClasses)
 		{
-			auto outputs = interpreter_.RunForward(*graph_, inputs);
+			auto outputs = interpreter_.RunForward(*graph_, inputs, device_);
 			if (outputs.size() != 1)
 			{
 				throw std::runtime_error("StepSoftmaxCrossEntropyBatch requires a graph with exactly one output");
 			}
 
-			auto lossGradient = LiteNN::Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targetClasses);
-			std::vector<Tensor<CPU>> outputGradients;
-			outputGradients.push_back(std::move(lossGradient.gradient));
+			auto lossGradient =
+			    LiteNN::Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0].CopyToDevice(CPU{}), targetClasses);
+			std::vector<Tensor<D>> outputGradients;
+			outputGradients.push_back(lossGradient.gradient.CopyToDevice(device_));
 			auto backwardResults = BackwardAndStep(inputs, outputGradients);
 			return { lossGradient.loss, std::move(outputs), std::move(backwardResults) };
 		}
@@ -108,19 +120,45 @@ namespace LiteNN::Training
 			return optimizer_;
 		}
 
-		Runtime::Interpreter<CPU>& Interpreter()
+		Runtime::Interpreter<D>& Interpreter()
 		{
 			return interpreter_;
 		}
 
+		const Runtime::Interpreter<D>& Interpreter() const
+		{
+			return interpreter_;
+		}
+
+		D& Device()
+		{
+			return device_;
+		}
+
+		const D& Device() const
+		{
+			return device_;
+		}
+
 	private:
-		std::vector<Tensor<CPU>> BackwardAndStep(std::span<const Tensor<CPU>> inputs,
-		                                         std::span<const Tensor<CPU>> outputGradients)
+		static std::vector<Tensor<CPU>> CopyToCPU(std::span<const Tensor<D>> tensors)
+		{
+			std::vector<Tensor<CPU>> cpuTensors;
+			cpuTensors.reserve(tensors.size());
+			for (const auto& tensor : tensors)
+			{
+				cpuTensors.push_back(tensor.CopyToDevice(CPU{}));
+			}
+			return cpuTensors;
+		}
+
+		std::vector<Tensor<D>> BackwardAndStep(std::span<const Tensor<D>> inputs,
+		                                       std::span<const Tensor<D>> outputGradients)
 		{
 			const auto outputCount = graph_->GetSubgraph(graph_->Forward()).Results().size();
 			if (outputGradients.size() != outputCount)
 			{
-				throw std::runtime_error("CPUTrainer output gradient count does not match graph output count");
+				throw std::runtime_error("Trainer output gradient count does not match graph output count");
 			}
 
 			if (options_.zeroVariableGradientsBeforeBackward)
@@ -128,7 +166,7 @@ namespace LiteNN::Training
 				LiteNN::Optimizer::ZeroGradients(*graph_);
 			}
 
-			std::vector<Tensor<CPU>> backwardInputs;
+			std::vector<Tensor<D>> backwardInputs;
 			backwardInputs.reserve(inputs.size() + outputGradients.size());
 			for (const auto& input : inputs)
 			{
@@ -139,21 +177,26 @@ namespace LiteNN::Training
 				backwardInputs.push_back(gradient);
 			}
 
-			auto backwardResults = interpreter_.RunBackward(*graph_, backwardInputs);
+			auto backwardResults = interpreter_.RunBackward(*graph_, backwardInputs, device_);
 			const auto inputGradientCount = inputs.size();
+			auto cpuBackwardResults = CopyToCPU(backwardResults);
 			if (options_.storeVariableGradients)
 			{
-				LiteNN::Optimizer::StoreVariableGradients(*graph_, backwardResults, inputGradientCount);
+				LiteNN::Optimizer::StoreVariableGradients(*graph_, cpuBackwardResults, inputGradientCount);
 			}
-			optimizer_.Step(*graph_, backwardResults, inputGradientCount);
+			optimizer_.Step(*graph_, cpuBackwardResults, inputGradientCount);
 			return backwardResults;
 		}
 
 		Graph* graph_;
 		OptimizerT optimizer_;
 		TrainerOptions options_;
-		Runtime::Interpreter<CPU> interpreter_;
+		D device_;
+		Runtime::Interpreter<D> interpreter_;
 	};
+
+	template <typename OptimizerT>
+	using CPUTrainer = Trainer<CPU, OptimizerT>;
 } // namespace LiteNN::Training
 
 #endif

@@ -41,7 +41,7 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
 	std::vector<Tensor<CPU>> outputGradients;
