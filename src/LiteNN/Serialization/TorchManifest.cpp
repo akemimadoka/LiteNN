@@ -1130,6 +1130,54 @@ namespace LiteNN::Serialization
 			return output;
 		}
 
+		NodeOutput ImportGEGLUFeedForward(ImportContext& context, simdjson::dom::object object,
+		                                  std::string_view nodeName)
+		{
+			const auto inputName = RequireString(RequireMember(object, "input", nodeName), "geglu_feed_forward input");
+			const auto input = RequireValue(context, inputName, nodeName);
+			auto projected = AddLinearSpec(context, input, RequireObjectMember(object, "proj", "geglu_feed_forward proj"),
+			                               nodeName, "geglu_feed_forward proj");
+			const auto projectedInfo = context.subgraph.GetOutputInfo(projected);
+			if (projectedInfo.shape.empty())
+			{
+				throw std::runtime_error("Torch manifest geglu_feed_forward projection must not be scalar");
+			}
+			const auto axis = FindSizeOr(object, "axis", projectedInfo.shape.size() - 1, "geglu_feed_forward axis");
+			if (axis >= projectedInfo.shape.size())
+			{
+				throw std::runtime_error(std::format(
+				    "Torch manifest node '{}' geglu_feed_forward axis {} out of range for rank {}",
+				    nodeName, axis, projectedInfo.shape.size()));
+			}
+			const auto width = projectedInfo.shape[axis];
+			if (width % 2 != 0)
+			{
+				throw std::runtime_error(std::format(
+				    "Torch manifest node '{}' geglu_feed_forward projection axis width {} must be even",
+				    nodeName, width));
+			}
+			const auto inner = width / 2;
+			auto partShape = projectedInfo.shape;
+			partShape[axis] = inner;
+			const auto valueId = context.subgraph.AddNode(SliceNode{ projected, axis, 0, inner },
+			                                               { OutputInfo{ projectedInfo.dtype, partShape } });
+			const auto gateId = context.subgraph.AddNode(SliceNode{ projected, axis, inner, inner },
+			                                              { OutputInfo{ projectedInfo.dtype, partShape } });
+			auto gate = AddActivationByName(context, { gateId, 0 }, "gelu", nodeName);
+			auto hidden = AddBinary(context, BinaryOp::Multiply, { valueId, 0 }, gate, nodeName,
+			                        "geglu_feed_forward gate multiply");
+			auto output = AddLinearSpec(context, hidden, RequireObjectMember(object, "down", "geglu_feed_forward down"),
+			                            nodeName, "geglu_feed_forward down");
+			if (FindBool(object, "residual", true, "geglu_feed_forward residual"))
+			{
+				output = AddBinary(context, BinaryOp::Add, output, input, nodeName,
+				                   "geglu_feed_forward residual add");
+			}
+			context.report.loweredOps.push_back(
+			    std::format("{}: geglu_feed_forward -> Linear/Slice/GELU/Gate/Linear(+residual)", nodeName));
+			return output;
+		}
+
 		NodeOutput ImportAttentionBlock(ImportContext& context, simdjson::dom::object object,
 		                                std::string_view nodeName)
 		{
@@ -1290,6 +1338,66 @@ namespace LiteNN::Serialization
 			return current;
 		}
 
+		NodeOutput ImportConcat(ImportContext& context, simdjson::dom::object object,
+		                        std::string_view nodeName)
+		{
+			std::vector<NodeOutput> inputs;
+			for (auto inputValue : RequireArray(RequireMember(object, "inputs", nodeName), "concat inputs"))
+			{
+				inputs.push_back(RequireValue(context, RequireString(inputValue, "concat input"), nodeName));
+			}
+			if (inputs.empty())
+			{
+				throw std::runtime_error("Torch manifest concat requires at least one input");
+			}
+
+			const auto axis = FindSizeOr(object, "axis", 0, "concat axis");
+			const auto firstInfo = context.subgraph.GetOutputInfo(inputs.front());
+			if (axis >= firstInfo.shape.size())
+			{
+				throw std::runtime_error(std::format("Torch manifest node '{}' concat axis {} out of range for rank {}",
+				                                     nodeName, axis, firstInfo.shape.size()));
+			}
+
+			auto outputShape = firstInfo.shape;
+			outputShape[axis] = 0;
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+			{
+				const auto info = context.subgraph.GetOutputInfo(inputs[i]);
+				if (info.dtype != firstInfo.dtype)
+				{
+					throw std::runtime_error(std::format(
+					    "Torch manifest node '{}' concat input {} dtype mismatch: expected {}, got {}",
+					    nodeName, i, DataTypeName(firstInfo.dtype), DataTypeName(info.dtype)));
+				}
+				if (info.shape.size() != firstInfo.shape.size())
+				{
+					throw std::runtime_error(std::format(
+					    "Torch manifest node '{}' concat input {} rank mismatch: expected {}, got {}",
+					    nodeName, i, firstInfo.shape.size(), info.shape.size()));
+				}
+				for (std::size_t dim = 0; dim < info.shape.size(); ++dim)
+				{
+					if (dim == axis)
+					{
+						outputShape[dim] += info.shape[dim];
+						continue;
+					}
+					if (info.shape[dim] != firstInfo.shape[dim])
+					{
+						throw std::runtime_error(std::format(
+						    "Torch manifest node '{}' concat input {} dim {} mismatch: expected {}, got {}",
+						    nodeName, i, dim, firstInfo.shape[dim], info.shape[dim]));
+					}
+				}
+			}
+
+			const auto id = context.subgraph.AddNode(ConcatNode{ std::move(inputs), axis },
+			                                         { OutputInfo{ firstInfo.dtype, std::move(outputShape) } });
+			context.report.loweredOps.push_back(std::format("{}: concat -> ConcatNode", nodeName));
+			return { id, 0 };
+		}
+
 		NodeOutput ImportNode(ImportContext& context, simdjson::dom::object object)
 		{
 			const auto nodeName =
@@ -1334,9 +1442,13 @@ namespace LiteNN::Serialization
 			{
 				return ImportResidualBlock(context, object, nodeName);
 			}
-			if (op == "feedforward" || op == "ffn" || op == "geglu" || op == "swiglu")
+			if (op == "feedforward" || op == "ffn" || op == "swiglu")
 			{
 				return ImportFeedForward(context, object, nodeName);
+			}
+			if (op == "geglu" || op == "geglufeedforward" || op == "gegluffn" || op == "torchgeglu")
+			{
+				return ImportGEGLUFeedForward(context, object, nodeName);
 			}
 			if (op == "attentionblock" || op == "crossattention" || op == "selfattention")
 			{
@@ -1345,6 +1457,10 @@ namespace LiteNN::Serialization
 			if (op == "vaedecode" || op == "vaedecoder" || op == "autoencoderkldecode")
 			{
 				return ImportVAEDecode(context, object, nodeName);
+			}
+			if (op == "concat" || op == "cat" || op == "torchcat")
+			{
+				return ImportConcat(context, object, nodeName);
 			}
 
 			const auto requireInputName = [&] {
@@ -1452,6 +1568,34 @@ namespace LiteNN::Serialization
 				context.report.loweredOps.push_back(std::format("{}: reshape -> ReshapeNode", nodeName));
 				return output;
 			}
+			if (op == "slice" || op == "narrow")
+			{
+				const auto input = RequireValue(context, requireInputName(), nodeName);
+				const auto inputInfo = context.subgraph.GetOutputInfo(input);
+				const auto axis = FindSizeOr(object, "axis", inputInfo.shape.empty() ? 0 : inputInfo.shape.size() - 1,
+				                             "slice axis");
+				if (axis >= inputInfo.shape.size())
+				{
+					throw std::runtime_error(std::format("Torch manifest node '{}' slice axis {} out of range for rank {}",
+					                                     nodeName, axis, inputInfo.shape.size()));
+				}
+				const auto start = FindSizeOr(object, "start", 0, "slice start");
+				const auto length = CheckedToSize(RequireUInt(RequireMember(object, "length", nodeName),
+				                                              "slice length"),
+				                                  "slice length");
+				if (length == 0 || start > inputInfo.shape[axis] || length > inputInfo.shape[axis] - start)
+				{
+					throw std::runtime_error(std::format(
+					    "Torch manifest node '{}' slice range [{}, {}) is out of bounds for axis dim {}",
+					    nodeName, start, start + length, inputInfo.shape[axis]));
+				}
+				auto outputShape = inputInfo.shape;
+				outputShape[axis] = length;
+				const auto id = context.subgraph.AddNode(SliceNode{ input, axis, start, length },
+				                                         { OutputInfo{ inputInfo.dtype, std::move(outputShape) } });
+				context.report.loweredOps.push_back(std::format("{}: slice -> SliceNode", nodeName));
+				return { id, 0 };
+			}
 			if (op == "permute")
 			{
 				const auto output = Layer::AddPermute(
@@ -1549,7 +1693,7 @@ namespace LiteNN::Serialization
 
 	std::span<const TorchManifestOpMapping> SupportedTorchManifestOpMappings()
 	{
-		static constexpr std::array<TorchManifestOpMapping, 31> mappings{ {
+		static constexpr std::array<TorchManifestOpMapping, 34> mappings{ {
 		    { "linear", "VariableRef -> MatMul -> optional Add", "expects torch_linear_weight layout for PyTorch weights" },
 		    { "attention_projection", "VariableRef -> MatMul -> optional Add", "same layout contract as linear" },
 		    { "embedding", "VariableRef -> Gather(axis=0)", "indices input may be named input or indices" },
@@ -1561,8 +1705,10 @@ namespace LiteNN::Serialization
 		    { "timestep_embedding", "TimestepEmbeddingNode", "sinusoidal diffusion timestep embedding" },
 		    { "residual_block", "GroupNorm/activation/Conv2D(+temb)+residual", "fixed-shape SDXL UNet ResNet block template" },
 		    { "feed_forward", "Linear/activation-or-gate/Linear(+residual)", "fixed-shape transformer MLP template" },
+		    { "geglu_feed_forward", "Linear -> Slice(value/gate) -> GELU(gate) -> Multiply -> Linear(+residual)", "SDXL GEGLU combined projection template" },
 		    { "attention_block", "QKV projection + head reshape/permute + SDPA + output projection", "fixed-shape self/cross attention over [tokens, channels]" },
 		    { "vae_decode", "fixed step Conv/Norm/Upsample/ConvTranspose/scale/clamp", "VAE decoder assembly template" },
+		    { "concat", "ConcatNode", "used for UNet skip-connection channel joins" },
 		    { "matmul", "BinaryOp(MatMul)", "2D matmul" },
 		    { "add", "BinaryOp(Add)", "LiteNN broadcast rules" },
 		    { "subtract", "BinaryOp(Subtract)", "LiteNN broadcast rules" },
@@ -1579,6 +1725,7 @@ namespace LiteNN::Serialization
 		    { "clamp", "Min(Max(x, min), max)", "final image clamp/clip policy helper" },
 		    { "cast", "CastNode", "dtype conversion helper for mixed precision manifests" },
 		    { "reshape", "ReshapeNode", "element count must match" },
+		    { "slice", "SliceNode", "axis/start/length narrow helper" },
 		    { "permute", "PermuteNode", "explicit multi-axis permutation" },
 		    { "transpose", "UnaryOp(Transpose)", "2D only" },
 		} };

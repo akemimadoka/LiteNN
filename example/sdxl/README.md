@@ -34,11 +34,24 @@ python311 example/sdxl/sdxl_manifest_probe.py \
 
 The probe reads only the safetensors header for compatibility checks. The generated manifest references real checkpoint
 tensor names and can be imported by the C++ example. Supported probes are `unet-stem`, `unet-resblock`,
-`unet-euler-smoke`, and `vae-decode-stem`; `unet-resblock` covers the stem Conv2D plus the first SDXL UNet ResBlock
-(`input_blocks.1.0`) with PyTorch-style GroupNorm, SiLU, timestep projection, two Conv2D layers, and residual add.
+`unet-euler-smoke`, `unet-conditioning-smoke`, `spatial-transformer-smoke`, `vae-decode-stem`, and
+`vae-decode-full`; `unet-resblock` covers the stem Conv2D plus the first SDXL UNet ResBlock (`input_blocks.1.0`)
+with PyTorch-style GroupNorm, SiLU, timestep projection, two Conv2D layers, and residual add.
 `unet-euler-smoke` emits a 4-channel `noise_pred` tensor from real SDXL stem, `time_embed`, first ResBlock, and output
-weights so the Euler sampler can run a complete latent-update loop before full UNet generation is available. For the
-CPU AOT smoke path, this probe materializes F16 checkpoint tensors as F32 constants with manifest `target_dtype`.
+weights so the Euler sampler can run a complete latent-update loop before full UNet generation is available.
+`unet-conditioning-smoke` adds the SDXL label/vector conditioning MLP, `spatial-transformer-smoke` emits a fixed token
+self/cross-attention block from `middle_block.1`, and `vae-decode-full` walks the VAE decoder ResBlocks/Upsamples/final
+projection for fixed shapes. For the CPU AOT smoke path, these probes materialize F16 checkpoint tensors as F32
+constants with manifest `target_dtype`.
+
+The probe can also write a discovered block traversal plan:
+
+```sh
+python311 example/sdxl/sdxl_manifest_probe.py \
+  --config path/to/generative-models/configs/inference/sd_xl_base.yaml \
+  --safetensors path/to/sdxl.safetensors \
+  --emit-skeleton-plan build/sdxl_skeleton_plan.json
+```
 
 Import a LiteNN Torch manifest plus SDXL weights into a serialized graph:
 
@@ -73,6 +86,31 @@ Run a minimal Euler sampler loop over a denoiser-shaped carrier DLL:
 litenn_sdxl_example --sample-euler sdxl_unet.dll litenn_sdxl_module --steps 4 --seed 1234
 ```
 
+Measure the current staged LiteNN smoke path:
+
+```sh
+python311 example/sdxl/sdxl_bench.py \
+  --exe build/example/sdxl/litenn_sdxl_example.exe \
+  --config path/to/generative-models/configs/inference/sd_xl_base.yaml \
+  --safetensors path/to/sdxl.safetensors \
+  --workdir build/sdxl_bench \
+  --markdown-out build/sdxl_bench/results.md \
+  --json-out build/sdxl_bench/results.json
+```
+
+Generate a reference image through Stability-AI/generative-models after its python311 dependencies are installed:
+
+```sh
+python311 example/sdxl/sdxl_generate_reference.py \
+  --generative-models path/to/generative-models \
+  --config path/to/generative-models/configs/inference/sd_xl_base.yaml \
+  --checkpoint path/to/sdxl.safetensors \
+  --prompt "1girl" \
+  --height 1024 \
+  --width 1024 \
+  --output build/sdxl_reference_1girl.png
+```
+
 On ELF platforms, link the object as a shared object:
 
 ```sh
@@ -89,7 +127,7 @@ the configured sigma range.
 
 This example reuses the G12 Torch manifest importer. The importer can lower Linear/Embedding/Conv2D/LayerNorm/RMSNorm/GroupNorm/timestep embedding/activation/Softmax/Pad/Upsample/Reshape/Transpose style graphs today.
 
-The importer also provides SDXL-oriented composite manifest ops for fixed-shape experiments: `residual_block`, `feed_forward`, `attention_block`, and `vae_decode`. These templates lower to existing LiteNN graph nodes, so they are meant as import-time assembly helpers rather than new core Graph concepts.
+The importer also provides SDXL-oriented composite manifest ops for fixed-shape experiments: `residual_block`, `feed_forward`, `attention_block`, `concat`, and `vae_decode`. These templates lower to existing LiteNN graph nodes, so they are meant as import-time assembly helpers rather than new core Graph concepts.
 
 ## Denoise Runtime Contract
 
@@ -101,6 +139,6 @@ The denoise loop is intentionally outside the compiled graph for now. A compiled
 - Latent scaling is explicit: manifests may model per-graph input/output scale, but scheduler-specific scaling before and after each step belongs to the runtime harness.
 - Benchmarks should report import time, serialization time, AOT compile time, DLL/shared-object load time, and one denoise-step invocation separately.
 
-Full SDXL still needs label/conditioning embedding generation, SpatialTransformer attention block emission, full VAE
-decode templates, and broader parity/benchmark coverage before loading complete checkpoints. These are tracked in
-`docs/Roadmap.md` under G12.5.
+Full production SDXL still needs tokenizer/text-encoder execution inside LiteNN, full 4D UNet SpatialTransformer
+flatten/unflatten generation, memory-aware 1024x1024 VAE attention handling, and broader parity/benchmark coverage.
+These are tracked in `docs/Roadmap.md` under G12.5 and the longer-term model-parity queues.

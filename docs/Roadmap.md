@@ -801,8 +801,8 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
 - [x] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
       （已完成：`SupportedTorchManifestOpMappings()` documents the first supported set: Linear/attention projection,
       Embedding, Conv2D/ConvTranspose2D, LayerNorm, RMSNorm, PyTorch-NCHW GroupNorm, timestep embedding,
-      residual/feed-forward/attention/VAE decode composites, MatMul/Add/Subtract/Multiply/Divide, scalar scale,
-      ReLU/GELU/SiLU/Sigmoid/Tanh, Softmax, Pad, Upsample, Clamp, Reshape, Permute, and 2D Transpose.）
+      residual/feed-forward/GEGLU/attention/VAE decode composites, MatMul/Add/Subtract/Multiply/Divide, scalar scale,
+      Concat, Slice, ReLU/GELU/SiLU/Sigmoid/Tanh, Softmax, Pad, Upsample, Clamp, Reshape, Permute, and 2D Transpose.）
 - [x] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
       （已完成：`TorchManifestReport` records imported tensors, lowered ops, folded constant layout transforms,
       unsupported ops, fallbacks, and diagnostics; the CLI prints the report after manifest conversion.）
@@ -867,10 +867,72 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
       `.ltnn` serialization, CPU AOT compile, carrier DLL load, and Euler sampler execution.
       （已完成：the 64x64 `unet-euler-smoke` path runs from a real SDXL-compatible safetensors checkpoint through
       `--run-model`, `--load-dll`, and `--sample-euler`; generated artifacts remain under build output only.）
-- [ ] Expand the generator from first probes to broader fixed-shape SDXL skeletons: label/conditioning embedding
+- [x] Expand the generator from first probes to broader fixed-shape SDXL skeletons: label/conditioning embedding
       prefix, SpatialTransformer attention blocks, down/up-block traversal, and full VAE decode templates.
-- [ ] Add an SDXL benchmark path that times import, graph serialization, CPU AOT compile, DLL load, and one denoise-step
+      （已完成：`sdxl_manifest_probe.py` now emits `unet-conditioning-smoke` for SDXL vector/label conditioning,
+      `spatial-transformer-smoke` for fixed-token middle-block self/cross attention, `vae-decode-full` for fixed-shape
+      VAE decoder traversal, and an `--emit-skeleton-plan` JSON that records discovered UNet input/middle/output
+      block traversal and skip-join requirements. Torch manifest `concat` now lowers to `ConcatNode` for UNet
+      skip-channel joins. Production full-image parity still defers tokenizer/text-encoder execution inside LiteNN,
+      full 4D UNet SpatialTransformer flatten/unflatten generation, and memory-aware 1024x1024 VAE attention policy.）
+- [x] Add an SDXL benchmark path that times import, graph serialization, CPU AOT compile, DLL load, and one denoise-step
       invocation separately.
+      （已完成：`example/sdxl/sdxl_bench.py` drives python311 manifest generation, safetensors import,
+      `.ltnn` serialization, CPU AOT carrier object emission, shared-library linking, exported-symbol load,
+      and one Euler denoise-step invocation, writing Markdown/JSON stage tables under caller-selected build output.）
+- [x] Add a reference prompt-generation helper for 1024x1024 SDXL validation.
+      （已完成：`example/sdxl/sdxl_generate_reference.py` runs Stability-AI/generative-models with Euler EDM when
+      that external Python environment is installed, producing a PNG from a prompt/checkpoint pair for later LiteNN
+      parity checks. This remains a reference harness, not a LiteNN full-pipeline frontend.）
+
+#### G12.6 End-to-End SDXL Image Generation
+
+Purpose: move from runnable SDXL subgraph smoke tests to producing a semantic 1024x1024 image from a prompt through
+LiteNN-owned execution, while keeping early milestones testable without requiring every text/model component to be
+native on day one.
+
+Phase 0: bind external conditioning and make the denoiser graph complete enough to run.
+
+- [ ] Add a conditioning export/binding path that can take prompt text through Stability-AI/generative-models or
+      diffusers and save the exact LiteNN runtime inputs: `crossattn`, pooled/vector conditioning, original/target
+      size embeddings, crop embeddings, negative conditioning, and classifier-free-guidance batch layout.
+- [ ] Define the LiteNN SDXL denoiser ABI for fixed shapes: latent input, timestep/sigma input, context tokens,
+      vector conditioning, optional masks, output `noise_pred`, dtype policy, and batch/CFG convention.
+- [ ] Generate a full fixed-shape SDXL UNet manifest from the Stability checkpoint layout: input blocks, middle block,
+      output blocks, skip stack, channel-axis `concat`, ResBlocks, downsample/upsample, and transformer blocks.
+- [x] Support SDXL Transformer FFN GEGLU combined projection in Torch manifests.
+      （已完成：Torch manifest now lowers `slice` and `geglu_feed_forward`; `spatial-transformer-smoke` emits
+      norm3 plus `ff.net.0.proj` chunk/GELU/gate/`ff.net.2` for the middle-block transformer smoke path.）
+- [ ] Add 4D SpatialTransformer lowering templates: NCHW -> token flatten, self/cross attention, GEGLU FFN,
+      token -> NCHW restore, and residual/proj_in/proj_out handling.
+- [ ] Add parity fixtures for one real SDXL SpatialTransformer block against PyTorch/generative-models tensors,
+      including GEGLU and cross-attention.
+
+Phase 1: make a real denoise loop produce a latent.
+
+- [ ] Implement a production Euler/EDM scheduler runtime contract: sigma schedule, latent input scaling,
+      epsilon prediction update, deterministic seed handling, CFG combine, and per-step diagnostics.
+- [ ] Add a CLI flow that accepts checkpoint/config plus exported conditioning and writes the final latent tensor after
+      N denoise steps using a compiled LiteNN UNet DLL/shared object.
+- [ ] Add CPU AOT and CUDA AOT benchmark rows for one full denoise step, with memory use separated from latency.
+
+Phase 2: decode and write an image.
+
+- [ ] Run the full VAE decoder manifest on the final latent and write an image artifact.
+- [ ] Add a PNG writing path or a Python postprocess bridge for `[N, 3, H, W]` Float32 image tensors.
+- [ ] Add 1024x1024 memory policy: VAE mid-attention tiling/fallback, workspace sizing, and failure diagnostics when
+      CPU-only memory or time would be unreasonable.
+- [ ] Validate one generated 1024x1024 image against the reference runtime at fixed seed/prompt, first by tensor stats
+      and then by image-level tolerances.
+
+Phase 3: make LiteNN own the full prompt path.
+
+- [ ] Import CLIP/OpenCLIP text encoder graphs and tokenizers or provide a stable ONNX/torch-export bridge into the
+      Torch manifest layer.
+- [ ] Support native prompt/negative prompt tokenization, text encoder execution, pooled embedding generation, and SDXL
+      size/crop conditioning inside LiteNN.
+- [ ] Package the complete prompt-to-image flow with separated rodata/weights, dynamic/shared-library loading, and
+      reproducible benchmark/profile commands.
 
 ### G13: AOT Training Execution
 

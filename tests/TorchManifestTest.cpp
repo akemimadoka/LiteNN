@@ -389,10 +389,18 @@ TEST(TorchManifest, ReportsSupportedMappingsAndDTypeAliases)
 	const auto hasGroupNorm = std::ranges::any_of(mappings, [](const auto& mapping) {
 		return mapping.torchOp == "group_norm";
 	});
+	const auto hasConcat = std::ranges::any_of(mappings, [](const auto& mapping) {
+		return mapping.torchOp == "concat";
+	});
+	const auto hasGEGLU = std::ranges::any_of(mappings, [](const auto& mapping) {
+		return mapping.torchOp == "geglu_feed_forward";
+	});
 	EXPECT_TRUE(hasLinear);
 	EXPECT_TRUE(hasLayerNorm);
 	EXPECT_TRUE(hasConv2D);
 	EXPECT_TRUE(hasGroupNorm);
+	EXPECT_TRUE(hasConcat);
+	EXPECT_TRUE(hasGEGLU);
 	EXPECT_EQ(Serialization::MapTorchManifestDataType("torch.float32"), DataType::Float32);
 	EXPECT_EQ(Serialization::MapTorchManifestDataType("torch.long"), DataType::Int64);
 }
@@ -501,6 +509,95 @@ TEST(TorchManifest, ImportsDiffusionFoundationOps)
 			EXPECT_TRUE(std::isfinite(ReadFloat(output, i))) << i;
 		}
 	}
+}
+
+TEST(TorchManifest, ImportsConcatOp)
+{
+	const std::array<FloatTensorSpec, 0> specs{};
+	const auto archive = BuildFloatArchive(specs);
+	const auto manifest = R"({
+  "format":"litenn.torch_manifest.v1",
+  "inputs":[
+    {"name":"x","dtype":"torch.float32","shape":[1,2]},
+    {"name":"skip","dtype":"torch.float32","shape":[1,1]}
+  ],
+  "tensors":[],
+  "nodes":[
+    {"name":"join","op":"concat","inputs":["x","skip"],"axis":1,"output":"joined"}
+  ],
+  "outputs":[{"name":"joined","source":"joined"}]
+})";
+
+	auto result = Serialization::ImportTorchManifest(manifest, archive);
+	ASSERT_EQ(result.graph.OutputSignature().size(), 1u);
+	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 3 }));
+	EXPECT_GE(result.report.loweredOps.size(), 1u);
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 1.0, 2.0 }, { 1, 2 }),
+		Tensor<CPU>({ 3.0 }, { 1, 1 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 3 }));
+	EXPECT_NEAR(ReadFloat(outputs[0], 0), 1.0F, 1e-5F);
+	EXPECT_NEAR(ReadFloat(outputs[0], 1), 2.0F, 1e-5F);
+	EXPECT_NEAR(ReadFloat(outputs[0], 2), 3.0F, 1e-5F);
+}
+
+TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
+{
+	const std::array<FloatTensorSpec, 4> specs{ {
+	    { "proj.weight", { 2, 4 }, { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F } },
+	    { "proj.bias", { 4 }, { 0.0F, 0.0F, 1.0F, 1.0F } },
+	    { "down.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+	    { "down.bias", { 2 }, { 0.0F, 0.0F } },
+	} };
+	const auto archive = BuildFloatArchive(specs);
+	const auto manifest = R"({
+  "format":"litenn.torch_manifest.v1",
+  "inputs":[{"name":"x","dtype":"torch.float32","shape":[1,2]}],
+  "tensors":[
+    {"name":"proj.weight","source":"proj.weight","dtype":"F32","shape":[2,4],"layout":"identity"},
+    {"name":"proj.bias","source":"proj.bias","dtype":"F32","shape":[1,4],"layout":"torch_bias_1d"},
+    {"name":"down.weight","source":"down.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"down.bias","source":"down.bias","dtype":"F32","shape":[1,2],"layout":"torch_bias_1d"}
+  ],
+  "nodes":[
+    {"name":"x_first","op":"slice","input":"x","axis":1,"start":0,"length":1,"output":"x0"},
+    {
+      "name":"ff",
+      "op":"geglu_feed_forward",
+      "input":"x",
+      "proj":{"weight":"proj.weight","bias":"proj.bias"},
+      "down":{"weight":"down.weight","bias":"down.bias"},
+      "residual":false,
+      "output":"y"
+    }
+  ],
+  "outputs":[
+    {"name":"x0","source":"x0"},
+    {"name":"y","source":"y"}
+  ]
+})";
+
+	auto result = Serialization::ImportTorchManifest(manifest, archive);
+	ASSERT_EQ(result.graph.OutputSignature().size(), 2u);
+	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1 }));
+	EXPECT_EQ(result.graph.OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 2 }));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(outputs.size(), 2u);
+	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
+	constexpr float pi = 3.14159265358979323846F;
+	const auto geluOne = 0.5F * (1.0F + std::tanh(std::sqrt(2.0F / pi) * (1.0F + 0.044715F)));
+	EXPECT_NEAR(ReadFloat(outputs[1], 0), 2.0F * geluOne, 1e-5F);
+	EXPECT_NEAR(ReadFloat(outputs[1], 1), 3.0F * geluOne, 1e-5F);
 }
 
 TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)

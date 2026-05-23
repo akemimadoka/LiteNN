@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -323,6 +324,38 @@ def torch_bias_1d_shape(tensor: TensorInfo) -> list[int]:
     if len(tensor.shape) != 1:
         raise ValueError(f"linear bias tensor {tensor.name!r} must be rank-1")
     return [1, tensor.shape[0]]
+
+
+def vae_tensor(tensors: dict[str, TensorInfo], suffix: str) -> TensorInfo:
+    return require_tensor(tensors, f"first_stage_model.{suffix}")
+
+
+def manifest_vae_tensor(
+    tensors: dict[str, TensorInfo],
+    manifest_name: str,
+    source_suffix: str,
+    layout: str = "identity",
+    shape: list[int] | None = None,
+    target_dtype: str | None = None,
+) -> dict[str, Any]:
+    return manifest_tensor(manifest_name, vae_tensor(tensors, source_suffix), layout, shape, target_dtype)
+
+
+def maybe_tensor(tensors: dict[str, TensorInfo], name: str) -> TensorInfo | None:
+    return tensors.get(name)
+
+
+def linear_spec(weight: str, bias: str | None = None) -> dict[str, str]:
+    result = {"weight": weight}
+    if bias is not None:
+        result["bias"] = bias
+    return result
+
+
+def sdxl_unet_heads(channel_count: int) -> int:
+    # SDXL base uses num_head_channels=64. Keep the smoke manifest robust for
+    # unusual checkpoints by falling back to one head when the division fails.
+    return channel_count // 64 if channel_count >= 64 and channel_count % 64 == 0 else 1
 
 
 def emit_unet_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
@@ -777,6 +810,277 @@ def emit_unet_euler_smoke_manifest(
     }
 
 
+def emit_unet_conditioning_smoke_manifest(
+    tensors: dict[str, TensorInfo],
+    *,
+    batch: int,
+    height: int,
+    width: int,
+) -> dict[str, Any]:
+    manifest = emit_unet_euler_smoke_manifest(tensors, batch=batch, height=height, width=width)
+    label0_weight = unet_tensor(tensors, "label_emb.0.0.weight")
+    label0_bias = unet_tensor(tensors, "label_emb.0.0.bias")
+    label2_weight = unet_tensor(tensors, "label_emb.0.2.weight")
+    label2_bias = unet_tensor(tensors, "label_emb.0.2.bias")
+    compute_dtype = "F32"
+
+    manifest["inputs"].append(
+        {"name": "vector_cond", "dtype": "torch.float32", "shape": [batch, label0_weight.shape[1]]}
+    )
+    manifest["tensors"].extend(
+        [
+            manifest_tensor(
+                "unet.label_emb.0.0.weight",
+                label0_weight,
+                "torch_linear_weight",
+                torch_linear_weight_shape(label0_weight),
+                target_dtype=compute_dtype,
+            ),
+            manifest_tensor(
+                "unet.label_emb.0.0.bias",
+                label0_bias,
+                "torch_bias_1d",
+                torch_bias_1d_shape(label0_bias),
+                target_dtype=compute_dtype,
+            ),
+            manifest_tensor(
+                "unet.label_emb.0.2.weight",
+                label2_weight,
+                "torch_linear_weight",
+                torch_linear_weight_shape(label2_weight),
+                target_dtype=compute_dtype,
+            ),
+            manifest_tensor(
+                "unet.label_emb.0.2.bias",
+                label2_bias,
+                "torch_bias_1d",
+                torch_bias_1d_shape(label2_bias),
+                target_dtype=compute_dtype,
+            ),
+        ]
+    )
+
+    nodes = manifest["nodes"]
+    time2_index = next(i for i, node in enumerate(nodes) if node["name"] == "unet_time_embed_2")
+    nodes[time2_index]["output"] = "time_emb"
+    nodes[time2_index + 1 : time2_index + 1] = [
+        {
+            "name": "unet_label_emb_0",
+            "op": "linear",
+            "input": "vector_cond",
+            "weight": "unet.label_emb.0.0.weight",
+            "bias": "unet.label_emb.0.0.bias",
+            "output": "label_hidden",
+        },
+        {
+            "name": "unet_label_emb_act",
+            "op": "silu",
+            "input": "label_hidden",
+            "output": "label_hidden_act",
+        },
+        {
+            "name": "unet_label_emb_2",
+            "op": "linear",
+            "input": "label_hidden_act",
+            "weight": "unet.label_emb.0.2.weight",
+            "bias": "unet.label_emb.0.2.bias",
+            "output": "label_emb",
+        },
+        {
+            "name": "unet_conditioning_add",
+            "op": "add",
+            "lhs": "time_emb",
+            "rhs": "label_emb",
+            "output": "temb",
+        },
+    ]
+    manifest["metadata"] = {
+        "probe": "unet-conditioning-smoke",
+        "description": "time_embed plus SDXL label/vector conditioning prefix feeding the first UNet ResBlock",
+    }
+    return manifest
+
+
+def emit_spatial_transformer_smoke_manifest(
+    tensors: dict[str, TensorInfo],
+    *,
+    tokens: int,
+    context_tokens: int,
+) -> dict[str, Any]:
+    prefix = "middle_block.1.transformer_blocks.0"
+    channel_count = unet_tensor(tensors, f"{prefix}.attn1.to_q.weight").shape[0]
+    context_width = unet_tensor(tensors, f"{prefix}.attn2.to_k.weight").shape[1]
+    compute_dtype = "F32"
+
+    def wt(name: str, suffix: str, layout: str, shape: list[int] | None = None) -> dict[str, Any]:
+        return manifest_unet_tensor(tensors, name, f"{prefix}.{suffix}", layout, shape, target_dtype=compute_dtype)
+
+    def maybe_bias(name: str, suffix: str) -> dict[str, str]:
+        spec = {"weight": name}
+        bias_source = f"model.diffusion_model.{prefix}.{suffix}"
+        if bias_source in tensors:
+            spec["bias"] = name.replace(".weight", ".bias")
+        return spec
+
+    tensor_entries = [
+        wt("unet.middle_block.1.transformer_blocks.0.norm1.weight", "norm1.weight", "torch_norm_weight",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm1.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.norm1.bias", "norm1.bias", "torch_norm_bias",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm1.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.norm2.weight", "norm2.weight", "torch_norm_weight",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm2.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.norm2.bias", "norm2.bias", "torch_norm_bias",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm2.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.norm3.weight", "norm3.weight", "torch_norm_weight",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm3.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.norm3.bias", "norm3.bias", "torch_norm_bias",
+           torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.norm3.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn1.to_q.weight", "attn1.to_q.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn1.to_q.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn1.to_k.weight", "attn1.to_k.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn1.to_k.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn1.to_v.weight", "attn1.to_v.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn1.to_v.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.weight", "attn1.to_out.0.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn1.to_out.0.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.bias", "attn1.to_out.0.bias",
+           "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.attn1.to_out.0.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn2.to_q.weight", "attn2.to_q.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn2.to_q.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn2.to_k.weight", "attn2.to_k.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn2.to_k.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn2.to_v.weight", "attn2.to_v.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn2.to_v.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.weight", "attn2.to_out.0.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.attn2.to_out.0.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.bias", "attn2.to_out.0.bias",
+           "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.attn2.to_out.0.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.weight", "ff.net.0.proj.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.ff.net.0.proj.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.bias", "ff.net.0.proj.bias",
+           "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.ff.net.0.proj.bias"))),
+        wt("unet.middle_block.1.transformer_blocks.0.ff.net.2.weight", "ff.net.2.weight",
+           "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{prefix}.ff.net.2.weight"))),
+        wt("unet.middle_block.1.transformer_blocks.0.ff.net.2.bias", "ff.net.2.bias",
+           "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{prefix}.ff.net.2.bias"))),
+    ]
+    for bias_suffix in (
+        "attn1.to_q.bias",
+        "attn1.to_k.bias",
+        "attn1.to_v.bias",
+        "attn2.to_q.bias",
+        "attn2.to_k.bias",
+        "attn2.to_v.bias",
+    ):
+        full_name = f"model.diffusion_model.{prefix}.{bias_suffix}"
+        if full_name in tensors:
+            tensor_entries.append(
+                wt(
+                    f"unet.middle_block.1.transformer_blocks.0.{bias_suffix}",
+                    bias_suffix,
+                    "torch_bias_1d",
+                    torch_bias_1d_shape(tensors[full_name]),
+                )
+            )
+    return {
+        "format": "litenn.torch_manifest.v1",
+        "metadata": {
+            "probe": "spatial-transformer-smoke",
+            "description": "fixed-shape SDXL transformer self-attention plus cross-attention over token tensors",
+            "limitations": [
+                "4D spatial flatten/unflatten is intentionally outside this smoke manifest",
+            ],
+        },
+        "inputs": [
+            {"name": "tokens", "dtype": "torch.float32", "shape": [tokens, channel_count]},
+            {"name": "context", "dtype": "torch.float32", "shape": [context_tokens, context_width]},
+        ],
+        "tensors": tensor_entries,
+        "nodes": [
+            {
+                "name": "spatial_norm1",
+                "op": "layer_norm",
+                "input": "tokens",
+                "weight": "unet.middle_block.1.transformer_blocks.0.norm1.weight",
+                "bias": "unet.middle_block.1.transformer_blocks.0.norm1.bias",
+                "axis": 1,
+                "eps": 1e-5,
+                "output": "norm1",
+            },
+            {
+                "name": "spatial_attn1",
+                "op": "attention_block",
+                "input": "norm1",
+                "heads": sdxl_unet_heads(channel_count),
+                "q": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_q.weight", "attn1.to_q.bias"),
+                "k": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_k.weight", "attn1.to_k.bias"),
+                "v": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_v.weight", "attn1.to_v.bias"),
+                "out": linear_spec(
+                    "unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.weight",
+                    "unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.bias",
+                ),
+                "residual": False,
+                "output": "attn1_delta",
+            },
+            {"name": "spatial_attn1_residual", "op": "add", "lhs": "tokens", "rhs": "attn1_delta", "output": "attn1"},
+            {
+                "name": "spatial_norm2",
+                "op": "layer_norm",
+                "input": "attn1",
+                "weight": "unet.middle_block.1.transformer_blocks.0.norm2.weight",
+                "bias": "unet.middle_block.1.transformer_blocks.0.norm2.bias",
+                "axis": 1,
+                "eps": 1e-5,
+                "output": "norm2",
+            },
+            {
+                "name": "spatial_attn2",
+                "op": "attention_block",
+                "input": "norm2",
+                "context": "context",
+                "heads": sdxl_unet_heads(channel_count),
+                "q": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_q.weight", "attn2.to_q.bias"),
+                "k": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_k.weight", "attn2.to_k.bias"),
+                "v": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_v.weight", "attn2.to_v.bias"),
+                "out": linear_spec(
+                    "unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
+                    "unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.bias",
+                ),
+                "residual": False,
+                "output": "attn2_delta",
+            },
+            {"name": "spatial_attn2_residual", "op": "add", "lhs": "attn1", "rhs": "attn2_delta", "output": "attn2"},
+            {
+                "name": "spatial_norm3",
+                "op": "layer_norm",
+                "input": "attn2",
+                "weight": "unet.middle_block.1.transformer_blocks.0.norm3.weight",
+                "bias": "unet.middle_block.1.transformer_blocks.0.norm3.bias",
+                "axis": 1,
+                "eps": 1e-5,
+                "output": "norm3",
+            },
+            {
+                "name": "spatial_ff",
+                "op": "geglu_feed_forward",
+                "input": "norm3",
+                "proj": {
+                    "weight": "unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.weight",
+                    "bias": "unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.bias",
+                },
+                "down": {
+                    "weight": "unet.middle_block.1.transformer_blocks.0.ff.net.2.weight",
+                    "bias": "unet.middle_block.1.transformer_blocks.0.ff.net.2.bias",
+                },
+                "residual": False,
+                "output": "ff_delta",
+            },
+            {"name": "spatial_ff_residual", "op": "add", "lhs": "attn2", "rhs": "ff_delta", "output": "tokens_out"},
+        ],
+        "outputs": [{"name": "tokens_out", "source": "tokens_out"}],
+    }
+
+
 def emit_vae_decode_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
     latent_h = height // 8
     latent_w = width // 8
@@ -813,6 +1117,296 @@ def emit_vae_decode_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int,
     }
 
 
+def emit_vae_decode_full_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
+    latent_h = height // 8
+    latent_w = width // 8
+    compute_dtype = "F32"
+    tensor_entries: list[dict[str, Any]] = []
+    seen_tensors: set[str] = set()
+    nodes: list[dict[str, Any]] = []
+
+    def add_tensor(manifest_name: str, source_suffix: str, layout: str, shape: list[int] | None = None) -> None:
+        if manifest_name in seen_tensors:
+            return
+        seen_tensors.add(manifest_name)
+        tensor_entries.append(
+            manifest_vae_tensor(tensors, manifest_name, source_suffix, layout, shape, target_dtype=compute_dtype)
+        )
+
+    def node_name(prefix: str) -> str:
+        return re.sub(r"[^A-Za-z0-9]+", "_", prefix).strip("_")
+
+    def add_groupnorm_tensors(source_prefix: str, manifest_prefix: str, norm_name: str) -> None:
+        weight = vae_tensor(tensors, f"{source_prefix}.{norm_name}.weight")
+        bias = vae_tensor(tensors, f"{source_prefix}.{norm_name}.bias")
+        add_tensor(f"{manifest_prefix}.{norm_name}.weight", f"{source_prefix}.{norm_name}.weight",
+                   "torch_groupnorm_weight", torch_groupnorm_shape(weight))
+        add_tensor(f"{manifest_prefix}.{norm_name}.bias", f"{source_prefix}.{norm_name}.bias",
+                   "torch_groupnorm_bias", torch_groupnorm_shape(bias))
+
+    def add_conv_tensors(source_prefix: str, manifest_prefix: str, conv_name: str) -> None:
+        weight = vae_tensor(tensors, f"{source_prefix}.{conv_name}.weight")
+        bias = vae_tensor(tensors, f"{source_prefix}.{conv_name}.bias")
+        add_tensor(f"{manifest_prefix}.{conv_name}.weight", f"{source_prefix}.{conv_name}.weight",
+                   "torch_conv2d_weight", weight.shape)
+        add_tensor(f"{manifest_prefix}.{conv_name}.bias", f"{source_prefix}.{conv_name}.bias", "identity", bias.shape)
+
+    def add_resblock(source_prefix: str, current: str) -> str:
+        manifest_prefix = "vae." + source_prefix
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "norm1")
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "norm2")
+        add_conv_tensors(source_prefix, manifest_prefix, "conv1")
+        add_conv_tensors(source_prefix, manifest_prefix, "conv2")
+
+        block: dict[str, Any] = {
+            "name": node_name(source_prefix),
+            "op": "residual_block",
+            "input": current,
+            "activation": "silu",
+            "norm1": {
+                "weight": f"{manifest_prefix}.norm1.weight",
+                "bias": f"{manifest_prefix}.norm1.bias",
+                "num_groups": 32,
+                "eps": 1e-6,
+                "layout": "pytorch",
+            },
+            "conv1": {
+                "weight": f"{manifest_prefix}.conv1.weight",
+                "bias": f"{manifest_prefix}.conv1.bias",
+                "padding": [1, 1],
+            },
+            "norm2": {
+                "weight": f"{manifest_prefix}.norm2.weight",
+                "bias": f"{manifest_prefix}.norm2.bias",
+                "num_groups": 32,
+                "eps": 1e-6,
+                "layout": "pytorch",
+            },
+            "conv2": {
+                "weight": f"{manifest_prefix}.conv2.weight",
+                "bias": f"{manifest_prefix}.conv2.bias",
+                "padding": [1, 1],
+            },
+            "output": node_name(source_prefix + ".out"),
+        }
+
+        skip_source = f"first_stage_model.{source_prefix}.nin_shortcut.weight"
+        if skip_source in tensors:
+            add_conv_tensors(source_prefix, manifest_prefix, "nin_shortcut")
+            block["skip"] = {
+                "weight": f"{manifest_prefix}.nin_shortcut.weight",
+                "bias": f"{manifest_prefix}.nin_shortcut.bias",
+                "padding": [0, 0],
+            }
+        nodes.append(block)
+        return block["output"]
+
+    def add_mid_attention(current: str, h: int, w: int) -> str:
+        source_prefix = "decoder.mid.attn_1"
+        if f"first_stage_model.{source_prefix}.q.weight" not in tensors:
+            return current
+        if batch != 1:
+            return current
+        manifest_prefix = "vae." + source_prefix
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "norm")
+        for conv_name in ("q", "k", "v", "proj_out"):
+            add_conv_tensors(source_prefix, manifest_prefix, conv_name)
+
+        channels = vae_tensor(tensors, f"{source_prefix}.q.weight").shape[0]
+        hw = h * w
+        nodes.extend(
+            [
+                {
+                    "name": "vae_mid_attn_norm",
+                    "op": "group_norm",
+                    "input": current,
+                    "weight": f"{manifest_prefix}.norm.weight",
+                    "bias": f"{manifest_prefix}.norm.bias",
+                    "num_groups": 32,
+                    "eps": 1e-6,
+                    "layout": "pytorch",
+                    "output": "vae_mid_attn_norm",
+                },
+                {
+                    "name": "vae_mid_attn_q",
+                    "op": "conv2d",
+                    "input": "vae_mid_attn_norm",
+                    "weight": f"{manifest_prefix}.q.weight",
+                    "bias": f"{manifest_prefix}.q.bias",
+                    "padding": [0, 0],
+                    "output": "vae_mid_q",
+                },
+                {
+                    "name": "vae_mid_attn_k",
+                    "op": "conv2d",
+                    "input": "vae_mid_attn_norm",
+                    "weight": f"{manifest_prefix}.k.weight",
+                    "bias": f"{manifest_prefix}.k.bias",
+                    "padding": [0, 0],
+                    "output": "vae_mid_k",
+                },
+                {
+                    "name": "vae_mid_attn_v",
+                    "op": "conv2d",
+                    "input": "vae_mid_attn_norm",
+                    "weight": f"{manifest_prefix}.v.weight",
+                    "bias": f"{manifest_prefix}.v.bias",
+                    "padding": [0, 0],
+                    "output": "vae_mid_v",
+                },
+                {"name": "vae_mid_q_flat", "op": "reshape", "input": "vae_mid_q", "shape": [channels, hw], "output": "vae_mid_q_flat"},
+                {"name": "vae_mid_q_tokens", "op": "transpose", "input": "vae_mid_q_flat", "output": "vae_mid_q_tokens"},
+                {"name": "vae_mid_k_flat", "op": "reshape", "input": "vae_mid_k", "shape": [channels, hw], "output": "vae_mid_k_flat"},
+                {"name": "vae_mid_scores", "op": "matmul", "lhs": "vae_mid_q_tokens", "rhs": "vae_mid_k_flat", "output": "vae_mid_scores"},
+                {"name": "vae_mid_scores_scale", "op": "scale", "input": "vae_mid_scores", "factor": channels ** -0.5, "output": "vae_mid_scaled"},
+                {"name": "vae_mid_probs", "op": "softmax", "input": "vae_mid_scaled", "axis": 1, "output": "vae_mid_probs"},
+                {"name": "vae_mid_v_flat", "op": "reshape", "input": "vae_mid_v", "shape": [channels, hw], "output": "vae_mid_v_flat"},
+                {"name": "vae_mid_v_tokens", "op": "transpose", "input": "vae_mid_v_flat", "output": "vae_mid_v_tokens"},
+                {"name": "vae_mid_attended", "op": "matmul", "lhs": "vae_mid_probs", "rhs": "vae_mid_v_tokens", "output": "vae_mid_attended"},
+                {"name": "vae_mid_attended_c_hw", "op": "transpose", "input": "vae_mid_attended", "output": "vae_mid_attended_c_hw"},
+                {
+                    "name": "vae_mid_attended_nchw",
+                    "op": "reshape",
+                    "input": "vae_mid_attended_c_hw",
+                    "shape": [batch, channels, h, w],
+                    "output": "vae_mid_attended_nchw",
+                },
+                {
+                    "name": "vae_mid_attn_proj_out",
+                    "op": "conv2d",
+                    "input": "vae_mid_attended_nchw",
+                    "weight": f"{manifest_prefix}.proj_out.weight",
+                    "bias": f"{manifest_prefix}.proj_out.bias",
+                    "padding": [0, 0],
+                    "output": "vae_mid_attn_proj",
+                },
+                {"name": "vae_mid_attn_residual", "op": "add", "lhs": current, "rhs": "vae_mid_attn_proj", "output": "vae_mid_attn_out"},
+            ]
+        )
+        return "vae_mid_attn_out"
+
+    conv_in_weight = vae_tensor(tensors, "decoder.conv_in.weight")
+    add_tensor("vae.decoder.conv_in.weight", "decoder.conv_in.weight", "torch_conv2d_weight", conv_in_weight.shape)
+    add_tensor("vae.decoder.conv_in.bias", "decoder.conv_in.bias", "identity", vae_tensor(tensors, "decoder.conv_in.bias").shape)
+    current = "scaled_latent"
+    nodes.append({"name": "vae_latent_scale", "op": "scale", "input": "latent", "factor": 1.0 / 0.13025, "output": current})
+    nodes.append(
+        {
+            "name": "vae_decoder_conv_in",
+            "op": "conv2d",
+            "input": current,
+            "weight": "vae.decoder.conv_in.weight",
+            "bias": "vae.decoder.conv_in.bias",
+            "padding": [1, 1],
+            "output": "vae_hidden",
+        }
+    )
+    current = "vae_hidden"
+
+    current = add_resblock("decoder.mid.block_1", current)
+    current = add_mid_attention(current, latent_h, latent_w)
+    current = add_resblock("decoder.mid.block_2", current)
+
+    up_levels = sorted(
+        {
+            int(match.group(1))
+            for name in tensors
+            if (match := re.match(r"first_stage_model\.decoder\.up\.(\d+)\.block\.\d+\.", name))
+        },
+        reverse=True,
+    )
+    current_h = latent_h
+    current_w = latent_w
+    for level in up_levels:
+        block_ids = sorted(
+            {
+                int(match.group(1))
+                for name in tensors
+                if (match := re.match(rf"first_stage_model\.decoder\.up\.{level}\.block\.(\d+)\.", name))
+            }
+        )
+        for block_id in block_ids:
+            current = add_resblock(f"decoder.up.{level}.block.{block_id}", current)
+        upsample_prefix = f"decoder.up.{level}.upsample.conv"
+        if f"first_stage_model.{upsample_prefix}.weight" in tensors:
+            current_h *= 2
+            current_w *= 2
+            resize_output = f"vae_up_{level}_resized"
+            nodes.append(
+                {
+                    "name": f"vae_up_{level}_upsample_resize",
+                    "op": "upsample",
+                    "input": current,
+                    "mode": "nearest",
+                    "output_spatial_shape": [current_h, current_w],
+                    "output": resize_output,
+                }
+            )
+            add_tensor(f"vae.{upsample_prefix}.weight", f"{upsample_prefix}.weight", "torch_conv2d_weight",
+                       vae_tensor(tensors, f"{upsample_prefix}.weight").shape)
+            add_tensor(f"vae.{upsample_prefix}.bias", f"{upsample_prefix}.bias", "identity",
+                       vae_tensor(tensors, f"{upsample_prefix}.bias").shape)
+            nodes.append(
+                {
+                    "name": f"vae_up_{level}_upsample_conv",
+                    "op": "conv2d",
+                    "input": resize_output,
+                    "weight": f"vae.{upsample_prefix}.weight",
+                    "bias": f"vae.{upsample_prefix}.bias",
+                    "padding": [1, 1],
+                    "output": f"vae_up_{level}_upsampled",
+                }
+            )
+            current = f"vae_up_{level}_upsampled"
+
+    add_groupnorm_tensors("decoder", "vae.decoder", "norm_out")
+    add_tensor("vae.decoder.conv_out.weight", "decoder.conv_out.weight", "torch_conv2d_weight",
+               vae_tensor(tensors, "decoder.conv_out.weight").shape)
+    add_tensor("vae.decoder.conv_out.bias", "decoder.conv_out.bias", "identity",
+               vae_tensor(tensors, "decoder.conv_out.bias").shape)
+    nodes.extend(
+        [
+            {
+                "name": "vae_decoder_norm_out",
+                "op": "group_norm",
+                "input": current,
+                "weight": "vae.decoder.norm_out.weight",
+                "bias": "vae.decoder.norm_out.bias",
+                "num_groups": 32,
+                "eps": 1e-6,
+                "layout": "pytorch",
+                "output": "vae_norm_out",
+            },
+            {"name": "vae_decoder_silu", "op": "silu", "input": "vae_norm_out", "output": "vae_out_act"},
+            {
+                "name": "vae_decoder_conv_out",
+                "op": "conv2d",
+                "input": "vae_out_act",
+                "weight": "vae.decoder.conv_out.weight",
+                "bias": "vae.decoder.conv_out.bias",
+                "padding": [1, 1],
+                "output": "decoded",
+            },
+            {"name": "vae_decoder_to_image", "op": "scale", "input": "decoded", "factor": 0.5, "bias": 0.5, "output": "image_unclamped"},
+            {"name": "vae_decoder_clamp", "op": "clamp", "input": "image_unclamped", "min": 0.0, "max": 1.0, "output": "image"},
+        ]
+    )
+
+    return {
+        "format": "litenn.torch_manifest.v1",
+        "metadata": {
+            "probe": "vae-decode-full",
+            "description": "fixed-shape SDXL VAE decoder traversal including mid attention for batch=1",
+            "latent_height": latent_h,
+            "latent_width": latent_w,
+        },
+        "inputs": [{"name": "latent", "dtype": "torch.float32", "shape": [batch, conv_in_weight.shape[1], latent_h, latent_w]}],
+        "tensors": tensor_entries,
+        "nodes": nodes,
+        "outputs": [{"name": "image", "source": "image"}],
+    }
+
+
 def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> dict[str, Any]:
     if args.probe == "unet-stem":
         return emit_unet_stem_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
@@ -820,9 +1414,81 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
         return emit_unet_resblock_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     if args.probe == "unet-euler-smoke":
         return emit_unet_euler_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+    if args.probe == "unet-conditioning-smoke":
+        return emit_unet_conditioning_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+    if args.probe == "spatial-transformer-smoke":
+        return emit_spatial_transformer_smoke_manifest(
+            tensors, tokens=args.tokens, context_tokens=args.context_tokens
+        )
     if args.probe == "vae-decode-stem":
         return emit_vae_decode_stem_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+    if args.probe == "vae-decode-full":
+        return emit_vae_decode_full_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     raise ValueError(f"unsupported probe manifest kind {args.probe!r}")
+
+
+def build_skeleton_plan(config: dict[str, Any], tensors: dict[str, TensorInfo]) -> dict[str, Any]:
+    net = network_params(config)
+    input_blocks: dict[int, set[str]] = {}
+    output_blocks: dict[int, set[str]] = {}
+    middle_parts: set[str] = set()
+    transformer_blocks: dict[str, int] = {}
+    vae_up_blocks: dict[int, set[int]] = {}
+
+    for name in tensors:
+        if match := re.match(r"model\.diffusion_model\.input_blocks\.(\d+)\.(\d+)\.", name):
+            input_blocks.setdefault(int(match.group(1)), set()).add(match.group(2))
+        if match := re.match(r"model\.diffusion_model\.output_blocks\.(\d+)\.(\d+)\.", name):
+            output_blocks.setdefault(int(match.group(1)), set()).add(match.group(2))
+        if match := re.match(r"model\.diffusion_model\.middle_block\.(\d+)\.", name):
+            middle_parts.add(match.group(1))
+        if match := re.match(
+            r"model\.diffusion_model\.(input_blocks\.\d+\.\d+|middle_block\.\d+|output_blocks\.\d+\.\d+)"
+            r"\.transformer_blocks\.(\d+)\.",
+            name,
+        ):
+            scope = match.group(1)
+            transformer_blocks[scope] = max(transformer_blocks.get(scope, 0), int(match.group(2)) + 1)
+        if match := re.match(r"first_stage_model\.decoder\.up\.(\d+)\.block\.(\d+)\.", name):
+            vae_up_blocks.setdefault(int(match.group(1)), set()).add(int(match.group(2)))
+
+    return {
+        "unet": {
+            "model_channels": net.get("model_channels"),
+            "channel_mult": net.get("channel_mult"),
+            "input_blocks": [
+                {"index": index, "submodules": sorted(parts)} for index, parts in sorted(input_blocks.items())
+            ],
+            "middle_parts": sorted(middle_parts),
+            "output_blocks": [
+                {"index": index, "submodules": sorted(parts)} for index, parts in sorted(output_blocks.items())
+            ],
+            "transformer_block_counts": dict(sorted(transformer_blocks.items())),
+            "skip_join_requirement": "concat along channel axis; manifest concat now lowers to ConcatNode",
+        },
+        "vae": {
+            "decoder_up_blocks": [
+                {"level": level, "blocks": sorted(blocks)} for level, blocks in sorted(vae_up_blocks.items(), reverse=True)
+            ],
+            "mid_attention": "emitted by vae-decode-full for fixed batch=1 smoke shapes",
+        },
+        "runtime": {
+            "required_bindings": [
+                "latent",
+                "timestep",
+                "text/context embeddings",
+                "SDXL vector conditioning",
+                "scheduler sigmas",
+                "classifier-free-guidance batching or two-pass combine",
+            ],
+            "deferred_production_items": [
+                "tokenizer/text encoder execution inside LiteNN",
+                "full UNet SpatialTransformer 4D flatten/unflatten generator",
+                "memory-aware VAE attention for 1024x1024 decode",
+                "image encoder/refiner variants",
+            ],
+        },
+    }
 
 
 def print_summary(report: dict[str, Any]) -> None:
@@ -856,14 +1522,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--safetensors", required=True, type=Path, help="Path to SDXL safetensors checkpoint")
     parser.add_argument("--json", action="store_true", help="Print the probe report as JSON")
     parser.add_argument("--emit-probe-manifest", type=Path, help="Write a small LiteNN manifest for one probe subgraph")
+    parser.add_argument("--emit-skeleton-plan", type=Path, help="Write the discovered SDXL block traversal plan as JSON")
     parser.add_argument(
         "--probe",
-        choices=["unet-stem", "unet-resblock", "unet-euler-smoke", "vae-decode-stem"],
+        choices=[
+            "unet-stem",
+            "unet-resblock",
+            "unet-euler-smoke",
+            "unet-conditioning-smoke",
+            "spatial-transformer-smoke",
+            "vae-decode-stem",
+            "vae-decode-full",
+        ],
         default="unet-stem",
     )
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--height", type=int, default=1024)
     parser.add_argument("--width", type=int, default=1024)
+    parser.add_argument("--tokens", type=int, default=64, help="Token count for spatial-transformer-smoke")
+    parser.add_argument("--context-tokens", type=int, default=77, help="Context token count for spatial-transformer-smoke")
     return parser
 
 
@@ -876,15 +1553,24 @@ def main() -> int:
         parser.error("--batch must be positive")
     if args.height <= 0 or args.width <= 0:
         parser.error("--height and --width must be positive")
+    if args.tokens <= 0 or args.context_tokens <= 0:
+        parser.error("--tokens and --context-tokens must be positive")
 
     config = load_yaml(args.config)
     tensors = parse_tensors(load_safetensors_header(args.safetensors))
     report = compatibility_report(config, tensors)
+    report["execution_skeleton"] = build_skeleton_plan(config, tensors)
 
     if args.emit_probe_manifest is not None:
         manifest = emit_manifest(args, tensors)
         args.emit_probe_manifest.parent.mkdir(parents=True, exist_ok=True)
         args.emit_probe_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    if args.emit_skeleton_plan is not None:
+        args.emit_skeleton_plan.parent.mkdir(parents=True, exist_ok=True)
+        args.emit_skeleton_plan.write_text(
+            json.dumps(report["execution_skeleton"], indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -892,6 +1578,8 @@ def main() -> int:
         print_summary(report)
         if args.emit_probe_manifest is not None:
             print(f"  wrote probe manifest: {args.emit_probe_manifest}")
+        if args.emit_skeleton_plan is not None:
+            print(f"  wrote skeleton plan: {args.emit_skeleton_plan}")
     return 0
 
 
