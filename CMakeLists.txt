@@ -139,6 +139,8 @@ endfunction()
 
 file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|.*\\.module\\.cpp$")
+list(APPEND LITENN_SOURCES third_party/simdjson/src/simdjson.cpp)
+
 add_library(LiteNN ${LITENN_SOURCES})
 
 add_library(LiteNN::LiteNN ALIAS LiteNN)
@@ -146,6 +148,10 @@ add_library(LiteNN::LiteNN ALIAS LiteNN)
 target_include_directories(LiteNN PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_include_directories(LiteNN PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/src
 )
 
 target_compile_features(LiteNN PUBLIC cxx_std_26)
@@ -266,12 +272,14 @@ add_subdirectory(third_party/googletest)
 
 if(LITENN_BUILD_TOOLS)
     add_subdirectory(tools/gguf)
+    add_subdirectory(tools/torch)
 endif()
 
 if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
     add_subdirectory(example/carrier)
     add_subdirectory(example/gguf)
+    add_subdirectory(example/torch_manifest)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
@@ -311,7 +319,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
        OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"
        OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND (TEST_NAME STREQUAL "MemorySafetyTest"
-                                   OR TEST_NAME STREQUAL "PyTorchGoldenTest")))
+                                   OR TEST_NAME STREQUAL "PyTorchGoldenTest"
+                                   OR TEST_NAME STREQUAL "TorchManifestTest")))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
     else()
         target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)

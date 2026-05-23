@@ -1,0 +1,29 @@
+{
+  "format": "litenn.torch_manifest.v1",
+  "inputs": [
+    { "name": "x", "dtype": "torch.float32", "shape": [2, 3] }
+  ],
+  "tensors": [
+    {
+      "name": "fc.weight",
+      "source": "linear.weight",
+      "dtype": "F32",
+      "source_shape": [2, 3],
+      "layout": "torch_linear_weight",
+      "shape": [3, 2]
+    },
+    {
+      "name": "fc.bias",
+      "source": "linear.bias",
+      "dtype": "F32",
+      "source_shape": [2],
+      "layout": "torch_bias_1d",
+      "shape": [1, 2]
+    }
+  ],
+  "nodes": [
+    { "name": "fc", "op": "linear", "input": "x", "weight": "fc.weight", "bias": "fc.bias", "output": "fc_out" },
+    { "name": "relu", "op": "relu", "input": "fc_out", "output": "relu_linear" }
+  ],
+  "outputs": [ "relu_linear" ]
+}

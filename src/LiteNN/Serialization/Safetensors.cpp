@@ -1,0 +1,469 @@
+#include <LiteNN/Serialization/Safetensors.h>
+
+#include <LiteNN/Validation/GraphValidator.h>
+
+#include <simdjson.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <limits>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace LiteNN::Serialization
+{
+	std::size_t SafetensorsTensorInfo::ByteSize() const
+	{
+		return dataEnd - dataBegin;
+	}
+
+	std::optional<DataType> TryMapSafetensorsDataType(std::string_view dtype)
+	{
+		if (dtype == "F64")
+			return DataType::Float64;
+		if (dtype == "F32")
+			return DataType::Float32;
+		if (dtype == "F16")
+			return DataType::Float16;
+		if (dtype == "BF16")
+			return DataType::BFloat16;
+		if (dtype == "F8_E4M3")
+			return DataType::Float8E4M3;
+		if (dtype == "F8_E5M2")
+			return DataType::Float8E5M2;
+		if (dtype == "I64")
+			return DataType::Int64;
+		if (dtype == "I32")
+			return DataType::Int32;
+		if (dtype == "I8")
+			return DataType::Int8;
+		if (dtype == "U8")
+			return DataType::UInt8;
+		if (dtype == "BOOL")
+			return DataType::Bool;
+		return std::nullopt;
+	}
+
+	DataType MapSafetensorsDataType(std::string_view dtype)
+	{
+		if (auto mapped = TryMapSafetensorsDataType(dtype))
+		{
+			return *mapped;
+		}
+		throw std::runtime_error(std::string("Unsupported safetensors dtype: ") + std::string(dtype));
+	}
+
+	namespace Detail
+	{
+		constexpr std::size_t kMaxSafetensorsHeaderBytes = 128uz * 1024uz * 1024uz;
+
+		std::runtime_error JsonError(std::string_view label, simdjson::error_code error)
+		{
+			return std::runtime_error(std::string("Safetensors header JSON ") + std::string(label) + ": " +
+			                          simdjson::error_message(error));
+		}
+
+		std::uint64_t ReadU64LE(std::span<const std::byte> data, std::size_t offset)
+		{
+			if (offset + sizeof(std::uint64_t) > data.size())
+			{
+				throw std::runtime_error("Safetensors file is truncated while reading u64");
+			}
+			std::uint64_t value = 0;
+			for (std::size_t i = 0; i < sizeof(std::uint64_t); ++i)
+			{
+				value |= static_cast<std::uint64_t>(std::to_integer<unsigned char>(data[offset + i])) << (8 * i);
+			}
+			return value;
+		}
+
+		std::size_t CheckedToSize(std::uint64_t value, std::string_view label)
+		{
+			if (value > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+			{
+				throw std::runtime_error(std::string("Safetensors ") + std::string(label) + " is too large");
+			}
+			return static_cast<std::size_t>(value);
+		}
+
+		std::size_t CheckedMul(std::size_t lhs, std::size_t rhs, std::string_view label)
+		{
+			if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs)
+			{
+				throw std::runtime_error(std::string("Safetensors ") + std::string(label) + " overflows size_t");
+			}
+			return lhs * rhs;
+		}
+
+		std::size_t TensorByteSize(ShapeView shape, DataType dtype)
+		{
+			std::size_t elements = 1;
+			for (const auto dim : shape.Dims)
+			{
+				if (dim == 0)
+				{
+					throw std::runtime_error(
+					    "Safetensors tensor shape contains a zero dimension unsupported by LiteNN");
+				}
+				elements = CheckedMul(elements, dim, "tensor element count");
+			}
+			return CheckedMul(elements, ElementByteSize(dtype), "tensor byte size");
+		}
+
+		simdjson::dom::object RequireObject(simdjson::dom::element value, std::string_view label)
+		{
+			simdjson::dom::object object;
+			if (const auto error = value.get_object().get(object))
+			{
+				throw JsonError(std::string(label) + " must be an object", error);
+			}
+			return object;
+		}
+
+		simdjson::dom::array RequireArray(simdjson::dom::element value, std::string_view label)
+		{
+			simdjson::dom::array array;
+			if (const auto error = value.get_array().get(array))
+			{
+				throw JsonError(std::string(label) + " must be an array", error);
+			}
+			return array;
+		}
+
+		std::string_view RequireString(simdjson::dom::element value, std::string_view label)
+		{
+			std::string_view string;
+			if (const auto error = value.get_string().get(string))
+			{
+				throw JsonError(std::string(label) + " must be a string", error);
+			}
+			return string;
+		}
+
+		std::uint64_t RequireUInt(simdjson::dom::element value, std::string_view label)
+		{
+			std::uint64_t integer{};
+			if (const auto error = value.get_uint64().get(integer))
+			{
+				throw JsonError(std::string(label) + " must be an unsigned integer", error);
+			}
+			return integer;
+		}
+
+		std::optional<simdjson::dom::element> FindMember(simdjson::dom::object object, std::string_view key)
+		{
+			for (auto field : object)
+			{
+				if (field.key == key)
+				{
+					return field.value;
+				}
+			}
+			return std::nullopt;
+		}
+
+		simdjson::dom::element RequireMember(simdjson::dom::object object, std::string_view key,
+		                                     std::string_view label)
+		{
+			if (auto member = FindMember(object, key))
+			{
+				return *member;
+			}
+			throw std::runtime_error(std::string("Safetensors tensor ") + std::string(label) +
+			                         " is missing required field '" + std::string(key) + "'");
+		}
+
+		std::vector<std::size_t> ParseShape(simdjson::dom::element value, std::string_view tensorName)
+		{
+			const auto array = RequireArray(value, std::string("shape for ") + std::string(tensorName));
+			std::vector<std::size_t> shape;
+			for (auto dimValue : array)
+			{
+				const auto dim = CheckedToSize(RequireUInt(dimValue, "shape dimension"), "shape dimension");
+				if (dim == 0)
+				{
+					throw std::runtime_error("Safetensors tensor shape contains zero dimension for " +
+					                         std::string(tensorName));
+				}
+				shape.push_back(dim);
+			}
+			return shape;
+		}
+
+		std::pair<std::size_t, std::size_t> ParseOffsets(simdjson::dom::element value,
+		                                                 std::string_view tensorName)
+		{
+			const auto array = RequireArray(value, std::string("data_offsets for ") + std::string(tensorName));
+			std::vector<std::size_t> offsets;
+			for (auto offsetValue : array)
+			{
+				offsets.push_back(CheckedToSize(RequireUInt(offsetValue, "data_offsets value"),
+				                                "data_offsets value"));
+			}
+			if (offsets.size() != 2)
+			{
+				throw std::runtime_error("Safetensors data_offsets must contain exactly two integers for " +
+				                         std::string(tensorName));
+			}
+			const auto begin = offsets[0];
+			const auto end = offsets[1];
+			if (begin > end)
+			{
+				throw std::runtime_error("Safetensors data_offsets begin is greater than end for " +
+				                         std::string(tensorName));
+			}
+			return { begin, end };
+		}
+
+		std::vector<std::byte> ReadAllBytes(const std::filesystem::path& path)
+		{
+			std::ifstream in(path, std::ios::binary | std::ios::ate);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to open safetensors file for reading");
+			}
+			const auto size = in.tellg();
+			if (size < 0)
+			{
+				throw std::runtime_error("Failed to determine safetensors file size");
+			}
+			std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+			in.seekg(0, std::ios::beg);
+			if (!bytes.empty())
+			{
+				in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+				if (!in)
+				{
+					throw std::runtime_error("Failed to read safetensors file");
+				}
+			}
+			return bytes;
+		}
+
+		struct SafetensorsArchiveBuilder
+		{
+			static SafetensorsArchive Build(std::span<const std::byte> bytes)
+			{
+				if (bytes.size() < sizeof(std::uint64_t))
+				{
+					throw std::runtime_error("Safetensors file is too small to contain a header length");
+				}
+
+				const auto headerSizeU64 = ReadU64LE(bytes, 0);
+				if (headerSizeU64 > kMaxSafetensorsHeaderBytes)
+				{
+					throw std::runtime_error("Safetensors header is too large");
+				}
+				const auto headerSize = CheckedToSize(headerSizeU64, "header size");
+				const auto payloadOffset = sizeof(std::uint64_t) + headerSize;
+				if (payloadOffset > bytes.size())
+				{
+					throw std::runtime_error("Safetensors file is truncated before tensor payload data");
+				}
+
+				const auto* headerBegin = reinterpret_cast<const char*>(bytes.data() + sizeof(std::uint64_t));
+				simdjson::padded_string header(headerBegin, headerSize);
+				simdjson::dom::parser parser;
+				simdjson::dom::element root;
+				if (const auto error = parser.parse(header).get(root))
+				{
+					throw JsonError("parse failed", error);
+				}
+				const auto rootObject = RequireObject(root, "header");
+
+				SafetensorsArchive archive;
+				archive.storage_.assign(bytes.begin(), bytes.end());
+				archive.payloadOffset_ = payloadOffset;
+				ParseHeader(archive, rootObject, bytes.size() - payloadOffset);
+				return archive;
+			}
+
+			static void ParseHeader(SafetensorsArchive& archive, simdjson::dom::object rootObject,
+			                        std::size_t payloadSize)
+			{
+				std::vector<std::pair<std::size_t, std::size_t>> intervals;
+				std::set<std::string> seenFields;
+				for (auto field : rootObject)
+				{
+					const auto name = std::string(field.key);
+					if (!seenFields.insert(name).second)
+					{
+						throw std::runtime_error("Safetensors header JSON contains duplicate top-level key: " + name);
+					}
+					if (name == "__metadata__")
+					{
+						ParseMetadata(archive, field.value);
+						continue;
+					}
+					ParseTensor(archive, name, field.value, payloadSize, intervals);
+				}
+
+				std::sort(intervals.begin(), intervals.end());
+				for (std::size_t i = 1; i < intervals.size(); ++i)
+				{
+					if (intervals[i - 1].second > intervals[i].first)
+					{
+						throw std::runtime_error("Safetensors tensor payload ranges overlap");
+					}
+				}
+			}
+
+			static void ParseMetadata(SafetensorsArchive& archive, simdjson::dom::element value)
+			{
+				const auto object = RequireObject(value, "__metadata__");
+				std::set<std::string> seenMetadataKeys;
+				for (auto field : object)
+				{
+					const auto key = std::string(field.key);
+					if (!seenMetadataKeys.insert(key).second)
+					{
+						throw std::runtime_error("Safetensors metadata contains duplicate key: " + key);
+					}
+					archive.metadata_.push_back(
+					    { key, std::string(RequireString(field.value, "__metadata__ value")) });
+				}
+			}
+
+			static void ParseTensor(SafetensorsArchive& archive, std::string_view name, simdjson::dom::element value,
+			                        std::size_t payloadSize,
+			                        std::vector<std::pair<std::size_t, std::size_t>>& intervals)
+			{
+				const auto object = RequireObject(value, std::string("metadata for tensor ") + std::string(name));
+				const auto storageDType = std::string(RequireString(RequireMember(object, "dtype", name), "dtype"));
+				const auto dtype = MapSafetensorsDataType(storageDType);
+				auto shape = ParseShape(RequireMember(object, "shape", name), name);
+				const auto [begin, end] = ParseOffsets(RequireMember(object, "data_offsets", name), name);
+				if (end > payloadSize)
+				{
+					throw std::runtime_error("Safetensors tensor payload exceeds file size for " + std::string(name));
+				}
+				const auto expectedBytes = TensorByteSize(ShapeView{ shape }, dtype);
+				if (end - begin != expectedBytes)
+				{
+					throw std::runtime_error("Safetensors tensor byte size does not match dtype and shape for " +
+					                         std::string(name));
+				}
+				if (dtype == DataType::Bool)
+				{
+					const auto absoluteBegin = archive.payloadOffset_ + begin;
+					for (std::size_t i = absoluteBegin; i < absoluteBegin + expectedBytes; ++i)
+					{
+						const auto valueByte = std::to_integer<unsigned char>(archive.storage_[i]);
+						if (valueByte > 1)
+						{
+							throw std::runtime_error("Safetensors BOOL tensor contains a non-boolean byte for " +
+							                         std::string(name));
+						}
+					}
+				}
+
+				intervals.emplace_back(begin, end);
+				archive.tensors_.push_back({
+				    .name = std::string(name),
+				    .storageDType = storageDType,
+				    .dtype = dtype,
+				    .shape = std::move(shape),
+				    .dataBegin = begin,
+				    .dataEnd = end,
+				});
+			}
+		};
+	} // namespace Detail
+
+	SafetensorsArchive SafetensorsArchive::Load(std::span<const std::byte> bytes)
+	{
+		return Detail::SafetensorsArchiveBuilder::Build(bytes);
+	}
+
+	SafetensorsArchive SafetensorsArchive::LoadFile(const std::filesystem::path& path)
+	{
+		auto bytes = Detail::ReadAllBytes(path);
+		return Load(std::span<const std::byte>(bytes));
+	}
+
+	std::span<const SafetensorsTensorInfo> SafetensorsArchive::Tensors() const
+	{
+		return tensors_;
+	}
+
+	std::span<const ModelMetadataEntry> SafetensorsArchive::Metadata() const
+	{
+		return metadata_;
+	}
+
+	const SafetensorsTensorInfo* SafetensorsArchive::FindTensor(std::string_view name) const
+	{
+		for (const auto& tensor : tensors_)
+		{
+			if (tensor.name == name)
+			{
+				return &tensor;
+			}
+		}
+		return nullptr;
+	}
+
+	std::span<const std::byte> SafetensorsArchive::TensorData(const SafetensorsTensorInfo& tensor) const
+	{
+		const auto begin = payloadOffset_ + tensor.dataBegin;
+		return std::span<const std::byte>(storage_).subspan(begin, tensor.ByteSize());
+	}
+
+	Tensor<CPU> SafetensorsArchive::TensorAsCPU(const SafetensorsTensorInfo& tensor, bool transpose2D) const
+	{
+		Tensor<CPU> result(Uninitialized, ShapeView{ tensor.shape }, tensor.dtype);
+		const auto bytes = TensorData(tensor);
+		std::memcpy(result.RawData(), bytes.data(), bytes.size());
+		if (transpose2D)
+		{
+			if (tensor.shape.size() != 2)
+			{
+				throw std::runtime_error("Safetensors transpose hook requires a rank-2 tensor: " + tensor.name);
+			}
+			return result.Transpose();
+		}
+		return result;
+	}
+
+	Graph ImportSafetensorsVariables(const SafetensorsArchive& archive, const SafetensorsImportOptions& options)
+	{
+		Graph graph;
+		graph.SetForward(graph.AddSubgraph(Subgraph{}));
+		std::set<std::string> seenNames;
+		for (const auto& metadata : archive.Metadata())
+		{
+			graph.SetMetadataEntry("safetensors.metadata." + metadata.key, metadata.value);
+		}
+
+		for (const auto& tensor : archive.Tensors())
+		{
+			auto targetName = options.renameTensor ? options.renameTensor(tensor.name) : tensor.name;
+			if (targetName.empty())
+			{
+				throw std::runtime_error("Safetensors import produced an empty variable name for " + tensor.name);
+			}
+			if (options.failOnDuplicateVariableNames && !seenNames.insert(targetName).second)
+			{
+				throw std::runtime_error("Safetensors import produced duplicate variable name: " + targetName);
+			}
+
+			const auto shouldTranspose = options.transpose2D && options.transpose2D(tensor.name);
+			auto importedTensor = archive.TensorAsCPU(tensor, shouldTranspose);
+			const auto index = graph.AddVariable(Variable::Create(std::move(importedTensor)));
+			graph.SetVariableName(index, std::move(targetName));
+		}
+
+		Validation::ValidateGraph(graph);
+		return graph;
+	}
+
+	Graph LoadSafetensorsVariables(const std::filesystem::path& path, const SafetensorsImportOptions& options)
+	{
+		return ImportSafetensorsVariables(SafetensorsArchive::LoadFile(path), options);
+	}
+} // namespace LiteNN::Serialization
