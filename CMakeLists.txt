@@ -280,6 +280,7 @@ if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/carrier)
     add_subdirectory(example/gguf)
     add_subdirectory(example/torch_manifest)
+    add_subdirectory(example/sdxl)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
