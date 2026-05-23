@@ -624,6 +624,91 @@ TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
 }
 
+TEST(CompiledModuleTest, CPUConv2DArtifactMatchesInterpreter)
+{
+	Graph graph;
+	std::vector<double> weightData;
+	weightData.reserve(36);
+	for (std::size_t i = 0; i < 36; ++i)
+	{
+		weightData.push_back((static_cast<double>(i % 7) - 3.0) * 0.125);
+	}
+	const auto weightIndex = graph.AddVariable(
+	    Variable::Create(Tensor<CPU>(std::span<const double>(weightData), { 4, 1, 3, 3 }, DataType::Float32)));
+	const auto biasIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 4 }, DataType::Float32)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2, 3, 3 });
+	const auto weight =
+	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 4, 1, 3, 3 } } });
+	const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 4 } } });
+	const auto conv = Layer::AddConv2D(sg, { input, 0 }, { weight, 0 }, NodeOutput{ bias, 0 },
+	                                   { 1, 1 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, 2);
+	sg.SetResults({ conv });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "conv" });
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5, -0.5,
+		              2.0, -1.25, 0.125, 0.5, -0.75, 1.25, -1.5, 0.875, 0.25 },
+		            { 1, 2, 3, 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUTorchStyleGroupNormArtifactMatchesInterpreter)
+{
+	Graph graph;
+	const auto scaleIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.5, -0.75 }, { 1, 2, 1, 1 }, DataType::Float32)));
+	const auto biasIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.25, -0.5 }, { 1, 2, 1, 1 }, DataType::Float32)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2, 2, 2 });
+	const auto grouped = Layer::AddReshape(sg, { input, 0 }, { 1, 2, 4 });
+	const auto normalized = Layer::AddNormalization(sg, grouped, NormalizationMode::LayerNorm, 2, 1e-5);
+	const auto nchw = Layer::AddReshape(sg, normalized, { 1, 2, 2, 2 });
+	const auto scale =
+	    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
+	const auto bias =
+	    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
+	const auto scaled = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, nchw, { scale, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 1, 2, 2, 2 } } });
+	const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { bias, 0 } },
+	                                { OutputInfo{ DataType::Float32, { 1, 2, 2, 2 } } });
+	sg.SetResults({ { shifted, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5 },
+		            { 1, 2, 2, 2 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUTimestepEmbeddingArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto timesteps = sg.AddParam(DataType::Float32, { 3 });
+	const auto embedding = Layer::AddTimestepEmbedding(sg, { timesteps, 0 }, 5, 1000);
+	sg.SetResults({ embedding });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "timesteps" });
+	graph.SetOutputNames({ "embedding" });
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 0.0, 1.0, 999.0 }, { 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
 TEST(CompiledModuleTest, CPUGatherPadArtifactMatchesInterpreter)
 {
 	Graph graph;

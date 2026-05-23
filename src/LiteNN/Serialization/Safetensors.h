@@ -59,6 +59,8 @@ namespace LiteNN::Serialization
 		friend struct Detail::SafetensorsArchiveBuilder;
 
 		std::vector<std::byte> storage_;
+		std::filesystem::path backingPath_;
+		mutable std::vector<std::byte> tensorReadBuffer_;
 		std::size_t payloadOffset_{};
 		std::vector<SafetensorsTensorInfo> tensors_;
 		std::vector<ModelMetadataEntry> metadata_;

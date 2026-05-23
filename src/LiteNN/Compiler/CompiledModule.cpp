@@ -61,6 +61,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -1913,11 +1914,83 @@ namespace
 		llvm::sys::DynamicLibrary::AddSymbol("_" + symbolName, address);
 	}
 
+	float LiteNNRuntimeExpF(float value)
+	{
+		return std::exp(value);
+	}
+
+	float LiteNNRuntimeLogF(float value)
+	{
+		return std::log(value);
+	}
+
+	float LiteNNRuntimeSqrtF(float value)
+	{
+		return std::sqrt(value);
+	}
+
+	float LiteNNRuntimeSinF(float value)
+	{
+		return std::sin(value);
+	}
+
+	float LiteNNRuntimeCosF(float value)
+	{
+		return std::cos(value);
+	}
+
+	float LiteNNRuntimeTanF(float value)
+	{
+		return std::tan(value);
+	}
+
+	float LiteNNRuntimeAsinF(float value)
+	{
+		return std::asin(value);
+	}
+
+	float LiteNNRuntimeAcosF(float value)
+	{
+		return std::acos(value);
+	}
+
+	float LiteNNRuntimeAtanF(float value)
+	{
+		return std::atan(value);
+	}
+
+	float LiteNNRuntimeErfF(float value)
+	{
+		return std::erf(value);
+	}
+
+	void LiteNNRuntimeSinCosF(float value, float* sinOut, float* cosOut)
+	{
+		*sinOut = std::sin(value);
+		*cosOut = std::cos(value);
+	}
+
 	LoadedJIT LoadJIT(std::span<const std::byte> instructions)
 	{
 		InitializeNativeLLVM();
 		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*) (std::size_t)>(&std::malloc)));
 		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
+		RegisterJITRuntimeSymbol(
+		    "memcpy",
+		    reinterpret_cast<void*>(static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy)));
+		RegisterJITRuntimeSymbol("memset",
+		                         reinterpret_cast<void*>(static_cast<void* (*)(void*, int, std::size_t)>(&std::memset)));
+		RegisterJITRuntimeSymbol("expf", reinterpret_cast<void*>(&LiteNNRuntimeExpF));
+		RegisterJITRuntimeSymbol("logf", reinterpret_cast<void*>(&LiteNNRuntimeLogF));
+		RegisterJITRuntimeSymbol("sqrtf", reinterpret_cast<void*>(&LiteNNRuntimeSqrtF));
+		RegisterJITRuntimeSymbol("sinf", reinterpret_cast<void*>(&LiteNNRuntimeSinF));
+		RegisterJITRuntimeSymbol("cosf", reinterpret_cast<void*>(&LiteNNRuntimeCosF));
+		RegisterJITRuntimeSymbol("tanf", reinterpret_cast<void*>(&LiteNNRuntimeTanF));
+		RegisterJITRuntimeSymbol("asinf", reinterpret_cast<void*>(&LiteNNRuntimeAsinF));
+		RegisterJITRuntimeSymbol("acosf", reinterpret_cast<void*>(&LiteNNRuntimeAcosF));
+		RegisterJITRuntimeSymbol("atanf", reinterpret_cast<void*>(&LiteNNRuntimeAtanF));
+		RegisterJITRuntimeSymbol("erff", reinterpret_cast<void*>(&LiteNNRuntimeErfF));
+		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 

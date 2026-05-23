@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <string>
 #include <vector>
@@ -99,6 +101,28 @@ TEST(Safetensors, ReadsMetadataDTypesAndPayloads)
 	const auto bias = archive.TensorAsCPU(*biasInfo);
 	EXPECT_EQ(ReadI64(bias, 0), 7);
 	EXPECT_EQ(ReadI64(bias, 1), 8);
+}
+
+TEST(Safetensors, LoadFileReadsHeaderAndPayloadOnDemand)
+{
+	const auto bytes = BuildFixture();
+	const auto path = std::filesystem::temp_directory_path() / "litenn_safetensors_loadfile_fixture.safetensors";
+	{
+		std::ofstream out(path, std::ios::binary);
+		ASSERT_TRUE(out);
+		out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		ASSERT_TRUE(out);
+	}
+
+	const auto archive = Serialization::SafetensorsArchive::LoadFile(path);
+	ASSERT_EQ(archive.Tensors().size(), 2u);
+	const auto* weightInfo = archive.FindTensor("linear.weight");
+	ASSERT_NE(weightInfo, nullptr);
+	const auto weight = archive.TensorAsCPU(*weightInfo);
+	EXPECT_FLOAT_EQ(ReadFloat(weight, 0), 1.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(weight, 5), 6.0F);
+
+	std::filesystem::remove(path);
 }
 
 TEST(Safetensors, ImportsVariablesWithRenameAndTransposeHooks)

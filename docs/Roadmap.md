@@ -786,7 +786,8 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
 - [x] Add diagnostics for missing tensors, extra tensors, dtype mismatch, shape mismatch, and layout mismatch.
       （已完成：manifest import reports missing safetensors sources, unused archive tensors by default,
       expected dtype/source-shape/final-shape mismatches, unsupported layout presets, rank mismatch for transpose/
-      bias/norm layouts, duplicate input/tensor/output names, and unsupported ops.）
+      bias/norm layouts, duplicate input/tensor/output names, and unsupported ops. Tensor entries can also request
+      `target_dtype` so import-time materialization can validate source dtype while storing constants in the compute dtype.）
 - [x] Add golden tests against PyTorch for small exported MLP/attention fixtures.
       （已完成：`tests/TorchManifestTest.cpp` imports a PyTorch-style Linear+ReLU fixture from manifest+safetensors,
       checks PyTorch golden outputs through the interpreter, and also checks CPU AOT when MLIR is enabled.
@@ -799,8 +800,9 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
       rename/transpose/expected-shape diagnostics，并可作为 torch.export/fx/ONNX 前端的稳定中间层。）
 - [x] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
       （已完成：`SupportedTorchManifestOpMappings()` documents the first supported set: Linear/attention projection,
-      Embedding, LayerNorm, RMSNorm, MatMul/Add/Subtract/Multiply/Divide, ReLU/GELU/SiLU/Sigmoid/Tanh, Softmax,
-      Reshape, and 2D Transpose.）
+      Embedding, Conv2D/ConvTranspose2D, LayerNorm, RMSNorm, PyTorch-NCHW GroupNorm, timestep embedding,
+      residual/feed-forward/attention/VAE decode composites, MatMul/Add/Subtract/Multiply/Divide, scalar scale,
+      ReLU/GELU/SiLU/Sigmoid/Tanh, Softmax, Pad, Upsample, Clamp, Reshape, Permute, and 2D Transpose.）
 - [x] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
       （已完成：`TorchManifestReport` records imported tensors, lowered ops, folded constant layout transforms,
       unsupported ops, fallbacks, and diagnostics; the CLI prints the report after manifest conversion.）
@@ -808,6 +810,67 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
       （已完成：`example/torch_manifest` provides a PyTorch fixture exporter that writes safetensors,
       a manifest using Torch layout presets, and a C++ example that loads the manifest, runs the interpreter,
       and also runs CPU AOT when `LiteNNCompiler` is available.）
+
+#### G12.4 SDXL / Diffusion Model Import Facilities
+
+- [x] Add manifest lowering for SDXL UNet/VAE foundation ops: Conv2D, GroupNorm with optional affine scale/bias,
+      timestep embedding, Pad, Upsample, and channel-first tensor layout presets.
+      （已完成：Torch manifest now lowers `conv2d`, `group_norm`, `timestep_embedding`, `pad`, and `upsample`;
+      tensor layouts include PyTorch Conv2D weights and channel/group-norm affine `[1, C, 1, 1]` materialization.
+      `tests/TorchManifestTest.cpp` covers a small diffusion-foundation block through the interpreter.）
+- [x] Add residual-block and feed-forward graph assembly patterns that combine Conv2D/GroupNorm/SiLU/Linear without
+      requiring every PyTorch module to be hand-expanded in manifests.
+      （已完成：Torch manifest adds `residual_block` and `feed_forward` composite ops. `residual_block`
+      assembles PyTorch-NCHW GroupNorm, activation, Conv2D, optional timestep projection, optional skip Conv2D,
+      and residual add; `feed_forward` assembles Linear, activation or gated FFN, output Linear, and optional residual.）
+- [x] Add attention-block lowering for fixed-shape self/cross attention: Q/K/V projections, head reshape/permute,
+      scaled dot-product attention or FlashAttnExt, output projection, and residual add.
+      （已完成：`attention_block` lowers fixed `[tokens, channels]` self/cross attention through Q/K/V Linear
+      projections, head reshape/permute, scaled dot-product attention using BatchMatMul + Softmax,
+      output projection, optional mask, and optional residual add.）
+- [x] Add VAE decode coverage: Conv2D/ConvTranspose2D/Upsample, GroupNorm/SiLU, and final output scaling/clamp policy.
+      （已完成：Torch manifest adds primitive `conv_transpose2d`, `scale`, `clamp`, and a `vae_decode`
+      composite step list for Conv2D, PyTorch-NCHW GroupNorm, SiLU, Upsample, ConvTranspose2D,
+      latent/output scaling, output bias, and clamp/clip.）
+- [x] Add scheduler/runtime contract docs for denoise-loop orchestration outside the graph: timestep schedule,
+      classifier-free guidance binding, latent scaling, and per-step benchmark boundaries.
+      （已完成：`example/sdxl/README.md` documents the denoise-loop runtime contract and keeps scheduler,
+      classifier-free guidance, latent scaling, and benchmark boundaries outside the compiled graph.）
+- [x] Add SDXL golden/parity fixtures against PyTorch/diffusers for at least one tiny fixed-shape UNet block before
+      attempting full SDXL checkpoints.
+      （已完成：`TorchManifest.ImportsSDXLCompositePatternsWithTinyParityFixture` imports a tiny fixed-shape
+      PyTorch-style UNet/attention/VAE composite fixture from safetensors and checks deterministic golden outputs
+      for the residual/feed-forward/VAE paths plus fixed-shape attention execution.）
+
+#### G12.5 SDXL Example and Packaging
+
+- [x] Add an SDXL import experiment example that accepts safetensors plus a manifest, serializes a LiteNN graph,
+      compiles a carrier object, and loads it from a DLL/shared object.
+      （已完成：`example/sdxl` supports checkpoint inspection, manifest import to `.ltnn`, carrier object emission,
+      exported-symbol DLL/shared-object smoke loading, direct in-process AOT smoke running, and raw instruction-object
+      dumping for JIT/runtime-symbol diagnostics.）
+- [x] Add a manifest template generator that starts from diffusers/original SDXL config files and emits a first
+      fixed-shape UNet manifest skeleton with expected tensor names and shapes.
+      （已完成：`example/sdxl/sdxl_manifest_probe.py` reads Stability-AI `generative-models` SDXL YAML plus
+      a safetensors header, checks key tensor compatibility, and emits importable `unet-stem`,
+      `unet-resblock`, `unet-euler-smoke`, and `vae-decode-stem` probe manifests. `unet-resblock` covers
+      stem Conv2D plus `input_blocks.1.0` with PyTorch-style GroupNorm, SiLU, timestep projection,
+      Conv2D, and residual add. `unet-euler-smoke` maps real SDXL stem, `time_embed`, first ResBlock, and
+      output weights to a denoiser-shaped 4-channel `noise_pred` output for sampler smoke tests. The CPU AOT
+      smoke path uses manifest `target_dtype` to materialize F16 checkpoint tensors as F32 constants until
+      production CPU half-precision lowering is validated.）
+- [x] Add a minimal Euler sampler runtime in the SDXL example.
+      （已完成：`litenn_sdxl_example --sample-euler` loads a carrier DLL/shared object, initializes the
+      `latent` input, fills a `timestep`/`timesteps` input when present, zero-fills other inputs, runs the module
+      for each step, and applies an Euler epsilon-prediction update using the `noise_pred` output.）
+- [x] Validate a first real-checkpoint end-to-end smoke flow through manifest generation, safetensors import,
+      `.ltnn` serialization, CPU AOT compile, carrier DLL load, and Euler sampler execution.
+      （已完成：the 64x64 `unet-euler-smoke` path runs from a real SDXL-compatible safetensors checkpoint through
+      `--run-model`, `--load-dll`, and `--sample-euler`; generated artifacts remain under build output only.）
+- [ ] Expand the generator from first probes to broader fixed-shape SDXL skeletons: label/conditioning embedding
+      prefix, SpatialTransformer attention blocks, down/up-block traversal, and full VAE decode templates.
+- [ ] Add an SDXL benchmark path that times import, graph serialization, CPU AOT compile, DLL load, and one denoise-step
+      invocation separately.
 
 ### G13: AOT Training Execution
 

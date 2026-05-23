@@ -5,6 +5,7 @@
 #include <simdjson.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -245,6 +246,45 @@ namespace LiteNN::Serialization
 			return bytes;
 		}
 
+		std::streamoff FileSize(std::ifstream& in)
+		{
+			const auto current = in.tellg();
+			in.seekg(0, std::ios::end);
+			const auto size = in.tellg();
+			in.seekg(current, std::ios::beg);
+			if (size < 0)
+			{
+				throw std::runtime_error("Failed to determine safetensors file size");
+			}
+			return size;
+		}
+
+		std::vector<std::byte> ReadFileRange(const std::filesystem::path& path,
+		                                     std::uint64_t offset,
+		                                     std::size_t byteCount)
+		{
+			std::ifstream in(path, std::ios::binary);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to open safetensors file for reading");
+			}
+			in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to seek safetensors file");
+			}
+			std::vector<std::byte> bytes(byteCount);
+			if (!bytes.empty())
+			{
+				in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+				if (!in)
+				{
+					throw std::runtime_error("Failed to read safetensors tensor payload");
+				}
+			}
+			return bytes;
+		}
+
 		struct SafetensorsArchiveBuilder
 		{
 			static SafetensorsArchive Build(std::span<const std::byte> bytes)
@@ -280,6 +320,64 @@ namespace LiteNN::Serialization
 				archive.storage_.assign(bytes.begin(), bytes.end());
 				archive.payloadOffset_ = payloadOffset;
 				ParseHeader(archive, rootObject, bytes.size() - payloadOffset);
+				return archive;
+			}
+
+			static SafetensorsArchive BuildFromFile(const std::filesystem::path& path)
+			{
+				std::ifstream in(path, std::ios::binary);
+				if (!in)
+				{
+					throw std::runtime_error("Failed to open safetensors file for reading");
+				}
+				const auto fileSize = FileSize(in);
+				if (fileSize < static_cast<std::streamoff>(sizeof(std::uint64_t)))
+				{
+					throw std::runtime_error("Safetensors file is too small to contain a header length");
+				}
+
+				std::array<std::byte, sizeof(std::uint64_t)> headerLengthBytes{};
+				in.read(reinterpret_cast<char*>(headerLengthBytes.data()),
+				        static_cast<std::streamsize>(headerLengthBytes.size()));
+				if (!in)
+				{
+					throw std::runtime_error("Failed to read safetensors header length");
+				}
+				const auto headerSizeU64 = ReadU64LE(headerLengthBytes, 0);
+				if (headerSizeU64 > kMaxSafetensorsHeaderBytes)
+				{
+					throw std::runtime_error("Safetensors header is too large");
+				}
+				const auto headerSize = CheckedToSize(headerSizeU64, "header size");
+				const auto payloadOffset = sizeof(std::uint64_t) + headerSize;
+				if (payloadOffset > static_cast<std::size_t>(fileSize))
+				{
+					throw std::runtime_error("Safetensors file is truncated before tensor payload data");
+				}
+
+				std::vector<char> header(headerSize);
+				if (!header.empty())
+				{
+					in.read(header.data(), static_cast<std::streamsize>(header.size()));
+					if (!in)
+					{
+						throw std::runtime_error("Failed to read safetensors header");
+					}
+				}
+
+				simdjson::padded_string paddedHeader(header.data(), header.size());
+				simdjson::dom::parser parser;
+				simdjson::dom::element root;
+				if (const auto error = parser.parse(paddedHeader).get(root))
+				{
+					throw JsonError("parse failed", error);
+				}
+
+				SafetensorsArchive archive;
+				archive.backingPath_ = path;
+				archive.payloadOffset_ = payloadOffset;
+				ParseHeader(archive, RequireObject(root, "header"),
+				            static_cast<std::size_t>(fileSize) - payloadOffset);
 				return archive;
 			}
 
@@ -348,7 +446,7 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("Safetensors tensor byte size does not match dtype and shape for " +
 					                         std::string(name));
 				}
-				if (dtype == DataType::Bool)
+				if (dtype == DataType::Bool && !archive.storage_.empty())
 				{
 					const auto absoluteBegin = archive.payloadOffset_ + begin;
 					for (std::size_t i = absoluteBegin; i < absoluteBegin + expectedBytes; ++i)
@@ -382,8 +480,7 @@ namespace LiteNN::Serialization
 
 	SafetensorsArchive SafetensorsArchive::LoadFile(const std::filesystem::path& path)
 	{
-		auto bytes = Detail::ReadAllBytes(path);
-		return Load(std::span<const std::byte>(bytes));
+		return Detail::SafetensorsArchiveBuilder::BuildFromFile(path);
 	}
 
 	std::span<const SafetensorsTensorInfo> SafetensorsArchive::Tensors() const
@@ -410,8 +507,18 @@ namespace LiteNN::Serialization
 
 	std::span<const std::byte> SafetensorsArchive::TensorData(const SafetensorsTensorInfo& tensor) const
 	{
-		const auto begin = payloadOffset_ + tensor.dataBegin;
-		return std::span<const std::byte>(storage_).subspan(begin, tensor.ByteSize());
+		if (!storage_.empty())
+		{
+			const auto begin = payloadOffset_ + tensor.dataBegin;
+			return std::span<const std::byte>(storage_).subspan(begin, tensor.ByteSize());
+		}
+		if (backingPath_.empty())
+		{
+			throw std::runtime_error("Safetensors archive has no in-memory payload or backing file");
+		}
+		tensorReadBuffer_ = Detail::ReadFileRange(backingPath_, payloadOffset_ + tensor.dataBegin,
+		                                          tensor.ByteSize());
+		return tensorReadBuffer_;
 	}
 
 	Tensor<CPU> SafetensorsArchive::TensorAsCPU(const SafetensorsTensorInfo& tensor, bool transpose2D) const

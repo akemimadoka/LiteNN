@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -18,6 +19,7 @@
 #include "llvm/ADT/APInt.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -482,6 +484,21 @@ private:
 			return b.create<arith::ConstantFloatOp>(loc, floatType, floatValue);
 		}
 		return b.create<arith::ConstantIntOp>(loc, elemType, static_cast<std::int64_t>(value));
+	}
+
+	Value emitScalarToF32(OpBuilder& b, Location loc, Value value)
+	{
+		auto f32 = b.getF32Type();
+		if (value.getType() == f32)
+		{
+			return value;
+		}
+		if (auto floatType = dyn_cast<FloatType>(value.getType()))
+		{
+			return floatType.getWidth() < 32 ? b.create<arith::ExtFOp>(loc, f32, value).getResult()
+			                                 : b.create<arith::TruncFOp>(loc, f32, value).getResult();
+		}
+		throw std::runtime_error("GraphToMLIR expected floating-point scalar");
 	}
 
 	Value emitScalarZero(OpBuilder& b, Location loc, Type elemType)
@@ -1223,11 +1240,65 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support OutProdNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const TimestepEmbeddingNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const TimestepEmbeddingNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support TimestepEmbeddingNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto timesteps = getVal(valueMap, node.timesteps);
+		auto timestepsType = cast<RankedTensorType>(timesteps.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		if (timestepsType.getRank() != 1 || resultType.getRank() != 2)
+		{
+			throw std::runtime_error("GraphToMLIR TimestepEmbeddingNode requires timesteps [T] and output [T, dim]");
+		}
+		if (resultType.getElementType() != builder_.getF32Type())
+		{
+			throw std::runtime_error("GraphToMLIR TimestepEmbeddingNode output must be Float32");
+		}
+
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto inputMap = AffineMap::get(2, 0, { getAffineDimExpr(0, &ctx_) }, &ctx_);
+		auto outputMap = AffineMap::getMultiDimIdentityMap(2, &ctx_);
+		SmallVector<utils::IteratorType> iterTypes(2, utils::IteratorType::parallel);
+		const auto half = static_cast<std::int64_t>(node.dim / 2);
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ timesteps }, ValueRange{ empty },
+		    SmallVector<AffineMap>{ inputMap, outputMap }, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    if (half == 0)
+			    {
+				    b.create<linalg::YieldOp>(l, emitScalarZero(b, l, b.getF32Type()));
+				    return;
+			    }
+
+			    auto dimIndex = b.create<linalg::IndexOp>(l, 1).getResult();
+			    auto dimI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), dimIndex).getResult();
+			    auto halfI64 = emitI64Constant(b, l, half);
+			    auto twoHalfI64 = emitI64Constant(b, l, 2 * half);
+			    auto isSinHalf = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, dimI64, halfI64).getResult();
+			    auto isPadding = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, dimI64, twoHalfI64).getResult();
+			    auto sinJ = b.create<arith::SubIOp>(l, dimI64, halfI64).getResult();
+			    auto freqIndex = b.create<arith::SelectOp>(l, isSinHalf, sinJ, dimI64).getResult();
+			    freqIndex = emitClampedI64(b, l, freqIndex, 0, half - 1);
+
+			    auto freqIndexFloat = b.create<arith::SIToFPOp>(l, b.getF32Type(), freqIndex).getResult();
+			    auto scale = b.create<arith::ConstantFloatOp>(
+			        l, b.getF32Type(),
+			        llvm::APFloat(static_cast<float>(-std::log(static_cast<double>(node.maxPeriod)) /
+			                                         static_cast<double>(half))));
+			    auto exponent = b.create<arith::MulFOp>(l, freqIndexFloat, scale).getResult();
+			    auto frequency = b.create<math::ExpOp>(l, exponent).getResult();
+			    auto timestep = emitScalarToF32(b, l, args[0]);
+			    auto arg = b.create<arith::MulFOp>(l, timestep, frequency).getResult();
+			    auto cosValue = b.create<math::CosOp>(l, arg).getResult();
+			    auto sinValue = b.create<math::SinOp>(l, arg).getResult();
+			    auto wave = b.create<arith::SelectOp>(l, isSinHalf, sinValue, cosValue).getResult();
+			    auto result = b.create<arith::SelectOp>(l, isPadding, emitScalarZero(b, l, b.getF32Type()), wave).getResult();
+			    b.create<linalg::YieldOp>(l, result);
+		    });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const SolveTriNode&, std::span<const OutputInfo>,
@@ -1258,11 +1329,178 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support Im2ColNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const Conv2DNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const Conv2DNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support Conv2DNode yet; use the interpreter path");
+		auto loc = builder_.getUnknownLoc();
+		auto input = getVal(valueMap, node.input);
+		auto weight = getVal(valueMap, node.weight);
+		auto inputType = cast<RankedTensorType>(input.getType());
+		auto weightType = cast<RankedTensorType>(weight.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		if (inputType.getRank() != 4 || weightType.getRank() != 4 || resultType.getRank() != 4)
+		{
+			throw std::runtime_error("GraphToMLIR Conv2DNode requires rank-4 input, weight, and output tensors");
+		}
+		if (node.strides.size() != 2 || node.dilations.size() != 2 || node.lowPads.size() != 2 ||
+		    node.highPads.size() != 2)
+		{
+			throw std::runtime_error("GraphToMLIR Conv2DNode requires rank-2 spatial parameters");
+		}
+		if (node.groupCount == 0)
+		{
+			throw std::runtime_error("GraphToMLIR Conv2DNode requires groupCount > 0");
+		}
+
+		const auto inputChannels = inputType.getDimSize(1);
+		const auto outputChannels = weightType.getDimSize(0);
+		const auto inChannelsPerGroup = weightType.getDimSize(1);
+		if (inputChannels < 0 || outputChannels < 0 || inChannelsPerGroup < 0)
+		{
+			throw std::runtime_error("GraphToMLIR Conv2DNode requires static channel dimensions");
+		}
+		if (inputChannels % static_cast<int64_t>(node.groupCount) != 0 ||
+		    outputChannels % static_cast<int64_t>(node.groupCount) != 0 ||
+		    inputChannels / static_cast<int64_t>(node.groupCount) != inChannelsPerGroup)
+		{
+			throw std::runtime_error("GraphToMLIR Conv2DNode group/channel dimensions are inconsistent");
+		}
+		const auto outChannelsPerGroup = outputChannels / static_cast<int64_t>(node.groupCount);
+
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+		auto filled = builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+
+		constexpr int64_t kLoopRank = 7;
+		auto outputMap = AffineMap::get(kLoopRank, 0,
+		                                { getAffineDimExpr(0, &ctx_), getAffineDimExpr(1, &ctx_),
+		                                  getAffineDimExpr(2, &ctx_), getAffineDimExpr(3, &ctx_) },
+		                                &ctx_);
+		auto weightMap = AffineMap::get(kLoopRank, 0,
+		                                { getAffineDimExpr(1, &ctx_), getAffineDimExpr(4, &ctx_),
+		                                  getAffineDimExpr(5, &ctx_), getAffineDimExpr(6, &ctx_) },
+		                                &ctx_);
+		SmallVector<utils::IteratorType> iterTypes{
+		    utils::IteratorType::parallel, utils::IteratorType::parallel, utils::IteratorType::parallel,
+		    utils::IteratorType::parallel, utils::IteratorType::reduction, utils::IteratorType::reduction,
+		    utils::IteratorType::reduction,
+		};
+
+		auto conv = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{ weight }, ValueRange{ filled },
+		    SmallVector<AffineMap>{ weightMap, outputMap },
+		    iterTypes, [&](OpBuilder& b, Location l, ValueRange args) {
+			    auto n = b.create<linalg::IndexOp>(l, 0).getResult();
+			    auto oc = b.create<linalg::IndexOp>(l, 1).getResult();
+			    auto oh = b.create<linalg::IndexOp>(l, 2).getResult();
+			    auto ow = b.create<linalg::IndexOp>(l, 3).getResult();
+			    auto icpg = b.create<linalg::IndexOp>(l, 4).getResult();
+			    auto kh = b.create<linalg::IndexOp>(l, 5).getResult();
+			    auto kw = b.create<linalg::IndexOp>(l, 6).getResult();
+
+			    auto ocI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), oc).getResult();
+			    auto icpgI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), icpg).getResult();
+			    auto ohI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), oh).getResult();
+			    auto owI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), ow).getResult();
+			    auto khI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), kh).getResult();
+			    auto kwI64 = b.create<arith::IndexCastOp>(l, b.getI64Type(), kw).getResult();
+
+			    auto group = b.create<arith::DivSIOp>(
+			        l, ocI64, emitI64Constant(b, l, outChannelsPerGroup)).getResult();
+			    auto inputChannel = b.create<arith::AddIOp>(
+			        l, b.create<arith::MulIOp>(
+			               l, group, emitI64Constant(b, l, inChannelsPerGroup)).getResult(),
+			        icpgI64).getResult();
+			    auto inputY = b.create<arith::SubIOp>(
+			        l,
+			        b.create<arith::AddIOp>(
+			             l,
+			             b.create<arith::MulIOp>(
+			                 l, ohI64,
+			                 emitI64Constant(b, l, static_cast<std::int64_t>(node.strides[0]))).getResult(),
+			             b.create<arith::MulIOp>(
+			                 l, khI64,
+			                 emitI64Constant(b, l, static_cast<std::int64_t>(node.dilations[0]))).getResult())
+			            .getResult(),
+			        emitI64Constant(b, l, static_cast<std::int64_t>(node.lowPads[0]))).getResult();
+			    auto inputX = b.create<arith::SubIOp>(
+			        l,
+			        b.create<arith::AddIOp>(
+			             l,
+			             b.create<arith::MulIOp>(
+			                 l, owI64,
+			                 emitI64Constant(b, l, static_cast<std::int64_t>(node.strides[1]))).getResult(),
+			             b.create<arith::MulIOp>(
+			                 l, kwI64,
+			                 emitI64Constant(b, l, static_cast<std::int64_t>(node.dilations[1]))).getResult())
+			            .getResult(),
+			        emitI64Constant(b, l, static_cast<std::int64_t>(node.lowPads[1]))).getResult();
+
+			    auto zeroI64 = emitI64Constant(b, l, 0);
+			    auto yInLow = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, inputY, zeroI64).getResult();
+			    auto yInHigh = b.create<arith::CmpIOp>(
+			        l, arith::CmpIPredicate::slt, inputY,
+			        emitI64Constant(b, l, inputType.getDimSize(2))).getResult();
+			    auto xInLow = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, inputX, zeroI64).getResult();
+			    auto xInHigh = b.create<arith::CmpIOp>(
+			        l, arith::CmpIPredicate::slt, inputX,
+			        emitI64Constant(b, l, inputType.getDimSize(3))).getResult();
+			    auto inBounds = b.create<arith::AndIOp>(l, yInLow, yInHigh).getResult();
+			    inBounds = b.create<arith::AndIOp>(l, inBounds, xInLow).getResult();
+			    inBounds = b.create<arith::AndIOp>(l, inBounds, xInHigh).getResult();
+
+			    SmallVector<Value> inputCoords{
+			        n,
+			        emitI64ToIndex(b, l, inputChannel),
+			        emitI64ToIndex(b, l, emitClampedI64(b, l, inputY, 0, inputType.getDimSize(2) - 1)),
+			        emitI64ToIndex(b, l, emitClampedI64(b, l, inputX, 0, inputType.getDimSize(3) - 1)),
+			    };
+			    auto inputElement = b.create<tensor::ExtractOp>(l, input, inputCoords).getResult();
+			    auto product = emitScalarMultiply(b, l, inputElement, args[0], resultType.getElementType());
+			    auto maskedProduct =
+			        b.create<arith::SelectOp>(l, inBounds, product,
+			                                  emitScalarZero(b, l, resultType.getElementType())).getResult();
+			    auto sum = emitScalarAdd(b, l, args[1], maskedProduct, resultType.getElementType());
+			    b.create<linalg::YieldOp>(l, sum);
+		    });
+		Value result = conv.getResult(0);
+
+		if (node.bias)
+		{
+			auto bias = getVal(valueMap, *node.bias);
+			auto biasType = cast<RankedTensorType>(bias.getType());
+			SmallVector<AffineExpr> biasExprs;
+			if (biasType.getRank() == 1)
+			{
+				biasExprs.push_back(getAffineDimExpr(1, &ctx_));
+			}
+			else if (biasType.getRank() == 4)
+			{
+				biasExprs = { getAffineConstantExpr(0, &ctx_), getAffineDimExpr(1, &ctx_),
+				              getAffineConstantExpr(0, &ctx_), getAffineConstantExpr(0, &ctx_) };
+			}
+			else
+			{
+				throw std::runtime_error("GraphToMLIR Conv2DNode bias must be rank-1 or rank-4");
+			}
+
+			auto biasMap = AffineMap::get(4, 0, biasExprs, &ctx_);
+			auto convMap = AffineMap::getMultiDimIdentityMap(4, &ctx_);
+			auto outMap = AffineMap::getMultiDimIdentityMap(4, &ctx_);
+			auto biasEmpty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+			SmallVector<utils::IteratorType> biasIterTypes(4, utils::IteratorType::parallel);
+			auto withBias = builder_.create<linalg::GenericOp>(
+			    loc, TypeRange{ resultType }, ValueRange{ result, bias }, ValueRange{ biasEmpty },
+			    SmallVector<AffineMap>{ convMap, biasMap, outMap }, biasIterTypes,
+			    [&](OpBuilder& b, Location l, ValueRange args) {
+				    auto sum = emitScalarAdd(b, l, args[0], args[1], resultType.getElementType());
+				    b.create<linalg::YieldOp>(l, sum);
+			    });
+			result = withBias.getResult(0);
+		}
+
+		valueMap[nodeId] = { result };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const ConvTranspose2DNode&, std::span<const OutputInfo>,
@@ -1354,7 +1592,8 @@ private:
 
 OwningOpRef<ModuleOp> translateGraphToMLIR(const Graph& graph, MLIRContext& ctx)
 {
-	ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect>();
+	ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, math::MathDialect,
+	                tensor::TensorDialect>();
 	Validation::ValidateGraph(graph);
 	GraphTranslator translator(graph, ctx);
 	return translator.translate();
