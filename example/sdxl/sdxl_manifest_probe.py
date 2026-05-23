@@ -1081,6 +1081,207 @@ def emit_spatial_transformer_smoke_manifest(
     }
 
 
+def emit_spatial_transformer_2d_smoke_manifest(
+    tensors: dict[str, TensorInfo],
+    *,
+    batch: int,
+    height: int,
+    width: int,
+    context_tokens: int,
+) -> dict[str, Any]:
+    if batch != 1:
+        raise ValueError("spatial-transformer-2d-smoke currently requires --batch 1")
+    st_prefix = "middle_block.1"
+    block_prefix = f"{st_prefix}.transformer_blocks.0"
+    channel_count = unet_tensor(tensors, f"{st_prefix}.norm.weight").shape[0]
+    context_width = unet_tensor(tensors, f"{block_prefix}.attn2.to_k.weight").shape[1]
+    feature_h = max(height // 32, 1)
+    feature_w = max(width // 32, 1)
+    compute_dtype = "F32"
+
+    def st_tensor(name: str, suffix: str, layout: str, shape: list[int] | None = None) -> dict[str, Any]:
+        return manifest_unet_tensor(tensors, name, f"{st_prefix}.{suffix}", layout, shape, target_dtype=compute_dtype)
+
+    def block_tensor(name: str, suffix: str, layout: str, shape: list[int] | None = None) -> dict[str, Any]:
+        return manifest_unet_tensor(tensors, name, f"{block_prefix}.{suffix}", layout, shape, target_dtype=compute_dtype)
+
+    def maybe_bias(name: str, suffix: str) -> dict[str, str]:
+        spec = {"weight": name}
+        bias_source = f"model.diffusion_model.{block_prefix}.{suffix}"
+        if bias_source in tensors:
+            spec["bias"] = name.replace(".weight", ".bias")
+        return spec
+
+    tensors_out = [
+        st_tensor("unet.middle_block.1.norm.weight", "norm.weight", "torch_groupnorm_weight",
+                  torch_groupnorm_shape(unet_tensor(tensors, f"{st_prefix}.norm.weight"))),
+        st_tensor("unet.middle_block.1.norm.bias", "norm.bias", "torch_groupnorm_bias",
+                  torch_groupnorm_shape(unet_tensor(tensors, f"{st_prefix}.norm.bias"))),
+        st_tensor("unet.middle_block.1.proj_in.weight", "proj_in.weight", "torch_linear_weight",
+                  torch_linear_weight_shape(unet_tensor(tensors, f"{st_prefix}.proj_in.weight"))),
+        st_tensor("unet.middle_block.1.proj_in.bias", "proj_in.bias", "torch_bias_1d",
+                  torch_bias_1d_shape(unet_tensor(tensors, f"{st_prefix}.proj_in.bias"))),
+        st_tensor("unet.middle_block.1.proj_out.weight", "proj_out.weight", "torch_linear_weight",
+                  torch_linear_weight_shape(unet_tensor(tensors, f"{st_prefix}.proj_out.weight"))),
+        st_tensor("unet.middle_block.1.proj_out.bias", "proj_out.bias", "torch_bias_1d",
+                  torch_bias_1d_shape(unet_tensor(tensors, f"{st_prefix}.proj_out.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm1.weight", "norm1.weight", "torch_norm_weight",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm1.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm1.bias", "norm1.bias", "torch_norm_bias",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm1.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm2.weight", "norm2.weight", "torch_norm_weight",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm2.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm2.bias", "norm2.bias", "torch_norm_bias",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm2.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm3.weight", "norm3.weight", "torch_norm_weight",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm3.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.norm3.bias", "norm3.bias", "torch_norm_bias",
+                     torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.norm3.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn1.to_q.weight", "attn1.to_q.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn1.to_q.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn1.to_k.weight", "attn1.to_k.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn1.to_k.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn1.to_v.weight", "attn1.to_v.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn1.to_v.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.weight", "attn1.to_out.0.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn1.to_out.0.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.bias", "attn1.to_out.0.bias",
+                     "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.attn1.to_out.0.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn2.to_q.weight", "attn2.to_q.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn2.to_q.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn2.to_k.weight", "attn2.to_k.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn2.to_k.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn2.to_v.weight", "attn2.to_v.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn2.to_v.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.weight", "attn2.to_out.0.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.attn2.to_out.0.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.bias", "attn2.to_out.0.bias",
+                     "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.attn2.to_out.0.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.weight", "ff.net.0.proj.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.ff.net.0.proj.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.bias", "ff.net.0.proj.bias",
+                     "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.ff.net.0.proj.bias"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.ff.net.2.weight", "ff.net.2.weight",
+                     "torch_linear_weight", torch_linear_weight_shape(unet_tensor(tensors, f"{block_prefix}.ff.net.2.weight"))),
+        block_tensor("unet.middle_block.1.transformer_blocks.0.ff.net.2.bias", "ff.net.2.bias",
+                     "torch_bias_1d", torch_bias_1d_shape(unet_tensor(tensors, f"{block_prefix}.ff.net.2.bias"))),
+    ]
+    for bias_suffix in (
+        "attn1.to_q.bias",
+        "attn1.to_k.bias",
+        "attn1.to_v.bias",
+        "attn2.to_q.bias",
+        "attn2.to_k.bias",
+        "attn2.to_v.bias",
+    ):
+        full_name = f"model.diffusion_model.{block_prefix}.{bias_suffix}"
+        if full_name in tensors:
+            tensors_out.append(
+                block_tensor(
+                    f"unet.middle_block.1.transformer_blocks.0.{bias_suffix}",
+                    bias_suffix,
+                    "torch_bias_1d",
+                    torch_bias_1d_shape(tensors[full_name]),
+                )
+            )
+
+    return {
+        "format": "litenn.torch_manifest.v1",
+        "metadata": {
+            "probe": "spatial-transformer-2d-smoke",
+            "description": "fixed-shape batch=1 SDXL middle-block SpatialTransformer over NCHW features",
+            "feature_height": feature_h,
+            "feature_width": feature_w,
+        },
+        "inputs": [
+            {"name": "features", "dtype": "torch.float32", "shape": [batch, channel_count, feature_h, feature_w]},
+            {"name": "context", "dtype": "torch.float32", "shape": [context_tokens, context_width]},
+        ],
+        "tensors": tensors_out,
+        "nodes": [
+            {
+                "name": "middle_spatial_transformer",
+                "op": "spatial_transformer_2d",
+                "input": "features",
+                "context": "context",
+                "use_linear": True,
+                "norm": {
+                    "weight": "unet.middle_block.1.norm.weight",
+                    "bias": "unet.middle_block.1.norm.bias",
+                    "num_groups": 32,
+                    "eps": 1e-6,
+                    "layout": "pytorch",
+                },
+                "proj_in": {
+                    "weight": "unet.middle_block.1.proj_in.weight",
+                    "bias": "unet.middle_block.1.proj_in.bias",
+                },
+                "blocks": [
+                    {
+                        "norm1": {
+                            "weight": "unet.middle_block.1.transformer_blocks.0.norm1.weight",
+                            "bias": "unet.middle_block.1.transformer_blocks.0.norm1.bias",
+                            "axis": 1,
+                            "eps": 1e-5,
+                        },
+                        "attn1": {
+                            "heads": sdxl_unet_heads(channel_count),
+                            "q": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_q.weight", "attn1.to_q.bias"),
+                            "k": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_k.weight", "attn1.to_k.bias"),
+                            "v": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn1.to_v.weight", "attn1.to_v.bias"),
+                            "out": linear_spec(
+                                "unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.weight",
+                                "unet.middle_block.1.transformer_blocks.0.attn1.to_out.0.bias",
+                            ),
+                            "residual": False,
+                        },
+                        "norm2": {
+                            "weight": "unet.middle_block.1.transformer_blocks.0.norm2.weight",
+                            "bias": "unet.middle_block.1.transformer_blocks.0.norm2.bias",
+                            "axis": 1,
+                            "eps": 1e-5,
+                        },
+                        "attn2": {
+                            "heads": sdxl_unet_heads(channel_count),
+                            "q": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_q.weight", "attn2.to_q.bias"),
+                            "k": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_k.weight", "attn2.to_k.bias"),
+                            "v": maybe_bias("unet.middle_block.1.transformer_blocks.0.attn2.to_v.weight", "attn2.to_v.bias"),
+                            "out": linear_spec(
+                                "unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
+                                "unet.middle_block.1.transformer_blocks.0.attn2.to_out.0.bias",
+                            ),
+                            "residual": False,
+                        },
+                        "norm3": {
+                            "weight": "unet.middle_block.1.transformer_blocks.0.norm3.weight",
+                            "bias": "unet.middle_block.1.transformer_blocks.0.norm3.bias",
+                            "axis": 1,
+                            "eps": 1e-5,
+                        },
+                        "ff": {
+                            "proj": {
+                                "weight": "unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.weight",
+                                "bias": "unet.middle_block.1.transformer_blocks.0.ff.net.0.proj.bias",
+                            },
+                            "down": {
+                                "weight": "unet.middle_block.1.transformer_blocks.0.ff.net.2.weight",
+                                "bias": "unet.middle_block.1.transformer_blocks.0.ff.net.2.bias",
+                            },
+                            "residual": False,
+                        },
+                    }
+                ],
+                "proj_out": {
+                    "weight": "unet.middle_block.1.proj_out.weight",
+                    "bias": "unet.middle_block.1.proj_out.bias",
+                },
+                "output": "features_out",
+            }
+        ],
+        "outputs": [{"name": "features_out", "source": "features_out"}],
+    }
+
+
 def emit_vae_decode_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
     latent_h = height // 8
     latent_w = width // 8
@@ -1420,6 +1621,10 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
         return emit_spatial_transformer_smoke_manifest(
             tensors, tokens=args.tokens, context_tokens=args.context_tokens
         )
+    if args.probe == "spatial-transformer-2d-smoke":
+        return emit_spatial_transformer_2d_smoke_manifest(
+            tensors, batch=args.batch, height=args.height, width=args.width, context_tokens=args.context_tokens
+        )
     if args.probe == "vae-decode-stem":
         return emit_vae_decode_stem_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     if args.probe == "vae-decode-full":
@@ -1531,6 +1736,7 @@ def build_parser() -> argparse.ArgumentParser:
             "unet-euler-smoke",
             "unet-conditioning-smoke",
             "spatial-transformer-smoke",
+            "spatial-transformer-2d-smoke",
             "vae-decode-stem",
             "vae-decode-full",
         ],

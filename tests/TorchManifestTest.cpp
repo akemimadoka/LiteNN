@@ -395,12 +395,16 @@ TEST(TorchManifest, ReportsSupportedMappingsAndDTypeAliases)
 	const auto hasGEGLU = std::ranges::any_of(mappings, [](const auto& mapping) {
 		return mapping.torchOp == "geglu_feed_forward";
 	});
+	const auto hasSpatialTransformer = std::ranges::any_of(mappings, [](const auto& mapping) {
+		return mapping.torchOp == "spatial_transformer_2d";
+	});
 	EXPECT_TRUE(hasLinear);
 	EXPECT_TRUE(hasLayerNorm);
 	EXPECT_TRUE(hasConv2D);
 	EXPECT_TRUE(hasGroupNorm);
 	EXPECT_TRUE(hasConcat);
 	EXPECT_TRUE(hasGEGLU);
+	EXPECT_TRUE(hasSpatialTransformer);
 	EXPECT_EQ(Serialization::MapTorchManifestDataType("torch.float32"), DataType::Float32);
 	EXPECT_EQ(Serialization::MapTorchManifestDataType("torch.long"), DataType::Int64);
 }
@@ -598,6 +602,124 @@ TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
 	const auto geluOne = 0.5F * (1.0F + std::tanh(std::sqrt(2.0F / pi) * (1.0F + 0.044715F)));
 	EXPECT_NEAR(ReadFloat(outputs[1], 0), 2.0F * geluOne, 1e-5F);
 	EXPECT_NEAR(ReadFloat(outputs[1], 1), 3.0F * geluOne, 1e-5F);
+}
+
+TEST(TorchManifest, ImportsSpatialTransformer2DComposite)
+{
+	std::vector<FloatTensorSpec> specs{
+		{ "st.norm.weight", { 1, 2, 1, 1 }, { 1.0F, 1.0F } },
+		{ "st.norm.bias", { 1, 2, 1, 1 }, { 0.0F, 0.0F } },
+		{ "st.proj_in.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.proj_in.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.proj_out.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.proj_out.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.block.norm1.weight", { 1, 2 }, { 1.0F, 1.0F } },
+		{ "st.block.norm1.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.block.norm2.weight", { 1, 2 }, { 1.0F, 1.0F } },
+		{ "st.block.norm2.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.block.norm3.weight", { 1, 2 }, { 1.0F, 1.0F } },
+		{ "st.block.norm3.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn1.q.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn1.q.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn1.k.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn1.k.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn1.v.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn1.v.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn1.out.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn1.out.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn2.q.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn2.q.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn2.k.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn2.k.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn2.v.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn2.v.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.attn2.out.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.attn2.out.bias", { 1, 2 }, { 0.0F, 0.0F } },
+		{ "st.ff.proj.weight", { 2, 4 }, { 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.ff.proj.bias", { 1, 4 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.ff.down.weight", { 2, 2 }, { 0.0F, 0.0F, 0.0F, 0.0F } },
+		{ "st.ff.down.bias", { 1, 2 }, { 0.0F, 0.0F } },
+	};
+	const auto archive = BuildFloatArchive(specs);
+	const auto manifest = R"({
+  "format":"litenn.torch_manifest.v1",
+  "inputs":[
+    {"name":"x","dtype":"torch.float32","shape":[1,2,1,1]},
+    {"name":"context","dtype":"torch.float32","shape":[1,2]}
+  ],
+  "tensors":[
+    {"name":"st.norm.weight","source":"st.norm.weight","dtype":"F32","shape":[1,2,1,1],"layout":"identity"},
+    {"name":"st.norm.bias","source":"st.norm.bias","dtype":"F32","shape":[1,2,1,1],"layout":"identity"},
+    {"name":"st.proj_in.weight","source":"st.proj_in.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.proj_in.bias","source":"st.proj_in.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.proj_out.weight","source":"st.proj_out.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.proj_out.bias","source":"st.proj_out.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm1.weight","source":"st.block.norm1.weight","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm1.bias","source":"st.block.norm1.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm2.weight","source":"st.block.norm2.weight","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm2.bias","source":"st.block.norm2.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm3.weight","source":"st.block.norm3.weight","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.block.norm3.bias","source":"st.block.norm3.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn1.q.weight","source":"st.attn1.q.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn1.q.bias","source":"st.attn1.q.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn1.k.weight","source":"st.attn1.k.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn1.k.bias","source":"st.attn1.k.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn1.v.weight","source":"st.attn1.v.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn1.v.bias","source":"st.attn1.v.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn1.out.weight","source":"st.attn1.out.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn1.out.bias","source":"st.attn1.out.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn2.q.weight","source":"st.attn2.q.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn2.q.bias","source":"st.attn2.q.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn2.k.weight","source":"st.attn2.k.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn2.k.bias","source":"st.attn2.k.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn2.v.weight","source":"st.attn2.v.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn2.v.bias","source":"st.attn2.v.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.attn2.out.weight","source":"st.attn2.out.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.attn2.out.bias","source":"st.attn2.out.bias","dtype":"F32","shape":[1,2],"layout":"identity"},
+    {"name":"st.ff.proj.weight","source":"st.ff.proj.weight","dtype":"F32","shape":[2,4],"layout":"identity"},
+    {"name":"st.ff.proj.bias","source":"st.ff.proj.bias","dtype":"F32","shape":[1,4],"layout":"identity"},
+    {"name":"st.ff.down.weight","source":"st.ff.down.weight","dtype":"F32","shape":[2,2],"layout":"identity"},
+    {"name":"st.ff.down.bias","source":"st.ff.down.bias","dtype":"F32","shape":[1,2],"layout":"identity"}
+  ],
+  "nodes":[
+    {
+      "name":"st",
+      "op":"spatial_transformer_2d",
+      "input":"x",
+      "context":"context",
+      "use_linear":true,
+      "norm":{"num_groups":1,"eps":0.000001,"layout":"pytorch","weight":"st.norm.weight","bias":"st.norm.bias"},
+      "proj_in":{"weight":"st.proj_in.weight","bias":"st.proj_in.bias"},
+      "blocks":[
+        {
+          "norm1":{"axis":1,"weight":"st.block.norm1.weight","bias":"st.block.norm1.bias"},
+          "attn1":{"heads":1,"q":{"weight":"st.attn1.q.weight","bias":"st.attn1.q.bias"},"k":{"weight":"st.attn1.k.weight","bias":"st.attn1.k.bias"},"v":{"weight":"st.attn1.v.weight","bias":"st.attn1.v.bias"},"out":{"weight":"st.attn1.out.weight","bias":"st.attn1.out.bias"},"residual":false},
+          "norm2":{"axis":1,"weight":"st.block.norm2.weight","bias":"st.block.norm2.bias"},
+          "attn2":{"heads":1,"q":{"weight":"st.attn2.q.weight","bias":"st.attn2.q.bias"},"k":{"weight":"st.attn2.k.weight","bias":"st.attn2.k.bias"},"v":{"weight":"st.attn2.v.weight","bias":"st.attn2.v.bias"},"out":{"weight":"st.attn2.out.weight","bias":"st.attn2.out.bias"},"residual":false},
+          "norm3":{"axis":1,"weight":"st.block.norm3.weight","bias":"st.block.norm3.bias"},
+          "ff":{"proj":{"weight":"st.ff.proj.weight","bias":"st.ff.proj.bias"},"down":{"weight":"st.ff.down.weight","bias":"st.ff.down.bias"},"residual":false}
+        }
+      ],
+      "proj_out":{"weight":"st.proj_out.weight","bias":"st.proj_out.bias"},
+      "output":"y"
+    }
+  ],
+  "outputs":[{"name":"y","source":"y"}]
+})";
+
+	auto result = Serialization::ImportTorchManifest(manifest, archive);
+	ASSERT_EQ(result.graph.OutputSignature().size(), 1u);
+	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 2, 1, 1 }));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2, 1, 1 }),
+		Tensor<CPU>({ 0.5, -0.5 }, { 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
+	EXPECT_NEAR(ReadFloat(outputs[0], 1), 3.0F, 1e-5F);
 }
 
 TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)

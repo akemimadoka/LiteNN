@@ -1099,6 +1099,35 @@ namespace LiteNN::Serialization
 			return output;
 		}
 
+		NodeOutput AddGEGLUFeedForwardSpec(ImportContext& context, NodeOutput input, simdjson::dom::object spec,
+		                                   std::string_view nodeName, std::string_view label);
+
+		NodeOutput AddAttentionBlockSpec(ImportContext& context, NodeOutput input, NodeOutput keyValueInput,
+		                                 simdjson::dom::object spec, std::string_view nodeName,
+		                                 std::string_view label);
+
+		NodeOutput AddLayerNormSpec(ImportContext& context, NodeOutput input, simdjson::dom::object spec,
+		                             std::string_view nodeName, std::string_view label)
+		{
+			const auto inputInfo = context.subgraph.GetOutputInfo(input);
+			if (inputInfo.shape.empty())
+			{
+				throw std::runtime_error(std::format("Torch manifest node '{}' {} input must not be scalar",
+				                                     nodeName, label));
+			}
+			const auto axis = FindSizeOr(spec, "axis", inputInfo.shape.size() - 1, label);
+			if (axis >= inputInfo.shape.size())
+			{
+				throw std::runtime_error(std::format("Torch manifest node '{}' {} axis {} out of range for rank {}",
+				                                     nodeName, label, axis, inputInfo.shape.size()));
+			}
+			const auto eps = FindDouble(spec, "eps", FindDouble(spec, "epsilon", 1e-5, label), label);
+			auto scale = FindVariableRef(context, spec, { "weight", "gamma", "scale" }, nodeName, label);
+			auto bias = FindVariableRef(context, spec, { "bias", "beta" }, nodeName, label);
+			return Layer::AddNormalization(context.subgraph, input, NormalizationMode::LayerNorm, axis, eps,
+			                               scale, bias);
+		}
+
 		NodeOutput ImportFeedForward(ImportContext& context, simdjson::dom::object object,
 		                             std::string_view nodeName)
 		{
@@ -1135,14 +1164,19 @@ namespace LiteNN::Serialization
 		{
 			const auto inputName = RequireString(RequireMember(object, "input", nodeName), "geglu_feed_forward input");
 			const auto input = RequireValue(context, inputName, nodeName);
-			auto projected = AddLinearSpec(context, input, RequireObjectMember(object, "proj", "geglu_feed_forward proj"),
-			                               nodeName, "geglu_feed_forward proj");
+			return AddGEGLUFeedForwardSpec(context, input, object, nodeName, "geglu_feed_forward");
+		}
+
+		NodeOutput AddGEGLUFeedForwardSpec(ImportContext& context, NodeOutput input, simdjson::dom::object spec,
+		                                   std::string_view nodeName, std::string_view label)
+		{
+			auto projected = AddLinearSpec(context, input, RequireObjectMember(spec, "proj", label), nodeName, label);
 			const auto projectedInfo = context.subgraph.GetOutputInfo(projected);
 			if (projectedInfo.shape.empty())
 			{
 				throw std::runtime_error("Torch manifest geglu_feed_forward projection must not be scalar");
 			}
-			const auto axis = FindSizeOr(object, "axis", projectedInfo.shape.size() - 1, "geglu_feed_forward axis");
+			const auto axis = FindSizeOr(spec, "axis", projectedInfo.shape.size() - 1, "geglu_feed_forward axis");
 			if (axis >= projectedInfo.shape.size())
 			{
 				throw std::runtime_error(std::format(
@@ -1166,9 +1200,8 @@ namespace LiteNN::Serialization
 			auto gate = AddActivationByName(context, { gateId, 0 }, "gelu", nodeName);
 			auto hidden = AddBinary(context, BinaryOp::Multiply, { valueId, 0 }, gate, nodeName,
 			                        "geglu_feed_forward gate multiply");
-			auto output = AddLinearSpec(context, hidden, RequireObjectMember(object, "down", "geglu_feed_forward down"),
-			                            nodeName, "geglu_feed_forward down");
-			if (FindBool(object, "residual", true, "geglu_feed_forward residual"))
+			auto output = AddLinearSpec(context, hidden, RequireObjectMember(spec, "down", label), nodeName, label);
+			if (FindBool(spec, "residual", true, "geglu_feed_forward residual"))
 			{
 				output = AddBinary(context, BinaryOp::Add, output, input, nodeName,
 				                   "geglu_feed_forward residual add");
@@ -1185,19 +1218,26 @@ namespace LiteNN::Serialization
 			const auto input = RequireValue(context, inputName, nodeName);
 			const auto contextName = FindString(object, "context", "attention_block context").value_or(std::string(inputName));
 			const auto keyValueInput = RequireValue(context, contextName, nodeName);
-			const auto heads = FindSizeOr(object, "heads", FindSizeOr(object, "num_heads", 1, "attention_block heads"),
-			                              "attention_block heads");
+			const auto output = AddAttentionBlockSpec(context, input, keyValueInput, object, nodeName,
+			                                          "attention_block");
+			context.report.loweredOps.push_back(
+			    std::format("{}: attention_block -> QKV/head reshape/SDPA/output projection(+residual)", nodeName));
+			return output;
+		}
+
+		NodeOutput AddAttentionBlockSpec(ImportContext& context, NodeOutput input, NodeOutput keyValueInput,
+		                                 simdjson::dom::object spec, std::string_view nodeName,
+		                                 std::string_view label)
+		{
+			const auto heads = FindSizeOr(spec, "heads", FindSizeOr(spec, "num_heads", 1, label), label);
 			if (heads == 0)
 			{
 				throw std::runtime_error("Torch manifest attention_block requires heads > 0");
 			}
 
-			auto q = AddLinearSpec(context, input, RequireObjectMember(object, "q", "attention_block q"),
-			                       nodeName, "attention_block q");
-			auto k = AddLinearSpec(context, keyValueInput, RequireObjectMember(object, "k", "attention_block k"),
-			                       nodeName, "attention_block k");
-			auto v = AddLinearSpec(context, keyValueInput, RequireObjectMember(object, "v", "attention_block v"),
-			                       nodeName, "attention_block v");
+			auto q = AddLinearSpec(context, input, RequireObjectMember(spec, "q", label), nodeName, label);
+			auto k = AddLinearSpec(context, keyValueInput, RequireObjectMember(spec, "k", label), nodeName, label);
+			auto v = AddLinearSpec(context, keyValueInput, RequireObjectMember(spec, "v", label), nodeName, label);
 			const auto qInfo = context.subgraph.GetOutputInfo(q);
 			const auto kInfo = context.subgraph.GetOutputInfo(k);
 			const auto vInfo = context.subgraph.GetOutputInfo(v);
@@ -1225,10 +1265,9 @@ namespace LiteNN::Serialization
 			v = Layer::AddPermute(context.subgraph, v, { 1uz, 0uz, 2uz });
 
 			auto scores = Layer::AddBatchMatMul(context.subgraph, q, k);
-			const auto scale = FindDouble(object, "scale", 1.0 / std::sqrt(static_cast<double>(headDim)),
-			                              "attention_block scale");
+			const auto scale = FindDouble(spec, "scale", 1.0 / std::sqrt(static_cast<double>(headDim)), label);
 			scores = AddScalarBinary(context, BinaryOp::Multiply, scores, scale, nodeName, "attention scale");
-			if (auto maskName = FindString(object, "mask", "attention_block mask"))
+			if (auto maskName = FindString(spec, "mask", label))
 			{
 				const auto mask = RequireValue(context, *maskName, nodeName);
 				scores = AddBinary(context, BinaryOp::Add, scores, mask, nodeName, "attention mask add");
@@ -1238,14 +1277,133 @@ namespace LiteNN::Serialization
 			auto attended = Layer::AddBatchMatMul(context.subgraph, probs, v);
 			attended = Layer::AddPermute(context.subgraph, attended, { 1uz, 0uz, 2uz });
 			attended = AddReshapeChecked(context, attended, { qInfo.shape[0], heads * valueHeadDim }, nodeName);
-			auto output = AddLinearSpec(context, attended, RequireObjectMember(object, "out", "attention_block out"),
-			                            nodeName, "attention_block out");
-			if (FindBool(object, "residual", true, "attention_block residual"))
+			auto output = AddLinearSpec(context, attended, RequireObjectMember(spec, "out", label), nodeName, label);
+			if (FindBool(spec, "residual", true, label))
 			{
 				output = AddBinary(context, BinaryOp::Add, output, input, nodeName, "attention residual add");
 			}
-			context.report.loweredOps.push_back(
-			    std::format("{}: attention_block -> QKV/head reshape/SDPA/output projection(+residual)", nodeName));
+			return output;
+		}
+
+		NodeOutput ImportSpatialTransformer2D(ImportContext& context, simdjson::dom::object object,
+		                                      std::string_view nodeName)
+		{
+			const auto inputName = RequireString(RequireMember(object, "input", nodeName),
+			                                     "spatial_transformer_2d input");
+			const auto input = RequireValue(context, inputName, nodeName);
+			const auto inputInfo = context.subgraph.GetOutputInfo(input);
+			if (inputInfo.shape.size() != 4)
+			{
+				throw std::runtime_error(std::format(
+				    "Torch manifest node '{}' spatial_transformer_2d expects NCHW rank-4 input", nodeName));
+			}
+			if (inputInfo.shape[0] != 1)
+			{
+				throw std::runtime_error(std::format(
+				    "Torch manifest node '{}' spatial_transformer_2d currently supports batch=1 to avoid cross-batch attention",
+				    nodeName));
+			}
+
+			const auto batch = inputInfo.shape[0];
+			const auto inputChannels = inputInfo.shape[1];
+			const auto height = inputInfo.shape[2];
+			const auto width = inputInfo.shape[3];
+			const auto spatialTokens = height * width;
+			const auto useLinear = FindBool(object, "use_linear", true, "spatial_transformer_2d use_linear");
+			const auto contextName = FindString(object, "context", "spatial_transformer_2d context");
+			const std::optional<NodeOutput> contextValue =
+			    contextName ? std::optional<NodeOutput>{ RequireValue(context, *contextName, nodeName) } : std::nullopt;
+
+			auto current = AddGroupNormSpec(context, input, RequireObjectMember(object, "norm",
+			                                                                    "spatial_transformer_2d norm"),
+			                                nodeName, "spatial_transformer_2d norm");
+			std::size_t tokenWidth = inputChannels;
+			if (useLinear)
+			{
+				current = AddReshapeChecked(context, current, { inputChannels, spatialTokens }, nodeName);
+				current = Layer::AddPermute(context.subgraph, current, { 1uz, 0uz });
+				current = AddLinearSpec(context, current,
+				                        RequireObjectMember(object, "proj_in", "spatial_transformer_2d proj_in"),
+				                        nodeName, "spatial_transformer_2d proj_in");
+				tokenWidth = context.subgraph.GetOutputInfo(current).shape[1];
+			}
+			else
+			{
+				current = AddConv2DSpec(context, current,
+				                        RequireObjectMember(object, "proj_in", "spatial_transformer_2d proj_in"),
+				                        nodeName, "spatial_transformer_2d proj_in");
+				const auto projectedInfo = context.subgraph.GetOutputInfo(current);
+				tokenWidth = projectedInfo.shape[1];
+				current = AddReshapeChecked(context, current, { tokenWidth, spatialTokens }, nodeName);
+				current = Layer::AddPermute(context.subgraph, current, { 1uz, 0uz });
+			}
+
+			std::size_t blockIndex = 0;
+			for (auto blockValue : RequireArray(RequireMember(object, "blocks", nodeName),
+			                                    "spatial_transformer_2d blocks"))
+			{
+				const auto block = RequireObject(blockValue, "spatial_transformer_2d block");
+				const auto blockLabel = std::format("spatial_transformer_2d block {}", blockIndex);
+
+				auto norm1 = AddLayerNormSpec(context, current, RequireObjectMember(block, "norm1", blockLabel),
+				                              nodeName, blockLabel + " norm1");
+				auto attn1 = AddAttentionBlockSpec(context, norm1, norm1,
+				                                   RequireObjectMember(block, "attn1", blockLabel),
+				                                   nodeName, blockLabel + " attn1");
+				current = AddBinary(context, BinaryOp::Add, current, attn1, nodeName,
+				                    blockLabel + " self-attention residual");
+
+				auto norm2 = AddLayerNormSpec(context, current, RequireObjectMember(block, "norm2", blockLabel),
+				                              nodeName, blockLabel + " norm2");
+				auto keyValue = contextValue.value_or(norm2);
+				auto attn2 = AddAttentionBlockSpec(context, norm2, keyValue,
+				                                   RequireObjectMember(block, "attn2", blockLabel),
+				                                   nodeName, blockLabel + " attn2");
+				current = AddBinary(context, BinaryOp::Add, current, attn2, nodeName,
+				                    blockLabel + " cross-attention residual");
+
+				auto norm3 = AddLayerNormSpec(context, current, RequireObjectMember(block, "norm3", blockLabel),
+				                              nodeName, blockLabel + " norm3");
+				auto ff = AddGEGLUFeedForwardSpec(context, norm3, RequireObjectMember(block, "ff", blockLabel),
+				                                  nodeName, blockLabel + " ff");
+				current = AddBinary(context, BinaryOp::Add, current, ff, nodeName, blockLabel + " ff residual");
+				++blockIndex;
+			}
+			if (blockIndex == 0)
+			{
+				throw std::runtime_error("Torch manifest spatial_transformer_2d requires at least one block");
+			}
+
+			if (useLinear)
+			{
+				current = AddLinearSpec(context, current,
+				                        RequireObjectMember(object, "proj_out", "spatial_transformer_2d proj_out"),
+				                        nodeName, "spatial_transformer_2d proj_out");
+				const auto projectedInfo = context.subgraph.GetOutputInfo(current);
+				if (projectedInfo.shape.size() != 2 || projectedInfo.shape[0] != spatialTokens ||
+				    projectedInfo.shape[1] != inputChannels)
+				{
+					throw std::runtime_error(std::format(
+					    "Torch manifest node '{}' spatial_transformer_2d proj_out must return [H*W, input_channels]",
+					    nodeName));
+				}
+				current = Layer::AddPermute(context.subgraph, current, { 1uz, 0uz });
+				current = AddReshapeChecked(context, current, { batch, inputChannels, height, width }, nodeName);
+			}
+			else
+			{
+				current = Layer::AddPermute(context.subgraph, current, { 1uz, 0uz });
+				current = AddReshapeChecked(context, current, { batch, tokenWidth, height, width }, nodeName);
+				current = AddConv2DSpec(context, current,
+				                        RequireObjectMember(object, "proj_out", "spatial_transformer_2d proj_out"),
+				                        nodeName, "spatial_transformer_2d proj_out");
+			}
+
+			const auto output = AddBinary(context, BinaryOp::Add, current, input, nodeName,
+			                              "spatial_transformer_2d residual");
+			context.report.loweredOps.push_back(std::format(
+			    "{}: spatial_transformer_2d -> GroupNorm/proj_in/flatten/TransformerBlock*/proj_out/residual",
+			    nodeName));
 			return output;
 		}
 
@@ -1449,6 +1607,10 @@ namespace LiteNN::Serialization
 			if (op == "geglu" || op == "geglufeedforward" || op == "gegluffn" || op == "torchgeglu")
 			{
 				return ImportGEGLUFeedForward(context, object, nodeName);
+			}
+			if (op == "spatialtransformer2d" || op == "spatialtransformer" || op == "spatialtransformerblock")
+			{
+				return ImportSpatialTransformer2D(context, object, nodeName);
 			}
 			if (op == "attentionblock" || op == "crossattention" || op == "selfattention")
 			{
@@ -1693,7 +1855,7 @@ namespace LiteNN::Serialization
 
 	std::span<const TorchManifestOpMapping> SupportedTorchManifestOpMappings()
 	{
-		static constexpr std::array<TorchManifestOpMapping, 34> mappings{ {
+		static constexpr std::array<TorchManifestOpMapping, 35> mappings{ {
 		    { "linear", "VariableRef -> MatMul -> optional Add", "expects torch_linear_weight layout for PyTorch weights" },
 		    { "attention_projection", "VariableRef -> MatMul -> optional Add", "same layout contract as linear" },
 		    { "embedding", "VariableRef -> Gather(axis=0)", "indices input may be named input or indices" },
@@ -1707,6 +1869,7 @@ namespace LiteNN::Serialization
 		    { "feed_forward", "Linear/activation-or-gate/Linear(+residual)", "fixed-shape transformer MLP template" },
 		    { "geglu_feed_forward", "Linear -> Slice(value/gate) -> GELU(gate) -> Multiply -> Linear(+residual)", "SDXL GEGLU combined projection template" },
 		    { "attention_block", "QKV projection + head reshape/permute + SDPA + output projection", "fixed-shape self/cross attention over [tokens, channels]" },
+		    { "spatial_transformer_2d", "GroupNorm + proj_in + NCHW/token reshape + transformer blocks + proj_out", "batch=1 SDXL use_linear_in_transformer path" },
 		    { "vae_decode", "fixed step Conv/Norm/Upsample/ConvTranspose/scale/clamp", "VAE decoder assembly template" },
 		    { "concat", "ConcatNode", "used for UNet skip-connection channel joins" },
 		    { "matmul", "BinaryOp(MatMul)", "2D matmul" },

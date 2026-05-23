@@ -903,8 +903,13 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
 - [x] Support SDXL Transformer FFN GEGLU combined projection in Torch manifests.
       （已完成：Torch manifest now lowers `slice` and `geglu_feed_forward`; `spatial-transformer-smoke` emits
       norm3 plus `ff.net.0.proj` chunk/GELU/gate/`ff.net.2` for the middle-block transformer smoke path.）
-- [ ] Add 4D SpatialTransformer lowering templates: NCHW -> token flatten, self/cross attention, GEGLU FFN,
+- [x] Add 4D SpatialTransformer lowering templates: NCHW -> token flatten, self/cross attention, GEGLU FFN,
       token -> NCHW restore, and residual/proj_in/proj_out handling.
+      （已完成：Torch manifest now has `spatial_transformer_2d`, covering batch=1 NCHW GroupNorm,
+      `use_linear_in_transformer=True` proj_in/proj_out, NCHW/token flatten+restore, self-attention,
+      cross-attention, GEGLU FFN, and residual add. `spatial-transformer-2d-smoke` emits the SDXL middle-block
+      version from real Stability checkpoint tensor names; the 64x64 fixed-shape smoke graph imports and runs through
+      CPU AOT `--run-model`.）
 - [ ] Add parity fixtures for one real SDXL SpatialTransformer block against PyTorch/generative-models tensors,
       including GEGLU and cross-attention.
 
