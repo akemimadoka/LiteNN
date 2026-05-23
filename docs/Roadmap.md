@@ -751,10 +751,11 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 Purpose: provide a practical bridge from PyTorch/Hugging Face artifacts into LiteNN graph/model formats, starting with
 safetensors weights and expanding toward torch-exported graph structure.
 
-Status: started on 2026-05-23 with a native safetensors reader/import path using vendored `third_party/simdjson`
-for JSON header parsing. LiteNN can now read safetensors metadata and checked tensor payloads, map supported
-dtypes to `DataType`, import tensors as named variables with rename/rank-2 transpose hooks, and convert a
-safetensors weight file into a `.ltnn` variable archive through `litenn_safetensors_convert`.
+Status: active on 2026-05-23. LiteNN now has a native safetensors reader/import path using vendored
+`third_party/simdjson` for JSON header parsing, plus a LiteNN-specific Torch manifest importer paired with
+safetensors weights. The importer validates expected dtype/shape/layout, materializes common PyTorch weight layouts,
+lowers a minimal op set into LiteNN graph nodes, emits a converter report, and can save either variable-only
+safetensors imports or manifest-defined graphs through `litenn_safetensors_convert`.
 
 #### G12.1 Safetensors Reader
 
@@ -778,20 +779,35 @@ safetensors weight file into a `.ltnn` variable archive through `litenn_safetens
       （已完成：library API imports to a variable-only LiteNN graph archive; `tools/torch/litenn_safetensors_convert`
       writes `.ltnn` archives and supports repeated `--rename from=to` and `--transpose name` options. Separated
       rodata export remains owned by G9 artifact packaging once graph manifests are available.）
-- [ ] Add mapping presets for common module names: Linear, Embedding, LayerNorm/RMSNorm, attention projections, and LoRA adapters.
-- [ ] Add diagnostics for missing tensors, extra tensors, dtype mismatch, shape mismatch, and layout mismatch.
-      （部分完成：reader/import paths already report unsupported dtype, shape/offset/byte-size/layout hook errors, and
-      duplicate output names; expected-tensor manifest diagnostics are pending G12.3.）
-- [ ] Add golden tests against PyTorch for small exported MLP/attention fixtures.
+- [x] Add mapping presets for common module names: Linear, Embedding, LayerNorm/RMSNorm, attention projections, and LoRA adapters.
+      （已完成：Torch manifest tensor layouts cover identity/embedding, `torch_linear_weight`,
+      `torch_attention_projection_weight`, `torch_bias_1d`, norm weight/bias reshape, and PEFT-style LoRA A/B
+      2D transpose layouts.）
+- [x] Add diagnostics for missing tensors, extra tensors, dtype mismatch, shape mismatch, and layout mismatch.
+      （已完成：manifest import reports missing safetensors sources, unused archive tensors by default,
+      expected dtype/source-shape/final-shape mismatches, unsupported layout presets, rank mismatch for transpose/
+      bias/norm layouts, duplicate input/tensor/output names, and unsupported ops.）
+- [x] Add golden tests against PyTorch for small exported MLP/attention fixtures.
+      （已完成：`tests/TorchManifestTest.cpp` imports a PyTorch-style Linear+ReLU fixture from manifest+safetensors,
+      checks PyTorch golden outputs through the interpreter, and also checks CPU AOT when MLIR is enabled.
+      Attention fixture remains a later coverage expansion.）
 
 #### G12.3 Torch Graph Support
 
 - [x] Decide first graph source: `torch.export`, `torch.fx`, ONNX, or a LiteNN-specific JSON manifest paired with safetensors.
       （决策：首个实现目标采用 LiteNN-specific JSON manifest + safetensors weights。原因是它最容易绑定
       rename/transpose/expected-shape diagnostics，并可作为 torch.export/fx/ONNX 前端的稳定中间层。）
-- [ ] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
-- [ ] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
-- [ ] Add roundtrip examples showing PyTorch weights plus graph manifest imported to LiteNN and compiled through CPU AOT.
+- [x] Define a minimal op mapping table from torch ops to existing LiteNN Layer/Node helpers.
+      （已完成：`SupportedTorchManifestOpMappings()` documents the first supported set: Linear/attention projection,
+      Embedding, LayerNorm, RMSNorm, MatMul/Add/Subtract/Multiply/Divide, ReLU/GELU/SiLU/Sigmoid/Tanh, Softmax,
+      Reshape, and 2D Transpose.）
+- [x] Add a converter report listing lowered ops, folded constants, unsupported ops, and required fallbacks.
+      （已完成：`TorchManifestReport` records imported tensors, lowered ops, folded constant layout transforms,
+      unsupported ops, fallbacks, and diagnostics; the CLI prints the report after manifest conversion.）
+- [x] Add roundtrip examples showing PyTorch weights plus graph manifest imported to LiteNN and compiled through CPU AOT.
+      （已完成：`example/torch_manifest` provides a PyTorch fixture exporter that writes safetensors,
+      a manifest using Torch layout presets, and a C++ example that loads the manifest, runs the interpreter,
+      and also runs CPU AOT when `LiteNNCompiler` is available.）
 
 ### G13: AOT Training Execution
 

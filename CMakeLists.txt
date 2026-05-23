@@ -279,6 +279,7 @@ if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/mnist)
     add_subdirectory(example/carrier)
     add_subdirectory(example/gguf)
+    add_subdirectory(example/torch_manifest)
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
@@ -318,7 +319,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
        OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"
        OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND (TEST_NAME STREQUAL "MemorySafetyTest"
-                                   OR TEST_NAME STREQUAL "PyTorchGoldenTest")))
+                                   OR TEST_NAME STREQUAL "PyTorchGoldenTest"
+                                   OR TEST_NAME STREQUAL "TorchManifestTest")))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
     else()
         target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)
