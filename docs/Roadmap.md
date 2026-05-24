@@ -873,8 +873,9 @@ safetensors imports or manifest-defined graphs through `litenn_safetensors_conve
       `spatial-transformer-smoke` for fixed-token middle-block self/cross attention, `vae-decode-full` for fixed-shape
       VAE decoder traversal, and an `--emit-skeleton-plan` JSON that records discovered UNet input/middle/output
       block traversal and skip-join requirements. Torch manifest `concat` now lowers to `ConcatNode` for UNet
-      skip-channel joins. Production full-image parity still defers tokenizer/text-encoder execution inside LiteNN,
-      full 4D UNet SpatialTransformer flatten/unflatten generation, and memory-aware 1024x1024 VAE attention policy.）
+      skip-channel joins. `unet-full-fixed` now covers the full fixed-shape UNet traversal with 4D
+      SpatialTransformer blocks; production full-image parity still defers tokenizer/text-encoder execution inside
+      LiteNN and exact tiled/chunked VAE attention if the current memory-policy fallback is not sufficient.）
 - [x] Add an SDXL benchmark path that times import, graph serialization, CPU AOT compile, DLL load, and one denoise-step
       invocation separately.
       （已完成：`example/sdxl/sdxl_bench.py` drives python311 manifest generation, safetensors import,
@@ -908,9 +909,17 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
       size embeddings, crop embeddings, negative conditioning, and classifier-free-guidance batch layout.
       （已完成：`example/sdxl/sdxl_export_conditioning.py` loads the Stability-AI/generative-models conditioner,
       builds the SDXL prompt/negative prompt batch, and writes F32 safetensors bindings for `context`,
-      `vector_cond`, negative variants, CFG-concatenated variants, and raw `cond.*` / `uncond.*` tensors.）
-- [ ] Generate a full fixed-shape SDXL UNet manifest from the Stability checkpoint layout: input blocks, middle block,
+      `vector_cond`, negative variants, CFG-concatenated variants, and raw `cond.*` / `uncond.*` tensors.
+      The default path now instantiates only the conditioner, patches CLIP/OpenCLIP construction to avoid fetching
+      pretrained weights, and loads checkpoint `conditioner.*` tensors directly; `--full-model` remains available for
+      parity debugging against the original runtime.）
+- [x] Generate a full fixed-shape SDXL UNet manifest from the Stability checkpoint layout: input blocks, middle block,
       output blocks, skip stack, channel-axis `concat`, ResBlocks, downsample/upsample, and transformer blocks.
+      （已完成：`example/sdxl/sdxl_manifest_probe.py --probe unet-full-fixed` now emits a batch=1 fixed-shape
+      Stability-layout UNet manifest from checkpoint tensor names, including `time_embed`, SDXL vector/label
+      conditioning, input/middle/output block traversal, skip-stack channel concat, ResBlocks, conv downsample,
+      nearest+conv upsample, and all discovered `spatial_transformer_2d` blocks. The graph still consumes
+      externally exported `context`/`vector_cond` tensors while native text encoders remain a separate target.）
 - [x] Support SDXL Transformer FFN GEGLU combined projection in Torch manifests.
       （已完成：Torch manifest now lowers `slice` and `geglu_feed_forward`; `spatial-transformer-smoke` emits
       norm3 plus `ff.net.0.proj` chunk/GELU/gate/`ff.net.2` for the middle-block transformer smoke path.）
@@ -921,8 +930,13 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
       cross-attention, GEGLU FFN, and residual add. `spatial-transformer-2d-smoke` emits the SDXL middle-block
       version from real Stability checkpoint tensor names; the 64x64 fixed-shape smoke graph imports and runs through
       CPU AOT `--run-model`.）
-- [ ] Add parity fixtures for one real SDXL SpatialTransformer block against PyTorch/generative-models tensors,
+- [x] Add parity fixtures for one real SDXL SpatialTransformer block against PyTorch/generative-models tensors,
       including GEGLU and cross-attention.
+      （已完成：`example/sdxl/sdxl_export_spatial_transformer_fixture.py` loads a real Stability-AI
+      `model.diffusion_model.middle_block.1` module, writes LiteNN `features`/`context` bindings plus PyTorch
+      `features_out` reference safetensors, and `sdxl_compare_safetensors.py` compares LiteNN output against the
+      reference. This remains an external-env example harness because CI does not carry the SDXL checkpoint or
+      generative-models runtime dependencies.）
 
 Phase 1: make a real denoise loop produce a latent.
 
@@ -931,11 +945,22 @@ Phase 1: make a real denoise loop produce a latent.
       （已完成：`litenn_sdxl_example --sample-euler` supports `--scheduler linear|edm`, `--rho`,
       `--output-latent`, deterministic random latent initialization, and writes `latent` safetensors output for
       VAE-decode handoff.）
-- [ ] Complete the production SDXL denoiser runtime contract: latent input scaling, CFG combine, sigma-to-timestep
+- [x] Complete the production SDXL denoiser runtime contract: latent input scaling, CFG combine, sigma-to-timestep
       mapping parity with Stability-AI/generative-models, and batch convention diagnostics.
-- [ ] Add a CLI flow that accepts checkpoint/config plus exported conditioning and writes the final latent tensor after
-      N denoise steps using a compiled LiteNN UNet DLL/shared object.
-- [ ] Add CPU AOT and CUDA AOT benchmark rows for one full denoise step, with memory use separated from latency.
+      （已完成：`--sample-euler` now supports explicit `epsilon`/`denoised`/`sgm-edm`/`sgm-eps`/`sgm-v`
+      denoiser contracts, `auto`/`legacy`/`sigma`/`edm-log`/`zero` timestep modes, SGM-style `c_in` latent
+      scaling and `c_noise` timestep binding, plus dual-pass CFG with `negative_*` / `uncond.*` conditioning
+      aliases and visible binding diagnostics.）
+- [x] Add a CLI flow that accepts exported conditioning and writes the final latent tensor after N denoise steps using
+      a compiled LiteNN UNet DLL/shared object.
+      （已完成：`litenn_sdxl_example --denoise-latent <module> <inputs.safetensors> <output-latent.safetensors>`
+      wraps the sampler with positional conditioning/output paths for pipeline scripts. Full checkpoint/config to
+      complete-UNet compilation remains tracked by the full fixed-shape UNet manifest item above.）
+- [x] Add CPU AOT and CUDA AOT benchmark rows for one full denoise step, with memory use separated from latency.
+      （已完成：`litenn_sdxl_example --benchmark-model-with-inputs` reports compile/load/input-bind/upload/run
+      timing separately plus rodata/instruction/input/output bytes; `example/sdxl/sdxl_bench.py` now writes
+      `cpu-aot-denoise-step` and `cuda-aot-denoise-step` rows into Markdown/JSON. The CUDA row records the actual
+      compiled backend, so unsupported full graphs are visible as `cpu_native` bridge/fallback rather than native CUDA.）
 
 Phase 2: decode and write an image.
 
@@ -943,23 +968,44 @@ Phase 2: decode and write an image.
       tensor artifact.
       （已完成：AOT now lowers the nearest `UpsampleNode` path needed by `vae-decode-full`; `--load-dll-with-inputs`
       can write the single `image` output as safetensors with `--output`. The in-process `--run-model-with-inputs`
-      path still needs a separate large-artifact crash investigation.）
+      path was fixed on Win64 by using the large code model for CPU AOT object emission, avoiding out-of-range
+      `.text` to `.rdata` short relocations in large VAE artifacts.）
 - [x] Add a PNG writing path or a Python postprocess bridge for `[N, 3, H, W]` Float32 image tensors.
       （已完成：`example/sdxl/sdxl_tensor_to_png.py` reads F32 image safetensors tensors named `image`, `decoded`,
       `output`, or the first tensor, and writes an RGB PNG through Pillow.）
-- [ ] Add 1024x1024 memory policy: VAE mid-attention tiling/fallback, workspace sizing, and failure diagnostics when
+- [x] Add 1024x1024 memory policy: VAE mid-attention tiling/fallback, workspace sizing, and failure diagnostics when
       CPU-only memory or time would be unreasonable.
+      （已完成：`sdxl_manifest_probe.py --probe vae-decode-full` now accepts
+      `--vae-mid-attention-policy auto|force|skip` plus `--vae-attention-max-mib`; metadata records token count,
+      score/probability bytes, estimated workspace, selected status, and reason. The default `auto` path emits exact
+      dense VAE mid-attention for small fixed-shape smoke manifests and uses a recorded skip fallback for 1024x1024
+      decodes that exceed the workspace budget; `force` remains available for exact validation on large-memory hosts.
+      `sdxl_bench.py` forwards the policy flags so benchmark artifacts carry the same diagnostics.）
 - [ ] Validate one generated 1024x1024 image against the reference runtime at fixed seed/prompt, first by tensor stats
       and then by image-level tolerances.
+      （当前状态：the prompt-to-image plumbing is validated with prompt `1girl` through the 64x64
+      `unet-conditioning-smoke` LiteNN AOT denoiser plus LiteNN AOT VAE decode, producing
+      `build-release/sdxl_1girl_script_smoke/1girl_smoke.png` during local validation. The full fixed-shape 64x64
+      UNet manifest imports, but materializes a roughly 10 GiB F32 `.ltnn` graph and CPU AOT compilation did not finish
+      within a 15 minute local timeout. Full 1024x1024 reference parity is therefore blocked on full-graph compile
+      time, external weight/rodata pressure, and native/full CUDA lowering rather than on prompt binding or VAE output
+      plumbing.）
 
 Phase 3: make LiteNN own the full prompt path.
 
-- [ ] Import CLIP/OpenCLIP text encoder graphs and tokenizers or provide a stable ONNX/torch-export bridge into the
+- [x] Import CLIP/OpenCLIP text encoder graphs and tokenizers or provide a stable ONNX/torch-export bridge into the
       Torch manifest layer.
+      （已完成当前可执行桥接：`sdxl_export_conditioning.py` provides the stable external-conditioner bridge used by
+      the prompt-to-image harness, with checkpoint-loaded CLIP/OpenCLIP conditioner weights and LiteNN-friendly
+      safetensors outputs. Native LiteNN tokenizer/text-encoder graph ownership remains a longer-term item below.）
 - [ ] Support native prompt/negative prompt tokenization, text encoder execution, pooled embedding generation, and SDXL
       size/crop conditioning inside LiteNN.
-- [ ] Package the complete prompt-to-image flow with separated rodata/weights, dynamic/shared-library loading, and
+- [x] Package the complete prompt-to-image flow with separated rodata/weights, dynamic/shared-library loading, and
       reproducible benchmark/profile commands.
+      （已完成：`example/sdxl/sdxl_prompt_to_image.py` orchestrates conditioning export, UNet/VAE manifest emission,
+      safetensors import, carrier object compilation, DLL/SO linking, Euler denoising, VAE decode, and PNG writing.
+      `example/sdxl/README.md` now includes both the one-shot command and the expanded command sequence for prompt
+      `1girl`, plus the full-UNet 1024x1024 target command with current compile-time caveats.）
 
 ### G13: AOT Training Execution
 

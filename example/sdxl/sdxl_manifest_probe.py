@@ -26,6 +26,8 @@ TENSOR_COMPONENT_PREFIXES: tuple[tuple[str, str], ...] = (
     ("conditioner.embedders.1.", "text_encoder_2"),
 )
 
+DEFAULT_VAE_ATTENTION_MAX_MIB = 512
+
 
 @dataclass(frozen=True)
 class TensorInfo:
@@ -356,6 +358,10 @@ def sdxl_unet_heads(channel_count: int) -> int:
     # SDXL base uses num_head_channels=64. Keep the smoke manifest robust for
     # unusual checkpoints by falling back to one head when the division fails.
     return channel_count // 64 if channel_count >= 64 and channel_count % 64 == 0 else 1
+
+
+def node_name(prefix: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", prefix).strip("_")
 
 
 def emit_unet_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
@@ -1282,6 +1288,560 @@ def emit_spatial_transformer_2d_smoke_manifest(
     }
 
 
+def emit_unet_full_fixed_manifest(
+    tensors: dict[str, TensorInfo],
+    *,
+    batch: int,
+    height: int,
+    width: int,
+    context_tokens: int,
+) -> dict[str, Any]:
+    if batch != 1:
+        raise ValueError("unet-full-fixed currently emits batch=1 SpatialTransformer blocks")
+    latent_h = height // 8
+    latent_w = width // 8
+    compute_dtype = "F32"
+    tensor_entries: list[dict[str, Any]] = []
+    seen_tensors: set[str] = set()
+    nodes: list[dict[str, Any]] = []
+    unsupported: list[str] = []
+
+    def has(source_suffix: str) -> bool:
+        return f"model.diffusion_model.{source_suffix}" in tensors
+
+    def wt(source_suffix: str) -> TensorInfo:
+        return unet_tensor(tensors, source_suffix)
+
+    def add_tensor(
+        manifest_name: str,
+        source_suffix: str,
+        layout: str = "identity",
+        shape: list[int] | None = None,
+    ) -> None:
+        if manifest_name in seen_tensors:
+            return
+        seen_tensors.add(manifest_name)
+        tensor_entries.append(
+            manifest_unet_tensor(tensors, manifest_name, source_suffix, layout, shape, target_dtype=compute_dtype)
+        )
+
+    def add_groupnorm_tensors(source_prefix: str, manifest_prefix: str, norm_name: str) -> None:
+        weight = wt(f"{source_prefix}.{norm_name}.weight")
+        bias = wt(f"{source_prefix}.{norm_name}.bias")
+        add_tensor(f"{manifest_prefix}.{norm_name}.weight", f"{source_prefix}.{norm_name}.weight",
+                   "torch_groupnorm_weight", torch_groupnorm_shape(weight))
+        add_tensor(f"{manifest_prefix}.{norm_name}.bias", f"{source_prefix}.{norm_name}.bias",
+                   "torch_groupnorm_bias", torch_groupnorm_shape(bias))
+
+    def add_conv_tensors(source_prefix: str, manifest_prefix: str, conv_name: str) -> None:
+        source_name = f"{source_prefix}.{conv_name}" if source_prefix else conv_name
+        weight = wt(f"{source_name}.weight")
+        bias = wt(f"{source_name}.bias")
+        add_tensor(f"{manifest_prefix}.{conv_name}.weight", f"{source_name}.weight",
+                   "torch_conv2d_weight", weight.shape)
+        add_tensor(f"{manifest_prefix}.{conv_name}.bias", f"{source_name}.bias", "identity", bias.shape)
+
+    def add_linear_tensors(source_prefix: str, manifest_prefix: str, linear_name: str) -> None:
+        source_name = f"{source_prefix}.{linear_name}" if source_prefix else linear_name
+        weight = wt(f"{source_name}.weight")
+        add_tensor(f"{manifest_prefix}.{linear_name}.weight", f"{source_name}.weight",
+                   "torch_linear_weight", torch_linear_weight_shape(weight))
+        if has(f"{source_name}.bias"):
+            bias = wt(f"{source_name}.bias")
+            add_tensor(f"{manifest_prefix}.{linear_name}.bias", f"{source_name}.bias",
+                       "torch_bias_1d", torch_bias_1d_shape(bias))
+
+    def add_1d_affine_tensors(source_prefix: str, manifest_prefix: str, name: str) -> None:
+        weight = wt(f"{source_prefix}.{name}.weight")
+        bias = wt(f"{source_prefix}.{name}.bias")
+        add_tensor(f"{manifest_prefix}.{name}.weight", f"{source_prefix}.{name}.weight",
+                   "torch_norm_weight", torch_bias_1d_shape(weight))
+        add_tensor(f"{manifest_prefix}.{name}.bias", f"{source_prefix}.{name}.bias",
+                   "torch_norm_bias", torch_bias_1d_shape(bias))
+
+    def linear_or_bias_spec(manifest_prefix: str, source_prefix: str, linear_name: str) -> dict[str, str]:
+        spec = {"weight": f"{manifest_prefix}.{linear_name}.weight"}
+        if has(f"{source_prefix}.{linear_name}.bias"):
+            spec["bias"] = f"{manifest_prefix}.{linear_name}.bias"
+        return spec
+
+    def has_resblock(source_prefix: str) -> bool:
+        return has(f"{source_prefix}.in_layers.0.weight") and has(f"{source_prefix}.out_layers.3.weight")
+
+    def has_downsample(source_prefix: str) -> bool:
+        return has(f"{source_prefix}.op.weight")
+
+    def has_upsample(source_prefix: str) -> bool:
+        return has(f"{source_prefix}.conv.weight")
+
+    def has_spatial_transformer(source_prefix: str) -> bool:
+        return has(f"{source_prefix}.norm.weight") and has(f"{source_prefix}.proj_in.weight")
+
+    def transformer_block_indices(source_prefix: str) -> list[int]:
+        result = {
+            int(match.group(1))
+            for name in tensors
+            if (match := re.match(
+                rf"model\.diffusion_model\.{re.escape(source_prefix)}\.transformer_blocks\.(\d+)\.",
+                name,
+            ))
+        }
+        return sorted(result)
+
+    def add_resblock(source_prefix: str, current: str) -> str:
+        if has(f"{source_prefix}.h_upd.in_layers.0.weight") or has(f"{source_prefix}.x_upd.op.weight"):
+            unsupported.append(f"{source_prefix}: ResBlock up/down variant is not supported by residual_block")
+        manifest_prefix = "unet." + source_prefix
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "in_layers.0")
+        add_conv_tensors(source_prefix, manifest_prefix, "in_layers.2")
+        add_linear_tensors(source_prefix, manifest_prefix, "emb_layers.1")
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "out_layers.0")
+        add_conv_tensors(source_prefix, manifest_prefix, "out_layers.3")
+
+        block: dict[str, Any] = {
+            "name": node_name(source_prefix),
+            "op": "residual_block",
+            "input": current,
+            "temb": "temb",
+            "activation": "silu",
+            "norm1": {
+                "weight": f"{manifest_prefix}.in_layers.0.weight",
+                "bias": f"{manifest_prefix}.in_layers.0.bias",
+                "num_groups": 32,
+                "eps": 1e-5,
+                "layout": "pytorch",
+            },
+            "conv1": {
+                "weight": f"{manifest_prefix}.in_layers.2.weight",
+                "bias": f"{manifest_prefix}.in_layers.2.bias",
+                "padding": [1, 1],
+            },
+            "temb_projection": {
+                "weight": f"{manifest_prefix}.emb_layers.1.weight",
+                "bias": f"{manifest_prefix}.emb_layers.1.bias",
+            },
+            "norm2": {
+                "weight": f"{manifest_prefix}.out_layers.0.weight",
+                "bias": f"{manifest_prefix}.out_layers.0.bias",
+                "num_groups": 32,
+                "eps": 1e-5,
+                "layout": "pytorch",
+            },
+            "conv2": {
+                "weight": f"{manifest_prefix}.out_layers.3.weight",
+                "bias": f"{manifest_prefix}.out_layers.3.bias",
+                "padding": [1, 1],
+            },
+            "output": node_name(source_prefix + ".out"),
+        }
+        if has(f"{source_prefix}.skip_connection.weight"):
+            add_conv_tensors(source_prefix, manifest_prefix, "skip_connection")
+            block["skip"] = {
+                "weight": f"{manifest_prefix}.skip_connection.weight",
+                "bias": f"{manifest_prefix}.skip_connection.bias",
+                "padding": [0, 0],
+            }
+        nodes.append(block)
+        return block["output"]
+
+    def add_downsample(source_prefix: str, current: str) -> str:
+        manifest_prefix = "unet." + source_prefix
+        add_conv_tensors(source_prefix, manifest_prefix, "op")
+        output = node_name(source_prefix + ".down")
+        nodes.append(
+            {
+                "name": node_name(source_prefix),
+                "op": "conv2d",
+                "input": current,
+                "weight": f"{manifest_prefix}.op.weight",
+                "bias": f"{manifest_prefix}.op.bias",
+                "stride": [2, 2],
+                "padding": [1, 1],
+                "output": output,
+            }
+        )
+        return output
+
+    def add_upsample(source_prefix: str, current: str, next_h: int, next_w: int) -> str:
+        manifest_prefix = "unet." + source_prefix
+        resize_output = node_name(source_prefix + ".resize")
+        nodes.append(
+            {
+                "name": node_name(source_prefix + ".resize"),
+                "op": "upsample",
+                "input": current,
+                "mode": "nearest",
+                "output_spatial_shape": [next_h, next_w],
+                "output": resize_output,
+            }
+        )
+        add_conv_tensors(source_prefix, manifest_prefix, "conv")
+        output = node_name(source_prefix + ".out")
+        nodes.append(
+            {
+                "name": node_name(source_prefix + ".conv"),
+                "op": "conv2d",
+                "input": resize_output,
+                "weight": f"{manifest_prefix}.conv.weight",
+                "bias": f"{manifest_prefix}.conv.bias",
+                "padding": [1, 1],
+                "output": output,
+            }
+        )
+        return output
+
+    def add_spatial_transformer(source_prefix: str, current: str) -> str:
+        manifest_prefix = "unet." + source_prefix
+        add_groupnorm_tensors(source_prefix, manifest_prefix, "norm")
+        proj_in_weight = wt(f"{source_prefix}.proj_in.weight")
+        proj_out_weight = wt(f"{source_prefix}.proj_out.weight")
+        use_linear = len(proj_in_weight.shape) == 2
+        if use_linear:
+            add_linear_tensors(source_prefix, manifest_prefix, "proj_in")
+            add_linear_tensors(source_prefix, manifest_prefix, "proj_out")
+        elif len(proj_in_weight.shape) == 4 and len(proj_out_weight.shape) == 4:
+            add_conv_tensors(source_prefix, manifest_prefix, "proj_in")
+            add_conv_tensors(source_prefix, manifest_prefix, "proj_out")
+        else:
+            unsupported.append(f"{source_prefix}: unsupported SpatialTransformer proj_in/proj_out ranks")
+
+        blocks: list[dict[str, Any]] = []
+        for block_index in transformer_block_indices(source_prefix):
+            block_source = f"{source_prefix}.transformer_blocks.{block_index}"
+            block_manifest = f"{manifest_prefix}.transformer_blocks.{block_index}"
+            for norm_name in ("norm1", "norm2", "norm3"):
+                add_1d_affine_tensors(block_source, block_manifest, norm_name)
+            for linear_name in (
+                "attn1.to_q",
+                "attn1.to_k",
+                "attn1.to_v",
+                "attn1.to_out.0",
+                "attn2.to_q",
+                "attn2.to_k",
+                "attn2.to_v",
+                "attn2.to_out.0",
+                "ff.net.0.proj",
+                "ff.net.2",
+            ):
+                add_linear_tensors(block_source, block_manifest, linear_name)
+            width = wt(f"{block_source}.attn1.to_q.weight").shape[0]
+            blocks.append(
+                {
+                    "norm1": {
+                        "weight": f"{block_manifest}.norm1.weight",
+                        "bias": f"{block_manifest}.norm1.bias",
+                        "axis": 1,
+                        "eps": 1e-5,
+                    },
+                    "attn1": {
+                        "heads": sdxl_unet_heads(width),
+                        "q": linear_or_bias_spec(block_manifest, block_source, "attn1.to_q"),
+                        "k": linear_or_bias_spec(block_manifest, block_source, "attn1.to_k"),
+                        "v": linear_or_bias_spec(block_manifest, block_source, "attn1.to_v"),
+                        "out": linear_or_bias_spec(block_manifest, block_source, "attn1.to_out.0"),
+                        "residual": False,
+                    },
+                    "norm2": {
+                        "weight": f"{block_manifest}.norm2.weight",
+                        "bias": f"{block_manifest}.norm2.bias",
+                        "axis": 1,
+                        "eps": 1e-5,
+                    },
+                    "attn2": {
+                        "heads": sdxl_unet_heads(width),
+                        "q": linear_or_bias_spec(block_manifest, block_source, "attn2.to_q"),
+                        "k": linear_or_bias_spec(block_manifest, block_source, "attn2.to_k"),
+                        "v": linear_or_bias_spec(block_manifest, block_source, "attn2.to_v"),
+                        "out": linear_or_bias_spec(block_manifest, block_source, "attn2.to_out.0"),
+                        "residual": False,
+                    },
+                    "norm3": {
+                        "weight": f"{block_manifest}.norm3.weight",
+                        "bias": f"{block_manifest}.norm3.bias",
+                        "axis": 1,
+                        "eps": 1e-5,
+                    },
+                    "ff": {
+                        "proj": linear_or_bias_spec(block_manifest, block_source, "ff.net.0.proj"),
+                        "down": linear_or_bias_spec(block_manifest, block_source, "ff.net.2"),
+                        "residual": False,
+                    },
+                }
+            )
+        if not blocks:
+            unsupported.append(f"{source_prefix}: SpatialTransformer has no transformer_blocks")
+
+        output = node_name(source_prefix + ".out")
+        node: dict[str, Any] = {
+            "name": node_name(source_prefix),
+            "op": "spatial_transformer_2d",
+            "input": current,
+            "context": "context",
+            "use_linear": use_linear,
+            "norm": {
+                "weight": f"{manifest_prefix}.norm.weight",
+                "bias": f"{manifest_prefix}.norm.bias",
+                "num_groups": 32,
+                "eps": 1e-6,
+                "layout": "pytorch",
+            },
+            "proj_in": {
+                "weight": f"{manifest_prefix}.proj_in.weight",
+                "bias": f"{manifest_prefix}.proj_in.bias",
+            },
+            "blocks": blocks,
+            "proj_out": {
+                "weight": f"{manifest_prefix}.proj_out.weight",
+                "bias": f"{manifest_prefix}.proj_out.bias",
+            },
+            "output": output,
+        }
+        nodes.append(node)
+        return output
+
+    def process_module(source_prefix: str, current: str, h: int, w: int) -> tuple[str, int, int]:
+        if has_resblock(source_prefix):
+            current = add_resblock(source_prefix, current)
+            return current, h, w
+        if has_spatial_transformer(source_prefix):
+            current = add_spatial_transformer(source_prefix, current)
+            return current, h, w
+        if has_downsample(source_prefix):
+            current = add_downsample(source_prefix, current)
+            return current, (h + 1) // 2, (w + 1) // 2
+        if has_upsample(source_prefix):
+            next_h = h * 2
+            next_w = w * 2
+            current = add_upsample(source_prefix, current, next_h, next_w)
+            return current, next_h, next_w
+        unsupported.append(f"{source_prefix}: no supported module tensor pattern")
+        return current, h, w
+
+    stem_weight = wt("input_blocks.0.0.weight")
+    add_tensor("unet.input_blocks.0.0.weight", "input_blocks.0.0.weight", "torch_conv2d_weight", stem_weight.shape)
+    add_tensor("unet.input_blocks.0.0.bias", "input_blocks.0.0.bias", "identity",
+               wt("input_blocks.0.0.bias").shape)
+    for linear_name in ("time_embed.0", "time_embed.2", "label_emb.0.0", "label_emb.0.2"):
+        add_linear_tensors("", "unet", linear_name)
+    out_norm_weight = wt("out.0.weight")
+    out_norm_bias = wt("out.0.bias")
+    add_tensor("unet.out.0.weight", "out.0.weight", "torch_groupnorm_weight", torch_groupnorm_shape(out_norm_weight))
+    add_tensor("unet.out.0.bias", "out.0.bias", "torch_groupnorm_bias", torch_groupnorm_shape(out_norm_bias))
+    add_tensor("unet.out.2.weight", "out.2.weight", "torch_conv2d_weight", wt("out.2.weight").shape)
+    add_tensor("unet.out.2.bias", "out.2.bias", "identity", wt("out.2.bias").shape)
+
+    model_channels = stem_weight.shape[0]
+    context_width = wt("middle_block.1.transformer_blocks.0.attn2.to_k.weight").shape[1]
+    vector_width = wt("label_emb.0.0.weight").shape[1]
+    nodes.extend(
+        [
+            {
+                "name": "unet_timestep_sinusoidal",
+                "op": "timestep_embedding",
+                "timesteps": "timestep",
+                "dim": model_channels,
+                "max_period": 10000,
+                "output": "time_sinusoidal",
+            },
+            {
+                "name": "unet_time_embed_0",
+                "op": "linear",
+                "input": "time_sinusoidal",
+                "weight": "unet.time_embed.0.weight",
+                "bias": "unet.time_embed.0.bias",
+                "output": "time_hidden",
+            },
+            {"name": "unet_time_embed_act", "op": "silu", "input": "time_hidden", "output": "time_hidden_act"},
+            {
+                "name": "unet_time_embed_2",
+                "op": "linear",
+                "input": "time_hidden_act",
+                "weight": "unet.time_embed.2.weight",
+                "bias": "unet.time_embed.2.bias",
+                "output": "time_emb",
+            },
+            {
+                "name": "unet_label_emb_0",
+                "op": "linear",
+                "input": "vector_cond",
+                "weight": "unet.label_emb.0.0.weight",
+                "bias": "unet.label_emb.0.0.bias",
+                "output": "label_hidden",
+            },
+            {"name": "unet_label_emb_act", "op": "silu", "input": "label_hidden", "output": "label_hidden_act"},
+            {
+                "name": "unet_label_emb_2",
+                "op": "linear",
+                "input": "label_hidden_act",
+                "weight": "unet.label_emb.0.2.weight",
+                "bias": "unet.label_emb.0.2.bias",
+                "output": "label_emb",
+            },
+            {"name": "unet_conditioning_add", "op": "add", "lhs": "time_emb", "rhs": "label_emb", "output": "temb"},
+            {
+                "name": "unet_stem_conv",
+                "op": "conv2d",
+                "input": "latent",
+                "weight": "unet.input_blocks.0.0.weight",
+                "bias": "unet.input_blocks.0.0.bias",
+                "padding": [1, 1],
+                "output": "input_blocks_0_out",
+            },
+        ]
+    )
+
+    input_block_indices = sorted(
+        {
+            int(match.group(1))
+            for name in tensors
+            if (match := re.match(r"model\.diffusion_model\.input_blocks\.(\d+)\.", name))
+        }
+    )
+    output_block_indices = sorted(
+        {
+            int(match.group(1))
+            for name in tensors
+            if (match := re.match(r"model\.diffusion_model\.output_blocks\.(\d+)\.", name))
+        }
+    )
+    if not input_block_indices or input_block_indices[0] != 0:
+        raise ValueError("unet-full-fixed requires input_blocks.0 stem tensors")
+
+    current = "input_blocks_0_out"
+    current_h = latent_h
+    current_w = latent_w
+    skip_stack: list[tuple[str, int, int]] = [(current, current_h, current_w)]
+    input_block_summaries: list[dict[str, Any]] = [
+        {"index": 0, "output": current, "height": current_h, "width": current_w}
+    ]
+    for block_index in input_block_indices[1:]:
+        submodules = sorted(
+            {
+                int(match.group(1))
+                for name in tensors
+                if (match := re.match(rf"model\.diffusion_model\.input_blocks\.{block_index}\.(\d+)\.", name))
+            }
+        )
+        for submodule in submodules:
+            current, current_h, current_w = process_module(
+                f"input_blocks.{block_index}.{submodule}", current, current_h, current_w
+            )
+        skip_stack.append((current, current_h, current_w))
+        input_block_summaries.append(
+            {"index": block_index, "output": current, "height": current_h, "width": current_w}
+        )
+
+    middle_summaries: list[dict[str, Any]] = []
+    middle_indices = sorted(
+        {
+            int(match.group(1))
+            for name in tensors
+            if (match := re.match(r"model\.diffusion_model\.middle_block\.(\d+)\.", name))
+        }
+    )
+    for middle_index in middle_indices:
+        current, current_h, current_w = process_module(f"middle_block.{middle_index}", current, current_h, current_w)
+        middle_summaries.append(
+            {"index": middle_index, "output": current, "height": current_h, "width": current_w}
+        )
+
+    output_block_summaries: list[dict[str, Any]] = []
+    for block_index in output_block_indices:
+        if not skip_stack:
+            raise ValueError("unet-full-fixed output block traversal exhausted the skip stack")
+        skip_value, skip_h, skip_w = skip_stack.pop()
+        if (skip_h, skip_w) != (current_h, current_w):
+            unsupported.append(
+                f"output_blocks.{block_index}: skip spatial {skip_h}x{skip_w} does not match current {current_h}x{current_w}"
+            )
+        concat_output = f"output_blocks_{block_index}_skip_concat"
+        nodes.append(
+            {
+                "name": f"unet_output_blocks_{block_index}_skip_concat",
+                "op": "concat",
+                "inputs": [current, skip_value],
+                "axis": 1,
+                "output": concat_output,
+            }
+        )
+        current = concat_output
+        submodules = sorted(
+            {
+                int(match.group(1))
+                for name in tensors
+                if (match := re.match(rf"model\.diffusion_model\.output_blocks\.{block_index}\.(\d+)\.", name))
+            }
+        )
+        for submodule in submodules:
+            current, current_h, current_w = process_module(
+                f"output_blocks.{block_index}.{submodule}", current, current_h, current_w
+            )
+        output_block_summaries.append(
+            {"index": block_index, "output": current, "height": current_h, "width": current_w}
+        )
+
+    if skip_stack:
+        unsupported.append(f"UNet traversal left {len(skip_stack)} unused skip value(s)")
+    if unsupported:
+        raise ValueError("unet-full-fixed cannot emit an importable manifest:\n  - " + "\n  - ".join(unsupported))
+
+    nodes.extend(
+        [
+            {
+                "name": "unet_out_norm",
+                "op": "group_norm",
+                "input": current,
+                "weight": "unet.out.0.weight",
+                "bias": "unet.out.0.bias",
+                "num_groups": 32,
+                "eps": 1e-5,
+                "layout": "pytorch",
+                "output": "out_norm",
+            },
+            {"name": "unet_out_silu", "op": "silu", "input": "out_norm", "output": "out_act"},
+            {
+                "name": "unet_noise_pred",
+                "op": "conv2d",
+                "input": "out_act",
+                "weight": "unet.out.2.weight",
+                "bias": "unet.out.2.bias",
+                "padding": [1, 1],
+                "output": "noise_pred",
+            },
+        ]
+    )
+
+    return {
+        "format": "litenn.torch_manifest.v1",
+        "metadata": {
+            "probe": "unet-full-fixed",
+            "description": "fixed-shape SDXL UNet traversal from Stability checkpoint layout",
+            "height": height,
+            "width": width,
+            "latent_height": latent_h,
+            "latent_width": latent_w,
+            "context_tokens": context_tokens,
+            "input_blocks": input_block_summaries,
+            "middle_blocks": middle_summaries,
+            "output_blocks": output_block_summaries,
+            "limitations": [
+                "batch=1 SpatialTransformer lowering",
+                "Stability-AI SDXL base-style resblock_updown=False topology",
+                "external tokenizer/text-encoder conditioning inputs",
+            ],
+        },
+        "inputs": [
+            {"name": "latent", "dtype": "torch.float32", "shape": [batch, stem_weight.shape[1], latent_h, latent_w]},
+            {"name": "timestep", "dtype": "torch.float32", "shape": [batch]},
+            {"name": "context", "dtype": "torch.float32", "shape": [context_tokens, context_width]},
+            {"name": "vector_cond", "dtype": "torch.float32", "shape": [batch, vector_width]},
+        ],
+        "tensors": tensor_entries,
+        "nodes": nodes,
+        "outputs": [{"name": "noise_pred", "source": "noise_pred"}],
+    }
+
+
 def emit_vae_decode_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
     latent_h = height // 8
     latent_w = width // 8
@@ -1318,13 +1878,31 @@ def emit_vae_decode_stem_manifest(tensors: dict[str, TensorInfo], *, batch: int,
     }
 
 
-def emit_vae_decode_full_manifest(tensors: dict[str, TensorInfo], *, batch: int, height: int, width: int) -> dict[str, Any]:
+def emit_vae_decode_full_manifest(
+    tensors: dict[str, TensorInfo],
+    *,
+    batch: int,
+    height: int,
+    width: int,
+    vae_mid_attention_policy: str = "auto",
+    vae_attention_max_mib: int = DEFAULT_VAE_ATTENTION_MAX_MIB,
+) -> dict[str, Any]:
     latent_h = height // 8
     latent_w = width // 8
     compute_dtype = "F32"
     tensor_entries: list[dict[str, Any]] = []
     seen_tensors: set[str] = set()
     nodes: list[dict[str, Any]] = []
+    vae_mid_attention_report: dict[str, Any] = {
+        "status": "not_evaluated",
+        "policy": vae_mid_attention_policy,
+        "max_workspace_mib": vae_attention_max_mib,
+        "max_workspace_bytes": vae_attention_max_mib * 1024 * 1024,
+        "feature_height": latent_h,
+        "feature_width": latent_w,
+        "batch": batch,
+        "dtype": compute_dtype,
+    }
 
     def add_tensor(manifest_name: str, source_suffix: str, layout: str, shape: list[int] | None = None) -> None:
         if manifest_name in seen_tensors:
@@ -1403,18 +1981,63 @@ def emit_vae_decode_full_manifest(tensors: dict[str, TensorInfo], *, batch: int,
         return block["output"]
 
     def add_mid_attention(current: str, h: int, w: int) -> str:
+        nonlocal vae_mid_attention_report
         source_prefix = "decoder.mid.attn_1"
         if f"first_stage_model.{source_prefix}.q.weight" not in tensors:
+            vae_mid_attention_report = {
+                **vae_mid_attention_report,
+                "status": "absent",
+                "reason": "checkpoint does not contain decoder.mid.attn_1.q.weight",
+            }
             return current
+
+        channels = vae_tensor(tensors, f"{source_prefix}.q.weight").shape[0]
+        hw = h * w
+        bytes_per_element = 4
+        score_bytes = hw * hw * bytes_per_element
+        activation_bytes = batch * channels * h * w * bytes_per_element
+        estimated_workspace_bytes = score_bytes * 2 + activation_bytes * 5
+        base_report = {
+            **vae_mid_attention_report,
+            "feature_height": h,
+            "feature_width": w,
+            "channels": channels,
+            "tokens": hw,
+            "score_bytes": score_bytes,
+            "probability_bytes": score_bytes,
+            "activation_bytes": activation_bytes,
+            "estimated_workspace_bytes": estimated_workspace_bytes,
+        }
         if batch != 1:
+            vae_mid_attention_report = {
+                **base_report,
+                "status": "skipped",
+                "reason": "only batch=1 VAE mid-attention is currently emitted",
+            }
             return current
+        if vae_mid_attention_policy == "skip":
+            vae_mid_attention_report = {
+                **base_report,
+                "status": "skipped",
+                "reason": "policy requested skip",
+            }
+            return current
+        if (
+            vae_mid_attention_policy == "auto"
+            and estimated_workspace_bytes > vae_mid_attention_report["max_workspace_bytes"]
+        ):
+            vae_mid_attention_report = {
+                **base_report,
+                "status": "skipped",
+                "reason": "estimated workspace exceeds --vae-attention-max-mib",
+            }
+            return current
+
         manifest_prefix = "vae." + source_prefix
         add_groupnorm_tensors(source_prefix, manifest_prefix, "norm")
         for conv_name in ("q", "k", "v", "proj_out"):
             add_conv_tensors(source_prefix, manifest_prefix, conv_name)
 
-        channels = vae_tensor(tensors, f"{source_prefix}.q.weight").shape[0]
-        hw = h * w
         nodes.extend(
             [
                 {
@@ -1484,6 +2107,11 @@ def emit_vae_decode_full_manifest(tensors: dict[str, TensorInfo], *, batch: int,
                 {"name": "vae_mid_attn_residual", "op": "add", "lhs": current, "rhs": "vae_mid_attn_proj", "output": "vae_mid_attn_out"},
             ]
         )
+        vae_mid_attention_report = {
+            **base_report,
+            "status": "emitted",
+            "reason": "exact dense attention emitted",
+        }
         return "vae_mid_attn_out"
 
     conv_in_weight = vae_tensor(tensors, "decoder.conv_in.weight")
@@ -1597,9 +2225,10 @@ def emit_vae_decode_full_manifest(tensors: dict[str, TensorInfo], *, batch: int,
         "format": "litenn.torch_manifest.v1",
         "metadata": {
             "probe": "vae-decode-full",
-            "description": "fixed-shape SDXL VAE decoder traversal including mid attention for batch=1",
+            "description": "fixed-shape SDXL VAE decoder traversal with memory-aware mid attention policy",
             "latent_height": latent_h,
             "latent_width": latent_w,
+            "vae_mid_attention": vae_mid_attention_report,
         },
         "inputs": [{"name": "latent", "dtype": "torch.float32", "shape": [batch, conv_in_weight.shape[1], latent_h, latent_w]}],
         "tensors": tensor_entries,
@@ -1617,6 +2246,14 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
         return emit_unet_euler_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     if args.probe == "unet-conditioning-smoke":
         return emit_unet_conditioning_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+    if args.probe == "unet-full-fixed":
+        return emit_unet_full_fixed_manifest(
+            tensors,
+            batch=args.batch,
+            height=args.height,
+            width=args.width,
+            context_tokens=args.context_tokens,
+        )
     if args.probe == "spatial-transformer-smoke":
         return emit_spatial_transformer_smoke_manifest(
             tensors, tokens=args.tokens, context_tokens=args.context_tokens
@@ -1628,7 +2265,14 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
     if args.probe == "vae-decode-stem":
         return emit_vae_decode_stem_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     if args.probe == "vae-decode-full":
-        return emit_vae_decode_full_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+        return emit_vae_decode_full_manifest(
+            tensors,
+            batch=args.batch,
+            height=args.height,
+            width=args.width,
+            vae_mid_attention_policy=args.vae_mid_attention_policy,
+            vae_attention_max_mib=args.vae_attention_max_mib,
+        )
     raise ValueError(f"unsupported probe manifest kind {args.probe!r}")
 
 
@@ -1675,7 +2319,10 @@ def build_skeleton_plan(config: dict[str, Any], tensors: dict[str, TensorInfo]) 
             "decoder_up_blocks": [
                 {"level": level, "blocks": sorted(blocks)} for level, blocks in sorted(vae_up_blocks.items(), reverse=True)
             ],
-            "mid_attention": "emitted by vae-decode-full for fixed batch=1 smoke shapes",
+            "mid_attention": (
+                "vae-decode-full emits exact dense attention for batch=1 when the configured memory policy allows it; "
+                "large 1024x1024 decodes default to a recorded skip fallback unless --vae-mid-attention-policy force is used"
+            ),
         },
         "runtime": {
             "required_bindings": [
@@ -1688,10 +2335,10 @@ def build_skeleton_plan(config: dict[str, Any], tensors: dict[str, TensorInfo]) 
             ],
             "deferred_production_items": [
                 "tokenizer/text encoder execution inside LiteNN",
-                "full UNet SpatialTransformer 4D flatten/unflatten generator",
-                "memory-aware VAE attention for 1024x1024 decode",
+                "exact tiled/chunked VAE attention if quality parity requires it beyond the current memory-policy fallback",
                 "image encoder/refiner variants",
             ],
+            "full_unet_manifest": "unet-full-fixed emits ResBlock/SpatialTransformer/downsample/upsample/skip traversal for fixed batch=1 shapes",
         },
     }
 
@@ -1735,6 +2382,7 @@ def build_parser() -> argparse.ArgumentParser:
             "unet-resblock",
             "unet-euler-smoke",
             "unet-conditioning-smoke",
+            "unet-full-fixed",
             "spatial-transformer-smoke",
             "spatial-transformer-2d-smoke",
             "vae-decode-stem",
@@ -1747,6 +2395,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--tokens", type=int, default=64, help="Token count for spatial-transformer-smoke")
     parser.add_argument("--context-tokens", type=int, default=77, help="Context token count for spatial-transformer-smoke")
+    parser.add_argument(
+        "--vae-mid-attention-policy",
+        choices=["auto", "force", "skip"],
+        default="auto",
+        help="Policy for dense VAE mid-attention in vae-decode-full",
+    )
+    parser.add_argument(
+        "--vae-attention-max-mib",
+        type=int,
+        default=DEFAULT_VAE_ATTENTION_MAX_MIB,
+        help="Auto-skip dense VAE mid-attention when estimated workspace exceeds this MiB limit",
+    )
     return parser
 
 
@@ -1761,6 +2421,8 @@ def main() -> int:
         parser.error("--height and --width must be positive")
     if args.tokens <= 0 or args.context_tokens <= 0:
         parser.error("--tokens and --context-tokens must be positive")
+    if args.vae_attention_max_mib <= 0:
+        parser.error("--vae-attention-max-mib must be positive")
 
     config = load_yaml(args.config)
     tensors = parse_tensors(load_safetensors_header(args.safetensors))

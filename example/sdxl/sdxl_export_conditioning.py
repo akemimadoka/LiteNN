@@ -88,6 +88,117 @@ def build_value_dict(args: argparse.Namespace) -> dict[str, Any]:
     return value_dict
 
 
+def install_no_pretrained_conditioner_patches() -> None:
+    """Instantiate text-encoder structures without fetching pretrained weights.
+
+    The checkpoint supplies the conditioner state. Loading canonical HF/OpenCLIP
+    weights first is only a slow bootstrap step and can block on cache/network.
+    """
+    import inspect
+
+    import open_clip
+    from transformers import CLIPTextConfig, CLIPTextModel
+
+    original_create_model_and_transforms = open_clip.create_model_and_transforms
+    open_clip_parameters = set(inspect.signature(original_create_model_and_transforms).parameters)
+
+    def create_model_and_transforms_without_weights(model_name: str, *args: Any, **kwargs: Any) -> Any:
+        kwargs["pretrained"] = None
+        if "pretrained_text" in open_clip_parameters:
+            kwargs["pretrained_text"] = False
+        if "load_weights" in open_clip_parameters:
+            kwargs["load_weights"] = False
+        return original_create_model_and_transforms(model_name, *args, **kwargs)
+
+    def clip_text_model_without_weights(cls: type[Any], version: str, *args: Any, **kwargs: Any) -> Any:
+        if version != "openai/clip-vit-large-patch14":
+            print(f"Warning: using CLIP ViT-L/14 text config for unsupported version {version!r}")
+        config = CLIPTextConfig(
+            vocab_size=49408,
+            hidden_size=768,
+            intermediate_size=3072,
+            projection_dim=768,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            max_position_embeddings=77,
+        )
+        return cls(config)
+
+    open_clip.create_model_and_transforms = create_model_and_transforms_without_weights
+    CLIPTextModel.from_pretrained = classmethod(clip_text_model_without_weights)
+
+
+def set_conditioner_device(conditioner: Any, device: str) -> None:
+    for embedder in getattr(conditioner, "embedders", []):
+        if hasattr(embedder, "device"):
+            embedder.device = device
+
+
+def load_conditioner_state(conditioner: Any, checkpoint: Path) -> tuple[list[str], list[str], int]:
+    import torch
+
+    if checkpoint.suffix == ".safetensors":
+        from safetensors import safe_open
+
+        state: dict[str, Any] = {}
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as archive:
+            for key in archive.keys():
+                if key.startswith("conditioner."):
+                    state[key.removeprefix("conditioner.")] = archive.get_tensor(key)
+    elif checkpoint.suffix == ".ckpt":
+        raw = torch.load(checkpoint, map_location="cpu")
+        raw_state = raw.get("state_dict", raw)
+        state = {
+            key.removeprefix("conditioner."): value
+            for key, value in raw_state.items()
+            if key.startswith("conditioner.")
+        }
+    else:
+        raise ValueError("checkpoint must be .safetensors or .ckpt")
+
+    missing, unexpected = conditioner.load_state_dict(state, strict=False)
+    return list(missing), list(unexpected), len(state)
+
+
+def load_conditioner(args: argparse.Namespace, config: Any, device: str) -> Any:
+    if args.full_model:
+        from sgm.util import load_model_from_config
+
+        model = load_model_from_config(config, str(args.checkpoint))
+        if model is None:
+            raise RuntimeError("generative-models returned no model")
+        model.to(device)
+        model.eval()
+        conditioner = model.conditioner
+    else:
+        from sgm.util import instantiate_from_config
+
+        if not args.allow_pretrained_download:
+            install_no_pretrained_conditioner_patches()
+        conditioner_config = config.model.params.conditioner_config
+        conditioner = instantiate_from_config(conditioner_config)
+        missing, unexpected, loaded = load_conditioner_state(conditioner, args.checkpoint)
+        print(
+            f"Loaded {loaded} conditioner tensor(s) from checkpoint "
+            f"({len(missing)} missing, {len(unexpected)} unexpected)"
+        )
+        if args.verbose_load_state and missing:
+            print("missing conditioner keys:")
+            for key in missing:
+                print(f"  {key}")
+        if args.verbose_load_state and unexpected:
+            print("unexpected conditioner keys:")
+            for key in unexpected:
+                print(f"  {key}")
+        conditioner.to(device)
+        conditioner.eval()
+
+    set_conditioner_device(conditioner, device)
+    for param in conditioner.parameters():
+        param.requires_grad = False
+    return conditioner
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generative-models", required=True, type=Path, help="Path to Stability-AI/generative-models")
@@ -111,6 +222,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crop-top", default=0, type=int)
     parser.add_argument("--crop-left", default=0, type=int)
     parser.add_argument("--keep-context-batch", action="store_true", help="Keep cross-attention as [B,T,C]")
+    parser.add_argument(
+        "--full-model",
+        action="store_true",
+        help="Load the full generative-models pipeline instead of only the conditioner",
+    )
+    parser.add_argument(
+        "--allow-pretrained-download",
+        action="store_true",
+        help="Allow conditioner-only construction to fetch canonical HF/OpenCLIP pretrained weights before checkpoint load",
+    )
+    parser.add_argument(
+        "--verbose-load-state",
+        action="store_true",
+        help="Print missing/unexpected keys when loading conditioner-only weights",
+    )
     parser.add_argument(
         "--force-uc-zero-embedding",
         action="append",
@@ -154,33 +280,27 @@ def main() -> int:
     import torch
     from omegaconf import OmegaConf
     from sgm.inference.helpers import get_batch, get_unique_embedder_keys_from_conditioner
-    from sgm.util import load_model_from_config
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     device_type = device.split(":", 1)[0]
 
     config = OmegaConf.load(args.config)
-    model = load_model_from_config(config, str(args.checkpoint))
-    if model is None:
-        raise RuntimeError("generative-models returned no model")
-    model.to(device)
-    model.eval()
+    conditioner = load_conditioner(args, config, device)
     if not args.fp32 and device_type != "cpu":
-        model.conditioner.half()
+        conditioner.half()
 
     value_dict = build_value_dict(args)
-    keys = get_unique_embedder_keys_from_conditioner(model.conditioner)
+    keys = get_unique_embedder_keys_from_conditioner(conditioner)
     batch, batch_uc = get_batch(keys, value_dict, [args.batch], device=device)
 
     autocast_scope = torch.autocast(device_type) if device_type == "cuda" and not args.fp32 else nullcontext()
     with torch.inference_mode():
         with autocast_scope:
-            with model.ema_scope():
-                cond, uncond = model.conditioner.get_unconditional_conditioning(
-                    batch,
-                    batch_uc=batch_uc,
-                    force_uc_zero_embeddings=args.force_uc_zero_embedding,
-                )
+            cond, uncond = conditioner.get_unconditional_conditioning(
+                batch,
+                batch_uc=batch_uc,
+                force_uc_zero_embeddings=args.force_uc_zero_embedding,
+            )
 
     output_tensors: dict[str, Any] = {}
     for key in sorted(cond):

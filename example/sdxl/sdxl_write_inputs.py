@@ -56,6 +56,13 @@ def probe_tensors(args: argparse.Namespace) -> dict[str, list[int]]:
             "timestep": [args.batch],
             "vector_cond": [args.batch, args.vector_width],
         }
+    if args.probe == "unet-full-fixed":
+        return {
+            "latent": [args.batch, args.latent_channels, latent_h, latent_w],
+            "timestep": [args.batch],
+            "context": [args.context_tokens, args.context_width],
+            "vector_cond": [args.batch, args.vector_width],
+        }
     if args.probe == "spatial-transformer-smoke":
         return {
             "tokens": [args.tokens, args.channels],
@@ -116,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "unet-euler-smoke",
             "unet-conditioning-smoke",
+            "unet-full-fixed",
             "spatial-transformer-smoke",
             "spatial-transformer-2d-smoke",
             "vae-decode-full",
