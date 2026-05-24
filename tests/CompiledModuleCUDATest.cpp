@@ -11,6 +11,7 @@
 #include <cuda_runtime_api.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -499,7 +500,7 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 	ExpectTensorNear(cpuOutput, std::array{ 8.0f, 9.0f, 4.0f, 1.0f });
 }
 
-TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalConstantsRegion)
+TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -509,7 +510,7 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalConstantsRegion)
 	ScopedEnvVar disableNative("LITENN_CUDA_DISABLE_NATIVE_AOT", "1");
 	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
 	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
-	ScopedEnvVar externalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
 	constexpr std::size_t kBatch = 128;
 	auto graph = BuildTinyMLPGraph(kBatch);
 	FusionPass{}.Run(graph);
@@ -529,7 +530,12 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalConstantsRegion)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
 	ASSERT_GE(separated.ExternalTensorInfos().size(), 4u);
+	const auto weightEntryCount = std::ranges::count_if(separated.ExternalTensorInfos(), [](const auto& info) {
+		return info.region == "weights";
+	});
+	EXPECT_GE(weightEntryCount, 4);
 
 	auto runAndCheck = [&](CompiledModule<CUDA>& module)
 	{

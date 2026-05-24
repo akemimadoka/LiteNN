@@ -88,8 +88,8 @@ rodata 分离对 CUDA 是有必要的，但意义和 CPU 不完全一样：
   CUDA `constantData` 从 `instructions` payload 移到 separated `constants` region，再在加载 separated image 时恢复为
   payload constant data 并上传到设备。这主要解决 packaging/object-size、carrier/static-library、mmap/raw-region 管理问题。
 - 对 CPU AOT，历史问题更重：MLIR lowering 会把 `VariableRefNode`/`ConstantNode` 放进 `memref.global`
-  `DenseElementsAttr`，再进入 native object 的 `.rdata`，导致 instruction object 膨胀。G9.4 的 CPU external constants
-  是为了解决这个问题。
+  `DenseElementsAttr`，再进入 native object 的 `.rdata`，导致 instruction object 膨胀。G9.4 的 CPU external regions
+  是为了解决这个问题，当前首个切片已经能把优化 f32 linear-chain 路径中的 variable weights 和 constants 分开存放。
 - CUDA 后续仍值得继续分离到 metadata table 和 zero-copy host mapping：不是因为 PTX 里塞了权重，而是为了让
   huge weights 能独立校验、rebind、mmap、热替换，并避免每次 image load 复制 host-side constant bytes。
 

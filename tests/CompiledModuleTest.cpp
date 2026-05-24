@@ -12,6 +12,7 @@
 #endif
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -1666,11 +1667,11 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 	}
 }
 
-TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalConstantsRegion)
+TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 {
 	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
 	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
-	ScopedEnvVar externalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
 	constexpr std::size_t kBatch = 128;
 	constexpr std::size_t kInput = 64;
 	constexpr std::size_t kOutput = 32;
@@ -1688,11 +1689,14 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalConstantsRegion)
 	auto separated = artifact.SeparateRodata();
 
 	ASSERT_GT(separated.Constants().size(), 0u);
-	EXPECT_EQ(separated.Weights().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
 	ASSERT_GT(separated.Instructions().size(), 0u);
 	const auto* constantsInfo = FindRegionInfo(separated.RegionInfos(), "constants");
 	ASSERT_NE(constantsInfo, nullptr);
 	EXPECT_EQ(constantsInfo->size, separated.Constants().size());
+	const auto* weightsInfo = FindRegionInfo(separated.RegionInfos(), "weights");
+	ASSERT_NE(weightsInfo, nullptr);
+	EXPECT_EQ(weightsInfo->size, separated.Weights().size());
 	const auto externalInfos = separated.ExternalTensorInfos();
 	ASSERT_GE(externalInfos.size(), 4u);
 	std::vector<std::string> externalNames;
@@ -1700,18 +1704,28 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalConstantsRegion)
 	for (const auto& info : externalInfos)
 	{
 		externalNames.push_back(info.name);
-		EXPECT_EQ(info.region, "constants");
 		EXPECT_EQ(info.dtype, DataType::Float32);
 		EXPECT_GT(info.shape.size(), 0u);
 		EXPECT_GT(info.byteSize, 0u);
 		EXPECT_EQ(info.byteOffset % info.alignment, 0u);
-		EXPECT_LE(info.byteOffset + info.byteSize, separated.Constants().size());
+		if (info.region == "weights")
+		{
+			EXPECT_LE(info.byteOffset + info.byteSize, separated.Weights().size());
+		}
+		else
+		{
+			EXPECT_EQ(info.region, "constants");
+			EXPECT_LE(info.byteOffset + info.byteSize, separated.Constants().size());
+		}
 		EXPECT_EQ(info.rebindPolicy, CompiledModuleExternalTensorRebindPolicy::ExactChecksum);
 	}
 	for (std::size_t i = 0; i < 4; ++i)
 	{
-		EXPECT_NE(std::find(externalNames.begin(), externalNames.end(), std::format("variable{}", i)),
-		          externalNames.end());
+		const auto name = std::format("variable{}", i);
+		const auto it = std::ranges::find_if(externalInfos, [&](const auto& info) {
+			return info.name == name && info.region == "weights";
+		});
+		EXPECT_NE(it, externalInfos.end());
 	}
 
 	auto runAndCheck = [&](CompiledModule<CPU>& module)
@@ -1741,7 +1755,42 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalConstantsRegion)
 	auto reboundLoaded = rebound.Load();
 	runAndCheck(reboundLoaded);
 
+	std::vector<std::byte> reboundWeights(separated.Weights().begin(), separated.Weights().end());
+	auto weightRebound = separated.WithReboundWeights({
+	    .data = reboundWeights.data(),
+	    .size = reboundWeights.size(),
+	});
+	auto weightReboundLoaded = weightRebound.Load();
+	runAndCheck(weightReboundLoaded);
+
 	std::vector<std::byte> wrongSize(separated.Constants().size() + 1);
 	EXPECT_THROW((void) separated.WithReboundConstants({ .data = wrongSize.data(), .size = wrongSize.size() }),
 	             std::runtime_error);
+	std::vector<std::byte> wrongWeightsSize(separated.Weights().size() + 1);
+	EXPECT_THROW((void) separated.WithReboundWeights({ .data = wrongWeightsSize.data(), .size = wrongWeightsSize.size() }),
+	             std::runtime_error);
+
+	std::vector<std::byte> corruptedWeights(separated.Weights().begin(), separated.Weights().end());
+	ASSERT_FALSE(corruptedWeights.empty());
+	corruptedWeights[0] ^= std::byte{ 0xff };
+	auto corruptedImage = separated.Image();
+	corruptedImage.weights = { .data = corruptedWeights.data(), .size = corruptedWeights.size() };
+	EXPECT_THROW((void) CompiledModuleSeparatedArtifact::CopyFromImage(corruptedImage), std::runtime_error);
+}
+
+TEST(CompiledModuleTest, CPUParallelLinearChainAcceptsLegacyExternalConstantsEnvVar)
+{
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "0");
+	ScopedEnvVar legacyExternalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+
+	auto graph = BuildWideLinearChainGraph(64);
+	auto optimized = graph;
+	FusionPass{}.Run(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	auto separated = artifact.SeparateRodata();
+
+	EXPECT_GT(separated.Constants().size(), 0u);
+	EXPECT_GT(separated.Weights().size(), 0u);
 }

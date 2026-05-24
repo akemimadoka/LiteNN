@@ -685,23 +685,26 @@ library embedding, memory mapping, hot weight swapping, and mobile packaging do 
 Purpose: make the already-separated artifact ABI useful for CPU MLIR/AOT graphs whose model weights would otherwise be
 embedded into LLVM globals inside the instruction object.
 
-- [x] Add the first CPU AOT context/region binding ABI so generated instructions can read immutable constants from a
-      separated artifact region instead of embedding every payload into instruction-owned LLVM globals.
+- [x] Add the first CPU AOT context/region binding ABI so generated instructions can read immutable constants and
+      variable weights from separated artifact regions instead of embedding every payload into instruction-owned LLVM
+      globals.
 - [x] Extend separated metadata to v2 with external tensor table entries: graph variable/constant name, region, dtype,
       shape, byte offset, byte size, alignment, checksum, and rebinding compatibility policy.
-- [ ] Populate the external tensor table for generic CPU MLIR externalized tensors and future external CPU weights.
+- [x] Populate the external tensor table for the initial CPU AOT external variable weights and constants path.
+- [ ] Populate the external tensor table for generic CPU MLIR externalized tensors.
 - [ ] Teach the CPU MLIR lowering path to externalize large `VariableRefNode` / `ConstantNode` tensors while keeping
       tiny scalar constants inline when that is cheaper.
-- [ ] Generalize the first external-constants slice beyond the optimized f32 parallel linear-chain AOT path.
+- [ ] Generalize the first external-regions slice beyond the optimized f32 parallel linear-chain AOT path.
 - [ ] Update `CompiledModule<CPU>::Load(CompiledModuleSeparatedImage)` and carrier/raw-region loaders to bind external
       regions without copying when the caller supplies stable mapped memory.
-- [x] Keep CUDA CPU-bridge loading compatible with CPU AOT external constants by routing external-constant artifacts
+- [x] Keep CUDA CPU-bridge loading compatible with CPU AOT external regions by routing external-region artifacts
       through separated-region loading when `CompiledModuleArtifact::Load(CUDA{})` is used.
-- [x] Add focused tests that verify a non-empty CPU constants region, successful rebinding, size-mismatch diagnostics,
-      and parity against interpreter output for the initial external-constants AOT path.
+- [x] Add focused tests that verify non-empty CPU constants/weights regions, successful rebinding, size-mismatch
+      diagnostics, and parity against interpreter output for the initial external-regions AOT path.
 - [x] Add focused tests for the initial metadata-table population and public inspection API.
-- [ ] Add full tests for external CPU weights, malformed metadata-table diagnostics, checksum mismatch diagnostics, and
-      generic MLIR externalization parity against inline AOT outputs.
+- [x] Add focused tests for external CPU weights rebinding, size-mismatch diagnostics, checksum mismatch diagnostics,
+      and legacy external-constants environment-variable compatibility for the initial external-regions path.
+- [ ] Add malformed metadata-table diagnostics and generic MLIR externalization parity tests against inline AOT outputs.
 - [ ] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
       CPU instruction objects with multi-GiB weight globals.
 
@@ -719,17 +722,27 @@ Notes:
   files for memory-mapped packaging.
 - Completed on 2026-05-22: `litenn_gguf_convert --compile-cpu-separated/--compile-cuda-separated` emits split carrier
   objects for converted `.ltnn` graphs.
-- Completed on 2026-05-25: CPU AOT gained an experimental `LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` binding path for the
-  optimized f32 parallel linear-chain compiler. It places variable/constant payload bytes into the separated constants
-  region, emits instruction code that obtains the bound base address through the LiteNN CPU runtime ABI, and covers
-  direct artifact loading, separated-image loading, rebinding, and interpreter parity in `CompiledModuleTest`.
-- Completed on 2026-05-25: CUDA CPU-bridge loading now preserves CPU AOT external constants for both
+- Completed on 2026-05-25: CPU AOT gained an experimental `LITENN_CPU_AOT_EXTERNAL_REGIONS=1` binding path for the
+  optimized f32 parallel linear-chain compiler (`LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` remains accepted as a legacy
+  alias). It places `VariableRefNode` payload bytes into the separated weights region and `ConstantNode` payload bytes
+  into the separated constants region, emits instruction code that obtains the bound base addresses through the LiteNN
+  CPU runtime ABI, and covers direct artifact loading, separated-image loading, constants/weights rebinding, and
+  interpreter parity in `CompiledModuleTest`.
+- Completed on 2026-05-25: CUDA CPU-bridge loading now preserves CPU AOT external regions for both
   `CompiledModuleArtifact::Load(CUDA{})` and `CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage)`, with a CUDA
-  bridge regression covering a CPUNative fallback artifact whose constants live in the separated constants region.
+  bridge regression covering a CPUNative fallback artifact whose variables live in the separated weights region.
 - Completed on 2026-05-25: separated metadata v2 now carries external tensor entries and exposes them through
-  `CompiledModuleSeparatedArtifact::ExternalTensorInfos()`. The initial CPU external-constants path records variable
-  or constant names, constants-region offsets, byte sizes, alignment, dtype/shape, per-entry checksum, and exact-checksum
-  rebind policy; image validation checks table ranges and per-entry checksums in addition to whole-region checksums.
+  `CompiledModuleSeparatedArtifact::ExternalTensorInfos()`. The initial CPU external-regions path records variable
+  or constant names, constants/weights-region offsets, byte sizes, alignment, dtype/shape, per-entry checksum, and
+  exact-checksum rebind policy; image validation checks table ranges and per-entry checksums in addition to whole-region
+  checksums.
+- Completed on 2026-05-25: the initial CPU external-regions runtime ABI now exposes both
+  `litenn_cpu_external_constants()` and `litenn_cpu_external_weights()`, and the CUDA CPU bridge verifies that CPUNative
+  fallback artifacts preserve non-empty weights regions and weights-region metadata entries.
+- Completed on 2026-05-25: `CompiledModuleTest.CPUParallelLinearChainLoadsExternalRegions` now covers weights rebinding,
+  wrong-size weights rejection, and corrupted weights checksum rejection; a separate legacy-env regression keeps
+  `LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` working while the preferred switch becomes
+  `LITENN_CPU_AOT_EXTERNAL_REGIONS=1`.
 
 ### G10: LoRA and Adapter Support
 

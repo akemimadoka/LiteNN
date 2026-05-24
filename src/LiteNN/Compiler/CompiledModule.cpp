@@ -91,9 +91,8 @@ namespace
 #define LITENN_GCC_IVDEP
 #endif
 
-	bool IsCUDANativeAOTDisabled()
+	bool IsTruthyEnvValue(const char* value)
 	{
-		const char* value = std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT");
 		if (!value)
 		{
 			return false;
@@ -102,39 +101,49 @@ namespace
 		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 	}
 
-	bool IsCPUExternalConstantsEnabled()
+	bool IsCUDANativeAOTDisabled()
 	{
-		const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS");
-		if (!value)
-		{
-			return false;
-		}
-		const std::string_view text = value;
-		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+		return IsTruthyEnvValue(std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT"));
+	}
+
+	bool IsCPUExternalRegionsEnabled()
+	{
+		return IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
+		       IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
 	}
 
 	thread_local const void* tCPUExternalConstants = nullptr;
+	thread_local const void* tCPUExternalWeights = nullptr;
 
 	extern "C" const void* litenn_cpu_external_constants()
 	{
 		return tCPUExternalConstants;
 	}
 
-	class ScopedCPUExternalConstants
+	extern "C" const void* litenn_cpu_external_weights()
+	{
+		return tCPUExternalWeights;
+	}
+
+	class ScopedCPUExternalRegions
 	{
 	public:
-		explicit ScopedCPUExternalConstants(const void* constants) : previous_(tCPUExternalConstants)
+		ScopedCPUExternalRegions(const void* constants, const void* weights)
+		    : previousConstants_(tCPUExternalConstants), previousWeights_(tCPUExternalWeights)
 		{
 			tCPUExternalConstants = constants;
+			tCPUExternalWeights = weights;
 		}
 
-		~ScopedCPUExternalConstants()
+		~ScopedCPUExternalRegions()
 		{
-			tCPUExternalConstants = previous_;
+			tCPUExternalConstants = previousConstants_;
+			tCPUExternalWeights = previousWeights_;
 		}
 
 	private:
-		const void* previous_{};
+		const void* previousConstants_{};
+		const void* previousWeights_{};
 	};
 
 	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
@@ -1468,45 +1477,47 @@ namespace
 		return ((value + alignment - 1) / alignment) * alignment;
 	}
 
-	std::uint64_t AppendExternalF32Constant(std::vector<std::byte>& constants, std::span<const float> values)
+	std::uint64_t AppendExternalF32Region(std::vector<std::byte>& bytes, std::span<const float> values)
 	{
-		const auto offset = AlignUpU64(static_cast<std::uint64_t>(constants.size()), 64);
-		if (constants.size() < offset)
+		const auto offset = AlignUpU64(static_cast<std::uint64_t>(bytes.size()), 64);
+		if (bytes.size() < offset)
 		{
-			constants.resize(static_cast<std::size_t>(offset));
+			bytes.resize(static_cast<std::size_t>(offset));
 		}
 		const auto byteSize = values.size_bytes();
-		const auto oldSize = constants.size();
-		constants.resize(oldSize + byteSize);
-		std::memcpy(constants.data() + oldSize, values.data(), byteSize);
+		const auto oldSize = bytes.size();
+		bytes.resize(oldSize + byteSize);
+		std::memcpy(bytes.data() + oldSize, values.data(), byteSize);
 		return offset;
 	}
 
-	llvm::Value* AddExternalConstantPointer(llvm::Module& module, llvm::IRBuilder<>& builder, std::uint64_t offset)
+	llvm::Value* AddExternalRegionPointer(llvm::Module& module, llvm::IRBuilder<>& builder, std::string_view symbol,
+	                                      std::uint64_t offset)
 	{
 		auto& ctx = module.getContext();
 		auto* ptrTy = llvm::PointerType::get(ctx, 0);
 		auto* i8Ty = llvm::Type::getInt8Ty(ctx);
-		auto externalConstantsFn = module.getOrInsertFunction(
-		    "litenn_cpu_external_constants", llvm::FunctionType::get(ptrTy, {}, false));
-		auto* base = builder.CreateCall(externalConstantsFn);
+		auto externalRegionFn =
+		    module.getOrInsertFunction(std::string(symbol), llvm::FunctionType::get(ptrTy, {}, false));
+		auto* base = builder.CreateCall(externalRegionFn);
 		return builder.CreateInBoundsGEP(i8Ty, base, builder.getInt64(offset));
 	}
 
-	CompiledModuleExternalTensorInfo MakeExternalF32ConstantInfo(std::string name,
-	                                                             std::span<const std::byte> constants,
-	                                                             std::span<const std::size_t> shape,
-	                                                             std::uint64_t byteOffset,
-	                                                             std::uint64_t byteSize,
-	                                                             std::uint64_t alignment)
+	CompiledModuleExternalTensorInfo MakeExternalF32TensorInfo(std::string name,
+	                                                           std::string_view regionName,
+	                                                           std::span<const std::byte> regionBytes,
+	                                                           std::span<const std::size_t> shape,
+	                                                           std::uint64_t byteOffset,
+	                                                           std::uint64_t byteSize,
+	                                                           std::uint64_t alignment)
 	{
 		const auto bytes = std::span<const std::byte>{
-			constants.data() + static_cast<std::ptrdiff_t>(byteOffset),
+			regionBytes.data() + static_cast<std::ptrdiff_t>(byteOffset),
 			static_cast<std::size_t>(byteSize),
 		};
 		return {
 			.name = std::move(name),
-			.region = std::string(kConstantsRegionName),
+			.region = std::string(regionName),
 			.dtype = DataType::Float32,
 			.shape = std::vector<std::size_t>(shape.begin(), shape.end()),
 			.byteOffset = byteOffset,
@@ -1569,8 +1580,9 @@ namespace
 		    "litenn_cpu_matmul_bias_relu_parallel_f32",
 		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty }, false));
 
-		const bool useExternalConstants = IsCPUExternalConstantsEnabled();
+		const bool useExternalRegions = IsCPUExternalRegionsEnabled();
 		std::vector<std::byte> externalConstants;
+		std::vector<std::byte> externalWeights;
 		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 		std::vector<std::optional<ValueRef>> values(subgraph.NodeCount());
 		std::vector<llvm::Value*> heapAllocations;
@@ -1619,13 +1631,13 @@ namespace
 					return std::nullopt;
 				}
 				llvm::Value* ptr = nullptr;
-				if (useExternalConstants)
+				if (useExternalRegions)
 				{
 					constexpr std::uint64_t kAlignment = 64;
-					const auto offset = AppendExternalF32Constant(externalConstants, *constantData);
-					ptr = AddExternalConstantPointer(*module, builder, offset);
-					externalTensorInfos.push_back(MakeExternalF32ConstantInfo(
-					    graph.VariableName(variable->variableIndex), externalConstants, output.shape, offset,
+					const auto offset = AppendExternalF32Region(externalWeights, *constantData);
+					ptr = AddExternalRegionPointer(*module, builder, "litenn_cpu_external_weights", offset);
+					externalTensorInfos.push_back(MakeExternalF32TensorInfo(
+					    graph.VariableName(variable->variableIndex), kWeightsRegionName, externalWeights, output.shape, offset,
 					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
 				}
 				else
@@ -1648,13 +1660,13 @@ namespace
 					return std::nullopt;
 				}
 				llvm::Value* ptr = nullptr;
-				if (useExternalConstants)
+				if (useExternalRegions)
 				{
 					constexpr std::uint64_t kAlignment = 64;
-					const auto offset = AppendExternalF32Constant(externalConstants, *constantData);
-					ptr = AddExternalConstantPointer(*module, builder, offset);
-					externalTensorInfos.push_back(MakeExternalF32ConstantInfo(
-					    std::format("constant_{}", nodeId), externalConstants, output.shape, offset,
+					const auto offset = AppendExternalF32Region(externalConstants, *constantData);
+					ptr = AddExternalRegionPointer(*module, builder, "litenn_cpu_external_constants", offset);
+					externalTensorInfos.push_back(MakeExternalF32TensorInfo(
+					    std::format("constant_{}", nodeId), kConstantsRegionName, externalConstants, output.shape, offset,
 					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
 				}
 				else
@@ -1732,7 +1744,7 @@ namespace
 		OptimizeLLVMModule(*module, *config.targetMachine);
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*module);
-		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), {},
+		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), std::move(externalWeights),
 			                          std::move(externalTensorInfos), inputSpecs, outputSpecs };
 	}
 
@@ -2283,6 +2295,8 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_constants",
 		                         reinterpret_cast<void*>(&litenn_cpu_external_constants));
+		RegisterJITRuntimeSymbol("litenn_cpu_external_weights",
+		                         reinterpret_cast<void*>(&litenn_cpu_external_weights));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -5434,8 +5448,8 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 		outputPtrs.push_back(outputs.back().RawData());
 	}
 
-	ScopedCPUExternalConstants scopedConstants(impl_->externalConstants.empty() ? nullptr
-	                                                                            : impl_->externalConstants.data());
+	ScopedCPUExternalRegions scopedRegions(impl_->externalConstants.empty() ? nullptr : impl_->externalConstants.data(),
+	                                      impl_->externalWeights.empty() ? nullptr : impl_->externalWeights.data());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 	return outputs;
 }
@@ -5473,8 +5487,8 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 		outputPtrs.push_back(outputs[i].RawData());
 	}
 
-	ScopedCPUExternalConstants scopedConstants(impl_->externalConstants.empty() ? nullptr
-	                                                                            : impl_->externalConstants.data());
+	ScopedCPUExternalRegions scopedRegions(impl_->externalConstants.empty() ? nullptr : impl_->externalConstants.data(),
+	                                      impl_->externalWeights.empty() ? nullptr : impl_->externalWeights.data());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
