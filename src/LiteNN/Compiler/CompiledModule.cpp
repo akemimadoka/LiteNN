@@ -458,10 +458,12 @@ namespace
 		auto relocModel = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
 		auto codeModel = std::optional<llvm::CodeModel::Model>();
 		const llvm::Triple targetTriple(triple);
-		if (targetTriple.isOSDarwin() && targetTriple.getArch() == llvm::Triple::aarch64)
+		if ((targetTriple.isOSDarwin() && targetTriple.getArch() == llvm::Triple::aarch64) ||
+		    (targetTriple.isOSWindows() && targetTriple.getArch() == llvm::Triple::x86_64))
 		{
-			// MCJIT may place code outside ARM64 branch26 range from libSystem; use
-			// address materialization for external calls instead of direct BL relocations.
+			// MCJIT may allocate code and data sections far apart from runtime symbols or
+			// from each other. Use address materialization instead of short relative
+			// relocations for hosts where the default model has known reach limits.
 			codeModel = llvm::CodeModel::Large;
 		}
 		auto cpuName = llvm::sys::getHostCPUName();

@@ -1517,11 +1517,60 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support Pool2DNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const UpsampleNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const Subgraph&, NodeId nodeId, const UpsampleNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support UpsampleNode yet; use the interpreter path");
+		if (node.mode != UpsampleMode::Nearest || node.alignCorners)
+		{
+			throw std::runtime_error(
+			    "GraphToMLIR UpsampleNode currently supports nearest mode with alignCorners=false only");
+		}
+
+		auto loc = builder_.getUnknownLoc();
+		auto input = getVal(valueMap, node.input);
+		auto inputType = cast<RankedTensorType>(input.getType());
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		if (inputType.getRank() != 4 || resultType.getRank() != 4)
+		{
+			throw std::runtime_error("GraphToMLIR UpsampleNode requires rank-4 NCHW tensors");
+		}
+		if (inputType.getDimSize(2) <= 0 || inputType.getDimSize(3) <= 0 ||
+		    resultType.getDimSize(2) <= 0 || resultType.getDimSize(3) <= 0)
+		{
+			throw std::runtime_error("GraphToMLIR UpsampleNode requires static non-zero spatial dimensions");
+		}
+
+		auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+		auto outputMap = AffineMap::getMultiDimIdentityMap(4, &ctx_);
+		SmallVector<utils::IteratorType> iterTypes(4, utils::IteratorType::parallel);
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, TypeRange{ resultType }, ValueRange{}, ValueRange{ empty }, SmallVector<AffineMap>{ outputMap },
+		    iterTypes, [&](OpBuilder& b, Location l, ValueRange) {
+			    auto n = b.create<linalg::IndexOp>(l, 0).getResult();
+			    auto c = b.create<linalg::IndexOp>(l, 1).getResult();
+			    auto oh = emitIndexAsI64(b, l, 2);
+			    auto ow = emitIndexAsI64(b, l, 3);
+
+			    auto sourceY = b.create<arith::DivSIOp>(
+			        l,
+			        b.create<arith::MulIOp>(l, oh, emitI64Constant(b, l, inputType.getDimSize(2))).getResult(),
+			        emitI64Constant(b, l, resultType.getDimSize(2))).getResult();
+			    auto sourceX = b.create<arith::DivSIOp>(
+			        l,
+			        b.create<arith::MulIOp>(l, ow, emitI64Constant(b, l, inputType.getDimSize(3))).getResult(),
+			        emitI64Constant(b, l, resultType.getDimSize(3))).getResult();
+
+			    SmallVector<Value> inputCoords{
+			        n,
+			        c,
+			        emitI64ToIndex(b, l, emitClampedI64(b, l, sourceY, 0, inputType.getDimSize(2) - 1)),
+			        emitI64ToIndex(b, l, emitClampedI64(b, l, sourceX, 0, inputType.getDimSize(3) - 1)),
+			    };
+			    auto element = b.create<tensor::ExtractOp>(l, input, inputCoords).getResult();
+			    b.create<linalg::YieldOp>(l, element);
+		    });
+		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,

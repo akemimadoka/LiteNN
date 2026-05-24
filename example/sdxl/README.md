@@ -60,6 +60,37 @@ Import a LiteNN Torch manifest plus SDXL weights into a serialized graph:
 litenn_sdxl_example --import sdxl_unet_manifest.json path/to/sdxl.safetensors sdxl_unet.ltnn --allow-extra-tensors
 ```
 
+Write an input-binding safetensors file for a smoke manifest:
+
+```sh
+python311 example/sdxl/sdxl_write_inputs.py \
+  --probe spatial-transformer-2d-smoke \
+  --height 64 \
+  --width 64 \
+  --context-tokens 4 \
+  --output build/sdxl_spatial_2d_inputs.safetensors
+```
+
+The helper writes F32 tensors whose names match the manifest inputs. It is intended for AOT/DLL binding tests and
+for bridging externally exported conditioning tensors into LiteNN while the native text encoder path is still being
+built. Custom bindings can also be added with `--tensor name=dimxdim`.
+
+Export prompt conditioning through Stability-AI/generative-models for LiteNN input binding:
+
+```sh
+python311 example/sdxl/sdxl_export_conditioning.py \
+  --generative-models path/to/generative-models \
+  --config path/to/generative-models/configs/inference/sd_xl_base.yaml \
+  --checkpoint path/to/sdxl.safetensors \
+  --prompt "1girl" \
+  --height 1024 \
+  --width 1024 \
+  --output build/sdxl_conditioning.safetensors
+```
+
+The conditioning export writes LiteNN-friendly `context` and `vector_cond` tensors when the original runtime produces
+`crossattn` and `vector` conditioning, plus `negative_*`, `*_cfg`, and raw `cond.*` / `uncond.*` tensors for debugging.
+
 Compile the serialized graph into a carrier object:
 
 ```sh
@@ -71,20 +102,40 @@ instruction object that is normally embedded into the carrier object:
 
 ```sh
 litenn_sdxl_example --run-model sdxl_unet.ltnn
+litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors
+litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors \
+  --output build/sdxl_step_output.safetensors
 litenn_sdxl_example --compile-raw-object sdxl_unet.ltnn sdxl_unet.raw.obj
 ```
 
-On Windows, the command also writes `litenn_sdxl_module_exports.def`. Link the object into a DLL with the generated def file, then load and run a zero-input smoke test:
+On Windows, the command also writes `litenn_sdxl_module_exports.def`. Link the object into a DLL with the generated def file, then load and run either a zero-input or bound-input smoke test:
 
 ```sh
 g++ -shared sdxl_unet.obj litenn_sdxl_module_exports.def -o sdxl_unet.dll
 litenn_sdxl_example --load-dll sdxl_unet.dll litenn_sdxl_module
+litenn_sdxl_example --load-dll-with-inputs sdxl_unet.dll build/sdxl_spatial_2d_inputs.safetensors litenn_sdxl_module
+litenn_sdxl_example --load-dll-with-inputs sdxl_unet.dll build/sdxl_spatial_2d_inputs.safetensors \
+  litenn_sdxl_module --output build/sdxl_step_output.safetensors
 ```
 
 Run a minimal Euler sampler loop over a denoiser-shaped carrier DLL:
 
 ```sh
 litenn_sdxl_example --sample-euler sdxl_unet.dll litenn_sdxl_module --steps 4 --seed 1234
+litenn_sdxl_example --sample-euler sdxl_unet.dll litenn_sdxl_module --steps 4 --seed 1234 --inputs conditioning.safetensors
+litenn_sdxl_example --sample-euler sdxl_unet.dll litenn_sdxl_module \
+  --scheduler edm --sigma-max 14.6146 --sigma-min 0.0292 --rho 3 \
+  --steps 30 --seed 1234 --inputs conditioning.safetensors --output-latent build/final_latent.safetensors
+```
+
+Run a VAE decode carrier over a saved latent and convert the output tensor to PNG:
+
+```sh
+litenn_sdxl_example --load-dll-with-inputs sdxl_vae.dll build/final_latent.safetensors \
+  litenn_sdxl_vae --output build/decoded_image.safetensors
+python311 example/sdxl/sdxl_tensor_to_png.py \
+  --input build/decoded_image.safetensors \
+  --output build/decoded_image.png
 ```
 
 Measure the current staged LiteNN smoke path:
@@ -119,10 +170,13 @@ g++ -shared sdxl_unet.o -o libsdxl_unet.so
 litenn_sdxl_example --load-dll ./libsdxl_unet.so litenn_sdxl_module
 ```
 
-The `--load-dll` path is a carrier ABI smoke test. It creates zero tensors from the compiled input signature. The
-`--sample-euler` path initializes the `latent` input, fills a `timestep`/`timesteps` input when present, zero-fills any
-other inputs, requires a `noise_pred` output (or a single output), and applies an Euler epsilon-prediction update across
-the configured sigma range.
+The `--load-dll` path is a carrier ABI smoke test. It creates zero tensors from the compiled input signature.
+`--run-model-with-inputs` and `--load-dll-with-inputs` require every compiled input to exist in a safetensors file with
+matching name, dtype, and shape, and can write a single output tensor with `--output`. The `--sample-euler` path
+initializes the `latent` input, fills a `timestep`/`timesteps` input when present, optionally binds other inputs from
+`--inputs`, requires a `noise_pred` output (or a single output), and applies an Euler epsilon-prediction update across
+the configured sigma range. It supports the original linear smoke schedule and an EDM rho schedule, and can write the
+final latent as a safetensors file for VAE decode experiments.
 
 ## Current Coverage
 
@@ -135,7 +189,7 @@ The importer also provides SDXL-oriented composite manifest ops for fixed-shape 
 The denoise loop is intentionally outside the compiled graph for now. A compiled UNet step should receive already-bound latents, timestep embedding input, text/context embeddings, and any additive attention masks.
 
 - The scheduler owns timestep order, sigma/alpha values, and the latent update equation. The example currently includes
-  a simple Euler sampler for denoiser-shaped smoke graphs.
+  a linear smoke scheduler and an EDM rho scheduler for denoiser-shaped smoke graphs.
 - Classifier-free guidance is a runtime binding policy: either run conditional/unconditional batches together or invoke the compiled step twice and combine outputs outside the graph.
 - Latent scaling is explicit: manifests may model per-graph input/output scale, but scheduler-specific scaling before and after each step belongs to the runtime harness.
 - Benchmarks should report import time, serialization time, AOT compile time, DLL/shared-object load time, and one denoise-step invocation separately.

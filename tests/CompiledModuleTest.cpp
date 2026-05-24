@@ -659,6 +659,24 @@ TEST(CompiledModuleTest, CPUConv2DArtifactMatchesInterpreter)
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
 }
 
+TEST(CompiledModuleTest, CPUNearestUpsampleArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 1, 2, 3 });
+	const auto upsample = Layer::AddNearestUpsample2D(sg, { input, 0 }, { 4, 6 });
+	sg.SetResults({ upsample });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "upsampled" });
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 1, 1, 2, 3 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
 TEST(CompiledModuleTest, CPUTorchStyleGroupNormArtifactMatchesInterpreter)
 {
 	Graph graph;

@@ -893,11 +893,22 @@ native on day one.
 
 Phase 0: bind external conditioning and make the denoiser graph complete enough to run.
 
-- [ ] Add a conditioning export/binding path that can take prompt text through Stability-AI/generative-models or
+- [x] Add a safetensors runtime input-binding path for compiled SDXL smoke graphs and carrier DLL/shared-object
+      execution.
+      （已完成：`litenn_sdxl_example --run-model-with-inputs` and `--load-dll-with-inputs` bind compiled input
+      signatures by tensor name from safetensors, validating dtype/shape before AOT execution. `--sample-euler`
+      also accepts `--inputs` for externally supplied conditioning tensors while still owning latent/timestep updates.）
+- [x] Define the initial LiteNN SDXL denoiser ABI for fixed-shape smoke execution: named `latent`, `timestep` or
+      `timesteps`, context/vector inputs as named safetensors tensors, and `noise_pred` output.
+      （已完成：the example runtime now treats compiled module input names as the ABI, uses strict binding for
+      one-shot runs, zero-missing conditioning binding for Euler sampling, and documents the scheduler-owned denoise
+      contract in `example/sdxl/README.md`.）
+- [x] Add a prompt-to-conditioning export path that can take prompt text through Stability-AI/generative-models or
       diffusers and save the exact LiteNN runtime inputs: `crossattn`, pooled/vector conditioning, original/target
       size embeddings, crop embeddings, negative conditioning, and classifier-free-guidance batch layout.
-- [ ] Define the LiteNN SDXL denoiser ABI for fixed shapes: latent input, timestep/sigma input, context tokens,
-      vector conditioning, optional masks, output `noise_pred`, dtype policy, and batch/CFG convention.
+      （已完成：`example/sdxl/sdxl_export_conditioning.py` loads the Stability-AI/generative-models conditioner,
+      builds the SDXL prompt/negative prompt batch, and writes F32 safetensors bindings for `context`,
+      `vector_cond`, negative variants, CFG-concatenated variants, and raw `cond.*` / `uncond.*` tensors.）
 - [ ] Generate a full fixed-shape SDXL UNet manifest from the Stability checkpoint layout: input blocks, middle block,
       output blocks, skip stack, channel-axis `concat`, ResBlocks, downsample/upsample, and transformer blocks.
 - [x] Support SDXL Transformer FFN GEGLU combined projection in Torch manifests.
@@ -915,16 +926,27 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
 
 Phase 1: make a real denoise loop produce a latent.
 
-- [ ] Implement a production Euler/EDM scheduler runtime contract: sigma schedule, latent input scaling,
-      epsilon prediction update, deterministic seed handling, CFG combine, and per-step diagnostics.
+- [x] Add deterministic Euler sampler output for compiled denoiser artifacts: seed-owned latent init, linear/EDM sigma
+      schedules, epsilon prediction update, per-step diagnostics, and final latent safetensors output.
+      （已完成：`litenn_sdxl_example --sample-euler` supports `--scheduler linear|edm`, `--rho`,
+      `--output-latent`, deterministic random latent initialization, and writes `latent` safetensors output for
+      VAE-decode handoff.）
+- [ ] Complete the production SDXL denoiser runtime contract: latent input scaling, CFG combine, sigma-to-timestep
+      mapping parity with Stability-AI/generative-models, and batch convention diagnostics.
 - [ ] Add a CLI flow that accepts checkpoint/config plus exported conditioning and writes the final latent tensor after
       N denoise steps using a compiled LiteNN UNet DLL/shared object.
 - [ ] Add CPU AOT and CUDA AOT benchmark rows for one full denoise step, with memory use separated from latency.
 
 Phase 2: decode and write an image.
 
-- [ ] Run the full VAE decoder manifest on the final latent and write an image artifact.
-- [ ] Add a PNG writing path or a Python postprocess bridge for `[N, 3, H, W]` Float32 image tensors.
+- [x] Run the full VAE decoder manifest on a saved final latent through a carrier DLL/shared object and write an image
+      tensor artifact.
+      （已完成：AOT now lowers the nearest `UpsampleNode` path needed by `vae-decode-full`; `--load-dll-with-inputs`
+      can write the single `image` output as safetensors with `--output`. The in-process `--run-model-with-inputs`
+      path still needs a separate large-artifact crash investigation.）
+- [x] Add a PNG writing path or a Python postprocess bridge for `[N, 3, H, W]` Float32 image tensors.
+      （已完成：`example/sdxl/sdxl_tensor_to_png.py` reads F32 image safetensors tensors named `image`, `decoded`,
+      `output`, or the first tensor, and writes an RGB PNG through Pillow.）
 - [ ] Add 1024x1024 memory policy: VAE mid-attention tiling/fallback, workspace sizing, and failure diagnostics when
       CPU-only memory or time would be unreasonable.
 - [ ] Validate one generated 1024x1024 image against the reference runtime at fixed seed/prompt, first by tensor stats
