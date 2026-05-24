@@ -499,6 +499,53 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 	ExpectTensorNear(cpuOutput, std::array{ 8.0f, 9.0f, 4.0f, 1.0f });
 }
 
+TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalConstantsRegion)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	ScopedEnvVar disableNative("LITENN_CUDA_DISABLE_NATIVE_AOT", "1");
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	ScopedEnvVar externalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+	constexpr std::size_t kBatch = 128;
+	auto graph = BuildTinyMLPGraph(kBatch);
+	FusionPass{}.Run(graph);
+
+	std::vector<double> inputValues(kBatch * 3);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<double>(static_cast<int>(i % 11) - 5) * 0.1;
+	}
+	std::vector<TensorInputSpec> inputSpecs = {
+		TensorInputSpec{ .values = inputValues, .shape = { kBatch, 3 } },
+	};
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
+	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.Constants().size(), 0u);
+	ASSERT_GE(separated.ExternalTensorInfos().size(), 4u);
+
+	auto runAndCheck = [&](CompiledModule<CUDA>& module)
+	{
+		EXPECT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
+		auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
+		ASSERT_EQ(outputs.size(), expected.size());
+		ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), expected[0], 1e-4f);
+	};
+
+	auto artifactLoaded = artifact.Load(CUDA{});
+	runAndCheck(artifactLoaded);
+
+	auto separatedLoaded = CompiledModule<CUDA>::Load(separated.Image(), CUDA{});
+	runAndCheck(separatedLoaded);
+}
+
 TEST(CompiledModuleCUDATest, RunsNativeMatMulWithCUBLAS)
 {
 	if (!IsCUDADeviceAvailable())

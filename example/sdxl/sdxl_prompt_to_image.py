@@ -68,8 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cfg-mode", choices=["auto", "none", "dual"], default="dual")
     parser.add_argument("--unet-probe", choices=["unet-conditioning-smoke", "unet-full-fixed"], default="unet-conditioning-smoke")
     parser.add_argument("--context-tokens", default=77, type=int)
+    parser.add_argument("--unet-compute-dtype", default="F32", choices=["F32", "F16", "BF16"])
+    parser.add_argument("--vae-compute-dtype", default="F32", choices=["F32", "F16", "BF16"])
+    parser.add_argument(
+        "--conditioning-output-dtype",
+        choices=["F32", "F16", "BF16"],
+        help="Safetensors dtype for exported conditioning; defaults to --unet-compute-dtype",
+    )
     parser.add_argument("--vae-mid-attention-policy", choices=["auto", "force", "skip"], default="skip")
     parser.add_argument("--vae-attention-max-mib", default=512, type=int)
+    parser.add_argument("--aot-load-mode", choices=["dll", "image-regions"], default="dll")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
     parser.add_argument("--unet-symbol-prefix", default="litenn_sdxl_unet")
@@ -87,6 +95,7 @@ def main() -> int:
         raise ValueError("--steps must be positive")
     if args.vae_attention_max_mib <= 0:
         raise ValueError("--vae-attention-max-mib must be positive")
+    conditioning_output_dtype = args.conditioning_output_dtype or args.unet_compute_dtype
 
     args.workdir.mkdir(parents=True, exist_ok=True)
     output_png = args.output_png or (args.workdir / "image.png")
@@ -103,6 +112,12 @@ def main() -> int:
     vae_library = library_path(args.workdir, "vae")
     unet_def = args.workdir / f"{args.unet_symbol_prefix}_exports.def" if os.name == "nt" else None
     vae_def = args.workdir / f"{args.vae_symbol_prefix}_exports.def" if os.name == "nt" else None
+    unet_region_dir = args.workdir / "unet_regions"
+    vae_region_dir = args.workdir / "vae_regions"
+    unet_rodata = unet_region_dir / f"{args.unet_symbol_prefix}.rodata.bin"
+    unet_instructions = unet_region_dir / f"{args.unet_symbol_prefix}.instructions.obj"
+    vae_rodata = vae_region_dir / f"{args.vae_symbol_prefix}.rodata.bin"
+    vae_instructions = vae_region_dir / f"{args.vae_symbol_prefix}.instructions.obj"
 
     scripts_dir = Path(__file__).resolve().parent
     conditioning_command = [
@@ -126,6 +141,8 @@ def main() -> int:
         str(args.cfg_scale),
         "--output",
         str(conditioning),
+        "--output-dtype",
+        conditioning_output_dtype,
     ]
     if args.allow_pretrained_download:
         conditioning_command.append("--allow-pretrained-download")
@@ -151,6 +168,8 @@ def main() -> int:
             + [
                 "--probe",
                 args.unet_probe,
+                "--compute-dtype",
+                args.unet_compute_dtype,
                 "--context-tokens",
                 str(args.context_tokens),
                 "--emit-probe-manifest",
@@ -158,43 +177,79 @@ def main() -> int:
             ],
         ),
         ("import-unet", [str(args.exe), "--import", str(unet_manifest), str(args.checkpoint), str(unet_graph), "--allow-extra-tensors"]),
-        ("compile-unet", [str(args.exe), "--compile-object", str(unet_graph), str(unet_obj), args.unet_symbol_prefix]),
-        ("link-unet", link_command(args.cxx, unet_obj, unet_library, unet_def)),
-        (
-            "denoise-latent",
+    ]
+
+    denoise_options = [
+        "--steps",
+        str(args.steps),
+        "--seed",
+        str(args.seed),
+        "--scheduler",
+        args.scheduler,
+        "--sigma-max",
+        str(args.sigma_max),
+        "--sigma-min",
+        str(args.sigma_min),
+        "--rho",
+        str(args.rho),
+        "--denoiser-contract",
+        args.denoiser_contract,
+        "--cfg-mode",
+        args.cfg_mode,
+        "--cfg-scale",
+        str(args.cfg_scale),
+    ]
+    if args.aot_load_mode == "image-regions":
+        steps.extend(
             [
-                str(args.exe),
-                "--denoise-latent",
-                str(unet_library),
-                str(conditioning),
-                str(final_latent),
-                args.unet_symbol_prefix,
-                "--steps",
-                str(args.steps),
-                "--seed",
-                str(args.seed),
-                "--scheduler",
-                args.scheduler,
-                "--sigma-max",
-                str(args.sigma_max),
-                "--sigma-min",
-                str(args.sigma_min),
-                "--rho",
-                str(args.rho),
-                "--denoiser-contract",
-                args.denoiser_contract,
-                "--cfg-mode",
-                args.cfg_mode,
-                "--cfg-scale",
-                str(args.cfg_scale),
-            ],
-        ),
+                (
+                    "compile-unet-regions",
+                    [str(args.exe), "--compile-image-regions", str(unet_graph), str(unet_region_dir), args.unet_symbol_prefix],
+                ),
+                (
+                    "denoise-latent",
+                    [
+                        str(args.exe),
+                        "--denoise-latent-image",
+                        str(unet_rodata),
+                        str(unet_instructions),
+                        str(conditioning),
+                        str(final_latent),
+                    ]
+                    + denoise_options,
+                ),
+            ]
+        )
+    else:
+        steps.extend(
+            [
+                ("compile-unet", [str(args.exe), "--compile-object", str(unet_graph), str(unet_obj), args.unet_symbol_prefix]),
+                ("link-unet", link_command(args.cxx, unet_obj, unet_library, unet_def)),
+                (
+                    "denoise-latent",
+                    [
+                        str(args.exe),
+                        "--denoise-latent",
+                        str(unet_library),
+                        str(conditioning),
+                        str(final_latent),
+                        args.unet_symbol_prefix,
+                    ]
+                    + denoise_options,
+                ),
+            ]
+        )
+
+    steps.extend(
+        [
         (
             "emit-vae-manifest",
             common_probe
             + [
                 "--probe",
                 "vae-decode-full",
+                "--compute-dtype",
+                args.vae_compute_dtype,
                 "--vae-mid-attention-policy",
                 args.vae_mid_attention_policy,
                 "--vae-attention-max-mib",
@@ -204,20 +259,51 @@ def main() -> int:
             ],
         ),
         ("import-vae", [str(args.exe), "--import", str(vae_manifest), str(args.checkpoint), str(vae_graph), "--allow-extra-tensors"]),
-        ("compile-vae", [str(args.exe), "--compile-object", str(vae_graph), str(vae_obj), args.vae_symbol_prefix]),
-        ("link-vae", link_command(args.cxx, vae_obj, vae_library, vae_def)),
-        (
-            "decode-latent",
+        ]
+    )
+
+    if args.aot_load_mode == "image-regions":
+        steps.extend(
             [
-                str(args.exe),
-                "--load-dll-with-inputs",
-                str(vae_library),
-                str(final_latent),
-                args.vae_symbol_prefix,
-                "--output",
-                str(decoded),
-            ],
-        ),
+                (
+                    "compile-vae-regions",
+                    [str(args.exe), "--compile-image-regions", str(vae_graph), str(vae_region_dir), args.vae_symbol_prefix],
+                ),
+                (
+                    "decode-latent",
+                    [
+                        str(args.exe),
+                        "--run-image-with-inputs",
+                        str(vae_rodata),
+                        str(vae_instructions),
+                        str(final_latent),
+                        "--output",
+                        str(decoded),
+                    ],
+                ),
+            ]
+        )
+    else:
+        steps.extend(
+            [
+                ("compile-vae", [str(args.exe), "--compile-object", str(vae_graph), str(vae_obj), args.vae_symbol_prefix]),
+                ("link-vae", link_command(args.cxx, vae_obj, vae_library, vae_def)),
+                (
+                    "decode-latent",
+                    [
+                        str(args.exe),
+                        "--load-dll-with-inputs",
+                        str(vae_library),
+                        str(final_latent),
+                        args.vae_symbol_prefix,
+                        "--output",
+                        str(decoded),
+                    ],
+                ),
+            ]
+        )
+
+    steps.append(
         (
             "write-png",
             [
@@ -228,8 +314,8 @@ def main() -> int:
                 "--output",
                 str(output_png),
             ],
-        ),
-    ]
+        )
+    )
 
     for name, command in steps:
         run_step(name, command, dry_run=args.dry_run)

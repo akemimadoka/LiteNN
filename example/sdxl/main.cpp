@@ -60,10 +60,12 @@ namespace
 		    " [--inputs inputs.safetensors] [--output-latent latent.safetensors]\n\n"
 		    "  {} --denoise-latent <module.dll|so|dylib> <inputs.safetensors> <output-latent.safetensors>"
 		    " [symbol-prefix] [same sampler options except --inputs/--output-latent]\n\n"
+		    "  {} --denoise-latent-image <rodata.bin> <instructions.o|obj> <inputs.safetensors>"
+		    " <output-latent.safetensors> [same sampler options except --inputs/--output-latent]\n\n"
 		    "This example intentionally requires a LiteNN Torch manifest. A raw SDXL safetensors file contains\n"
 		    "weights only; it does not define the UNet/text-encoder/VAE graph, scheduler, or fixed input shapes.\n",
 		    executable, executable, executable, executable, executable, executable, executable, executable,
-		    executable, executable, executable, executable, executable);
+		    executable, executable, executable, executable, executable, executable);
 	}
 
 	void PrintReport(const LiteNN::Serialization::TorchManifestReport& report)
@@ -1668,16 +1670,10 @@ namespace
 		WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
 	}
 
-	void SampleEuler(const std::filesystem::path& libraryPath, std::string_view symbolPrefix,
-	                 const EulerSamplerOptions& options)
+	void SampleEulerModule(const LiteNN::CompiledModule<LiteNN::CPU>& module,
+	                       std::string_view sourceLabel,
+	                       const EulerSamplerOptions& options)
 	{
-		DynamicLibrary library(libraryPath);
-		auto artifact = LoadArtifactFromLibrary(library, symbolPrefix);
-		std::cout << std::format("Loaded carrier image {} backend={} rodata={} bytes instructions={} bytes\n",
-		                         libraryPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
-		                         artifact.Instructions().size())
-		          << std::flush;
-		auto module = artifact.Load();
 		const auto latentInput = module.FindInput("latent");
 		if (!latentInput)
 		{
@@ -1728,7 +1724,7 @@ namespace
 		std::cout << std::format(
 		    "Euler sampler loaded {} backend={} steps={} seed={} scheduler={} sigma_max={} sigma_min={}"
 		    " denoiser={} timestep_mode={} cfg_mode={} cfg_scale={} latent={}\n",
-		    libraryPath.string(), BackendName(module.Backend()), options.steps, options.seed, options.scheduler,
+		    sourceLabel, BackendName(module.Backend()), options.steps, options.seed, options.scheduler,
 		    options.sigmaMax, options.sigmaMin, options.denoiserContract, options.timestepMode, cfgMode,
 		    options.cfgScale, ShapeToString(latentState.Shape()));
 		PrintStats("  initial latent", ComputeTensorStats(latentState));
@@ -1776,6 +1772,38 @@ namespace
 			WriteTensorSafetensors(*options.outputLatent, "latent", latentState);
 			std::cout << std::format("  wrote final latent {}\n", options.outputLatent->string());
 		}
+	}
+
+	void SampleEuler(const std::filesystem::path& libraryPath, std::string_view symbolPrefix,
+	                 const EulerSamplerOptions& options)
+	{
+		DynamicLibrary library(libraryPath);
+		auto artifact = LoadArtifactFromLibrary(library, symbolPrefix);
+		std::cout << std::format("Loaded carrier image {} backend={} rodata={} bytes instructions={} bytes\n",
+		                         libraryPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
+		                         artifact.Instructions().size())
+		          << std::flush;
+		auto module = artifact.Load();
+		SampleEulerModule(module, libraryPath.string(), options);
+	}
+
+	void SampleEulerImage(const std::filesystem::path& rodataPath,
+	                      const std::filesystem::path& instructionsPath,
+	                      const EulerSamplerOptions& options)
+	{
+		auto rodata = ReadAllBytes(rodataPath);
+		auto instructions = ReadAllBytes(instructionsPath);
+		auto module = LiteNN::CompiledModule<LiteNN::CPU>::Load({
+		    .rodata = rodata.data(),
+		    .rodataSize = rodata.size(),
+		    .instructions = instructions.data(),
+		    .instructionSize = instructions.size(),
+		});
+		std::cout << std::format("Loaded image regions rodata={} instructions={} backend={} input_count={} output_count={}\n",
+		                         rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+		                         module.InputSpecs().size(), module.OutputSpecs().size())
+		          << std::flush;
+		SampleEulerModule(module, rodataPath.string(), options);
 	}
 #endif
 } // namespace
@@ -1995,6 +2023,28 @@ int main(int argc, char** argv)
 			options.inputBindings = std::filesystem::path(argv[3]);
 			options.outputLatent = std::filesystem::path(argv[4]);
 			SampleEuler(argv[2], prefix, options);
+			return 0;
+#else
+			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
+		}
+		if (argc >= 2 && std::string_view(argv[1]) == "--denoise-latent-image")
+		{
+			if (argc < 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_ENABLE_MLIR
+			auto options = ParseEulerOptions(argc, argv, 6);
+			if (options.inputBindings || options.outputLatent)
+			{
+				throw std::runtime_error(
+				    "--denoise-latent-image takes input/output paths positionally; do not also pass --inputs or --output-latent");
+			}
+			options.inputBindings = std::filesystem::path(argv[4]);
+			options.outputLatent = std::filesystem::path(argv[5]);
+			SampleEulerImage(argv[2], argv[3], options);
 			return 0;
 #else
 			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");

@@ -45,7 +45,9 @@ SpatialTransformer path with GroupNorm/proj_in/proj_out/flatten/restore, and `va
 projection for fixed shapes. `unet-full-fixed` walks the SDXL UNet input/middle/output blocks for batch=1 fixed shapes,
 including skip-stack channel concat, ResBlocks, downsample/upsample, and all discovered SpatialTransformer blocks while
 still expecting externally supplied `context` and `vector_cond` tensors. For the CPU AOT smoke path, these probes materialize F16 checkpoint tensors as F32
-constants with manifest `target_dtype`.
+constants with manifest `target_dtype`. Pass `--compute-dtype F16` or `--compute-dtype BF16` to keep generated
+UNet/VAE probe inputs and imported weights in low precision; non-F32 timestep embeddings insert an explicit cast after
+the sinusoidal F32 embedding boundary.
 
 `vae-decode-full` controls dense VAE mid-attention with `--vae-mid-attention-policy auto|force|skip` and
 `--vae-attention-max-mib`. The default `auto` policy emits exact dense attention for small fixed-shape smoke tests and
@@ -132,7 +134,8 @@ The conditioning export writes LiteNN-friendly `context` and `vector_cond` tenso
 `crossattn` and `vector` conditioning, plus `negative_*`, `*_cfg`, and raw `cond.*` / `uncond.*` tensors for debugging.
 By default this helper instantiates only the conditioner and loads `conditioner.*` tensors from the checkpoint, avoiding
 the cost of loading the full UNet/VAE just to compute text embeddings. Add `--full-model` only when debugging parity
-against the original runtime's complete model construction path.
+against the original runtime's complete model construction path. Use `--output-dtype F16` or `--output-dtype BF16`
+when binding conditioning into a low-precision manifest.
 
 Compile the serialized graph into a carrier object:
 
@@ -226,7 +229,8 @@ python311 example/sdxl/sdxl_generate_reference.py \
 ## Prompt-To-Image Command Sequence
 
 The checked-in one-shot harness runs the current LiteNN prompt-to-image path: export prompt conditioning, emit/import
-UNet and VAE manifests, compile carrier DLL/SO artifacts, run Euler denoising, decode the latent, and write PNG.
+UNet and VAE manifests, compile carrier DLL/SO artifacts or separated image regions, run Euler denoising, decode the
+latent, and write PNG.
 
 On Windows, first build the example and make MinGW available to the linker:
 
@@ -255,12 +259,15 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
   --steps 2 ^
   --workdir %OUT% ^
   --output-png %OUT%\1girl_smoke.png ^
-  --cxx %CXX%
+  --cxx %CXX% ^
+  --aot-load-mode image-regions
 ```
 
 The smoke path uses `unet-conditioning-smoke`, so it validates the LiteNN SDXL plumbing and AOT carrier loading rather
 than full SDXL image quality. It still uses real prompt conditioning, real SDXL checkpoint tensors, LiteNN AOT for the
-denoiser probe, LiteNN AOT for VAE decode, and `sdxl_tensor_to_png.py` for the final PNG.
+denoiser probe, LiteNN AOT for VAE decode, and `sdxl_tensor_to_png.py` for the final PNG. The `image-regions` mode
+loads rodata and instruction bytes directly from files, avoiding the shared-library link/load step; use
+`--aot-load-mode dll` when specifically validating exported carrier symbols.
 
 The same harness can target the full fixed-shape UNet and 1024x1024 output:
 
@@ -282,8 +289,10 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
 ```
 
 Current status: the full fixed-shape UNet manifest imports correctly, but the materialized F32 `.ltnn` graph is very
-large and CPU AOT compilation is not yet interactive. Use the smoke command above for a fully runnable pipeline while
-the full-graph compile/weight-externalization work continues.
+large and CPU AOT compilation is not yet interactive. A low-precision manifest can reduce serialized weight size
+roughly in half, but full-graph CPU AOT still has to lower large constants through MLIR/LLVM, so external weight/codegen
+work remains the blocker for practical full-UNet compilation. Use the smoke command above for a fully runnable pipeline
+while that work continues.
 
 The expanded command sequence is:
 
@@ -316,6 +325,24 @@ python311 example\sdxl\sdxl_tensor_to_png.py ^
   --input %OUT%\decoded_image.safetensors --output %OUT%\1girl_smoke.png
 ```
 
+The same expanded flow can avoid DLL/shared-object linking by writing separated image regions:
+
+```bat
+%LITENN_EXE% --compile-image-regions %OUT%\unet.ltnn %OUT%\unet_regions litenn_sdxl_unet
+%LITENN_EXE% --denoise-latent-image ^
+  %OUT%\unet_regions\litenn_sdxl_unet.rodata.bin ^
+  %OUT%\unet_regions\litenn_sdxl_unet.instructions.obj ^
+  %OUT%\conditioning.safetensors %OUT%\final_latent.safetensors ^
+  --steps 2 --seed 1234 --scheduler edm --sigma-max 14.6146 --sigma-min 0.0292 ^
+  --rho 3 --denoiser-contract sgm-edm --cfg-mode dual --cfg-scale 6
+
+%LITENN_EXE% --compile-image-regions %OUT%\vae.ltnn %OUT%\vae_regions litenn_sdxl_vae
+%LITENN_EXE% --run-image-with-inputs ^
+  %OUT%\vae_regions\litenn_sdxl_vae.rodata.bin ^
+  %OUT%\vae_regions\litenn_sdxl_vae.instructions.obj ^
+  %OUT%\final_latent.safetensors --output %OUT%\decoded_image.safetensors
+```
+
 On ELF platforms, link the object as a shared object:
 
 ```sh
@@ -341,6 +368,8 @@ litenn_sdxl_example --denoise-latent sdxl_unet.dll conditioning.safetensors buil
   litenn_sdxl_module --steps 30 --scheduler edm --sigma-max 14.6146 --sigma-min 0.0292 \
   --denoiser-contract sgm-edm --cfg-mode dual --cfg-scale 6
 ```
+
+`--denoise-latent-image` is the equivalent positional wrapper for rodata/instruction image-region files.
 
 ## Current Coverage
 

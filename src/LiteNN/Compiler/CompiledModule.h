@@ -84,6 +84,24 @@ namespace LiteNN
 		std::uint64_t checksum{};
 	};
 
+	enum class CompiledModuleExternalTensorRebindPolicy : std::uint32_t
+	{
+		ExactChecksum = 1,
+	};
+
+	struct CompiledModuleExternalTensorInfo
+	{
+		std::string name;
+		std::string region;
+		DataType dtype{};
+		std::vector<std::size_t> shape;
+		std::uint64_t byteOffset{};
+		std::uint64_t byteSize{};
+		std::uint64_t alignment{ 1 };
+		std::uint64_t checksum{};
+		CompiledModuleExternalTensorRebindPolicy rebindPolicy{ CompiledModuleExternalTensorRebindPolicy::ExactChecksum };
+	};
+
 	struct CompiledModuleInvocation
 	{
 		std::span<const Tensor<CPU>> inputs;
@@ -123,6 +141,7 @@ namespace LiteNN
 		std::span<const std::byte> Weights() const;
 		std::span<const std::byte> Instructions() const;
 		std::vector<CompiledModuleRegionInfo> RegionInfos() const;
+		std::vector<CompiledModuleExternalTensorInfo> ExternalTensorInfos() const;
 		std::span<const CompiledTensorSpec> InputSpecs() const;
 		std::span<const CompiledTensorSpec> OutputSpecs() const;
 		CompiledModuleBackend Backend() const;
@@ -200,10 +219,16 @@ namespace LiteNN
 		                      std::vector<std::byte> instructions,
 		                      std::vector<CompiledTensorSpec> inputSpecs,
 		                      std::vector<CompiledTensorSpec> outputSpecs,
-		                      CompiledModuleBackend backend);
+		                      CompiledModuleBackend backend,
+		                      std::vector<std::byte> constants = {},
+		                      std::vector<std::byte> weights = {},
+		                      std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {});
 
 		std::vector<std::byte> rodata_;
 		std::vector<std::byte> instructions_;
+		std::vector<std::byte> constants_;
+		std::vector<std::byte> weights_;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos_;
 		std::vector<CompiledTensorSpec> inputSpecs_;
 		std::vector<CompiledTensorSpec> outputSpecs_;
 		CompiledModuleBackend backend_{ CompiledModuleBackend::CPUNative };
@@ -250,6 +275,8 @@ namespace LiteNN
 		                     std::string_view symbolPrefix = "litenn_module") const;
 
 	private:
+		friend class CompiledModuleArtifact;
+
 		struct Impl;
 
 		explicit CompiledModule(std::shared_ptr<Impl> impl);

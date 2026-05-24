@@ -102,6 +102,41 @@ namespace
 		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 	}
 
+	bool IsCPUExternalConstantsEnabled()
+	{
+		const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS");
+		if (!value)
+		{
+			return false;
+		}
+		const std::string_view text = value;
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	thread_local const void* tCPUExternalConstants = nullptr;
+
+	extern "C" const void* litenn_cpu_external_constants()
+	{
+		return tCPUExternalConstants;
+	}
+
+	class ScopedCPUExternalConstants
+	{
+	public:
+		explicit ScopedCPUExternalConstants(const void* constants) : previous_(tCPUExternalConstants)
+		{
+			tCPUExternalConstants = constants;
+		}
+
+		~ScopedCPUExternalConstants()
+		{
+			tCPUExternalConstants = previous_;
+		}
+
+	private:
+		const void* previous_{};
+	};
+
 	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
 
 	std::size_t LiteNNCPUAOTThreadCount()
@@ -373,7 +408,7 @@ namespace
 		std::byte{ 'S' }, std::byte{ 'E' }, std::byte{ 'P' }, std::byte{ 0 },
 	};
 	constexpr std::uint32_t kRodataVersion = 4;
-	constexpr std::uint32_t kSeparatedMetadataVersion = 1;
+	constexpr std::uint32_t kSeparatedMetadataVersion = 2;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
 	constexpr std::uint32_t kRodataBigEndian = 2;
 	constexpr std::string_view kMetadataRegionName = "metadata";
@@ -403,6 +438,7 @@ namespace
 		RodataMetadata legacyMetadata;
 		std::vector<std::byte> legacyRodata;
 		std::vector<CompiledModuleRegionInfo> regions;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 	};
 
 	std::string ToString(llvm::Error error)
@@ -960,6 +996,84 @@ namespace
 		return info;
 	}
 
+	CompiledModuleExternalTensorRebindPolicy DecodeExternalTensorRebindPolicy(std::uint32_t value)
+	{
+		switch (value)
+		{
+		case static_cast<std::uint32_t>(CompiledModuleExternalTensorRebindPolicy::ExactChecksum):
+			return CompiledModuleExternalTensorRebindPolicy::ExactChecksum;
+		default:
+			throw std::runtime_error("Compiled module separated metadata contains an invalid external tensor rebind policy");
+		}
+	}
+
+	void AppendExternalTensorInfo(std::vector<std::byte>& out, const CompiledModuleExternalTensorInfo& info)
+	{
+		AppendString(out, info.name);
+		AppendString(out, info.region);
+		AppendU32(out, static_cast<std::uint32_t>(info.dtype));
+		AppendU32(out, static_cast<std::uint32_t>(info.shape.size()));
+		for (const auto dim : info.shape)
+		{
+			AppendU64(out, static_cast<std::uint64_t>(dim));
+		}
+		AppendU64(out, info.byteOffset);
+		AppendU64(out, info.byteSize);
+		AppendU64(out, info.alignment);
+		AppendU64(out, info.checksum);
+		AppendU32(out, static_cast<std::uint32_t>(info.rebindPolicy));
+	}
+
+	CompiledModuleExternalTensorInfo ReadExternalTensorInfo(std::span<const std::byte> bytes, std::size_t& offset)
+	{
+		CompiledModuleExternalTensorInfo info;
+		info.name = ReadString(bytes, offset);
+		info.region = ReadString(bytes, offset);
+		const auto dtypeValue = ReadU32(bytes, offset);
+		if (dtypeValue > static_cast<std::uint32_t>(LastDataType) ||
+		    !IsValidDataTypeValue(static_cast<DataType>(dtypeValue)))
+		{
+			throw std::runtime_error("Compiled module separated metadata contains an invalid external tensor data type");
+		}
+		info.dtype = static_cast<DataType>(dtypeValue);
+		const auto rank = ReadU32(bytes, offset);
+		info.shape.reserve(rank);
+		for (std::uint32_t i = 0; i < rank; ++i)
+		{
+			const auto dim = ReadU64(bytes, offset);
+			if (dim > std::numeric_limits<std::size_t>::max())
+			{
+				throw std::runtime_error(
+				    "Compiled module separated metadata external tensor shape dimension is too large");
+			}
+			info.shape.push_back(static_cast<std::size_t>(dim));
+		}
+		info.byteOffset = ReadU64(bytes, offset);
+		info.byteSize = ReadU64(bytes, offset);
+		info.alignment = ReadU64(bytes, offset);
+		info.checksum = ReadU64(bytes, offset);
+		info.rebindPolicy = DecodeExternalTensorRebindPolicy(ReadU32(bytes, offset));
+		if (info.name.empty())
+		{
+			throw std::runtime_error("Compiled module separated metadata contains an empty external tensor name");
+		}
+		if (info.region.empty())
+		{
+			throw std::runtime_error("Compiled module separated metadata contains an empty external tensor region");
+		}
+		if (info.byteSize == 0)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated metadata external tensor '{}' has zero byte size", info.name));
+		}
+		if (info.alignment == 0)
+		{
+			throw std::runtime_error(
+			    std::format("Compiled module separated metadata external tensor '{}' has zero alignment", info.name));
+		}
+		return info;
+	}
+
 	std::vector<CompiledModuleRegionInfo> MakeSeparatedRegionInfos(std::span<const std::byte> constants,
 	                                                               std::span<const std::byte> weights,
 	                                                               std::span<const std::byte> instructions)
@@ -974,7 +1088,8 @@ namespace
 	std::vector<std::byte> SerializeSeparatedMetadata(std::span<const std::byte> legacyRodata,
 	                                                  std::span<const std::byte> constants,
 	                                                  std::span<const std::byte> weights,
-	                                                  std::span<const std::byte> instructions)
+	                                                  std::span<const std::byte> instructions,
+	                                                  std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
 	{
 		std::vector<std::byte> metadata;
 		metadata.insert(metadata.end(), kSeparatedMetadataMagic.begin(), kSeparatedMetadataMagic.end());
@@ -988,6 +1103,12 @@ namespace
 		for (const auto& region : regions)
 		{
 			AppendRegionInfo(metadata, region);
+		}
+
+		AppendU32(metadata, static_cast<std::uint32_t>(externalTensorInfos.size()));
+		for (const auto& info : externalTensorInfos)
+		{
+			AppendExternalTensorInfo(metadata, info);
 		}
 		return metadata;
 	}
@@ -1003,6 +1124,33 @@ namespace
 			}
 		}
 		throw std::runtime_error(std::format("Compiled module separated metadata is missing '{}' region", name));
+	}
+
+	void ValidateExternalTensorInfoRanges(std::span<const CompiledModuleExternalTensorInfo> infos,
+	                                      std::span<const CompiledModuleRegionInfo> regions)
+	{
+		for (const auto& info : infos)
+		{
+			if (info.region != kConstantsRegionName && info.region != kWeightsRegionName)
+			{
+				throw std::runtime_error(std::format(
+				    "Compiled module separated metadata external tensor '{}' references unsupported '{}' region",
+				    info.name, info.region));
+			}
+			const auto& region = FindRegionInfo(regions, info.region);
+			if (info.byteOffset > region.size || info.byteSize > region.size - info.byteOffset)
+			{
+				throw std::runtime_error(std::format(
+				    "Compiled module separated metadata external tensor '{}' byte range is out of bounds",
+				    info.name));
+			}
+			if (info.byteOffset % info.alignment != 0)
+			{
+				throw std::runtime_error(std::format(
+				    "Compiled module separated metadata external tensor '{}' offset is not aligned to {} bytes",
+				    info.name, info.alignment));
+			}
+		}
 	}
 
 	SeparatedMetadata DeserializeSeparatedMetadata(std::span<const std::byte> metadata)
@@ -1048,6 +1196,16 @@ namespace
 			}
 			regions.push_back(std::move(info));
 		}
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
+		if (version >= 2)
+		{
+			const auto externalTensorCount = ReadU32(metadata, offset);
+			externalTensorInfos.reserve(externalTensorCount);
+			for (std::uint32_t i = 0; i < externalTensorCount; ++i)
+			{
+				externalTensorInfos.push_back(ReadExternalTensorInfo(metadata, offset));
+			}
+		}
 		if (offset != metadata.size())
 		{
 			throw std::runtime_error("Compiled module separated metadata contains trailing bytes");
@@ -1056,10 +1214,12 @@ namespace
 		(void) FindRegionInfo(regions, kConstantsRegionName);
 		(void) FindRegionInfo(regions, kWeightsRegionName);
 		(void) FindRegionInfo(regions, kInstructionsRegionName);
+		ValidateExternalTensorInfoRanges(externalTensorInfos, regions);
 		return {
 			.legacyMetadata = std::move(legacyMetadata),
 			.legacyRodata = std::move(legacyRodata),
 			.regions = std::move(regions),
+			.externalTensorInfos = std::move(externalTensorInfos),
 		};
 	}
 
@@ -1096,6 +1256,42 @@ namespace
 		}
 	}
 
+	std::span<const std::byte> SeparatedImageRegionBytes(CompiledModuleSeparatedImage image, std::string_view name)
+	{
+		if (name == kConstantsRegionName)
+		{
+			return RegionBytes(image.constants, kConstantsRegionName);
+		}
+		if (name == kWeightsRegionName)
+		{
+			return RegionBytes(image.weights, kWeightsRegionName);
+		}
+		throw std::runtime_error(std::format("Compiled module separated external tensor references invalid '{}' region",
+		                                     name));
+	}
+
+	void ValidateExternalTensorChecksums(std::span<const CompiledModuleExternalTensorInfo> infos,
+	                                     CompiledModuleSeparatedImage image)
+	{
+		for (const auto& info : infos)
+		{
+			const auto region = SeparatedImageRegionBytes(image, info.region);
+			if (info.byteOffset > region.size() || info.byteSize > region.size() - info.byteOffset)
+			{
+				throw std::runtime_error(std::format(
+				    "Compiled module separated external tensor '{}' byte range is out of bounds", info.name));
+			}
+			const auto tensorBytes =
+			    std::span<const std::byte>{ region.data() + static_cast<std::ptrdiff_t>(info.byteOffset),
+				                            static_cast<std::size_t>(info.byteSize) };
+			if (ChecksumBytes(tensorBytes) != info.checksum)
+			{
+				throw std::runtime_error(std::format(
+				    "Compiled module separated external tensor '{}' checksum mismatch", info.name));
+			}
+		}
+	}
+
 	SeparatedMetadata ValidateSeparatedImage(CompiledModuleSeparatedImage image)
 	{
 		const auto metadataBytes = RegionBytes(image.metadata, kMetadataRegionName);
@@ -1103,6 +1299,7 @@ namespace
 		ValidateSeparatedRegion(image.constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
 		ValidateSeparatedRegion(image.weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
 		ValidateSeparatedRegion(image.instructions, FindRegionInfo(metadata.regions, kInstructionsRegionName));
+		ValidateExternalTensorChecksums(metadata.externalTensorInfos, image);
 		return metadata;
 	}
 
@@ -1165,6 +1362,9 @@ namespace
 	{
 		std::vector<std::byte> rodata;
 		std::vector<std::byte> instructions;
+		std::vector<std::byte> constants;
+		std::vector<std::byte> weights;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 		std::vector<CompiledTensorSpec> inputSpecs;
 		std::vector<CompiledTensorSpec> outputSpecs;
 	};
@@ -1263,6 +1463,60 @@ namespace
 		return builder.CreateInBoundsGEP(arrayType, global, { zero, zero });
 	}
 
+	std::uint64_t AlignUpU64(std::uint64_t value, std::uint64_t alignment)
+	{
+		return ((value + alignment - 1) / alignment) * alignment;
+	}
+
+	std::uint64_t AppendExternalF32Constant(std::vector<std::byte>& constants, std::span<const float> values)
+	{
+		const auto offset = AlignUpU64(static_cast<std::uint64_t>(constants.size()), 64);
+		if (constants.size() < offset)
+		{
+			constants.resize(static_cast<std::size_t>(offset));
+		}
+		const auto byteSize = values.size_bytes();
+		const auto oldSize = constants.size();
+		constants.resize(oldSize + byteSize);
+		std::memcpy(constants.data() + oldSize, values.data(), byteSize);
+		return offset;
+	}
+
+	llvm::Value* AddExternalConstantPointer(llvm::Module& module, llvm::IRBuilder<>& builder, std::uint64_t offset)
+	{
+		auto& ctx = module.getContext();
+		auto* ptrTy = llvm::PointerType::get(ctx, 0);
+		auto* i8Ty = llvm::Type::getInt8Ty(ctx);
+		auto externalConstantsFn = module.getOrInsertFunction(
+		    "litenn_cpu_external_constants", llvm::FunctionType::get(ptrTy, {}, false));
+		auto* base = builder.CreateCall(externalConstantsFn);
+		return builder.CreateInBoundsGEP(i8Ty, base, builder.getInt64(offset));
+	}
+
+	CompiledModuleExternalTensorInfo MakeExternalF32ConstantInfo(std::string name,
+	                                                             std::span<const std::byte> constants,
+	                                                             std::span<const std::size_t> shape,
+	                                                             std::uint64_t byteOffset,
+	                                                             std::uint64_t byteSize,
+	                                                             std::uint64_t alignment)
+	{
+		const auto bytes = std::span<const std::byte>{
+			constants.data() + static_cast<std::ptrdiff_t>(byteOffset),
+			static_cast<std::size_t>(byteSize),
+		};
+		return {
+			.name = std::move(name),
+			.region = std::string(kConstantsRegionName),
+			.dtype = DataType::Float32,
+			.shape = std::vector<std::size_t>(shape.begin(), shape.end()),
+			.byteOffset = byteOffset,
+			.byteSize = byteSize,
+			.alignment = alignment,
+			.checksum = ChecksumBytes(bytes),
+			.rebindPolicy = CompiledModuleExternalTensorRebindPolicy::ExactChecksum,
+		};
+	}
+
 	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32(const Graph& graph)
 	{
 		if (LiteNNCPUAOTThreadCount() <= 1)
@@ -1315,6 +1569,9 @@ namespace
 		    "litenn_cpu_matmul_bias_relu_parallel_f32",
 		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty }, false));
 
+		const bool useExternalConstants = IsCPUExternalConstantsEnabled();
+		std::vector<std::byte> externalConstants;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 		std::vector<std::optional<ValueRef>> values(subgraph.NodeCount());
 		std::vector<llvm::Value*> heapAllocations;
 		std::size_t fusedLayerCount = 0;
@@ -1361,9 +1618,23 @@ namespace
 				{
 					return std::nullopt;
 				}
+				llvm::Value* ptr = nullptr;
+				if (useExternalConstants)
+				{
+					constexpr std::uint64_t kAlignment = 64;
+					const auto offset = AppendExternalF32Constant(externalConstants, *constantData);
+					ptr = AddExternalConstantPointer(*module, builder, offset);
+					externalTensorInfos.push_back(MakeExternalF32ConstantInfo(
+					    graph.VariableName(variable->variableIndex), externalConstants, output.shape, offset,
+					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
+				}
+				else
+				{
+					ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
+					                           *constantData);
+				}
 				values[nodeId] = ValueRef{
-					.ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
-					                            *constantData),
+					.ptr = ptr,
 					.dtype = output.dtype,
 					.shape = output.shape,
 				};
@@ -1376,9 +1647,23 @@ namespace
 				{
 					return std::nullopt;
 				}
+				llvm::Value* ptr = nullptr;
+				if (useExternalConstants)
+				{
+					constexpr std::uint64_t kAlignment = 64;
+					const auto offset = AppendExternalF32Constant(externalConstants, *constantData);
+					ptr = AddExternalConstantPointer(*module, builder, offset);
+					externalTensorInfos.push_back(MakeExternalF32ConstantInfo(
+					    std::format("constant_{}", nodeId), externalConstants, output.shape, offset,
+					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
+				}
+				else
+				{
+					ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
+					                           *constantData);
+				}
 				values[nodeId] = ValueRef{
-					.ptr = AddF32ConstantGlobal(*module, builder, std::format("litenn_cpu_const_{}", nodeId),
-					                            *constantData),
+					.ptr = ptr,
 					.dtype = output.dtype,
 					.shape = output.shape,
 				};
@@ -1447,7 +1732,8 @@ namespace
 		OptimizeLLVMModule(*module, *config.targetMachine);
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*module);
-		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), inputSpecs, outputSpecs };
+		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), {},
+			                          std::move(externalTensorInfos), inputSpecs, outputSpecs };
 	}
 
 	std::uint64_t NumElements(const CompiledTensorSpec& spec)
@@ -1995,6 +2281,8 @@ namespace
 		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_external_constants",
+		                         reinterpret_cast<void*>(&litenn_cpu_external_constants));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -4740,6 +5028,8 @@ struct CompiledModule<CPU>::Impl
 {
 	std::vector<std::byte> rodata;
 	std::vector<std::byte> instructions;
+	std::vector<std::byte> externalConstants;
+	std::vector<std::byte> externalWeights;
 	std::vector<CompiledTensorSpec> inputSpecs;
 	std::vector<CompiledTensorSpec> outputSpecs;
 	CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
@@ -4878,6 +5168,11 @@ std::vector<CompiledModuleRegionInfo> CompiledModuleSeparatedArtifact::RegionInf
 	return infos;
 }
 
+std::vector<CompiledModuleExternalTensorInfo> CompiledModuleSeparatedArtifact::ExternalTensorInfos() const
+{
+	return DeserializeSeparatedMetadata(metadata_).externalTensorInfos;
+}
+
 std::span<const CompiledTensorSpec> CompiledModuleSeparatedArtifact::InputSpecs() const
 {
 	return inputSpecs_;
@@ -4940,9 +5235,13 @@ void CompiledModuleSeparatedArtifact::WriteRegionFiles(const std::filesystem::pa
 CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
                                                std::vector<CompiledTensorSpec> inputSpecs,
                                                std::vector<CompiledTensorSpec> outputSpecs,
-                                               CompiledModuleBackend backend)
-    : rodata_(std::move(rodata)), instructions_(std::move(instructions)), inputSpecs_(std::move(inputSpecs)),
-      outputSpecs_(std::move(outputSpecs)), backend_(backend)
+                                               CompiledModuleBackend backend,
+                                               std::vector<std::byte> constants,
+                                               std::vector<std::byte> weights,
+                                               std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos)
+    : rodata_(std::move(rodata)), instructions_(std::move(instructions)), constants_(std::move(constants)),
+      weights_(std::move(weights)), externalTensorInfos_(std::move(externalTensorInfos)),
+      inputSpecs_(std::move(inputSpecs)), outputSpecs_(std::move(outputSpecs)), backend_(backend)
 {
 }
 
@@ -4967,26 +5266,42 @@ CompiledModuleArtifact CompiledModuleArtifact::FromExportedSymbols(CompiledModul
 
 CompiledModuleSeparatedArtifact CompiledModuleArtifact::SeparateRodata() const
 {
-	std::vector<std::byte> constants;
-	std::vector<std::byte> weights;
+	std::vector<std::byte> constants(constants_.begin(), constants_.end());
+	std::vector<std::byte> weights(weights_.begin(), weights_.end());
 	std::vector<std::byte> instructions(instructions_.begin(), instructions_.end());
 
 	if (backend_ == CompiledModuleBackend::CUDANative)
 	{
 		auto payload = DeserializeCUDANativeInstructionPayload(instructions_);
-		constants = std::move(payload.constantData);
+		if (constants.empty())
+		{
+			constants = std::move(payload.constantData);
+		}
+		else
+		{
+			constants.insert(constants.end(), payload.constantData.begin(), payload.constantData.end());
+		}
 		payload.constantData.clear();
 		instructions = SerializeCUDANativeInstructionPayload(payload);
 	}
 
-	auto metadata = SerializeSeparatedMetadata(rodata_, constants, weights, instructions);
+	auto metadata = SerializeSeparatedMetadata(rodata_, constants, weights, instructions, externalTensorInfos_);
 	return CompiledModuleSeparatedArtifact(std::move(metadata), std::move(constants), std::move(weights),
-	                                      std::move(instructions), inputSpecs_, outputSpecs_, backend_);
+	                                       std::move(instructions), inputSpecs_, outputSpecs_, backend_);
 }
 
 CompiledModule<CPU> CompiledModuleArtifact::Load() const
 {
-	return CompiledModule<CPU>::Load(Image());
+	auto module = CompiledModule<CPU>::Load(Image());
+	if (!constants_.empty())
+	{
+		module.impl_->externalConstants = constants_;
+	}
+	if (!weights_.empty())
+	{
+		module.impl_->externalWeights = weights_;
+	}
+	return module;
 }
 
 CompiledModuleImage CompiledModuleArtifact::Image() const
@@ -5074,15 +5389,19 @@ CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleSeparatedImage image
 {
 	auto metadata = ValidateSeparatedImage(image);
 	auto constants = RegionBytes(image.constants, kConstantsRegionName);
+	auto weights = RegionBytes(image.weights, kWeightsRegionName);
 	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
 	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
 	                                                           constants);
-	return Load({
+	auto module = Load({
 	    .rodata = metadata.legacyRodata.data(),
 	    .rodataSize = metadata.legacyRodata.size(),
 	    .instructions = instructions.data(),
 	    .instructionSize = instructions.size(),
 	});
+	module.impl_->externalConstants.assign(constants.begin(), constants.end());
+	module.impl_->externalWeights.assign(weights.begin(), weights.end());
+	return module;
 }
 
 std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> inputs) const
@@ -5115,6 +5434,8 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 		outputPtrs.push_back(outputs.back().RawData());
 	}
 
+	ScopedCPUExternalConstants scopedConstants(impl_->externalConstants.empty() ? nullptr
+	                                                                            : impl_->externalConstants.data());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 	return outputs;
 }
@@ -5152,6 +5473,8 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 		outputPtrs.push_back(outputs[i].RawData());
 	}
 
+	ScopedCPUExternalConstants scopedConstants(impl_->externalConstants.empty() ? nullptr
+	                                                                            : impl_->externalConstants.data());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
@@ -5338,6 +5661,10 @@ CompiledModule<CUDA>::CompiledModule(std::shared_ptr<Impl> impl) : impl_(std::mo
 
 CompiledModule<CUDA> CompiledModuleArtifact::Load(CUDA device) const
 {
+	if (!constants_.empty() || !weights_.empty())
+	{
+		return SeparateRodata().Load(std::move(device));
+	}
 	return CompiledModule<CUDA>::Load(Image(), std::move(device));
 }
 
@@ -5394,12 +5721,17 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage ima
 	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
 	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
 	                                                           constants);
-	return Load({
+	auto module = Load({
 	    .rodata = metadata.legacyRodata.data(),
 	    .rodataSize = metadata.legacyRodata.size(),
 	    .instructions = instructions.data(),
 	    .instructionSize = instructions.size(),
 	}, std::move(device));
+	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
+	{
+		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
+	}
+	return module;
 }
 
 std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const
@@ -5670,7 +6002,9 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 	{
 		return CompiledModuleArtifact(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
 		                              std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
-		                              CompiledModuleBackend::CPUNative);
+		                              CompiledModuleBackend::CPUNative, std::move(parallelParts->constants),
+		                              std::move(parallelParts->weights),
+		                              std::move(parallelParts->externalTensorInfos));
 	}
 
 	mlir::MLIRContext ctx;

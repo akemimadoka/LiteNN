@@ -680,6 +680,31 @@ library embedding, memory mapping, hot weight swapping, and mobile packaging do 
 - [x] Support large-weight packaging without exceeding PE/COFF section/object limits.
 - [x] Document recommended packaging layouts for desktop, mobile, static library, and shared library users.
 
+#### G9.4 CPU AOT External Constants and Weights
+
+Purpose: make the already-separated artifact ABI useful for CPU MLIR/AOT graphs whose model weights would otherwise be
+embedded into LLVM globals inside the instruction object.
+
+- [x] Add the first CPU AOT context/region binding ABI so generated instructions can read immutable constants from a
+      separated artifact region instead of embedding every payload into instruction-owned LLVM globals.
+- [x] Extend separated metadata to v2 with external tensor table entries: graph variable/constant name, region, dtype,
+      shape, byte offset, byte size, alignment, checksum, and rebinding compatibility policy.
+- [ ] Populate the external tensor table for generic CPU MLIR externalized tensors and future external CPU weights.
+- [ ] Teach the CPU MLIR lowering path to externalize large `VariableRefNode` / `ConstantNode` tensors while keeping
+      tiny scalar constants inline when that is cheaper.
+- [ ] Generalize the first external-constants slice beyond the optimized f32 parallel linear-chain AOT path.
+- [ ] Update `CompiledModule<CPU>::Load(CompiledModuleSeparatedImage)` and carrier/raw-region loaders to bind external
+      regions without copying when the caller supplies stable mapped memory.
+- [x] Keep CUDA CPU-bridge loading compatible with CPU AOT external constants by routing external-constant artifacts
+      through separated-region loading when `CompiledModuleArtifact::Load(CUDA{})` is used.
+- [x] Add focused tests that verify a non-empty CPU constants region, successful rebinding, size-mismatch diagnostics,
+      and parity against interpreter output for the initial external-constants AOT path.
+- [x] Add focused tests for the initial metadata-table population and public inspection API.
+- [ ] Add full tests for external CPU weights, malformed metadata-table diagnostics, checksum mismatch diagnostics, and
+      generic MLIR externalization parity against inline AOT outputs.
+- [ ] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
+      CPU instruction objects with multi-GiB weight globals.
+
 Notes:
 
 - Completed on 2026-05-22: `CompiledModuleArtifact::SeparateRodata()` now creates an owning separated artifact with
@@ -694,6 +719,17 @@ Notes:
   files for memory-mapped packaging.
 - Completed on 2026-05-22: `litenn_gguf_convert --compile-cpu-separated/--compile-cuda-separated` emits split carrier
   objects for converted `.ltnn` graphs.
+- Completed on 2026-05-25: CPU AOT gained an experimental `LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` binding path for the
+  optimized f32 parallel linear-chain compiler. It places variable/constant payload bytes into the separated constants
+  region, emits instruction code that obtains the bound base address through the LiteNN CPU runtime ABI, and covers
+  direct artifact loading, separated-image loading, rebinding, and interpreter parity in `CompiledModuleTest`.
+- Completed on 2026-05-25: CUDA CPU-bridge loading now preserves CPU AOT external constants for both
+  `CompiledModuleArtifact::Load(CUDA{})` and `CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage)`, with a CUDA
+  bridge regression covering a CPUNative fallback artifact whose constants live in the separated constants region.
+- Completed on 2026-05-25: separated metadata v2 now carries external tensor entries and exposes them through
+  `CompiledModuleSeparatedArtifact::ExternalTensorInfos()`. The initial CPU external-constants path records variable
+  or constant names, constants-region offsets, byte sizes, alignment, dtype/shape, per-entry checksum, and exact-checksum
+  rebind policy; image validation checks table ranges and per-entry checksums in addition to whole-region checksums.
 
 ### G10: LoRA and Adapter Support
 
@@ -908,7 +944,7 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
       diffusers and save the exact LiteNN runtime inputs: `crossattn`, pooled/vector conditioning, original/target
       size embeddings, crop embeddings, negative conditioning, and classifier-free-guidance batch layout.
       （已完成：`example/sdxl/sdxl_export_conditioning.py` loads the Stability-AI/generative-models conditioner,
-      builds the SDXL prompt/negative prompt batch, and writes F32 safetensors bindings for `context`,
+      builds the SDXL prompt/negative prompt batch, and writes F32/F16/BF16 safetensors bindings for `context`,
       `vector_cond`, negative variants, CFG-concatenated variants, and raw `cond.*` / `uncond.*` tensors.
       The default path now instantiates only the conditioner, patches CLIP/OpenCLIP construction to avoid fetching
       pretrained weights, and loads checkpoint `conditioner.*` tensors directly; `--full-model` remains available for
@@ -919,7 +955,9 @@ Phase 0: bind external conditioning and make the denoiser graph complete enough 
       Stability-layout UNet manifest from checkpoint tensor names, including `time_embed`, SDXL vector/label
       conditioning, input/middle/output block traversal, skip-stack channel concat, ResBlocks, conv downsample,
       nearest+conv upsample, and all discovered `spatial_transformer_2d` blocks. The graph still consumes
-      externally exported `context`/`vector_cond` tensors while native text encoders remain a separate target.）
+      externally exported `context`/`vector_cond` tensors while native text encoders remain a separate target.
+      `--compute-dtype F16|BF16` now preserves low-precision probe inputs/weights and inserts an explicit cast after
+      F32 timestep embedding output so mixed-precision manifest import remains type-correct.）
 - [x] Support SDXL Transformer FFN GEGLU combined projection in Torch manifests.
       （已完成：Torch manifest now lowers `slice` and `geglu_feed_forward`; `spatial-transformer-smoke` emits
       norm3 plus `ff.net.0.proj` chunk/GELU/gate/`ff.net.2` for the middle-block transformer smoke path.）
@@ -954,8 +992,10 @@ Phase 1: make a real denoise loop produce a latent.
 - [x] Add a CLI flow that accepts exported conditioning and writes the final latent tensor after N denoise steps using
       a compiled LiteNN UNet DLL/shared object.
       （已完成：`litenn_sdxl_example --denoise-latent <module> <inputs.safetensors> <output-latent.safetensors>`
-      wraps the sampler with positional conditioning/output paths for pipeline scripts. Full checkpoint/config to
-      complete-UNet compilation remains tracked by the full fixed-shape UNet manifest item above.）
+      wraps the sampler with positional conditioning/output paths for pipeline scripts.
+      `--denoise-latent-image <rodata.bin> <instructions.obj> ...` provides the same Euler path for separated
+      rodata/instruction image-region files. Full checkpoint/config to complete-UNet compilation remains tracked by
+      the full fixed-shape UNet manifest item above.）
 - [x] Add CPU AOT and CUDA AOT benchmark rows for one full denoise step, with memory use separated from latency.
       （已完成：`litenn_sdxl_example --benchmark-model-with-inputs` reports compile/load/input-bind/upload/run
       timing separately plus rodata/instruction/input/output bytes; `example/sdxl/sdxl_bench.py` now writes
@@ -971,8 +1011,9 @@ Phase 2: decode and write an image.
       path was fixed on Win64 by using the large code model for CPU AOT object emission, avoiding out-of-range
       `.text` to `.rdata` short relocations in large VAE artifacts.）
 - [x] Add a PNG writing path or a Python postprocess bridge for `[N, 3, H, W]` Float32 image tensors.
-      （已完成：`example/sdxl/sdxl_tensor_to_png.py` reads F32 image safetensors tensors named `image`, `decoded`,
-      `output`, or the first tensor, and writes an RGB PNG through Pillow.）
+      （已完成：`example/sdxl/sdxl_tensor_to_png.py` reads F32/F16/BF16 image safetensors tensors named `image`,
+      `decoded`, `output`, or the first tensor, converts to Float32 for postprocess, and writes an RGB PNG through
+      Pillow.）
 - [x] Add 1024x1024 memory policy: VAE mid-attention tiling/fallback, workspace sizing, and failure diagnostics when
       CPU-only memory or time would be unreasonable.
       （已完成：`sdxl_manifest_probe.py --probe vae-decode-full` now accepts
@@ -985,10 +1026,13 @@ Phase 2: decode and write an image.
       and then by image-level tolerances.
       （当前状态：the prompt-to-image plumbing is validated with prompt `1girl` through the 64x64
       `unet-conditioning-smoke` LiteNN AOT denoiser plus LiteNN AOT VAE decode, producing
-      `build-release/sdxl_1girl_script_smoke/1girl_smoke.png` during local validation. The full fixed-shape 64x64
-      UNet manifest imports, but materializes a roughly 10 GiB F32 `.ltnn` graph and CPU AOT compilation did not finish
-      within a 15 minute local timeout. Full 1024x1024 reference parity is therefore blocked on full-graph compile
-      time, external weight/rodata pressure, and native/full CUDA lowering rather than on prompt binding or VAE output
+      `build-release/sdxl_1girl_script_smoke/1girl_smoke.png` and
+      `build-release/sdxl_1girl_regions_smoke/1girl_regions_smoke.png` during local validation. The latter uses direct
+      rodata/instruction image-region loading instead of DLL/shared-object loading. The full fixed-shape 64x64 UNet
+      manifest imports, but materializes a roughly 10 GiB F32 `.ltnn` graph and CPU AOT compilation did not finish
+      within a 15 minute local timeout. F16 manifest import now works and halves the small smoke `.ltnn` size
+      (about 38.3 MiB to 19.2 MiB locally), but full 1024x1024 reference parity is still blocked on full-graph compile
+      time, external weight/codegen pressure, and native/full CUDA lowering rather than on prompt binding or VAE output
       plumbing.）
 
 Phase 3: make LiteNN own the full prompt path.
@@ -1003,7 +1047,8 @@ Phase 3: make LiteNN own the full prompt path.
 - [x] Package the complete prompt-to-image flow with separated rodata/weights, dynamic/shared-library loading, and
       reproducible benchmark/profile commands.
       （已完成：`example/sdxl/sdxl_prompt_to_image.py` orchestrates conditioning export, UNet/VAE manifest emission,
-      safetensors import, carrier object compilation, DLL/SO linking, Euler denoising, VAE decode, and PNG writing.
+      safetensors import, carrier object or image-region compilation, DLL/SO or rodata/instruction loading, Euler
+      denoising, VAE decode, and PNG writing.
       `example/sdxl/README.md` now includes both the one-shot command and the expanded command sequence for prompt
       `1girl`, plus the full-UNet 1024x1024 target command with current compile-time caveats.）
 

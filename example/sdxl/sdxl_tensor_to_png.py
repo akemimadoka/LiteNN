@@ -41,6 +41,19 @@ def choose_tensor(header: dict[str, Any], name: str | None) -> tuple[str, dict[s
     raise ValueError("safetensors file contains no tensor")
 
 
+def tensor_payload_to_float32(payload: memoryview, begin: int, end: int, dtype: str, shape: list[int]) -> Any:
+    import numpy as np
+
+    if dtype == "F32":
+        return np.frombuffer(payload[begin:end], dtype="<f4").reshape(shape)
+    if dtype == "F16":
+        return np.frombuffer(payload[begin:end], dtype="<f2").astype(np.float32).reshape(shape)
+    if dtype == "BF16":
+        raw = np.frombuffer(payload[begin:end], dtype="<u2").astype(np.uint32)
+        return (raw << 16).view(np.float32).reshape(shape)
+    raise ValueError(f"unsupported image tensor dtype {dtype!r}; expected F32, F16, or BF16")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
@@ -60,8 +73,9 @@ def main() -> int:
 
     header, payload = load_safetensors(args.input)
     name, tensor = choose_tensor(header, args.tensor)
-    if tensor.get("dtype") != "F32":
-        raise ValueError(f"tensor {name!r} must be F32, got {tensor.get('dtype')!r}")
+    dtype = tensor.get("dtype")
+    if not isinstance(dtype, str):
+        raise ValueError(f"tensor {name!r} has invalid dtype")
     shape = tensor.get("shape")
     offsets = tensor.get("data_offsets")
     if not isinstance(shape, list) or not all(isinstance(dim, int) and dim > 0 for dim in shape):
@@ -69,7 +83,7 @@ def main() -> int:
     if not isinstance(offsets, list) or len(offsets) != 2:
         raise ValueError(f"tensor {name!r} has invalid data_offsets")
     begin, end = offsets
-    array = np.frombuffer(payload[begin:end], dtype="<f4").reshape(shape)
+    array = tensor_payload_to_float32(payload, begin, end, dtype, shape)
     if array.ndim == 4:
         if array.shape[0] != 1 or array.shape[1] != 3:
             raise ValueError(f"rank-4 image tensor must have shape [1,3,H,W], got {shape}")

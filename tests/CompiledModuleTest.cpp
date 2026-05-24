@@ -1665,3 +1665,83 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
 	}
 }
+
+TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalConstantsRegion)
+{
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	ScopedEnvVar externalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+	constexpr std::size_t kBatch = 128;
+	constexpr std::size_t kInput = 64;
+	constexpr std::size_t kOutput = 32;
+	auto graph = BuildWideLinearChainGraph(kBatch);
+	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
+	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput },
+	                                                  DataType::Float32) };
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+
+	auto optimized = graph;
+	FusionPass{}.Run(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	auto separated = artifact.SeparateRodata();
+
+	ASSERT_GT(separated.Constants().size(), 0u);
+	EXPECT_EQ(separated.Weights().size(), 0u);
+	ASSERT_GT(separated.Instructions().size(), 0u);
+	const auto* constantsInfo = FindRegionInfo(separated.RegionInfos(), "constants");
+	ASSERT_NE(constantsInfo, nullptr);
+	EXPECT_EQ(constantsInfo->size, separated.Constants().size());
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_GE(externalInfos.size(), 4u);
+	std::vector<std::string> externalNames;
+	externalNames.reserve(externalInfos.size());
+	for (const auto& info : externalInfos)
+	{
+		externalNames.push_back(info.name);
+		EXPECT_EQ(info.region, "constants");
+		EXPECT_EQ(info.dtype, DataType::Float32);
+		EXPECT_GT(info.shape.size(), 0u);
+		EXPECT_GT(info.byteSize, 0u);
+		EXPECT_EQ(info.byteOffset % info.alignment, 0u);
+		EXPECT_LE(info.byteOffset + info.byteSize, separated.Constants().size());
+		EXPECT_EQ(info.rebindPolicy, CompiledModuleExternalTensorRebindPolicy::ExactChecksum);
+	}
+	for (std::size_t i = 0; i < 4; ++i)
+	{
+		EXPECT_NE(std::find(externalNames.begin(), externalNames.end(), std::format("variable{}", i)),
+		          externalNames.end());
+	}
+
+	auto runAndCheck = [&](CompiledModule<CPU>& module)
+	{
+		std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32) };
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+
+		ASSERT_EQ(expected.size(), 1u);
+		ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
+		for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
+		}
+	};
+
+	auto direct = artifact.Load();
+	runAndCheck(direct);
+
+	auto imageLoaded = CompiledModule<CPU>::Load(separated.Image());
+	runAndCheck(imageLoaded);
+
+	std::vector<std::byte> reboundConstants(separated.Constants().begin(), separated.Constants().end());
+	auto rebound = separated.WithReboundConstants({
+	    .data = reboundConstants.data(),
+	    .size = reboundConstants.size(),
+	});
+	auto reboundLoaded = rebound.Load();
+	runAndCheck(reboundLoaded);
+
+	std::vector<std::byte> wrongSize(separated.Constants().size() + 1);
+	EXPECT_THROW((void) separated.WithReboundConstants({ .data = wrongSize.data(), .size = wrongSize.size() }),
+	             std::runtime_error);
+}

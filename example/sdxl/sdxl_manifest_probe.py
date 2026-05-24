@@ -150,6 +150,34 @@ def dtype_to_torch(dtype: str) -> str:
     return mapping[dtype]
 
 
+def manifest_compute_dtype(value: str) -> str:
+    normalized = value.upper()
+    aliases = {
+        "FLOAT32": "F32",
+        "TORCH.FLOAT32": "F32",
+        "FP32": "F32",
+        "FLOAT16": "F16",
+        "TORCH.FLOAT16": "F16",
+        "FP16": "F16",
+        "HALF": "F16",
+        "BFLOAT16": "BF16",
+        "TORCH.BFLOAT16": "BF16",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"F32", "F16", "BF16"}:
+        raise ValueError(f"unsupported compute dtype {value!r}; expected F32, F16, or BF16")
+    return normalized
+
+
+def manifest_input_dtype(compute_dtype: str) -> str:
+    mapping = {
+        "F32": "torch.float32",
+        "F16": "torch.float16",
+        "BF16": "torch.bfloat16",
+    }
+    return mapping[manifest_compute_dtype(compute_dtype)]
+
+
 def require_tensor(tensors: dict[str, TensorInfo], name: str) -> TensorInfo:
     tensor = tensors.get(name)
     if tensor is None:
@@ -548,7 +576,10 @@ def emit_unet_euler_smoke_manifest(
     batch: int,
     height: int,
     width: int,
+    compute_dtype: str = "F32",
 ) -> dict[str, Any]:
+    compute_dtype = manifest_compute_dtype(compute_dtype)
+    input_dtype = manifest_input_dtype(compute_dtype)
     latent_h = height // 8
     latent_w = width // 8
     res_prefix = "input_blocks.1.0"
@@ -574,12 +605,13 @@ def emit_unet_euler_smoke_manifest(
     out_bias = unet_tensor(tensors, "out.2.bias")
     channels = stem_weight.shape[0]
     emb_channels = channels * 4
-    compute_dtype = "F32"
+    time_sinusoidal_value = "time_sinusoidal" if compute_dtype == "F32" else "time_sinusoidal_cast"
     return {
         "format": "litenn.torch_manifest.v1",
+        "metadata": {"probe": "unet-euler-smoke", "compute_dtype": compute_dtype},
         "inputs": [
-            {"name": "latent", "dtype": "torch.float32", "shape": [batch, stem_weight.shape[1], latent_h, latent_w]},
-            {"name": "timestep", "dtype": "torch.float32", "shape": [batch]},
+            {"name": "latent", "dtype": input_dtype, "shape": [batch, stem_weight.shape[1], latent_h, latent_w]},
+            {"name": "timestep", "dtype": input_dtype, "shape": [batch]},
         ],
         "tensors": [
             manifest_tensor("unet.input_blocks.0.0.weight", stem_weight, "torch_conv2d_weight", target_dtype=compute_dtype),
@@ -718,10 +750,23 @@ def emit_unet_euler_smoke_manifest(
                 "max_period": 10000,
                 "output": "time_sinusoidal",
             },
+            *(
+                [
+                    {
+                        "name": "unet_timestep_sinusoidal_cast",
+                        "op": "cast",
+                        "input": "time_sinusoidal",
+                        "dtype": input_dtype,
+                        "output": "time_sinusoidal_cast",
+                    }
+                ]
+                if compute_dtype != "F32"
+                else []
+            ),
             {
                 "name": "unet_time_embed_0",
                 "op": "linear",
-                "input": "time_sinusoidal",
+                "input": time_sinusoidal_value,
                 "weight": "unet.time_embed.0.weight",
                 "bias": "unet.time_embed.0.bias",
                 "output": "time_hidden",
@@ -822,17 +867,23 @@ def emit_unet_conditioning_smoke_manifest(
     batch: int,
     height: int,
     width: int,
+    compute_dtype: str = "F32",
 ) -> dict[str, Any]:
-    manifest = emit_unet_euler_smoke_manifest(tensors, batch=batch, height=height, width=width)
+    compute_dtype = manifest_compute_dtype(compute_dtype)
+    input_dtype = manifest_input_dtype(compute_dtype)
+    manifest = emit_unet_euler_smoke_manifest(
+        tensors, batch=batch, height=height, width=width, compute_dtype=compute_dtype
+    )
     label0_weight = unet_tensor(tensors, "label_emb.0.0.weight")
     label0_bias = unet_tensor(tensors, "label_emb.0.0.bias")
     label2_weight = unet_tensor(tensors, "label_emb.0.2.weight")
     label2_bias = unet_tensor(tensors, "label_emb.0.2.bias")
-    compute_dtype = "F32"
 
     manifest["inputs"].append(
-        {"name": "vector_cond", "dtype": "torch.float32", "shape": [batch, label0_weight.shape[1]]}
+        {"name": "vector_cond", "dtype": input_dtype, "shape": [batch, label0_weight.shape[1]]}
     )
+    manifest.setdefault("metadata", {})["probe"] = "unet-conditioning-smoke"
+    manifest.setdefault("metadata", {})["compute_dtype"] = compute_dtype
     manifest["tensors"].extend(
         [
             manifest_tensor(
@@ -1295,12 +1346,14 @@ def emit_unet_full_fixed_manifest(
     height: int,
     width: int,
     context_tokens: int,
+    compute_dtype: str = "F32",
 ) -> dict[str, Any]:
+    compute_dtype = manifest_compute_dtype(compute_dtype)
+    input_dtype = manifest_input_dtype(compute_dtype)
     if batch != 1:
         raise ValueError("unet-full-fixed currently emits batch=1 SpatialTransformer blocks")
     latent_h = height // 8
     latent_w = width // 8
-    compute_dtype = "F32"
     tensor_entries: list[dict[str, Any]] = []
     seen_tensors: set[str] = set()
     nodes: list[dict[str, Any]] = []
@@ -1633,6 +1686,7 @@ def emit_unet_full_fixed_manifest(
     model_channels = stem_weight.shape[0]
     context_width = wt("middle_block.1.transformer_blocks.0.attn2.to_k.weight").shape[1]
     vector_width = wt("label_emb.0.0.weight").shape[1]
+    time_sinusoidal_value = "time_sinusoidal" if compute_dtype == "F32" else "time_sinusoidal_cast"
     nodes.extend(
         [
             {
@@ -1643,10 +1697,23 @@ def emit_unet_full_fixed_manifest(
                 "max_period": 10000,
                 "output": "time_sinusoidal",
             },
+            *(
+                [
+                    {
+                        "name": "unet_timestep_sinusoidal_cast",
+                        "op": "cast",
+                        "input": "time_sinusoidal",
+                        "dtype": input_dtype,
+                        "output": "time_sinusoidal_cast",
+                    }
+                ]
+                if compute_dtype != "F32"
+                else []
+            ),
             {
                 "name": "unet_time_embed_0",
                 "op": "linear",
-                "input": "time_sinusoidal",
+                "input": time_sinusoidal_value,
                 "weight": "unet.time_embed.0.weight",
                 "bias": "unet.time_embed.0.bias",
                 "output": "time_hidden",
@@ -1821,6 +1888,7 @@ def emit_unet_full_fixed_manifest(
             "latent_height": latent_h,
             "latent_width": latent_w,
             "context_tokens": context_tokens,
+            "compute_dtype": compute_dtype,
             "input_blocks": input_block_summaries,
             "middle_blocks": middle_summaries,
             "output_blocks": output_block_summaries,
@@ -1831,10 +1899,10 @@ def emit_unet_full_fixed_manifest(
             ],
         },
         "inputs": [
-            {"name": "latent", "dtype": "torch.float32", "shape": [batch, stem_weight.shape[1], latent_h, latent_w]},
-            {"name": "timestep", "dtype": "torch.float32", "shape": [batch]},
-            {"name": "context", "dtype": "torch.float32", "shape": [context_tokens, context_width]},
-            {"name": "vector_cond", "dtype": "torch.float32", "shape": [batch, vector_width]},
+            {"name": "latent", "dtype": input_dtype, "shape": [batch, stem_weight.shape[1], latent_h, latent_w]},
+            {"name": "timestep", "dtype": input_dtype, "shape": [batch]},
+            {"name": "context", "dtype": input_dtype, "shape": [context_tokens, context_width]},
+            {"name": "vector_cond", "dtype": input_dtype, "shape": [batch, vector_width]},
         ],
         "tensors": tensor_entries,
         "nodes": nodes,
@@ -1886,10 +1954,12 @@ def emit_vae_decode_full_manifest(
     width: int,
     vae_mid_attention_policy: str = "auto",
     vae_attention_max_mib: int = DEFAULT_VAE_ATTENTION_MAX_MIB,
+    compute_dtype: str = "F32",
 ) -> dict[str, Any]:
+    compute_dtype = manifest_compute_dtype(compute_dtype)
+    input_dtype = manifest_input_dtype(compute_dtype)
     latent_h = height // 8
     latent_w = width // 8
-    compute_dtype = "F32"
     tensor_entries: list[dict[str, Any]] = []
     seen_tensors: set[str] = set()
     nodes: list[dict[str, Any]] = []
@@ -2228,9 +2298,10 @@ def emit_vae_decode_full_manifest(
             "description": "fixed-shape SDXL VAE decoder traversal with memory-aware mid attention policy",
             "latent_height": latent_h,
             "latent_width": latent_w,
+            "compute_dtype": compute_dtype,
             "vae_mid_attention": vae_mid_attention_report,
         },
-        "inputs": [{"name": "latent", "dtype": "torch.float32", "shape": [batch, conv_in_weight.shape[1], latent_h, latent_w]}],
+        "inputs": [{"name": "latent", "dtype": input_dtype, "shape": [batch, conv_in_weight.shape[1], latent_h, latent_w]}],
         "tensors": tensor_entries,
         "nodes": nodes,
         "outputs": [{"name": "image", "source": "image"}],
@@ -2243,9 +2314,13 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
     if args.probe == "unet-resblock":
         return emit_unet_resblock_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
     if args.probe == "unet-euler-smoke":
-        return emit_unet_euler_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+        return emit_unet_euler_smoke_manifest(
+            tensors, batch=args.batch, height=args.height, width=args.width, compute_dtype=args.compute_dtype
+        )
     if args.probe == "unet-conditioning-smoke":
-        return emit_unet_conditioning_smoke_manifest(tensors, batch=args.batch, height=args.height, width=args.width)
+        return emit_unet_conditioning_smoke_manifest(
+            tensors, batch=args.batch, height=args.height, width=args.width, compute_dtype=args.compute_dtype
+        )
     if args.probe == "unet-full-fixed":
         return emit_unet_full_fixed_manifest(
             tensors,
@@ -2253,6 +2328,7 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
             height=args.height,
             width=args.width,
             context_tokens=args.context_tokens,
+            compute_dtype=args.compute_dtype,
         )
     if args.probe == "spatial-transformer-smoke":
         return emit_spatial_transformer_smoke_manifest(
@@ -2272,6 +2348,7 @@ def emit_manifest(args: argparse.Namespace, tensors: dict[str, TensorInfo]) -> d
             width=args.width,
             vae_mid_attention_policy=args.vae_mid_attention_policy,
             vae_attention_max_mib=args.vae_attention_max_mib,
+            compute_dtype=args.compute_dtype,
         )
     raise ValueError(f"unsupported probe manifest kind {args.probe!r}")
 
@@ -2396,6 +2473,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tokens", type=int, default=64, help="Token count for spatial-transformer-smoke")
     parser.add_argument("--context-tokens", type=int, default=77, help="Context token count for spatial-transformer-smoke")
     parser.add_argument(
+        "--compute-dtype",
+        default="F32",
+        help="Manifest compute dtype for generated UNet/VAE probes (F32, F16, or BF16; default: F32)",
+    )
+    parser.add_argument(
         "--vae-mid-attention-policy",
         choices=["auto", "force", "skip"],
         default="auto",
@@ -2423,6 +2505,10 @@ def main() -> int:
         parser.error("--tokens and --context-tokens must be positive")
     if args.vae_attention_max_mib <= 0:
         parser.error("--vae-attention-max-mib must be positive")
+    try:
+        args.compute_dtype = manifest_compute_dtype(args.compute_dtype)
+    except ValueError as ex:
+        parser.error(str(ex))
 
     config = load_yaml(args.config)
     tensors = parse_tensors(load_safetensors_header(args.safetensors))

@@ -61,6 +61,38 @@ CUDA AOT 的最终目标是让 `Compiler<CUDA>` 生成设备特定可执行产�
 - `CUDANativeInstructionPayload` 继续承载 target、binary bytes/library-call 标记、feature flags、scalar data、kernel launch table 和参数表。
 - cuBLAS MatMul 可继续走 `LibraryCall` payload；混合 payload 支持 per-kernel 分派，因此 MatMulBiasAdd/ReLU 可在同一 payload 中先调用 cuBLAS，再执行 MLIR/NVPTX epilogue kernel。
 
+### 当前 CUDA MLIR/NVPTX 流程与产物结构
+
+CUDA native custom kernel 目前不是从通用 LiteNN MLIR module 统一 lowering 到 NVPTX；而是先由
+`Compiler<CUDA>` 的 graph matcher 识别一小类静态 shape pattern，再用 `CUDANativeMLIRKernelBuilder` 通过
+MLIR `OpBuilder` 构造专用 `gpu.module` / `gpu.func` kernel。这个 kernel module 经过
+`ConvertGpuOpsToNVVMOps`、`ArithToLLVM`、`ReconcileUnrealizedCasts`，再导出 LLVM IR，最后交给 LLVM NVPTX
+target machine 生成 PTX 文本。也就是说，MLIR 当前承担的是 CUDA kernel builder/codegen backend，而不是完整
+`GraphToMLIR -> generic lowering -> GPU lowering` 路线。
+
+`Compiler<CUDA>::CompileArtifact` 的产物分两类：
+
+- `CompiledModuleBackend::CUDANative`：`rodata` 仍存 ABI metadata、backend、target/input/output spec；
+  `instructions` 存 `CUDANativeInstructionPayload`。payload 内包含 binary kind（PTX/cubin/fatbin/library-call）、
+  target、feature flags、PTX bytes 或 library-call 标记、scalar data、constant data、workspace bytes、kernel
+  launch table 和每个 kernel 的参数表。MatMul/cuBLAS 可不含 PTX binary，只用 library-call kernel spec；融合图可以
+  在同一 payload 中混合 cuBLAS call 与 MLIR/NVPTX epilogue PTX kernel。
+- `CompiledModuleBackend::CPUNative` fallback：CUDA native matcher 不支持的 graph 会复用 CPU AOT artifact。
+  `CompiledModule<CUDA>` 加载后在 CUDA Tensor 边界做 host/device copy，并调用内部 `CompiledModule<CPU>` 执行。
+  这条路径用于正确性和覆盖兜底，不是性能目标。
+
+rodata 分离对 CUDA 是有必要的，但意义和 CPU 不完全一样：
+
+- 对 CUDA native，常量不是编进 PTX text；它们存放在 `CUDANativeInstructionPayload::constantData`，运行时上传到
+  `CUDANativeConstantBuffer`，kernel 参数表通过 `ConstantTensor` byte range 引用。因此 `SeparateRodata()` 已经能把
+  CUDA `constantData` 从 `instructions` payload 移到 separated `constants` region，再在加载 separated image 时恢复为
+  payload constant data 并上传到设备。这主要解决 packaging/object-size、carrier/static-library、mmap/raw-region 管理问题。
+- 对 CPU AOT，历史问题更重：MLIR lowering 会把 `VariableRefNode`/`ConstantNode` 放进 `memref.global`
+  `DenseElementsAttr`，再进入 native object 的 `.rdata`，导致 instruction object 膨胀。G9.4 的 CPU external constants
+  是为了解决这个问题。
+- CUDA 后续仍值得继续分离到 metadata table 和 zero-copy host mapping：不是因为 PTX 里塞了权重，而是为了让
+  huge weights 能独立校验、rebind、mmap、热替换，并避免每次 image load 复制 host-side constant bytes。
+
 ### P4：生产化验证
 
 - [x] CUDA AOT carrier-style exported symbol 验证：新增 `CompiledModuleArtifact::FromExportedSymbols` 加载 `CUDANative` artifact 并运行 cuBLAS MatMul 的回归。

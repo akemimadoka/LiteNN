@@ -23,24 +23,59 @@ def missing_modules(names: list[str]) -> list[str]:
     return [name for name in names if importlib.util.find_spec(name) is None]
 
 
-def tensor_to_f32_payload(tensor: Any) -> tuple[list[int], bytes]:
-    import numpy as np
+def normalize_output_dtype(value: str) -> str:
+    normalized = value.upper()
+    aliases = {
+        "FLOAT32": "F32",
+        "TORCH.FLOAT32": "F32",
+        "FP32": "F32",
+        "FLOAT16": "F16",
+        "TORCH.FLOAT16": "F16",
+        "FP16": "F16",
+        "HALF": "F16",
+        "BFLOAT16": "BF16",
+        "TORCH.BFLOAT16": "BF16",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"F32", "F16", "BF16"}:
+        raise ValueError(f"unsupported output dtype {value!r}; expected F32, F16, or BF16")
+    return normalized
 
-    array = tensor.detach().float().cpu().contiguous().numpy().astype(np.dtype("<f4"), copy=False)
+
+def tensor_to_payload(tensor: Any, dtype: str) -> tuple[list[int], bytes]:
+    import numpy as np
+    import torch
+
+    dtype = normalize_output_dtype(dtype)
+    if dtype == "F32":
+        array = tensor.detach().float().cpu().contiguous().numpy().astype(np.dtype("<f4"), copy=False)
+    elif dtype == "F16":
+        array = tensor.detach().to(torch.float16).cpu().contiguous().numpy().astype(np.dtype("<f2"), copy=False)
+    else:
+        array = (
+            tensor.detach()
+            .to(torch.bfloat16)
+            .cpu()
+            .contiguous()
+            .view(torch.uint16)
+            .numpy()
+            .astype(np.dtype("<u2"), copy=False)
+        )
     return [int(dim) for dim in array.shape], array.tobytes(order="C")
 
 
-def write_safetensors(path: Path, tensors: dict[str, Any], metadata: dict[str, str]) -> None:
+def write_safetensors(path: Path, tensors: dict[str, Any], metadata: dict[str, str], dtype: str) -> None:
+    dtype = normalize_output_dtype(dtype)
     header: dict[str, Any] = {}
     if metadata:
         header["__metadata__"] = metadata
     payloads: list[bytes] = []
     offset = 0
     for name, tensor in tensors.items():
-        shape, payload = tensor_to_f32_payload(tensor)
+        shape, payload = tensor_to_payload(tensor, dtype)
         end = offset + len(payload)
         header[name] = {
-            "dtype": "F32",
+            "dtype": dtype,
             "shape": shape,
             "data_offsets": [offset, end],
         }
@@ -212,6 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch", default=1, type=int)
     parser.add_argument("--device", default=None, help="Default: cuda when available, otherwise cpu")
     parser.add_argument("--fp32", action="store_true", help="Disable conditioner fp16 execution on CUDA")
+    parser.add_argument("--output-dtype", default="F32", help="Safetensors dtype for exported bindings: F32, F16, or BF16")
     parser.add_argument("--cfg-scale", default=6.0, type=float)
     parser.add_argument("--aesthetic-score", default=5.0, type=float)
     parser.add_argument("--negative-aesthetic-score", default=5.0, type=float)
@@ -252,6 +288,7 @@ def main() -> int:
         raise ValueError("--height and --width must be divisible by 8")
     if args.batch <= 0:
         raise ValueError("--batch must be positive")
+    args.output_dtype = normalize_output_dtype(args.output_dtype)
 
     sys.path.insert(0, str(args.generative_models))
     missing = missing_modules(
@@ -331,9 +368,10 @@ def main() -> int:
         "litenn.width": str(args.width),
         "litenn.batch": str(args.batch),
         "litenn.context_batch_squeezed": str(not args.keep_context_batch),
+        "litenn.dtype": args.output_dtype,
     }
-    write_safetensors(args.output, output_tensors, metadata)
-    print(f"Wrote {args.output} with {len(output_tensors)} F32 tensor(s)")
+    write_safetensors(args.output, output_tensors, metadata, args.output_dtype)
+    print(f"Wrote {args.output} with {len(output_tensors)} {args.output_dtype} tensor(s)")
     for name, tensor in output_tensors.items():
         print(f"  {name}: {[int(dim) for dim in tensor.shape]}")
     return 0
