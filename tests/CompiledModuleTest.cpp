@@ -22,10 +22,12 @@
 #include <future>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace LiteNN;
@@ -123,6 +125,30 @@ namespace
 		graph.SetForward(0);
 		graph.SetInputNames({ "lhs", "rhs" });
 		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
+	Graph BuildGenericExternalRegionGraph()
+	{
+		Graph graph;
+		const auto scaleIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "scale.weight");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto scaled = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { input, 0 }, { scale, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto biasTensor = Tensor<CPU>({ 0.125, -0.25 }, { 1, 2 }, DataType::Float32);
+		const auto bias = sg.AddNode(ConstantNode{ biasTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                             { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { bias, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
 		return graph;
 	}
 
@@ -1635,8 +1661,9 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 
 TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 {
-	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
-	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
 	constexpr std::size_t kBatch = 128;
 	constexpr std::size_t kInput = 64;
 	constexpr std::size_t kOutput = 32;
@@ -1650,7 +1677,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized, options);
 	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
 	                               artifact.Instructions().size());
 	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
@@ -1669,9 +1696,10 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 
 TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 {
-	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
-	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
-	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCPUAOTExternalRegions = true;
 	constexpr std::size_t kBatch = 128;
 	constexpr std::size_t kInput = 64;
 	constexpr std::size_t kOutput = 32;
@@ -1685,7 +1713,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(optimized, options);
 	auto separated = artifact.SeparateRodata();
 
 	ASSERT_GT(separated.Constants().size(), 0u);
@@ -1747,6 +1775,9 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto imageLoaded = CompiledModule<CPU>::Load(separated.Image());
 	runAndCheck(imageLoaded);
 
+	auto artifactBorrowed = separated.LoadBorrowedExternalRegions();
+	runAndCheck(artifactBorrowed);
+
 	std::vector<std::byte> reboundConstants(separated.Constants().begin(), separated.Constants().end());
 	auto rebound = separated.WithReboundConstants({
 	    .data = reboundConstants.data(),
@@ -1763,6 +1794,31 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto weightReboundLoaded = weightRebound.Load();
 	runAndCheck(weightReboundLoaded);
 
+	std::vector<std::byte> borrowedConstants(separated.Constants().begin(), separated.Constants().end());
+	std::vector<std::byte> borrowedWeights(separated.Weights().begin(), separated.Weights().end());
+	auto borrowedImage = separated.Image();
+	borrowedImage.constants = { .data = borrowedConstants.data(), .size = borrowedConstants.size() };
+	borrowedImage.weights = { .data = borrowedWeights.data(), .size = borrowedWeights.size() };
+	auto borrowedLoaded = CompiledModule<CPU>::LoadBorrowedExternalRegions(borrowedImage);
+	runAndCheck(borrowedLoaded);
+
+	// This deliberately mutates borrowed memory after load to prove the borrowed API is not copying weights.
+	std::fill(borrowedWeights.begin(), borrowedWeights.end(), std::byte{ 0 });
+	std::array<Tensor<CPU>, 1> borrowedOutputs = {
+		Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32),
+	};
+	borrowedLoaded.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(borrowedOutputs));
+	bool observedBorrowedMutation = false;
+	for (std::size_t i = 0; i < borrowedOutputs[0].NumElements(); ++i)
+	{
+		if (std::abs(ReadFloat(borrowedOutputs[0], i) - ReadFloat(expected[0], i)) > 1e-4f)
+		{
+			observedBorrowedMutation = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(observedBorrowedMutation);
+
 	std::vector<std::byte> wrongSize(separated.Constants().size() + 1);
 	EXPECT_THROW((void) separated.WithReboundConstants({ .data = wrongSize.data(), .size = wrongSize.size() }),
 	             std::runtime_error);
@@ -1778,6 +1834,55 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	EXPECT_THROW((void) CompiledModuleSeparatedArtifact::CopyFromImage(corruptedImage), std::runtime_error);
 }
 
+TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+
+	auto graph = BuildGenericExternalRegionGraph();
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.Constants().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_EQ(externalInfos.size(), 2u);
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name == "scale.weight" && info.region == "weights" && info.dtype == DataType::Float32 &&
+		       info.shape == std::vector<std::size_t>{ 2, 2 };
+	}));
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name.starts_with("constant_") && info.region == "constants" && info.dtype == DataType::Float32 &&
+		       info.shape == std::vector<std::size_t>{ 1, 2 };
+	}));
+
+	auto runAndCheck = [&](CompiledModule<CPU>& module) {
+		std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 2, 2 }, DataType::Float32) };
+		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		ASSERT_EQ(expected.size(), 1u);
+		ExpectTensorNear(outputs[0], expected[0], 1e-5f);
+	};
+
+	auto direct = artifact.Load();
+	runAndCheck(direct);
+
+	auto imageLoaded = CompiledModule<CPU>::Load(separated.Image());
+	runAndCheck(imageLoaded);
+
+	std::vector<std::byte> borrowedConstants(separated.Constants().begin(), separated.Constants().end());
+	std::vector<std::byte> borrowedWeights(separated.Weights().begin(), separated.Weights().end());
+	auto borrowedImage = separated.Image();
+	borrowedImage.constants = { .data = borrowedConstants.data(), .size = borrowedConstants.size() };
+	borrowedImage.weights = { .data = borrowedWeights.data(), .size = borrowedWeights.size() };
+	auto borrowedLoaded = CompiledModule<CPU>::LoadBorrowedExternalRegions(borrowedImage);
+	runAndCheck(borrowedLoaded);
+}
+
 TEST(CompiledModuleTest, CPUParallelLinearChainAcceptsLegacyExternalConstantsEnvVar)
 {
 	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
@@ -1786,11 +1891,280 @@ TEST(CompiledModuleTest, CPUParallelLinearChainAcceptsLegacyExternalConstantsEnv
 	ScopedEnvVar legacyExternalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
 
 	auto graph = BuildWideLinearChainGraph(64);
-	auto optimized = graph;
-	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(optimized);
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
 	auto separated = artifact.SeparateRodata();
 
 	EXPECT_GT(separated.Constants().size(), 0u);
 	EXPECT_GT(separated.Weights().size(), 0u);
+}
+
+TEST(CompiledModuleTest, CompilerDefaultsDoNotReadEnvironmentVariables)
+{
+	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
+	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
+	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
+
+	auto graph = BuildWideLinearChainGraph(64);
+	auto defaultArtifact = Compiler<CPU>::CompileArtifact(graph);
+	auto envArtifact = Compiler<CPU>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
+
+	EXPECT_EQ(defaultArtifact.SeparateRodata().Weights().size(), 0u);
+	EXPECT_GT(envArtifact.SeparateRodata().Weights().size(), 0u);
+}
+
+struct ExternalTensorMetadataOffsets
+{
+	std::size_t dtype{};
+	std::size_t byteOffset{};
+	std::size_t byteSize{};
+	std::size_t alignment{};
+	std::size_t rebindPolicy{};
+};
+
+void RequireMetadataRange(std::span<const std::byte> metadata, std::size_t offset, std::size_t size)
+{
+	if (offset > metadata.size() || size > metadata.size() - offset)
+	{
+		throw std::runtime_error("test metadata parser reached truncated separated metadata");
+	}
+}
+
+std::uint32_t ReadU32LEForTest(std::span<const std::byte> metadata, std::size_t& offset)
+{
+	RequireMetadataRange(metadata, offset, 4);
+	std::uint32_t value = 0;
+	for (int i = 0; i < 4; ++i)
+	{
+		value |= std::to_integer<std::uint32_t>(metadata[offset + i]) << (i * 8);
+	}
+	offset += 4;
+	return value;
+}
+
+std::uint64_t ReadU64LEForTest(std::span<const std::byte> metadata, std::size_t& offset)
+{
+	RequireMetadataRange(metadata, offset, 8);
+	std::uint64_t value = 0;
+	for (int i = 0; i < 8; ++i)
+	{
+		value |= std::to_integer<std::uint64_t>(metadata[offset + i]) << (i * 8);
+	}
+	offset += 8;
+	return value;
+}
+
+void WriteU32LEForTest(std::vector<std::byte>& metadata, std::size_t offset, std::uint32_t value)
+{
+	RequireMetadataRange(metadata, offset, 4);
+	for (int i = 0; i < 4; ++i)
+	{
+		metadata[offset + i] = static_cast<std::byte>((value >> (i * 8)) & 0xffu);
+	}
+}
+
+void WriteU64LEForTest(std::vector<std::byte>& metadata, std::size_t offset, std::uint64_t value)
+{
+	RequireMetadataRange(metadata, offset, 8);
+	for (int i = 0; i < 8; ++i)
+	{
+		metadata[offset + i] = static_cast<std::byte>((value >> (i * 8)) & 0xffu);
+	}
+}
+
+void SkipStringForTest(std::span<const std::byte> metadata, std::size_t& offset)
+{
+	const auto size = ReadU64LEForTest(metadata, offset);
+	if (size > std::numeric_limits<std::size_t>::max())
+	{
+		throw std::runtime_error("test metadata parser saw an oversized string");
+	}
+	RequireMetadataRange(metadata, offset, static_cast<std::size_t>(size));
+	offset += static_cast<std::size_t>(size);
+}
+
+void SkipBytesForTest(std::span<const std::byte> metadata, std::size_t& offset)
+{
+	const auto size = ReadU64LEForTest(metadata, offset);
+	if (size > std::numeric_limits<std::size_t>::max())
+	{
+		throw std::runtime_error("test metadata parser saw an oversized byte region");
+	}
+	RequireMetadataRange(metadata, offset, static_cast<std::size_t>(size));
+	offset += static_cast<std::size_t>(size);
+}
+
+ExternalTensorMetadataOffsets FindFirstExternalTensorMetadataOffsets(std::span<const std::byte> metadata)
+{
+	std::size_t offset = 8; // separated metadata magic
+	(void) ReadU32LEForTest(metadata, offset); // version
+	(void) ReadU32LEForTest(metadata, offset); // pointer size
+	(void) ReadU32LEForTest(metadata, offset); // endian tag
+	SkipBytesForTest(metadata, offset);        // legacy rodata
+
+	const auto regionCount = ReadU32LEForTest(metadata, offset);
+	for (std::uint32_t i = 0; i < regionCount; ++i)
+	{
+		SkipStringForTest(metadata, offset);
+		RequireMetadataRange(metadata, offset, 8 * 3);
+		offset += 8 * 3; // size, alignment, checksum
+	}
+
+	const auto externalTensorCount = ReadU32LEForTest(metadata, offset);
+	if (externalTensorCount == 0)
+	{
+		throw std::runtime_error("test metadata fixture does not contain an external tensor");
+	}
+
+	SkipStringForTest(metadata, offset); // name
+	SkipStringForTest(metadata, offset); // region
+
+	ExternalTensorMetadataOffsets result;
+	result.dtype = offset;
+	(void) ReadU32LEForTest(metadata, offset);
+	const auto rank = ReadU32LEForTest(metadata, offset);
+	RequireMetadataRange(metadata, offset, static_cast<std::size_t>(rank) * 8);
+	offset += static_cast<std::size_t>(rank) * 8;
+	result.byteOffset = offset;
+	(void) ReadU64LEForTest(metadata, offset);
+	result.byteSize = offset;
+	(void) ReadU64LEForTest(metadata, offset);
+	result.alignment = offset;
+	(void) ReadU64LEForTest(metadata, offset);
+	(void) ReadU64LEForTest(metadata, offset); // checksum
+	result.rebindPolicy = offset;
+	(void) ReadU32LEForTest(metadata, offset);
+	return result;
+}
+
+template <typename Mutator>
+void ExpectMalformedExternalTensorMetadata(const CompiledModuleSeparatedArtifact& separated,
+                                           Mutator&& mutator,
+                                           std::string_view expectedMessage)
+{
+	std::vector<std::byte> metadata(separated.Metadata().begin(), separated.Metadata().end());
+	const auto offsets = FindFirstExternalTensorMetadataOffsets(metadata);
+	std::forward<Mutator>(mutator)(metadata, offsets);
+
+	auto image = separated.Image();
+	image.metadata = { .data = metadata.data(), .size = metadata.size() };
+	try
+	{
+		(void) CompiledModuleSeparatedArtifact::CopyFromImage(image);
+		FAIL() << "expected malformed external tensor metadata validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find(expectedMessage), std::string::npos) << message;
+	}
+}
+
+TEST(CompiledModuleTest, CPUParallelLinearChainRejectsMalformedExternalTensorMetadata)
+{
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCPUAOTExternalRegions = true;
+
+	auto graph = BuildWideLinearChainGraph(64);
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.ExternalTensorInfos().size(), 0u);
+
+	std::vector<std::byte> metadata(separated.Metadata().begin(), separated.Metadata().end());
+	const std::string_view needle = "weights";
+	std::vector<std::byte> needleBytes;
+	needleBytes.reserve(needle.size());
+	for (char ch : needle)
+	{
+		needleBytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+	}
+	const std::string_view replacement = "badregn";
+	std::vector<std::size_t> offsets;
+	for (auto it = metadata.begin(); it != metadata.end();)
+	{
+		it = std::search(it, metadata.end(), needleBytes.begin(), needleBytes.end());
+		if (it == metadata.end())
+		{
+			break;
+		}
+		offsets.push_back(static_cast<std::size_t>(std::distance(metadata.begin(), it)));
+		++it;
+	}
+	ASSERT_GE(offsets.size(), 2u);
+	const auto corruptOffset = offsets.back();
+	for (std::size_t i = 0; i < replacement.size(); ++i)
+	{
+		metadata[corruptOffset + i] = static_cast<std::byte>(static_cast<unsigned char>(replacement[i]));
+	}
+
+	auto image = separated.Image();
+	image.metadata = { .data = metadata.data(), .size = metadata.size() };
+	try
+	{
+		(void) CompiledModuleSeparatedArtifact::CopyFromImage(image);
+		FAIL() << "expected malformed external tensor metadata validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("external tensor"), std::string::npos);
+		EXPECT_NE(message.find("unsupported"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, CPUParallelLinearChainRejectsBroaderMalformedExternalTensorMetadata)
+{
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCPUAOTExternalRegions = true;
+
+	auto graph = BuildWideLinearChainGraph(64);
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.ExternalTensorInfos().size(), 0u);
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU32LEForTest(metadata, offsets.dtype, 0xffffffffu);
+	    },
+	    "invalid external tensor data type");
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU64LEForTest(metadata, offsets.byteSize, 0);
+	    },
+	    "zero byte size");
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU64LEForTest(metadata, offsets.alignment, 0);
+	    },
+	    "zero alignment");
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU32LEForTest(metadata, offsets.rebindPolicy, 0xffffffffu);
+	    },
+	    "invalid external tensor rebind policy");
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU64LEForTest(metadata, offsets.byteOffset, 1);
+	    },
+	    "not aligned");
+
+	ExpectMalformedExternalTensorMetadata(
+	    separated,
+	    [&](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
+		    WriteU64LEForTest(metadata, offsets.byteOffset,
+		                      static_cast<std::uint64_t>(separated.Weights().size() + 64));
+	    },
+	    "byte range is out of bounds");
 }

@@ -23,9 +23,17 @@
 ### AOT 编译与部署
 
 1. 可选先 `ExtractForwardOnlyGraph(graph)`
-2. `Compiler<CPU>::CompileArtifact(graph)`
-3. `artifact.Load()` 或 `CompiledModule<CPU>::Load(...)`
-4. `Run` / `RunInto` / `RunManyInto`
+2. 可选创建 `CompilerOptions`（例如设置 `cpuAOTThreadCount`、`enableCPUAOTExternalRegions`）；CLI/benchmark 可以用
+   `CompilerOptions::FromEnvironment()` 将环境变量翻译成显式配置
+3. `Compiler<CPU>::CompileArtifact(graph, options)` 或默认 `Compiler<CPU>::CompileArtifact(graph)`
+4. `artifact.Load()` 或 `CompiledModule<CPU>::Load(...)`
+5. `Run` / `RunInto` / `RunManyInto`
+
+### AOT 调试与外置权重检查
+
+- `Debug::DumpCompiledModuleMetadata(artifact)` 可查看普通 AOT artifact 的 backend、rodata/instruction 大小和输入输出签名。
+- `Debug::DumpCompiledModuleMetadata(separatedArtifact)` 可查看 separated artifact 的 metadata/constants/weights/instructions
+  区域大小、region checksum，以及 external tensor table 中的权重/常量名称、region、offset、shape 和 rebind policy。
 
 ## 稳定性边界
 

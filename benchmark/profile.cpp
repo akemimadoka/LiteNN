@@ -538,7 +538,7 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		{
 			ScopedEnvVar disableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "0");
 			auto begin = Clock::now();
-			artifact = Compiler<CUDA>::CompileArtifact(graph);
+			artifact = Compiler<CUDA>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
 			auto end = Clock::now();
 			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
 		}
@@ -644,7 +644,7 @@ int main(int argc, char** argv)
 
 		// Time compile
 		auto cs = Clock::now();
-		auto compiled = Compiler<CPU>::Compile(g);
+		auto compiled = Compiler<CPU>::Compile(g, CompilerOptions::FromEnvironment());
 		auto ce = Clock::now();
 		const double compileMs = clk::duration<double, std::milli>(ce - cs).count();
 

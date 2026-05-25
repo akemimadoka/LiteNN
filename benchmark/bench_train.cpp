@@ -351,14 +351,14 @@ std::vector<Tensor<CPU>> AllocateCPUOutputs(const CompiledModule<CPU>& module)
 void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind, std::size_t batch,
                                     const char* threadCount)
 {
-	std::optional<ScopedEnvVar> threadCountEnv;
+	auto options = CompilerOptions::FromEnvironment();
 	if (threadCount != nullptr)
 	{
-		threadCountEnv.emplace("LITENN_CPU_AOT_THREADS", threadCount);
+		options.cpuAOTThreadCount = static_cast<std::size_t>(std::stoull(threadCount));
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CPU>::Compile(graph);
+	auto module = Compiler<CPU>::Compile(graph, options);
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	auto outputs = AllocateCPUOutputs(module);
@@ -411,9 +411,10 @@ void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind,
 		return;
 	}
 
-	ScopedEnvVar disableNative("LITENN_CUDA_DISABLE_NATIVE_AOT", "1");
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	auto options = CompilerOptions::FromEnvironment();
+	options.enableCUDANativeAOT = false;
+	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, options);
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
 		state.SkipWithError("expected CUDA CPU fallback backend");
@@ -447,7 +448,7 @@ void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std:
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, CompilerOptions::FromEnvironment());
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
 		state.SkipWithError("expected CUDA native backend");

@@ -119,7 +119,8 @@ int main(int argc, char** argv)
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
-			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFile(argv[3], symbolPrefix);
 			PrintArtifactSummary(artifact, argv[3]);
@@ -138,7 +139,8 @@ int main(int argc, char** argv)
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
 			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
-			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph);
+			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFile(argv[3], symbolPrefix);
 			PrintArtifactSummary(artifact, argv[3]);
@@ -159,7 +161,8 @@ int main(int argc, char** argv)
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
-			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph).SeparateRodata();
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFiles(argv[3], symbolPrefix);
 			PrintSeparatedArtifactSummary(artifact, argv[3]);
@@ -178,7 +181,8 @@ int main(int argc, char** argv)
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
 			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
-			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph).SeparateRodata();
+			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFiles(argv[3], symbolPrefix);
 			PrintSeparatedArtifactSummary(artifact, argv[3]);

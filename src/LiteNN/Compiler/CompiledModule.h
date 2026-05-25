@@ -102,6 +102,23 @@ namespace LiteNN
 		CompiledModuleExternalTensorRebindPolicy rebindPolicy{ CompiledModuleExternalTensorRebindPolicy::ExactChecksum };
 	};
 
+	struct CompilerOptions
+	{
+		/// CPU AOT worker count. Zero means use hardware_concurrency().
+		std::size_t cpuAOTThreadCount{};
+		/// Minimum f32 linear-chain FLOPs before the CPU parallel AOT path is used.
+		std::uint64_t cpuAOTParallelMinFlops{ 1ull << 28 };
+		/// Store CPU AOT constants/variable weights in separated artifact regions when supported.
+		bool enableCPUAOTExternalRegions{};
+		/// Retry the CPU f32 linear-chain external-region path after an internal FusionPass.
+		bool enableCPUAOTExternalRegionFusion{ true };
+		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
+		bool enableCUDANativeAOT{ true };
+
+		static CompilerOptions Defaults();
+		static CompilerOptions FromEnvironment();
+	};
+
 	struct CompiledModuleInvocation
 	{
 		std::span<const Tensor<CPU>> inputs;
@@ -128,6 +145,9 @@ namespace LiteNN
 		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
 
 		CompiledModule<CPU> Load() const;
+		/// Loads instructions into a CPU module while borrowing constants/weights from this artifact.
+		/// The artifact must outlive every run of the returned module.
+		CompiledModule<CPU> LoadBorrowedExternalRegions() const;
 #ifdef LITENN_ENABLE_CUDA
 		CompiledModule<CUDA> Load(CUDA device) const;
 #endif
@@ -250,6 +270,10 @@ namespace LiteNN
 		static CompiledModule Load(CompiledModuleImage image);
 		static CompiledModule Load(CompiledModuleSeparatedImage image);
 
+		/// Loads a separated image while borrowing constants/weights from the caller-provided regions.
+		/// The caller must keep image.constants and image.weights stable for every run of the returned module.
+		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image);
+
 		/// Runs the compiled entry point and returns newly allocated output tensors.
 		std::vector<Tensor<CPU>> Run(std::span<const Tensor<CPU>> inputs) const;
 
@@ -289,7 +313,9 @@ namespace LiteNN
 	{
 	public:
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
+		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
 		static CompiledModule<CPU> Compile(const Graph& graph);
+		static CompiledModule<CPU> Compile(const Graph& graph, const CompilerOptions& options);
 	};
 
 #ifdef LITENN_ENABLE_CUDA
@@ -355,7 +381,10 @@ namespace LiteNN
 	{
 	public:
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
+		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device = CUDA{});
+		static CompiledModule<CUDA> Compile(const Graph& graph, const CompilerOptions& options);
+		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device, const CompilerOptions& options);
 	};
 #endif
 } // namespace LiteNN

@@ -691,12 +691,16 @@ embedded into LLVM globals inside the instruction object.
 - [x] Extend separated metadata to v2 with external tensor table entries: graph variable/constant name, region, dtype,
       shape, byte offset, byte size, alignment, checksum, and rebinding compatibility policy.
 - [x] Populate the external tensor table for the initial CPU AOT external variable weights and constants path.
-- [ ] Populate the external tensor table for generic CPU MLIR externalized tensors.
-- [ ] Teach the CPU MLIR lowering path to externalize large `VariableRefNode` / `ConstantNode` tensors while keeping
-      tiny scalar constants inline when that is cheaper.
-- [ ] Generalize the first external-regions slice beyond the optimized f32 parallel linear-chain AOT path.
-- [ ] Update `CompiledModule<CPU>::Load(CompiledModuleSeparatedImage)` and carrier/raw-region loaders to bind external
-      regions without copying when the caller supplies stable mapped memory.
+- [x] Populate the external tensor table for the first generic CPU MLIR externalized tensors.
+- [x] Teach the CPU MLIR compile path to externalize forward-subgraph `VariableRefNode` / byte-addressable
+      `ConstantNode` tensors through hidden AOT parameters bound from separated weights/constants regions.
+- [ ] Add a size-threshold policy, keep tiny scalar constants inline when cheaper, and propagate hidden external
+      parameters through nested/control subgraphs.
+- [x] Generalize the first external-regions slice beyond the optimized f32 parallel linear-chain AOT path.
+- [x] Add an explicit CPU borrowed external-region loader for stable mapped constants/weights memory while keeping the
+      default `Load()` API copy-owned.
+- [ ] Extend borrowed external-region loading to CUDA native host constants and document the exact shared-library/static
+      library lifetime contract.
 - [x] Keep CUDA CPU-bridge loading compatible with CPU AOT external regions by routing external-region artifacts
       through separated-region loading when `CompiledModuleArtifact::Load(CUDA{})` is used.
 - [x] Add focused tests that verify non-empty CPU constants/weights regions, successful rebinding, size-mismatch
@@ -704,7 +708,14 @@ embedded into LLVM globals inside the instruction object.
 - [x] Add focused tests for the initial metadata-table population and public inspection API.
 - [x] Add focused tests for external CPU weights rebinding, size-mismatch diagnostics, checksum mismatch diagnostics,
       and legacy external-constants environment-variable compatibility for the initial external-regions path.
-- [ ] Add malformed metadata-table diagnostics and generic MLIR externalization parity tests against inline AOT outputs.
+- [x] Auto-apply `FusionPass` before the CPU f32 linear-chain external-regions fast path when external regions are
+      explicitly enabled, so callers do not need to pre-fuse common Layer-generated linear chains just to externalize
+      weights.
+- [x] Add focused malformed external tensor metadata-table diagnostics for the initial external-regions path.
+- [x] Replace hardwired compiler environment-variable behavior with explicit `CompilerOptions`; CLI/benchmark/example
+      entry points can opt into `CompilerOptions::FromEnvironment()`, while library defaults remain deterministic.
+- [x] Add broader malformed metadata-table cases for the current external-regions path.
+- [ ] Add generic MLIR externalization parity tests against inline AOT outputs.
 - [ ] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
       CPU instruction objects with multi-GiB weight globals.
 
@@ -743,6 +754,31 @@ Notes:
   wrong-size weights rejection, and corrupted weights checksum rejection; a separate legacy-env regression keeps
   `LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` working while the preferred switch becomes
   `LITENN_CPU_AOT_EXTERNAL_REGIONS=1`.
+- Completed on 2026-05-25: when external regions are enabled, `Compiler<CPU>::CompileArtifact` now retries the CPU f32
+  linear-chain external-regions path after an internal `FusionPass`, covering common unfused Layer-generated linear
+  graphs without requiring callers to mutate the graph first.
+- Completed on 2026-05-25: CPU separated images now have `CompiledModule<CPU>::LoadBorrowedExternalRegions()` and
+  `CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions()` for memory-mapped constants/weights. The default
+  `Load()` path still copies external regions; the borrowed API explicitly requires the supplied constants/weights
+  memory to outlive every run of the returned module.
+- Completed on 2026-05-25: `CompiledModuleTest.CPUParallelLinearChainRejectsMalformedExternalTensorMetadata` corrupts
+  an external tensor region name in separated metadata and verifies that validation reports the malformed table before
+  load/JIT execution.
+- Completed on 2026-05-25: `CompilerOptions` now controls CPU AOT thread count, CPU parallel min-FLOPs, CPU external
+  regions, internal external-region fusion, and CUDA native-AOT enablement. `Compiler<CPU/CUDA>` overloads accept
+  options explicitly; `CompilerOptions::FromEnvironment()` is used by command-line style entry points and compatibility
+  tests instead of having the library's default compile path read process environment variables directly.
+- Completed on 2026-05-25: `Debug::DumpCompiledModuleMetadata` now also accepts
+  `CompiledModuleSeparatedArtifact` and prints metadata/constants/weights/instructions sizes, per-region checksums, and
+  external tensor table entries. This makes external region packaging and rebind diagnostics inspectable without parsing
+  the binary metadata table by hand.
+- Completed on 2026-05-25: external tensor metadata validation now has broader corruption coverage for invalid dtype,
+  zero byte size, zero alignment, invalid rebind policy, unaligned offsets, and out-of-bounds byte ranges.
+- Completed on 2026-05-25: the generic CPU MLIR compile path now has an initial external-regions route. When
+  `CompilerOptions::enableCPUAOTExternalRegions` is enabled and the f32 linear-chain path does not apply, the compiler
+  rewrites forward-subgraph `VariableRefNode` and byte-addressable `ConstantNode` payloads into hidden MLIR function
+  parameters, emits the actual bytes into separated weights/constants regions, and has the uniform CPU entry wrapper
+  bind those hidden memrefs from `litenn_cpu_external_weights()` / `litenn_cpu_external_constants()` at run time.
 
 ### G10: LoRA and Adapter Support
 

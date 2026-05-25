@@ -87,7 +87,8 @@ int main(int argc, char** argv)
 		PrintTensor("Interpreter output", interpreted[0]);
 
 #ifdef LITENN_ENABLE_MLIR
-		auto compiled = LiteNN::Compiler<LiteNN::CPU>::Compile(imported.graph);
+		auto compiled = LiteNN::Compiler<LiteNN::CPU>::Compile(
+		    imported.graph, LiteNN::CompilerOptions::FromEnvironment());
 		const auto compiledOutputs = compiled.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 		PrintTensor("CPU AOT output", compiledOutputs[0]);
 #else

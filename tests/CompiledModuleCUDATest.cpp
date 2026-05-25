@@ -507,10 +507,11 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	ScopedEnvVar disableNative("LITENN_CUDA_DISABLE_NATIVE_AOT", "1");
-	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
-	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
-	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
+	CompilerOptions options;
+	options.enableCUDANativeAOT = false;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCPUAOTExternalRegions = true;
 	constexpr std::size_t kBatch = 128;
 	auto graph = BuildTinyMLPGraph(kBatch);
 	FusionPass{}.Run(graph);
@@ -526,7 +527,7 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(graph, options);
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);

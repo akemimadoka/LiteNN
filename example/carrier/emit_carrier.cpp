@@ -21,7 +21,7 @@ namespace
 		const std::string_view symbolPrefix = argv[2];
 		std::filesystem::create_directories(outputPath.parent_path());
 
-		auto artifact = Compiler<CPU>::CompileArtifact(BuildCarrierExampleGraph());
+		auto artifact = Compiler<CPU>::CompileArtifact(BuildCarrierExampleGraph(), CompilerOptions::FromEnvironment());
 		artifact.WriteObjectFile(outputPath, symbolPrefix);
 
 		std::cout << std::format(

@@ -912,7 +912,8 @@ namespace
 	                   std::string_view symbolPrefix)
 	{
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+		    graph, LiteNN::CompilerOptions::FromEnvironment());
 		artifact.WriteObjectFile(objectPath, symbolPrefix);
 		std::cout << std::format("Wrote carrier object {} backend={} rodata={} bytes instructions={} bytes\n",
 		                         objectPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1364,7 +1365,8 @@ namespace
 
 		auto begin = BenchmarkClock::now();
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+		    graph, LiteNN::CompilerOptions::FromEnvironment());
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1447,7 +1449,8 @@ namespace
 		LiteNN::CUDA device{};
 		auto begin = BenchmarkClock::now();
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
-		auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph);
+		auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
+		    graph, LiteNN::CompilerOptions::FromEnvironment());
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1528,7 +1531,8 @@ namespace
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
 			auto graph = LiteNN::Serialization::LoadModel(graphPath);
-			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment());
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1548,7 +1552,8 @@ namespace
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
 			auto graph = LiteNN::Serialization::LoadModel(graphPath);
-			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			    graph, LiteNN::CompilerOptions::FromEnvironment());
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1566,7 +1571,8 @@ namespace
 	void CompileRawObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath)
 	{
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+		    graph, LiteNN::CompilerOptions::FromEnvironment());
 		std::ofstream out(objectPath, std::ios::binary);
 		if (!out)
 		{
@@ -1588,7 +1594,8 @@ namespace
 	                         std::string_view filePrefix)
 	{
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph);
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+		    graph, LiteNN::CompilerOptions::FromEnvironment());
 		std::filesystem::create_directories(outputDir);
 		const auto prefix = std::string(filePrefix);
 		const auto rodataPath = outputDir / (prefix + ".rodata.bin");

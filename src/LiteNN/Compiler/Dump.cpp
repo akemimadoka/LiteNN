@@ -76,6 +76,28 @@ namespace
 		return "unknown";
 	}
 
+	std::string_view FormatRebindPolicy(CompiledModuleExternalTensorRebindPolicy policy)
+	{
+		switch (policy)
+		{
+			case CompiledModuleExternalTensorRebindPolicy::ExactChecksum:
+				return "exact_checksum";
+		}
+		return "unknown";
+	}
+
+	std::string FormatRegionInfo(const CompiledModuleRegionInfo& info)
+	{
+		return std::format("{}: size={} align={} checksum={}", info.name, info.size, info.alignment, info.checksum);
+	}
+
+	std::string FormatExternalTensorInfo(const CompiledModuleExternalTensorInfo& info)
+	{
+		return std::format("{}: region={} offset={} bytes={} align={} checksum={} policy={} {}",
+		                   info.name, info.region, info.byteOffset, info.byteSize, info.alignment, info.checksum,
+		                   FormatRebindPolicy(info.rebindPolicy), Validation::FormatInfo(info.dtype, info.shape));
+	}
+
 	std::string PrintModule(mlir::ModuleOp module)
 	{
 		std::string text;
@@ -133,6 +155,40 @@ namespace
 		out += "}\n";
 		return out;
 	}
+
+	std::string DumpSeparatedCompiledModuleMetadataImpl(
+	    std::span<const std::byte> metadata,
+	    std::span<const std::byte> constants,
+	    std::span<const std::byte> weights,
+	    std::span<const std::byte> instructions,
+	    std::span<const CompiledTensorSpec> inputSpecs,
+	    std::span<const CompiledTensorSpec> outputSpecs,
+	    CompiledModuleBackend backend,
+	    std::span<const CompiledModuleRegionInfo> regionInfos,
+	    std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
+	{
+		std::string out = "compiled_module {\n";
+		out += std::format("  backend = {}\n", FormatBackend(backend));
+		out += std::format("  metadata_size = {}\n", metadata.size());
+		out += std::format("  constants_size = {}\n", constants.size());
+		out += std::format("  weights_size = {}\n", weights.size());
+		out += std::format("  instruction_size = {}\n", instructions.size());
+		out += std::format("  regions = [{}]\n", JoinIndexed(regionInfos.size(), ", ", [&](std::size_t index) {
+			return FormatRegionInfo(regionInfos[index]);
+		}));
+		out += std::format("  external_tensors = [{}]\n",
+		                   JoinIndexed(externalTensorInfos.size(), ", ", [&](std::size_t index) {
+			                   return FormatExternalTensorInfo(externalTensorInfos[index]);
+		                   }));
+		out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
+			return FormatCompiledSpec(inputSpecs[index], "input", index);
+		}));
+		out += std::format("  outputs = [{}]\n", JoinIndexed(outputSpecs.size(), ", ", [&](std::size_t index) {
+			return FormatCompiledSpec(outputSpecs[index], "output", index);
+		}));
+		out += "}\n";
+		return out;
+	}
 } // namespace
 
 	std::string DumpMLIR(const Graph& graph, MLIRDumpStage stage)
@@ -172,6 +228,15 @@ namespace
 	{
 		return DumpCompiledModuleMetadataImpl(artifact.Rodata(), artifact.Instructions(), artifact.InputSpecs(),
 		                                    artifact.OutputSpecs(), artifact.Backend());
+	}
+
+	std::string DumpCompiledModuleMetadata(const CompiledModuleSeparatedArtifact& artifact)
+	{
+		auto regionInfos = artifact.RegionInfos();
+		auto externalTensorInfos = artifact.ExternalTensorInfos();
+		return DumpSeparatedCompiledModuleMetadataImpl(
+		    artifact.Metadata(), artifact.Constants(), artifact.Weights(), artifact.Instructions(), artifact.InputSpecs(),
+		    artifact.OutputSpecs(), artifact.Backend(), regionInfos, externalTensorInfos);
 	}
 
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CPU>& module)

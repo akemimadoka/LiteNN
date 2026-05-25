@@ -18,6 +18,7 @@ namespace LiteNN::Debug
 
 	std::string DumpMLIR(const Graph& graph, MLIRDumpStage stage = MLIRDumpStage::InputDialect);
 	std::string DumpCompiledModuleMetadata(const CompiledModuleArtifact& artifact);
+	std::string DumpCompiledModuleMetadata(const CompiledModuleSeparatedArtifact& artifact);
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CPU>& module);
 #ifdef LITENN_ENABLE_CUDA
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CUDA>& module);

@@ -9,6 +9,7 @@
 #include "Pass/LowerLiteNNPass.h"
 #include "Translation/GraphToMLIR.h"
 
+#include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -101,15 +102,23 @@ namespace
 		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 	}
 
-	bool IsCUDANativeAOTDisabled()
+	std::optional<std::uint64_t> ParseU64Env(const char* name)
 	{
-		return IsTruthyEnvValue(std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT"));
+		if (const char* value = std::getenv(name))
+		{
+			char* end = nullptr;
+			const auto parsed = std::strtoull(value, &end, 10);
+			if (end != value)
+			{
+				return static_cast<std::uint64_t>(parsed);
+			}
+		}
+		return std::nullopt;
 	}
 
-	bool IsCPUExternalRegionsEnabled()
+	bool IsCPUExternalRegionsEnabled(const CompilerOptions& options)
 	{
-		return IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
-		       IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
+		return options.enableCPUAOTExternalRegions;
 	}
 
 	thread_local const void* tCPUExternalConstants = nullptr;
@@ -148,39 +157,20 @@ namespace
 
 	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
 
-	std::size_t LiteNNCPUAOTThreadCount()
+	std::size_t LiteNNCPUHardwareThreadCount()
 	{
-		if (const char* value = std::getenv("LITENN_CPU_AOT_THREADS"))
-		{
-			char* end = nullptr;
-			const auto parsed = std::strtoull(value, &end, 10);
-			if (end != value && parsed > 0)
-			{
-				return static_cast<std::size_t>(parsed);
-			}
-		}
 		const auto hardware = std::thread::hardware_concurrency();
 		return hardware == 0 ? 1 : static_cast<std::size_t>(hardware);
+	}
+
+	std::size_t ResolveCPUAOTThreadCount(const CompilerOptions& options)
+	{
+		return options.cpuAOTThreadCount == 0 ? LiteNNCPUHardwareThreadCount() : options.cpuAOTThreadCount;
 	}
 
 	std::size_t LiteNNCPUMaxThreadCount()
 	{
-		const auto hardware = std::thread::hardware_concurrency();
-		return hardware == 0 ? 1 : static_cast<std::size_t>(hardware);
-	}
-
-	std::uint64_t LiteNNCPUParallelMinFlops()
-	{
-		if (const char* value = std::getenv("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
-		{
-			char* end = nullptr;
-			const auto parsed = std::strtoull(value, &end, 10);
-			if (end != value)
-			{
-				return static_cast<std::uint64_t>(parsed);
-			}
-		}
-		return 1ull << 28;
+		return LiteNNCPUHardwareThreadCount();
 	}
 
 	class LiteNNCPUThreadPool
@@ -325,9 +315,9 @@ namespace
 	}
 
 	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
-	                          LiteNNCPUParallelForBody body, void* userData)
+	                          LiteNNCPUParallelForBody body, void* userData, std::uint64_t threadCount)
 	{
-		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, LiteNNCPUAOTThreadCount());
+		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, static_cast<std::size_t>(threadCount));
 	}
 
 	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
@@ -368,10 +358,13 @@ namespace
 
 	void LiteNNCPUMatMulBiasReLUParallel(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
 	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out, std::uint64_t m,
-	                                     std::uint64_t k, std::uint64_t n, std::uint64_t biasRows, bool relu)
+	                                     std::uint64_t k, std::uint64_t n, std::uint64_t biasRows,
+	                                     std::uint64_t requestedThreadCount, bool relu)
 	{
 		const auto flops = m * k * n * 2;
-		const auto threadCount = std::min<std::uint64_t>(LiteNNCPUAOTThreadCount(), m);
+		const auto threadCount = std::min<std::uint64_t>(requestedThreadCount == 0 ? LiteNNCPUHardwareThreadCount()
+		                                                                           : requestedThreadCount,
+		                                                 m);
 		if (threadCount <= 1 || flops < (1ull << 20))
 		{
 			LiteNNCPUMatMulBiasReLURange(lhs, rhs, bias, out, 0, m, k, n, biasRows, relu);
@@ -397,14 +390,15 @@ namespace
 		};
 
 		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
-		LiteNNCPUParallelFor(0, m, grain, body, &context);
+		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount);
 	}
 
 	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
 	                                                         float* out, std::uint64_t m, std::uint64_t k,
-	                                                         std::uint64_t n, std::uint64_t biasRows, bool relu)
+	                                                         std::uint64_t n, std::uint64_t biasRows,
+	                                                         std::uint64_t threadCount, bool relu)
 	{
-		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, relu);
+		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu);
 	}
 
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
@@ -1491,6 +1485,21 @@ namespace
 		return offset;
 	}
 
+	std::uint64_t AppendExternalRegionBytes(std::vector<std::byte>& bytes,
+	                                        std::span<const std::byte> payload,
+	                                        std::uint64_t alignment = 64)
+	{
+		const auto offset = AlignUpU64(static_cast<std::uint64_t>(bytes.size()), alignment);
+		if (bytes.size() < offset)
+		{
+			bytes.resize(static_cast<std::size_t>(offset));
+		}
+		const auto oldSize = bytes.size();
+		bytes.resize(oldSize + payload.size());
+		std::memcpy(bytes.data() + oldSize, payload.data(), payload.size());
+		return offset;
+	}
+
 	llvm::Value* AddExternalRegionPointer(llvm::Module& module, llvm::IRBuilder<>& builder, std::string_view symbol,
 	                                      std::uint64_t offset)
 	{
@@ -1528,9 +1537,202 @@ namespace
 		};
 	}
 
-	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32(const Graph& graph)
+	CompiledModuleExternalTensorInfo MakeExternalTensorInfo(std::string name,
+	                                                        std::string_view regionName,
+	                                                        DataType dtype,
+	                                                        std::span<const std::byte> regionBytes,
+	                                                        std::span<const std::size_t> shape,
+	                                                        std::uint64_t byteOffset,
+	                                                        std::uint64_t byteSize,
+	                                                        std::uint64_t alignment)
 	{
-		if (LiteNNCPUAOTThreadCount() <= 1)
+		const auto bytes = std::span<const std::byte>{
+			regionBytes.data() + static_cast<std::ptrdiff_t>(byteOffset),
+			static_cast<std::size_t>(byteSize),
+		};
+		return {
+			.name = std::move(name),
+			.region = std::string(regionName),
+			.dtype = dtype,
+			.shape = std::vector<std::size_t>(shape.begin(), shape.end()),
+			.byteOffset = byteOffset,
+			.byteSize = byteSize,
+			.alignment = alignment,
+			.checksum = ChecksumBytes(bytes),
+			.rebindPolicy = CompiledModuleExternalTensorRebindPolicy::ExactChecksum,
+		};
+	}
+
+	bool CanExternalizeCPUTensorInMLIR(DataType dtype)
+	{
+		// MLIR lowers memref<i1> with bit-level element semantics, while LiteNN CPU
+		// tensors store Bool as byte-addressable host values.
+		return dtype != DataType::Bool;
+	}
+
+	std::optional<std::vector<std::byte>> CopyTensorPayloadBytes(const Tensor<PolymorphicDevice>& tensor,
+	                                                             DataType expectedDType,
+	                                                             std::span<const std::size_t> expectedShape)
+	{
+		if (!CanExternalizeCPUTensorInMLIR(expectedDType))
+		{
+			return std::nullopt;
+		}
+
+		const auto cpuTensor = tensor.CopyToDevice(CPU{});
+		if (cpuTensor.DType() != expectedDType || cpuTensor.Shape() != expectedShape)
+		{
+			return std::nullopt;
+		}
+
+		const auto byteSize = cpuTensor.NumElements() * LiteNN::ElementByteSize(expectedDType);
+		std::vector<std::byte> bytes(byteSize);
+		std::memcpy(bytes.data(), cpuTensor.RawData(), byteSize);
+		return bytes;
+	}
+
+	bool SubgraphContainsVariableRef(const Subgraph& subgraph)
+	{
+		for (const auto& entry : subgraph.Nodes())
+		{
+			if (std::holds_alternative<VariableRefNode>(entry.node))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	struct CPUMLIRExternalizedGraph
+	{
+		Graph graph;
+		std::vector<std::byte> constants;
+		std::vector<std::byte> weights;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
+	};
+
+	std::optional<CPUMLIRExternalizedGraph> BuildCPUMLIRExternalizedGraph(const Graph& graph)
+	{
+		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
+		    graph.SubgraphCount() == 0)
+		{
+			return std::nullopt;
+		}
+
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			if (subgraphId != graph.Forward() && SubgraphContainsVariableRef(graph.GetSubgraph(subgraphId)))
+			{
+				return std::nullopt;
+			}
+		}
+
+		CPUMLIRExternalizedGraph result;
+		std::unordered_map<std::size_t, std::size_t> variableParamMap;
+		std::vector<std::string> inputNames;
+		const auto& forward = graph.GetSubgraph(graph.Forward());
+		inputNames.reserve(forward.Params().size());
+		for (std::size_t i = 0; i < forward.Params().size(); ++i)
+		{
+			inputNames.push_back(graph.InputName(i));
+		}
+
+		const auto addHiddenParam = [&](Subgraph& subgraph, DataType dtype, std::span<const std::size_t> shape,
+		                                std::string_view debugName) {
+			const auto paramIndex = subgraph.Params().size();
+			subgraph.AddParam(dtype, std::vector<std::size_t>(shape.begin(), shape.end()));
+			inputNames.push_back(std::format("__litenn_external_{}_{}", inputNames.size(), debugName));
+			return paramIndex;
+		};
+
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			auto subgraph = graph.GetSubgraph(subgraphId);
+			if (subgraphId == graph.Forward())
+			{
+				const auto originalNodeCount = subgraph.NodeCount();
+				for (NodeId nodeId = 0; nodeId < originalNodeCount; ++nodeId)
+				{
+					auto& entry = subgraph.GetNodeEntry(nodeId);
+					if (entry.outputInfos.size() != 1)
+					{
+						return std::nullopt;
+					}
+					const auto output = entry.outputInfos[0];
+					if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
+					{
+						const auto variableIndex = variable->variableIndex;
+						if (variableIndex >= graph.VariableCount())
+						{
+							return std::nullopt;
+						}
+
+						auto [it, inserted] = variableParamMap.emplace(variableIndex, 0);
+						if (inserted)
+						{
+							const auto payload = CopyTensorPayloadBytes(graph.GetVariable(variableIndex)->Data(),
+							                                            output.dtype, output.shape);
+							if (!payload)
+							{
+								return std::nullopt;
+							}
+							constexpr std::uint64_t kAlignment = 64;
+							const auto offset = AppendExternalRegionBytes(result.weights, *payload, kAlignment);
+							const auto name = graph.VariableName(variableIndex);
+							result.externalTensorInfos.push_back(MakeExternalTensorInfo(
+							    name, kWeightsRegionName, output.dtype, result.weights, output.shape, offset,
+							    static_cast<std::uint64_t>(payload->size()), kAlignment));
+							it->second = addHiddenParam(subgraph, output.dtype, output.shape, name);
+						}
+						subgraph.GetNodeEntry(nodeId).node = ParamRefNode{ it->second };
+						continue;
+					}
+
+					if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
+					{
+						const auto payload = CopyTensorPayloadBytes(constant->value, output.dtype, output.shape);
+						if (!payload)
+						{
+							continue;
+						}
+
+						constexpr std::uint64_t kAlignment = 64;
+						const auto offset = AppendExternalRegionBytes(result.constants, *payload, kAlignment);
+						const auto name = std::format("constant_{}", nodeId);
+						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
+						    name, kConstantsRegionName, output.dtype, result.constants, output.shape, offset,
+						    static_cast<std::uint64_t>(payload->size()), kAlignment));
+						const auto paramIndex = addHiddenParam(subgraph, output.dtype, output.shape, name);
+						subgraph.GetNodeEntry(nodeId).node = ParamRefNode{ paramIndex };
+					}
+				}
+			}
+			result.graph.AddSubgraph(std::move(subgraph));
+		}
+
+		if (result.externalTensorInfos.empty())
+		{
+			return std::nullopt;
+		}
+
+		result.graph.SetForward(graph.Forward());
+		result.graph.SetInputNames(std::move(inputNames));
+		std::vector<std::string> outputNames;
+		outputNames.reserve(forward.Results().size());
+		for (std::size_t i = 0; i < forward.Results().size(); ++i)
+		{
+			outputNames.push_back(graph.OutputName(i));
+		}
+		result.graph.SetOutputNames(std::move(outputNames));
+		result.graph.SetMetadata(std::vector<ModelMetadataEntry>(graph.Metadata().begin(), graph.Metadata().end()));
+		return result;
+	}
+
+	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32(const Graph& graph,
+	                                                                         const CompilerOptions& options)
+	{
+		const auto threadCount = ResolveCPUAOTThreadCount(options);
+		if (threadCount <= 1)
 		{
 			return std::nullopt;
 		}
@@ -1578,9 +1780,10 @@ namespace
 		auto freeFn = module->getOrInsertFunction("free", llvm::FunctionType::get(voidTy, { ptrTy }, false));
 		auto kernelFn = module->getOrInsertFunction(
 		    "litenn_cpu_matmul_bias_relu_parallel_f32",
-		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty }, false));
+		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty },
+		                            false));
 
-		const bool useExternalRegions = IsCPUExternalRegionsEnabled();
+		const bool useExternalRegions = IsCPUExternalRegionsEnabled(options);
 		std::vector<std::byte> externalConstants;
 		std::vector<std::byte> externalWeights;
 		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
@@ -1722,12 +1925,13 @@ namespace
 			builder.CreateCall(kernelFn,
 			                   { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m), builder.getInt64(k),
 			                     builder.getInt64(n), builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
+			                     builder.getInt64(static_cast<std::uint64_t>(threadCount)),
 			                     builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
 			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;
 		}
 
-		if (fusedLayerCount == 0 || !values[finalResult.node] || totalFlops < LiteNNCPUParallelMinFlops())
+		if (fusedLayerCount == 0 || !values[finalResult.node] || totalFlops < options.cpuAOTParallelMinFlops)
 		{
 			return std::nullopt;
 		}
@@ -1746,6 +1950,23 @@ namespace
 		auto instructions = EmitObjectFile(*module);
 		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), std::move(externalWeights),
 			                          std::move(externalTensorInfos), inputSpecs, outputSpecs };
+	}
+
+	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(
+	    const Graph& graph, const CompilerOptions& options)
+	{
+		if (auto parts = TryCompileCPUParallelLinearChainF32(graph, options))
+		{
+			return parts;
+		}
+		if (!IsCPUExternalRegionsEnabled(options) || !options.enableCPUAOTExternalRegionFusion)
+		{
+			return std::nullopt;
+		}
+
+		auto optimized = graph;
+		FusionPass{}.Run(optimized);
+		return TryCompileCPUParallelLinearChainF32(optimized, options);
 	}
 
 	std::uint64_t NumElements(const CompiledTensorSpec& spec)
@@ -1993,8 +2214,19 @@ namespace
 		return std::nullopt;
 	}
 
+	CompiledTensorSpec ExternalTensorAsSpec(const CompiledModuleExternalTensorInfo& info)
+	{
+		return {
+			.dtype = info.dtype,
+			.shape = info.shape,
+			.name = info.name,
+		};
+	}
+
 	void AddUniformEntryWrapper(llvm::Module& module, std::string_view calleeName,
-	                            std::span<const CompiledTensorSpec> inputs, std::span<const CompiledTensorSpec> outputs)
+	                            std::span<const CompiledTensorSpec> inputs,
+	                            std::span<const CompiledTensorSpec> outputs,
+	                            std::span<const CompiledModuleExternalTensorInfo> externalInputs = {})
 	{
 		auto* callee = module.getFunction(calleeName);
 		if (!callee)
@@ -2016,12 +2248,19 @@ namespace
 		llvm::Value* outputArray = &*argIt;
 
 		std::vector<llvm::Value*> descriptors;
-		descriptors.reserve(inputs.size());
+		descriptors.reserve(inputs.size() + externalInputs.size());
 		for (std::size_t i = 0; i < inputs.size(); ++i)
 		{
 			auto* inputSlot = builder.CreateGEP(ptrTy, inputArray, builder.getInt64(i));
 			auto* inputData = builder.CreateLoad(ptrTy, inputSlot);
 			descriptors.push_back(BuildMemRefDescriptor(builder, inputData, inputs[i]));
+		}
+		for (const auto& external : externalInputs)
+		{
+			const auto symbol = external.region == kWeightsRegionName ? "litenn_cpu_external_weights"
+			                                                          : "litenn_cpu_external_constants";
+			auto* data = AddExternalRegionPointer(module, builder, symbol, external.byteOffset);
+			descriptors.push_back(BuildMemRefDescriptor(builder, data, ExternalTensorAsSpec(external)));
 		}
 
 		auto* calleeType = callee->getFunctionType();
@@ -5036,6 +5275,51 @@ namespace
 		                mlir::LLVM::LLVMDialect, mlir::math::MathDialect, mlir::memref::MemRefDialect,
 		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
 	}
+
+	std::optional<CompiledArtifactParts> TryCompileCPUMLIRExternalRegions(const Graph& graph,
+	                                                                      const CompilerOptions& options)
+	{
+		if (!IsCPUExternalRegionsEnabled(options))
+		{
+			return std::nullopt;
+		}
+
+		auto externalized = BuildCPUMLIRExternalizedGraph(graph);
+		if (!externalized)
+		{
+			return std::nullopt;
+		}
+
+		mlir::MLIRContext ctx;
+		SetupCompilerMLIRContext(ctx);
+		auto mlirModule = BuildLoweredMLIRModule(externalized->graph, ctx);
+
+		llvm::LLVMContext llvmCtx;
+		auto llvmModule = litenn::translateToLLVMIR(*mlirModule, llvmCtx);
+		if (!llvmModule)
+		{
+			throw std::runtime_error("Failed to translate externalized LiteNN MLIR module to LLVM IR");
+		}
+
+		auto config = CreateNativeTargetMachine();
+		ConfigureForNativeObject(*llvmModule, config);
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
+		                       externalized->externalTensorInfos);
+		OptimizeLLVMModule(*llvmModule, *config.targetMachine);
+
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto instructions = EmitObjectFile(*llvmModule);
+		return CompiledArtifactParts{ std::move(rodata),
+			                          std::move(instructions),
+			                          std::move(externalized->constants),
+			                          std::move(externalized->weights),
+			                          std::move(externalized->externalTensorInfos),
+			                          std::move(inputSpecs),
+			                          std::move(outputSpecs) };
+	}
 } // namespace
 
 struct CompiledModule<CPU>::Impl
@@ -5044,15 +5328,65 @@ struct CompiledModule<CPU>::Impl
 	std::vector<std::byte> instructions;
 	std::vector<std::byte> externalConstants;
 	std::vector<std::byte> externalWeights;
+	std::span<const std::byte> borrowedExternalConstants;
+	std::span<const std::byte> borrowedExternalWeights;
 	std::vector<CompiledTensorSpec> inputSpecs;
 	std::vector<CompiledTensorSpec> outputSpecs;
 	CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
 	std::unique_ptr<llvm::LLVMContext> jitContext;
 	std::unique_ptr<llvm::ExecutionEngine> jit;
 	EntryFn entry{};
+
+	const void* ExternalConstantsData() const
+	{
+		if (!externalConstants.empty())
+		{
+			return externalConstants.data();
+		}
+		return borrowedExternalConstants.empty() ? nullptr : borrowedExternalConstants.data();
+	}
+
+	const void* ExternalWeightsData() const
+	{
+		if (!externalWeights.empty())
+		{
+			return externalWeights.data();
+		}
+		return borrowedExternalWeights.empty() ? nullptr : borrowedExternalWeights.data();
+	}
 };
 
 CompiledModule<CPU>::CompiledModule() = default;
+
+CompilerOptions CompilerOptions::Defaults()
+{
+	return {};
+}
+
+CompilerOptions CompilerOptions::FromEnvironment()
+{
+	auto options = Defaults();
+	if (const auto threadCount = ParseU64Env("LITENN_CPU_AOT_THREADS"); threadCount && *threadCount > 0)
+	{
+		options.cpuAOTThreadCount = static_cast<std::size_t>(*threadCount);
+	}
+	if (const auto minFlops = ParseU64Env("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
+	{
+		options.cpuAOTParallelMinFlops = *minFlops;
+	}
+	options.enableCPUAOTExternalRegions =
+	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
+	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
+	if (const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_REGION_FUSION"))
+	{
+		options.enableCPUAOTExternalRegionFusion = IsTruthyEnvValue(value);
+	}
+	if (IsTruthyEnvValue(std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT")))
+	{
+		options.enableCUDANativeAOT = false;
+	}
+	return options;
+}
 
 CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
                                                                  std::vector<std::byte> constants,
@@ -5106,6 +5440,11 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromExportedSym
 CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() const
 {
 	return CompiledModule<CPU>::Load(Image());
+}
+
+CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions() const
+{
+	return CompiledModule<CPU>::LoadBorrowedExternalRegions(Image());
 }
 
 #ifdef LITENN_ENABLE_CUDA
@@ -5418,6 +5757,25 @@ CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleSeparatedImage image
 	return module;
 }
 
+CompiledModule<CPU> CompiledModule<CPU>::LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	auto constants = RegionBytes(image.constants, kConstantsRegionName);
+	auto weights = RegionBytes(image.weights, kWeightsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
+	                                                           constants);
+	auto module = Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	});
+	module.impl_->borrowedExternalConstants = constants;
+	module.impl_->borrowedExternalWeights = weights;
+	return module;
+}
+
 std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> inputs) const
 {
 	if (!impl_ || !impl_->entry)
@@ -5448,8 +5806,7 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 		outputPtrs.push_back(outputs.back().RawData());
 	}
 
-	ScopedCPUExternalRegions scopedRegions(impl_->externalConstants.empty() ? nullptr : impl_->externalConstants.data(),
-	                                      impl_->externalWeights.empty() ? nullptr : impl_->externalWeights.data());
+	ScopedCPUExternalRegions scopedRegions(impl_->ExternalConstantsData(), impl_->ExternalWeightsData());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 	return outputs;
 }
@@ -5487,8 +5844,7 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 		outputPtrs.push_back(outputs[i].RawData());
 	}
 
-	ScopedCPUExternalRegions scopedRegions(impl_->externalConstants.empty() ? nullptr : impl_->externalConstants.data(),
-	                                      impl_->externalWeights.empty() ? nullptr : impl_->externalWeights.data());
+	ScopedCPUExternalRegions scopedRegions(impl_->ExternalConstantsData(), impl_->ExternalWeightsData());
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
@@ -6012,13 +6368,26 @@ void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, st
 
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
-	if (auto parallelParts = TryCompileCPUParallelLinearChainF32(graph))
+	return CompileArtifact(graph, CompilerOptions::Defaults());
+}
+
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
+{
+	if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
 	{
 		return CompiledModuleArtifact(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
 		                              std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
 		                              CompiledModuleBackend::CPUNative, std::move(parallelParts->constants),
 		                              std::move(parallelParts->weights),
 		                              std::move(parallelParts->externalTensorInfos));
+	}
+	if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options))
+	{
+		return CompiledModuleArtifact(std::move(externalParts->rodata), std::move(externalParts->instructions),
+		                              std::move(externalParts->inputSpecs), std::move(externalParts->outputSpecs),
+		                              CompiledModuleBackend::CPUNative, std::move(externalParts->constants),
+		                              std::move(externalParts->weights),
+		                              std::move(externalParts->externalTensorInfos));
 	}
 
 	mlir::MLIRContext ctx;
@@ -6048,14 +6417,24 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 
 CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
 {
-	return CompileArtifact(graph).Load();
+	return Compile(graph, CompilerOptions::Defaults());
+}
+
+CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph, const CompilerOptions& options)
+{
+	return CompileArtifact(graph, options).Load();
 }
 
 #ifdef LITENN_ENABLE_CUDA
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 {
+	return CompileArtifact(graph, CompilerOptions::Defaults());
+}
+
+CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
+{
 	Validation::ValidateGraph(graph);
-	if (!IsCUDANativeAOTDisabled())
+	if (options.enableCUDANativeAOT)
 	{
 		if (auto nativeParts = TryCompileCUDANativeCast(graph))
 		{
@@ -6118,11 +6497,21 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 			                              CompiledModuleBackend::CUDANative);
 		}
 	}
-	return Compiler<CPU>::CompileArtifact(graph);
+	return Compiler<CPU>::CompileArtifact(graph, options);
 }
 
 CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device)
 {
-	return CompileArtifact(graph).Load(std::move(device));
+	return Compile(graph, std::move(device), CompilerOptions::Defaults());
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, const CompilerOptions& options)
+{
+	return Compile(graph, CUDA{}, options);
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device, const CompilerOptions& options)
+{
+	return CompileArtifact(graph, options).Load(std::move(device));
 }
 #endif
