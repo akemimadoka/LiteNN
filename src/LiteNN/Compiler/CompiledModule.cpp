@@ -1570,25 +1570,39 @@ namespace
 		return dtype != DataType::Bool;
 	}
 
-	std::optional<std::vector<std::byte>> CopyTensorPayloadBytes(const Tensor<PolymorphicDevice>& tensor,
-	                                                             DataType expectedDType,
-	                                                             std::span<const std::size_t> expectedShape)
+	std::optional<std::uint64_t> AppendTensorPayloadBytes(std::vector<std::byte>& bytes,
+	                                                      const Tensor<PolymorphicDevice>& tensor,
+	                                                      DataType expectedDType,
+	                                                      std::span<const std::size_t> expectedShape,
+	                                                      std::uint64_t alignment)
 	{
 		if (!CanExternalizeCPUTensorInMLIR(expectedDType))
 		{
 			return std::nullopt;
 		}
-
-		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		if (cpuTensor.DType() != expectedDType || cpuTensor.Shape() != expectedShape)
+		if (tensor.DType() != expectedDType || tensor.Shape() != expectedShape)
 		{
 			return std::nullopt;
 		}
 
-		const auto byteSize = cpuTensor.NumElements() * LiteNN::ElementByteSize(expectedDType);
-		std::vector<std::byte> bytes(byteSize);
-		std::memcpy(bytes.data(), cpuTensor.RawData(), byteSize);
-		return bytes;
+		const auto byteSize = tensor.NumElements() * LiteNN::ElementByteSize(expectedDType);
+		const auto offset = AlignUpU64(static_cast<std::uint64_t>(bytes.size()), alignment);
+		if (bytes.size() < offset)
+		{
+			bytes.resize(static_cast<std::size_t>(offset));
+		}
+		const auto oldSize = bytes.size();
+		bytes.resize(oldSize + byteSize);
+		if (tensor.CurDevice().template As<CPU>() != nullptr)
+		{
+			std::memcpy(bytes.data() + oldSize, tensor.RawData(), byteSize);
+		}
+		else
+		{
+			const auto cpuTensor = tensor.CopyToDevice(CPU{});
+			std::memcpy(bytes.data() + oldSize, cpuTensor.RawData(), byteSize);
+		}
+		return offset;
 	}
 
 	struct CPUMLIRExternalizedGraph
@@ -1864,20 +1878,19 @@ namespace
 					auto [it, inserted] = variableExternalIdMap.emplace(variable->variableIndex, 0);
 					if (inserted)
 					{
-						const auto payload =
-						    CopyTensorPayloadBytes(graph.GetVariable(variable->variableIndex)->Data(), output.dtype,
-						                           output.shape);
-						if (!payload)
+						constexpr std::uint64_t kAlignment = 64;
+						const auto offset = AppendTensorPayloadBytes(result.weights,
+						                                             graph.GetVariable(variable->variableIndex)->Data(),
+						                                             output.dtype, output.shape, kAlignment);
+						if (!offset)
 						{
 							return std::nullopt;
 						}
-						constexpr std::uint64_t kAlignment = 64;
-						const auto offset = AppendExternalRegionBytes(result.weights, *payload, kAlignment);
 						const auto name = graph.VariableName(variable->variableIndex);
 						it->second = result.externalTensorInfos.size();
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-						    name, kWeightsRegionName, output.dtype, result.weights, output.shape, offset,
-						    static_cast<std::uint64_t>(payload->size()), kAlignment));
+						    name, kWeightsRegionName, output.dtype, result.weights, output.shape, *offset,
+						    TensorByteSizeForShape(output.dtype, output.shape), kAlignment));
 					}
 					directExternalByNode[subgraphId][nodeId] = it->second;
 					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], it->second);
@@ -1891,23 +1904,29 @@ namespace
 						return std::nullopt;
 					}
 					const auto output = entry.outputInfos[0];
-					const auto payload = CopyTensorPayloadBytes(constant->value, output.dtype, output.shape);
-					if (!payload)
+					if (!CanExternalizeCPUTensorInMLIR(output.dtype) || constant->value.DType() != output.dtype ||
+					    constant->value.Shape() != output.shape)
 					{
 						continue;
 					}
-					if (payload->size() < options.cpuAOTExternalConstantMinBytes)
+					const auto byteSize = TensorByteSizeForShape(output.dtype, output.shape);
+					if (byteSize < options.cpuAOTExternalConstantMinBytes)
 					{
 						continue;
 					}
 
 					constexpr std::uint64_t kAlignment = 64;
-					const auto offset = AppendExternalRegionBytes(result.constants, *payload, kAlignment);
+					const auto offset =
+					    AppendTensorPayloadBytes(result.constants, constant->value, output.dtype, output.shape, kAlignment);
+					if (!offset)
+					{
+						continue;
+					}
 					const auto externalId = result.externalTensorInfos.size();
 					const auto name = std::format("constant_{}_{}", subgraphId, nodeId);
 					result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-					    name, kConstantsRegionName, output.dtype, result.constants, output.shape, offset,
-					    static_cast<std::uint64_t>(payload->size()), kAlignment));
+					    name, kConstantsRegionName, output.dtype, result.constants, output.shape, *offset, byteSize,
+					    kAlignment));
 					directExternalByNode[subgraphId][nodeId] = externalId;
 					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], externalId);
 				}

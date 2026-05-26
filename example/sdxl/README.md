@@ -285,7 +285,8 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
   --vae-mid-attention-policy auto ^
   --workdir build\sdxl_1girl_full ^
   --output-png build\sdxl_1girl_full\1girl.png ^
-  --cxx %CXX%
+  --cxx %CXX% ^
+  --max-unet-weight-mib 0
 ```
 
 Current status: the full fixed-shape UNet manifest imports correctly, but the materialized F32 `.ltnn` graph is very
@@ -293,8 +294,10 @@ large and CPU AOT compilation is not yet interactive. For large imported graphs,
 `LITENN_CPU_AOT_EXTERNAL_REGIONS=1`; `--compile-object` will then write a separated carrier object, and
 `--compile-image-regions` will write metadata to the existing `.rodata.bin` path plus sibling `.constants.bin` and
 `.weights.bin` files. A low-precision manifest can reduce serialized weight size roughly in half, but full-graph CPU AOT
-still needs more compile-time/codegen work before it is practical. Use the smoke command above for a fully runnable
-pipeline while that work continues.
+still needs more compile-time/codegen work before it is practical. The one-shot harness now has a preflight guard:
+`--max-unet-weight-mib` defaults to `2048` and stops before importing/compiling full UNet manifests whose tensor payload
+would drive CPU AOT memory into tens of GiB. Use `--max-unet-weight-mib 0` only when intentionally running the full
+compile on a large-memory host. Use the smoke command above for a fully runnable pipeline while that work continues.
 
 The expanded command sequence is:
 

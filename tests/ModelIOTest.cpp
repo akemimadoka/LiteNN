@@ -146,6 +146,43 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 6.0F, 1e-3F);
 }
 
+TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(
+	    Variable::CreateFrozen(Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 })));
+
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { weight, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1, 2 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "x" });
+	graph.SetOutputNames({ "y" });
+
+	const auto path = std::filesystem::path("litenn_modelio_frozen_variable_roundtrip_test.ltnn");
+	std::filesystem::remove(path);
+	Serialization::SaveModel(graph, path);
+
+	auto loaded = Serialization::LoadModel(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(loaded.VariableCount(), 1);
+	EXPECT_FALSE(loaded.GetVariable(0)->HasGradStorage());
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 0), 1.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 3), 4.0f);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
+	const auto outputs = interpreter.RunForward(loaded, inputs);
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 16.0f);
+}
+
 TEST(ModelIO, SaveLoadPreservesVariableNamesAndMetadataForWeightArchive)
 {
 	Graph graph;

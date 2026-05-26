@@ -1100,7 +1100,14 @@ Phase 2: decode and write an image.
       within a 15 minute local timeout. F16 manifest import now works and halves the small smoke `.ltnn` size
       (about 38.3 MiB to 19.2 MiB locally), but full 1024x1024 reference parity is still blocked on full-graph compile
       time, external weight/codegen pressure, and native/full CUDA lowering rather than on prompt binding or VAE output
-      plumbing.）
+      plumbing.
+      2026-05-27 追踪：一次 `unet-full-fixed` 64x64 F16 prompt run stopped在 import 后、compile 前，生成的
+      `unet.ltnn` 为约 5.14 GiB，manifest tensor payload 估算约 4.9 GiB；继续 CPU AOT 会因为变量梯度镜像、
+      external weights region 复制和 MLIR/LLVM 编译峰值叠加而进入数十 GiB 内存区间。已完成两项止血修复：
+      Torch manifest 默认导入 frozen variables，不再为推理权重分配同尺寸 grad storage；CPU AOT external-region
+      构建改为直接从 CPU tensor 写入外置 region，避免 payload 临时 vector 的整份二次复制。`sdxl_prompt_to_image.py`
+      还新增 `--max-unet-weight-mib` 预检，默认在超大 full UNet manifest 进入 import/compile 前失败，避免再次
+      触发长时间高内存运行；大内存主机可显式传 `--max-unet-weight-mib 0` 关闭保护。）
 
 Phase 3: make LiteNN own the full prompt path.
 

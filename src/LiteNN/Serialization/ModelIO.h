@@ -23,7 +23,7 @@ namespace LiteNN::Serialization
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 19;
+		constexpr std::uint32_t kModelVersion = 20;
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -1341,6 +1341,7 @@ namespace LiteNN::Serialization
 		for (const auto& variable : graph.Variables())
 		{
 			Detail::WriteTensor(out, variable->Data());
+			Detail::WriteScalar(out, static_cast<std::uint8_t>(variable->HasGradStorage() ? 1 : 0));
 			Detail::WriteOptionalQuantizationParams(out, variable->Quantization());
 		}
 
@@ -1416,12 +1417,14 @@ namespace LiteNN::Serialization
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
 			auto tensor = Detail::ReadTensor(in);
+			const auto hasGradStorage = version >= 20 ? Detail::ReadScalar<std::uint8_t>(in) != 0 : true;
 			std::optional<QuantizationParams> quantization;
 			if (version >= 4)
 			{
 				quantization = Detail::ReadOptionalQuantizationParams(in, version);
 			}
-			auto variable = Variable::Create(std::move(tensor));
+			auto variable = Variable::Create(std::move(tensor), hasGradStorage ? VariableGradStorage::Allocate
+			                                                                   : VariableGradStorage::None);
 			variable->SetQuantization(std::move(quantization));
 			graph.AddVariable(std::move(variable));
 		}

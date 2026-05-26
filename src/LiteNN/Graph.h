@@ -7,6 +7,7 @@
 #include <meta>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -499,6 +500,12 @@ namespace LiteNN
 	};
 
 	// 可训练参数，持有数据和梯度
+	enum class VariableGradStorage
+	{
+		Allocate,
+		None
+	};
+
 	class Variable
 	{
 	public:
@@ -506,23 +513,47 @@ namespace LiteNN
 		Variable& operator=(const Variable&) = delete;
 
 		template <Device D>
-		static std::shared_ptr<Variable> Create(Tensor<D> data)
-		{
-			return std::shared_ptr<Variable>(new Variable(std::move(data)));
-		}
-
-		template <Device D>
-		static std::shared_ptr<Variable> CreateQuantized(Tensor<D> storage, QuantizationParams quantization)
+		static std::shared_ptr<Variable> Create(Tensor<D> data,
+		                                        VariableGradStorage gradStorage = VariableGradStorage::Allocate)
 		{
 			if constexpr (std::same_as<D, PolymorphicDevice>)
 			{
-				return std::shared_ptr<Variable>(new Variable(std::move(storage), std::move(quantization)));
+				return std::shared_ptr<Variable>(new Variable(std::move(data), std::nullopt, gradStorage));
 			}
 			else
 			{
 				return std::shared_ptr<Variable>(
-				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }), std::move(quantization)));
+				    new Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }), std::nullopt, gradStorage));
 			}
+		}
+
+		template <Device D>
+		static std::shared_ptr<Variable> CreateFrozen(Tensor<D> data)
+		{
+			return Create(std::move(data), VariableGradStorage::None);
+		}
+
+		template <Device D>
+		static std::shared_ptr<Variable> CreateQuantized(Tensor<D> storage, QuantizationParams quantization,
+		                                                 VariableGradStorage gradStorage = VariableGradStorage::Allocate)
+		{
+			if constexpr (std::same_as<D, PolymorphicDevice>)
+			{
+				return std::shared_ptr<Variable>(
+				    new Variable(std::move(storage), std::move(quantization), gradStorage));
+			}
+			else
+			{
+				return std::shared_ptr<Variable>(
+				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }), std::move(quantization),
+				                 gradStorage));
+			}
+		}
+
+		template <Device D>
+		static std::shared_ptr<Variable> CreateFrozenQuantized(Tensor<D> storage, QuantizationParams quantization)
+		{
+			return CreateQuantized(std::move(storage), std::move(quantization), VariableGradStorage::None);
 		}
 
 		auto& Data(this auto&& self)
@@ -532,7 +563,24 @@ namespace LiteNN
 
 		auto& Grad(this auto&& self)
 		{
-			return self.grad_;
+			if (!self.grad_)
+			{
+				throw std::runtime_error("Variable has no gradient storage");
+			}
+			return *self.grad_;
+		}
+
+		bool HasGradStorage() const
+		{
+			return grad_.has_value();
+		}
+
+		void AllocateGrad()
+		{
+			if (!grad_)
+			{
+				grad_.emplace(data_.Shape(), data_.DType(), data_.CurDevice());
+			}
 		}
 
 		bool IsQuantized() const
@@ -552,22 +600,27 @@ namespace LiteNN
 
 	private:
 		Tensor<PolymorphicDevice> data_;
-		Tensor<PolymorphicDevice> grad_;
+		std::optional<Tensor<PolymorphicDevice>> grad_;
 		std::optional<QuantizationParams> quantization_;
 
-		Variable(Tensor<PolymorphicDevice> data)
-		    : Variable(std::move(data), std::nullopt)
+		Variable(Tensor<PolymorphicDevice> data, VariableGradStorage gradStorage)
+		    : Variable(std::move(data), std::nullopt, gradStorage)
 		{
 		}
 
-		Variable(Tensor<PolymorphicDevice> data, std::optional<QuantizationParams> quantization)
-		    : data_(std::move(data)), grad_(data_.Shape(), data_.DType(), data_.CurDevice()),
-		      quantization_(std::move(quantization))
+		Variable(Tensor<PolymorphicDevice> data, std::optional<QuantizationParams> quantization,
+		         VariableGradStorage gradStorage)
+		    : data_(std::move(data)), quantization_(std::move(quantization))
 		{
+			if (gradStorage == VariableGradStorage::Allocate)
+			{
+				AllocateGrad();
+			}
 		}
 
 		template <Device D>
-		Variable(Tensor<D> data) : Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }))
+		Variable(Tensor<D> data, VariableGradStorage gradStorage)
+		    : Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }), gradStorage)
 		{
 		}
 

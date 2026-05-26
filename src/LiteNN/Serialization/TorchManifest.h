@@ -17,6 +17,7 @@ namespace LiteNN::Serialization
 	struct TorchManifestImportOptions
 	{
 		bool failOnUnusedWeights{ true };
+		bool trainableVariables{ false };
 	};
 
 	struct TorchManifestOpMapping

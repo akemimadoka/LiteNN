@@ -417,6 +417,8 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 	ASSERT_EQ(result.graph.VariableCount(), 2u);
 	ASSERT_TRUE(result.graph.FindVariable("fc.weight").has_value());
 	ASSERT_TRUE(result.graph.FindVariable("fc.bias").has_value());
+	EXPECT_FALSE(result.graph.GetVariable(*result.graph.FindVariable("fc.weight"))->HasGradStorage());
+	EXPECT_FALSE(result.graph.GetVariable(*result.graph.FindVariable("fc.bias"))->HasGradStorage());
 	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.weight"))->Data().Shape().ToOwned(),
 	          (std::vector<std::size_t>{ 3, 2 }));
 	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.bias"))->Data().Shape().ToOwned(),
@@ -439,6 +441,18 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 	ASSERT_EQ(compiledOutputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(compiledOutputs[0]);
 #endif
+}
+
+TEST(TorchManifest, CanImportTrainableVariablesWhenRequested)
+{
+	const auto archive = BuildLinearArchive();
+	Serialization::TorchManifestImportOptions options;
+	options.trainableVariables = true;
+	auto result = Serialization::ImportTorchManifest(BuildLinearManifest(), archive, options);
+
+	ASSERT_EQ(result.graph.VariableCount(), 2u);
+	ASSERT_TRUE(result.graph.GetVariable(0)->HasGradStorage());
+	ASSERT_TRUE(result.graph.GetVariable(1)->HasGradStorage());
 }
 
 TEST(TorchManifest, ReportsManifestTensorDiagnostics)

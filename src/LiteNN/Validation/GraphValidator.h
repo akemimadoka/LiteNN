@@ -457,16 +457,19 @@ namespace LiteNN::Validation
 				}
 
 				const auto& data = variable->Data();
-				const auto& grad = variable->Grad();
 				ValidateDataType(data.DType(), std::format("variable {} data", i));
 				ValidateShape(data.Shape().Dims, std::format("variable {} data", i));
-				ValidateDataType(grad.DType(), std::format("variable {} grad", i));
-				ValidateShape(grad.Shape().Dims, std::format("variable {} grad", i));
-				if (data.DType() != grad.DType() || data.Shape() != grad.Shape())
+				if (variable->HasGradStorage())
 				{
-					Fail(std::format("Graph validation failed: variable {} grad metadata {} does not match data {}",
-					                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
-					                 FormatInfo(data.DType(), data.Shape().Dims)));
+					const auto& grad = variable->Grad();
+					ValidateDataType(grad.DType(), std::format("variable {} grad", i));
+					ValidateShape(grad.Shape().Dims, std::format("variable {} grad", i));
+					if (data.DType() != grad.DType() || data.Shape() != grad.Shape())
+					{
+						Fail(std::format("Graph validation failed: variable {} grad metadata {} does not match data {}",
+						                 i, FormatInfo(grad.DType(), grad.Shape().Dims),
+						                 FormatInfo(data.DType(), data.Shape().Dims)));
+					}
 				}
 				if (variable->Quantization())
 				{

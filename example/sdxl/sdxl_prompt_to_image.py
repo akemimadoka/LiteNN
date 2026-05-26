@@ -11,11 +11,36 @@ complete fixed-shape graph once compile time and memory are acceptable.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+DTYPE_BYTES = {
+    "F64": 8,
+    "torch.float64": 8,
+    "float64": 8,
+    "F32": 4,
+    "torch.float32": 4,
+    "float32": 4,
+    "F16": 2,
+    "torch.float16": 2,
+    "float16": 2,
+    "BF16": 2,
+    "torch.bfloat16": 2,
+    "bfloat16": 2,
+    "I64": 8,
+    "torch.int64": 8,
+    "torch.long": 8,
+    "I32": 4,
+    "torch.int32": 4,
+    "I8": 1,
+    "U8": 1,
+    "BOOL": 1,
+}
 
 
 def run_step(name: str, command: list[str], *, dry_run: bool = False) -> None:
@@ -43,6 +68,55 @@ def library_path(workdir: Path, name: str) -> Path:
     if os.name == "nt":
         return workdir / f"{name}.dll"
     return workdir / f"lib{name}.so"
+
+
+def shape_elements(shape: object, label: str) -> int:
+    if not isinstance(shape, list) or not all(isinstance(dim, int) and dim > 0 for dim in shape):
+        raise ValueError(f"{label} has invalid tensor shape")
+    count = 1
+    for dim in shape:
+        count *= dim
+    return count
+
+
+def dtype_nbytes(dtype: object, label: str) -> int:
+    if not isinstance(dtype, str):
+        raise ValueError(f"{label} has invalid dtype")
+    try:
+        return DTYPE_BYTES[dtype]
+    except KeyError as exc:
+        raise ValueError(f"{label} uses unsupported dtype {dtype!r} for size estimation") from exc
+
+
+def estimate_manifest_tensor_bytes(path: Path) -> int:
+    root = json.loads(path.read_text(encoding="utf-8"))
+    tensors = root.get("tensors")
+    if not isinstance(tensors, list):
+        return 0
+    total = 0
+    for index, tensor in enumerate(tensors):
+        if not isinstance(tensor, dict):
+            raise ValueError(f"{path}: tensor entry {index} must be an object")
+        dtype = tensor.get("target_dtype", tensor.get("dtype"))
+        total += shape_elements(tensor.get("shape"), f"{path}: tensor entry {index}") * dtype_nbytes(
+            dtype, f"{path}: tensor entry {index}"
+        )
+    return total
+
+
+def enforce_manifest_budget(path: Path, label: str, budget_mib: int) -> None:
+    if budget_mib <= 0:
+        return
+    estimated_bytes = estimate_manifest_tensor_bytes(path)
+    estimated_mib = estimated_bytes / (1024.0 * 1024.0)
+    print(f"{label} manifest tensor payload estimate: {estimated_mib:.1f} MiB", flush=True)
+    if estimated_bytes > budget_mib * 1024 * 1024:
+        raise RuntimeError(
+            f"{label} manifest tensor payload estimate {estimated_mib:.1f} MiB exceeds "
+            f"--max-unet-weight-mib={budget_mib}. This path would materialize a very large .ltnn graph and "
+            "can drive CPU AOT memory into tens of GiB. Use the smoke probe, lower precision/quantization, "
+            "or pass --max-unet-weight-mib 0 only when intentionally running the full compile on a large-memory host."
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,7 +151,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--vae-mid-attention-policy", choices=["auto", "force", "skip"], default="skip")
     parser.add_argument("--vae-attention-max-mib", default=512, type=int)
+    parser.add_argument(
+        "--max-unet-weight-mib",
+        default=2048,
+        type=int,
+        help="Preflight budget for imported UNet tensor payloads; use 0 to disable the guard",
+    )
     parser.add_argument("--aot-load-mode", choices=["dll", "image-regions"], default="dll")
+    parser.add_argument(
+        "--png-range",
+        choices=["auto", "zero-one", "minus-one-one"],
+        default="auto",
+        help="Value range passed to sdxl_tensor_to_png.py",
+    )
+    parser.add_argument("--skip-image-validation", action="store_true", help="Write the PNG without postprocess sanity checks")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
     parser.add_argument("--unet-symbol-prefix", default="litenn_sdxl_unet")
@@ -95,6 +182,8 @@ def main() -> int:
         raise ValueError("--steps must be positive")
     if args.vae_attention_max_mib <= 0:
         raise ValueError("--vae-attention-max-mib must be positive")
+    if args.max_unet_weight_mib < 0:
+        raise ValueError("--max-unet-weight-mib must be non-negative")
     conditioning_output_dtype = args.conditioning_output_dtype or args.unet_compute_dtype
 
     args.workdir.mkdir(parents=True, exist_ok=True)
@@ -313,12 +402,17 @@ def main() -> int:
                 str(decoded),
                 "--output",
                 str(output_png),
-            ],
+                "--range",
+                args.png_range,
+            ]
+            + ([] if args.skip_image_validation else ["--validate"]),
         )
     )
 
     for name, command in steps:
         run_step(name, command, dry_run=args.dry_run)
+        if not args.dry_run and name == "emit-unet-manifest":
+            enforce_manifest_budget(unet_manifest, "UNet", args.max_unet_weight_mib)
 
     print(f"\nWrote {output_png}", flush=True)
     if args.unet_probe != "unet-full-fixed":

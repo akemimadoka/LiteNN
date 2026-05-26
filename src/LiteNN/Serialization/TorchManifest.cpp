@@ -563,7 +563,9 @@ namespace LiteNN::Serialization
 				const auto dtype = finalTensor->DType();
 				auto shape = finalTensor->Shape().ToOwned();
 				auto variableTensor = convertedTensor ? std::move(*convertedTensor) : std::move(tensor);
-				const auto index = context.graph.AddVariable(Variable::Create(std::move(variableTensor)));
+				auto variable = options.trainableVariables ? Variable::Create(std::move(variableTensor))
+				                                           : Variable::CreateFrozen(std::move(variableTensor));
+				const auto index = context.graph.AddVariable(std::move(variable));
 				context.graph.SetVariableName(index, name);
 				context.variables.emplace(name, VariableBinding{ index, dtype, std::move(shape), source });
 				context.report.importedTensors.push_back(
