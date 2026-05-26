@@ -289,10 +289,12 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
 ```
 
 Current status: the full fixed-shape UNet manifest imports correctly, but the materialized F32 `.ltnn` graph is very
-large and CPU AOT compilation is not yet interactive. A low-precision manifest can reduce serialized weight size
-roughly in half, but full-graph CPU AOT still has to lower large constants through MLIR/LLVM, so external weight/codegen
-work remains the blocker for practical full-UNet compilation. Use the smoke command above for a fully runnable pipeline
-while that work continues.
+large and CPU AOT compilation is not yet interactive. For large imported graphs, enable separated CPU AOT weights with
+`LITENN_CPU_AOT_EXTERNAL_REGIONS=1`; `--compile-object` will then write a separated carrier object, and
+`--compile-image-regions` will write metadata to the existing `.rodata.bin` path plus sibling `.constants.bin` and
+`.weights.bin` files. A low-precision manifest can reduce serialized weight size roughly in half, but full-graph CPU AOT
+still needs more compile-time/codegen work before it is practical. Use the smoke command above for a fully runnable
+pipeline while that work continues.
 
 The expanded command sequence is:
 
@@ -305,6 +307,7 @@ python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe unet-conditioning-smoke ^
   --height 64 --width 64 --emit-probe-manifest %OUT%\unet_manifest.json
 %LITENN_EXE% --import %OUT%\unet_manifest.json %CKPT% %OUT%\unet.ltnn --allow-extra-tensors
+set LITENN_CPU_AOT_EXTERNAL_REGIONS=1
 %LITENN_EXE% --compile-object %OUT%\unet.ltnn %OUT%\unet.obj litenn_sdxl_unet
 %CXX% -shared %OUT%\unet.obj %OUT%\litenn_sdxl_unet_exports.def -o %OUT%\unet.dll
 
@@ -316,6 +319,7 @@ python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe vae-decode-full ^
   --height 64 --width 64 --vae-mid-attention-policy skip --emit-probe-manifest %OUT%\vae_manifest.json
 %LITENN_EXE% --import %OUT%\vae_manifest.json %CKPT% %OUT%\vae.ltnn --allow-extra-tensors
+set LITENN_CPU_AOT_EXTERNAL_REGIONS=1
 %LITENN_EXE% --compile-object %OUT%\vae.ltnn %OUT%\vae.obj litenn_sdxl_vae
 %CXX% -shared %OUT%\vae.obj %OUT%\litenn_sdxl_vae_exports.def -o %OUT%\vae.dll
 

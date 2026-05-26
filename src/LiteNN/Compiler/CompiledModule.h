@@ -110,6 +110,9 @@ namespace LiteNN
 		std::uint64_t cpuAOTParallelMinFlops{ 1ull << 28 };
 		/// Store CPU AOT constants/variable weights in separated artifact regions when supported.
 		bool enableCPUAOTExternalRegions{};
+		/// Minimum generic CPU MLIR ConstantNode byte size before externalizing it.
+		/// VariableRefNode weights are externalized independently when external regions are enabled.
+		std::uint64_t cpuAOTExternalConstantMinBytes{ 64 };
 		/// Retry the CPU f32 linear-chain external-region path after an internal FusionPass.
 		bool enableCPUAOTExternalRegionFusion{ true };
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
@@ -150,6 +153,10 @@ namespace LiteNN
 		CompiledModule<CPU> LoadBorrowedExternalRegions() const;
 #ifdef LITENN_ENABLE_CUDA
 		CompiledModule<CUDA> Load(CUDA device) const;
+		/// Loads a CUDA module from separated regions. CUDA-native constants are copied
+		/// to device memory during load; CPU-bridge artifacts borrow constants/weights
+		/// through the embedded CPU module and require this artifact to outlive runs.
+		CompiledModule<CUDA> LoadBorrowedExternalRegions(CUDA device) const;
 #endif
 
 		CompiledModuleSeparatedArtifact WithReboundConstants(CompiledModuleRegion constants) const;
@@ -346,6 +353,7 @@ namespace LiteNN
 		/// Loads a borrowed CUDA module image. CPU-native images bridge through CPU AOT.
 		static CompiledModule Load(CompiledModuleImage image, CUDA device = CUDA{});
 		static CompiledModule Load(CompiledModuleSeparatedImage image, CUDA device = CUDA{});
+		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image, CUDA device = CUDA{});
 
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;
 		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs,

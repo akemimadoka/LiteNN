@@ -1591,27 +1591,246 @@ namespace
 		return bytes;
 	}
 
-	bool SubgraphContainsVariableRef(const Subgraph& subgraph)
-	{
-		for (const auto& entry : subgraph.Nodes())
-		{
-			if (std::holds_alternative<VariableRefNode>(entry.node))
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
 	struct CPUMLIRExternalizedGraph
 	{
 		Graph graph;
 		std::vector<std::byte> constants;
 		std::vector<std::byte> weights;
 		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
+		std::vector<CompiledModuleExternalTensorInfo> entryExternalTensorInfos;
 	};
 
-	std::optional<CPUMLIRExternalizedGraph> BuildCPUMLIRExternalizedGraph(const Graph& graph)
+	void AppendUniqueExternalId(std::vector<std::size_t>& ids, std::size_t id)
+	{
+		if (!std::ranges::contains(ids, id))
+		{
+			ids.push_back(id);
+		}
+	}
+
+	bool AppendUniqueExternalIds(std::vector<std::size_t>& ids, std::span<const std::size_t> extras)
+	{
+		bool changed = false;
+		for (const auto id : extras)
+		{
+			if (!std::ranges::contains(ids, id))
+			{
+				ids.push_back(id);
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
+	std::vector<std::size_t> UnionExternalIds(std::span<const std::size_t> lhs,
+	                                          std::span<const std::size_t> rhs)
+	{
+		std::vector<std::size_t> result(lhs.begin(), lhs.end());
+		AppendUniqueExternalIds(result, rhs);
+		return result;
+	}
+
+	template <class Remap>
+	NodeVariant RemapNodeInputs(const NodeVariant& node, Remap&& remap)
+	{
+		return std::visit(
+		    [&](const auto& typedNode) -> NodeVariant {
+			    using T = std::decay_t<decltype(typedNode)>;
+			    auto copy = typedNode;
+			    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
+			                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+			                  std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+			    {
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, UnaryOpNode>)
+			    {
+				    copy.input = remap(copy.input);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, BinaryOpNode>)
+			    {
+				    copy.lhs = remap(copy.lhs);
+				    copy.rhs = remap(copy.rhs);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, CallNode>)
+			    {
+				    for (auto& arg : copy.args)
+				    {
+					    arg = remap(arg);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, CastNode> || std::same_as<T, QuantizeNode> ||
+			                       std::same_as<T, DequantizeNode> || std::same_as<T, SaveActivationNode> ||
+			                       std::same_as<T, TapeSaveActivationNode> || std::same_as<T, ReduceOpNode> ||
+			                       std::same_as<T, ReshapeNode> || std::same_as<T, PermuteNode> ||
+			                       std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
+			                       std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
+			                       std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+			                       std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
+			                       std::same_as<T, ArgsortNode>)
+			    {
+				    copy.input = remap(copy.input);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+			    {
+				    copy.timesteps = remap(copy.timesteps);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, CondNode>)
+			    {
+				    copy.condition = remap(copy.condition);
+				    for (auto& arg : copy.args)
+				    {
+					    arg = remap(arg);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, WhileNode>)
+			    {
+				    for (auto& arg : copy.initArgs)
+				    {
+					    arg = remap(arg);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, GatherNode> || std::same_as<T, GetRowsNode>)
+			    {
+				    copy.data = remap(copy.data);
+				    copy.indices = remap(copy.indices);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, ScatterNode>)
+			    {
+				    copy.data = remap(copy.data);
+				    copy.indices = remap(copy.indices);
+				    copy.updates = remap(copy.updates);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, SSMScanNode>)
+			    {
+				    copy.state = remap(copy.state);
+				    copy.dt = remap(copy.dt);
+				    copy.a = remap(copy.a);
+				    copy.b = remap(copy.b);
+				    copy.c = remap(copy.c);
+				    if (copy.d)
+				    {
+					    copy.d = remap(*copy.d);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, RWKVWKVNode>)
+			    {
+				    copy.key = remap(copy.key);
+				    copy.value = remap(copy.value);
+				    copy.receptance = remap(copy.receptance);
+				    copy.timeDecay = remap(copy.timeDecay);
+				    copy.timeFirst = remap(copy.timeFirst);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+			    {
+				    copy.logits = remap(copy.logits);
+				    copy.labels = remap(copy.labels);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+			    {
+				    copy.grad = remap(copy.grad);
+				    copy.logits = remap(copy.logits);
+				    copy.labels = remap(copy.labels);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, NormalizationNode>)
+			    {
+				    copy.input = remap(copy.input);
+				    if (copy.scale)
+				    {
+					    copy.scale = remap(*copy.scale);
+				    }
+				    if (copy.bias)
+				    {
+					    copy.bias = remap(*copy.bias);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, BatchMatMulNode> || std::same_as<T, OutProdNode>)
+			    {
+				    copy.lhs = remap(copy.lhs);
+				    copy.rhs = remap(copy.rhs);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, SolveTriNode>)
+			    {
+				    copy.a = remap(copy.a);
+				    copy.b = remap(copy.b);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, SGDStepNode>)
+			    {
+				    copy.parameter = remap(copy.parameter);
+				    copy.gradient = remap(copy.gradient);
+				    if (copy.velocity)
+				    {
+					    copy.velocity = remap(*copy.velocity);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, AdamWStepNode>)
+			    {
+				    copy.parameter = remap(copy.parameter);
+				    copy.gradient = remap(copy.gradient);
+				    copy.firstMoment = remap(copy.firstMoment);
+				    copy.secondMoment = remap(copy.secondMoment);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, Conv2DNode> || std::same_as<T, ConvTranspose2DNode>)
+			    {
+				    copy.input = remap(copy.input);
+				    copy.weight = remap(copy.weight);
+				    if (copy.bias)
+				    {
+					    copy.bias = remap(*copy.bias);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, ConcatNode>)
+			    {
+				    for (auto& input : copy.inputs)
+				    {
+					    input = remap(input);
+				    }
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, MulMatIdNode>)
+			    {
+				    copy.as = remap(copy.as);
+				    copy.b = remap(copy.b);
+				    copy.ids = remap(copy.ids);
+				    return copy;
+			    }
+			    else if constexpr (std::same_as<T, FusedOpNode>)
+			    {
+				    for (auto& arg : copy.args)
+				    {
+					    arg = remap(arg);
+				    }
+				    return copy;
+			    }
+			    else
+			    {
+				    static_assert(sizeof(T) == 0, "Unhandled LiteNN node input remap case");
+			    }
+		    },
+		    node);
+	}
+
+	std::optional<CPUMLIRExternalizedGraph> BuildCPUMLIRExternalizedGraph(const Graph& graph,
+	                                                                      const CompilerOptions& options)
 	{
 		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
 		    graph.SubgraphCount() == 0)
@@ -1619,95 +1838,80 @@ namespace
 			return std::nullopt;
 		}
 
-		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
-		{
-			if (subgraphId != graph.Forward() && SubgraphContainsVariableRef(graph.GetSubgraph(subgraphId)))
-			{
-				return std::nullopt;
-			}
-		}
-
 		CPUMLIRExternalizedGraph result;
-		std::unordered_map<std::size_t, std::size_t> variableParamMap;
-		std::vector<std::string> inputNames;
-		const auto& forward = graph.GetSubgraph(graph.Forward());
-		inputNames.reserve(forward.Params().size());
-		for (std::size_t i = 0; i < forward.Params().size(); ++i)
-		{
-			inputNames.push_back(graph.InputName(i));
-		}
-
-		const auto addHiddenParam = [&](Subgraph& subgraph, DataType dtype, std::span<const std::size_t> shape,
-		                                std::string_view debugName) {
-			const auto paramIndex = subgraph.Params().size();
-			subgraph.AddParam(dtype, std::vector<std::size_t>(shape.begin(), shape.end()));
-			inputNames.push_back(std::format("__litenn_external_{}_{}", inputNames.size(), debugName));
-			return paramIndex;
-		};
+		std::unordered_map<std::size_t, std::size_t> variableExternalIdMap;
+		std::vector<std::vector<std::optional<std::size_t>>> directExternalByNode(graph.SubgraphCount());
+		std::vector<std::vector<std::size_t>> externalDepsBySubgraph(graph.SubgraphCount());
 
 		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
 		{
-			auto subgraph = graph.GetSubgraph(subgraphId);
-			if (subgraphId == graph.Forward())
+			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			directExternalByNode[subgraphId].resize(subgraph.NodeCount());
+			for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
 			{
-				const auto originalNodeCount = subgraph.NodeCount();
-				for (NodeId nodeId = 0; nodeId < originalNodeCount; ++nodeId)
+				const auto& entry = subgraph.GetNodeEntry(nodeId);
+				if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
 				{
-					auto& entry = subgraph.GetNodeEntry(nodeId);
+					if (entry.outputInfos.size() != 1)
+					{
+						return std::nullopt;
+					}
+					if (variable->variableIndex >= graph.VariableCount())
+					{
+						return std::nullopt;
+					}
+					const auto output = entry.outputInfos[0];
+					auto [it, inserted] = variableExternalIdMap.emplace(variable->variableIndex, 0);
+					if (inserted)
+					{
+						const auto payload =
+						    CopyTensorPayloadBytes(graph.GetVariable(variable->variableIndex)->Data(), output.dtype,
+						                           output.shape);
+						if (!payload)
+						{
+							return std::nullopt;
+						}
+						constexpr std::uint64_t kAlignment = 64;
+						const auto offset = AppendExternalRegionBytes(result.weights, *payload, kAlignment);
+						const auto name = graph.VariableName(variable->variableIndex);
+						it->second = result.externalTensorInfos.size();
+						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
+						    name, kWeightsRegionName, output.dtype, result.weights, output.shape, offset,
+						    static_cast<std::uint64_t>(payload->size()), kAlignment));
+					}
+					directExternalByNode[subgraphId][nodeId] = it->second;
+					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], it->second);
+					continue;
+				}
+
+				if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
+				{
 					if (entry.outputInfos.size() != 1)
 					{
 						return std::nullopt;
 					}
 					const auto output = entry.outputInfos[0];
-					if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
+					const auto payload = CopyTensorPayloadBytes(constant->value, output.dtype, output.shape);
+					if (!payload)
 					{
-						const auto variableIndex = variable->variableIndex;
-						if (variableIndex >= graph.VariableCount())
-						{
-							return std::nullopt;
-						}
-
-						auto [it, inserted] = variableParamMap.emplace(variableIndex, 0);
-						if (inserted)
-						{
-							const auto payload = CopyTensorPayloadBytes(graph.GetVariable(variableIndex)->Data(),
-							                                            output.dtype, output.shape);
-							if (!payload)
-							{
-								return std::nullopt;
-							}
-							constexpr std::uint64_t kAlignment = 64;
-							const auto offset = AppendExternalRegionBytes(result.weights, *payload, kAlignment);
-							const auto name = graph.VariableName(variableIndex);
-							result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-							    name, kWeightsRegionName, output.dtype, result.weights, output.shape, offset,
-							    static_cast<std::uint64_t>(payload->size()), kAlignment));
-							it->second = addHiddenParam(subgraph, output.dtype, output.shape, name);
-						}
-						subgraph.GetNodeEntry(nodeId).node = ParamRefNode{ it->second };
+						continue;
+					}
+					if (payload->size() < options.cpuAOTExternalConstantMinBytes)
+					{
 						continue;
 					}
 
-					if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
-					{
-						const auto payload = CopyTensorPayloadBytes(constant->value, output.dtype, output.shape);
-						if (!payload)
-						{
-							continue;
-						}
-
-						constexpr std::uint64_t kAlignment = 64;
-						const auto offset = AppendExternalRegionBytes(result.constants, *payload, kAlignment);
-						const auto name = std::format("constant_{}", nodeId);
-						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-						    name, kConstantsRegionName, output.dtype, result.constants, output.shape, offset,
-						    static_cast<std::uint64_t>(payload->size()), kAlignment));
-						const auto paramIndex = addHiddenParam(subgraph, output.dtype, output.shape, name);
-						subgraph.GetNodeEntry(nodeId).node = ParamRefNode{ paramIndex };
-					}
+					constexpr std::uint64_t kAlignment = 64;
+					const auto offset = AppendExternalRegionBytes(result.constants, *payload, kAlignment);
+					const auto externalId = result.externalTensorInfos.size();
+					const auto name = std::format("constant_{}_{}", subgraphId, nodeId);
+					result.externalTensorInfos.push_back(MakeExternalTensorInfo(
+					    name, kConstantsRegionName, output.dtype, result.constants, output.shape, offset,
+					    static_cast<std::uint64_t>(payload->size()), kAlignment));
+					directExternalByNode[subgraphId][nodeId] = externalId;
+					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], externalId);
 				}
 			}
-			result.graph.AddSubgraph(std::move(subgraph));
 		}
 
 		if (result.externalTensorInfos.empty())
@@ -1715,7 +1919,195 @@ namespace
 			return std::nullopt;
 		}
 
+		bool changed = true;
+		while (changed)
+		{
+			changed = false;
+			for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+			{
+				const auto& subgraph = graph.GetSubgraph(subgraphId);
+				for (const auto& entry : subgraph.Nodes())
+				{
+					if (const auto* call = std::get_if<CallNode>(&entry.node))
+					{
+						if (call->callee >= graph.SubgraphCount())
+						{
+							return std::nullopt;
+						}
+						changed |= AppendUniqueExternalIds(externalDepsBySubgraph[subgraphId],
+						                                   externalDepsBySubgraph[call->callee]);
+					}
+					else if (const auto* cond = std::get_if<CondNode>(&entry.node))
+					{
+						if (cond->thenBranch >= graph.SubgraphCount() || cond->elseBranch >= graph.SubgraphCount())
+						{
+							return std::nullopt;
+						}
+						const auto branchDeps = UnionExternalIds(externalDepsBySubgraph[cond->thenBranch],
+						                                         externalDepsBySubgraph[cond->elseBranch]);
+						if (externalDepsBySubgraph[cond->thenBranch] != branchDeps)
+						{
+							externalDepsBySubgraph[cond->thenBranch] = branchDeps;
+							changed = true;
+						}
+						if (externalDepsBySubgraph[cond->elseBranch] != branchDeps)
+						{
+							externalDepsBySubgraph[cond->elseBranch] = branchDeps;
+							changed = true;
+						}
+						changed |= AppendUniqueExternalIds(externalDepsBySubgraph[subgraphId], branchDeps);
+					}
+				}
+			}
+		}
+
+		if (externalDepsBySubgraph[graph.Forward()].empty())
+		{
+			return std::nullopt;
+		}
+
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			for (const auto& entry : subgraph.Nodes())
+			{
+				if (const auto* whileNode = std::get_if<WhileNode>(&entry.node))
+				{
+					if (whileNode->condBranch >= graph.SubgraphCount() || whileNode->bodyBranch >= graph.SubgraphCount())
+					{
+						return std::nullopt;
+					}
+					if (!externalDepsBySubgraph[whileNode->condBranch].empty() ||
+					    !externalDepsBySubgraph[whileNode->bodyBranch].empty())
+					{
+						return std::nullopt;
+					}
+				}
+				else if (const auto* fused = std::get_if<FusedOpNode>(&entry.node))
+				{
+					if (fused->body >= graph.SubgraphCount())
+					{
+						return std::nullopt;
+					}
+					if (!externalDepsBySubgraph[fused->body].empty())
+					{
+						return std::nullopt;
+					}
+				}
+			}
+		}
+
+		const auto hiddenOutputFor = [&](const std::vector<NodeId>& hiddenNodesByExternalId, std::size_t externalId) {
+			if (externalId >= hiddenNodesByExternalId.size() ||
+			    hiddenNodesByExternalId[externalId] == std::numeric_limits<NodeId>::max())
+			{
+				throw std::runtime_error("CPU MLIR externalization planned a missing hidden parameter");
+			}
+			return NodeOutput{ hiddenNodesByExternalId[externalId], 0 };
+		};
+
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			const auto& original = graph.GetSubgraph(subgraphId);
+			Subgraph rebuilt;
+			std::vector<NodeId> publicParamNodes;
+			publicParamNodes.reserve(original.Params().size());
+			for (const auto& param : original.Params())
+			{
+				publicParamNodes.push_back(
+				    rebuilt.AddParam(param.dtype, std::vector<std::size_t>(param.shape.begin(), param.shape.end())));
+			}
+
+			std::vector<NodeId> hiddenNodesByExternalId(result.externalTensorInfos.size(),
+			                                            std::numeric_limits<NodeId>::max());
+			for (const auto externalId : externalDepsBySubgraph[subgraphId])
+			{
+				const auto& external = result.externalTensorInfos[externalId];
+				hiddenNodesByExternalId[externalId] =
+				    rebuilt.AddParam(external.dtype, std::vector<std::size_t>(external.shape.begin(), external.shape.end()));
+			}
+
+			std::vector<std::vector<NodeOutput>> outputMap(original.NodeCount());
+			const auto remapOutput = [&](NodeOutput output) {
+				if (output.node >= outputMap.size() || output.port >= outputMap[output.node].size())
+				{
+					throw std::runtime_error("CPU MLIR externalization encountered a non-topological node reference");
+				}
+				return outputMap[output.node][output.port];
+			};
+
+			for (NodeId nodeId = 0; nodeId < original.NodeCount(); ++nodeId)
+			{
+				const auto& entry = original.GetNodeEntry(nodeId);
+				if (const auto* param = std::get_if<ParamRefNode>(&entry.node))
+				{
+					if (param->paramIndex >= publicParamNodes.size())
+					{
+						return std::nullopt;
+					}
+					outputMap[nodeId] = { NodeOutput{ publicParamNodes[param->paramIndex], 0 } };
+					continue;
+				}
+
+				if (const auto externalId = directExternalByNode[subgraphId][nodeId])
+				{
+					outputMap[nodeId] = { hiddenOutputFor(hiddenNodesByExternalId, *externalId) };
+					continue;
+				}
+
+				auto remappedNode = RemapNodeInputs(entry.node, remapOutput);
+				if (auto* call = std::get_if<CallNode>(&remappedNode))
+				{
+					for (const auto externalId : externalDepsBySubgraph[call->callee])
+					{
+						call->args.push_back(hiddenOutputFor(hiddenNodesByExternalId, externalId));
+					}
+				}
+				else if (auto* cond = std::get_if<CondNode>(&remappedNode))
+				{
+					if (externalDepsBySubgraph[cond->thenBranch] != externalDepsBySubgraph[cond->elseBranch])
+					{
+						return std::nullopt;
+					}
+					for (const auto externalId : externalDepsBySubgraph[cond->thenBranch])
+					{
+						cond->args.push_back(hiddenOutputFor(hiddenNodesByExternalId, externalId));
+					}
+				}
+
+				auto outputInfos = std::vector<OutputInfo>(entry.outputInfos.begin(), entry.outputInfos.end());
+				const auto newNode = rebuilt.AddNode(std::move(remappedNode), std::move(outputInfos));
+				outputMap[nodeId].reserve(entry.outputInfos.size());
+				for (std::size_t port = 0; port < entry.outputInfos.size(); ++port)
+				{
+					outputMap[nodeId].push_back({ newNode, port });
+				}
+			}
+
+			std::vector<NodeOutput> remappedResults;
+			remappedResults.reserve(original.Results().size());
+			for (const auto resultOutput : original.Results())
+			{
+				remappedResults.push_back(remapOutput(resultOutput));
+			}
+			rebuilt.SetResults(std::move(remappedResults));
+			result.graph.AddSubgraph(std::move(rebuilt));
+		}
+
 		result.graph.SetForward(graph.Forward());
+		const auto& forward = graph.GetSubgraph(graph.Forward());
+		std::vector<std::string> inputNames;
+		inputNames.reserve(forward.Params().size() + externalDepsBySubgraph[graph.Forward()].size());
+		for (std::size_t i = 0; i < forward.Params().size(); ++i)
+		{
+			inputNames.push_back(graph.InputName(i));
+		}
+		for (const auto externalId : externalDepsBySubgraph[graph.Forward()])
+		{
+			const auto& external = result.externalTensorInfos[externalId];
+			inputNames.push_back(std::format("__litenn_external_{}_{}", inputNames.size(), external.name));
+			result.entryExternalTensorInfos.push_back(external);
+		}
 		result.graph.SetInputNames(std::move(inputNames));
 		std::vector<std::string> outputNames;
 		outputNames.reserve(forward.Results().size());
@@ -5284,7 +5676,7 @@ namespace
 			return std::nullopt;
 		}
 
-		auto externalized = BuildCPUMLIRExternalizedGraph(graph);
+		auto externalized = BuildCPUMLIRExternalizedGraph(graph, options);
 		if (!externalized)
 		{
 			return std::nullopt;
@@ -5307,7 +5699,7 @@ namespace
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
 		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
-		                       externalized->externalTensorInfos);
+		                       externalized->entryExternalTensorInfos);
 		OptimizeLLVMModule(*llvmModule, *config.targetMachine);
 
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
@@ -5373,6 +5765,10 @@ CompilerOptions CompilerOptions::FromEnvironment()
 	if (const auto minFlops = ParseU64Env("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
 	{
 		options.cpuAOTParallelMinFlops = *minFlops;
+	}
+	if (const auto minConstantBytes = ParseU64Env("LITENN_CPU_AOT_EXTERNAL_CONSTANT_MIN_BYTES"))
+	{
+		options.cpuAOTExternalConstantMinBytes = *minConstantBytes;
 	}
 	options.enableCPUAOTExternalRegions =
 	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
@@ -5451,6 +5847,11 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions
 CompiledModule<CUDA> CompiledModuleSeparatedArtifact::Load(CUDA device) const
 {
 	return CompiledModule<CUDA>::Load(Image(), std::move(device));
+}
+
+CompiledModule<CUDA> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions(CUDA device) const
+{
+	return CompiledModule<CUDA>::LoadBorrowedExternalRegions(Image(), std::move(device));
 }
 #endif
 
@@ -6102,6 +6503,30 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage ima
 		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
 	}
 	return module;
+}
+
+CompiledModule<CUDA> CompiledModule<CUDA>::LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image, CUDA device)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
+	{
+		auto instructions =
+		    RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+		                                           RegionBytes(image.instructions, kInstructionsRegionName),
+		                                           RegionBytes(image.constants, kConstantsRegionName));
+		auto module = Load({
+		    .rodata = metadata.legacyRodata.data(),
+		    .rodataSize = metadata.legacyRodata.size(),
+		    .instructions = instructions.data(),
+		    .instructionSize = instructions.size(),
+		}, std::move(device));
+		module.impl_->cpuModule = CompiledModule<CPU>::LoadBorrowedExternalRegions(image);
+		return module;
+	}
+
+	// CUDA-native kernels consume constants from a device allocation. The separated
+	// host constants region is validated here and copied to device memory during Load().
+	return Load(image, std::move(device));
 }
 
 std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const

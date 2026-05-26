@@ -694,12 +694,12 @@ embedded into LLVM globals inside the instruction object.
 - [x] Populate the external tensor table for the first generic CPU MLIR externalized tensors.
 - [x] Teach the CPU MLIR compile path to externalize forward-subgraph `VariableRefNode` / byte-addressable
       `ConstantNode` tensors through hidden AOT parameters bound from separated weights/constants regions.
-- [ ] Add a size-threshold policy, keep tiny scalar constants inline when cheaper, and propagate hidden external
-      parameters through nested/control subgraphs.
+- [x] Add a generic CPU MLIR external constant size-threshold policy and keep tiny scalar constants inline by default.
+- [x] Propagate hidden external parameters through nested/control subgraphs.
 - [x] Generalize the first external-regions slice beyond the optimized f32 parallel linear-chain AOT path.
 - [x] Add an explicit CPU borrowed external-region loader for stable mapped constants/weights memory while keeping the
       default `Load()` API copy-owned.
-- [ ] Extend borrowed external-region loading to CUDA native host constants and document the exact shared-library/static
+- [x] Extend borrowed external-region loading to CUDA native host constants and document the exact shared-library/static
       library lifetime contract.
 - [x] Keep CUDA CPU-bridge loading compatible with CPU AOT external regions by routing external-region artifacts
       through separated-region loading when `CompiledModuleArtifact::Load(CUDA{})` is used.
@@ -715,8 +715,8 @@ embedded into LLVM globals inside the instruction object.
 - [x] Replace hardwired compiler environment-variable behavior with explicit `CompilerOptions`; CLI/benchmark/example
       entry points can opt into `CompilerOptions::FromEnvironment()`, while library defaults remain deterministic.
 - [x] Add broader malformed metadata-table cases for the current external-regions path.
-- [ ] Add generic MLIR externalization parity tests against inline AOT outputs.
-- [ ] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
+- [x] Add generic MLIR externalization parity tests against inline AOT outputs.
+- [x] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
       CPU instruction objects with multi-GiB weight globals.
 
 Notes:
@@ -765,7 +765,7 @@ Notes:
   an external tensor region name in separated metadata and verifies that validation reports the malformed table before
   load/JIT execution.
 - Completed on 2026-05-25: `CompilerOptions` now controls CPU AOT thread count, CPU parallel min-FLOPs, CPU external
-  regions, internal external-region fusion, and CUDA native-AOT enablement. `Compiler<CPU/CUDA>` overloads accept
+  regions, generic MLIR external constant minimum byte size, internal external-region fusion, and CUDA native-AOT enablement. `Compiler<CPU/CUDA>` overloads accept
   options explicitly; `CompilerOptions::FromEnvironment()` is used by command-line style entry points and compatibility
   tests instead of having the library's default compile path read process environment variables directly.
 - Completed on 2026-05-25: `Debug::DumpCompiledModuleMetadata` now also accepts
@@ -776,9 +776,27 @@ Notes:
   zero byte size, zero alignment, invalid rebind policy, unaligned offsets, and out-of-bounds byte ranges.
 - Completed on 2026-05-25: the generic CPU MLIR compile path now has an initial external-regions route. When
   `CompilerOptions::enableCPUAOTExternalRegions` is enabled and the f32 linear-chain path does not apply, the compiler
-  rewrites forward-subgraph `VariableRefNode` and byte-addressable `ConstantNode` payloads into hidden MLIR function
-  parameters, emits the actual bytes into separated weights/constants regions, and has the uniform CPU entry wrapper
+  rewrites forward-subgraph `VariableRefNode` and eligible byte-addressable `ConstantNode` payloads into hidden MLIR
+  function parameters, emits the actual bytes into separated weights/constants regions, and has the uniform CPU entry wrapper
   bind those hidden memrefs from `litenn_cpu_external_weights()` / `litenn_cpu_external_constants()` at run time.
+- Completed on 2026-05-26: generic CPU MLIR external constants now honor
+  `CompilerOptions::cpuAOTExternalConstantMinBytes` (default 64 bytes; CLI/env opt-in via
+  `LITENN_CPU_AOT_EXTERNAL_CONSTANT_MIN_BYTES`). Small scalar/vector constants stay inline by default, while variable
+  weights remain externalized when external regions are enabled. Regression coverage now compares generic external AOT
+  output against both interpreter and inline AOT output.
+- Completed on 2026-05-26: generic CPU MLIR externalization now rebuilds subgraphs so hidden external params are emitted
+  before ordinary nodes and can propagate through `CallNode` and `CondNode` without violating topological validation.
+  `CompiledModuleTest` covers both a callee-owned weight/constant capture and a conditional whose two branches capture
+  different external tensors. `WhileNode` and special fused bodies that would require external captures deliberately
+  fall back to normal inline AOT, because extending their hidden state would change loop/fusion ABI semantics.
+- Completed on 2026-05-26: CUDA separated loading now has `CompiledModule<CUDA>::LoadBorrowedExternalRegions()` and
+  `CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions(CUDA)`. For CUDA-native payloads, host constants are
+  copied into device memory during load and may be released after `Load` returns; for CUDA CPU-bridge artifacts, the
+  embedded CPU module uses the same borrowed constants/weights lifetime rule as `CompiledModule<CPU>`.
+- Completed on 2026-05-26: Torch/SDXL imported graphs use the same explicit compiler options as other CLI entry points.
+  The SDXL example now writes a separated carrier object when external regions are present, loads separated carrier
+  symbols from DLL/shared-object exports, and preserves the image-region workflow by writing metadata to the existing
+  `.rodata.bin` path plus sibling `.constants.bin`/`.weights.bin` files when external regions are enabled.
 
 ### G10: LoRA and Adapter Support
 

@@ -23,11 +23,18 @@
 ### AOT 编译与部署
 
 1. 可选先 `ExtractForwardOnlyGraph(graph)`
-2. 可选创建 `CompilerOptions`（例如设置 `cpuAOTThreadCount`、`enableCPUAOTExternalRegions`）；CLI/benchmark 可以用
+2. 可选创建 `CompilerOptions`（例如设置 `cpuAOTThreadCount`、`enableCPUAOTExternalRegions`、
+   `cpuAOTExternalConstantMinBytes`）；CLI/benchmark 可以用
    `CompilerOptions::FromEnvironment()` 将环境变量翻译成显式配置
 3. `Compiler<CPU>::CompileArtifact(graph, options)` 或默认 `Compiler<CPU>::CompileArtifact(graph)`
 4. `artifact.Load()` 或 `CompiledModule<CPU>::Load(...)`
 5. `Run` / `RunInto` / `RunManyInto`
+
+启用 `enableCPUAOTExternalRegions` 后，优先用 `artifact.SeparateRodata()` 或
+`CompiledModuleSeparatedArtifact` 的 object/region 写出接口部署；旧的 two-symbol carrier object 只包含
+rodata/instructions，不适合携带 separated constants/weights。运行时如果 constants/weights 来自 mmap 或共享库稳定
+地址，可用 `CompiledModule<CPU>::LoadBorrowedExternalRegions(separatedImage)`。CUDA native 会在 load 时把
+separated host constants 上传到 device；CUDA CPU-bridge 则沿用 CPU borrowed constants/weights 生命周期。
 
 ### AOT 调试与外置权重检查
 

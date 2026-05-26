@@ -907,6 +907,31 @@ namespace
 #endif
 	}
 
+	void WriteSeparatedWindowsDefFile(const std::filesystem::path& objectPath, std::string_view symbolPrefix)
+	{
+#if defined(_WIN32)
+		const auto defPath = objectPath.parent_path() / (std::string(symbolPrefix) + "_exports.def");
+		std::ofstream out(defPath);
+		if (!out)
+		{
+			throw std::runtime_error("Failed to write Windows export definition file");
+		}
+		out << "EXPORTS\n"
+		    << "    " << symbolPrefix << "_metadata DATA\n"
+		    << "    " << symbolPrefix << "_metadata_size DATA\n"
+		    << "    " << symbolPrefix << "_constants DATA\n"
+		    << "    " << symbolPrefix << "_constants_size DATA\n"
+		    << "    " << symbolPrefix << "_weights DATA\n"
+		    << "    " << symbolPrefix << "_weights_size DATA\n"
+		    << "    " << symbolPrefix << "_instructions DATA\n"
+		    << "    " << symbolPrefix << "_instructions_size DATA\n";
+		std::cout << std::format("Wrote Windows export definition file {}\n", defPath.string());
+#else
+		(void)objectPath;
+		(void)symbolPrefix;
+#endif
+	}
+
 	void CompileObject(const std::filesystem::path& graphPath,
 	                   const std::filesystem::path& objectPath,
 	                   std::string_view symbolPrefix)
@@ -914,6 +939,21 @@ namespace
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
 		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
 		    graph, LiteNN::CompilerOptions::FromEnvironment());
+		auto separated = artifact.SeparateRodata();
+		if (!separated.Constants().empty() || !separated.Weights().empty() ||
+		    !separated.ExternalTensorInfos().empty())
+		{
+			separated.WriteObjectFile(objectPath, symbolPrefix);
+			std::cout << std::format(
+			    "Wrote separated carrier object {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
+			    " instructions={} bytes external_tensors={}\n",
+			    objectPath.string(), BackendName(separated.Backend()), separated.Metadata().size(),
+			    separated.Constants().size(), separated.Weights().size(), separated.Instructions().size(),
+			    separated.ExternalTensorInfos().size());
+			WriteSeparatedWindowsDefFile(objectPath, symbolPrefix);
+			return;
+		}
+
 		artifact.WriteObjectFile(objectPath, symbolPrefix);
 		std::cout << std::format("Wrote carrier object {} backend={} rodata={} bytes instructions={} bytes\n",
 		                         objectPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -976,6 +1016,16 @@ namespace
 				throw std::runtime_error(std::format("Missing exported symbol {}: {}", name, dlerror()));
 			}
 			return address;
+#endif
+		}
+
+		const void* TryLookup(std::string_view name) const
+		{
+#if defined(_WIN32)
+			return reinterpret_cast<const void*>(GetProcAddress(handle_, std::string(name).c_str()));
+#else
+			dlerror();
+			return dlsym(handle_, std::string(name).c_str());
 #endif
 		}
 
@@ -1600,12 +1650,78 @@ namespace
 		const auto prefix = std::string(filePrefix);
 		const auto rodataPath = outputDir / (prefix + ".rodata.bin");
 		const auto instructionsPath = outputDir / (prefix + ".instructions.obj");
+		auto separated = artifact.SeparateRodata();
+		if (!separated.Constants().empty() || !separated.Weights().empty() ||
+		    !separated.ExternalTensorInfos().empty())
+		{
+			const auto constantsPath = outputDir / (prefix + ".constants.bin");
+			const auto weightsPath = outputDir / (prefix + ".weights.bin");
+			WriteAllBytes(rodataPath, separated.Metadata());
+			WriteAllBytes(constantsPath, separated.Constants());
+			WriteAllBytes(weightsPath, separated.Weights());
+			WriteAllBytes(instructionsPath, separated.Instructions());
+			std::cout << std::format(
+			    "Wrote separated image regions metadata={} constants={} weights={} instructions={} backend={}"
+			    " metadata={} bytes constants={} bytes weights={} bytes instructions={} bytes external_tensors={}\n",
+			    rodataPath.string(), constantsPath.string(), weightsPath.string(), instructionsPath.string(),
+			    BackendName(separated.Backend()), separated.Metadata().size(), separated.Constants().size(),
+			    separated.Weights().size(), separated.Instructions().size(), separated.ExternalTensorInfos().size());
+			return;
+		}
+
 		WriteAllBytes(rodataPath, artifact.Rodata());
 		WriteAllBytes(instructionsPath, artifact.Instructions());
 		std::cout << std::format("Wrote image regions rodata={} instructions={} backend={} rodata={} bytes"
 		                         " instructions={} bytes\n",
 		                         rodataPath.string(), instructionsPath.string(), BackendName(artifact.Backend()),
 		                         artifact.Rodata().size(), artifact.Instructions().size());
+	}
+
+	std::optional<std::string> RegionFilePrefixFromRodataPath(const std::filesystem::path& rodataPath)
+	{
+		const auto filename = rodataPath.filename().string();
+		const std::string suffix = ".rodata.bin";
+		if (filename.size() <= suffix.size() || !filename.ends_with(suffix))
+		{
+			return std::nullopt;
+		}
+		return filename.substr(0, filename.size() - suffix.size());
+	}
+
+	std::optional<LiteNN::CompiledModuleSeparatedArtifact> TryLoadSeparatedImageRegions(
+	    const std::filesystem::path& rodataPath,
+	    const std::filesystem::path& instructionsPath)
+	{
+		const auto prefix = RegionFilePrefixFromRodataPath(rodataPath);
+		if (!prefix)
+		{
+			return std::nullopt;
+		}
+		const auto directory = rodataPath.parent_path();
+		const auto constantsPath = directory / (*prefix + ".constants.bin");
+		const auto weightsPath = directory / (*prefix + ".weights.bin");
+		if (!std::filesystem::exists(constantsPath) || !std::filesystem::exists(weightsPath))
+		{
+			return std::nullopt;
+		}
+
+		auto metadata = ReadAllBytes(rodataPath);
+		auto constants = ReadAllBytes(constantsPath);
+		auto weights = ReadAllBytes(weightsPath);
+		auto instructions = ReadAllBytes(instructionsPath);
+		try
+		{
+			return LiteNN::CompiledModuleSeparatedArtifact::CopyFromImage({
+			    .metadata = { .data = metadata.data(), .size = metadata.size() },
+			    .constants = { .data = constants.data(), .size = constants.size() },
+			    .weights = { .data = weights.data(), .size = weights.size() },
+			    .instructions = { .data = instructions.data(), .size = instructions.size() },
+			});
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
 	}
 
 	LiteNN::CompiledModuleArtifact LoadArtifactFromLibrary(const DynamicLibrary& library,
@@ -1619,9 +1735,49 @@ namespace
 		});
 	}
 
+	std::optional<LiteNN::CompiledModuleSeparatedArtifact> TryLoadSeparatedArtifactFromLibrary(
+	    const DynamicLibrary& library,
+	    std::string_view symbolPrefix)
+	{
+		const auto metadata = library.TryLookup(SymbolName(symbolPrefix, "_metadata"));
+		const auto metadataSize = library.TryLookup(SymbolName(symbolPrefix, "_metadata_size"));
+		if (!metadata || !metadataSize)
+		{
+			return std::nullopt;
+		}
+		return LiteNN::CompiledModuleSeparatedArtifact::FromExportedSymbols({
+		    .metadata = metadata,
+		    .metadataSize = metadataSize,
+		    .constants = library.Lookup(SymbolName(symbolPrefix, "_constants")),
+		    .constantsSize = library.Lookup(SymbolName(symbolPrefix, "_constants_size")),
+		    .weights = library.Lookup(SymbolName(symbolPrefix, "_weights")),
+		    .weightsSize = library.Lookup(SymbolName(symbolPrefix, "_weights_size")),
+		    .instructions = library.Lookup(SymbolName(symbolPrefix, "_instructions")),
+		    .instructionsSize = library.Lookup(SymbolName(symbolPrefix, "_instructions_size")),
+		});
+	}
+
 	void LoadDllAndRun(const std::filesystem::path& libraryPath, std::string_view symbolPrefix)
 	{
 		DynamicLibrary library(libraryPath);
+		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
+		{
+			std::cout << std::format(
+			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
+			    " instructions={} bytes external_tensors={}\n",
+			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
+			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
+			    separated->ExternalTensorInfos().size())
+			          << std::flush;
+			auto module = separated->LoadBorrowedExternalRegions();
+			std::cout << std::format("Loaded separated carrier DLL {} backend={} input_count={} output_count={}\n",
+			                         libraryPath.string(), BackendName(module.Backend()), module.InputSpecs().size(),
+			                         module.OutputSpecs().size())
+			          << std::flush;
+			RunZeroInputsAndPrint(module);
+			return;
+		}
+
 		auto artifact = LoadArtifactFromLibrary(library, symbolPrefix);
 		std::cout << std::format("Loaded carrier image {} backend={} rodata={} bytes instructions={} bytes\n",
 		                         libraryPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1641,6 +1797,26 @@ namespace
 	                             const std::optional<std::filesystem::path>& outputPath)
 	{
 		DynamicLibrary library(libraryPath);
+		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
+		{
+			std::cout << std::format(
+			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
+			    " instructions={} bytes external_tensors={}\n",
+			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
+			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
+			    separated->ExternalTensorInfos().size())
+			          << std::flush;
+			auto module = separated->LoadBorrowedExternalRegions();
+			std::cout << std::format("Loaded separated carrier DLL {} backend={} input_count={} output_count={}\n",
+			                         libraryPath.string(), BackendName(module.Backend()), module.InputSpecs().size(),
+			                         module.OutputSpecs().size())
+			          << std::flush;
+			auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
+			auto outputs = RunInputsAndPrint(module, inputs);
+			WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+			return;
+		}
+
 		auto artifact = LoadArtifactFromLibrary(library, symbolPrefix);
 		std::cout << std::format("Loaded carrier image {} backend={} rodata={} bytes instructions={} bytes\n",
 		                         libraryPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1661,6 +1837,22 @@ namespace
 	                               const std::filesystem::path& inputPath,
 	                               const std::optional<std::filesystem::path>& outputPath)
 	{
+		if (auto separated = TryLoadSeparatedImageRegions(rodataPath, instructionsPath))
+		{
+			auto module = separated->Load();
+			std::cout << std::format(
+			    "Loaded separated image regions metadata={} instructions={} backend={} input_count={} output_count={}"
+			    " constants={} bytes weights={} bytes external_tensors={}\n",
+			    rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+			    module.InputSpecs().size(), module.OutputSpecs().size(), separated->Constants().size(),
+			    separated->Weights().size(), separated->ExternalTensorInfos().size())
+			          << std::flush;
+			auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
+			auto outputs = RunInputsAndPrint(module, inputs);
+			WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+			return;
+		}
+
 		auto rodata = ReadAllBytes(rodataPath);
 		auto instructions = ReadAllBytes(instructionsPath);
 		auto module = LiteNN::CompiledModule<LiteNN::CPU>::Load({
@@ -1785,6 +1977,20 @@ namespace
 	                 const EulerSamplerOptions& options)
 	{
 		DynamicLibrary library(libraryPath);
+		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
+		{
+			std::cout << std::format(
+			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
+			    " instructions={} bytes external_tensors={}\n",
+			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
+			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
+			    separated->ExternalTensorInfos().size())
+			          << std::flush;
+			auto module = separated->LoadBorrowedExternalRegions();
+			SampleEulerModule(module, libraryPath.string(), options);
+			return;
+		}
+
 		auto artifact = LoadArtifactFromLibrary(library, symbolPrefix);
 		std::cout << std::format("Loaded carrier image {} backend={} rodata={} bytes instructions={} bytes\n",
 		                         libraryPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1798,6 +2004,20 @@ namespace
 	                      const std::filesystem::path& instructionsPath,
 	                      const EulerSamplerOptions& options)
 	{
+		if (auto separated = TryLoadSeparatedImageRegions(rodataPath, instructionsPath))
+		{
+			auto module = separated->Load();
+			std::cout << std::format(
+			    "Loaded separated image regions metadata={} instructions={} backend={} input_count={} output_count={}"
+			    " constants={} bytes weights={} bytes external_tensors={}\n",
+			    rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+			    module.InputSpecs().size(), module.OutputSpecs().size(), separated->Constants().size(),
+			    separated->Weights().size(), separated->ExternalTensorInfos().size())
+			          << std::flush;
+			SampleEulerModule(module, rodataPath.string(), options);
+			return;
+		}
+
 		auto rodata = ReadAllBytes(rodataPath);
 		auto instructions = ReadAllBytes(instructionsPath);
 		auto module = LiteNN::CompiledModule<LiteNN::CPU>::Load({

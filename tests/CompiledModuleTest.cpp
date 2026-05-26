@@ -152,6 +152,76 @@ namespace
 		return graph;
 	}
 
+	Graph BuildCallExternalRegionGraph()
+	{
+		Graph graph;
+		const auto scaleIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "call.scale.weight");
+
+		Subgraph callee;
+		const auto calleeInput = callee.AddParam(DataType::Float32, { 2, 2 });
+		const auto scale =
+		    callee.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto scaled = callee.AddNode(BinaryOpNode{ BinaryOp::Multiply, { calleeInput, 0 }, { scale, 0 } },
+		                                   { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto biasTensor = Tensor<CPU>({ 0.125, -0.25 }, { 1, 2 }, DataType::Float32);
+		const auto bias = callee.AddNode(ConstantNode{ biasTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                 { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto output = callee.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { bias, 0 } },
+		                                   { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		callee.SetResults({ { output, 0 } });
+		const auto calleeId = graph.AddSubgraph(std::move(callee));
+
+		Subgraph forward;
+		const auto input = forward.AddParam(DataType::Float32, { 2, 2 });
+		const auto call = forward.AddNode(CallNode{ calleeId, { { input, 0 } } },
+		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		forward.SetResults({ { call, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
+	Graph BuildCondExternalRegionGraph()
+	{
+		Graph graph;
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 2.0, -0.5 }, { 2 }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "cond.scale.weight");
+
+		Subgraph thenBranch;
+		const auto thenInput = thenBranch.AddParam(DataType::Float32, { 2 });
+		const auto scale =
+		    thenBranch.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto thenOutput = thenBranch.AddNode(BinaryOpNode{ BinaryOp::Multiply, { thenInput, 0 }, { scale, 0 } },
+		                                           { OutputInfo{ DataType::Float32, { 2 } } });
+		thenBranch.SetResults({ { thenOutput, 0 } });
+		const auto thenId = graph.AddSubgraph(std::move(thenBranch));
+
+		Subgraph elseBranch;
+		const auto elseInput = elseBranch.AddParam(DataType::Float32, { 2 });
+		const auto offsetTensor = Tensor<CPU>({ 0.25, 0.75 }, { 2 }, DataType::Float32);
+		const auto offset = elseBranch.AddNode(ConstantNode{ offsetTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                       { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto elseOutput = elseBranch.AddNode(BinaryOpNode{ BinaryOp::Add, { elseInput, 0 }, { offset, 0 } },
+		                                           { OutputInfo{ DataType::Float32, { 2 } } });
+		elseBranch.SetResults({ { elseOutput, 0 } });
+		const auto elseId = graph.AddSubgraph(std::move(elseBranch));
+
+		Subgraph forward;
+		const auto cond = forward.AddParam(DataType::Bool, { 1 });
+		const auto input = forward.AddParam(DataType::Float32, { 2 });
+		const auto selected = forward.AddNode(CondNode{ { cond, 0 }, thenId, elseId, { { input, 0 } } },
+		                                      { OutputInfo{ DataType::Float32, { 2 } } });
+		forward.SetResults({ { selected, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+		graph.SetInputNames({ "condition", "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildQuantizedConstantOutputGraph()
 	{
 		Graph graph;
@@ -1838,6 +1908,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 {
 	CompilerOptions options;
 	options.enableCPUAOTExternalRegions = true;
+	options.cpuAOTExternalConstantMinBytes = 0;
 
 	auto graph = BuildGenericExternalRegionGraph();
 	std::array<Tensor<CPU>, 1> inputs = {
@@ -1845,6 +1916,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 	};
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	auto inlineModule = Compiler<CPU>::CompileArtifact(graph).Load();
+	const auto inlineOutputs = inlineModule.Run(std::span<const Tensor<CPU>>(inputs));
 
 	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
 	auto separated = artifact.SeparateRodata();
@@ -1866,6 +1939,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 		ASSERT_EQ(expected.size(), 1u);
 		ExpectTensorNear(outputs[0], expected[0], 1e-5f);
+		ASSERT_EQ(inlineOutputs.size(), 1u);
+		ExpectTensorNear(outputs[0], inlineOutputs[0], 1e-5f);
 	};
 
 	auto direct = artifact.Load();
@@ -1881,6 +1956,105 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 	borrowedImage.weights = { .data = borrowedWeights.data(), .size = borrowedWeights.size() };
 	auto borrowedLoaded = CompiledModule<CPU>::LoadBorrowedExternalRegions(borrowedImage);
 	runAndCheck(borrowedLoaded);
+}
+
+TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+
+	auto graph = BuildGenericExternalRegionGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+
+	EXPECT_EQ(separated.Constants().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_EQ(externalInfos.size(), 1u);
+	EXPECT_EQ(externalInfos[0].name, "scale.weight");
+	EXPECT_EQ(externalInfos[0].region, "weights");
+	EXPECT_EQ(externalInfos[0].shape, (std::vector<std::size_t>{ 2, 2 }));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
+	};
+	auto inlineModule = Compiler<CPU>::CompileArtifact(graph).Load();
+	auto externalModule = artifact.Load();
+	const auto inlineOutputs = inlineModule.Run(std::span<const Tensor<CPU>>(inputs));
+	const auto externalOutputs = externalModule.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(inlineOutputs.size(), 1u);
+	ASSERT_EQ(externalOutputs.size(), 1u);
+	ExpectTensorNear(externalOutputs[0], inlineOutputs[0], 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.cpuAOTExternalConstantMinBytes = 0;
+
+	auto graph = BuildCallExternalRegionGraph();
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.Constants().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_EQ(externalInfos.size(), 2u);
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name == "call.scale.weight" && info.region == "weights";
+	}));
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name.starts_with("constant_") && info.region == "constants";
+	}));
+
+	auto module = artifact.Load();
+	const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(outputs.size(), expected.size());
+	ExpectTensorNear(outputs[0], expected[0], 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.cpuAOTExternalConstantMinBytes = 0;
+
+	auto graph = BuildCondExternalRegionGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.Constants().size(), 0u);
+	ASSERT_GT(separated.Weights().size(), 0u);
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_EQ(externalInfos.size(), 2u);
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name == "cond.scale.weight" && info.region == "weights";
+	}));
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name.starts_with("constant_") && info.region == "constants";
+	}));
+
+	auto module = artifact.Load();
+	Runtime::Interpreter<CPU> interpreter;
+	const auto runAndCheck = [&](Tensor<CPU> condition) {
+		std::array<Tensor<CPU>, 2> inputs = {
+			std::move(condition),
+			Tensor<CPU>({ 1.5, -2.0 }, { 2 }, DataType::Float32),
+		};
+		const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+		ASSERT_EQ(outputs.size(), expected.size());
+		ExpectTensorNear(outputs[0], expected[0], 1e-5f);
+	};
+
+	runAndCheck(Tensor<CPU>({ 1.0 }, { 1 }, DataType::Bool));
+	runAndCheck(Tensor<CPU>({ 0.0 }, { 1 }, DataType::Bool));
 }
 
 TEST(CompiledModuleTest, CPUParallelLinearChainAcceptsLegacyExternalConstantsEnvVar)
