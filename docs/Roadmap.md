@@ -1107,9 +1107,91 @@ Phase 2: decode and write an image.
       Torch manifest 默认导入 frozen variables，不再为推理权重分配同尺寸 grad storage；CPU AOT external-region
       构建改为直接从 CPU tensor 写入外置 region，避免 payload 临时 vector 的整份二次复制。`sdxl_prompt_to_image.py`
       还新增 `--max-unet-weight-mib` 预检，默认在超大 full UNet manifest 进入 import/compile 前失败，避免再次
-      触发长时间高内存运行；大内存主机可显式传 `--max-unet-weight-mib 0` 关闭保护。）
+      触发长时间高内存运行；大内存主机可显式传 `--max-unet-weight-mib 0` 关闭保护。
+      2026-05-28 追踪：full64 BF16 `unet-full-fixed` 已可通过 separated image regions 完成 CPU AOT
+      编译、加载、1-step/4-step Euler denoise 和 VAE decode；输出 PNG
+      `build\sdxl_bf16_full64\1girl_bf16_64_4step.png` 非空但仍不具备可接受语义质量。F16 full UNet 在
+      zero latent 下仍输出 NaN，说明下一步需要 mixed-precision accumulation / per-node finite diagnostics，而不是
+      单纯调整初始噪声。）
 
-Phase 3: make LiteNN own the full prompt path.
+Phase 3: unblock full semantic image generation.
+
+- [x] Add a model-level external-weight format so imported Torch/SDXL `.ltnn` graphs can reference a sibling weight
+      payload instead of embedding multi-GiB variable tensors inline.
+      - [x] Serialize variable metadata separately from payload bytes, including dtype, shape, quantization metadata,
+            grad-storage flag, external filename, byte offset, byte size, and alignment.
+      - [x] Load external weights relative to the `.ltnn` file, keep the backing bytes owned by the `Graph`, and expose
+            borrowed frozen CPU tensors to existing interpreter/compiler code.
+            （已加固：large external weight files are read in bounded chunks; the 64x64 full UNet F16
+            `unet.weights.bin` load path now handles a 5,134,927,424 byte sibling weights file without relying on one
+            giant `istream::read` call.）
+      - [x] Add `--import-external-weights` or an equivalent SDXL import option that writes `<graph>.ltnn` plus a sibling
+            weights file without recording private checkpoint paths.
+      - [x] Make all SDXL compile/run entry points load both inline and external-weight `.ltnn` files transparently.
+      - [x] Add tests proving external-weight models round-trip, run through the interpreter, and compile through CPU AOT
+            external regions without re-inlining the payload.
+      （已完成：model format v21 adds inline/external variable payload records; `SaveModelExternalWeights`
+      writes sibling `.weights.bin` payloads with relative paths, `LoadModel` owns external bytes in `Graph` and
+      exposes borrowed CPU tensors, `example/sdxl --import --external-weights` plus
+      `sdxl_prompt_to_image.py` default to sibling weight files, and ModelIO/CPU AOT tests cover round-trip,
+      interpreter run, and external-region compilation after load.）
+- [ ] Prove full UNet correctness before chasing image quality.
+      - [x] Run one `unet-full-fixed` 64x64 single-step denoise through LiteNN with fixed seed,
+            timestep/sigma, CFG convention, and exported conditioning.
+      - [ ] Run one `unet-full-fixed` 64x64 single-step denoise against Stability-AI/generative-models with fixed seed,
+            timestep/sigma, CFG convention, and exported conditioning.
+      - [ ] Add tensor-level comparison for `noise_pred`, final latent after one Euler step, and VAE decoded image.
+      - [ ] Record tolerances separately for F32, F16, and BF16 imports.
+- [ ] Make full UNet compilation practical.
+      - [x] Profile coarse CPU AOT compile phases after model-level external weights are enabled.
+            （已完成首轮阶段定位：full64 F16 O3/O1 均卡在 LLVM module optimization；O0 跳过 module opt 后
+            F16 codegen 约 172.6s、object emit 约 120.7s，BF16 codegen 约 115.4s、object emit 约 79.2s。）
+      - [x] Avoid MLIR/LLVM IR constants for large weights and keep them as runtime external region arguments through
+            lowering.
+            （已完成当前 CPU AOT 路径：SDXL example no longer relies on environment variables for this behavior;
+            its compile/run/benchmark entry points build explicit `CompilerOptions` with
+            `enableCPUAOTExternalRegions=true`, so VariableRef weights are rewritten to hidden runtime parameters
+            before GraphToMLIR and enter separated weight regions instead of DenseElementsAttr/LLVM globals.）
+      - [x] Add explicit CPU AOT LLVM opt-level control for SDXL-sized compile experiments.
+            （已完成：`CompilerOptions::cpuAOTLLVMOptLevel` defaults to O3 for the library, while the SDXL example
+            defaults image-region compilation to O0 and exposes `--cpu-aot-llvm-opt-level 0|1|2|3` through the CLI
+            and prompt harness.）
+      - [x] Remove avoidable multi-GiB copies in separated image-region write/load paths.
+            （已完成：`CompiledModuleArtifact::BuildSeparatedMetadata()` plus constants/weights spans let tools write
+            separated regions without constructing a second 5GB `CompiledModuleSeparatedArtifact`; image-region loading
+            can move owned vectors into `CompiledModuleSeparatedArtifact::FromOwnedRegions(...)` and use borrowed
+            external regions for execution. Large reads/writes are chunked.）
+      - [ ] Split or cache full UNet compilation units if one monolithic module still exceeds interactive memory/time.
+      - [x] Add compile-time budget diagnostics that report expected model payload, MLIR op count, instruction bytes,
+            and external region bytes before codegen starts.
+            （已完成首批预算诊断：`EstimateCompileBudget` reports subgraph/node/variable/constant counts,
+            variable/constant/qconstant payload bytes, projected inline MLIR payload, and projected external
+            constants/weights; SDXL example prints this before compile/run/benchmark. Instruction bytes are reported
+            after object emission as before. `--compile-budget` can print the same estimate without invoking MLIR/LLVM.
+            Local full64 F16 UNet validation: `unet.ltnn` is 757,293 bytes, sibling `unet.weights.bin` is
+            5,134,927,424 bytes, and compile budget reports 7,153 nodes, 1,680 variables, 667 constants,
+            4,897.05 MiB projected external weights, and only 1,334 bytes projected inline MLIR payload.）
+      - [ ] Add mixed-precision accumulation policy for F16 SDXL graphs.
+            （当前风险：full64 F16 denoise 在 zero latent 下仍产生 NaN；BF16 不产生 NaN。优先排查
+            attention/MatMul/Conv/normalization 的 F16 accumulation 与 finite diagnostics。）
+- [ ] Bring CUDA/native execution to the SDXL critical path.
+      - [ ] Cover full UNet op set on CUDA native/AOT: Conv2D, GroupNorm/LayerNorm, Linear/MatMul, BatchMatMul,
+            Softmax, SpatialTransformer, GEGLU, Concat, Slice, Reshape, Permute, Upsample, and scalar scheduler ops.
+      - [ ] Implement memory-efficient or tiled attention for UNet SpatialTransformer and VAE mid-attention instead of
+            dense 1024x1024 score tensors.
+      - [ ] Validate separated constants/weights for CUDA artifacts and document whether CUDA needs the same external
+            region ABI as CPU.
+- [ ] Complete image-level validation.
+      - [ ] Generate 64x64 and 1024x1024 `1girl` outputs with full UNet, save PNG plus raw safetensors artifacts, and
+            inspect/read the resulting image before marking the target complete.
+            （进展：已生成并读取 `build\sdxl_bf16_full64\1girl_bf16_64.png` 和
+            `build\sdxl_bf16_full64\1girl_bf16_64_4step.png`；两者非空且通道范围正常，但 4-step 64x64 结果仍是
+            抽象色块，不能标记为语义正确。）
+      - [ ] Compare against the reference runtime at fixed seed/prompt by tensor statistics, image statistics, and
+            perceptual/manual inspection path.
+      - [ ] Keep the smoke pipeline as a fast CI/dev check, but clearly label it as non-semantic.
+
+Phase 4: make LiteNN own the full prompt path.
 
 - [x] Import CLIP/OpenCLIP text encoder graphs and tokenizers or provide a stable ONNX/torch-export bridge into the
       Torch manifest layer.

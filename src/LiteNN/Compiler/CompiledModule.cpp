@@ -62,6 +62,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -70,12 +71,14 @@
 #include <exception>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -119,6 +122,36 @@ namespace
 	bool IsCPUExternalRegionsEnabled(const CompilerOptions& options)
 	{
 		return options.enableCPUAOTExternalRegions;
+	}
+
+	void LogCompileDiagnostic(const CompilerOptions& options, std::string_view message)
+	{
+		if (options.enableCompileDiagnostics)
+		{
+			std::cerr << "[LiteNN compile] " << message << '\n' << std::flush;
+		}
+	}
+
+	template <typename F>
+	auto TimedCompileDiagnostic(const CompilerOptions& options, std::string_view label, F&& f)
+	{
+		LogCompileDiagnostic(options, std::string(label) + "...");
+		const auto begin = std::chrono::steady_clock::now();
+		if constexpr (std::is_void_v<std::invoke_result_t<F>>)
+		{
+			std::forward<F>(f)();
+			const auto elapsed =
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+			LogCompileDiagnostic(options, std::format("{}: ok {:.3f} ms", label, elapsed));
+		}
+		else
+		{
+			auto result = std::forward<F>(f)();
+			const auto elapsed =
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+			LogCompileDiagnostic(options, std::format("{}: ok {:.3f} ms", label, elapsed));
+			return result;
+		}
 	}
 
 	thread_local const void* tCPUExternalConstants = nullptr;
@@ -532,8 +565,28 @@ namespace
 		module.setDataLayout(config.targetMachine->createDataLayout());
 	}
 
-	void OptimizeLLVMModule(llvm::Module& module, llvm::TargetMachine& targetMachine)
+	llvm::OptimizationLevel ToLLVMOptimizationLevel(std::uint8_t level)
 	{
+		switch (std::min<std::uint8_t>(level, 3))
+		{
+		case 0:
+			return llvm::OptimizationLevel::O0;
+		case 1:
+			return llvm::OptimizationLevel::O1;
+		case 2:
+			return llvm::OptimizationLevel::O2;
+		default:
+			return llvm::OptimizationLevel::O3;
+		}
+	}
+
+	void OptimizeLLVMModule(llvm::Module& module, llvm::TargetMachine& targetMachine, std::uint8_t optLevel)
+	{
+		if (optLevel == 0)
+		{
+			return;
+		}
+
 		llvm::LoopAnalysisManager loopAnalysisManager;
 		llvm::FunctionAnalysisManager functionAnalysisManager;
 		llvm::CGSCCAnalysisManager cgsccAnalysisManager;
@@ -547,7 +600,7 @@ namespace
 		passBuilder.crossRegisterProxies(loopAnalysisManager, functionAnalysisManager, cgsccAnalysisManager,
 		                                 moduleAnalysisManager);
 
-		auto modulePipeline = passBuilder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+		auto modulePipeline = passBuilder.buildPerModuleDefaultPipeline(ToLLVMOptimizationLevel(optLevel));
 		modulePipeline.run(module, moduleAnalysisManager);
 	}
 
@@ -2356,7 +2409,7 @@ namespace
 		const auto outputSpecs = BuildOutputSpecs(graph);
 		auto config = CreateNativeTargetMachine();
 		ConfigureForNativeObject(*module, config);
-		OptimizeLLVMModule(*module, *config.targetMachine);
+		OptimizeLLVMModule(*module, *config.targetMachine, options.cpuAOTLLVMOptLevel);
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*module);
 		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), std::move(externalWeights),
@@ -3079,16 +3132,25 @@ namespace
 	void WriteAllBytes(const std::filesystem::path& path, std::span<const std::byte> bytes)
 	{
 		std::ofstream out(path, std::ios::binary);
-		if (!out)
-		{
-			throw std::runtime_error("Failed to open output object file");
-		}
-		out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+	if (!out)
+	{
+		throw std::runtime_error("Failed to open output object file");
+	}
+	constexpr std::size_t kChunkBytes = 64ull * 1024ull * 1024ull;
+	std::size_t offset = 0;
+	while (offset < bytes.size())
+	{
+		const auto remaining = bytes.size() - offset;
+		const auto chunk = std::min(remaining, kChunkBytes);
+		out.write(reinterpret_cast<const char*>(bytes.data() + static_cast<std::ptrdiff_t>(offset)),
+		          static_cast<std::streamsize>(chunk));
 		if (!out)
 		{
 			throw std::runtime_error("Failed to write output object file");
 		}
+		offset += chunk;
 	}
+}
 
 	std::optional<std::size_t> FindSpecIndex(std::span<const CompiledTensorSpec> specs, std::string_view name)
 	{
@@ -5695,34 +5757,52 @@ namespace
 			return std::nullopt;
 		}
 
-		auto externalized = BuildCPUMLIRExternalizedGraph(graph, options);
+		auto externalized = TimedCompileDiagnostic(options, "cpu-mlir externalize graph",
+		                                           [&] { return BuildCPUMLIRExternalizedGraph(graph, options); });
 		if (!externalized)
 		{
+			LogCompileDiagnostic(options, "cpu-mlir externalize graph: unsupported, falling back");
 			return std::nullopt;
 		}
+		LogCompileDiagnostic(options,
+		                     std::format("cpu-mlir external regions: constants={} bytes weights={} bytes tensors={}",
+		                                 externalized->constants.size(), externalized->weights.size(),
+		                                 externalized->externalTensorInfos.size()));
 
 		mlir::MLIRContext ctx;
-		SetupCompilerMLIRContext(ctx);
-		auto mlirModule = BuildLoweredMLIRModule(externalized->graph, ctx);
+		TimedCompileDiagnostic(options, "cpu-mlir setup context", [&] { SetupCompilerMLIRContext(ctx); });
+		auto mlirModule = TimedCompileDiagnostic(options, "cpu-mlir build/lower module",
+		                                         [&] { return BuildLoweredMLIRModule(externalized->graph, ctx); });
 
 		llvm::LLVMContext llvmCtx;
-		auto llvmModule = litenn::translateToLLVMIR(*mlirModule, llvmCtx);
+		auto llvmModule = TimedCompileDiagnostic(options, "cpu-mlir translate to LLVM IR",
+		                                         [&] { return litenn::translateToLLVMIR(*mlirModule, llvmCtx); });
 		if (!llvmModule)
 		{
 			throw std::runtime_error("Failed to translate externalized LiteNN MLIR module to LLVM IR");
 		}
 
-		auto config = CreateNativeTargetMachine();
-		ConfigureForNativeObject(*llvmModule, config);
+		auto config = TimedCompileDiagnostic(options, "cpu-aot create target machine",
+		                                     [&] { return CreateNativeTargetMachine(); });
+		TimedCompileDiagnostic(options, "cpu-aot configure module",
+		                       [&] { ConfigureForNativeObject(*llvmModule, config); });
 
-		auto inputSpecs = BuildInputSpecs(graph);
-		auto outputSpecs = BuildOutputSpecs(graph);
-		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
-		                       externalized->entryExternalTensorInfos);
-		OptimizeLLVMModule(*llvmModule, *config.targetMachine);
+		auto inputSpecs =
+		    TimedCompileDiagnostic(options, "cpu-aot build input specs", [&] { return BuildInputSpecs(graph); });
+		auto outputSpecs =
+		    TimedCompileDiagnostic(options, "cpu-aot build output specs", [&] { return BuildOutputSpecs(graph); });
+		TimedCompileDiagnostic(options, "cpu-aot add uniform entry wrapper", [&] {
+			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
+			                       externalized->entryExternalTensorInfos);
+		});
+		TimedCompileDiagnostic(options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
+		                       [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
 
-		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
-		auto instructions = EmitObjectFile(*llvmModule);
+		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
+			return SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		});
+		auto instructions =
+		    TimedCompileDiagnostic(options, "cpu-aot emit object file", [&] { return EmitObjectFile(*llvmModule); });
 		return CompiledArtifactParts{ std::move(rodata),
 			                          std::move(instructions),
 			                          std::move(externalized->constants),
@@ -5789,6 +5869,10 @@ CompilerOptions CompilerOptions::FromEnvironment()
 	{
 		options.cpuAOTExternalConstantMinBytes = *minConstantBytes;
 	}
+	if (const auto optLevel = ParseU64Env("LITENN_CPU_AOT_LLVM_OPT_LEVEL"))
+	{
+		options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
+	}
 	options.enableCPUAOTExternalRegions =
 	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
 	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
@@ -5801,6 +5885,80 @@ CompilerOptions CompilerOptions::FromEnvironment()
 		options.enableCUDANativeAOT = false;
 	}
 	return options;
+}
+
+CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const CompilerOptions& options)
+{
+	CompileBudgetEstimate estimate;
+	estimate.subgraphCount = graph.SubgraphCount();
+	estimate.variableCount = graph.VariableCount();
+	estimate.cpuAOTExternalRegionsEnabled = options.enableCPUAOTExternalRegions;
+
+	for (const auto& variable : graph.Variables())
+	{
+		const auto byteSize = static_cast<std::uint64_t>(variable->Data().NumElements()) *
+		                      LiteNN::ElementByteSize(variable->Data().DType());
+		estimate.variablePayloadBytes = SaturatedAddU64(estimate.variablePayloadBytes, byteSize);
+		if (options.enableCPUAOTExternalRegions)
+		{
+			estimate.projectedExternalWeightBytes = SaturatedAddU64(estimate.projectedExternalWeightBytes, byteSize);
+		}
+		else
+		{
+			estimate.projectedInlineMLIRPayloadBytes =
+			    SaturatedAddU64(estimate.projectedInlineMLIRPayloadBytes, byteSize);
+		}
+	}
+
+	for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+	{
+		const auto& subgraph = graph.GetSubgraph(subgraphId);
+		estimate.nodeCount += subgraph.NodeCount();
+		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		{
+			const auto& entry = subgraph.GetNodeEntry(nodeId);
+			std::visit(
+			    [&](const auto& node) {
+				    using T = std::decay_t<decltype(node)>;
+				    if constexpr (std::same_as<T, VariableRefNode>)
+				    {
+					    ++estimate.variableRefNodeCount;
+				    }
+				    else if constexpr (std::same_as<T, ConstantNode>)
+				    {
+					    ++estimate.constantNodeCount;
+					    const auto byteSize =
+					        static_cast<std::uint64_t>(node.value.NumElements()) * LiteNN::ElementByteSize(node.value.DType());
+					    estimate.constantPayloadBytes = SaturatedAddU64(estimate.constantPayloadBytes, byteSize);
+					    const bool externalized = options.enableCPUAOTExternalRegions &&
+					                              CanExternalizeCPUTensorInMLIR(node.value.DType()) &&
+					                              byteSize >= options.cpuAOTExternalConstantMinBytes;
+					    if (externalized)
+					    {
+						    estimate.projectedExternalConstantBytes =
+						        SaturatedAddU64(estimate.projectedExternalConstantBytes, byteSize);
+					    }
+					    else
+					    {
+						    estimate.projectedInlineMLIRPayloadBytes =
+						        SaturatedAddU64(estimate.projectedInlineMLIRPayloadBytes, byteSize);
+					    }
+				    }
+				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    {
+					    ++estimate.quantizedConstantNodeCount;
+					    const auto byteSize = static_cast<std::uint64_t>(node.storage.NumElements()) *
+					                          LiteNN::ElementByteSize(node.storage.DType());
+					    estimate.quantizedConstantPayloadBytes =
+					        SaturatedAddU64(estimate.quantizedConstantPayloadBytes, byteSize);
+					    estimate.projectedInlineMLIRPayloadBytes =
+					        SaturatedAddU64(estimate.projectedInlineMLIRPayloadBytes, byteSize);
+				    }
+			    },
+			    entry.node);
+		}
+	}
+	return estimate;
 }
 
 CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
@@ -5827,6 +5985,24 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::CopyFromImage(C
 	    std::move(separatedMetadata.legacyMetadata.inputSpecs),
 	    std::move(separatedMetadata.legacyMetadata.outputSpecs),
 	    separatedMetadata.legacyMetadata.backend);
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegions(std::vector<std::byte> metadata,
+                                                                                  std::vector<std::byte> constants,
+                                                                                  std::vector<std::byte> weights,
+                                                                                  std::vector<std::byte> instructions)
+{
+	auto separatedMetadata = ValidateSeparatedImage({
+	    .metadata = { .data = metadata.data(), .size = metadata.size() },
+	    .constants = { .data = constants.data(), .size = constants.size() },
+	    .weights = { .data = weights.data(), .size = weights.size() },
+	    .instructions = { .data = instructions.data(), .size = instructions.size() },
+	});
+	return CompiledModuleSeparatedArtifact(std::move(metadata), std::move(constants), std::move(weights),
+	                                       std::move(instructions),
+	                                       std::move(separatedMetadata.legacyMetadata.inputSpecs),
+	                                       std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	                                       separatedMetadata.legacyMetadata.backend);
 }
 
 CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromExportedSymbols(
@@ -6097,6 +6273,16 @@ std::span<const std::byte> CompiledModuleArtifact::Instructions() const
 	return instructions_;
 }
 
+std::span<const std::byte> CompiledModuleArtifact::Constants() const
+{
+	return constants_;
+}
+
+std::span<const std::byte> CompiledModuleArtifact::Weights() const
+{
+	return weights_;
+}
+
 std::span<const CompiledTensorSpec> CompiledModuleArtifact::InputSpecs() const
 {
 	return inputSpecs_;
@@ -6112,6 +6298,11 @@ CompiledModuleBackend CompiledModuleArtifact::Backend() const
 	return backend_;
 }
 
+std::span<const CompiledModuleExternalTensorInfo> CompiledModuleArtifact::ExternalTensorInfos() const
+{
+	return externalTensorInfos_;
+}
+
 std::optional<std::size_t> CompiledModuleArtifact::FindInput(std::string_view name) const
 {
 	return FindSpecIndex(inputSpecs_, name);
@@ -6120,6 +6311,11 @@ std::optional<std::size_t> CompiledModuleArtifact::FindInput(std::string_view na
 std::optional<std::size_t> CompiledModuleArtifact::FindOutput(std::string_view name) const
 {
 	return FindSpecIndex(outputSpecs_, name);
+}
+
+std::vector<std::byte> CompiledModuleArtifact::BuildSeparatedMetadata() const
+{
+	return SerializeSeparatedMetadata(rodata_, constants_, weights_, instructions_, externalTensorInfos_);
 }
 
 void CompiledModuleArtifact::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
@@ -6851,7 +7047,7 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph, const 
 	const auto inputSpecs = BuildInputSpecs(graph);
 	const auto outputSpecs = BuildOutputSpecs(graph);
 	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
-	OptimizeLLVMModule(*llvmModule, *config.targetMachine);
+	OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel);
 
 	auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 	auto instructions = EmitObjectFile(*llvmModule);

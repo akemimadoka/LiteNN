@@ -292,10 +292,11 @@ struct Pass {
 `CompiledModule<CPU>` 是当前 CPU 原生 AOT 运行时封装；`CompiledModule<CUDA>` 采用 native 优先、bridge fallback：可直接加载 `CUDANative` payload 运行 CUDA kernel；不支持 native codegen 的图仍用 CUDA Tensor 作为公开输入/输出边界，内部复用 CPU AOT image/JIT 执行。
 
 - `Compiler<CPU>::CompileArtifact(graph)` 生成拥有 rodata/native object bytes 的 `CompiledModuleArtifact`；这是编译期的稳定产物层，可用于写 carrier object 或延后加载
-- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、parallel min-FLOPs、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库默认编译路径不直接读取环境变量，CLI/benchmark/example 可用 `CompilerOptions::FromEnvironment()` 将环境变量转成配置
+- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、parallel min-FLOPs、LLVM opt level、编译阶段诊断、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库默认编译路径不直接读取环境变量，CLI/benchmark/example 可用 `CompilerOptions::FromEnvironment()` 将环境变量转成配置
 - `Compiler<CPU>::Compile(graph)` 保留为便捷接口，等价于 `CompileArtifact(graph).Load()`
 - `Compiler<CUDA>::CompileArtifact(graph)` 当前优先匹配静态 `Float32` elementwise Negate/Abs/Sqrt/Add/Subtract/Multiply/Divide、同 rank binary broadcast native PTX 和二维 `Float32` MatMul/cuBLAS library call；不匹配时复用 CPU artifact。`Compiler<CUDA>::Compile(graph, CUDA{})` 返回 `CompiledModule<CUDA>`，在 `Run` / `RunInto` / `RunManyInto` 中根据 backend 直接 launch CUDA kernel、调用 cuBLAS 或执行 CPU AOT bridge
 - `CompiledModuleArtifact::FromExportedSymbols(...)` 可从静态库/动态库导出的 `<prefix>_rodata{,_size}`、`<prefix>_instructions{,_size}` 符号恢复拥有型 artifact
+- `CompiledModuleArtifact::BuildSeparatedMetadata()` 与 `Constants()` / `Weights()` / `ExternalTensorInfos()` 可让工具直接写出 separated image regions，避免为了写文件再复制整份外置权重；`CompiledModuleSeparatedArtifact::FromOwnedRegions(...)` 用于从已读入的 metadata/constants/weights/instructions vectors 移动构造拥有型 artifact
 - `CompiledModule<CPU>::Load({rodata, instructions})` 会复制 image 数据并创建 JIT loader；调用方传入的 rodata/instruction 地址或 carrier library 在 `Load` 返回后即可释放/卸载
 - `CompiledModule<CUDA>::Load({rodata, instructions}, CUDA{})` 与 CPU loader 使用相同 image 生命周期规则；`CPUNative` instructions 是 CPU object bytes，`CUDANative` instructions 是 `CUDANativeInstructionPayload`（PTX/cubin/fatbin、feature flags、scalar data、launch table）
 - `CompiledModule<CPU>::LoadBorrowedExternalRegions(separatedImage)` 复制 metadata/instructions，但借用 separated constants/weights；调用方必须保证这些 region 覆盖每次 `Run`。`CompiledModule<CUDA>::LoadBorrowedExternalRegions(separatedImage, CUDA{})` 对 CPU bridge 复用该规则；CUDA native 会在 load 时把 host constants 上传到 device buffer，因此 host constants 只需活到 `Load` 返回。

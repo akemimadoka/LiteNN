@@ -117,10 +117,34 @@ namespace LiteNN
 		bool enableCPUAOTExternalRegionFusion{ true };
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };
+		/// LLVM optimization level for CPU AOT codegen. Values above 3 are clamped to 3.
+		std::uint8_t cpuAOTLLVMOptLevel{ 3 };
+		/// Print coarse compiler phase timing diagnostics to stderr.
+		bool enableCompileDiagnostics{};
 
 		static CompilerOptions Defaults();
 		static CompilerOptions FromEnvironment();
 	};
+
+	struct CompileBudgetEstimate
+	{
+		std::size_t subgraphCount{};
+		std::size_t nodeCount{};
+		std::size_t variableCount{};
+		std::size_t variableRefNodeCount{};
+		std::size_t constantNodeCount{};
+		std::size_t quantizedConstantNodeCount{};
+		std::uint64_t variablePayloadBytes{};
+		std::uint64_t constantPayloadBytes{};
+		std::uint64_t quantizedConstantPayloadBytes{};
+		std::uint64_t projectedInlineMLIRPayloadBytes{};
+		std::uint64_t projectedExternalConstantBytes{};
+		std::uint64_t projectedExternalWeightBytes{};
+		bool cpuAOTExternalRegionsEnabled{};
+	};
+
+	/// Estimate tensor payload pressure before invoking MLIR/LLVM code generation.
+	CompileBudgetEstimate EstimateCompileBudget(const Graph& graph, const CompilerOptions& options);
 
 	struct CompiledModuleInvocation
 	{
@@ -145,6 +169,10 @@ namespace LiteNN
 		~CompiledModuleSeparatedArtifact() = default;
 
 		static CompiledModuleSeparatedArtifact CopyFromImage(CompiledModuleSeparatedImage image);
+		static CompiledModuleSeparatedArtifact FromOwnedRegions(std::vector<std::byte> metadata,
+		                                                        std::vector<std::byte> constants,
+		                                                        std::vector<std::byte> weights,
+		                                                        std::vector<std::byte> instructions);
 		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
 
 		CompiledModule<CPU> Load() const;
@@ -226,11 +254,16 @@ namespace LiteNN
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;
 		std::span<const std::byte> Instructions() const;
+		std::span<const std::byte> Constants() const;
+		std::span<const std::byte> Weights() const;
 		std::span<const CompiledTensorSpec> InputSpecs() const;
 		std::span<const CompiledTensorSpec> OutputSpecs() const;
 		CompiledModuleBackend Backend() const;
+		std::span<const CompiledModuleExternalTensorInfo> ExternalTensorInfos() const;
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
+		/// Builds separated-image metadata for the artifact's current constant/weight regions.
+		std::vector<std::byte> BuildSeparatedMetadata() const;
 		CompiledModuleSeparatedArtifact SeparateRodata() const;
 
 		void WriteObjectFile(const std::filesystem::path& path,

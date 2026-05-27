@@ -183,6 +183,44 @@ TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 16.0f);
 }
 
+TEST(ModelIO, SaveLoadExternalWeightsKeepsVariablesAlive)
+{
+	auto graph = BuildLinearGraph();
+
+	const auto path = std::filesystem::path("litenn_modelio_external_weights_roundtrip_test.ltnn");
+	const auto weightsPath = std::filesystem::path("litenn_modelio_external_weights_roundtrip_test.weights.bin");
+	std::filesystem::remove(path);
+	std::filesystem::remove(weightsPath);
+	Serialization::ExternalWeightSaveOptions options;
+	options.minVariableBytes = 0;
+	options.alignment = 16;
+	Serialization::SaveModelExternalWeights(graph, path, weightsPath, options);
+
+	ASSERT_TRUE(std::filesystem::exists(path));
+	ASSERT_TRUE(std::filesystem::exists(weightsPath));
+	EXPECT_GT(std::filesystem::file_size(weightsPath), 0u);
+
+	auto loaded = Serialization::LoadModel(path);
+	std::filesystem::remove(path);
+	std::filesystem::remove(weightsPath);
+
+	ASSERT_EQ(loaded.VariableCount(), 2);
+	EXPECT_TRUE(loaded.GetVariable(0)->HasGradStorage());
+	EXPECT_TRUE(loaded.GetVariable(1)->HasGradStorage());
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 0), 1.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 0, 3), 4.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 1, 0), 5.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(loaded, 1, 1), 6.0f);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
+	const auto outputs = interpreter.RunForward(loaded, inputs);
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 16.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
+}
+
 TEST(ModelIO, SaveLoadPreservesVariableNamesAndMetadataForWeightArchive)
 {
 	Graph graph;

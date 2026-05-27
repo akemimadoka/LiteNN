@@ -104,6 +104,36 @@ def estimate_manifest_tensor_bytes(path: Path) -> int:
     return total
 
 
+def manifest_stats(path: Path) -> dict[str, int]:
+    root = json.loads(path.read_text(encoding="utf-8"))
+    tensors = root.get("tensors")
+    nodes = root.get("nodes")
+    inputs = root.get("inputs")
+    outputs = root.get("outputs")
+    tensor_count = len(tensors) if isinstance(tensors, list) else 0
+    node_count = len(nodes) if isinstance(nodes, list) else 0
+    input_count = len(inputs) if isinstance(inputs, list) else 0
+    output_count = len(outputs) if isinstance(outputs, list) else 0
+    return {
+        "tensor_count": tensor_count,
+        "node_count": node_count,
+        "input_count": input_count,
+        "output_count": output_count,
+        "tensor_bytes": estimate_manifest_tensor_bytes(path),
+    }
+
+
+def print_manifest_stats(path: Path, label: str) -> None:
+    stats = manifest_stats(path)
+    tensor_mib = stats["tensor_bytes"] / (1024.0 * 1024.0)
+    print(
+        f"{label} manifest: tensors={stats['tensor_count']} nodes={stats['node_count']} "
+        f"inputs={stats['input_count']} outputs={stats['output_count']} "
+        f"target_payload={tensor_mib:.1f} MiB",
+        flush=True,
+    )
+
+
 def enforce_manifest_budget(path: Path, label: str, budget_mib: int) -> None:
     if budget_mib <= 0:
         return
@@ -113,8 +143,8 @@ def enforce_manifest_budget(path: Path, label: str, budget_mib: int) -> None:
     if estimated_bytes > budget_mib * 1024 * 1024:
         raise RuntimeError(
             f"{label} manifest tensor payload estimate {estimated_mib:.1f} MiB exceeds "
-            f"--max-unet-weight-mib={budget_mib}. This path would materialize a very large .ltnn graph and "
-            "can drive CPU AOT memory into tens of GiB. Use the smoke probe, lower precision/quantization, "
+            f"--max-unet-weight-mib={budget_mib}. This path would import and compile very large weights and "
+            "can still drive CPU AOT memory into tens of GiB. Use the smoke probe, lower precision/quantization, "
             "or pass --max-unet-weight-mib 0 only when intentionally running the full compile on a large-memory host."
         )
 
@@ -155,9 +185,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-unet-weight-mib",
         default=2048,
         type=int,
-        help="Preflight budget for imported UNet tensor payloads; use 0 to disable the guard",
+        help="Preflight budget for imported UNet tensor payloads before AOT compile; use 0 to disable the guard",
+    )
+    parser.add_argument(
+        "--inline-model-weights",
+        action="store_true",
+        help="Embed imported tensor payloads in .ltnn instead of writing sibling .weights.bin files",
+    )
+    parser.add_argument(
+        "--external-weight-min-bytes",
+        default=0,
+        type=int,
+        help="Minimum variable payload size to place in external .weights.bin files",
     )
     parser.add_argument("--aot-load-mode", choices=["dll", "image-regions"], default="dll")
+    parser.add_argument(
+        "--cpu-aot-llvm-opt-level",
+        default=0,
+        type=int,
+        choices=[0, 1, 2, 3],
+        help="LLVM optimization level forwarded to litenn_sdxl_example image-region compilation",
+    )
     parser.add_argument(
         "--png-range",
         choices=["auto", "zero-one", "minus-one-one"],
@@ -170,6 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unet-symbol-prefix", default="litenn_sdxl_unet")
     parser.add_argument("--vae-symbol-prefix", default="litenn_sdxl_vae")
     parser.add_argument("--allow-pretrained-download", action="store_true")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Emit UNet/VAE manifests, print payload budgets, then stop before import or compile",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -184,6 +237,8 @@ def main() -> int:
         raise ValueError("--vae-attention-max-mib must be positive")
     if args.max_unet_weight_mib < 0:
         raise ValueError("--max-unet-weight-mib must be non-negative")
+    if args.external_weight_min_bytes < 0:
+        raise ValueError("--external-weight-min-bytes must be non-negative")
     conditioning_output_dtype = args.conditioning_output_dtype or args.unet_compute_dtype
 
     args.workdir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +250,8 @@ def main() -> int:
     vae_manifest = args.workdir / "vae_manifest.json"
     unet_graph = args.workdir / "unet.ltnn"
     vae_graph = args.workdir / "vae.ltnn"
+    unet_weights = args.workdir / "unet.weights.bin"
+    vae_weights = args.workdir / "vae.weights.bin"
     unet_obj = args.workdir / "unet.obj"
     vae_obj = args.workdir / "vae.obj"
     unet_library = library_path(args.workdir, "unet")
@@ -249,24 +306,72 @@ def main() -> int:
         str(args.width),
     ]
 
-    steps = [
-        ("export-conditioning", conditioning_command),
-        (
-            "emit-unet-manifest",
-            common_probe
-            + [
-                "--probe",
-                args.unet_probe,
-                "--compute-dtype",
-                args.unet_compute_dtype,
-                "--context-tokens",
-                str(args.context_tokens),
-                "--emit-probe-manifest",
-                str(unet_manifest),
-            ],
-        ),
-        ("import-unet", [str(args.exe), "--import", str(unet_manifest), str(args.checkpoint), str(unet_graph), "--allow-extra-tensors"]),
-    ]
+    unet_import_command = [str(args.exe), "--import", str(unet_manifest), str(args.checkpoint), str(unet_graph), "--allow-extra-tensors"]
+    vae_import_command = [str(args.exe), "--import", str(vae_manifest), str(args.checkpoint), str(vae_graph), "--allow-extra-tensors"]
+    if not args.inline_model_weights:
+        unet_import_command += [
+            "--external-weights",
+            str(unet_weights),
+            "--external-weight-min-bytes",
+            str(args.external_weight_min_bytes),
+        ]
+        vae_import_command += [
+            "--external-weights",
+            str(vae_weights),
+            "--external-weight-min-bytes",
+            str(args.external_weight_min_bytes),
+        ]
+
+    emit_unet_manifest_step = (
+        "emit-unet-manifest",
+        common_probe
+        + [
+            "--probe",
+            args.unet_probe,
+            "--compute-dtype",
+            args.unet_compute_dtype,
+            "--context-tokens",
+            str(args.context_tokens),
+            "--emit-probe-manifest",
+            str(unet_manifest),
+        ],
+    )
+    emit_vae_manifest_step = (
+        "emit-vae-manifest",
+        common_probe
+        + [
+            "--probe",
+            "vae-decode-full",
+            "--compute-dtype",
+            args.vae_compute_dtype,
+            "--vae-mid-attention-policy",
+            args.vae_mid_attention_policy,
+            "--vae-attention-max-mib",
+            str(args.vae_attention_max_mib),
+            "--emit-probe-manifest",
+            str(vae_manifest),
+        ],
+    )
+
+    if args.preflight_only:
+        steps = [emit_unet_manifest_step, emit_vae_manifest_step]
+    else:
+        steps = [
+            ("export-conditioning", conditioning_command),
+            emit_unet_manifest_step,
+            ("import-unet", unet_import_command),
+        ]
+
+    if args.preflight_only:
+        for name, command in steps:
+            run_step(name, command, dry_run=args.dry_run)
+            if not args.dry_run and name == "emit-unet-manifest":
+                print_manifest_stats(unet_manifest, "UNet")
+                enforce_manifest_budget(unet_manifest, "UNet", args.max_unet_weight_mib)
+            if not args.dry_run and name == "emit-vae-manifest":
+                print_manifest_stats(vae_manifest, "VAE")
+        print("\nPreflight complete; stopped before import, compile, denoise, decode, and PNG writing.", flush=True)
+        return 0
 
     denoise_options = [
         "--steps",
@@ -293,7 +398,15 @@ def main() -> int:
             [
                 (
                     "compile-unet-regions",
-                    [str(args.exe), "--compile-image-regions", str(unet_graph), str(unet_region_dir), args.unet_symbol_prefix],
+                    [
+                        str(args.exe),
+                        "--compile-image-regions",
+                        str(unet_graph),
+                        str(unet_region_dir),
+                        args.unet_symbol_prefix,
+                        "--cpu-aot-llvm-opt-level",
+                        str(args.cpu_aot_llvm_opt_level),
+                    ],
                 ),
                 (
                     "denoise-latent",
@@ -329,34 +442,28 @@ def main() -> int:
             ]
         )
 
-    steps.extend(
-        [
-        (
-            "emit-vae-manifest",
-            common_probe
-            + [
-                "--probe",
-                "vae-decode-full",
-                "--compute-dtype",
-                args.vae_compute_dtype,
-                "--vae-mid-attention-policy",
-                args.vae_mid_attention_policy,
-                "--vae-attention-max-mib",
-                str(args.vae_attention_max_mib),
-                "--emit-probe-manifest",
-                str(vae_manifest),
-            ],
-        ),
-        ("import-vae", [str(args.exe), "--import", str(vae_manifest), str(args.checkpoint), str(vae_graph), "--allow-extra-tensors"]),
-        ]
-    )
+    if not args.preflight_only:
+        steps.extend(
+            [
+                emit_vae_manifest_step,
+                ("import-vae", vae_import_command),
+            ]
+        )
 
     if args.aot_load_mode == "image-regions":
         steps.extend(
             [
                 (
                     "compile-vae-regions",
-                    [str(args.exe), "--compile-image-regions", str(vae_graph), str(vae_region_dir), args.vae_symbol_prefix],
+                    [
+                        str(args.exe),
+                        "--compile-image-regions",
+                        str(vae_graph),
+                        str(vae_region_dir),
+                        args.vae_symbol_prefix,
+                        "--cpu-aot-llvm-opt-level",
+                        str(args.cpu_aot_llvm_opt_level),
+                    ],
                 ),
                 (
                     "decode-latent",
@@ -412,7 +519,10 @@ def main() -> int:
     for name, command in steps:
         run_step(name, command, dry_run=args.dry_run)
         if not args.dry_run and name == "emit-unet-manifest":
+            print_manifest_stats(unet_manifest, "UNet")
             enforce_manifest_budget(unet_manifest, "UNet", args.max_unet_weight_mib)
+        if not args.dry_run and name == "emit-vae-manifest":
+            print_manifest_stats(vae_manifest, "VAE")
 
     print(f"\nWrote {output_png}", flush=True)
     if args.unet_probe != "unet-full-fixed":

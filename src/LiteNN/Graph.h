@@ -2,6 +2,7 @@
 #include <LiteNN/Metadata.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <meta>
@@ -10,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef LITENN_GRAPH_H
 #define LITENN_GRAPH_H
@@ -819,6 +821,12 @@ namespace LiteNN
 			metadata_.push_back({ std::move(key), std::move(value) });
 		}
 
+		/// Keep externally backed tensor storage alive for borrowed tensors owned by this graph.
+		void AddExternalStorage(std::shared_ptr<const std::vector<std::byte>> storage)
+		{
+			externalStorages_.push_back(std::move(storage));
+		}
+
 		SubgraphId Forward() const
 		{
 			return forward_;
@@ -1021,6 +1029,7 @@ namespace LiteNN
 		std::vector<std::string> variableNames_;
 		std::vector<std::string> outputNames_;
 		std::vector<ModelMetadataEntry> metadata_;
+		std::vector<std::shared_ptr<const std::vector<std::byte>>> externalStorages_;
 	};
 } // namespace LiteNN
 

@@ -1,18 +1,22 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifndef LITENN_SERIALIZATION_MODELIO_H
@@ -20,10 +24,23 @@
 
 namespace LiteNN::Serialization
 {
+	/// Controls when variable tensor payloads are written to a sibling external weight file.
+	struct ExternalWeightSaveOptions
+	{
+		std::uint64_t minVariableBytes{ 0 };
+		std::uint64_t alignment{ 64 };
+	};
+
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 20;
+		constexpr std::uint32_t kModelVersion = 21;
+
+		enum class VariablePayloadKind : std::uint8_t
+		{
+			Inline = 0,
+			External = 1,
+		};
 
 		enum class MetadataValueKind : std::uint32_t
 		{
@@ -358,6 +375,16 @@ namespace LiteNN::Serialization
 			return shape;
 		}
 
+		inline std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment)
+		{
+			if (alignment <= 1)
+			{
+				return value;
+			}
+			const auto remainder = value % alignment;
+			return remainder == 0 ? value : value + (alignment - remainder);
+		}
+
 		inline void WriteString(std::ostream& out, std::string_view value)
 		{
 			WriteSize(out, value.size());
@@ -371,6 +398,59 @@ namespace LiteNN::Serialization
 			in.read(value.data(), static_cast<std::streamsize>(value.size()));
 			EnsureRead(in);
 			return value;
+		}
+
+		inline std::filesystem::path ResolveExternalPath(const std::filesystem::path& modelPath,
+		                                                 const std::string& externalPath)
+		{
+			std::filesystem::path path(externalPath);
+			if (path.is_relative() && modelPath.has_parent_path())
+			{
+				path = modelPath.parent_path() / path;
+			}
+			return path.lexically_normal();
+		}
+
+		inline std::string ExternalPathText(const std::filesystem::path& modelPath,
+		                                    const std::filesystem::path& externalPath)
+		{
+			const auto modelDirectory =
+			    modelPath.has_parent_path() ? std::filesystem::absolute(modelPath.parent_path()).lexically_normal()
+			                               : std::filesystem::current_path().lexically_normal();
+			const auto externalAbsolute = std::filesystem::absolute(externalPath).lexically_normal();
+			const auto relative = externalAbsolute.lexically_relative(modelDirectory);
+			if (!relative.empty())
+			{
+				return relative.string();
+			}
+			return externalPath.string();
+		}
+
+		inline std::vector<std::byte> ReadExternalWeightBytes(const std::filesystem::path& path)
+		{
+			std::ifstream in(path, std::ios::binary);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to open external LiteNN weight file for reading: " + path.string());
+			}
+			in.seekg(0, std::ios::end);
+			const auto end = in.tellg();
+			if (end == std::streampos(-1))
+			{
+				throw std::runtime_error("Failed to determine external LiteNN weight file size: " + path.string());
+			}
+			std::vector<std::byte> bytes(static_cast<std::size_t>(end));
+			in.seekg(0, std::ios::beg);
+			std::size_t offset = 0;
+			constexpr std::size_t kChunkSize = 64uz * 1024uz * 1024uz;
+			while (offset < bytes.size())
+			{
+				const auto chunk = std::min(kChunkSize, bytes.size() - offset);
+				in.read(reinterpret_cast<char*>(bytes.data() + offset), static_cast<std::streamsize>(chunk));
+				EnsureRead(in);
+				offset += chunk;
+			}
+			return bytes;
 		}
 
 		inline void WriteStringList(std::ostream& out, std::span<const std::string> values)
@@ -599,6 +679,63 @@ namespace LiteNN::Serialization
 			const auto byteCount = cpuTensor.NumElements() * LiteNN::ElementByteSize(cpuTensor.DType());
 			out.write(static_cast<const char*>(cpuTensor.RawData()), static_cast<std::streamsize>(byteCount));
 			EnsureWrite(out);
+		}
+
+		template <Device D>
+		std::uint64_t TensorByteSize(const Tensor<D>& tensor)
+		{
+			return static_cast<std::uint64_t>(tensor.NumElements()) * LiteNN::ElementByteSize(tensor.DType());
+		}
+
+		inline std::uint64_t TensorSpecByteSize(const TensorSpec& spec)
+		{
+			std::uint64_t elementCount = 1;
+			for (const auto dim : spec.shape)
+			{
+				elementCount *= static_cast<std::uint64_t>(dim);
+			}
+			return elementCount * LiteNN::ElementByteSize(spec.dtype);
+		}
+
+		template <Device D>
+		void WriteTensorMetadata(std::ostream& out, const Tensor<D>& tensor)
+		{
+			WriteDataType(out, tensor.DType());
+			WriteShape(out, tensor.Shape().Dims);
+		}
+
+		inline void WriteZeroBytes(std::ostream& out, std::uint64_t count)
+		{
+			std::array<char, 256> zeros{};
+			while (count != 0)
+			{
+				const auto chunk = std::min<std::uint64_t>(count, zeros.size());
+				out.write(zeros.data(), static_cast<std::streamsize>(chunk));
+				EnsureWrite(out);
+				count -= chunk;
+			}
+		}
+
+		template <Device D>
+		void WriteTensorPayload(std::ostream& out, const Tensor<D>& tensor)
+		{
+			if constexpr (std::same_as<D, CPU>)
+			{
+				out.write(static_cast<const char*>(tensor.RawData()), static_cast<std::streamsize>(TensorByteSize(tensor)));
+				EnsureWrite(out);
+			}
+			else
+			{
+				auto cpuTensor = tensor.CopyToDevice(CPU{});
+				out.write(static_cast<const char*>(cpuTensor.RawData()),
+				          static_cast<std::streamsize>(TensorByteSize(cpuTensor)));
+				EnsureWrite(out);
+			}
+		}
+
+		inline TensorSpec ReadTensorMetadata(std::istream& in)
+		{
+			return { ReadDataType(in), ReadShape(in) };
 		}
 
 		inline Tensor<CPU> ReadTensor(std::istream& in)
@@ -1314,9 +1451,28 @@ namespace LiteNN::Serialization
 		}
 	} // namespace Detail
 
-	inline void SaveModel(const Graph& graph, const std::filesystem::path& path)
+	inline void SaveModelImpl(const Graph& graph, const std::filesystem::path& path,
+	                          const std::optional<std::filesystem::path>& externalWeightsPath,
+	                          ExternalWeightSaveOptions externalOptions)
 	{
 		Validation::ValidateGraph(graph);
+		std::optional<std::ofstream> externalOut;
+		std::string externalPathText;
+		if (externalWeightsPath)
+		{
+			if (std::filesystem::absolute(*externalWeightsPath).lexically_normal() ==
+			    std::filesystem::absolute(path).lexically_normal())
+			{
+				throw std::runtime_error("LiteNN external weight file must be different from the model file");
+			}
+			externalOut.emplace(*externalWeightsPath, std::ios::binary);
+			if (!*externalOut)
+			{
+				throw std::runtime_error("Failed to open LiteNN external weight file for writing");
+			}
+			externalPathText = Detail::ExternalPathText(path, *externalWeightsPath);
+		}
+
 		std::ofstream out(path, std::ios::binary);
 		if (!out)
 		{
@@ -1340,7 +1496,30 @@ namespace LiteNN::Serialization
 		Detail::WriteMetadataEntries(out, graph.Metadata());
 		for (const auto& variable : graph.Variables())
 		{
-			Detail::WriteTensor(out, variable->Data());
+			const auto byteCount = Detail::TensorByteSize(variable->Data());
+			if (externalOut && byteCount >= externalOptions.minVariableBytes)
+			{
+				const auto rawPosition = externalOut->tellp();
+				if (rawPosition == std::streampos(-1))
+				{
+					throw std::runtime_error("Failed to determine LiteNN external weight output offset");
+				}
+				const auto rawOffset = static_cast<std::uint64_t>(rawPosition);
+				const auto alignedOffset = Detail::AlignUp(rawOffset, externalOptions.alignment);
+				Detail::WriteZeroBytes(*externalOut, alignedOffset - rawOffset);
+				Detail::WriteTensorPayload(*externalOut, variable->Data());
+
+				Detail::WriteScalar(out, static_cast<std::uint8_t>(Detail::VariablePayloadKind::External));
+				Detail::WriteTensorMetadata(out, variable->Data());
+				Detail::WriteString(out, externalPathText);
+				Detail::WriteScalar(out, alignedOffset);
+				Detail::WriteScalar(out, byteCount);
+			}
+			else
+			{
+				Detail::WriteScalar(out, static_cast<std::uint8_t>(Detail::VariablePayloadKind::Inline));
+				Detail::WriteTensor(out, variable->Data());
+			}
 			Detail::WriteScalar(out, static_cast<std::uint8_t>(variable->HasGradStorage() ? 1 : 0));
 			Detail::WriteOptionalQuantizationParams(out, variable->Quantization());
 		}
@@ -1366,6 +1545,19 @@ namespace LiteNN::Serialization
 		{
 			Detail::WriteSubgraph(out, graph.GetSubgraph(id));
 		}
+	}
+
+	inline void SaveModel(const Graph& graph, const std::filesystem::path& path)
+	{
+		SaveModelImpl(graph, path, std::nullopt, {});
+	}
+
+	/// Save graph structure and variable metadata to `path`, with selected variable payloads in `externalWeightsPath`.
+	inline void SaveModelExternalWeights(const Graph& graph, const std::filesystem::path& path,
+	                                     const std::filesystem::path& externalWeightsPath,
+	                                     const ExternalWeightSaveOptions& externalOptions = {})
+	{
+		SaveModelImpl(graph, path, externalWeightsPath, externalOptions);
 	}
 
 	inline Graph LoadModel(const std::filesystem::path& path)
@@ -1414,17 +1606,68 @@ namespace LiteNN::Serialization
 			variableNames = Detail::ReadStringList(in);
 			metadata = Detail::ReadMetadataEntries(in);
 		}
+		std::vector<std::pair<std::filesystem::path, std::shared_ptr<std::vector<std::byte>>>> externalWeightCache;
+		const auto loadExternalWeightFile = [&](const std::string& externalPathText) {
+			auto resolvedPath = Detail::ResolveExternalPath(path, externalPathText);
+			for (const auto& [cachedPath, storage] : externalWeightCache)
+			{
+				if (cachedPath == resolvedPath)
+				{
+					return storage;
+				}
+			}
+			auto storage = std::make_shared<std::vector<std::byte>>(Detail::ReadExternalWeightBytes(resolvedPath));
+			externalWeightCache.emplace_back(std::move(resolvedPath), storage);
+			graph.AddExternalStorage(storage);
+			return storage;
+		};
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
-			auto tensor = Detail::ReadTensor(in);
+			std::optional<Tensor<PolymorphicDevice>> tensor;
+			if (version >= 21)
+			{
+				const auto payloadKind =
+				    static_cast<Detail::VariablePayloadKind>(Detail::ReadScalar<std::uint8_t>(in));
+				if (payloadKind == Detail::VariablePayloadKind::Inline)
+				{
+					tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
+				}
+				else if (payloadKind == Detail::VariablePayloadKind::External)
+				{
+					auto spec = Detail::ReadTensorMetadata(in);
+					const auto externalPathText = Detail::ReadString(in);
+					const auto offset = Detail::ReadScalar<std::uint64_t>(in);
+					const auto byteCount = Detail::ReadScalar<std::uint64_t>(in);
+					const auto expectedByteCount = Detail::TensorSpecByteSize(spec);
+					if (byteCount != expectedByteCount)
+					{
+						throw std::runtime_error("LiteNN external variable byte size does not match tensor metadata");
+					}
+					auto storage = loadExternalWeightFile(externalPathText);
+					if (offset > storage->size() || byteCount > storage->size() - offset)
+					{
+						throw std::runtime_error("LiteNN external variable payload is outside the weight file");
+					}
+					auto* data = static_cast<void*>(storage->data() + static_cast<std::size_t>(offset));
+					tensor.emplace(data, ShapeView{ spec.shape }, spec.dtype, PolymorphicDevice{ CPU{} });
+				}
+				else
+				{
+					throw std::runtime_error("LiteNN model contains an unknown variable payload kind");
+				}
+			}
+			else
+			{
+				tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
+			}
 			const auto hasGradStorage = version >= 20 ? Detail::ReadScalar<std::uint8_t>(in) != 0 : true;
 			std::optional<QuantizationParams> quantization;
 			if (version >= 4)
 			{
 				quantization = Detail::ReadOptionalQuantizationParams(in, version);
 			}
-			auto variable = Variable::Create(std::move(tensor), hasGradStorage ? VariableGradStorage::Allocate
-			                                                                   : VariableGradStorage::None);
+			auto variable = Variable::Create(std::move(*tensor), hasGradStorage ? VariableGradStorage::Allocate
+			                                                                    : VariableGradStorage::None);
 			variable->SetQuantization(std::move(quantization));
 			graph.AddVariable(std::move(variable));
 		}

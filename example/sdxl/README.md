@@ -282,22 +282,58 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
   --width 1024 ^
   --steps 30 ^
   --unet-probe unet-full-fixed ^
+  --unet-compute-dtype BF16 ^
+  --vae-compute-dtype BF16 ^
   --vae-mid-attention-policy auto ^
+  --aot-load-mode image-regions ^
+  --cpu-aot-llvm-opt-level 0 ^
   --workdir build\sdxl_1girl_full ^
   --output-png build\sdxl_1girl_full\1girl.png ^
   --cxx %CXX% ^
   --max-unet-weight-mib 0
 ```
 
-Current status: the full fixed-shape UNet manifest imports correctly, but the materialized F32 `.ltnn` graph is very
-large and CPU AOT compilation is not yet interactive. For large imported graphs, enable separated CPU AOT weights with
-`LITENN_CPU_AOT_EXTERNAL_REGIONS=1`; `--compile-object` will then write a separated carrier object, and
-`--compile-image-regions` will write metadata to the existing `.rodata.bin` path plus sibling `.constants.bin` and
-`.weights.bin` files. A low-precision manifest can reduce serialized weight size roughly in half, but full-graph CPU AOT
-still needs more compile-time/codegen work before it is practical. The one-shot harness now has a preflight guard:
+Current status: the full fixed-shape 64x64 UNet now imports, compiles, loads, and runs through separated image regions
+with BF16 weights/activations. F16 full UNet currently produces NaNs in the denoiser output, so BF16 is the recommended
+low-precision mode until mixed-precision accumulation is added for F16 attention/convolution-heavy graphs. The prompt
+harness now imports LiteNN graphs as `.ltnn` metadata plus sibling
+`unet.weights.bin` / `vae.weights.bin` files by default; pass `--inline-model-weights` only when intentionally testing
+the older inline format. SDXL compile/run/benchmark commands also enable CPU AOT external regions through explicit
+`CompilerOptions`, so large VariableRef weights become separated runtime weight regions instead of MLIR/LLVM constants.
+`--compile-object` writes a separated carrier object when such regions are present, and `--compile-image-regions`
+writes metadata to the existing `.rodata.bin` path plus sibling `.constants.bin` and `.weights.bin` files. Image-region
+write/load paths avoid extra multi-GiB copies and use chunked I/O for large weights. Full CPU AOT still uses O0 for
+SDXL-sized monolithic modules because LLVM O1/O3 module optimization is not yet interactive; pass
+`--cpu-aot-llvm-opt-level` to `--compile-image-regions` when explicitly testing higher optimization levels. Each compile
+command prints a budget line with graph size, tensor payload, projected inline MLIR payload, and projected separated
+constants/weights; use
+`litenn_sdxl_example --compile-budget <graph.ltnn>` to print the same budget without entering MLIR/LLVM codegen. The
+one-shot harness has a preflight guard:
 `--max-unet-weight-mib` defaults to `2048` and stops before importing/compiling full UNet manifests whose tensor payload
 would drive CPU AOT memory into tens of GiB. Use `--max-unet-weight-mib 0` only when intentionally running the full
-compile on a large-memory host. Use the smoke command above for a fully runnable pipeline while that work continues.
+compile on a large-memory host. A local BF16 64x64 `1girl` 4-step run completed and wrote
+`build\sdxl_bf16_full64\1girl_bf16_64_4step.png`; it is nonblank but not semantically convincing yet, so image-quality
+parity remains open.
+
+For a safe full-UNet size check that stops before import and codegen:
+
+```bat
+python311 example\sdxl\sdxl_prompt_to_image.py ^
+  --exe %LITENN_EXE% ^
+  --generative-models %GM% ^
+  --config %CONFIG% ^
+  --checkpoint %CKPT% ^
+  --prompt "1girl" ^
+  --height 64 ^
+  --width 64 ^
+  --steps 1 ^
+  --unet-probe unet-full-fixed ^
+  --unet-compute-dtype BF16 ^
+  --vae-compute-dtype BF16 ^
+  --workdir build\sdxl_preflight_full64 ^
+  --preflight-only ^
+  --max-unet-weight-mib 0
+```
 
 The expanded command sequence is:
 
@@ -309,8 +345,8 @@ python311 example\sdxl\sdxl_export_conditioning.py ^
 python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe unet-conditioning-smoke ^
   --height 64 --width 64 --emit-probe-manifest %OUT%\unet_manifest.json
-%LITENN_EXE% --import %OUT%\unet_manifest.json %CKPT% %OUT%\unet.ltnn --allow-extra-tensors
-set LITENN_CPU_AOT_EXTERNAL_REGIONS=1
+%LITENN_EXE% --import %OUT%\unet_manifest.json %CKPT% %OUT%\unet.ltnn --allow-extra-tensors ^
+  --external-weights %OUT%\unet.weights.bin
 %LITENN_EXE% --compile-object %OUT%\unet.ltnn %OUT%\unet.obj litenn_sdxl_unet
 %CXX% -shared %OUT%\unet.obj %OUT%\litenn_sdxl_unet_exports.def -o %OUT%\unet.dll
 
@@ -321,8 +357,8 @@ set LITENN_CPU_AOT_EXTERNAL_REGIONS=1
 python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe vae-decode-full ^
   --height 64 --width 64 --vae-mid-attention-policy skip --emit-probe-manifest %OUT%\vae_manifest.json
-%LITENN_EXE% --import %OUT%\vae_manifest.json %CKPT% %OUT%\vae.ltnn --allow-extra-tensors
-set LITENN_CPU_AOT_EXTERNAL_REGIONS=1
+%LITENN_EXE% --import %OUT%\vae_manifest.json %CKPT% %OUT%\vae.ltnn --allow-extra-tensors ^
+  --external-weights %OUT%\vae.weights.bin
 %LITENN_EXE% --compile-object %OUT%\vae.ltnn %OUT%\vae.obj litenn_sdxl_vae
 %CXX% -shared %OUT%\vae.obj %OUT%\litenn_sdxl_vae_exports.def -o %OUT%\vae.dll
 
@@ -335,7 +371,8 @@ python311 example\sdxl\sdxl_tensor_to_png.py ^
 The same expanded flow can avoid DLL/shared-object linking by writing separated image regions:
 
 ```bat
-%LITENN_EXE% --compile-image-regions %OUT%\unet.ltnn %OUT%\unet_regions litenn_sdxl_unet
+%LITENN_EXE% --compile-image-regions %OUT%\unet.ltnn %OUT%\unet_regions litenn_sdxl_unet ^
+  --cpu-aot-llvm-opt-level 0
 %LITENN_EXE% --denoise-latent-image ^
   %OUT%\unet_regions\litenn_sdxl_unet.rodata.bin ^
   %OUT%\unet_regions\litenn_sdxl_unet.instructions.obj ^
@@ -343,7 +380,8 @@ The same expanded flow can avoid DLL/shared-object linking by writing separated 
   --steps 2 --seed 1234 --scheduler edm --sigma-max 14.6146 --sigma-min 0.0292 ^
   --rho 3 --denoiser-contract sgm-edm --cfg-mode dual --cfg-scale 6
 
-%LITENN_EXE% --compile-image-regions %OUT%\vae.ltnn %OUT%\vae_regions litenn_sdxl_vae
+%LITENN_EXE% --compile-image-regions %OUT%\vae.ltnn %OUT%\vae_regions litenn_sdxl_vae ^
+  --cpu-aot-llvm-opt-level 0
 %LITENN_EXE% --run-image-with-inputs ^
   %OUT%\vae_regions\litenn_sdxl_vae.rodata.bin ^
   %OUT%\vae_regions\litenn_sdxl_vae.instructions.obj ^

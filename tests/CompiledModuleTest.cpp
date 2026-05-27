@@ -1958,6 +1958,72 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 	runAndCheck(borrowedLoaded);
 }
 
+TEST(CompiledModuleTest, CompileBudgetReportsExternalRegionPressure)
+{
+	auto graph = BuildGenericExternalRegionGraph();
+
+	auto inlineOptions = CompilerOptions::Defaults();
+	const auto inlineBudget = EstimateCompileBudget(graph, inlineOptions);
+	EXPECT_FALSE(inlineBudget.cpuAOTExternalRegionsEnabled);
+	EXPECT_EQ(inlineBudget.variableCount, 1u);
+	EXPECT_EQ(inlineBudget.variableRefNodeCount, 1u);
+	EXPECT_EQ(inlineBudget.constantNodeCount, 1u);
+	EXPECT_EQ(inlineBudget.variablePayloadBytes, 16u);
+	EXPECT_EQ(inlineBudget.constantPayloadBytes, 8u);
+	EXPECT_EQ(inlineBudget.projectedInlineMLIRPayloadBytes, 24u);
+	EXPECT_EQ(inlineBudget.projectedExternalWeightBytes, 0u);
+
+	auto externalOptions = CompilerOptions::Defaults();
+	externalOptions.enableCPUAOTExternalRegions = true;
+	externalOptions.cpuAOTExternalConstantMinBytes = 0;
+	const auto externalBudget = EstimateCompileBudget(graph, externalOptions);
+	EXPECT_TRUE(externalBudget.cpuAOTExternalRegionsEnabled);
+	EXPECT_EQ(externalBudget.projectedInlineMLIRPayloadBytes, 0u);
+	EXPECT_EQ(externalBudget.projectedExternalWeightBytes, 16u);
+	EXPECT_EQ(externalBudget.projectedExternalConstantBytes, 8u);
+}
+
+TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalRegions)
+{
+	auto graph = BuildGenericExternalRegionGraph();
+	const auto modelPath = std::filesystem::path("litenn_compiled_external_weight_model_test.ltnn");
+	const auto weightsPath = std::filesystem::path("litenn_compiled_external_weight_model_test.weights.bin");
+	std::filesystem::remove(modelPath);
+	std::filesystem::remove(weightsPath);
+	Serialization::ExternalWeightSaveOptions saveOptions;
+	saveOptions.minVariableBytes = 0;
+	Serialization::SaveModelExternalWeights(graph, modelPath, weightsPath, saveOptions);
+
+	auto loaded = Serialization::LoadModel(modelPath);
+	std::filesystem::remove(modelPath);
+	std::filesystem::remove(weightsPath);
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(loaded, std::span<const Tensor<CPU>>(inputs));
+
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.cpuAOTExternalConstantMinBytes = 0;
+	auto artifact = Compiler<CPU>::CompileArtifact(loaded, options);
+	auto separated = artifact.SeparateRodata();
+	ASSERT_GT(separated.Weights().size(), 0u);
+	EXPECT_TRUE(std::ranges::any_of(separated.ExternalTensorInfos(), [](const auto& info) {
+		return info.name == "scale.weight" && info.region == "weights" && info.dtype == DataType::Float32 &&
+		       info.shape == std::vector<std::size_t>{ 2, 2 };
+	}));
+
+	auto module = artifact.Load();
+	const auto actual = module.Run(std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		ExpectTensorNear(actual[i], expected[i], 1e-5f);
+	}
+}
+
 TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault)
 {
 	CompilerOptions options;
