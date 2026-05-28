@@ -286,6 +286,28 @@ private:
 		return op.getResult();
 	}
 
+	bool shouldUseFloat32Accumulator(DataType dtype) const
+	{
+		return dtype == DataType::Float16;
+	}
+
+	Value emitCastValue(Value input, DataType dtype, std::span<const std::size_t> shape)
+	{
+		auto resultType = convertTensorType(ctx_, dtype, shape);
+		auto op = builder_.create<CastOp>(builder_.getUnknownLoc(), resultType, input);
+		return op.getResult();
+	}
+
+	Value emitMaybeCastValue(Value input, DataType inputDType, DataType outputDType,
+	                         std::span<const std::size_t> shape)
+	{
+		if (inputDType == outputDType)
+		{
+			return input;
+		}
+		return emitCastValue(input, outputDType, shape);
+	}
+
 	Value emitReduceValue(LiteNN::ReduceOp opKind, Value input, DataType dtype,
 	                      std::span<const std::size_t> shape, std::size_t axis)
 	{
@@ -402,7 +424,7 @@ private:
 		return op.getResult();
 	}
 
-	Value emitSoftmaxValue(Value input, DataType dtype, std::span<const std::size_t> shape, std::size_t axis)
+	Value emitSoftmaxValueTyped(Value input, DataType dtype, std::span<const std::size_t> shape, std::size_t axis)
 	{
 		const auto inputShape = ShapeView{ shape };
 		const auto reducedShape = ReducedShape(inputShape, axis);
@@ -415,6 +437,18 @@ private:
 		auto denom = emitReduceValue(LiteNN::ReduceOp::Sum, exp, dtype, reducedShape, axis);
 		auto denomBroadcast = emitReshapeValue(denom, dtype, broadcastShape);
 		return emitBinaryValue(LiteNN::BinaryOp::Divide, exp, denomBroadcast, dtype, shape);
+	}
+
+	Value emitSoftmaxValue(Value input, DataType dtype, std::span<const std::size_t> shape, std::size_t axis)
+	{
+		if (!shouldUseFloat32Accumulator(dtype))
+		{
+			return emitSoftmaxValueTyped(input, dtype, shape, axis);
+		}
+
+		auto wideInput = emitCastValue(input, DataType::Float32, shape);
+		auto wideResult = emitSoftmaxValueTyped(wideInput, DataType::Float32, shape, axis);
+		return emitCastValue(wideResult, dtype, shape);
 	}
 
 	Value emitBroadcastToValue(Value input, DataType dtype, std::span<const std::size_t> targetShape)
@@ -626,15 +660,27 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const BinaryOpNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const Subgraph& sg, NodeId nodeId, const BinaryOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto dtype = outputInfos[0].dtype;
 		auto lhs = getVal(valueMap, node.lhs);
 		auto rhs = getVal(valueMap, node.rhs);
-		auto op = builder_.create<litenn::BinaryOp>(builder_.getUnknownLoc(), resultType, convertBinaryOp(node.op), lhs,
-		                                            rhs);
+		if (node.op == LiteNN::BinaryOp::MatMul && shouldUseFloat32Accumulator(dtype))
+		{
+			const auto lhsInfo = sg.GetOutputInfo(node.lhs);
+			const auto rhsInfo = sg.GetOutputInfo(node.rhs);
+			lhs = emitMaybeCastValue(lhs, lhsInfo.dtype, DataType::Float32, lhsInfo.shape);
+			rhs = emitMaybeCastValue(rhs, rhsInfo.dtype, DataType::Float32, rhsInfo.shape);
+			auto wide = emitBinaryValue(node.op, lhs, rhs, DataType::Float32, outputInfos[0].shape);
+			valueMap[nodeId] = { emitCastValue(wide, dtype, outputInfos[0].shape) };
+			return;
+		}
+
+		auto resultType = convertTensorType(ctx_, dtype, outputInfos[0].shape);
+		auto op = builder_.create<litenn::BinaryOp>(builder_.getUnknownLoc(), resultType, convertBinaryOp(node.op),
+		                                            lhs, rhs);
 		valueMap[nodeId] = { op.getResult() };
 	}
 
@@ -1129,51 +1175,61 @@ private:
 
 		const auto inputInfo = sg.GetOutputInfo(node.input);
 		const auto dtype = outputInfos[0].dtype;
+		const auto computeDType = shouldUseFloat32Accumulator(dtype) ? DataType::Float32 : dtype;
 		const auto inputShape = ShapeView{ inputInfo.shape };
 		const auto reducedShape = ReducedShape(inputShape, node.axis);
 		const auto broadcastShape = BroadcastShapeForAxis(inputShape, node.axis);
-		auto input = getVal(valueMap, node.input);
+		auto input = emitMaybeCastValue(getVal(valueMap, node.input), inputInfo.dtype, computeDType, inputInfo.shape);
 
 		Value centered = input;
 		if (node.mode == NormalizationMode::LayerNorm)
 		{
-			auto mean = emitReduceValue(LiteNN::ReduceOp::Mean, input, dtype, reducedShape, node.axis);
-			auto meanBroadcast = emitReshapeValue(mean, dtype, broadcastShape);
-			centered = emitBinaryValue(LiteNN::BinaryOp::Subtract, input, meanBroadcast, dtype, inputInfo.shape);
+			auto mean = emitReduceValue(LiteNN::ReduceOp::Mean, input, computeDType, reducedShape, node.axis);
+			auto meanBroadcast = emitReshapeValue(mean, computeDType, broadcastShape);
+			centered = emitBinaryValue(LiteNN::BinaryOp::Subtract, input, meanBroadcast, computeDType, inputInfo.shape);
 		}
 
-		auto squared = emitBinaryValue(LiteNN::BinaryOp::Multiply, centered, centered, dtype, inputInfo.shape);
-		auto variance = emitReduceValue(LiteNN::ReduceOp::Mean, squared, dtype, reducedShape, node.axis);
-		auto varianceBroadcast = emitReshapeValue(variance, dtype, broadcastShape);
-		auto epsilon = emitFilledConstant(dtype, broadcastShape, node.epsilon);
-		auto withEpsilon = emitBinaryValue(LiteNN::BinaryOp::Add, varianceBroadcast, epsilon, dtype, broadcastShape);
-		auto denom = emitUnaryValue(LiteNN::UnaryOp::Sqrt, withEpsilon, dtype, broadcastShape);
-		auto normalized = emitBinaryValue(LiteNN::BinaryOp::Divide, centered, denom, dtype, inputInfo.shape);
+		auto squared = emitBinaryValue(LiteNN::BinaryOp::Multiply, centered, centered, computeDType, inputInfo.shape);
+		auto variance = emitReduceValue(LiteNN::ReduceOp::Mean, squared, computeDType, reducedShape, node.axis);
+		auto varianceBroadcast = emitReshapeValue(variance, computeDType, broadcastShape);
+		auto epsilon = emitFilledConstant(computeDType, broadcastShape, node.epsilon);
+		auto withEpsilon =
+		    emitBinaryValue(LiteNN::BinaryOp::Add, varianceBroadcast, epsilon, computeDType, broadcastShape);
+		auto denom = emitUnaryValue(LiteNN::UnaryOp::Sqrt, withEpsilon, computeDType, broadcastShape);
+		auto normalized = emitBinaryValue(LiteNN::BinaryOp::Divide, centered, denom, computeDType, inputInfo.shape);
 
 		if (node.scale)
 		{
+			const auto scaleInfo = sg.GetOutputInfo(*node.scale);
+			auto scale = emitMaybeCastValue(getVal(valueMap, *node.scale), scaleInfo.dtype, computeDType, scaleInfo.shape);
 			normalized =
-			    emitBinaryValue(LiteNN::BinaryOp::Multiply, normalized, getVal(valueMap, *node.scale), dtype, inputInfo.shape);
+			    emitBinaryValue(LiteNN::BinaryOp::Multiply, normalized, scale, computeDType, inputInfo.shape);
 		}
 		if (node.bias)
 		{
+			const auto biasInfo = sg.GetOutputInfo(*node.bias);
+			auto bias = emitMaybeCastValue(getVal(valueMap, *node.bias), biasInfo.dtype, computeDType, biasInfo.shape);
 			normalized =
-			    emitBinaryValue(LiteNN::BinaryOp::Add, normalized, getVal(valueMap, *node.bias), dtype, inputInfo.shape);
+			    emitBinaryValue(LiteNN::BinaryOp::Add, normalized, bias, computeDType, inputInfo.shape);
 		}
 
-		valueMap[nodeId] = { normalized };
+		valueMap[nodeId] = { emitMaybeCastValue(normalized, computeDType, dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const BatchMatMulNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const Subgraph& sg, NodeId nodeId, const BatchMatMulNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		auto loc = builder_.getUnknownLoc();
-		auto lhs = getVal(valueMap, node.lhs);
-		auto rhs = getVal(valueMap, node.rhs);
+		const auto outputDType = outputInfos[0].dtype;
+		const auto computeDType = shouldUseFloat32Accumulator(outputDType) ? DataType::Float32 : outputDType;
+		const auto lhsInfo = sg.GetOutputInfo(node.lhs);
+		const auto rhsInfo = sg.GetOutputInfo(node.rhs);
+		auto lhs = emitMaybeCastValue(getVal(valueMap, node.lhs), lhsInfo.dtype, computeDType, lhsInfo.shape);
+		auto rhs = emitMaybeCastValue(getVal(valueMap, node.rhs), rhsInfo.dtype, computeDType, rhsInfo.shape);
 		auto lhsType = cast<RankedTensorType>(lhs.getType());
 		auto rhsType = cast<RankedTensorType>(rhs.getType());
-		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		auto resultType = convertTensorType(ctx_, computeDType, outputInfos[0].shape);
 		const auto resultRank = resultType.getRank();
 		const auto leadRank = resultRank - 2;
 		const auto loopRank = leadRank + 3;
@@ -1230,7 +1286,8 @@ private:
 			    auto sum = emitScalarAdd(b, l, args[2], product, elemType);
 			    b.create<linalg::YieldOp>(l, sum);
 		    });
-		valueMap[nodeId] = { generic.getResult(0) };
+		valueMap[nodeId] = { emitMaybeCastValue(generic.getResult(0), computeDType, outputDType,
+		                                         outputInfos[0].shape) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const OutProdNode&, std::span<const OutputInfo>,
@@ -1329,16 +1386,20 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support Im2ColNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const Conv2DNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const Subgraph& sg, NodeId nodeId, const Conv2DNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		auto loc = builder_.getUnknownLoc();
-		auto input = getVal(valueMap, node.input);
-		auto weight = getVal(valueMap, node.weight);
+		const auto outputDType = outputInfos[0].dtype;
+		const auto computeDType = shouldUseFloat32Accumulator(outputDType) ? DataType::Float32 : outputDType;
+		const auto inputInfo = sg.GetOutputInfo(node.input);
+		const auto weightInfo = sg.GetOutputInfo(node.weight);
+		auto input = emitMaybeCastValue(getVal(valueMap, node.input), inputInfo.dtype, computeDType, inputInfo.shape);
+		auto weight = emitMaybeCastValue(getVal(valueMap, node.weight), weightInfo.dtype, computeDType, weightInfo.shape);
 		auto inputType = cast<RankedTensorType>(input.getType());
 		auto weightType = cast<RankedTensorType>(weight.getType());
-		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		auto resultType = convertTensorType(ctx_, computeDType, outputInfos[0].shape);
 		if (inputType.getRank() != 4 || weightType.getRank() != 4 || resultType.getRank() != 4)
 		{
 			throw std::runtime_error("GraphToMLIR Conv2DNode requires rank-4 input, weight, and output tensors");
@@ -1468,7 +1529,8 @@ private:
 
 		if (node.bias)
 		{
-			auto bias = getVal(valueMap, *node.bias);
+			const auto biasInfo = sg.GetOutputInfo(*node.bias);
+			auto bias = emitMaybeCastValue(getVal(valueMap, *node.bias), biasInfo.dtype, computeDType, biasInfo.shape);
 			auto biasType = cast<RankedTensorType>(bias.getType());
 			SmallVector<AffineExpr> biasExprs;
 			if (biasType.getRank() == 1)
@@ -1500,7 +1562,7 @@ private:
 			result = withBias.getResult(0);
 		}
 
-		valueMap[nodeId] = { result };
+		valueMap[nodeId] = { emitMaybeCastValue(result, computeDType, outputDType, outputInfos[0].shape) };
 	}
 
 	void emitNode(const Subgraph&, NodeId, const ConvTranspose2DNode&, std::span<const OutputInfo>,

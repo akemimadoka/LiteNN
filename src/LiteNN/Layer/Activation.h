@@ -38,13 +38,10 @@ namespace LiteNN::Layer
 		const auto one = Detail::AddConstant(subgraph, Detail::MakeScalarTensor(info.dtype, 1.0));
 		const auto scaled = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, { two, 0 } },
 		                                     { OutputInfo{ info.dtype, info.shape } });
-		const auto exp =
-		    subgraph.AddNode(UnaryOpNode{ UnaryOp::Exp, { scaled, 0 } }, { OutputInfo{ info.dtype, info.shape } });
-		const auto numerator = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, { exp, 0 }, { one, 0 } },
-		                                        { OutputInfo{ info.dtype, info.shape } });
-		const auto denominator = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { exp, 0 }, { one, 0 } },
-		                                          { OutputInfo{ info.dtype, info.shape } });
-		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, { numerator, 0 }, { denominator, 0 } },
+		const auto sigmoid = AddSigmoid(subgraph, { scaled, 0 });
+		const auto doubleSigmoid = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { two, 0 }, sigmoid },
+		                                            { OutputInfo{ info.dtype, info.shape } });
+		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, { doubleSigmoid, 0 }, { one, 0 } },
 		                                     { OutputInfo{ info.dtype, info.shape } });
 		return { result, 0 };
 	}

@@ -13,6 +13,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -23,6 +24,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -37,6 +39,15 @@ namespace
 	float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 	{
 		return static_cast<const float*>(t.RawData())[i];
+	}
+
+	float ReadAsFloat(const Tensor<CPU>& t, std::size_t i)
+	{
+		Tensor<CPU> converted(Uninitialized, t.Shape(), DataType::Float32);
+		CPU cpu;
+		DeviceTraits<CPU>::ConvertTo(cpu, t.DType(), t.RawData(), t.NumElements(), DataType::Float32,
+		                             converted.RawData());
+		return ReadFloat(converted, i);
 	}
 
 	void ExpectTensorNear(const Tensor<CPU>& actual, const Tensor<CPU>& expected, float tolerance = 1e-5f)
@@ -690,6 +701,206 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 	{
 		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5f);
 	}
+}
+
+TEST(CompiledModuleTest, CPUFloat16SoftmaxArtifactUsesFloat32Accumulator)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float16, { 1, 4 });
+	const auto softmax = sg.AddNode(SoftmaxNode{ { x, 0 }, 1 }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
+	sg.SetResults({ { softmax, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "logits" });
+	graph.SetOutputNames({ "probabilities" });
+
+	const std::vector<double> inputData = { 1000.0, 999.0, 998.0, 997.0 };
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>(std::span<const double>(inputData), { 1, 4 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	ASSERT_EQ(outputs[0].Shape(), (std::vector<std::size_t>{ 1, 4 }));
+
+	float sum = 0.0f;
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		const auto value = ReadAsFloat(outputs[0], i);
+		EXPECT_TRUE(std::isfinite(value)) << i;
+		EXPECT_GE(value, 0.0f) << i;
+		sum += value;
+	}
+	EXPECT_NEAR(sum, 1.0f, 2e-3f);
+	EXPECT_GT(ReadAsFloat(outputs[0], 0), ReadAsFloat(outputs[0], 1));
+	EXPECT_GT(ReadAsFloat(outputs[0], 1), ReadAsFloat(outputs[0], 2));
+	EXPECT_GT(ReadAsFloat(outputs[0], 2), ReadAsFloat(outputs[0], 3));
+}
+
+TEST(CompiledModuleTest, CPUFloat16RMSNormArtifactUsesFloat32Accumulator)
+{
+	Graph graph;
+	const auto scaleIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 2.0, 1.0, 0.5 }, { 1, 4 }, DataType::Float16)));
+	const auto biasIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0, 0.25, -0.25, 0.0 }, { 1, 4 }, DataType::Float16)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float16, { 1, 4 });
+	const auto scale =
+	    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
+	const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
+	const auto normalized = sg.AddNode(
+	    NormalizationNode{ { input, 0 }, NodeOutput{ scale, 0 }, NodeOutput{ bias, 0 },
+	                       NormalizationMode::RMSNorm, 1, 1, 1e-5 },
+	    { OutputInfo{ DataType::Float16, { 1, 4 } } });
+	sg.SetResults({ { normalized, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "normalized" });
+
+	const std::vector<double> inputData = { 400.0, 401.0, 399.0, 402.0 };
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>(std::span<const double>(inputData), { 1, 4 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	ASSERT_EQ(outputs[0].Shape(), (std::vector<std::size_t>{ 1, 4 }));
+
+	const float denom =
+	    std::sqrt((400.0f * 400.0f + 401.0f * 401.0f + 399.0f * 399.0f + 402.0f * 402.0f) / 4.0f + 1e-5f);
+	const std::array<float, 4> expected = {
+		400.0f / denom,
+		401.0f / denom * 2.0f + 0.25f,
+		399.0f / denom - 0.25f,
+		402.0f / denom * 0.5f,
+	};
+
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		const auto value = ReadAsFloat(outputs[0], i);
+		EXPECT_TRUE(std::isfinite(value)) << i;
+		EXPECT_NEAR(value, expected[i], 3e-3f) << i;
+	}
+}
+
+TEST(CompiledModuleTest, CPUFloat16MatMulArtifactUsesFloat32Accumulator)
+{
+	Graph graph;
+	const auto weightIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 300.0, 300.0 }, { 2, 1 }, DataType::Float16)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float16, { 1, 2 });
+	const auto weight =
+	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 2, 1 } } });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
+	                               { OutputInfo{ DataType::Float16, { 1, 1 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 300.0, -300.0 }, { 1, 2 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	const auto value = ReadAsFloat(outputs[0], 0);
+	EXPECT_TRUE(std::isfinite(value));
+	EXPECT_NEAR(value, 0.0f, 1e-3f);
+}
+
+TEST(CompiledModuleTest, CPUFloat16BatchMatMulArtifactUsesFloat32Accumulator)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto lhs = sg.AddParam(DataType::Float16, { 1, 1, 2 });
+	const auto rhs = sg.AddParam(DataType::Float16, { 1, 2, 1 });
+	const auto output = sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } },
+	                               { OutputInfo{ DataType::Float16, { 1, 1, 1 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 300.0, -300.0 }, { 1, 1, 2 }, DataType::Float16),
+		Tensor<CPU>({ 300.0, 300.0 }, { 1, 2, 1 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	const auto value = ReadAsFloat(outputs[0], 0);
+	EXPECT_TRUE(std::isfinite(value));
+	EXPECT_NEAR(value, 0.0f, 1e-3f);
+}
+
+TEST(CompiledModuleTest, CPUFloat16Conv2DArtifactUsesFloat32Accumulator)
+{
+	Graph graph;
+	const auto weightIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 300.0, 300.0 }, { 1, 2, 1, 1 }, DataType::Float16)));
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float16, { 1, 2, 1, 1 });
+	const auto weight =
+	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 1, 2, 1, 1 } } });
+	const auto output = sg.AddNode(
+	    Conv2DNode{ { input, 0 }, { weight, 0 }, std::optional<NodeOutput>{}, { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 },
+	                1 },
+	    { OutputInfo{ DataType::Float16, { 1, 1, 1, 1 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 300.0, -300.0 }, { 1, 2, 1, 1 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	const auto value = ReadAsFloat(outputs[0], 0);
+	EXPECT_TRUE(std::isfinite(value));
+	EXPECT_NEAR(value, 0.0f, 1e-3f);
+}
+
+TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float16, { 2 });
+	const auto output = Layer::AddGELU(sg, { input, 0 });
+	sg.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 10.0, -10.0 }, { 2 }, DataType::Float16),
+	};
+
+	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].DType(), DataType::Float16);
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_TRUE(std::isfinite(ReadAsFloat(outputs[0], i))) << i;
+	}
+	EXPECT_GT(ReadAsFloat(outputs[0], 0), 9.9f);
+	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 0.0f, 1e-3f);
 }
 
 TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)

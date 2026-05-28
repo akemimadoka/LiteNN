@@ -1112,7 +1112,12 @@ Phase 2: decode and write an image.
       编译、加载、1-step/4-step Euler denoise 和 VAE decode；输出 PNG
       `build\sdxl_bf16_full64\1girl_bf16_64_4step.png` 非空但仍不具备可接受语义质量。F16 full UNet 在
       zero latent 下仍输出 NaN，说明下一步需要 mixed-precision accumulation / per-node finite diagnostics，而不是
-      单纯调整初始噪声。）
+      单纯调整初始噪声。
+      2026-05-29 追踪：CPU AOT F16 已加入首批 mixed-precision lowering（Softmax、LayerNorm/RMSNorm、
+      MatMul、BatchMatMul、Conv2D）并将 `Layer::AddTanh` 改为稳定的 `2*sigmoid(2x)-1` 展开；重新 import
+      后的 full64 F16 UNet 可完成 zero-latent 1-step（`pred_rms=0.254`）和 random dual-CFG 4-step
+      denoise，不再产生 NaN。输出 `build\sdxl_f16_stable\1girl_f16_64_4step.png` 非空、范围正常，但仍是
+      抽象结果，语义质量问题尚未关闭。）
 
 Phase 3: unblock full semantic image generation.
 
@@ -1172,8 +1177,20 @@ Phase 3: unblock full semantic image generation.
             5,134,927,424 bytes, and compile budget reports 7,153 nodes, 1,680 variables, 667 constants,
             4,897.05 MiB projected external weights, and only 1,334 bytes projected inline MLIR payload.）
       - [ ] Add mixed-precision accumulation policy for F16 SDXL graphs.
-            （当前风险：full64 F16 denoise 在 zero latent 下仍产生 NaN；BF16 不产生 NaN。优先排查
-            attention/MatMul/Conv/normalization 的 F16 accumulation 与 finite diagnostics。）
+            - [x] Use Float32 intermediates for CPU AOT F16 Softmax and LayerNorm/RMSNorm lowering, then cast results
+                  back to F16. Regression coverage: `CompiledModuleTest.CPUFloat16SoftmaxArtifactUsesFloat32Accumulator`
+                  and `CompiledModuleTest.CPUFloat16RMSNormArtifactUsesFloat32Accumulator`.
+            - [x] Extend the policy to MatMul/BatchMatMul/Conv accumulation. Regression coverage:
+                  `CompiledModuleTest.CPUFloat16MatMulArtifactUsesFloat32Accumulator`,
+                  `CompiledModuleTest.CPUFloat16BatchMatMulArtifactUsesFloat32Accumulator`, and
+                  `CompiledModuleTest.CPUFloat16Conv2DArtifactUsesFloat32Accumulator`.
+            - [x] Replace the unstable generated Tanh formula with `2*sigmoid(2x)-1`, avoiding F16 `inf/inf` in
+                  GELU/GEGLU paths. Regression coverage:
+                  `CompiledModuleTest.CPUFloat16GELUArtifactUsesStableTanh`.
+            - [ ] Add full-graph finite diagnostics that can stop after the first non-finite SDXL tensor.
+            （已验证当前 CPU AOT F16 路径：重新 import 后的 full64 F16 UNet image-region artifact 可完成
+            zero-latent 1-step 和 random dual-CFG 4-step denoise；有限性问题阶段解除。finite diagnostics
+            仍保留为后续定位工具，以便处理未来模型或 1024x1024 图中的首个非有限 tensor。）
 - [ ] Bring CUDA/native execution to the SDXL critical path.
       - [ ] Cover full UNet op set on CUDA native/AOT: Conv2D, GroupNorm/LayerNorm, Linear/MatMul, BatchMatMul,
             Softmax, SpatialTransformer, GEGLU, Concat, Slice, Reshape, Permute, Upsample, and scalar scheduler ops.
@@ -1186,7 +1203,8 @@ Phase 3: unblock full semantic image generation.
             inspect/read the resulting image before marking the target complete.
             （进展：已生成并读取 `build\sdxl_bf16_full64\1girl_bf16_64.png` 和
             `build\sdxl_bf16_full64\1girl_bf16_64_4step.png`；两者非空且通道范围正常，但 4-step 64x64 结果仍是
-            抽象色块，不能标记为语义正确。）
+            抽象色块。F16 stable 路径新增 `build\sdxl_f16_stable\1girl_f16_64_4step.png`，图像范围正常且非空，
+            但人工读取仍是抽象块状结果，不能标记为语义正确。）
       - [ ] Compare against the reference runtime at fixed seed/prompt by tensor statistics, image statistics, and
             perceptual/manual inspection path.
       - [ ] Keep the smoke pipeline as a fast CI/dev check, but clearly label it as non-semantic.

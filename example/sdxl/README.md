@@ -431,6 +431,9 @@ The denoise loop is intentionally outside the compiled graph for now. A compiled
 - Classifier-free guidance is a runtime binding policy: either run conditional/unconditional batches together or invoke the compiled step twice and combine outputs outside the graph.
 - Latent scaling is explicit: manifests may model per-graph input/output scale, but scheduler-specific scaling before and after each step belongs to the runtime harness. `sgm-*` contracts follow the Stability-AI `Denoiser` shape: latent input is multiplied by `c_in`, the timestep input receives `c_noise` in `auto` mode, and raw network output is converted to a denoised prediction before the Euler derivative is computed.
 - Benchmarks should report import time, serialization time, AOT compile time, DLL/shared-object load time, and one denoise-step invocation separately.
+- CPU AOT F16 full64 smoke currently relies on mixed-precision lowering for Softmax, normalization, MatMul,
+  BatchMatMul, and Conv2D plus the stable generated Tanh formula `2*sigmoid(2x)-1`. Older imported F16 `.ltnn`
+  graphs that expanded Tanh as `(exp(2x)-1)/(exp(2x)+1)` should be re-imported before judging F16 stability.
 
 Full production SDXL still needs native tokenizer/text-encoder execution inside LiteNN, full fixed-shape UNet AOT
 compile-time/weight-size reduction, and broader 1024x1024 parity/benchmark coverage.
