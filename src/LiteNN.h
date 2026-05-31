@@ -12,6 +12,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
+#include <LiteNN/MemoryPlan.h>
 #include <LiteNN/Metadata.h>
 #include <LiteNN/Misc.h>
 #include <LiteNN/OpSchema.h>
@@ -21,6 +22,7 @@
 #include <LiteNN/Pass/EGraphPass.h>
 #include <LiteNN/Pass/ForwardOnlyPass.h>
 #include <LiteNN/Quantization.h>
+#include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Serialization/Safetensors.h>
 #include <LiteNN/Serialization/TorchManifest.h>
@@ -29,5 +31,6 @@
 #include <LiteNN/TensorType.h>
 #include <LiteNN/Training/Trainer.h>
 #include <LiteNN/Validation/GraphValidator.h>
+#include <LiteNN/VNextPackage.h>
 
 #endif

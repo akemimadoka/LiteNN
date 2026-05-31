@@ -5,6 +5,7 @@
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <filesystem>
+#include <fstream>
 #include <vector>
 
 using namespace LiteNN;
@@ -144,6 +145,23 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 	EXPECT_EQ(outputs[0].DType(), DataType::Float16);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 0), 4.0F, 1e-3F);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 6.0F, 1e-3F);
+}
+
+TEST(ModelIO, LoadRejectsPreVNextModelVersions)
+{
+	const auto path = std::filesystem::path("litenn_modelio_legacy_version_reject_test.ltnn");
+	std::filesystem::remove(path);
+	{
+		std::ofstream out(path, std::ios::binary);
+		ASSERT_TRUE(out);
+		out.write(Serialization::Detail::kModelMagic.data(),
+		          static_cast<std::streamsize>(Serialization::Detail::kModelMagic.size()));
+		const std::uint32_t legacyVersion = Serialization::Detail::kModelVersion - 1;
+		out.write(reinterpret_cast<const char*>(&legacyVersion), sizeof(legacyVersion));
+	}
+
+	EXPECT_THROW((void)Serialization::LoadModel(path), std::runtime_error);
+	std::filesystem::remove(path);
 }
 
 TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)

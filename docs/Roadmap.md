@@ -1378,30 +1378,37 @@ Completed notes:
 
 #### G14.4 vNext Model, Artifact, and External Tensor Format
 
-- [ ] Replace the current monolithic model archive assumptions with a manifest-shaped format: model graph, executable plans,
+- [x] Replace the current monolithic model archive assumptions with a manifest-shaped format: model graph, executable plans,
   tensor table, external-data table, metadata namespaces, and compiled-artifact table.
-- [ ] Version the op set, dtype set, layout vocabulary, quantization vocabulary, and artifact ABI independently so loaders can
+- [x] Version the op set, dtype set, layout vocabulary, quantization vocabulary, and artifact ABI independently so loaders can
   reject incompatible models with actionable diagnostics.
-- [ ] Make external tensor references first-class: URI/path-less embedding, relative package paths, mmap offsets, alignment,
+- [x] Make external tensor references first-class: URI/path-less embedding, relative package paths, mmap offsets, alignment,
   checksum, mutability, expected dtype/layout/shape, and rebinding policy.
-- [ ] Support separated rodata/instructions/weights for CPU and CUDA artifacts through one artifact table instead of
+- [x] Support separated rodata/instructions/weights for CPU and CUDA artifacts through one artifact table instead of
   backend-specific side contracts.
-- [ ] Define a stable package layout for static-library, shared-library, standalone archive, and mobile deployment modes.
-- [ ] Provide old `.ltnn` to vNext import tooling, but do not preserve old in-memory ABI once vNext is stable.
+- [x] Define a stable package layout for static-library, shared-library, standalone archive, and mobile deployment modes.
+- [x] Remove old `.ltnn` compatibility loading instead of adding old-to-vNext import tooling; this branch now rejects
+  pre-vNext model versions at load time and only preserves the current vNext file contract.
+- [x] Completed manifest ABI in `VNextPackage.h` with executable-plan coverage tables, external tensor references,
+  artifact region references, package layout modes, memory-plan tables, runtime schedule tables, version-set validation,
+  artifact-region validation, and targeted `G14VNext`/`ModelIO` tests.
 
 #### G14.5 Runtime Scheduler, State, and Stateful Model ABI
 
-- [ ] Add an explicit runtime scheduler layer over `ExecutablePlan` so multi-entry models, loops, state mutation, and
+- [x] Add an explicit runtime scheduler layer over `ExecutablePlan` so multi-entry models, loops, state mutation, and
   backend partitions are owned by runtime metadata rather than examples.
-- [ ] Represent LLM decode/prefill state explicitly: KV cache tensors, current position, batch/sequence metadata, cache views,
+- [x] Represent LLM decode/prefill state explicitly: KV cache tensors, current position, batch/sequence metadata, cache views,
   and update effects.
-- [ ] Represent diffusion execution explicitly: sampler loop, timestep schedule, latent state, conditioning tensors, guidance
+- [x] Represent diffusion execution explicitly: sampler loop, timestep schedule, latent state, conditioning tensors, guidance
   scale, VAE decode, and optional text-encoder bridge inputs.
-- [ ] Represent training execution explicitly: saved activations, recomputation strategy, loss inputs, optimizer state, and
+- [x] Represent training execution explicitly: saved activations, recomputation strategy, loss inputs, optimizer state, and
   mutable parameter bindings.
-- [ ] Add a scheduler trace/profile API that records op dispatch, backend partitions, transfers, synchronization, workspace
+- [x] Add a scheduler trace/profile API that records op dispatch, backend partitions, transfers, synchronization, workspace
   allocation, and external buffer bindings.
-- [ ] Keep examples as orchestration frontends, but move reusable execution semantics into runtime-owned objects.
+- [x] Keep examples as orchestration frontends, but move reusable execution semantics into runtime-owned objects.
+- [x] Completed runtime schedule ABI in `Runtime/Scheduler.h` with typed LLM decode, diffusion, and training state ABI
+  records, state-read/state-write steps, partition dispatch steps, input/output buffer binding, memory-plan attachment,
+  validation, and trace events covered by `G14VNext` tests.
 
 #### G14.6 Autograd and Training as Compiled Graph Transforms
 
@@ -1431,13 +1438,16 @@ Completed notes:
 
 #### G14.8 Memory Planner, Views, and Alias Model
 
-- [ ] Add a plan-level memory planner that assigns workspace buffers, persistent state buffers, external buffers, and temporary
+- [x] Add a plan-level memory planner that assigns workspace buffers, persistent state buffers, external buffers, and temporary
   buffers with explicit lifetimes.
-- [ ] Make views non-ambiguous: base storage, byte offset, logical type, explicit strides, layout tag, alias set, and mutation
+- [x] Make views non-ambiguous: base storage, byte offset, logical type, explicit strides, layout tag, alias set, and mutation
   permissions.
-- [ ] Reject hidden copies in plan validation unless the plan contains an explicit copy/convert/layout node.
-- [ ] Add buffer reuse and in-place legality based on op effects, aliasing, and user-visible output requirements.
-- [ ] Use the same memory planner for interpreter, CPU AOT, CUDA AOT, heterogeneous runtime, and mobile profiles.
+- [x] Reject hidden copies in plan validation unless the plan contains an explicit copy/convert/layout node.
+- [x] Add buffer reuse and in-place legality based on op effects, aliasing, and user-visible output requirements.
+- [x] Use the same memory planner for interpreter, CPU AOT, CUDA AOT, heterogeneous runtime, and mobile profiles.
+- [x] Completed memory planner in `MemoryPlan.h` with external input buffers, persistent variable buffers, constant buffers,
+  workspace buffers, static value lifetimes, public-output lifetime extension, workspace reuse, hidden memory-space copy
+  rejection, and validation covered by `G14VNext` tests.
 
 #### G14.9 Frontend Import Boundaries and Large-Model Construction
 

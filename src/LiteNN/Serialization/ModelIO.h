@@ -312,7 +312,7 @@ namespace LiteNN::Serialization
 			WriteSizeList(out, params.expressedShape);
 		}
 
-		inline QuantizationParams ReadQuantizationParams(std::istream& in, std::uint32_t version)
+		inline QuantizationParams ReadQuantizationParams(std::istream& in)
 		{
 			QuantizationParams params;
 			params.scheme = static_cast<QuantizationScheme>(ReadScalar<std::uint32_t>(in));
@@ -324,10 +324,7 @@ namespace LiteNN::Serialization
 			params.groupSize = ReadSize(in);
 			params.scales = ReadFloatList(in);
 			params.zeroPoints = ReadI32List(in);
-			if (version >= 5)
-			{
-				params.expressedShape = ReadSizeList(in);
-			}
+			params.expressedShape = ReadSizeList(in);
 			return params;
 		}
 
@@ -342,8 +339,7 @@ namespace LiteNN::Serialization
 			WriteQuantizationParams(out, *params);
 		}
 
-		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in,
-		                                                                        std::uint32_t version)
+		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in)
 		{
 			const auto hasValue = ReadScalar<std::uint8_t>(in);
 			if (hasValue == 0)
@@ -354,7 +350,7 @@ namespace LiteNN::Serialization
 			{
 				throw std::runtime_error("Invalid quantization metadata presence flag");
 			}
-			return ReadQuantizationParams(in, version);
+			return ReadQuantizationParams(in);
 		}
 
 		inline void WriteShape(std::ostream& out, std::span<const std::size_t> shape)
@@ -1109,7 +1105,7 @@ namespace LiteNN::Serialization
 			    entry.node);
 		}
 
-		inline NodeVariant ReadNodePayload(std::istream& in, std::uint32_t version)
+		inline NodeVariant ReadNodePayload(std::istream& in)
 		{
 			const auto kind = static_cast<NodeKind>(ReadScalar<std::uint32_t>(in));
 			switch (kind)
@@ -1120,7 +1116,7 @@ namespace LiteNN::Serialization
 				return ConstantNode{ ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }) };
 			case NodeKind::QuantizedConstant: {
 				auto storage = ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} });
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return QuantizedConstantNode{ std::move(storage), std::move(params) };
 			}
 			case NodeKind::VariableRef:
@@ -1145,12 +1141,12 @@ namespace LiteNN::Serialization
 			}
 			case NodeKind::Quantize: {
 				const auto input = ReadNodeOutput(in);
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return QuantizeNode{ input, std::move(params) };
 			}
 			case NodeKind::Dequantize: {
 				const auto input = ReadNodeOutput(in);
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return DequantizeNode{ input, std::move(params), ReadDataType(in) };
 			}
 			case NodeKind::Cond: {
@@ -1380,7 +1376,7 @@ namespace LiteNN::Serialization
 			}
 			case NodeKind::Argsort: {
 				const auto input = ReadNodeOutput(in);
-				const auto axis = version >= 10 ? ReadSize(in) : 0uz;
+				const auto axis = ReadSize(in);
 				const auto order = static_cast<SortOrder>(ReadScalar<std::uint32_t>(in));
 				return ArgsortNode{ input, axis, order };
 			}
@@ -1416,7 +1412,7 @@ namespace LiteNN::Serialization
 			WriteNodeOutputList(out, subgraph.Results());
 		}
 
-		inline Subgraph ReadSubgraph(std::istream& in, std::uint32_t version)
+		inline Subgraph ReadSubgraph(std::istream& in)
 		{
 			Subgraph subgraph;
 			const auto paramCount = ReadSize(in);
@@ -1435,7 +1431,7 @@ namespace LiteNN::Serialization
 			for (std::size_t nodeId = 0; nodeId < nodeCount; ++nodeId)
 			{
 				auto outputInfos = ReadOutputInfoList(in);
-				auto node = ReadNodePayload(in, version);
+				auto node = ReadNodePayload(in);
 				if (nodeId < paramCount)
 				{
 					const auto* param = std::get_if<ParamRefNode>(&node);
@@ -1579,9 +1575,11 @@ namespace LiteNN::Serialization
 		}
 
 		const auto version = Detail::ReadScalar<std::uint32_t>(in);
-		if (version == 0 || version > Detail::kModelVersion)
+		if (version != Detail::kModelVersion)
 		{
-			throw std::runtime_error("Unsupported LiteNN model version");
+			throw std::runtime_error(std::format(
+			    "Unsupported LiteNN model version {}; this vNext branch only loads version {}",
+			    version, Detail::kModelVersion));
 		}
 
 		const auto forward = Detail::ReadSize(in);
@@ -1591,23 +1589,13 @@ namespace LiteNN::Serialization
 		{
 			backward = Detail::ReadSize(in);
 		}
-		std::vector<std::string> inputNames;
-		std::vector<std::string> outputNames;
-		if (version >= 2)
-		{
-			inputNames = Detail::ReadStringList(in);
-			outputNames = Detail::ReadStringList(in);
-		}
+		auto inputNames = Detail::ReadStringList(in);
+		auto outputNames = Detail::ReadStringList(in);
 
 		Graph graph;
 		const auto variableCount = Detail::ReadSize(in);
-		std::vector<std::string> variableNames;
-		std::vector<ModelMetadataEntry> metadata;
-		if (version >= 6)
-		{
-			variableNames = Detail::ReadStringList(in);
-			metadata = Detail::ReadMetadataEntries(in);
-		}
+		auto variableNames = Detail::ReadStringList(in);
+		auto metadata = Detail::ReadMetadataEntries(in);
 		std::vector<std::pair<std::filesystem::path, std::shared_ptr<std::vector<std::byte>>>> externalWeightCache;
 		const auto loadExternalWeightFile = [&](const std::string& externalPathText) {
 			auto resolvedPath = Detail::ResolveExternalPath(path, externalPathText);
@@ -1626,48 +1614,37 @@ namespace LiteNN::Serialization
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
 			std::optional<Tensor<PolymorphicDevice>> tensor;
-			if (version >= 21)
-			{
-				const auto payloadKind =
-				    static_cast<Detail::VariablePayloadKind>(Detail::ReadScalar<std::uint8_t>(in));
-				if (payloadKind == Detail::VariablePayloadKind::Inline)
-				{
-					tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
-				}
-				else if (payloadKind == Detail::VariablePayloadKind::External)
-				{
-					auto spec = Detail::ReadTensorMetadata(in);
-					const auto externalPathText = Detail::ReadString(in);
-					const auto offset = Detail::ReadScalar<std::uint64_t>(in);
-					const auto byteCount = Detail::ReadScalar<std::uint64_t>(in);
-					const auto expectedByteCount = Detail::TensorSpecByteSize(spec);
-					if (byteCount != expectedByteCount)
-					{
-						throw std::runtime_error("LiteNN external variable byte size does not match tensor metadata");
-					}
-					auto storage = loadExternalWeightFile(externalPathText);
-					if (offset > storage->size() || byteCount > storage->size() - offset)
-					{
-						throw std::runtime_error("LiteNN external variable payload is outside the weight file");
-					}
-					auto* data = static_cast<void*>(storage->data() + static_cast<std::size_t>(offset));
-					tensor.emplace(data, ShapeView{ spec.shape }, spec.dtype, PolymorphicDevice{ CPU{} });
-				}
-				else
-				{
-					throw std::runtime_error("LiteNN model contains an unknown variable payload kind");
-				}
-			}
-			else
+			const auto payloadKind =
+			    static_cast<Detail::VariablePayloadKind>(Detail::ReadScalar<std::uint8_t>(in));
+			if (payloadKind == Detail::VariablePayloadKind::Inline)
 			{
 				tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
 			}
-			const auto hasGradStorage = version >= 20 ? Detail::ReadScalar<std::uint8_t>(in) != 0 : true;
-			std::optional<QuantizationParams> quantization;
-			if (version >= 4)
+			else if (payloadKind == Detail::VariablePayloadKind::External)
 			{
-				quantization = Detail::ReadOptionalQuantizationParams(in, version);
+				auto spec = Detail::ReadTensorMetadata(in);
+				const auto externalPathText = Detail::ReadString(in);
+				const auto offset = Detail::ReadScalar<std::uint64_t>(in);
+				const auto byteCount = Detail::ReadScalar<std::uint64_t>(in);
+				const auto expectedByteCount = Detail::TensorSpecByteSize(spec);
+				if (byteCount != expectedByteCount)
+				{
+					throw std::runtime_error("LiteNN external variable byte size does not match tensor metadata");
+				}
+				auto storage = loadExternalWeightFile(externalPathText);
+				if (offset > storage->size() || byteCount > storage->size() - offset)
+				{
+					throw std::runtime_error("LiteNN external variable payload is outside the weight file");
+				}
+				auto* data = static_cast<void*>(storage->data() + static_cast<std::size_t>(offset));
+				tensor.emplace(data, ShapeView{ spec.shape }, spec.dtype, PolymorphicDevice{ CPU{} });
 			}
+			else
+			{
+				throw std::runtime_error("LiteNN model contains an unknown variable payload kind");
+			}
+			const auto hasGradStorage = Detail::ReadScalar<std::uint8_t>(in) != 0;
+			auto quantization = Detail::ReadOptionalQuantizationParams(in);
 			auto variable = Variable::Create(std::move(*tensor), hasGradStorage ? VariableGradStorage::Allocate
 			                                                                    : VariableGradStorage::None);
 			variable->SetQuantization(std::move(quantization));
@@ -1689,7 +1666,7 @@ namespace LiteNN::Serialization
 		const auto subgraphCount = Detail::ReadSize(in);
 		for (std::size_t i = 0; i < subgraphCount; ++i)
 		{
-			graph.AddSubgraph(Detail::ReadSubgraph(in, version));
+			graph.AddSubgraph(Detail::ReadSubgraph(in));
 		}
 		graph.SetForward(forward);
 		if (backward)
