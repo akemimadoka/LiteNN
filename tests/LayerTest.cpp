@@ -623,8 +623,9 @@ TEST(LayerPad, AppendsZerosAlongEachAxis)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
-	const std::array<std::size_t, 2> paddings{ 1, 2 };
-	const auto out = Layer::AddPad(sg, { input, 0 }, paddings);
+	const std::array<std::size_t, 2> lowPads{ 0, 0 };
+	const std::array<std::size_t, 2> highPads{ 1, 2 };
+	const auto out = Layer::AddPad(sg, { input, 0 }, lowPads, highPads);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

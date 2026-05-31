@@ -316,7 +316,7 @@ void BMTrainCPUFullStep(benchmark::State& state, TrainModelKind kind, std::size_
 	const auto inputData = MakeInputData(batch);
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
-	Training::CPUTrainer<Optimizer::SGD> trainer(
+	Training::Trainer<CPU, Optimizer::SGD> trainer(
 	    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }),
 	    Training::TrainerOptions{ .buildBackwardIfMissing = false });
 

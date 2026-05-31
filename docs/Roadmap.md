@@ -1483,6 +1483,27 @@ Completed notes:
   storage/artifact ABI usage, interpreter-vs-production execution, Graph entrypoint migration, schema serialization,
   backend shortcut migration, and builder-helper migration, with invariant validation covered by `G14Remaining`.
 
+#### G14.11 vNext Breakability Audit Follow-Up
+
+Purpose: finish the remaining compatibility-breaking cleanup found after the first G14 pass. These are the items most likely
+to keep the old architecture alive if they are left in place during vNext.
+
+- [ ] Remove `Graph` production overloads from runtime/compiler public APIs. `Interpreter`, CPU/CUDA `Compiler`,
+  `DumpMLIR`, and MLIR translation should consume `ExecutablePlan`, `ExecutableModule`, `ExecutableRegion`, or
+  `RuntimeSchedule`; graph convenience wrappers must move to migration/test/example helpers.
+- [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
+  serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
+- [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
+  GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
+- [ ] Remove library-internal environment-variable reads. `CompilerOptions`, `CUDAOptions`, and runtime/config objects own
+  behavior; CLI, benchmarks, and examples may still populate those options from environment variables.
+- [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and mark or remove helpers that
+  mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
+- [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
+  and CUDA AOT are selected through the same train-step contract.
+- [x] Delete legacy aliases and overload shims such as `CPUTrainer` and single-vector Pad helpers.
+- [ ] Add CI/build targets that intentionally fail when new public runtime/compiler APIs accept raw `Graph` after vNext.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,

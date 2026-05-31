@@ -194,9 +194,6 @@ namespace LiteNN::Training
 		D device_;
 		Runtime::Interpreter<D> interpreter_;
 	};
-
-	template <typename OptimizerT>
-	using CPUTrainer = Trainer<CPU, OptimizerT>;
 } // namespace LiteNN::Training
 
 #endif

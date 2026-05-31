@@ -318,7 +318,7 @@ namespace LiteNN::Examples::Mnist
 
 	inline void TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options)
 	{
-		Training::CPUTrainer<Optimizer::SGD> trainer(
+		Training::Trainer<CPU, Optimizer::SGD> trainer(
 		    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
 
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)

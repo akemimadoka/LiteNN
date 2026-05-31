@@ -68,7 +68,7 @@ TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 
 	auto result = trainer.StepSoftmaxCrossEntropy(inputs, 1);
@@ -97,7 +97,7 @@ TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 	std::vector<std::size_t> targets = { 0, 1 };
 
