@@ -1117,7 +1117,8 @@ Phase 2: decode and write an image.
       MatMul、BatchMatMul、Conv2D）并将 `Layer::AddTanh` 改为稳定的 `2*sigmoid(2x)-1` 展开；重新 import
       后的 full64 F16 UNet 可完成 zero-latent 1-step（`pred_rms=0.254`）和 random dual-CFG 4-step
       denoise，不再产生 NaN。输出 `build\sdxl_f16_stable\1girl_f16_64_4step.png` 非空、范围正常，但仍是
-      抽象结果，语义质量问题尚未关闭。）
+      抽象结果，语义质量问题尚未关闭。SDXL CLI 的 sampler / run-with-inputs 路径已默认检查输出 NaN/Inf，
+      并提供 `--allow-nonfinite` 作为诊断逃生口，避免再次静默写出坏 latent / output。）
 
 Phase 3: unblock full semantic image generation.
 
@@ -1187,6 +1188,8 @@ Phase 3: unblock full semantic image generation.
             - [x] Replace the unstable generated Tanh formula with `2*sigmoid(2x)-1`, avoiding F16 `inf/inf` in
                   GELU/GEGLU paths. Regression coverage:
                   `CompiledModuleTest.CPUFloat16GELUArtifactUsesStableTanh`.
+            - [x] Add output-level finite guards to the SDXL sampler and AOT run-with-inputs CLI paths, with
+                  `--allow-nonfinite` for collecting broken debug artifacts.
             - [ ] Add full-graph finite diagnostics that can stop after the first non-finite SDXL tensor.
             （已验证当前 CPU AOT F16 路径：重新 import 后的 full64 F16 UNet image-region artifact 可完成
             zero-latent 1-step 和 random dual-CFG 4-step denoise；有限性问题阶段解除。finite diagnostics

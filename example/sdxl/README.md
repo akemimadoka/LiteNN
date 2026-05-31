@@ -294,9 +294,12 @@ python311 example\sdxl\sdxl_prompt_to_image.py ^
 ```
 
 Current status: the full fixed-shape 64x64 UNet now imports, compiles, loads, and runs through separated image regions
-with BF16 weights/activations. F16 full UNet currently produces NaNs in the denoiser output, so BF16 is the recommended
-low-precision mode until mixed-precision accumulation is added for F16 attention/convolution-heavy graphs. The prompt
-harness now imports LiteNN graphs as `.ltnn` metadata plus sibling
+with BF16 or freshly re-imported F16 weights/activations. F16 requires the mixed-precision CPU AOT lowering and stable
+generated Tanh path in current LiteNN builds; re-import older `.ltnn` graphs that were created before those fixes. The
+SDXL CLI now fails by default when sampler or run-with-inputs outputs contain NaN/Inf; pass `--allow-nonfinite` only
+when intentionally collecting broken intermediate artifacts for debugging. BF16 is still the recommended first mode for
+large local smoke runs because it keeps a wider exponent range. The prompt harness now imports LiteNN graphs as `.ltnn`
+metadata plus sibling
 `unet.weights.bin` / `vae.weights.bin` files by default; pass `--inline-model-weights` only when intentionally testing
 the older inline format. SDXL compile/run/benchmark commands also enable CPU AOT external regions through explicit
 `CompilerOptions`, so large VariableRef weights become separated runtime weight regions instead of MLIR/LLVM constants.
@@ -311,9 +314,9 @@ constants/weights; use
 one-shot harness has a preflight guard:
 `--max-unet-weight-mib` defaults to `2048` and stops before importing/compiling full UNet manifests whose tensor payload
 would drive CPU AOT memory into tens of GiB. Use `--max-unet-weight-mib 0` only when intentionally running the full
-compile on a large-memory host. A local BF16 64x64 `1girl` 4-step run completed and wrote
-`build\sdxl_bf16_full64\1girl_bf16_64_4step.png`; it is nonblank but not semantically convincing yet, so image-quality
-parity remains open.
+compile on a large-memory host. Local BF16 and F16 64x64 `1girl` 4-step runs completed and wrote
+`build\sdxl_bf16_full64\1girl_bf16_64_4step.png` and `build\sdxl_f16_stable\1girl_f16_64_4step.png`; both are nonblank
+but not semantically convincing yet, so image-quality parity remains open.
 
 For a safe full-UNet size check that stops before import and codegen:
 

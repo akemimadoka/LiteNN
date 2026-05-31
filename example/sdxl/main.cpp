@@ -44,24 +44,25 @@ namespace
 		    " [--allow-extra-tensors] [--external-weights weights.bin] [--external-weight-min-bytes N]\n"
 		    "  {} --compile-budget <input.ltnn>\n"
 		    "  {} --run-model <input.ltnn>\n"
-		    "  {} --run-model-with-inputs <input.ltnn> <inputs.safetensors> [--output outputs.safetensors]\n"
+		    "  {} --run-model-with-inputs <input.ltnn> <inputs.safetensors>"
+		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
 		    "  {} --benchmark-model-with-inputs <input.ltnn> <inputs.safetensors>"
 		    " [--device cpu|cuda] [--warmup N] [--iterations N] [--json result.json]\n"
 		    "  {} --compile-raw-object <input.ltnn> <output.o|obj>\n"
 		    "  {} --compile-image-regions <input.ltnn> <output-dir> [file-prefix]"
 		    " [--cpu-aot-llvm-opt-level 0|1|2|3]\n"
 		    "  {} --run-image-with-inputs <rodata.bin> <instructions.o|obj> <inputs.safetensors>"
-		    " [--output outputs.safetensors]\n"
+		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
 		    "  {} --compile-object <input.ltnn> <output.o|obj> [symbol-prefix]\n"
 		    "  {} --load-dll <module.dll|so|dylib> [symbol-prefix]\n"
 		    "  {} --load-dll-with-inputs <module.dll|so|dylib> <inputs.safetensors> [symbol-prefix]"
-		    " [--output outputs.safetensors]\n"
+		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
 		    "  {} --sample-euler <module.dll|so|dylib> [symbol-prefix] [--steps N] [--seed N]"
 		    " [--sigma-max X] [--sigma-min X] [--scheduler linear|edm] [--rho X]"
 		    " [--denoiser-contract epsilon|denoised|sgm-edm|sgm-eps|sgm-v]"
 		    " [--timestep-mode auto|legacy|sigma|edm-log|zero] [--cfg-mode auto|none|dual]"
 		    " [--cfg-scale X] [--sigma-data X] [--latent-init random|zero|inputs]"
-		    " [--inputs inputs.safetensors] [--output-latent latent.safetensors]\n\n"
+		    " [--inputs inputs.safetensors] [--output-latent latent.safetensors] [--allow-nonfinite]\n\n"
 		    "  {} --denoise-latent <module.dll|so|dylib> <inputs.safetensors> <output-latent.safetensors>"
 		    " [symbol-prefix] [same sampler options except --inputs/--output-latent]\n\n"
 		    "  {} --denoise-latent-image <rodata.bin> <instructions.o|obj> <inputs.safetensors>"
@@ -211,6 +212,7 @@ namespace
 		std::string latentInit{ "random" };
 		std::optional<std::filesystem::path> inputBindings;
 		std::optional<std::filesystem::path> outputLatent;
+		bool failOnNonFinite{ true };
 	};
 
 	struct DenoiserStepCoefficients
@@ -235,6 +237,24 @@ namespace
 		double rms{};
 		double min{ std::numeric_limits<double>::infinity() };
 		double max{ -std::numeric_limits<double>::infinity() };
+		std::size_t finiteCount{};
+		std::size_t nonFiniteCount{};
+
+		[[nodiscard]] std::size_t TotalCount() const
+		{
+			return finiteCount + nonFiniteCount;
+		}
+
+		[[nodiscard]] bool AllFinite() const
+		{
+			return nonFiniteCount == 0;
+		}
+	};
+
+	struct OutputRunOptions
+	{
+		std::optional<std::filesystem::path> outputPath;
+		bool failOnNonFinite{ true };
 	};
 
 	struct ExampleCompilerSettings
@@ -354,17 +374,27 @@ namespace
 		return result;
 	}
 
-	std::optional<std::filesystem::path> ParseOutputOption(int argc, char** argv, int firstOption)
+	OutputRunOptions ParseOutputRunOptions(int argc, char** argv, int firstOption)
 	{
-		std::optional<std::filesystem::path> outputPath;
+		OutputRunOptions options;
 		for (int i = firstOption; i < argc; ++i)
 		{
 			const std::string_view option = argv[i];
+			if (option == "--allow-nonfinite")
+			{
+				options.failOnNonFinite = false;
+				continue;
+			}
+			if (option == "--fail-on-nonfinite")
+			{
+				options.failOnNonFinite = true;
+				continue;
+			}
 			if (option != "--output")
 			{
 				throw std::runtime_error("Unknown output option: " + std::string(option));
 			}
-			if (outputPath)
+			if (options.outputPath)
 			{
 				throw std::runtime_error("--output was specified more than once");
 			}
@@ -373,9 +403,9 @@ namespace
 				throw std::runtime_error("--output requires a value");
 			}
 			++i;
-			outputPath = std::filesystem::path(argv[i]);
+			options.outputPath = std::filesystem::path(argv[i]);
 		}
-		return outputPath;
+		return options;
 	}
 
 	std::vector<std::byte> ReadAllBytes(const std::filesystem::path& path)
@@ -508,6 +538,14 @@ namespace
 			else if (option == "--output-latent")
 			{
 				options.outputLatent = std::filesystem::path(std::string(requireValue(option)));
+			}
+			else if (option == "--allow-nonfinite")
+			{
+				options.failOnNonFinite = false;
+			}
+			else if (option == "--fail-on-nonfinite")
+			{
+				options.failOnNonFinite = true;
 			}
 			else
 			{
@@ -806,12 +844,24 @@ namespace
 		for (std::size_t i = 0; i < tensor.NumElements(); ++i)
 		{
 			const auto value = static_cast<double>(data[i]);
+			if (!std::isfinite(value))
+			{
+				++stats.nonFiniteCount;
+				continue;
+			}
+			++stats.finiteCount;
 			sum += value;
 			sumSquares += value * value;
 			stats.min = std::min(stats.min, value);
 			stats.max = std::max(stats.max, value);
 		}
-		const auto count = static_cast<double>(tensor.NumElements());
+		if (stats.finiteCount == 0)
+		{
+			stats.mean = std::numeric_limits<double>::quiet_NaN();
+			stats.rms = std::numeric_limits<double>::quiet_NaN();
+			return stats;
+		}
+		const auto count = static_cast<double>(stats.finiteCount);
 		stats.mean = sum / count;
 		stats.rms = std::sqrt(sumSquares / count);
 		return stats;
@@ -920,7 +970,18 @@ namespace
 
 	void PrintStats(std::string_view label, const TensorStats& stats)
 	{
-		std::cout << std::format("{} mean={} rms={} min={} max={}\n", label, stats.mean, stats.rms, stats.min, stats.max);
+		std::cout << std::format("{} mean={} rms={} min={} max={} finite={} nonfinite={}\n",
+		                         label, stats.mean, stats.rms, stats.min, stats.max,
+		                         stats.finiteCount, stats.nonFiniteCount);
+	}
+
+	void RequireFinite(std::string label, const TensorStats& stats)
+	{
+		if (!stats.AllFinite())
+		{
+			throw std::runtime_error(std::format("{} contains {} non-finite value(s) out of {}",
+			                                     label, stats.nonFiniteCount, stats.TotalCount()));
+		}
 	}
 
 	std::string_view SafetensorsDataTypeName(LiteNN::DataType dtype)
@@ -1302,7 +1363,8 @@ namespace
 	}
 
 	void PrintOutputs(std::span<const LiteNN::CompiledTensorSpec> specs,
-	                  std::span<const LiteNN::Tensor<LiteNN::CPU>> outputs)
+	                  std::span<const LiteNN::Tensor<LiteNN::CPU>> outputs,
+	                  bool failOnNonFinite)
 	{
 		for (std::size_t i = 0; i < outputs.size(); ++i)
 		{
@@ -1311,7 +1373,12 @@ namespace
 			                         LiteNN::DataTypeName(outputs[i].DType()), outputs[i].NumElements());
 			if (LiteNN::IsFloatingDataType(outputs[i].DType()) && outputs[i].NumElements() != 0)
 			{
-				PrintStats("    stats", ComputeTensorStats(outputs[i]));
+				const auto stats = ComputeTensorStats(outputs[i]);
+				PrintStats("    stats", stats);
+				if (failOnNonFinite)
+				{
+					RequireFinite(std::format("output {} '{}'", i, spec.name), stats);
+				}
 			}
 		}
 	}
@@ -1685,10 +1752,11 @@ namespace
 
 	std::vector<LiteNN::Tensor<LiteNN::CPU>> RunInputsAndPrint(
 	    const LiteNN::CompiledModule<LiteNN::CPU>& module,
-	    std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs)
+	    std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs,
+	    bool failOnNonFinite = true)
 	{
 		auto outputs = module.Run(inputs);
-		PrintOutputs(module.OutputSpecs(), outputs);
+		PrintOutputs(module.OutputSpecs(), outputs, failOnNonFinite);
 		return outputs;
 	}
 
@@ -1721,7 +1789,7 @@ namespace
 
 	void CompileAndRunModelWithInputs(const std::filesystem::path& graphPath,
 	                                  const std::filesystem::path& inputPath,
-	                                  const std::optional<std::filesystem::path>& outputPath)
+	                                  const OutputRunOptions& outputOptions)
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
@@ -1740,8 +1808,8 @@ namespace
 		                         BackendName(module.Backend()), module.InputSpecs().size(), module.OutputSpecs().size())
 		          << std::flush;
 		auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
-		auto outputs = RunInputsAndPrint(module, inputs);
-		WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+		auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
+		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 	}
 
 	void CompileRawObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath)
@@ -1925,7 +1993,7 @@ namespace
 	void LoadDllAndRunWithInputs(const std::filesystem::path& libraryPath,
 	                             const std::filesystem::path& inputPath,
 	                             std::string_view symbolPrefix,
-	                             const std::optional<std::filesystem::path>& outputPath)
+	                             const OutputRunOptions& outputOptions)
 	{
 		DynamicLibrary library(libraryPath);
 		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
@@ -1943,8 +2011,8 @@ namespace
 			                         module.OutputSpecs().size())
 			          << std::flush;
 			auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
-			auto outputs = RunInputsAndPrint(module, inputs);
-			WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+			auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
+			WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 			return;
 		}
 
@@ -1959,14 +2027,14 @@ namespace
 		                         module.InputSpecs().size(), module.OutputSpecs().size())
 		          << std::flush;
 		auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
-		auto outputs = RunInputsAndPrint(module, inputs);
-		WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+		auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
+		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 	}
 
 	void LoadImageAndRunWithInputs(const std::filesystem::path& rodataPath,
 	                               const std::filesystem::path& instructionsPath,
 	                               const std::filesystem::path& inputPath,
-	                               const std::optional<std::filesystem::path>& outputPath)
+	                               const OutputRunOptions& outputOptions)
 	{
 		if (auto separated = TryLoadSeparatedImageRegions(rodataPath, instructionsPath))
 		{
@@ -1979,8 +2047,8 @@ namespace
 			    separated->Weights().size(), separated->ExternalTensorInfos().size())
 			          << std::flush;
 			auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
-			auto outputs = RunInputsAndPrint(module, inputs);
-			WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+			auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
+			WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 			return;
 		}
 
@@ -1996,8 +2064,8 @@ namespace
 		                         BackendName(module.Backend()), module.InputSpecs().size(), module.OutputSpecs().size())
 		          << std::flush;
 		auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
-		auto outputs = RunInputsAndPrint(module, inputs);
-		WriteSingleOutputIfRequested(outputPath, module.OutputSpecs(), outputs);
+		auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
+		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 	}
 
 	void SampleEulerModule(const LiteNN::CompiledModule<LiteNN::CPU>& module,
@@ -2061,7 +2129,12 @@ namespace
 		    sourceLabel, BackendName(module.Backend()), options.steps, options.seed, options.scheduler,
 		    options.sigmaMax, options.sigmaMin, options.denoiserContract, options.timestepMode, cfgMode,
 		    options.cfgScale, ShapeToString(latentState.Shape()));
-		PrintStats("  initial latent", ComputeTensorStats(latentState));
+		const auto initialLatentStats = ComputeTensorStats(latentState);
+		PrintStats("  initial latent", initialLatentStats);
+		if (options.failOnNonFinite)
+		{
+			RequireFinite("initial latent", initialLatentStats);
+		}
 
 		for (std::size_t step = 0; step < options.steps; ++step)
 		{
@@ -2090,17 +2163,55 @@ namespace
 			}
 			const auto outputs = module.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 			const auto* uncondPrediction = cfgMode == "dual" ? &uncondOutputs[*noiseOutput] : nullptr;
+			const auto noiseStats = ComputeTensorStats(outputs[*noiseOutput]);
+			std::optional<TensorStats> uncondNoiseStats;
+			if (uncondPrediction != nullptr)
+			{
+				uncondNoiseStats = ComputeTensorStats(*uncondPrediction);
+			}
+			if (options.failOnNonFinite)
+			{
+				RequireFinite(std::format("step {} prediction", step + 1), noiseStats);
+				if (uncondNoiseStats)
+				{
+					RequireFinite(std::format("step {} unconditional prediction", step + 1),
+					              *uncondNoiseStats);
+				}
+			}
 			EulerUpdateFromPredictions(latentState, outputs[*noiseOutput], uncondPrediction, coefficients,
 			                           options.cfgScale, sigma, dt);
-			const auto noiseStats = ComputeTensorStats(outputs[*noiseOutput]);
 			const auto latentStats = ComputeTensorStats(latentState);
-			std::cout << std::format(
-			    "  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={} latent_rms={}\n",
-			    step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt, noiseStats.rms,
-			    latentStats.rms);
+			if (options.failOnNonFinite)
+			{
+				RequireFinite(std::format("step {} latent", step + 1), latentStats);
+			}
+			if (uncondNoiseStats)
+			{
+				std::cout << std::format(
+				    "  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
+				    " pred_nonfinite={} uncond_pred_rms={} uncond_pred_nonfinite={} latent_rms={}"
+				    " latent_nonfinite={}\n",
+				    step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
+				    noiseStats.rms, noiseStats.nonFiniteCount, uncondNoiseStats->rms,
+				    uncondNoiseStats->nonFiniteCount, latentStats.rms, latentStats.nonFiniteCount);
+			}
+			else
+			{
+				std::cout << std::format(
+				    "  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
+				    " pred_nonfinite={} latent_rms={} latent_nonfinite={}\n",
+				    step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
+				    noiseStats.rms, noiseStats.nonFiniteCount, latentStats.rms,
+				    latentStats.nonFiniteCount);
+			}
 		}
 
-		PrintStats("  final latent", ComputeTensorStats(latentState));
+		const auto finalLatentStats = ComputeTensorStats(latentState);
+		PrintStats("  final latent", finalLatentStats);
+		if (options.failOnNonFinite)
+		{
+			RequireFinite("final latent", finalLatentStats);
+		}
 		if (options.outputLatent)
 		{
 			WriteTensorSafetensors(*options.outputLatent, "latent", latentState);
@@ -2275,13 +2386,13 @@ int main(int argc, char** argv)
 		}
 		if (argc >= 2 && std::string_view(argv[1]) == "--run-model-with-inputs")
 		{
-			if (argc != 4 && argc != 6)
+			if (argc < 4)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
 #ifdef LITENN_ENABLE_MLIR
-			CompileAndRunModelWithInputs(argv[2], argv[3], ParseOutputOption(argc, argv, 4));
+			CompileAndRunModelWithInputs(argv[2], argv[3], ParseOutputRunOptions(argc, argv, 4));
 			return 0;
 #else
 			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
@@ -2360,13 +2471,13 @@ int main(int argc, char** argv)
 		}
 		if (argc >= 2 && std::string_view(argv[1]) == "--run-image-with-inputs")
 		{
-			if (argc != 5 && argc != 7)
+			if (argc < 5)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
 #ifdef LITENN_ENABLE_MLIR
-			LoadImageAndRunWithInputs(argv[2], argv[3], argv[4], ParseOutputOption(argc, argv, 5));
+			LoadImageAndRunWithInputs(argv[2], argv[3], argv[4], ParseOutputRunOptions(argc, argv, 5));
 			return 0;
 #else
 			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
@@ -2402,7 +2513,7 @@ int main(int argc, char** argv)
 				prefix = argv[4];
 				optionStart = 5;
 			}
-			LoadDllAndRunWithInputs(argv[2], argv[3], prefix, ParseOutputOption(argc, argv, optionStart));
+			LoadDllAndRunWithInputs(argv[2], argv[3], prefix, ParseOutputRunOptions(argc, argv, optionStart));
 			return 0;
 #else
 			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
