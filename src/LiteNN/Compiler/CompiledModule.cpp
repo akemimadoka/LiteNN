@@ -1361,13 +1361,12 @@ namespace
 
 	std::vector<CompiledTensorSpec> BuildInputSpecs(const Graph& graph)
 	{
-		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		const auto signature = graph.InputTypeSignature();
 		std::vector<CompiledTensorSpec> specs;
-		specs.reserve(subgraph.Params().size());
-		for (std::size_t i = 0; i < subgraph.Params().size(); ++i)
+		specs.reserve(signature.size());
+		for (const auto& input : signature)
 		{
-			const auto& param = subgraph.Params()[i];
-			specs.push_back({ param.dtype, param.shape, graph.InputName(i) });
+			specs.push_back(CompiledTensorSpec::FromType(input.name, input.type));
 		}
 		return specs;
 	}
@@ -1402,14 +1401,14 @@ namespace
 	std::vector<CompiledTensorSpec> BuildOutputSpecs(const Graph& graph)
 	{
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		const auto signature = graph.OutputTypeSignature();
 		std::vector<CompiledTensorSpec> specs;
-		specs.reserve(subgraph.Results().size());
-		for (std::size_t i = 0; i < subgraph.Results().size(); ++i)
+		specs.reserve(signature.size());
+		for (std::size_t i = 0; i < signature.size(); ++i)
 		{
 			const auto output = subgraph.Results()[i];
-			const auto& info = subgraph.GetOutputInfo(output);
-			specs.push_back(
-			    { info.dtype, info.shape, graph.OutputName(i), InferOutputQuantization(graph, subgraph, output) });
+			specs.push_back(CompiledTensorSpec::FromType(
+			    signature[i].name, signature[i].type, InferOutputQuantization(graph, subgraph, output)));
 		}
 		return specs;
 	}
@@ -1423,7 +1422,26 @@ namespace
 		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 		std::vector<CompiledTensorSpec> inputSpecs;
 		std::vector<CompiledTensorSpec> outputSpecs;
+		CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
 	};
+
+	CompiledArtifactParts MakeCompiledArtifactParts(
+	    std::vector<std::byte> rodata, std::vector<std::byte> instructions,
+	    std::vector<CompiledTensorSpec> inputSpecs, std::vector<CompiledTensorSpec> outputSpecs,
+	    CompiledModuleBackend backend, std::vector<std::byte> constants = {}, std::vector<std::byte> weights = {},
+	    std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {})
+	{
+		CompiledArtifactParts parts;
+		parts.rodata = std::move(rodata);
+		parts.instructions = std::move(instructions);
+		parts.constants = std::move(constants);
+		parts.weights = std::move(weights);
+		parts.externalTensorInfos = std::move(externalTensorInfos);
+		parts.inputSpecs = std::move(inputSpecs);
+		parts.outputSpecs = std::move(outputSpecs);
+		parts.backend = backend;
+		return parts;
+	}
 
 	std::uint64_t SaturatedMulU64(std::uint64_t lhs, std::uint64_t rhs)
 	{
@@ -7006,6 +7024,241 @@ void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, st
 }
 #endif
 
+namespace
+{
+	Graph BuildCompilerGraphFromPlan(const ExecutablePlan& plan)
+	{
+		ValidateExecutablePlan(plan);
+		Graph graph;
+
+		for (std::size_t i = 0; i < plan.variables.size(); ++i)
+		{
+			const auto& storage = plan.variables[i];
+			if (!storage.type.IsFullyStatic())
+			{
+				throw std::runtime_error(
+				    std::format("Cannot compile plan variable {} with non-static tensor type", i));
+			}
+			if (!storage.region.data)
+			{
+				throw std::runtime_error(std::format("Cannot compile plan variable {} without bound storage", i));
+			}
+			if (storage.type.memorySpace == TensorMemorySpace::Device)
+			{
+				throw std::runtime_error(
+				    std::format("Cannot compile plan variable {} from device-only storage without host binding", i));
+			}
+			const auto shape = storage.type.StaticShape();
+			const auto* bytes = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset +
+			                    storage.storageOffsetBytes;
+			Tensor<CPU> hostView(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+			if (storage.quantization)
+			{
+				graph.AddVariable(Variable::CreateFrozenQuantized(hostView, *storage.quantization));
+			}
+			else
+			{
+				graph.AddVariable(Variable::CreateFrozen(hostView));
+			}
+		}
+
+		for (const auto& type : plan.activationSlots)
+		{
+			graph.AddActivationSlot(type);
+		}
+		for (const auto& type : plan.tapeSlots)
+		{
+			graph.AddTapeSlot(type);
+		}
+
+		for (const auto& planSubgraph : plan.subgraphs)
+		{
+			Subgraph subgraph;
+			for (std::size_t paramIndex = 0; paramIndex < planSubgraph.params.size(); ++paramIndex)
+			{
+				if (paramIndex >= planSubgraph.nodes.size())
+				{
+					throw std::runtime_error("ExecutablePlan subgraph has fewer nodes than params");
+				}
+				const auto* paramNode = std::get_if<ParamRefNode>(&planSubgraph.nodes[paramIndex].node);
+				if (!paramNode || paramNode->paramIndex != paramIndex)
+				{
+					throw std::runtime_error(
+					    "ExecutablePlan compiler bridge expects leading ParamRefNode entries for subgraph params");
+				}
+				subgraph.AddParam(planSubgraph.params[paramIndex]);
+			}
+			for (std::size_t nodeIndex = planSubgraph.params.size(); nodeIndex < planSubgraph.nodes.size(); ++nodeIndex)
+			{
+				const auto& planNode = planSubgraph.nodes[nodeIndex];
+				std::vector<OutputInfo> outputs;
+				outputs.reserve(planNode.outputs.size());
+				for (const auto& output : planNode.outputs)
+				{
+					outputs.push_back(OutputInfo::FromType(output));
+				}
+				subgraph.AddNode(planNode.node, std::move(outputs));
+			}
+			subgraph.SetResults(std::vector<NodeOutput>(planSubgraph.results.begin(), planSubgraph.results.end()));
+			const auto id = graph.AddSubgraph(std::move(subgraph));
+			if (id != planSubgraph.sourceSubgraph)
+			{
+				throw std::runtime_error("ExecutablePlan subgraph order is not compatible with compiler lowering");
+			}
+		}
+
+		graph.SetForward(plan.forward);
+		if (plan.backward)
+		{
+			graph.SetBackward(*plan.backward);
+		}
+
+		std::vector<std::string> inputNames;
+		inputNames.reserve(plan.inputs.size());
+		for (std::size_t i = 0; i < plan.inputs.size(); ++i)
+		{
+			inputNames.push_back(plan.inputs[i].name.empty() ? std::format("input{}", i) : plan.inputs[i].name);
+		}
+		graph.SetInputNames(std::move(inputNames));
+
+		std::vector<std::string> outputNames;
+		outputNames.reserve(plan.outputs.size());
+		for (std::size_t i = 0; i < plan.outputs.size(); ++i)
+		{
+			outputNames.push_back(plan.outputs[i].name.empty() ? std::format("output{}", i) : plan.outputs[i].name);
+		}
+		graph.SetOutputNames(std::move(outputNames));
+
+		std::vector<std::string> variableNames;
+		variableNames.reserve(plan.variables.size());
+		for (std::size_t i = 0; i < plan.variables.size(); ++i)
+		{
+			const auto& name = plan.variables[i].region.name;
+			variableNames.push_back(name.empty() ? std::format("variable{}", i) : name);
+		}
+		graph.SetVariableNames(std::move(variableNames));
+
+		Validation::ValidateGraph(graph);
+		return graph;
+	}
+
+	CompiledArtifactParts CompileCPUArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options)
+	{
+		Validation::ValidateGraph(graph);
+		if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
+		{
+			return MakeCompiledArtifactParts(
+			    std::move(parallelParts->rodata), std::move(parallelParts->instructions),
+			    std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
+			    CompiledModuleBackend::CPUNative, std::move(parallelParts->constants), std::move(parallelParts->weights),
+			    std::move(parallelParts->externalTensorInfos));
+		}
+		if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options))
+		{
+			return MakeCompiledArtifactParts(
+			    std::move(externalParts->rodata), std::move(externalParts->instructions),
+			    std::move(externalParts->inputSpecs), std::move(externalParts->outputSpecs),
+			    CompiledModuleBackend::CPUNative, std::move(externalParts->constants), std::move(externalParts->weights),
+			    std::move(externalParts->externalTensorInfos));
+		}
+
+		mlir::MLIRContext ctx;
+		SetupCompilerMLIRContext(ctx);
+		auto mlirModule = BuildLoweredMLIRModule(graph, ctx);
+
+		llvm::LLVMContext llvmCtx;
+		auto llvmModule = litenn::translateToLLVMIR(*mlirModule, llvmCtx);
+		if (!llvmModule)
+		{
+			throw std::runtime_error("Failed to translate lowered MLIR module to LLVM IR");
+		}
+
+		auto config = CreateNativeTargetMachine();
+		ConfigureForNativeObject(*llvmModule, config);
+
+		const auto inputSpecs = BuildInputSpecs(graph);
+		const auto outputSpecs = BuildOutputSpecs(graph);
+		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
+		OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel);
+
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto instructions = EmitObjectFile(*llvmModule);
+		return MakeCompiledArtifactParts(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs,
+		                                 CompiledModuleBackend::CPUNative);
+	}
+
+#ifdef LITENN_ENABLE_CUDA
+	CompiledArtifactParts CompileCUDAArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options)
+	{
+		Validation::ValidateGraph(graph);
+		if (options.enableCUDANativeAOT)
+		{
+			if (auto nativeParts = TryCompileCUDANativeCast(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeLinearChain(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeMatMulBias(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeMatMulLowPrecision(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+		}
+		return CompileCPUArtifactPartsFromGraph(graph, options);
+	}
+#endif
+} // namespace
+
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 {
 	return CompileArtifact(graph, CompilerOptions::Defaults());
@@ -7013,46 +7266,22 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
 
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
 {
-	if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
-	{
-		return CompiledModuleArtifact(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
-		                              std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
-		                              CompiledModuleBackend::CPUNative, std::move(parallelParts->constants),
-		                              std::move(parallelParts->weights),
-		                              std::move(parallelParts->externalTensorInfos));
-	}
-	if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options))
-	{
-		return CompiledModuleArtifact(std::move(externalParts->rodata), std::move(externalParts->instructions),
-		                              std::move(externalParts->inputSpecs), std::move(externalParts->outputSpecs),
-		                              CompiledModuleBackend::CPUNative, std::move(externalParts->constants),
-		                              std::move(externalParts->weights),
-		                              std::move(externalParts->externalTensorInfos));
-	}
+	Validation::ValidateGraph(graph);
+	return CompileArtifact(BuildExecutablePlan(graph), options);
+}
 
-	mlir::MLIRContext ctx;
-	SetupCompilerMLIRContext(ctx);
-	auto mlirModule = BuildLoweredMLIRModule(graph, ctx);
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan)
+{
+	return CompileArtifact(plan, CompilerOptions::Defaults());
+}
 
-	llvm::LLVMContext llvmCtx;
-	auto llvmModule = litenn::translateToLLVMIR(*mlirModule, llvmCtx);
-	if (!llvmModule)
-	{
-		throw std::runtime_error("Failed to translate lowered MLIR module to LLVM IR");
-	}
-
-	auto config = CreateNativeTargetMachine();
-	ConfigureForNativeObject(*llvmModule, config);
-
-	const auto inputSpecs = BuildInputSpecs(graph);
-	const auto outputSpecs = BuildOutputSpecs(graph);
-	AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
-	OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel);
-
-	auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
-	auto instructions = EmitObjectFile(*llvmModule);
-	return CompiledModuleArtifact(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs,
-	                              CompiledModuleBackend::CPUNative);
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	ValidateExecutablePlan(plan);
+	auto parts = CompileCPUArtifactPartsFromGraph(BuildCompilerGraphFromPlan(plan), options);
+	return CompiledModuleArtifact(std::move(parts.rodata), std::move(parts.instructions), std::move(parts.inputSpecs),
+	                              std::move(parts.outputSpecs), parts.backend, std::move(parts.constants),
+	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
 }
 
 CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
@@ -7065,6 +7294,16 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph, const CompilerOpt
 	return CompileArtifact(graph, options).Load();
 }
 
+CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan)
+{
+	return Compile(plan, CompilerOptions::Defaults());
+}
+
+CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	return CompileArtifact(plan, options).Load();
+}
+
 #ifdef LITENN_ENABLE_CUDA
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 {
@@ -7074,70 +7313,21 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
 {
 	Validation::ValidateGraph(graph);
-	if (options.enableCUDANativeAOT)
-	{
-		if (auto nativeParts = TryCompileCUDANativeCast(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeLinearChain(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeMatMulBias(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeMatMulLowPrecision(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-		if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
-		{
-			return CompiledModuleArtifact(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-			                              std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
-			                              CompiledModuleBackend::CUDANative);
-		}
-	}
-	return Compiler<CPU>::CompileArtifact(graph, options);
+	return CompileArtifact(BuildExecutablePlan(graph), options);
+}
+
+CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const ExecutablePlan& plan)
+{
+	return CompileArtifact(plan, CompilerOptions::Defaults());
+}
+
+CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	ValidateExecutablePlan(plan);
+	auto parts = CompileCUDAArtifactPartsFromGraph(BuildCompilerGraphFromPlan(plan), options);
+	return CompiledModuleArtifact(std::move(parts.rodata), std::move(parts.instructions), std::move(parts.inputSpecs),
+	                              std::move(parts.outputSpecs), parts.backend, std::move(parts.constants),
+	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
 }
 
 CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device)
@@ -7153,5 +7343,20 @@ CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, const CompilerO
 CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device, const CompilerOptions& options)
 {
 	return CompileArtifact(graph, options).Load(std::move(device));
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA device)
+{
+	return Compile(plan, std::move(device), CompilerOptions::Defaults());
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	return Compile(plan, CUDA{}, options);
+}
+
+CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA device, const CompilerOptions& options)
+{
+	return CompileArtifact(plan, options).Load(std::move(device));
 }
 #endif

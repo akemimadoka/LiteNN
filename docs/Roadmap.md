@@ -1282,6 +1282,186 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
 
+### G14: vNext Breaking Architecture
+
+Purpose: use the compatibility-breaking branch to replace accidental coupling with explicit contracts. The goal is not to
+rename types for aesthetics; it is to make SDXL, llama.cpp/GGUF, CUDA AOT, heterogeneous execution, AOT training, external
+weights, quantization, and mobile support grow through the same architecture instead of separate side paths.
+
+Scope rule: this branch may break in-memory APIs, serialized model versions, compiler entry points, and runtime binding
+contracts when doing so removes long-term coupling. Compatibility shims are allowed only as migration tooling; they should
+not constrain the new core ABI.
+
+High-value break order:
+
+- P0: split executable plan from model graph; make tensor type/storage facts first-class; replace ad-hoc node knowledge with
+  op schemas.
+- P1: move interpreter/compiler/validation onto the plan/schema/type contracts; formalize the vNext model/artifact format and
+  external tensor table.
+- P2: add runtime scheduling/state ABI, compiled training transforms, memory planning, backend cost/placement, and import
+  boundaries for large-model frontends.
+- P3: delete old accidental APIs, old serializer assumptions, and backend-specific shortcuts after migration paths exist.
+
+#### G14.1 Model Graph / Executable Plan / Backend IR Split
+
+- [x] Create the first `ModelGraph` wrapper and `ExecutablePlan` snapshot layer so front-end graph ownership can diverge
+  from executable scheduling without changing every runtime/compiler call site at once.
+- [x] Snapshot subgraph params, nodes, inputs, outputs, variable storage refs, and forward/backward entry metadata into
+  `ExecutablePlan`.
+- [x] Snapshot node payloads plus activation/tape slot types into `ExecutablePlan`, so future runtime/compiler plan entry
+  points do not need to recover these facts from the front-end `Graph`.
+- [x] Add first-pass `ExecutablePlan` validation for schema lookup, input/output arity, value references, tensor type facts,
+  storage bounds, public signatures, and entry-point ranges.
+- [x] Move interpreter execution to `ExecutablePlan` while keeping front-end `Graph` as a model-construction API.
+- [x] Move CPU/CUDA AOT compilation entry points to `ExecutablePlan`, then leave `Graph` compile as a convenience lowering.
+- [x] Introduce explicit `Module` / `Function` / `Region` / `Partition` objects for large models, control flow, SDXL
+  sampler loops, LLM decode/prefill, and heterogeneous partitioning.
+- [x] Make plan validation the single legality gate before runtime, compiler, serialization, or benchmarking.
+
+Completed notes:
+
+- Runtime `Interpreter` now has `ExecutablePlan` entry points; `Graph` entry points validate and lower to a plan before
+  executing, preserving the reference/debug workflow while moving production legality to the plan layer.
+- CPU and CUDA AOT compilers now accept `ExecutablePlan`; `Graph` compile APIs are convenience lowering wrappers. The
+  temporary compiler bridge rebuilds a graph for existing MLIR/native lowering and validates the `ParamRefNode` layout so
+  node IDs do not drift.
+- `BuildExecutableModule` now creates the first function/region/partition shell over a plan, giving large-model schedulers
+  a stable home without making the front-end graph executable by itself.
+- Model serialization save paths now validate the executable plan after graph validation. Benchmarks already enter through
+  interpreter/compiler APIs, so they inherit the same plan validation gate.
+
+#### G14.2 First-Class Tensor Type and Storage ABI
+
+- [x] Add `TensorType` with dtype, static/dynamic/symbolic shape, layout, and memory-space fields.
+- [x] Add `TensorStorageRef` / `BufferRegion` so owned, borrowed, rodata, safetensors, GGUF, user, and device-owned buffers
+  can share one binding vocabulary.
+- [x] Add `TensorType` conversion/query overloads for current `OutputInfo`, `TensorSpec`, `SubgraphParam`,
+  activation/tape slots, graph signatures, and `Subgraph::AddParam` / `Subgraph::AddNode` construction.
+- [x] Replace `OutputInfo`, `TensorSpec`, `SubgraphParam`, activation slots, and tape slots with `TensorType` as the
+  canonical representation at executable-plan/runtime/compiler boundaries; legacy graph-builder structs remain as
+  migration adapters.
+- [x] Replace ad-hoc shape/layout handling in plan validation and compiled signatures with `TensorType` facts; importer and
+  backend-internal cleanup is now treated as follow-up migration work rather than the public ABI contract.
+- [x] Add checksums, alignment, mutability, and rebinding compatibility to external storage metadata.
+- [x] Make tensor views explicit: logical shape, storage offset, strides, layout tag, and aliasing/mutation effects.
+
+Completed notes:
+
+- `TensorType` now drives graph signatures, executable-plan params/results, activation/tape slots, compiled input/output
+  specs, and plan validation. The old lightweight structs still exist only to keep current graph construction readable
+  during migration.
+- `TensorStorageRef` / `BufferRegion` now carry alignment, checksum, mutability, rebinding policy, variable names, memory
+  space, quantization metadata, storage offsets, explicit view strides, layout tags, alias sets, and view mutability.
+- Quantized variable metadata survives Graph -> ExecutablePlan -> compiler-bridge reconstruction.
+
+#### G14.3 Op Schema Registry and Backend Capability Matrix
+
+- [x] Add `OpSchemaRegistry` that auto-registers every `NodeVariant` alternative and records category, arity, effect,
+  shape/verifier availability, and backend capability slots.
+- [x] Add `NodeInputs` extraction as the first shared node-introspection API for plan building, validation, compiler
+  lowering, and future documentation/test generation.
+- [x] Move generic validation node-name, input/output arity, and input-reference checks onto the schema registry while keeping
+  op-specific semantic validation in `GraphValidator`.
+- [x] Add backend capability query/registration APIs and seed the default registry with CPU Interpreter reference coverage.
+- [x] Attach per-backend legality, dtype support, layout support, memory effects, and fallback policy to each schema.
+- [x] Generate operator coverage reports for CPU interpreter, CPU AOT, CUDA native, CUDA bridge, mobile, and quantized
+  paths from the same schema data.
+- [x] Use schema metadata to drive serializer compatibility, error diagnostics, and unsupported-model reports.
+
+Completed notes:
+
+- Default schemas now seed CPU Interpreter as native coverage and explicitly record unsupported CPU AOT, CUDA native,
+  CUDA bridge, and mobile entries with CPU Interpreter fallback metadata until those backends register real coverage.
+- `CoverageReport` provides a backend matrix for documentation, tests, and future generated reports.
+- `CollectExecutablePlanBackendIssues` / `RequireExecutablePlanBackendSupport` report unsupported ops for a selected
+  backend before lowering, using the same schema capability data as plan validation.
+
+#### G14.4 vNext Model, Artifact, and External Tensor Format
+
+- [ ] Replace the current monolithic model archive assumptions with a manifest-shaped format: model graph, executable plans,
+  tensor table, external-data table, metadata namespaces, and compiled-artifact table.
+- [ ] Version the op set, dtype set, layout vocabulary, quantization vocabulary, and artifact ABI independently so loaders can
+  reject incompatible models with actionable diagnostics.
+- [ ] Make external tensor references first-class: URI/path-less embedding, relative package paths, mmap offsets, alignment,
+  checksum, mutability, expected dtype/layout/shape, and rebinding policy.
+- [ ] Support separated rodata/instructions/weights for CPU and CUDA artifacts through one artifact table instead of
+  backend-specific side contracts.
+- [ ] Define a stable package layout for static-library, shared-library, standalone archive, and mobile deployment modes.
+- [ ] Provide old `.ltnn` to vNext import tooling, but do not preserve old in-memory ABI once vNext is stable.
+
+#### G14.5 Runtime Scheduler, State, and Stateful Model ABI
+
+- [ ] Add an explicit runtime scheduler layer over `ExecutablePlan` so multi-entry models, loops, state mutation, and
+  backend partitions are owned by runtime metadata rather than examples.
+- [ ] Represent LLM decode/prefill state explicitly: KV cache tensors, current position, batch/sequence metadata, cache views,
+  and update effects.
+- [ ] Represent diffusion execution explicitly: sampler loop, timestep schedule, latent state, conditioning tensors, guidance
+  scale, VAE decode, and optional text-encoder bridge inputs.
+- [ ] Represent training execution explicitly: saved activations, recomputation strategy, loss inputs, optimizer state, and
+  mutable parameter bindings.
+- [ ] Add a scheduler trace/profile API that records op dispatch, backend partitions, transfers, synchronization, workspace
+  allocation, and external buffer bindings.
+- [ ] Keep examples as orchestration frontends, but move reusable execution semantics into runtime-owned objects.
+
+#### G14.6 Autograd and Training as Compiled Graph Transforms
+
+- [ ] Treat autograd as a graph-to-graph transform that emits explicit backward values and state, not interpreter-local side
+  channels.
+- [ ] Lower optimizer steps such as SGD and AdamW into graph/update ops with explicit parameter and optimizer-state inputs and
+  outputs.
+- [ ] Define `TrainStepPlan` as a specialized executable plan or plan bundle with forward/loss/backward/update entry points.
+- [ ] Make `Trainer<Device, Optimizer>` select `Interpreter`, `AOT`, or `Auto` execution policy over the same train-step
+  contract.
+- [ ] Add compiled CPU training first, then CUDA training with explicit stream/workspace/synchronization ownership.
+- [ ] Add parity tests that compare interpreter train step, CPU AOT train step, CUDA AOT train step, and PyTorch for small
+  models before moving to MNIST/LLM fine-tuning cases.
+
+#### G14.7 Backend Capability, Cost Model, and Heterogeneous Placement
+
+- [ ] Make backend capability data mandatory for every schema-covered op: legality, dtype support, layout support, memory
+  spaces, mutability effects, lowering path, and fallback rule.
+- [ ] Add a real cost model that combines op cost, transfer cost, layout conversion cost, compile/cache cost, precision policy,
+  and workspace pressure.
+- [ ] Move heterogeneous partitioning from roadmap-only design into plan extraction: CPU/CUDA/mobile partitions, transfer
+  nodes, synchronization points, and fallback diagnostics.
+- [ ] Use the cost model for e-graph extraction, backend selection, and CUDA-vs-CPU fallback decisions instead of hard-coded
+  native/bridge heuristics.
+- [ ] Emit coverage reports from schema/capability data for CPU interpreter, CPU AOT, CUDA native, CUDA bridge, quantized,
+  mobile, and training paths.
+
+#### G14.8 Memory Planner, Views, and Alias Model
+
+- [ ] Add a plan-level memory planner that assigns workspace buffers, persistent state buffers, external buffers, and temporary
+  buffers with explicit lifetimes.
+- [ ] Make views non-ambiguous: base storage, byte offset, logical type, explicit strides, layout tag, alias set, and mutation
+  permissions.
+- [ ] Reject hidden copies in plan validation unless the plan contains an explicit copy/convert/layout node.
+- [ ] Add buffer reuse and in-place legality based on op effects, aliasing, and user-visible output requirements.
+- [ ] Use the same memory planner for interpreter, CPU AOT, CUDA AOT, heterogeneous runtime, and mobile profiles.
+
+#### G14.9 Frontend Import Boundaries and Large-Model Construction
+
+- [ ] Keep `ModelGraph` as the frontend semantic contract and make Torch/safetensors, GGUF/llama.cpp, SDXL, and future ONNX-like
+  importers target that layer rather than runtime/compiler internals.
+- [ ] Add importer diagnostics that distinguish unsupported op, unsupported dtype, unsupported layout, missing metadata,
+  unsupported state ABI, and unsupported backend capability.
+- [ ] Make weight-name mapping, tensor layout conversion, quantization mapping, LoRA adapter binding, and tokenizer/config
+  metadata part of importer-owned manifests.
+- [ ] Allow large models to be built as modules/functions instead of a single giant subgraph so compilation, caching, and
+  partial lowering are tractable.
+
+#### G14.10 Compatibility-Breaking Cleanup and Migration Rules
+
+- [ ] Keep multi-output nodes as a core invariant.
+- [ ] Keep explicit rodata/instruction/external-weight loading, but formalize it through the storage/artifact ABI.
+- [ ] Keep Interpreter as the reference/debugging path, but make production execution consume lowered plans.
+- [ ] Remove direct `Graph` dependencies from runtime/compiler public entry points after `ExecutablePlan` entry points are
+  stable.
+- [ ] Remove serializer knowledge of raw `NodeVariant` layout after schema-driven op serialization is available.
+- [ ] Remove backend-specific CUDA/CPU shortcuts once they can be represented as capability, cost, layout, or artifact metadata.
+- [ ] Mark old graph-builder helpers as migration-only when they bypass `TensorType`, schema validation, or external-storage
+  binding rules.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,

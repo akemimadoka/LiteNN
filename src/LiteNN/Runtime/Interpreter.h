@@ -1,10 +1,12 @@
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/DataMovement.h>
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <format>
 #include <limits>
@@ -31,18 +33,32 @@ namespace LiteNN::Runtime
 		                                   D device = D{})
 		{
 			Validation::ValidateGraph(graph);
-			return RunSubgraphUnchecked(graph, subgraphId, inputs, std::move(device));
+			return RunSubgraph(BuildExecutablePlan(graph), subgraphId, inputs, std::move(device));
+		}
+
+		std::vector<Tensor<D>> RunSubgraph(const ExecutablePlan& plan, SubgraphId subgraphId,
+		                                   std::span<const Tensor<D>> inputs, D device = D{})
+		{
+			ValidateExecutablePlan(plan);
+			return RunSubgraphUnchecked(plan, subgraphId, inputs, std::move(device));
 		}
 
 		// 执行前向子图（自动初始化 activation store）
 		std::vector<Tensor<D>> RunForward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			Validation::ValidateGraph(graph);
+			return RunForward(BuildExecutablePlan(graph), inputs, std::move(device));
+		}
+
+		std::vector<Tensor<D>> RunForward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
+		                                  D device = D{})
+		{
+			ValidateExecutablePlan(plan);
 			activationStore_.clear();
-			activationStore_.resize(graph.ActivationSlotCount());
+			activationStore_.resize(plan.activationSlots.size());
 			tapeStore_.clear();
-			tapeStore_.resize(graph.TapeSlotCount());
-			return RunSubgraphUnchecked(graph, graph.Forward(), inputs, std::move(device));
+			tapeStore_.resize(plan.tapeSlots.size());
+			return RunSubgraphUnchecked(plan, plan.forward, inputs, std::move(device));
 		}
 
 		// 执行前向子图，并在每个节点执行后回调其输出张量；用于诊断中间激活。
@@ -50,15 +66,22 @@ namespace LiteNN::Runtime
 		                                           TraceCallback callback, D device = D{})
 		{
 			Validation::ValidateGraph(graph);
+			return RunForwardWithTrace(BuildExecutablePlan(graph), inputs, std::move(callback), std::move(device));
+		}
+
+		std::vector<Tensor<D>> RunForwardWithTrace(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
+		                                           TraceCallback callback, D device = D{})
+		{
+			ValidateExecutablePlan(plan);
 			activationStore_.clear();
-			activationStore_.resize(graph.ActivationSlotCount());
+			activationStore_.resize(plan.activationSlots.size());
 			tapeStore_.clear();
-			tapeStore_.resize(graph.TapeSlotCount());
+			tapeStore_.resize(plan.tapeSlots.size());
 			auto previousCallback = std::move(traceCallback_);
 			traceCallback_ = std::move(callback);
 			try
 			{
-				auto results = RunSubgraphUnchecked(graph, graph.Forward(), inputs, std::move(device));
+				auto results = RunSubgraphUnchecked(plan, plan.forward, inputs, std::move(device));
 				traceCallback_ = std::move(previousCallback);
 				return results;
 			}
@@ -73,12 +96,18 @@ namespace LiteNN::Runtime
 		std::vector<Tensor<D>> RunBackward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			Validation::ValidateGraph(graph);
-			const auto backwardId = graph.Backward();
-			if (!backwardId)
+			return RunBackward(BuildExecutablePlan(graph), inputs, std::move(device));
+		}
+
+		std::vector<Tensor<D>> RunBackward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
+		                                   D device = D{})
+		{
+			ValidateExecutablePlan(plan);
+			if (!plan.backward)
 			{
 				throw std::runtime_error("Graph has no backward subgraph");
 			}
-			return RunSubgraphUnchecked(graph, *backwardId, inputs, std::move(device));
+			return RunSubgraphUnchecked(plan, *plan.backward, inputs, std::move(device));
 		}
 
 	private:
@@ -101,6 +130,55 @@ namespace LiteNN::Runtime
 					    Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
 				}
 			}
+		}
+
+		static void ValidateRuntimeInputs(const ExecutablePlan& plan, SubgraphId subgraphId,
+		                                  std::span<const Tensor<D>> inputs)
+		{
+			if (subgraphId >= plan.subgraphs.size())
+			{
+				throw std::runtime_error(std::format("RunSubgraph subgraph {} is out of range; subgraphCount={}",
+				                                     subgraphId, plan.subgraphs.size()));
+			}
+			const auto& subgraph = plan.subgraphs[subgraphId];
+			if (inputs.size() != subgraph.params.size())
+			{
+				throw std::runtime_error(std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}",
+				                                     subgraphId, subgraph.params.size(), inputs.size()));
+			}
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+			{
+				const auto& param = subgraph.params[i];
+				if (!param.IsFullyStatic())
+				{
+					throw std::runtime_error(std::format(
+					    "RunSubgraph input {} for subgraph {} has non-static executable type", i, subgraphId));
+				}
+				const auto expectedShape = param.StaticShape();
+				if (inputs[i].DType() != param.dtype || inputs[i].Shape() != ShapeView{ expectedShape })
+				{
+					throw std::runtime_error(std::format(
+					    "RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
+					    Validation::FormatInfo(param.dtype, expectedShape),
+					    Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+				}
+			}
+		}
+
+		static OutputInfo ToOutputInfo(const TensorType& type)
+		{
+			return OutputInfo::FromType(type);
+		}
+
+		static NodeEntry MakeNodeEntry(const ExecutablePlanNode& node)
+		{
+			std::vector<OutputInfo> outputs;
+			outputs.reserve(node.outputs.size());
+			for (const auto& output : node.outputs)
+			{
+				outputs.push_back(ToOutputInfo(output));
+			}
+			return { node.node, std::move(outputs) };
 		}
 
 		std::vector<Tensor<D>> RunSubgraphUnchecked(const Graph& graph, SubgraphId subgraphId,
@@ -144,9 +222,93 @@ namespace LiteNN::Runtime
 			}
 			return results;
 		}
+
+		std::vector<Tensor<D>> RunSubgraphUnchecked(const ExecutablePlan& plan, SubgraphId subgraphId,
+		                                            std::span<const Tensor<D>> inputs, D device = D{})
+		{
+			const auto& subgraph = plan.subgraphs[subgraphId];
+			ValidateRuntimeInputs(plan, subgraphId, inputs);
+
+			std::vector<std::vector<Tensor<D>>> slots(subgraph.nodes.size());
+
+			for (NodeId nodeId = 0; nodeId < subgraph.nodes.size(); ++nodeId)
+			{
+				const auto& planNode = subgraph.nodes[nodeId];
+				auto entry = MakeNodeEntry(planNode);
+
+				try
+				{
+					std::visit([&](const auto& node) { Execute(plan, entry, nodeId, node, slots, inputs, device); },
+					           entry.node);
+				}
+				catch (const std::exception& ex)
+				{
+					throw std::runtime_error(std::format("Interpreter failed at subgraph {}, node {} ({}): {}",
+					                                     subgraphId, nodeId, Validation::NodeKindName(entry.node),
+					                                     ex.what()));
+				}
+				if (traceCallback_)
+				{
+					traceCallback_(subgraphId, nodeId, entry,
+					               std::span<const Tensor<D>>(slots[nodeId].data(), slots[nodeId].size()));
+				}
+			}
+
+			std::vector<Tensor<D>> results;
+			results.reserve(subgraph.results.size());
+			for (const auto& output : subgraph.results)
+			{
+				results.push_back(GetValue(slots, output));
+			}
+			return results;
+		}
 		static const Tensor<D>& GetValue(const std::vector<std::vector<Tensor<D>>>& slots, NodeOutput output)
 		{
 			return slots[output.node][output.port];
+		}
+
+		static Tensor<D> LoadVariable(const Graph& graph, std::size_t variableIndex, D& device)
+		{
+			return graph.GetVariable(variableIndex)->Data().CopyToDevice(device);
+		}
+
+		static Tensor<D> LoadVariable(const ExecutablePlan& plan, std::size_t variableIndex, D& device)
+		{
+			if (variableIndex >= plan.variables.size())
+			{
+				throw std::runtime_error(std::format("VariableRefNode references variable {}, but variableCount={}",
+				                                     variableIndex, plan.variables.size()));
+			}
+			const auto& storage = plan.variables[variableIndex];
+			if (!storage.type.IsFullyStatic())
+			{
+				throw std::runtime_error("VariableRefNode requires a fully static tensor type");
+			}
+			if (!storage.region.data)
+			{
+				throw std::runtime_error("VariableRefNode storage region is not bound");
+			}
+			const auto shape = storage.type.StaticShape();
+			const auto* bytes = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset +
+			                    storage.storageOffsetBytes;
+			if (storage.type.memorySpace == TensorMemorySpace::Host ||
+			    storage.type.memorySpace == TensorMemorySpace::Constant ||
+			    storage.type.memorySpace == TensorMemorySpace::External ||
+			    storage.type.memorySpace == TensorMemorySpace::Unified)
+			{
+				Tensor<CPU> hostView(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+				return hostView.CopyToDevice(device);
+			}
+
+			if constexpr (std::same_as<D, CPU>)
+			{
+				throw std::runtime_error("VariableRefNode device storage cannot be read by a CPU interpreter plan");
+			}
+			else
+			{
+				Tensor<D> deviceView(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, device);
+				return Tensor<D>(deviceView);
+			}
 		}
 
 		static bool ReadScalarBool(const Tensor<D>& tensor)
@@ -336,31 +498,36 @@ namespace LiteNN::Runtime
 
 		// 各节点类型的执行逻辑
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ParamRefNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ParamRefNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			slots[nodeId].push_back(Tensor<D>(inputs[node.paramIndex]));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConstantNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ConstantNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			slots[nodeId].push_back(node.value.CopyToDevice(device));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const QuantizedConstantNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const QuantizedConstantNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			slots[nodeId].push_back(node.storage.CopyToDevice(device));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const VariableRefNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const VariableRefNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			slots[nodeId].push_back(graph.GetVariable(node.variableIndex)->Data().CopyToDevice(device));
+			slots[nodeId].push_back(LoadVariable(graph, node.variableIndex, device));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const UnaryOpNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const UnaryOpNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -372,7 +539,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const BinaryOpNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const BinaryOpNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& lhs = GetValue(slots, node.lhs);
@@ -385,7 +553,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CastNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const CastNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -396,7 +565,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const QuantizeNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const QuantizeNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			if (node.params.scheme != QuantizationScheme::Affine)
@@ -409,7 +579,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(quantized.Storage().CopyToDevice(device));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const DequantizeNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const DequantizeNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			if (node.params.scheme != QuantizationScheme::Affine)
@@ -422,7 +593,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(dequantized.CopyToDevice(device));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CallNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const CallNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			// 收集参数
@@ -437,7 +609,8 @@ namespace LiteNN::Runtime
 			slots[nodeId] = RunSubgraphUnchecked(graph, node.callee, args, device);
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CondNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const CondNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& condition = GetValue(slots, node.condition);
@@ -456,7 +629,8 @@ namespace LiteNN::Runtime
 			slots[nodeId] = RunSubgraphUnchecked(graph, branchId, args, device);
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const WhileNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const WhileNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			// 初始 carry values
@@ -482,7 +656,8 @@ namespace LiteNN::Runtime
 			slots[nodeId] = std::move(carry);
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SaveActivationNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SaveActivationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -491,14 +666,16 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(Tensor<D>(input));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const LoadActivationNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const LoadActivationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			assert(activationStore_[node.slotId].has_value());
 			slots[nodeId].push_back(Tensor<D>(*activationStore_[node.slotId]));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TapeSaveActivationNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TapeSaveActivationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -507,7 +684,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(Tensor<D>(input));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TapeLoadActivationNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TapeLoadActivationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			assert(!tapeStore_[node.tapeSlotId].empty());
@@ -515,7 +693,8 @@ namespace LiteNN::Runtime
 			tapeStore_[node.tapeSlotId].pop_back();
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ReduceOpNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ReduceOpNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -527,7 +706,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ReshapeNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ReshapeNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -541,7 +721,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const PermuteNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const PermuteNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -553,7 +734,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const BroadcastToNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const BroadcastToNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -568,7 +750,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const PadNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const PadNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -584,7 +767,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const GatherNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const GatherNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& data = GetValue(slots, node.data);
@@ -600,7 +784,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ScatterNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ScatterNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& data = GetValue(slots, node.data);
@@ -618,7 +803,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ScanNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ScanNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -633,7 +819,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SSMScanNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SSMScanNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const Tensor<D>* dTensor = node.d ? &GetValue(slots, *node.d) : nullptr;
@@ -654,7 +841,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const RWKVWKVNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const RWKVWKVNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalRWKVWKV(GetValue(slots, node.key).CopyToDevice(CPU{}),
@@ -672,7 +860,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SoftmaxNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SoftmaxNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -687,7 +876,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const CrossEntropyLossNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const CrossEntropyLossNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalCrossEntropyLoss(GetValue(slots, node.logits).CopyToDevice(CPU{}),
@@ -702,7 +892,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
 		             const CrossEntropyLossBackwardNode& node, std::vector<std::vector<Tensor<D>>>& slots,
 		             std::span<const Tensor<D>> inputs, D& device)
 		{
@@ -719,7 +910,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const NormalizationNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const NormalizationNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const Tensor<D>* scaleTensor = node.scale ? &GetValue(slots, *node.scale) : nullptr;
@@ -740,7 +932,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const BatchMatMulNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const BatchMatMulNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalBatchMatMul(GetValue(slots, node.lhs).CopyToDevice(CPU{}),
@@ -755,7 +948,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const OutProdNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const OutProdNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalOutProd(GetValue(slots, node.lhs).CopyToDevice(CPU{}),
@@ -770,7 +964,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const TimestepEmbeddingNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TimestepEmbeddingNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalTimestepEmbedding(GetValue(slots, node.timesteps).CopyToDevice(CPU{}),
@@ -785,7 +980,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SolveTriNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SolveTriNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalSolveTri(GetValue(slots, node.a).CopyToDevice(CPU{}),
@@ -801,7 +997,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SGDStepNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SGDStepNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const Tensor<D>* velocity = node.velocity ? &GetValue(slots, *node.velocity) : nullptr;
@@ -824,7 +1021,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const AdamWStepNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const AdamWStepNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResults = Detail::EvalAdamWStep(GetValue(slots, node.parameter).CopyToDevice(CPU{}),
@@ -846,7 +1044,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Im2ColNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const Im2ColNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalIm2Col(GetValue(slots, node.input).CopyToDevice(CPU{}),
@@ -862,7 +1061,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Conv2DNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const Conv2DNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuInput = GetValue(slots, node.input).CopyToDevice(CPU{});
@@ -883,7 +1083,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConvTranspose2DNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ConvTranspose2DNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuInput = GetValue(slots, node.input).CopyToDevice(CPU{});
@@ -904,7 +1105,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const Pool2DNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const Pool2DNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalPool2D(GetValue(slots, node.input).CopyToDevice(CPU{}),
@@ -920,7 +1122,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const UpsampleNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const UpsampleNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalUpsample(GetValue(slots, node.input).CopyToDevice(CPU{}),
@@ -935,7 +1138,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ConcatNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ConcatNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& outputInfo = entry.outputInfos[0];
@@ -957,7 +1161,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const SliceNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SliceNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -969,7 +1174,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const GetRowsNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const GetRowsNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& data = GetValue(slots, node.data);
@@ -982,7 +1188,8 @@ namespace LiteNN::Runtime
 			slots[nodeId].push_back(std::move(result));
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const ArgsortNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ArgsortNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
@@ -999,7 +1206,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const MulMatIdNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const MulMatIdNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& as = GetValue(slots, node.as);
@@ -1020,7 +1228,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		void Execute(const Graph& graph, const NodeEntry& entry, NodeId nodeId, const FusedOpNode& node,
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const FusedOpNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			// 收集参数

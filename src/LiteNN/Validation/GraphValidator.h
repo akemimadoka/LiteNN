@@ -1,6 +1,7 @@
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/OpSchema.h>
 
 #include <algorithm>
 #include <cmath>
@@ -210,109 +211,9 @@ namespace LiteNN::Validation
 		return std::format("{}{}", DataTypeToString(dtype), ShapeToString(shape));
 	}
 
-	inline std::string_view NodeKindName(const NodeVariant& node)
+	inline std::string NodeKindName(const NodeVariant& node)
 	{
-		return std::visit(
-		    [](const auto& value) -> std::string_view {
-			    using T = std::decay_t<decltype(value)>;
-			    if constexpr (std::same_as<T, ParamRefNode>)
-				    return "ParamRefNode";
-			    else if constexpr (std::same_as<T, ConstantNode>)
-				    return "ConstantNode";
-			    else if constexpr (std::same_as<T, QuantizedConstantNode>)
-				    return "QuantizedConstantNode";
-			    else if constexpr (std::same_as<T, VariableRefNode>)
-				    return "VariableRefNode";
-			    else if constexpr (std::same_as<T, UnaryOpNode>)
-				    return "UnaryOpNode";
-			    else if constexpr (std::same_as<T, BinaryOpNode>)
-				    return "BinaryOpNode";
-			    else if constexpr (std::same_as<T, CallNode>)
-				    return "CallNode";
-			    else if constexpr (std::same_as<T, CastNode>)
-				    return "CastNode";
-			    else if constexpr (std::same_as<T, QuantizeNode>)
-				    return "QuantizeNode";
-			    else if constexpr (std::same_as<T, DequantizeNode>)
-				    return "DequantizeNode";
-			    else if constexpr (std::same_as<T, CondNode>)
-				    return "CondNode";
-			    else if constexpr (std::same_as<T, WhileNode>)
-				    return "WhileNode";
-			    else if constexpr (std::same_as<T, SaveActivationNode>)
-				    return "SaveActivationNode";
-			    else if constexpr (std::same_as<T, LoadActivationNode>)
-				    return "LoadActivationNode";
-			    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
-				    return "TapeSaveActivationNode";
-			    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
-				    return "TapeLoadActivationNode";
-			    else if constexpr (std::same_as<T, ReduceOpNode>)
-				    return "ReduceOpNode";
-			    else if constexpr (std::same_as<T, ReshapeNode>)
-				    return "ReshapeNode";
-			    else if constexpr (std::same_as<T, PermuteNode>)
-				    return "PermuteNode";
-			    else if constexpr (std::same_as<T, BroadcastToNode>)
-				    return "BroadcastToNode";
-			    else if constexpr (std::same_as<T, PadNode>)
-				    return "PadNode";
-			    else if constexpr (std::same_as<T, GatherNode>)
-				    return "GatherNode";
-			    else if constexpr (std::same_as<T, ScatterNode>)
-				    return "ScatterNode";
-			    else if constexpr (std::same_as<T, ScanNode>)
-				    return "ScanNode";
-			    else if constexpr (std::same_as<T, SSMScanNode>)
-				    return "SSMScanNode";
-			    else if constexpr (std::same_as<T, RWKVWKVNode>)
-				    return "RWKVWKVNode";
-			    else if constexpr (std::same_as<T, SoftmaxNode>)
-				    return "SoftmaxNode";
-			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
-				    return "CrossEntropyLossNode";
-			    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
-				    return "CrossEntropyLossBackwardNode";
-			    else if constexpr (std::same_as<T, NormalizationNode>)
-				    return "NormalizationNode";
-			    else if constexpr (std::same_as<T, BatchMatMulNode>)
-				    return "BatchMatMulNode";
-			    else if constexpr (std::same_as<T, OutProdNode>)
-				    return "OutProdNode";
-			    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
-				    return "TimestepEmbeddingNode";
-			    else if constexpr (std::same_as<T, SolveTriNode>)
-				    return "SolveTriNode";
-			    else if constexpr (std::same_as<T, SGDStepNode>)
-				    return "SGDStepNode";
-			    else if constexpr (std::same_as<T, AdamWStepNode>)
-				    return "AdamWStepNode";
-			    else if constexpr (std::same_as<T, Im2ColNode>)
-				    return "Im2ColNode";
-			    else if constexpr (std::same_as<T, Conv2DNode>)
-				    return "Conv2DNode";
-			    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
-				    return "ConvTranspose2DNode";
-			    else if constexpr (std::same_as<T, Pool2DNode>)
-				    return "Pool2DNode";
-			    else if constexpr (std::same_as<T, UpsampleNode>)
-				    return "UpsampleNode";
-			    else if constexpr (std::same_as<T, ConcatNode>)
-				    return "ConcatNode";
-			    else if constexpr (std::same_as<T, SliceNode>)
-				    return "SliceNode";
-			    else if constexpr (std::same_as<T, GetRowsNode>)
-				    return "GetRowsNode";
-			    else if constexpr (std::same_as<T, ArgsortNode>)
-				    return "ArgsortNode";
-			    else if constexpr (std::same_as<T, MulMatIdNode>)
-				    return "MulMatIdNode";
-			    else if constexpr (std::same_as<T, FusedOpNode>)
-				    return "FusedOpNode";
-			    else
-				    return "UnknownNode";
-		    },
-		    node);
+		return OpKindName(node);
 	}
 
 	class GraphValidator
@@ -406,6 +307,36 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId,
 				     std::format("expected {} output(s), got {}", expected, entry.outputInfos.size()));
+			}
+		}
+
+		void ValidateNodeSchema(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId,
+		                        const NodeEntry& entry) const
+		{
+			const auto kind = NodeKindName(entry.node);
+			const auto& schema = DefaultOpSchemaRegistry().Require(kind);
+			const auto inputs = NodeInputs(entry.node);
+			if (!schema.AllowsInputCount(inputs.size()))
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("{} expected input count in [{}, {}], got {}", kind, schema.minInputs,
+				                 schema.maxInputs == OpSchema::DynamicArity ? std::string("dynamic")
+				                                                            : std::to_string(schema.maxInputs),
+				                 inputs.size()));
+			}
+			if (!schema.AllowsOutputCount(entry.outputInfos.size()))
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("{} expected output count in [{}, {}], got {}", kind, schema.minOutputs,
+				                 schema.maxOutputs == OpSchema::DynamicArity ? std::string("dynamic")
+				                                                             : std::to_string(schema.maxOutputs),
+				                 entry.outputInfos.size()));
+			}
+
+			for (std::size_t i = 0; i < inputs.size(); ++i)
+			{
+				(void)ValidateNodeOutput(subgraph, subgraphId, nodeId, inputs[i],
+				                         std::format("{} input {}", kind, i), true);
 			}
 		}
 
@@ -578,6 +509,7 @@ namespace LiteNN::Validation
 						ValidateOutputInfo(entry.outputInfos[port],
 						                   std::format("subgraph {} node {} output {}", subgraphId, nodeId, port));
 					}
+					ValidateNodeSchema(subgraph, subgraphId, nodeId, entry);
 
 					std::visit([&](const auto& node) { ValidateNode(subgraph, subgraphId, nodeId, entry, node); },
 					           entry.node);

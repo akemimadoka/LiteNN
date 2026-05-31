@@ -2,6 +2,7 @@
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>
 #endif
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
 
@@ -32,6 +33,20 @@ namespace LiteNN
 		std::vector<std::size_t> shape;
 		std::string name;
 		std::optional<QuantizationParams> quantization;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static CompiledTensorSpec FromType(std::string name, const TensorType& type,
+		                                   std::optional<QuantizationParams> quantization = std::nullopt)
+		{
+			return { .dtype = type.dtype,
+				     .shape = type.StaticShape(),
+				     .name = std::move(name),
+				     .quantization = std::move(quantization) };
+		}
 	};
 
 	struct CompiledModuleImage
@@ -354,8 +369,12 @@ namespace LiteNN
 	public:
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
 		static CompiledModule<CPU> Compile(const Graph& graph);
 		static CompiledModule<CPU> Compile(const Graph& graph, const CompilerOptions& options);
+		static CompiledModule<CPU> Compile(const ExecutablePlan& plan);
+		static CompiledModule<CPU> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
 	};
 
 #ifdef LITENN_ENABLE_CUDA
@@ -423,9 +442,14 @@ namespace LiteNN
 	public:
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
 		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device = CUDA{});
 		static CompiledModule<CUDA> Compile(const Graph& graph, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device, const CompilerOptions& options);
+		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device = CUDA{});
+		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
+		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device, const CompilerOptions& options);
 	};
 #endif
 } // namespace LiteNN

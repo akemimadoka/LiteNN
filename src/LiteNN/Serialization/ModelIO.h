@@ -1,3 +1,4 @@
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -1456,6 +1457,7 @@ namespace LiteNN::Serialization
 	                          ExternalWeightSaveOptions externalOptions)
 	{
 		Validation::ValidateGraph(graph);
+		ValidateExecutablePlan(BuildExecutablePlan(graph));
 		std::optional<std::ofstream> externalOut;
 		std::string externalPathText;
 		if (externalWeightsPath)

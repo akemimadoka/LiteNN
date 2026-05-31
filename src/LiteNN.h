@@ -3,6 +3,7 @@
 
 #include <LiteNN/DType.h>
 #include <LiteNN/Device.h>
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/ComputePrimitives.h>
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>
@@ -13,6 +14,7 @@
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Metadata.h>
 #include <LiteNN/Misc.h>
+#include <LiteNN/OpSchema.h>
 #include <LiteNN/Optimizer/Optimizer.h>
 #include <LiteNN/Operators.h>
 #include <LiteNN/Pass.h>
@@ -22,7 +24,9 @@
 #include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Serialization/Safetensors.h>
 #include <LiteNN/Serialization/TorchManifest.h>
+#include <LiteNN/Storage.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/TensorType.h>
 #include <LiteNN/Training/Trainer.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
