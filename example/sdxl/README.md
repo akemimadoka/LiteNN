@@ -151,6 +151,8 @@ litenn_sdxl_example --run-model sdxl_unet.ltnn
 litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors
 litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors \
   --output build/sdxl_step_output.safetensors
+litenn_sdxl_example --diagnose-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors \
+  --max-nodes 1000
 litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn build/sdxl_unet_inputs.safetensors \
   --device cpu --warmup 1 --iterations 5 --json build/sdxl_cpu_aot_step.json
 litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn build/sdxl_unet_inputs.safetensors \
@@ -161,6 +163,9 @@ litenn_sdxl_example --compile-raw-object sdxl_unet.ltnn sdxl_unet.raw.obj
 `--benchmark-model-with-inputs` reports compile/load/input-bind/upload/run timing separately and records rodata,
 instruction, input, and output byte sizes. The CUDA row also reports the actual compiled backend, so unsupported graphs
 show up as `cpu_native` bridge/fallback instead of being mistaken for native CUDA execution.
+`--diagnose-model-with-inputs` runs the `.ltnn` graph through the interpreter and checks every floating output after each
+node, stopping at the first NaN/Inf by default. Use `--verbose` for finite per-node stats or `--allow-nonfinite` to keep
+collecting diagnostics after the first bad tensor.
 
 On Windows, the command also writes `litenn_sdxl_module_exports.def`. Link the object into a DLL with the generated def file, then load and run either a zero-input or bound-input smoke test:
 
@@ -371,6 +376,33 @@ python311 example\sdxl\sdxl_tensor_to_png.py ^
   --input %OUT%\decoded_image.safetensors --output %OUT%\1girl_smoke.png
 ```
 
+For reference-runtime parity, run a single Stability-AI/generative-models UNet step from the same LiteNN input binding
+file and compare the resulting safetensors artifacts:
+
+```bat
+python311 example\sdxl\sdxl_write_inputs.py ^
+  --output %OUT%\step_inputs.safetensors --probe unet-full-fixed ^
+  --height 64 --width 64 --fill random --seed 1234
+
+python311 example\sdxl\sdxl_reference_unet_step.py ^
+  --generative-models %GM% --config %CONFIG% --checkpoint %CKPT% ^
+  --inputs %OUT%\step_inputs.safetensors --output %OUT%\reference_noise_pred.safetensors ^
+  --output-dtype F32
+
+%LITENN_EXE% --run-model-with-inputs %OUT%\unet.ltnn %OUT%\step_inputs.safetensors ^
+  --output %OUT%\litenn_noise_pred.safetensors
+
+python311 example\sdxl\sdxl_compare_artifacts.py ^
+  --actual %OUT%\litenn_noise_pred.safetensors ^
+  --expected %OUT%\reference_noise_pred.safetensors ^
+  --tensor noise_pred --preset f32 --json %OUT%\noise_pred_compare.json
+```
+
+Use the same compare helper for final latents and VAE decoded image tensors. The presets record the current tolerance
+bands for `f32`, `f16`, `bf16`, and image-space comparisons; override with `--atol` / `--rtol` when documenting a new
+backend or dtype-specific budget. For prompt-conditioned parity, create the same four UNet inputs (`latent`,
+`timestep`, `context`, and `vector_cond`) using the exported conditioning tensors plus the chosen scheduler step.
+
 The same expanded flow can avoid DLL/shared-object linking by writing separated image regions:
 
 ```bat
@@ -437,6 +469,8 @@ The denoise loop is intentionally outside the compiled graph for now. A compiled
 - CPU AOT F16 full64 smoke currently relies on mixed-precision lowering for Softmax, normalization, MatMul,
   BatchMatMul, and Conv2D plus the stable generated Tanh formula `2*sigmoid(2x)-1`. Older imported F16 `.ltnn`
   graphs that expanded Tanh as `(exp(2x)-1)/(exp(2x)+1)` should be re-imported before judging F16 stability.
+- Smoke outputs are deliberately labeled non-semantic until the full UNet `noise_pred`, Euler latent, and VAE decoded
+  image compare within the recorded tolerance bands against the reference runtime.
 
 Full production SDXL still needs native tokenizer/text-encoder execution inside LiteNN, full fixed-shape UNet AOT
 compile-time/weight-size reduction, and broader 1024x1024 parity/benchmark coverage.

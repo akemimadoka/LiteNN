@@ -2,6 +2,7 @@
 
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
+#include <LiteNN/Runtime/Interpreter.h>
 #endif
 
 #include <algorithm>
@@ -44,9 +45,11 @@ namespace
 		    " [--allow-extra-tensors] [--external-weights weights.bin] [--external-weight-min-bytes N]\n"
 		    "  {} --compile-budget <input.ltnn>\n"
 		    "  {} --run-model <input.ltnn>\n"
-		    "  {} --run-model-with-inputs <input.ltnn> <inputs.safetensors>"
-		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
-		    "  {} --benchmark-model-with-inputs <input.ltnn> <inputs.safetensors>"
+	    "  {} --run-model-with-inputs <input.ltnn> <inputs.safetensors>"
+	    " [--output outputs.safetensors] [--allow-nonfinite]\n"
+	    "  {} --diagnose-model-with-inputs <input.ltnn> <inputs.safetensors>"
+	    " [--verbose] [--max-nodes N] [--allow-nonfinite]\n"
+	    "  {} --benchmark-model-with-inputs <input.ltnn> <inputs.safetensors>"
 		    " [--device cpu|cuda] [--warmup N] [--iterations N] [--json result.json]\n"
 		    "  {} --compile-raw-object <input.ltnn> <output.o|obj>\n"
 		    "  {} --compile-image-regions <input.ltnn> <output-dir> [file-prefix]"
@@ -69,8 +72,8 @@ namespace
 		    " <output-latent.safetensors> [same sampler options except --inputs/--output-latent]\n\n"
 		    "This example intentionally requires a LiteNN Torch manifest. A raw SDXL safetensors file contains\n"
 		    "weights only; it does not define the UNet/text-encoder/VAE graph, scheduler, or fixed input shapes.\n",
-		    executable, executable, executable, executable, executable, executable, executable, executable,
-		    executable, executable, executable, executable, executable, executable, executable);
+	    executable, executable, executable, executable, executable, executable, executable, executable,
+	    executable, executable, executable, executable, executable, executable, executable, executable);
 	}
 
 	void PrintReport(const LiteNN::Serialization::TorchManifestReport& report)
@@ -257,6 +260,13 @@ namespace
 		bool failOnNonFinite{ true };
 	};
 
+	struct FiniteDiagnosticOptions
+	{
+		bool verbose{ false };
+		bool failOnNonFinite{ true };
+		std::optional<std::size_t> maxNodes;
+	};
+
 	struct ExampleCompilerSettings
 	{
 		std::uint8_t cpuAOTLLVMOptLevel{ 0 };
@@ -404,6 +414,48 @@ namespace
 			}
 			++i;
 			options.outputPath = std::filesystem::path(argv[i]);
+		}
+		return options;
+	}
+
+	FiniteDiagnosticOptions ParseFiniteDiagnosticOptions(int argc, char** argv, int firstOption)
+	{
+		FiniteDiagnosticOptions options;
+		for (int i = firstOption; i < argc; ++i)
+		{
+			const std::string_view option = argv[i];
+			const auto requireValue = [&](std::string_view label) -> std::string_view {
+				if (i + 1 >= argc)
+				{
+					throw std::runtime_error(std::format("{} requires a value", label));
+				}
+				++i;
+				return argv[i];
+			};
+			if (option == "--verbose")
+			{
+				options.verbose = true;
+			}
+			else if (option == "--allow-nonfinite")
+			{
+				options.failOnNonFinite = false;
+			}
+			else if (option == "--fail-on-nonfinite")
+			{
+				options.failOnNonFinite = true;
+			}
+		else if (option == "--max-nodes")
+		{
+			options.maxNodes = ParseSize(requireValue(option), "max-nodes");
+			if (*options.maxNodes == 0)
+			{
+				throw std::runtime_error("--max-nodes must be positive");
+			}
+		}
+			else
+			{
+				throw std::runtime_error("Unknown --diagnose-model-with-inputs option: " + std::string(option));
+			}
 		}
 		return options;
 	}
@@ -1228,6 +1280,38 @@ namespace
 		return std::format("{} {}", LiteNN::DataTypeName(spec.dtype), ShapeToString(spec.shape));
 	}
 
+	std::vector<LiteNN::CompiledTensorSpec> GraphInputSpecs(const LiteNN::Graph& graph)
+	{
+		const auto signature = graph.InputSignature();
+		std::vector<LiteNN::CompiledTensorSpec> specs;
+		specs.reserve(signature.size());
+		for (const auto& input : signature)
+		{
+			specs.push_back(LiteNN::CompiledTensorSpec{
+			    .dtype = input.dtype,
+			    .shape = input.shape,
+			    .name = input.name,
+			});
+		}
+		return specs;
+	}
+
+	std::vector<LiteNN::CompiledTensorSpec> GraphOutputSpecs(const LiteNN::Graph& graph)
+	{
+		const auto signature = graph.OutputSignature();
+		std::vector<LiteNN::CompiledTensorSpec> specs;
+		specs.reserve(signature.size());
+		for (const auto& output : signature)
+		{
+			specs.push_back(LiteNN::CompiledTensorSpec{
+			    .dtype = output.dtype,
+			    .shape = output.shape,
+			    .name = output.name,
+			});
+		}
+		return specs;
+	}
+
 	void ValidateBoundTensor(const LiteNN::CompiledTensorSpec& spec,
 	                         const LiteNN::Serialization::SafetensorsTensorInfo& tensor,
 	                         const std::filesystem::path& inputPath)
@@ -1810,6 +1894,91 @@ namespace
 		auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
 		auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
 		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
+	}
+
+	void DiagnoseModelWithInputs(const std::filesystem::path& graphPath,
+	                             const std::filesystem::path& inputPath,
+	                             const FiniteDiagnosticOptions& options)
+	{
+		auto graph = LiteNN::Serialization::LoadModel(graphPath);
+		const auto inputSpecs = GraphInputSpecs(graph);
+		const auto outputSpecs = GraphOutputSpecs(graph);
+		auto inputs = MakeInputsFromSafetensors(inputSpecs, inputPath, false);
+
+		std::size_t visitedNodes = 0;
+		std::size_t floatingTensors = 0;
+		std::size_t nonFiniteTensors = 0;
+		std::size_t nonFiniteValues = 0;
+		bool printedFirstNonFinite = false;
+
+		std::cout << std::format("Running finite diagnostics for {} with {} input(s), {} output(s)\n",
+		                         graphPath.string(), inputSpecs.size(), outputSpecs.size())
+		          << std::flush;
+
+		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
+		auto outputs = interpreter.RunForwardWithTrace(
+		    graph, std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs.data(), inputs.size()),
+		    [&](LiteNN::SubgraphId subgraphId, LiteNN::NodeId nodeId, const LiteNN::NodeEntry& entry,
+		        std::span<const LiteNN::Tensor<LiteNN::CPU>> nodeOutputs) {
+			    ++visitedNodes;
+			    if (options.maxNodes && visitedNodes > *options.maxNodes)
+			    {
+				    throw std::runtime_error(std::format(
+				        "Finite diagnostics reached --max-nodes {} without finding a non-finite tensor",
+				        *options.maxNodes));
+			    }
+			    for (std::size_t port = 0; port < nodeOutputs.size(); ++port)
+			    {
+				    const auto& tensor = nodeOutputs[port];
+				    if (!LiteNN::IsFloatingDataType(tensor.DType()))
+				    {
+					    if (options.verbose)
+					    {
+						    std::cout << std::format("  subgraph={} node={} kind={} port={} dtype={} shape={} skipped\n",
+						                             subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node),
+						                             port, LiteNN::DataTypeName(tensor.DType()),
+						                             ShapeToString(tensor.Shape()));
+					    }
+					    continue;
+				    }
+				    ++floatingTensors;
+				    const auto stats = ComputeTensorStats(tensor);
+				    if (stats.nonFiniteCount != 0)
+				    {
+					    ++nonFiniteTensors;
+					    nonFiniteValues += stats.nonFiniteCount;
+					    std::cout << std::format(
+					        "  non-finite subgraph={} node={} kind={} port={} dtype={} shape={} nonfinite={}/{}"
+					        " mean={} rms={} min={} max={}\n",
+					        subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
+					        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()),
+					        stats.nonFiniteCount, stats.TotalCount(), stats.mean, stats.rms, stats.min, stats.max);
+					    printedFirstNonFinite = true;
+					    if (options.failOnNonFinite)
+					    {
+						    throw std::runtime_error("Finite diagnostics stopped at the first non-finite tensor");
+					    }
+				    }
+				    else if (options.verbose)
+				    {
+					    std::cout << std::format(
+					        "  finite subgraph={} node={} kind={} port={} dtype={} shape={} mean={} rms={} min={} max={}\n",
+					        subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
+					        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()), stats.mean,
+					        stats.rms, stats.min, stats.max);
+				    }
+			    }
+		    });
+
+		std::cout << std::format(
+		    "Finite diagnostics completed: visited_nodes={} floating_tensors={} nonfinite_tensors={}"
+		    " nonfinite_values={}\n",
+		    visitedNodes, floatingTensors, nonFiniteTensors, nonFiniteValues);
+		if (!printedFirstNonFinite)
+		{
+			std::cout << "  no non-finite floating outputs found\n";
+		}
+		PrintOutputs(outputSpecs, outputs, options.failOnNonFinite);
 	}
 
 	void CompileRawObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath)
@@ -2396,6 +2565,20 @@ int main(int argc, char** argv)
 			return 0;
 #else
 			throw std::runtime_error("AOT compiler support is not enabled; configure with LITENN_ENABLE_MLIR=ON");
+#endif
+		}
+		if (argc >= 2 && std::string_view(argv[1]) == "--diagnose-model-with-inputs")
+		{
+			if (argc < 4)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_ENABLE_MLIR
+			DiagnoseModelWithInputs(argv[2], argv[3], ParseFiniteDiagnosticOptions(argc, argv, 4));
+			return 0;
+#else
+			throw std::runtime_error("Finite diagnostics require LITENN_ENABLE_MLIR=ON in the SDXL example build");
 #endif
 		}
 		if (argc >= 2 && std::string_view(argv[1]) == "--benchmark-model-with-inputs")

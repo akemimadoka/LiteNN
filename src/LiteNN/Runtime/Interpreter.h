@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <format>
 #include <limits>
 #include <numeric>
@@ -23,6 +24,8 @@ namespace LiteNN::Runtime
 	class Interpreter
 	{
 	public:
+		using TraceCallback = std::function<void(SubgraphId, NodeId, const NodeEntry&, std::span<const Tensor<D>>)>;
+
 		// 执行指定子图
 		std::vector<Tensor<D>> RunSubgraph(const Graph& graph, SubgraphId subgraphId, std::span<const Tensor<D>> inputs,
 		                                   D device = D{})
@@ -40,6 +43,30 @@ namespace LiteNN::Runtime
 			tapeStore_.clear();
 			tapeStore_.resize(graph.TapeSlotCount());
 			return RunSubgraphUnchecked(graph, graph.Forward(), inputs, std::move(device));
+		}
+
+		// 执行前向子图，并在每个节点执行后回调其输出张量；用于诊断中间激活。
+		std::vector<Tensor<D>> RunForwardWithTrace(const Graph& graph, std::span<const Tensor<D>> inputs,
+		                                           TraceCallback callback, D device = D{})
+		{
+			Validation::ValidateGraph(graph);
+			activationStore_.clear();
+			activationStore_.resize(graph.ActivationSlotCount());
+			tapeStore_.clear();
+			tapeStore_.resize(graph.TapeSlotCount());
+			auto previousCallback = std::move(traceCallback_);
+			traceCallback_ = std::move(callback);
+			try
+			{
+				auto results = RunSubgraphUnchecked(graph, graph.Forward(), inputs, std::move(device));
+				traceCallback_ = std::move(previousCallback);
+				return results;
+			}
+			catch (...)
+			{
+				traceCallback_ = std::move(previousCallback);
+				throw;
+			}
 		}
 
 		// 执行反向子图（使用前向已填充的 activation store）
@@ -100,6 +127,11 @@ namespace LiteNN::Runtime
 					throw std::runtime_error(std::format("Interpreter failed at subgraph {}, node {} ({}): {}",
 					                                     subgraphId, nodeId, Validation::NodeKindName(entry.node),
 					                                     ex.what()));
+				}
+				if (traceCallback_)
+				{
+					traceCallback_(subgraphId, nodeId, entry,
+					               std::span<const Tensor<D>>(slots[nodeId].data(), slots[nodeId].size()));
 				}
 			}
 
@@ -1005,6 +1037,7 @@ namespace LiteNN::Runtime
 
 		std::vector<std::optional<Tensor<D>>> activationStore_;
 		std::vector<std::vector<Tensor<D>>> tapeStore_;
+		TraceCallback traceCallback_;
 	};
 } // namespace LiteNN::Runtime
 

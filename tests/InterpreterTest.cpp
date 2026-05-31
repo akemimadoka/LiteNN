@@ -5,6 +5,11 @@
 #include <LiteNN/Pass/AutogradPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <cmath>
+#include <string>
+#include <tuple>
+#include <vector>
+
 using namespace LiteNN;
 
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
@@ -44,6 +49,58 @@ TEST(Interpreter, Add)
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 1), 22);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 2), 33);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 3), 44);
+}
+
+TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
+{
+	Graph graph;
+	Subgraph sg;
+
+	const auto a = sg.AddParam(DataType::Float32, { 2 });
+	const auto b = sg.AddParam(DataType::Float32, { 2 });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Divide, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	sg.SetResults({ { y, 0 } });
+
+	const auto fwdId = graph.AddSubgraph(std::move(sg));
+	graph.SetForward(fwdId);
+
+	Tensor<CPU> tensorA({ 1.0F, 2.0F }, { 2 });
+	Tensor<CPU> tensorB({ 1.0F, 0.0F }, { 2 });
+	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
+
+	std::vector<std::tuple<SubgraphId, NodeId, std::string, std::size_t, bool>> trace;
+	Runtime::Interpreter<CPU> interp;
+	auto results = interp.RunForwardWithTrace(
+	    graph, inputs,
+	    [&](SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry, std::span<const Tensor<CPU>> outputs) {
+		    bool sawNonFinite = false;
+		    for (const auto& output : outputs)
+		    {
+			    if (output.DType() != DataType::Float32)
+			    {
+				    continue;
+			    }
+			    const auto* data = static_cast<const float*>(output.RawData());
+			    for (std::size_t i = 0; i < output.NumElements(); ++i)
+			    {
+				    sawNonFinite = sawNonFinite || !std::isfinite(static_cast<double>(data[i]));
+			    }
+		    }
+		    trace.emplace_back(subgraphId, nodeId, std::string(Validation::NodeKindName(entry.node)),
+		                       outputs.size(), sawNonFinite);
+	    });
+
+	ASSERT_EQ(results.size(), 1);
+	ASSERT_EQ(trace.size(), 3);
+	EXPECT_EQ(std::get<1>(trace[0]), a);
+	EXPECT_EQ(std::get<2>(trace[0]), "ParamRefNode");
+	EXPECT_EQ(std::get<1>(trace[1]), b);
+	EXPECT_EQ(std::get<2>(trace[1]), "ParamRefNode");
+	EXPECT_EQ(std::get<1>(trace[2]), y);
+	EXPECT_EQ(std::get<2>(trace[2]), "BinaryOpNode");
+	EXPECT_EQ(std::get<3>(trace[2]), 1u);
+	EXPECT_TRUE(std::get<4>(trace[2]));
 }
 
 // 测试 2: MatMul y = x @ w + bias (使用 Variable 作为权重)
