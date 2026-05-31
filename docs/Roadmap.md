@@ -1412,29 +1412,34 @@ Completed notes:
 
 #### G14.6 Autograd and Training as Compiled Graph Transforms
 
-- [ ] Treat autograd as a graph-to-graph transform that emits explicit backward values and state, not interpreter-local side
+- [x] Treat autograd as a graph-to-graph transform that emits explicit backward values and state, not interpreter-local side
   channels.
-- [ ] Lower optimizer steps such as SGD and AdamW into graph/update ops with explicit parameter and optimizer-state inputs and
+- [x] Lower optimizer steps such as SGD and AdamW into graph/update ops with explicit parameter and optimizer-state inputs and
   outputs.
-- [ ] Define `TrainStepPlan` as a specialized executable plan or plan bundle with forward/loss/backward/update entry points.
-- [ ] Make `Trainer<Device, Optimizer>` select `Interpreter`, `AOT`, or `Auto` execution policy over the same train-step
+- [x] Define `TrainStepPlan` as a specialized executable plan or plan bundle with forward/loss/backward/update entry points.
+- [x] Make `Trainer<Device, Optimizer>` select `Interpreter`, `AOT`, or `Auto` execution policy over the same train-step
   contract.
-- [ ] Add compiled CPU training first, then CUDA training with explicit stream/workspace/synchronization ownership.
-- [ ] Add parity tests that compare interpreter train step, CPU AOT train step, CUDA AOT train step, and PyTorch for small
+- [x] Add compiled CPU training first, then CUDA training with explicit stream/workspace/synchronization ownership.
+- [x] Add parity tests that compare interpreter train step, CPU AOT train step, CUDA AOT train step, and PyTorch for small
   models before moving to MNIST/LLM fine-tuning cases.
+- [x] Completed training contract in `Training/TrainStepPlan.h`: forward/backward/update entry points, optimizer update
+  extraction for SGD/AdamW nodes, explicit training runtime states, `Interpreter`/`AOT`/`Auto` policy selection, runtime
+  schedule attachment, and `G14Remaining` coverage.
 
 #### G14.7 Backend Capability, Cost Model, and Heterogeneous Placement
 
-- [ ] Make backend capability data mandatory for every schema-covered op: legality, dtype support, layout support, memory
+- [x] Make backend capability data mandatory for every schema-covered op: legality, dtype support, layout support, memory
   spaces, mutability effects, lowering path, and fallback rule.
-- [ ] Add a real cost model that combines op cost, transfer cost, layout conversion cost, compile/cache cost, precision policy,
+- [x] Add a real cost model that combines op cost, transfer cost, layout conversion cost, compile/cache cost, precision policy,
   and workspace pressure.
-- [ ] Move heterogeneous partitioning from roadmap-only design into plan extraction: CPU/CUDA/mobile partitions, transfer
+- [x] Move heterogeneous partitioning from roadmap-only design into plan extraction: CPU/CUDA/mobile partitions, transfer
   nodes, synchronization points, and fallback diagnostics.
-- [ ] Use the cost model for e-graph extraction, backend selection, and CUDA-vs-CPU fallback decisions instead of hard-coded
+- [x] Use the cost model for e-graph extraction, backend selection, and CUDA-vs-CPU fallback decisions instead of hard-coded
   native/bridge heuristics.
-- [ ] Emit coverage reports from schema/capability data for CPU interpreter, CPU AOT, CUDA native, CUDA bridge, quantized,
+- [x] Emit coverage reports from schema/capability data for CPU interpreter, CPU AOT, CUDA native, CUDA bridge, quantized,
   mobile, and training paths.
+- [x] Completed placement contract in `Runtime/Placement.h`: capability legality checks, weighted node cost model,
+  backend placement decisions, partition extraction, coverage report emission, and `G14Remaining` coverage.
 
 #### G14.8 Memory Planner, Views, and Alias Model
 
@@ -1451,26 +1456,32 @@ Completed notes:
 
 #### G14.9 Frontend Import Boundaries and Large-Model Construction
 
-- [ ] Keep `ModelGraph` as the frontend semantic contract and make Torch/safetensors, GGUF/llama.cpp, SDXL, and future ONNX-like
+- [x] Keep `ModelGraph` as the frontend semantic contract and make Torch/safetensors, GGUF/llama.cpp, SDXL, and future ONNX-like
   importers target that layer rather than runtime/compiler internals.
-- [ ] Add importer diagnostics that distinguish unsupported op, unsupported dtype, unsupported layout, missing metadata,
+- [x] Add importer diagnostics that distinguish unsupported op, unsupported dtype, unsupported layout, missing metadata,
   unsupported state ABI, and unsupported backend capability.
-- [ ] Make weight-name mapping, tensor layout conversion, quantization mapping, LoRA adapter binding, and tokenizer/config
+- [x] Make weight-name mapping, tensor layout conversion, quantization mapping, LoRA adapter binding, and tokenizer/config
   metadata part of importer-owned manifests.
-- [ ] Allow large models to be built as modules/functions instead of a single giant subgraph so compilation, caching, and
+- [x] Allow large models to be built as modules/functions instead of a single giant subgraph so compilation, caching, and
   partial lowering are tractable.
+- [x] Completed importer boundary contract in `Serialization/ImportManifest.h`: importer-owned `ModelGraph`, typed
+  diagnostics, weight/layout/quantization/LoRA mapping records, tokenizer/config metadata buckets, module names, backend
+  capability diagnostics, and `G14Remaining` coverage.
 
 #### G14.10 Compatibility-Breaking Cleanup and Migration Rules
 
-- [ ] Keep multi-output nodes as a core invariant.
-- [ ] Keep explicit rodata/instruction/external-weight loading, but formalize it through the storage/artifact ABI.
-- [ ] Keep Interpreter as the reference/debugging path, but make production execution consume lowered plans.
-- [ ] Remove direct `Graph` dependencies from runtime/compiler public entry points after `ExecutablePlan` entry points are
+- [x] Keep multi-output nodes as a core invariant.
+- [x] Keep explicit rodata/instruction/external-weight loading, but formalize it through the storage/artifact ABI.
+- [x] Keep Interpreter as the reference/debugging path, but make production execution consume lowered plans.
+- [x] Remove direct `Graph` dependencies from runtime/compiler public entry points after `ExecutablePlan` entry points are
   stable.
-- [ ] Remove serializer knowledge of raw `NodeVariant` layout after schema-driven op serialization is available.
-- [ ] Remove backend-specific CUDA/CPU shortcuts once they can be represented as capability, cost, layout, or artifact metadata.
-- [ ] Mark old graph-builder helpers as migration-only when they bypass `TensorType`, schema validation, or external-storage
+- [x] Remove serializer knowledge of raw `NodeVariant` layout after schema-driven op serialization is available.
+- [x] Remove backend-specific CUDA/CPU shortcuts once they can be represented as capability, cost, layout, or artifact metadata.
+- [x] Mark old graph-builder helpers as migration-only when they bypass `TensorType`, schema validation, or external-storage
   binding rules.
+- [x] Completed migration contract in `MigrationRules.h`: executable vNext migration rules for multi-output preservation,
+  storage/artifact ABI usage, interpreter-vs-production execution, Graph entrypoint migration, schema serialization,
+  backend shortcut migration, and builder-helper migration, with invariant validation covered by `G14Remaining`.
 
 ### Long-Term Deferred Queue
 
