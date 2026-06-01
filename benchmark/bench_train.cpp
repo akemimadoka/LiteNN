@@ -1,5 +1,7 @@
 #include <benchmark/benchmark.h>
 
+#include "CompilerOptionsEnv.h"
+
 #include <LiteNN.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
@@ -351,14 +353,14 @@ std::vector<Tensor<CPU>> AllocateCPUOutputs(const CompiledModule<CPU>& module)
 void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind, std::size_t batch,
                                     const char* threadCount)
 {
-	auto options = CompilerOptions::FromEnvironment();
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	if (threadCount != nullptr)
 	{
 		options.cpuAOTThreadCount = static_cast<std::size_t>(std::stoull(threadCount));
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CPU>::Compile(graph, options);
+	auto module = Compiler<CPU>::Compile(BuildExecutablePlan(graph), options);
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	auto outputs = AllocateCPUOutputs(module);
@@ -412,9 +414,9 @@ void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind,
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto options = CompilerOptions::FromEnvironment();
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	options.enableCUDANativeAOT = false;
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, options);
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, options);
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
 		state.SkipWithError("expected CUDA CPU fallback backend");
@@ -448,7 +450,7 @@ void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std:
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, CompilerOptions::FromEnvironment());
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
 		state.SkipWithError("expected CUDA native backend");

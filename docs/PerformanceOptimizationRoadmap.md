@@ -50,7 +50,7 @@ P0 validation run:
 Goal: make real model benchmarks run through CUDA native instead of falling back to CPU AOT.
 
 Status: implemented for fused inference Linear/MLP chains on 2026-05-16. Optional CUDA Graph replay is now
-available for pointer-stable `RunInto` invocations via `LITENN_CUDA_ENABLE_GRAPH_REPLAY=1`.
+available for pointer-stable `RunInto` invocations through `CompiledModuleCUDARunOptions::enableGraphReplay`.
 
 - [x] Add a static launch scheduler for single-subgraph CUDA native graphs.
   - Implementation: `CUDANativeInstructionPayload` launch tables now support mixed library-call and PTX kernels.
@@ -179,12 +179,12 @@ when it was used by default. CUDA Graph replay is opt-in rather than default bec
 sensitive. Tensor Core codegen is evaluated and deferred until explicit fp16/bf16 tensor support exists.
 
 - [x] Replace default `sm_30` target with `native` or a more modern baseline such as `sm_75`.
-  - Implementation: the default NVPTX target is now `sm_75`; `LITENN_CUDA_AOT_TARGET=native` queries the
-    current CUDA device and emits its `sm_<major><minor>` target.
+  - Implementation: the default NVPTX target is now `sm_75`; callers can pass `native` explicitly to query the
+    current CUDA device and emit its `sm_<major><minor>` target.
   - Validation: `CompiledModuleTest.CUDANativeDefaultTargetUsesModernBaseline`.
 - [x] Add cuBLASLt path and cache algorithm selection.
   - Implementation: when LiteNN is built with `CUDA::cublasLt`, the CUDA device runtime exposes an opt-in
-    `LITENN_CUDA_ENABLE_CUBLASLT=1` MatMul path with per-device handle reuse and per-shape heuristic caching.
+    `CUDAExecutionOptions::enableCUBLASLt` MatMul path with per-device handle reuse and per-shape heuristic caching.
   - Default policy: disabled unless explicitly requested, because the current benchmark favors the existing
     cuBLAS path for the covered inference sizes.
 - [x] Evaluate CUDA Graph replay as the default for static-shape inference payloads.

@@ -138,7 +138,6 @@ namespace LiteNN
 		bool enableCompileDiagnostics{};
 
 		static CompilerOptions Defaults();
-		static CompilerOptions FromEnvironment();
 	};
 
 	struct CompileBudgetEstimate
@@ -367,12 +366,8 @@ namespace LiteNN
 	class Compiler<CPU>
 	{
 	public:
-		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
-		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
-		static CompiledModule<CPU> Compile(const Graph& graph);
-		static CompiledModule<CPU> Compile(const Graph& graph, const CompilerOptions& options);
 		static CompiledModule<CPU> Compile(const ExecutablePlan& plan);
 		static CompiledModule<CPU> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
 	};
@@ -382,6 +377,8 @@ namespace LiteNN
 	{
 		void* stream{};
 		bool synchronize{ true };
+		bool enableGraphReplay{};
+		bool enableCUBLASLt{};
 	};
 
 	struct CompiledModuleCUDAInvocation
@@ -440,13 +437,8 @@ namespace LiteNN
 	class Compiler<CUDA>
 	{
 	public:
-		static CompiledModuleArtifact CompileArtifact(const Graph& graph);
-		static CompiledModuleArtifact CompileArtifact(const Graph& graph, const CompilerOptions& options);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
-		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device = CUDA{});
-		static CompiledModule<CUDA> Compile(const Graph& graph, const CompilerOptions& options);
-		static CompiledModule<CUDA> Compile(const Graph& graph, CUDA device, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device = CUDA{});
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device, const CompilerOptions& options);

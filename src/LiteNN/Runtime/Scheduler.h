@@ -249,13 +249,6 @@ namespace LiteNN::Runtime
 		return schedule;
 	}
 
-	inline RuntimeSchedule BuildRuntimeSchedule(const Graph& graph,
-	                                            std::vector<RuntimeStateBinding> states = {},
-	                                            const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
-	{
-		return BuildRuntimeSchedule(BuildExecutableModule(graph, registry), std::move(states));
-	}
-
 	inline std::vector<RuntimeTraceEvent> TraceRuntimeSchedule(const RuntimeSchedule& schedule)
 	{
 		std::vector<RuntimeTraceEvent> events;

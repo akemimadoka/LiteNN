@@ -436,7 +436,7 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 	ExpectPyTorchLinearReluGolden(outputs[0]);
 
 #ifdef LITENN_ENABLE_MLIR
-	auto module = Compiler<CPU>::Compile(result.graph);
+	auto module = Compiler<CPU>::Compile(BuildExecutablePlan(result.graph));
 	const auto compiledOutputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(compiledOutputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(compiledOutputs[0]);

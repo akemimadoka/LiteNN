@@ -126,14 +126,6 @@ namespace LiteNN::Training
 		return train;
 	}
 
-	inline TrainStepPlan BuildTrainStepPlan(const Graph& graph,
-	                                        TrainExecutionPolicy policy = TrainExecutionPolicy::Auto,
-	                                        bool hasAOTBackend = false,
-	                                        const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
-	{
-		return BuildTrainStepPlan(BuildExecutableModule(graph, registry), policy, hasAOTBackend);
-	}
-
 	inline void ValidateTrainStepPlan(const TrainStepPlan& plan)
 	{
 		ValidateExecutablePlan(plan.module.plan);

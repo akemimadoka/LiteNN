@@ -95,30 +95,6 @@ namespace
 #define LITENN_GCC_IVDEP
 #endif
 
-	bool IsTruthyEnvValue(const char* value)
-	{
-		if (!value)
-		{
-			return false;
-		}
-		const std::string_view text = value;
-		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
-	}
-
-	std::optional<std::uint64_t> ParseU64Env(const char* name)
-	{
-		if (const char* value = std::getenv(name))
-		{
-			char* end = nullptr;
-			const auto parsed = std::strtoull(value, &end, 10);
-			if (end != value)
-			{
-				return static_cast<std::uint64_t>(parsed);
-			}
-		}
-		return std::nullopt;
-	}
-
 	bool IsCPUExternalRegionsEnabled(const CompilerOptions& options)
 	{
 		return options.enableCPUAOTExternalRegions;
@@ -5291,18 +5267,9 @@ namespace
 
 	CUDAExecutionOptions ToCUDAExecutionOptions(CompiledModuleCUDARunOptions options)
 	{
-		return CUDAExecutionOptions{ .stream = options.stream, .synchronize = options.synchronize };
-	}
-
-	bool IsCUDAGraphReplayEnabled()
-	{
-		const char* value = std::getenv("LITENN_CUDA_ENABLE_GRAPH_REPLAY");
-		if (value == nullptr)
-		{
-			return false;
-		}
-		const std::string_view text = value;
-		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+		return CUDAExecutionOptions{ .stream = options.stream,
+			                         .synchronize = options.synchronize,
+			                         .enableCUBLASLt = options.enableCUBLASLt };
 	}
 
 	void CheckCUDARuntime(cudaError_t status, std::string_view action)
@@ -5870,39 +5837,6 @@ CompiledModule<CPU>::CompiledModule() = default;
 CompilerOptions CompilerOptions::Defaults()
 {
 	return {};
-}
-
-CompilerOptions CompilerOptions::FromEnvironment()
-{
-	auto options = Defaults();
-	if (const auto threadCount = ParseU64Env("LITENN_CPU_AOT_THREADS"); threadCount && *threadCount > 0)
-	{
-		options.cpuAOTThreadCount = static_cast<std::size_t>(*threadCount);
-	}
-	if (const auto minFlops = ParseU64Env("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
-	{
-		options.cpuAOTParallelMinFlops = *minFlops;
-	}
-	if (const auto minConstantBytes = ParseU64Env("LITENN_CPU_AOT_EXTERNAL_CONSTANT_MIN_BYTES"))
-	{
-		options.cpuAOTExternalConstantMinBytes = *minConstantBytes;
-	}
-	if (const auto optLevel = ParseU64Env("LITENN_CPU_AOT_LLVM_OPT_LEVEL"))
-	{
-		options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
-	}
-	options.enableCPUAOTExternalRegions =
-	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
-	    IsTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
-	if (const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_REGION_FUSION"))
-	{
-		options.enableCPUAOTExternalRegionFusion = IsTruthyEnvValue(value);
-	}
-	if (IsTruthyEnvValue(std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT")))
-	{
-		options.enableCUDANativeAOT = false;
-	}
-	return options;
 }
 
 CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const CompilerOptions& options)
@@ -6841,7 +6775,7 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 		{
 			throw std::runtime_error("CUDA native asynchronous execution with shared workspace is not supported");
 		}
-		if (IsCUDAGraphReplayEnabled() && options.synchronize && options.stream == nullptr)
+		if (options.enableGraphReplay && options.synchronize && options.stream == nullptr)
 		{
 			std::scoped_lock lock(impl_->cudaWorkspaceMutex, impl_->cudaGraphReplayMutex);
 			RunCUDANativePayloadWithGraphReplay(impl_->cudaGraphReplayCache, impl_->device, impl_->cudaPayload,
@@ -7259,17 +7193,6 @@ namespace
 #endif
 } // namespace
 
-CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph)
-{
-	return CompileArtifact(graph, CompilerOptions::Defaults());
-}
-
-CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
-{
-	Validation::ValidateGraph(graph);
-	return CompileArtifact(BuildExecutablePlan(graph), options);
-}
-
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan)
 {
 	return CompileArtifact(plan, CompilerOptions::Defaults());
@@ -7284,16 +7207,6 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan
 	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
 }
 
-CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph)
-{
-	return Compile(graph, CompilerOptions::Defaults());
-}
-
-CompiledModule<CPU> Compiler<CPU>::Compile(const Graph& graph, const CompilerOptions& options)
-{
-	return CompileArtifact(graph, options).Load();
-}
-
 CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan)
 {
 	return Compile(plan, CompilerOptions::Defaults());
@@ -7305,17 +7218,6 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan, const Com
 }
 
 #ifdef LITENN_ENABLE_CUDA
-CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph)
-{
-	return CompileArtifact(graph, CompilerOptions::Defaults());
-}
-
-CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const Graph& graph, const CompilerOptions& options)
-{
-	Validation::ValidateGraph(graph);
-	return CompileArtifact(BuildExecutablePlan(graph), options);
-}
-
 CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const ExecutablePlan& plan)
 {
 	return CompileArtifact(plan, CompilerOptions::Defaults());
@@ -7328,21 +7230,6 @@ CompiledModuleArtifact Compiler<CUDA>::CompileArtifact(const ExecutablePlan& pla
 	return CompiledModuleArtifact(std::move(parts.rodata), std::move(parts.instructions), std::move(parts.inputSpecs),
 	                              std::move(parts.outputSpecs), parts.backend, std::move(parts.constants),
 	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
-}
-
-CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device)
-{
-	return Compile(graph, std::move(device), CompilerOptions::Defaults());
-}
-
-CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, const CompilerOptions& options)
-{
-	return Compile(graph, CUDA{}, options);
-}
-
-CompiledModule<CUDA> Compiler<CUDA>::Compile(const Graph& graph, CUDA device, const CompilerOptions& options)
-{
-	return CompileArtifact(graph, options).Load(std::move(device));
 }
 
 CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA device)

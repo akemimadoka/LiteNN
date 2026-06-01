@@ -65,7 +65,7 @@ TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 	auto kvCache = Runtime::MakeKVCacheState("kv.cache.0",
 	                                         TensorType::Dense(DataType::Float32, ShapeView{ 1, 2, 4 }));
 
-	const auto schedule = Runtime::BuildRuntimeSchedule(graph, { kvCache });
+	const auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(graph), { kvCache });
 
 	ASSERT_EQ(schedule.steps.size(), 3u);
 	EXPECT_EQ(schedule.steps[0].kind, Runtime::RuntimeScheduleStepKind::StateRead);

@@ -71,6 +71,7 @@ namespace LiteNN
 	{
 		void* stream{};
 		bool synchronize{ true };
+		bool enableCUBLASLt{};
 	};
 
 	class CUDADriverModule

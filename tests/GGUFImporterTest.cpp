@@ -913,7 +913,7 @@ TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)
 	const auto archive = BuildTinyLLaMAArchive();
 	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	EXPECT_EQ(artifact.InputSpecs().size(), 1u);
 	EXPECT_EQ(artifact.OutputSpecs().size(), 1u);
 	auto compiled = artifact.Load();
@@ -933,7 +933,7 @@ TEST(GGUFLLaMACausalLM, CompilesSingleTokenFullGraphToCPUArtifactAndMatchesInter
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 2 }, { 1 }) };
 	const auto expected = interpreter.RunForward(lowered, inputs);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	auto compiled = artifact.Load();
 	const auto outputs = compiled.Run(inputs);
 
@@ -957,7 +957,7 @@ TEST(GGUFLLaMACausalLM, CompilesDecodeGraphToCPUArtifactAndMatchesInterpreter)
 	};
 	const auto expected = interpreter.RunForward(lowered, inputs);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	EXPECT_EQ(artifact.InputSpecs().size(), 3u);
 	EXPECT_EQ(artifact.OutputSpecs().size(), 3u);
 	auto compiled = artifact.Load();

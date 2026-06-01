@@ -24,8 +24,8 @@
 
 1. 可选先 `ExtractForwardOnlyGraph(graph)`
 2. 可选创建 `CompilerOptions`（例如设置 `cpuAOTThreadCount`、`enableCPUAOTExternalRegions`、
-   `cpuAOTExternalConstantMinBytes`）；CLI/benchmark 可以用
-   `CompilerOptions::FromEnvironment()` 将环境变量翻译成显式配置
+   `cpuAOTExternalConstantMinBytes`）；CLI/benchmark 若需要环境变量控制，应在命令行层读取环境变量并填充
+   这个显式配置对象
 3. `Compiler<CPU>::CompileArtifact(graph, options)` 或默认 `Compiler<CPU>::CompileArtifact(graph)`
 4. `artifact.Load()` 或 `CompiledModule<CPU>::Load(...)`
 5. `Run` / `RunInto` / `RunManyInto`

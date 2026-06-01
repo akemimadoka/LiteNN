@@ -1164,7 +1164,10 @@ namespace
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-object");
 		auto artifact = TimedStep("compile-object codegen",
-		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, options); });
+		                          [&] {
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			                              LiteNN::BuildExecutablePlan(graph), options);
+		                          });
 		auto separated = artifact.SeparateRodata();
 		if (!separated.Constants().empty() || !separated.Weights().empty() ||
 		    !separated.ExternalTensorInfos().empty())
@@ -1688,7 +1691,8 @@ namespace
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cpu");
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, compilerOptions);
+		auto artifact =
+		    LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(LiteNN::BuildExecutablePlan(graph), compilerOptions);
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1773,7 +1777,8 @@ namespace
 		auto graph = LiteNN::Serialization::LoadModel(graphPath);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cuda");
-		auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(graph, compilerOptions);
+		auto artifact =
+		    LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(LiteNN::BuildExecutablePlan(graph), compilerOptions);
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1858,7 +1863,10 @@ namespace
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "run-model");
 		auto artifact = TimedStep("run-model codegen",
-		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, options); });
+		                          [&] {
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			                              LiteNN::BuildExecutablePlan(graph), options);
+		                          });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1881,7 +1889,10 @@ namespace
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "run-model-with-inputs");
 		auto artifact = TimedStep("run-model-with-inputs codegen",
-		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, options); });
+		                          [&] {
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			                              LiteNN::BuildExecutablePlan(graph), options);
+		                          });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1987,7 +1998,10 @@ namespace
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-raw-object");
 		auto artifact = TimedStep("compile-raw-object codegen",
-		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, options); });
+		                          [&] {
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			                              LiteNN::BuildExecutablePlan(graph), options);
+		                          });
 		std::ofstream out(objectPath, std::ios::binary);
 		if (!out)
 		{
@@ -2013,7 +2027,10 @@ namespace
 		auto options = MakeExampleCompilerOptions(compilerSettings);
 		PrintCompileBudget(graph, options, "compile-image-regions");
 		auto artifact = TimedStep("compile-image-regions codegen",
-		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(graph, options); });
+		                          [&] {
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
+			                              LiteNN::BuildExecutablePlan(graph), options);
+		                          });
 		std::filesystem::create_directories(outputDir);
 		const auto prefix = std::string(filePrefix);
 		const auto rodataPath = outputDir / (prefix + ".rodata.bin");

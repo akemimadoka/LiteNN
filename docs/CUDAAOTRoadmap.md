@@ -46,7 +46,7 @@ CUDA AOT 的最终目标是让 `Compiler<CUDA>` 生成设备特定可执行产�
 - [x] **R1：行为基线**：保留现有 native unary/binary/broadcast/cuBLAS 回归；已新增 codegen/payload inspection 覆盖 kernel symbol、PTX NUL 结尾、feature flags 与 broadcast PTX 形态，并补充 `Compiler<CUDA>::CompileArtifact` 产物级 ABI inspection，覆盖 rodata backend、payload flags、scalar metadata、kernel launch/argument metadata 与 cuBLAS library-call payload。
 - [x] **R2：MLIR GPU/NVVM 试点**：新增可选实验路径，当前通过 `OpBuilder` 生成 `gpu.module`/`gpu.func` 表达 `f32` elementwise unary/binary kernel，经 GPUToNVVM、LLVM IR、NVPTX 后端生成 PTX，并接入 `Compiler<CUDA>` payload；已覆盖 `UnaryOp::Negate/Abs/Sqrt/Exp/Log/Sin/Cos` 与 `BinaryOp::Add/Subtract/Multiply/Divide/Max/Min`，其中 `Abs/Sqrt/Exp/Log/Sin/Cos/Max/Min` 使用 NVVM intrinsic 或等价 LLVM op，避免 standalone PTX 依赖 libdevice 外部符号。
 - [x] **R3：逐步替换模板**：unary、same-shape binary、same-rank broadcast binary、reduce、concat/slice 与 MatMulBiasAdd/ReLU epilogue 已接入 MLIR GPU/NVVM；MLIR 失败时返回 unsupported 并回退 CPU AOT bridge，避免继续扩大裸 PTX 面积。
-- [x] **R4：生产化清理**：删除旧手写 PTX 模板和 fallback 调用；新增 `LITENN_CUDA_AOT_TARGET=sm_<digits>` 目标架构策略，默认 `sm_30`；补充 artifact/target diagnostics、CUDA native carrier-style 验证、benchmark 覆盖和 release checklist。
+- [x] **R4：生产化清理**：删除旧手写 PTX 模板和 fallback 调用；新增显式 `sm_<digits>` / `native` 目标架构策略，默认 `sm_75`；补充 artifact/target diagnostics、CUDA native carrier-style 验证、benchmark 覆盖和 release checklist。
 
 阶段交付标准：
 
@@ -96,7 +96,7 @@ rodata 分离对 CUDA 是有必要的，但意义和 CPU 不完全一样：
 ### P4：生产化验证
 
 - [x] CUDA AOT carrier-style exported symbol 验证：新增 `CompiledModuleArtifact::FromExportedSymbols` 加载 `CUDANative` artifact 并运行 cuBLAS MatMul 的回归。
-- [x] CUDA native target diagnostics：新增非法 `LITENN_CUDA_AOT_TARGET` 格式测试，确保 target arch 错误在 codegen/compile 阶段显式失败。
+- [x] CUDA native target diagnostics：新增非法显式 target 格式测试，确保 target arch 错误在 codegen/compile 阶段显式失败。
 - [x] CUDA unavailable / driver mismatch / arch mismatch 的更完整诊断测试：`CUDADeviceTest` 覆盖无效 device index、非法 image JIT log、unsupported target JIT diagnostics；CUDA 不可用或设备数不足时按测试前置条件显式 skip。
 - [x] benchmark 覆盖 CPU AOT、CUDA bridge、CUDA native：`litenn_bench` 注册 Interpreter、CPU AOT Run/RunInto、CUDA CPU-bridge RunInto，以及 CUDANative MatMul/cuBLAS RunInto 条目。
 - [x] 文档化 backend/image ABI 迁移策略，并进入 release checklist。
@@ -105,7 +105,7 @@ P4 release checklist：
 
 - artifact ABI：保持 rodata v3 backend tag、`CUDANativeInstructionPayload` feature mask、scalar/workspace/launch table schema 向后显式校验；新增 feature 必须扩展 known-mask 并补 payload inspection。
 - loader/runtime：carrier-style exported symbols、CPU bridge fallback、CUDANative driver module load、mixed library/PTX launch、workspace 边界和 stream/sync 选项都必须有回归。
-- diagnostics：`LITENN_CUDA_AOT_TARGET` 格式错误在 compile/codegen 阶段失败；driver load failure 必须携带 CUDA error name、JIT error log 或 info log，便于定位 PTX/driver/arch mismatch。
+- diagnostics：显式 CUDA target 格式错误在 compile/codegen 阶段失败；driver load failure 必须携带 CUDA error name、JIT error log 或 info log，便于定位 PTX/driver/arch mismatch。
 - validation：CUDA P4 收尾至少运行 focused build、`CompiledModuleTest|CompiledModuleCUDATest` CTest、`CUDADeviceTest.exe`，benchmark-enabled build 的 `litenn_bench` compile 与 `--benchmark_list_tests=true` registry smoke。
 
 ## 当前选择

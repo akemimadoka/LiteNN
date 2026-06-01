@@ -49,7 +49,8 @@ namespace
 TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto train = Training::BuildTrainStepPlan(graph, Training::TrainExecutionPolicy::Auto, true);
+	const auto train = Training::BuildTrainStepPlan(BuildExecutableModule(graph), Training::TrainExecutionPolicy::Auto,
+	                                                true);
 
 	EXPECT_EQ(train.policy, Training::TrainExecutionPolicy::AOT);
 	EXPECT_TRUE(train.backwardFunction.has_value());
@@ -63,7 +64,7 @@ TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 {
 	const auto graph = BuildTrainableGraph();
 	constexpr std::array<std::string_view, 1> backends{ BackendCPUInterpreter };
-	const auto placement = Runtime::BuildPlacementPlan(graph, backends);
+	const auto placement = Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends);
 
 	EXPECT_FALSE(placement.decisions.empty());
 	EXPECT_FALSE(placement.coverage.empty());

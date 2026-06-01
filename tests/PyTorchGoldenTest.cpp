@@ -93,7 +93,7 @@ TEST(PyTorchGolden, ReLULinearCPUArtifactMatchesFixture)
 	auto graph = BuildReLULinearGraph();
 	auto inputs = MakeInputs();
 
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto module = artifact.Load();
 	const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 

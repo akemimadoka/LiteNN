@@ -944,12 +944,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		using CUBLASLtPreferenceOwner =
 		    CUBLASLtDescriptor<cublasLtMatmulPreference_t, cublasLtMatmulPreferenceDestroy>;
 
-		bool ShouldTryCUBLASLtMatMul(int m, int k, int n)
+		bool ShouldTryCUBLASLtMatMul(int m, int k, int n, CUDAExecutionOptions options)
 		{
-			const char* enable = std::getenv("LITENN_CUDA_ENABLE_CUBLASLT");
-			if (enable == nullptr || (std::string_view(enable) != "1" && std::string_view(enable) != "true" &&
-			                          std::string_view(enable) != "TRUE" && std::string_view(enable) != "on" &&
-			                          std::string_view(enable) != "ON"))
+			if (!options.enableCUBLASLt)
 			{
 				return false;
 			}
@@ -978,7 +975,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
 			const auto outputElements = static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
-			if (!ShouldTryCUBLASLtMatMul(m, k, n))
+			if (!ShouldTryCUBLASLtMatMul(m, k, n, options))
 			{
 				return false;
 			}

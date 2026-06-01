@@ -178,15 +178,6 @@ namespace LiteNN::Runtime
 		return placement;
 	}
 
-	inline PlacementPlan BuildPlacementPlan(const Graph& graph,
-	                                        std::span<const std::string_view> candidateBackends =
-	                                            std::span<const std::string_view>{ DefaultBackendNames },
-	                                        const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
-	                                        CostModelWeights weights = {})
-	{
-		return BuildPlacementPlan(BuildExecutablePlan(graph, registry), candidateBackends, registry, weights);
-	}
-
 	inline void ValidatePlacementPlan(const PlacementPlan& placement)
 	{
 		ValidateExecutablePlan(placement.plan);

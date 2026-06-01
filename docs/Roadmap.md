@@ -707,13 +707,13 @@ embedded into LLVM globals inside the instruction object.
       diagnostics, and parity against interpreter output for the initial external-regions AOT path.
 - [x] Add focused tests for the initial metadata-table population and public inspection API.
 - [x] Add focused tests for external CPU weights rebinding, size-mismatch diagnostics, checksum mismatch diagnostics,
-      and legacy external-constants environment-variable compatibility for the initial external-regions path.
+      and explicit external-region option coverage for the initial external-regions path.
 - [x] Auto-apply `FusionPass` before the CPU f32 linear-chain external-regions fast path when external regions are
       explicitly enabled, so callers do not need to pre-fuse common Layer-generated linear chains just to externalize
       weights.
 - [x] Add focused malformed external tensor metadata-table diagnostics for the initial external-regions path.
-- [x] Replace hardwired compiler environment-variable behavior with explicit `CompilerOptions`; CLI/benchmark/example
-      entry points can opt into `CompilerOptions::FromEnvironment()`, while library defaults remain deterministic.
+- [x] Replace hardwired compiler environment-variable behavior with explicit `CompilerOptions`; benchmark/profile entry
+      points that still need environment-variable control parse it locally before calling compiler APIs.
 - [x] Add broader malformed metadata-table cases for the current external-regions path.
 - [x] Add generic MLIR externalization parity tests against inline AOT outputs.
 - [x] Apply the externalization policy to Torch/SDXL imported graphs so full fixed-shape UNet artifacts do not inflate
@@ -733,9 +733,8 @@ Notes:
   files for memory-mapped packaging.
 - Completed on 2026-05-22: `litenn_gguf_convert --compile-cpu-separated/--compile-cuda-separated` emits split carrier
   objects for converted `.ltnn` graphs.
-- Completed on 2026-05-25: CPU AOT gained an experimental `LITENN_CPU_AOT_EXTERNAL_REGIONS=1` binding path for the
-  optimized f32 parallel linear-chain compiler (`LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` remains accepted as a legacy
-  alias). It places `VariableRefNode` payload bytes into the separated weights region and `ConstantNode` payload bytes
+- Completed on 2026-05-25: CPU AOT gained an explicit external-region binding path for the optimized f32 parallel
+  linear-chain compiler. It places `VariableRefNode` payload bytes into the separated weights region and `ConstantNode` payload bytes
   into the separated constants region, emits instruction code that obtains the bound base addresses through the LiteNN
   CPU runtime ABI, and covers direct artifact loading, separated-image loading, constants/weights rebinding, and
   interpreter parity in `CompiledModuleTest`.
@@ -751,9 +750,8 @@ Notes:
   `litenn_cpu_external_constants()` and `litenn_cpu_external_weights()`, and the CUDA CPU bridge verifies that CPUNative
   fallback artifacts preserve non-empty weights regions and weights-region metadata entries.
 - Completed on 2026-05-25: `CompiledModuleTest.CPUParallelLinearChainLoadsExternalRegions` now covers weights rebinding,
-  wrong-size weights rejection, and corrupted weights checksum rejection; a separate legacy-env regression keeps
-  `LITENN_CPU_AOT_EXTERNAL_CONSTANTS=1` working while the preferred switch becomes
-  `LITENN_CPU_AOT_EXTERNAL_REGIONS=1`.
+  wrong-size weights rejection, and corrupted weights checksum rejection; a separate explicit-options regression covers
+  enabling external regions without relying on process environment variables.
 - Completed on 2026-05-25: when external regions are enabled, `Compiler<CPU>::CompileArtifact` now retries the CPU f32
   linear-chain external-regions path after an internal `FusionPass`, covering common unfused Layer-generated linear
   graphs without requiring callers to mutate the graph first.
@@ -764,10 +762,10 @@ Notes:
 - Completed on 2026-05-25: `CompiledModuleTest.CPUParallelLinearChainRejectsMalformedExternalTensorMetadata` corrupts
   an external tensor region name in separated metadata and verifies that validation reports the malformed table before
   load/JIT execution.
-- Completed on 2026-05-25: `CompilerOptions` now controls CPU AOT thread count, CPU parallel min-FLOPs, CPU external
-  regions, generic MLIR external constant minimum byte size, internal external-region fusion, and CUDA native-AOT enablement. `Compiler<CPU/CUDA>` overloads accept
-  options explicitly; `CompilerOptions::FromEnvironment()` is used by command-line style entry points and compatibility
-  tests instead of having the library's default compile path read process environment variables directly.
+- Completed on 2026-05-25 and tightened during vNext: `CompilerOptions` now controls CPU AOT thread count, CPU parallel
+  min-FLOPs, CPU external regions, generic MLIR external constant minimum byte size, internal external-region fusion,
+  and CUDA native-AOT enablement. `Compiler<CPU/CUDA>` overloads accept options explicitly; command-line style entry
+  points that need environment variables parse them outside the core library before calling compiler APIs.
 - Completed on 2026-05-25: `Debug::DumpCompiledModuleMetadata` now also accepts
   `CompiledModuleSeparatedArtifact` and prints metadata/constants/weights/instructions sizes, per-region checksums, and
   external tensor table entries. This makes external region packaging and rebind diagnostics inspectable without parsing
@@ -1491,18 +1489,44 @@ to keep the old architecture alive if they are left in place during vNext.
 - [ ] Remove `Graph` production overloads from runtime/compiler public APIs. `Interpreter`, CPU/CUDA `Compiler`,
   `DumpMLIR`, and MLIR translation should consume `ExecutablePlan`, `ExecutableModule`, `ExecutableRegion`, or
   `RuntimeSchedule`; graph convenience wrappers must move to migration/test/example helpers.
+  - [x] Removed `Graph` overloads from runtime schedule, placement plan, and train-step plan construction; callers now
+    pass `ExecutableModule` or `ExecutablePlan` explicitly.
+  - [x] Removed `Graph` overloads from CPU/CUDA compiler public APIs; callers must pass `ExecutablePlan` explicitly.
+  - [x] `DumpMLIR` now consumes `ExecutablePlan`, with a public API guard preventing the `Graph` overload from returning.
+  - [ ] Move remaining `Interpreter` and direct MLIR translation `Graph` convenience wrappers out of production-facing
+    headers or mark them as migration/debug-only helpers.
 - [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
 - [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
-- [ ] Remove library-internal environment-variable reads. `CompilerOptions`, `CUDAOptions`, and runtime/config objects own
+  - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal
+    lowering implementation detail rather than the caller contract.
+  - [ ] Replace the internal `ExecutablePlan -> Graph` lowering bridge with direct plan/module/region lowering.
+- [x] Remove library-internal environment-variable reads. `CompilerOptions`, `CUDAOptions`, and runtime/config objects own
   behavior; CLI, benchmarks, and examples may still populate those options from environment variables.
+  - [x] `CUDANativeNVPTXTargetChip()` no longer reads `LITENN_CUDA_AOT_TARGET`; callers that need a non-default target must
+    pass an explicit target string to `CUDANativeNVPTXTargetChip(target)`.
+  - [x] CUDA Graph replay no longer reads `LITENN_CUDA_ENABLE_GRAPH_REPLAY` inside the runtime; callers opt in through
+    `CompiledModuleCUDARunOptions::enableGraphReplay`.
+  - [x] Removed internal `LITENN_CUDA_NATIVE_CODEGEN_TRACE` reads from optional CUDA native codegen fallback probes.
+  - [x] CUDA device cuBLASLt selection no longer reads `LITENN_CUDA_ENABLE_CUBLASLT`; callers opt in with
+    `CUDAExecutionOptions::enableCUBLASLt` or `CompiledModuleCUDARunOptions::enableCUBLASLt`.
+  - [x] Removed `CompilerOptions::FromEnvironment()` from the core compiler API; benchmark/profile code now parses
+    environment variables locally before filling `CompilerOptions`, and examples use explicit defaults.
 - [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and mark or remove helpers that
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
   and CUDA AOT are selected through the same train-step contract.
+  - [x] `Trainer` now builds, stores, exposes, and validates `TrainStepPlan`; current numerical execution still uses the
+    interpreter policy path until CPU/CUDA train-step runners are wired.
+  - [x] `Trainer` forward/backward debug execution now runs through `TrainStepPlan::module.plan` instead of directly
+    executing the source `Graph`.
+  - [ ] Wire CPU/CUDA compiled train-step runners behind `TrainExecutionPolicy::AOT` / `Auto`.
 - [x] Delete legacy aliases and overload shims such as `CPUTrainer` and single-vector Pad helpers.
-- [ ] Add CI/build targets that intentionally fail when new public runtime/compiler APIs accept raw `Graph` after vNext.
+- [x] Add CI/build targets that intentionally fail when new public runtime/compiler APIs accept raw `Graph` after vNext.
+  - [x] Added `G14PublicApiGuardTest` to fail if migrated runtime schedule, placement, train-step, or compiler APIs
+    reintroduce raw `Graph` overloads.
+  - [x] Extended `G14PublicApiGuardTest` to cover the migrated `DumpMLIR` entry point.
 
 ### Long-Term Deferred Queue
 
@@ -1546,6 +1570,15 @@ or backend architecture decisions before implementation would be meaningful.
   use it as the production execution path.
 
 ## Date Notes
+
+### 2026-06-02
+
+- Continued G14.11 vNext cleanup: public `DumpMLIR` now consumes `ExecutablePlan`, the guard test covers that entry
+  point, and `Trainer` debug execution now routes forward/backward through `TrainStepPlan::module.plan`.
+- Remaining G14.11 work is narrowed to the larger architecture tails: moving `Interpreter` / direct MLIR graph wrappers
+  into migration/debug-only surfaces, replacing raw `NodeVariant` ModelIO serialization, making the internal compiler
+  lowering bridge fully plan-native, moving raw graph layer helpers behind `ModelBuilder`, and wiring real CPU/CUDA
+  compiled train-step runners.
 
 ### 2026-05-22
 
