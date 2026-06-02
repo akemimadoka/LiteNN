@@ -38,25 +38,36 @@ namespace LiteNN::Layer
 		}
 	}
 
+	namespace Detail
+	{
+		inline SwiGLUMLPLayer CreateSwiGLUMLPImpl(Graph& graph, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
+		                                          Tensor<CPU> downWeight)
+		{
+			const auto gateProjection = Detail::CreateLinearImpl(graph, std::move(gateWeight));
+			const auto upProjection = Detail::CreateLinearImpl(graph, std::move(upWeight));
+			const auto downProjection = Detail::CreateLinearImpl(graph, std::move(downWeight));
+			ValidateSwiGLUMLP(gateProjection, upProjection, downProjection);
+			return {
+				.gateProjection = gateProjection,
+				.upProjection = upProjection,
+				.downProjection = downProjection,
+			};
+		}
+	} // namespace Detail
+
+	/// Migration-only raw Graph helper. Prefer CreateSwiGLUMLP(ModelBuilder&, ...).
+	[[deprecated("Use CreateSwiGLUMLP(ModelBuilder&, ...)")]]
 	inline SwiGLUMLPLayer CreateSwiGLUMLP(Graph& graph, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
 	                                     Tensor<CPU> downWeight)
 	{
-		const auto gateProjection = CreateLinear(graph, std::move(gateWeight));
-		const auto upProjection = CreateLinear(graph, std::move(upWeight));
-		const auto downProjection = CreateLinear(graph, std::move(downWeight));
-		ValidateSwiGLUMLP(gateProjection, upProjection, downProjection);
-		return {
-			.gateProjection = gateProjection,
-			.upProjection = upProjection,
-			.downProjection = downProjection,
-		};
+		return Detail::CreateSwiGLUMLPImpl(graph, std::move(gateWeight), std::move(upWeight), std::move(downWeight));
 	}
 
 	inline SwiGLUMLPLayer CreateSwiGLUMLP(ModelBuilder& builder, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
 	                                      Tensor<CPU> downWeight)
 	{
-		return CreateSwiGLUMLP(builder.MutableGraph(), std::move(gateWeight), std::move(upWeight),
-		                       std::move(downWeight));
+		return Detail::CreateSwiGLUMLPImpl(builder.MutableGraph(), std::move(gateWeight), std::move(upWeight),
+		                                   std::move(downWeight));
 	}
 
 	inline NodeOutput AddSwiGLUMLP(Subgraph& subgraph, const SwiGLUMLPLayer& layer, NodeOutput input)
@@ -71,19 +82,29 @@ namespace LiteNN::Layer
 		return AddLinear(subgraph, layer.downProjection, { gated, 0 });
 	}
 
+	namespace Detail
+	{
+		inline SubgraphId BuildSwiGLUMLPImpl(Graph& graph, const SwiGLUMLPLayer& layer, std::size_t batchSize)
+		{
+			ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
+			Subgraph subgraph;
+			const auto input = subgraph.AddParam(layer.gateProjection.dtype, { batchSize, layer.gateProjection.inFeatures });
+			const auto result = AddSwiGLUMLP(subgraph, layer, { input, 0 });
+			subgraph.SetResults({ result });
+			return graph.AddSubgraph(std::move(subgraph));
+		}
+	} // namespace Detail
+
+	/// Migration-only raw Graph helper. Prefer BuildSwiGLUMLP(ModelBuilder&, ...).
+	[[deprecated("Use BuildSwiGLUMLP(ModelBuilder&, ...)")]]
 	inline SubgraphId BuildSwiGLUMLP(Graph& graph, const SwiGLUMLPLayer& layer, std::size_t batchSize = 1)
 	{
-		ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
-		Subgraph subgraph;
-		const auto input = subgraph.AddParam(layer.gateProjection.dtype, { batchSize, layer.gateProjection.inFeatures });
-		const auto result = AddSwiGLUMLP(subgraph, layer, { input, 0 });
-		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return Detail::BuildSwiGLUMLPImpl(graph, layer, batchSize);
 	}
 
 	inline SubgraphId BuildSwiGLUMLP(ModelBuilder& builder, const SwiGLUMLPLayer& layer, std::size_t batchSize = 1)
 	{
-		return BuildSwiGLUMLP(builder.MutableGraph(), layer, batchSize);
+		return Detail::BuildSwiGLUMLPImpl(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 

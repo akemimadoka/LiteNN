@@ -37,39 +37,57 @@ namespace LiteNN::Layer
 		}
 	}
 
+	namespace Detail
+	{
+		inline LinearLayer CreateLinearImpl(Graph& graph, Tensor<CPU> weight)
+		{
+			ValidateLinearWeight(weight);
+			LinearLayer layer;
+			layer.inFeatures = weight.Shape()[0];
+			layer.outFeatures = weight.Shape()[1];
+			layer.dtype = weight.DType();
+			layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
+			return layer;
+		}
+
+		inline LinearLayer CreateLinearImpl(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
+		{
+			ValidateLinearWeight(weight);
+			ValidateLinearBias(bias, weight.Shape()[1], weight.DType());
+
+			LinearLayer layer;
+			layer.inFeatures = weight.Shape()[0];
+			layer.outFeatures = weight.Shape()[1];
+			layer.dtype = weight.DType();
+			layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
+			layer.biasVariable = graph.AddVariable(Variable::Create(std::move(bias)));
+			return layer;
+		}
+
+	} // namespace Detail
+
+	/// Migration-only raw Graph helper. Prefer CreateLinear(ModelBuilder&, ...).
+	[[deprecated("Use CreateLinear(ModelBuilder&, ...)")]]
 	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight)
 	{
-		ValidateLinearWeight(weight);
-		LinearLayer layer;
-		layer.inFeatures = weight.Shape()[0];
-		layer.outFeatures = weight.Shape()[1];
-		layer.dtype = weight.DType();
-		layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
-		return layer;
+		return Detail::CreateLinearImpl(graph, std::move(weight));
 	}
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight)
 	{
-		return CreateLinear(builder.MutableGraph(), std::move(weight));
+		return Detail::CreateLinearImpl(builder.MutableGraph(), std::move(weight));
 	}
 
+	/// Migration-only raw Graph helper. Prefer CreateLinear(ModelBuilder&, ...).
+	[[deprecated("Use CreateLinear(ModelBuilder&, ...)")]]
 	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
 	{
-		ValidateLinearWeight(weight);
-		ValidateLinearBias(bias, weight.Shape()[1], weight.DType());
-
-		LinearLayer layer;
-		layer.inFeatures = weight.Shape()[0];
-		layer.outFeatures = weight.Shape()[1];
-		layer.dtype = weight.DType();
-		layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
-		layer.biasVariable = graph.AddVariable(Variable::Create(std::move(bias)));
-		return layer;
+		return Detail::CreateLinearImpl(graph, std::move(weight), std::move(bias));
 	}
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight, Tensor<CPU> bias)
 	{
-		return CreateLinear(builder.MutableGraph(), std::move(weight), std::move(bias));
+		return Detail::CreateLinearImpl(builder.MutableGraph(), std::move(weight), std::move(bias));
 	}
 
 	inline NodeOutput AddLinear(Subgraph& subgraph, const LinearLayer& layer, NodeOutput input)
@@ -100,18 +118,28 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
+	namespace Detail
+	{
+		inline SubgraphId BuildLinearImpl(Graph& graph, const LinearLayer& layer, std::size_t batchSize)
+		{
+			Subgraph subgraph;
+			const auto input = subgraph.AddParam(layer.dtype, { batchSize, layer.inFeatures });
+			const auto result = AddLinear(subgraph, layer, { input, 0 });
+			subgraph.SetResults({ result });
+			return graph.AddSubgraph(std::move(subgraph));
+		}
+	} // namespace Detail
+
+	/// Migration-only raw Graph helper. Prefer BuildLinear(ModelBuilder&, ...).
+	[[deprecated("Use BuildLinear(ModelBuilder&, ...)")]]
 	inline SubgraphId BuildLinear(Graph& graph, const LinearLayer& layer, std::size_t batchSize = 1)
 	{
-		Subgraph subgraph;
-		const auto input = subgraph.AddParam(layer.dtype, { batchSize, layer.inFeatures });
-		const auto result = AddLinear(subgraph, layer, { input, 0 });
-		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return Detail::BuildLinearImpl(graph, layer, batchSize);
 	}
 
 	inline SubgraphId BuildLinear(ModelBuilder& builder, const LinearLayer& layer, std::size_t batchSize = 1)
 	{
-		return BuildLinear(builder.MutableGraph(), layer, batchSize);
+		return Detail::BuildLinearImpl(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 
