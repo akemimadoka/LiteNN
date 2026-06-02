@@ -1521,6 +1521,10 @@ to keep the old architecture alive if they are left in place during vNext.
     `CompilerOptions`; core compiler APIs remain environment-free.
 - [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and mark or remove helpers that
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
+  - [x] Added `ModelBuilder` as a `ModelGraph`-owned construction surface and wired the common `Linear` layer
+    create/build helpers through `ModelBuilder&`.
+  - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
+    and deprecate the raw graph variants.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
   and CUDA AOT are selected through the same train-step contract.
   - [x] `Trainer` now builds, stores, exposes, and validates `TrainStepPlan`; current numerical execution still uses the

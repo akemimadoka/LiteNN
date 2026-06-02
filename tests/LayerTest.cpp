@@ -27,6 +27,7 @@
 #include <LiteNN/Layer/Window.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -181,6 +182,29 @@ namespace
 			return result;
 		}
 } // namespace
+
+TEST(LayerLinear, BuildsThroughModelBuilderSurface)
+{
+	ModelBuilder builder;
+	auto layer = Layer::CreateLinear(builder,
+	                                 Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 0.5f, -1.0f },
+	                                             { 3, 2 }, DataType::Float32),
+	                                 Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
+	const auto forward = Layer::BuildLinear(builder, layer, 2);
+	builder.SetForward(forward);
+
+	Runtime::Interpreter<CPU> interpreter;
+	auto input = Optimizer::MakeFloatTensor(std::array{ 1.0f, 0.0f, 2.0f, 0.0f, 1.0f, 1.0f }, { 2, 3 });
+	std::array<Tensor<CPU>, 1> inputs{ std::move(input) };
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(builder.Model()), inputs);
+
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_EQ(outputs[0].Shape(), (ShapeView{ 2, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 2.25f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), -0.5f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 3.75f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 2.5f);
+}
 
 TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 {

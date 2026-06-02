@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <format>
 #include <optional>
@@ -47,6 +48,11 @@ namespace LiteNN::Layer
 		return layer;
 	}
 
+	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight)
+	{
+		return CreateLinear(builder.MutableGraph(), std::move(weight));
+	}
+
 	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
 	{
 		ValidateLinearWeight(weight);
@@ -59,6 +65,11 @@ namespace LiteNN::Layer
 		layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
 		layer.biasVariable = graph.AddVariable(Variable::Create(std::move(bias)));
 		return layer;
+	}
+
+	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight, Tensor<CPU> bias)
+	{
+		return CreateLinear(builder.MutableGraph(), std::move(weight), std::move(bias));
 	}
 
 	inline NodeOutput AddLinear(Subgraph& subgraph, const LinearLayer& layer, NodeOutput input)
@@ -96,6 +107,11 @@ namespace LiteNN::Layer
 		const auto result = AddLinear(subgraph, layer, { input, 0 });
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
+	}
+
+	inline SubgraphId BuildLinear(ModelBuilder& builder, const LinearLayer& layer, std::size_t batchSize = 1)
+	{
+		return BuildLinear(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 
