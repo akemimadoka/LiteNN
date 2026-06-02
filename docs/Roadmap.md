@@ -1525,7 +1525,10 @@ to keep the old architecture alive if they are left in place during vNext.
     create/build helpers through `ModelBuilder&`.
   - [x] Wired additional variable-owning layer helpers (`LayerNorm`, `RMSNorm`, `SwiGLUMLP`) through
     `ModelBuilder&` overloads.
-  - [x] Deprecated the migrated raw `Graph&` layer helpers so new code is guided toward `ModelBuilder&`.
+  - [x] Added `ModelGraph::TakeGraph()` / `ModelBuilder::TakeGraph()` so builder-based construction can still hand
+    existing graph-oriented passes a completed `Graph` at the migration boundary.
+  - [x] Deleted migrated raw `Graph&` layer helpers (`Linear`, `LayerNorm`, `RMSNorm`, `SwiGLUMLP`) and moved tests,
+    examples, and benchmarks to `ModelBuilder&`; the public API guard prevents those helpers from returning.
   - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
     and delete the raw graph variants.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT

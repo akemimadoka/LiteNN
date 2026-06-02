@@ -221,8 +221,9 @@ namespace LiteNN::Examples::Mnist
 			throw std::runtime_error("Unexpected MNIST parameter tensor shape or dtype");
 		}
 
-		Graph graph;
-		const auto classifier = Layer::CreateLinear(graph, std::move(weightTensor), std::move(biasTensor));
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
+		const auto classifier = Layer::CreateLinear(builder, std::move(weightTensor), std::move(biasTensor));
 		if (classifier.weightVariable != kWeightVariableIndex || !classifier.biasVariable ||
 		    *classifier.biasVariable != kBiasVariableIndex)
 		{
@@ -238,7 +239,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	inline Graph BuildTrainableMnistGraph(std::uint32_t seed = 42)
@@ -254,12 +255,13 @@ namespace LiteNN::Examples::Mnist
 	{
 		std::mt19937 rng(seed);
 
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		const auto hidden = Layer::CreateLinear(
-		    graph, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
+		    builder, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
 		    Initializer::Zeros({ 1, hiddenSize }));
 		const auto output = Layer::CreateLinear(
-		    graph, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
+		    builder, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
 		    Initializer::Zeros({ 1, kDigitCount }));
 
 		if (hidden.weightVariable != kMlpHiddenWeightIdx || !hidden.biasVariable ||
@@ -281,7 +283,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	inline Graph BuildInferenceGraphFromTrainedVariables(const Graph& trainedGraph)

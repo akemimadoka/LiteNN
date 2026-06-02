@@ -65,9 +65,9 @@ const TrainModelSpec& GetTrainModelSpec(TrainModelKind kind)
 	return specs[static_cast<std::size_t>(kind)];
 }
 
-Layer::LinearLayer CreateLinear(Graph& graph, std::size_t inputSize, std::size_t outputSize, std::mt19937& rng)
+Layer::LinearLayer CreateLinear(ModelBuilder& builder, std::size_t inputSize, std::size_t outputSize, std::mt19937& rng)
 {
-	return Layer::CreateLinear(graph,
+	return Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ inputSize, outputSize }, rng),
 	    Initializer::Zeros({ 1, outputSize }));
 }
@@ -75,15 +75,16 @@ Layer::LinearLayer CreateLinear(Graph& graph, std::size_t inputSize, std::size_t
 Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& rng)
 {
 	const auto& spec = GetTrainModelSpec(kind);
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 	std::vector<Layer::LinearLayer> layers;
 	std::size_t inputSize = 784;
 	for (const auto hiddenSize : spec.hiddenSizes)
 	{
-		layers.push_back(CreateLinear(graph, inputSize, hiddenSize, rng));
+		layers.push_back(CreateLinear(builder, inputSize, hiddenSize, rng));
 		inputSize = hiddenSize;
 	}
-	layers.push_back(CreateLinear(graph, inputSize, 10, rng));
+	layers.push_back(CreateLinear(builder, inputSize, 10, rng));
 
 	Subgraph forward;
 	NodeOutput value{ forward.AddParam(DataType::Float32, { batch, 784 }), 0 };
@@ -95,7 +96,7 @@ Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& r
 	graph.SetForward(graph.AddSubgraph(std::move(forward)));
 	graph.SetInputNames({ "image" });
 	graph.SetOutputNames({ "logits" });
-	return graph;
+	return builder.TakeGraph();
 }
 
 void OptimizeInferenceGraph(Graph& graph)

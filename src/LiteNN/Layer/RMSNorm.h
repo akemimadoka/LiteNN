@@ -38,14 +38,6 @@ namespace LiteNN::Layer
 		}
 	} // namespace Detail
 
-	/// Migration-only raw Graph helper. Prefer CreateRMSNorm(ModelBuilder&, ...).
-	[[deprecated("Use CreateRMSNorm(ModelBuilder&, ...)")]]
-	inline RMSNormLayer CreateRMSNorm(Graph& graph, std::size_t featureSize,
-	                                 DataType dtype = DataType::Float32, double eps = 1e-6)
-	{
-		return Detail::CreateRMSNormImpl(graph, featureSize, dtype, eps);
-	}
-
 	inline RMSNormLayer CreateRMSNorm(ModelBuilder& builder, std::size_t featureSize,
 	                                  DataType dtype = DataType::Float32, double eps = 1e-6)
 	{
@@ -82,13 +74,6 @@ namespace LiteNN::Layer
 			return graph.AddSubgraph(std::move(subgraph));
 		}
 	} // namespace Detail
-
-	/// Migration-only raw Graph helper. Prefer BuildRMSNorm(ModelBuilder&, ...).
-	[[deprecated("Use BuildRMSNorm(ModelBuilder&, ...)")]]
-	inline SubgraphId BuildRMSNorm(Graph& graph, const RMSNormLayer& layer, std::size_t batchSize = 1)
-	{
-		return Detail::BuildRMSNormImpl(graph, layer, batchSize);
-	}
 
 	inline SubgraphId BuildRMSNorm(ModelBuilder& builder, const RMSNormLayer& layer, std::size_t batchSize = 1)
 	{

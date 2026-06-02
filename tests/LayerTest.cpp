@@ -1134,8 +1134,9 @@ TEST(LayerL2Norm, SupportsAxisZero)
 TEST(LayerLayerNorm, OutputMeanNearZero)
 {
 	// gamma=1, beta=0 → 输出均值应约为 0
-	Graph graph;
-	const auto norm = Layer::CreateLayerNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1158,8 +1159,9 @@ TEST(LayerLayerNorm, OutputMeanNearZero)
 TEST(LayerLayerNorm, OutputVarianceNearOne)
 {
 	// gamma=1, beta=0 → 输出方差应约为 1
-	Graph graph;
-	const auto norm = Layer::CreateLayerNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1223,8 +1225,9 @@ TEST(LayerLayerNorm, BetaShiftsOutput)
 
 TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 {
-	Graph graph;
-	const auto norm = Layer::CreateRMSNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateRMSNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1246,8 +1249,9 @@ TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 
 TEST(LayerRMSNorm, ZeroInputStaysZero)
 {
-	Graph graph;
-	const auto norm = Layer::CreateRMSNorm(graph, 3);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateRMSNorm(builder, 3);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
@@ -1363,9 +1367,10 @@ TEST(LayerSiLU, MatchesAnalyticValue)
 
 TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
-	    graph,
+	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }));
@@ -1383,9 +1388,10 @@ TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 
 TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
-	    graph,
+	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }));
@@ -1405,9 +1411,9 @@ TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 
 TEST(LayerSwiGLU, RejectsMismatchedHiddenSizes)
 {
-	Graph graph;
+	ModelBuilder builder;
 	EXPECT_THROW(static_cast<void>(Layer::CreateSwiGLUMLP(
-	                 graph,
+	                 builder,
 	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f }, { 2, 3 }),
 	                 Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }))),

@@ -35,6 +35,11 @@ namespace LiteNN
 			return model_.GraphView();
 		}
 
+		Graph TakeGraph() noexcept
+		{
+			return model_.TakeGraph();
+		}
+
 		std::size_t AddVariable(std::shared_ptr<Variable> variable)
 		{
 			return MutableGraph().AddVariable(std::move(variable));

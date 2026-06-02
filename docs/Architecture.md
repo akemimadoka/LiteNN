@@ -401,7 +401,7 @@ SubgraphId BuildSoftmax(Graph& graph, DataType dtype, ShapeView shape, std::size
 // Layer/LayerNorm.h
 struct LayerNormLayer { SubgraphId subgraph; VariableIdx gammaVariable, betaVariable;
                         std::size_t featureSize; DataType dtype; double eps; };
-LayerNormLayer CreateLayerNorm(Graph& graph, std::size_t featureSize, DataType dtype, double eps = 1e-5);
+LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize, DataType dtype, double eps = 1e-5);
 NodeOutput AddLayerNorm(Subgraph& sg, NodeOutput input, const LayerNormLayer& layer);
 // LayerNorm 归一化最后一维（featureSize），含 learnable gamma/beta，输入形状 [batch, featureSize]
 ```

@@ -86,24 +86,26 @@ void SetThroughputCounters(benchmark::State& state, std::size_t batch);
 
 Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto fc = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto fc = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 128 }, rng),
 	    Initializer::Zeros({ 1, 128 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 128, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -111,19 +113,20 @@ Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	fwd.SetResults({ Layer::AddLinear(fwd, h2, a1) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 512 }, rng),
 	    Initializer::Zeros({ 1, 512 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 512, 256 }, rng),
 	    Initializer::Zeros({ 1, 256 }));
-	const auto h3 = Layer::CreateLinear(graph,
+	const auto h3 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 256, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -132,7 +135,7 @@ Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 	fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 void Optimize(Graph& graph)

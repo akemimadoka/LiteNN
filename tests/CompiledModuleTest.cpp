@@ -269,14 +269,15 @@ namespace
 
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		const auto h1 = Layer::CreateLinear(
-		    graph,
+		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 },
 		                DataType::Float32),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
-		    graph, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
+		    builder, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
 		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
 
 		Subgraph sg;
@@ -286,7 +287,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	std::vector<double> MakePatternValues(std::size_t count, double scale)
@@ -306,16 +307,17 @@ namespace
 		constexpr std::size_t kHidden = 64;
 		constexpr std::size_t kOutput = 32;
 
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		auto w1 = MakePatternValues(kInput * kHidden, 0.005);
 		auto b1 = MakePatternValues(kHidden, 0.001);
 		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
 		auto b2 = MakePatternValues(kOutput, 0.001);
 		const auto h1 =
-		    Layer::CreateLinear(graph, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		    Layer::CreateLinear(builder, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
 		                        Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
-		    graph, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
+		    builder, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
 		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
 
 		Subgraph sg;
@@ -325,7 +327,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	class ScopedEnvVar

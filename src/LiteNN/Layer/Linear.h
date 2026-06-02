@@ -66,23 +66,9 @@ namespace LiteNN::Layer
 
 	} // namespace Detail
 
-	/// Migration-only raw Graph helper. Prefer CreateLinear(ModelBuilder&, ...).
-	[[deprecated("Use CreateLinear(ModelBuilder&, ...)")]]
-	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight)
-	{
-		return Detail::CreateLinearImpl(graph, std::move(weight));
-	}
-
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight)
 	{
 		return Detail::CreateLinearImpl(builder.MutableGraph(), std::move(weight));
-	}
-
-	/// Migration-only raw Graph helper. Prefer CreateLinear(ModelBuilder&, ...).
-	[[deprecated("Use CreateLinear(ModelBuilder&, ...)")]]
-	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
-	{
-		return Detail::CreateLinearImpl(graph, std::move(weight), std::move(bias));
 	}
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight, Tensor<CPU> bias)
@@ -129,13 +115,6 @@ namespace LiteNN::Layer
 			return graph.AddSubgraph(std::move(subgraph));
 		}
 	} // namespace Detail
-
-	/// Migration-only raw Graph helper. Prefer BuildLinear(ModelBuilder&, ...).
-	[[deprecated("Use BuildLinear(ModelBuilder&, ...)")]]
-	inline SubgraphId BuildLinear(Graph& graph, const LinearLayer& layer, std::size_t batchSize = 1)
-	{
-		return Detail::BuildLinearImpl(graph, layer, batchSize);
-	}
 
 	inline SubgraphId BuildLinear(ModelBuilder& builder, const LinearLayer& layer, std::size_t batchSize = 1)
 	{

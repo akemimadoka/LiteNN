@@ -32,6 +32,11 @@ namespace LiteNN
 			return graph_;
 		}
 
+		Graph TakeGraph() noexcept
+		{
+			return std::move(graph_);
+		}
+
 	private:
 		Graph graph_;
 	};

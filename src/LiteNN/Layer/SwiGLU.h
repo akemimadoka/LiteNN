@@ -55,14 +55,6 @@ namespace LiteNN::Layer
 		}
 	} // namespace Detail
 
-	/// Migration-only raw Graph helper. Prefer CreateSwiGLUMLP(ModelBuilder&, ...).
-	[[deprecated("Use CreateSwiGLUMLP(ModelBuilder&, ...)")]]
-	inline SwiGLUMLPLayer CreateSwiGLUMLP(Graph& graph, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
-	                                     Tensor<CPU> downWeight)
-	{
-		return Detail::CreateSwiGLUMLPImpl(graph, std::move(gateWeight), std::move(upWeight), std::move(downWeight));
-	}
-
 	inline SwiGLUMLPLayer CreateSwiGLUMLP(ModelBuilder& builder, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
 	                                      Tensor<CPU> downWeight)
 	{
@@ -94,13 +86,6 @@ namespace LiteNN::Layer
 			return graph.AddSubgraph(std::move(subgraph));
 		}
 	} // namespace Detail
-
-	/// Migration-only raw Graph helper. Prefer BuildSwiGLUMLP(ModelBuilder&, ...).
-	[[deprecated("Use BuildSwiGLUMLP(ModelBuilder&, ...)")]]
-	inline SubgraphId BuildSwiGLUMLP(Graph& graph, const SwiGLUMLPLayer& layer, std::size_t batchSize = 1)
-	{
-		return Detail::BuildSwiGLUMLPImpl(graph, layer, batchSize);
-	}
 
 	inline SubgraphId BuildSwiGLUMLP(ModelBuilder& builder, const SwiGLUMLPLayer& layer, std::size_t batchSize = 1)
 	{

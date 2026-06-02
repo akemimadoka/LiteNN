@@ -41,14 +41,6 @@ namespace LiteNN::Layer
 		}
 	} // namespace Detail
 
-	/// Migration-only raw Graph helper. Prefer CreateLayerNorm(ModelBuilder&, ...).
-	[[deprecated("Use CreateLayerNorm(ModelBuilder&, ...)")]]
-	inline LayerNormLayer CreateLayerNorm(Graph& graph, std::size_t featureSize,
-	                                      DataType dtype = DataType::Float32, double eps = 1e-5)
-	{
-		return Detail::CreateLayerNormImpl(graph, featureSize, dtype, eps);
-	}
-
 	inline LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize,
 	                                      DataType dtype = DataType::Float32, double eps = 1e-5)
 	{
