@@ -1486,7 +1486,7 @@ Completed notes:
 Purpose: finish the remaining compatibility-breaking cleanup found after the first G14 pass. These are the items most likely
 to keep the old architecture alive if they are left in place during vNext.
 
-- [ ] Remove `Graph` production overloads from runtime/compiler public APIs. `Interpreter`, CPU/CUDA `Compiler`,
+- [x] Remove `Graph` production overloads from runtime/compiler public APIs. `Interpreter`, CPU/CUDA `Compiler`,
   `DumpMLIR`, and MLIR translation should consume `ExecutablePlan`, `ExecutableModule`, `ExecutableRegion`, or
   `RuntimeSchedule`; graph convenience wrappers must move to migration/test/example helpers.
   - [x] Removed `Graph` overloads from runtime schedule, placement plan, and train-step plan construction; callers now
