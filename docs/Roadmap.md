@@ -1493,7 +1493,9 @@ to keep the old architecture alive if they are left in place during vNext.
     pass `ExecutableModule` or `ExecutablePlan` explicitly.
   - [x] Removed `Graph` overloads from CPU/CUDA compiler public APIs; callers must pass `ExecutablePlan` explicitly.
   - [x] `DumpMLIR` now consumes `ExecutablePlan`, with a public API guard preventing the `Graph` overload from returning.
-  - [ ] Move remaining `Interpreter` and direct MLIR translation `Graph` convenience wrappers out of production-facing
+  - [x] `GraphToMLIR`'s public header now exposes `translateExecutablePlanToMLIR`; compiler pass tests build fixture
+    graphs only at the migration boundary and translate executable plans.
+  - [ ] Move remaining `Interpreter` `Graph` convenience wrappers out of production-facing
     headers or mark them as migration/debug-only helpers.
 - [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
@@ -1501,6 +1503,8 @@ to keep the old architecture alive if they are left in place during vNext.
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal
     lowering implementation detail rather than the caller contract.
+  - [x] Centralized the temporary `ExecutablePlan -> Graph -> MLIR` bridge inside `GraphToMLIR.cpp`; `DumpMLIR`,
+    `CompiledModule`, and compiler pass tests call the plan-native translation entry point.
   - [ ] Replace the internal `ExecutablePlan -> Graph` lowering bridge with direct plan/module/region lowering.
 - [x] Remove library-internal environment-variable reads. `CompilerOptions`, `CUDAOptions`, and runtime/config objects own
   behavior; CLI, benchmarks, and examples may still populate those options from environment variables.
@@ -1513,6 +1517,8 @@ to keep the old architecture alive if they are left in place during vNext.
     `CUDAExecutionOptions::enableCUBLASLt` or `CompiledModuleCUDARunOptions::enableCUBLASLt`.
   - [x] Removed `CompilerOptions::FromEnvironment()` from the core compiler API; benchmark/profile code now parses
     environment variables locally before filling `CompilerOptions`, and examples use explicit defaults.
+  - [x] `litenn_gguf_convert` now parses compiler environment settings locally in the CLI before filling
+    `CompilerOptions`; core compiler APIs remain environment-free.
 - [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and mark or remove helpers that
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
@@ -1574,7 +1580,8 @@ or backend architecture decisions before implementation would be meaningful.
 ### 2026-06-02
 
 - Continued G14.11 vNext cleanup: public `DumpMLIR` now consumes `ExecutablePlan`, the guard test covers that entry
-  point, and `Trainer` debug execution now routes forward/backward through `TrainStepPlan::module.plan`.
+  point, public `GraphToMLIR` translation now consumes `ExecutablePlan`, and `Trainer` debug execution now routes
+  forward/backward through `TrainStepPlan::module.plan`.
 - Remaining G14.11 work is narrowed to the larger architecture tails: moving `Interpreter` / direct MLIR graph wrappers
   into migration/debug-only surfaces, replacing raw `NodeVariant` ModelIO serialization, making the internal compiler
   lowering bridge fully plan-native, moving raw graph layer helpers behind `ModelBuilder`, and wiring real CPU/CUDA

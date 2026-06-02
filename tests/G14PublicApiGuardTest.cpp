@@ -40,6 +40,7 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/Compiler/CompiledModule.h", "CompileArtifact(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Compiler/Dump.h", "DumpMLIR(const Graph&", "BuildExecutablePlan(graph)" },
+		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR", "BuildExecutablePlan(graph)" },
 	};
 
 	for (const auto& entry : forbidden)

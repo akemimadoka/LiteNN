@@ -24,7 +24,6 @@
 #include "mlir/Pass/PassManager.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <cstring>
 #include <format>
 #include <stdexcept>
 #include <string_view>
@@ -124,92 +123,12 @@ namespace
 		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
 	}
 
-	OutputInfo ToOutputInfo(const TensorType& type)
-	{
-		return OutputInfo::FromType(type);
-	}
-
-	Graph BuildDumpGraphFromPlan(const ExecutablePlan& plan)
-	{
-		ValidateExecutablePlan(plan);
-		Graph graph;
-		for (const auto& variable : plan.variables)
-		{
-			if (variable.type.memorySpace != TensorMemorySpace::Host || variable.region.data == nullptr)
-			{
-				throw std::runtime_error("DumpMLIR requires host-backed executable plan variables");
-			}
-			const auto byteSize = variable.type.ByteSize().value_or(0);
-			if (byteSize > variable.region.byteSize)
-			{
-				throw std::runtime_error("DumpMLIR executable plan variable storage is smaller than tensor type");
-			}
-			const auto shape = variable.type.StaticShape();
-			Tensor<CPU> data(Uninitialized, ShapeView{ shape }, variable.type.dtype);
-			std::memcpy(data.RawData(), variable.region.data, byteSize);
-			const auto index = variable.quantization
-			                     ? graph.AddVariable(Variable::CreateQuantized(std::move(data), *variable.quantization))
-			                     : graph.AddVariable(Variable::Create(std::move(data)));
-			graph.SetVariableName(index, variable.region.name);
-		}
-		for (const auto& slot : plan.activationSlots)
-		{
-			graph.AddActivationSlot(slot);
-		}
-		for (const auto& slot : plan.tapeSlots)
-		{
-			graph.AddTapeSlot(slot);
-		}
-		for (const auto& planSubgraph : plan.subgraphs)
-		{
-			Subgraph subgraph;
-			for (const auto& param : planSubgraph.params)
-			{
-				subgraph.AddParam(param);
-			}
-			for (const auto& node : planSubgraph.nodes)
-			{
-				std::vector<OutputInfo> outputs;
-				outputs.reserve(node.outputs.size());
-				for (const auto& output : node.outputs)
-				{
-					outputs.push_back(ToOutputInfo(output));
-				}
-				subgraph.AddNode(node.node, std::move(outputs));
-			}
-			subgraph.SetResults(planSubgraph.results);
-			graph.AddSubgraph(std::move(subgraph));
-		}
-		graph.SetForward(plan.forward);
-		if (plan.backward)
-		{
-			graph.SetBackward(*plan.backward);
-		}
-		std::vector<std::string> inputNames;
-		inputNames.reserve(plan.inputs.size());
-		for (const auto& input : plan.inputs)
-		{
-			inputNames.push_back(input.name);
-		}
-		graph.SetInputNames(std::move(inputNames));
-		std::vector<std::string> outputNames;
-		outputNames.reserve(plan.outputs.size());
-		for (const auto& output : plan.outputs)
-		{
-			outputNames.push_back(output.name);
-		}
-		graph.SetOutputNames(std::move(outputNames));
-		Validation::ValidateGraph(graph);
-		return graph;
-	}
-
 	mlir::OwningOpRef<mlir::ModuleOp> CreateTranslatedModule(const ExecutablePlan& plan, mlir::MLIRContext& ctx)
 	{
-		const auto graph = BuildDumpGraphFromPlan(plan);
-		auto module = litenn::translateGraphToMLIR(graph, ctx);
+		auto module = litenn::translateExecutablePlanToMLIR(plan, ctx);
 		if (!module)
 		{
-			throw std::runtime_error("Failed to translate LiteNN graph to MLIR");
+			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
 		}
 		if (mlir::failed(mlir::verify(*module)))
 		{

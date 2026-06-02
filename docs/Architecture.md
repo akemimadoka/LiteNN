@@ -595,7 +595,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 ### 长期
 
 - **AOT Compiler\<D\>**：将 Graph 编译为设备特定可执行代码（`CompiledModule<D>`）
-  - [x] **Step 1 — MLIR Dialect + Graph→MLIR 翻译器**：定义 `litenn` MLIR Dialect（ODS TableGen，全部 Op），实现 `translateGraphToMLIR()`；SSA 化激活值（Save/Load passthrough）；支持 CondNode/WhileNode region 内联；CompilerTest 4 项测试通过
+  - [x] **Step 1 — MLIR Dialect + ExecutablePlan→MLIR 翻译器**：定义 `litenn` MLIR Dialect（ODS TableGen，全部 Op），实现 `translateExecutablePlanToMLIR()`；SSA 化激活值（Save/Load passthrough）；支持 CondNode/WhileNode region 内联；CompilerTest 4 项测试通过
   - [x] **Step 2 — Lowering Passes**：`litenn` Dialect → 标准 MLIR Dialect（`linalg`/`arith`/`scf`）；tensor 操作映射到 `linalg.generic`/`arith.*`；CondOp/WhileOp → `scf.if`/`scf.while`
   - [x] **Step 3 — Bufferization**：tensor → memref（`one-shot-bufferize`）；内存分配策略
   - [x] **Step 4 — LLVM IR 生成**：convert-linalg-to-loops + convert-scf-to-cf + arith/math/index/memref/func/cf-to-LLVM + reconcile-casts → `translateModuleToLLVMIR()`；LLVMCodegenPassTest 3 项测试通过

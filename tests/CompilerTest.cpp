@@ -39,7 +39,7 @@ TEST_F(CompilerTest, SimpleAdd)
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
 	graph.SetForward(fwdId);
 
-	auto module = litenn::translateGraphToMLIR(graph, ctx_);
+	auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
 	ASSERT_TRUE(module);
 	EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
 
@@ -63,7 +63,7 @@ TEST_F(CompilerTest, MatMulWithVariable)
 	graph.AddSubgraph(std::move(sg));
 	graph.SetForward(0);
 
-	auto module = litenn::translateGraphToMLIR(graph, ctx_);
+	auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
 	ASSERT_TRUE(module);
 	EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
 
@@ -106,7 +106,7 @@ TEST_F(CompilerTest, CondNode)
 	const auto mainId = graph.AddSubgraph(std::move(mainSg));
 	graph.SetForward(mainId);
 
-	auto module = litenn::translateGraphToMLIR(graph, ctx_);
+	auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
 	ASSERT_TRUE(module);
 	EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
 
@@ -148,7 +148,7 @@ TEST_F(CompilerTest, WhileNode)
 	const auto mainId = graph.AddSubgraph(std::move(mainSg));
 	graph.SetForward(mainId);
 
-	auto module = litenn::translateGraphToMLIR(graph, ctx_);
+	auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
 	ASSERT_TRUE(module);
 	EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
 

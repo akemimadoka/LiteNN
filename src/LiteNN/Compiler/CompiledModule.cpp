@@ -5698,10 +5698,10 @@ namespace
 
 	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
 	{
-		auto module = litenn::translateGraphToMLIR(graph, ctx);
+		auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx);
 		if (!module)
 		{
-			throw std::runtime_error("Failed to translate LiteNN graph to MLIR");
+			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
 		}
 
 		mlir::PassManager pm(&ctx);

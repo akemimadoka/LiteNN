@@ -2,6 +2,7 @@
 #include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
 
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -74,6 +76,89 @@ UnaryOpKind convertUnaryOp(LiteNN::UnaryOp op) { return static_cast<UnaryOpKind>
 BinaryOpKind convertBinaryOp(LiteNN::BinaryOp op) { return static_cast<BinaryOpKind>(op); }
 ReduceOpKind convertReduceOp(LiteNN::ReduceOp op) { return static_cast<ReduceOpKind>(op); }
 FusionPatternKind convertFusionPattern(FusionPattern pat) { return static_cast<FusionPatternKind>(pat); }
+
+OutputInfo ToOutputInfo(const LiteNN::TensorType& type)
+{
+	return OutputInfo::FromType(type);
+}
+
+Graph BuildMLIRGraphFromPlan(const ExecutablePlan& plan)
+{
+	ValidateExecutablePlan(plan);
+	Graph graph;
+	for (const auto& variable : plan.variables)
+	{
+		if (variable.type.memorySpace != TensorMemorySpace::Host || variable.region.data == nullptr)
+		{
+			throw std::runtime_error("MLIR translation requires host-backed executable plan variables");
+		}
+		const auto byteSize = variable.type.ByteSize().value_or(0);
+		if (byteSize > variable.region.byteSize)
+		{
+			throw std::runtime_error("MLIR translation executable plan variable storage is smaller than tensor type");
+		}
+		const auto shape = variable.type.StaticShape();
+		Tensor<CPU> data(Uninitialized, ShapeView{ shape }, variable.type.dtype);
+		std::memcpy(data.RawData(), variable.region.data, byteSize);
+		const auto index = variable.quantization
+		                     ? graph.AddVariable(Variable::CreateQuantized(std::move(data), *variable.quantization))
+		                     : graph.AddVariable(Variable::Create(std::move(data)));
+		graph.SetVariableName(index, variable.region.name);
+	}
+	for (const auto& slot : plan.activationSlots)
+	{
+		graph.AddActivationSlot(slot);
+	}
+	for (const auto& slot : plan.tapeSlots)
+	{
+		graph.AddTapeSlot(slot);
+	}
+	for (const auto& planSubgraph : plan.subgraphs)
+	{
+		Subgraph subgraph;
+		for (const auto& param : planSubgraph.params)
+		{
+			subgraph.AddParam(param);
+		}
+		for (const auto& node : planSubgraph.nodes)
+		{
+			if (std::holds_alternative<ParamRefNode>(node.node))
+			{
+				continue;
+			}
+			std::vector<OutputInfo> outputs;
+			outputs.reserve(node.outputs.size());
+			for (const auto& output : node.outputs)
+			{
+				outputs.push_back(ToOutputInfo(output));
+			}
+			subgraph.AddNode(node.node, std::move(outputs));
+		}
+		subgraph.SetResults(planSubgraph.results);
+		graph.AddSubgraph(std::move(subgraph));
+	}
+	graph.SetForward(plan.forward);
+	if (plan.backward)
+	{
+		graph.SetBackward(*plan.backward);
+	}
+	std::vector<std::string> inputNames;
+	inputNames.reserve(plan.inputs.size());
+	for (const auto& input : plan.inputs)
+	{
+		inputNames.push_back(input.name);
+	}
+	graph.SetInputNames(std::move(inputNames));
+	std::vector<std::string> outputNames;
+	outputNames.reserve(plan.outputs.size());
+	for (const auto& output : plan.outputs)
+	{
+		outputNames.push_back(output.name);
+	}
+	graph.SetOutputNames(std::move(outputNames));
+	Validation::ValidateGraph(graph);
+	return graph;
+}
 
 // Extract tensor data to DenseElementsAttr
 DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<PolymorphicDevice>& tensor)
@@ -1701,13 +1786,19 @@ private:
 
 } // namespace
 
-OwningOpRef<ModuleOp> translateGraphToMLIR(const Graph& graph, MLIRContext& ctx)
+OwningOpRef<ModuleOp> TranslateGraphToMLIRInternal(const Graph& graph, MLIRContext& ctx)
 {
 	ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, math::MathDialect,
 	                tensor::TensorDialect>();
 	Validation::ValidateGraph(graph);
 	GraphTranslator translator(graph, ctx);
 	return translator.translate();
+}
+
+OwningOpRef<ModuleOp> translateExecutablePlanToMLIR(const ExecutablePlan& plan, MLIRContext& ctx)
+{
+	const auto graph = BuildMLIRGraphFromPlan(plan);
+	return TranslateGraphToMLIRInternal(graph, ctx);
 }
 
 } // namespace litenn
