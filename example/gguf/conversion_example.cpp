@@ -175,7 +175,7 @@ int main(int argc, char** argv)
 		                                               LiteNN::DataType::Int32, tokenIdValues.data(),
 		                                               tokenIdValues.size());
 		std::array<LiteNN::Tensor<LiteNN::CPU>, 1> inputs = { std::move(tokenIds) };
-		const auto outputs = interpreter.RunForward(lowered, inputs);
+		const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 
 		LiteNN::Tensor<LiteNN::CPU> decodeTokenIds(LiteNN::Uninitialized, { 1 }, LiteNN::DataType::Int32, cpu);
 		const std::array<std::int32_t, 1> decodeTokenIdValues = { 2 };
@@ -189,7 +189,7 @@ int main(int argc, char** argv)
 			std::move(pastKeys),
 			std::move(pastValues),
 		};
-		const auto decodeOutputs = interpreter.RunForward(decode, decodeInputs);
+		const auto decodeOutputs = interpreter.RunForward(BuildExecutablePlan(decode), decodeInputs);
 
 		std::cout << "Imported " << imported.summary.tensorCount << " tensors and "
 		          << imported.summary.metadataCount << " metadata entries\n";

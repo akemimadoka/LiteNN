@@ -28,28 +28,11 @@ namespace LiteNN::Runtime
 	public:
 		using TraceCallback = std::function<void(SubgraphId, NodeId, const NodeEntry&, std::span<const Tensor<D>>)>;
 
-		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
-		[[deprecated("Use BuildExecutablePlan(graph) and RunSubgraph(plan, ...) for production execution")]]
-		std::vector<Tensor<D>> RunSubgraph(const Graph& graph, SubgraphId subgraphId, std::span<const Tensor<D>> inputs,
-		                                   D device = D{})
-		{
-			Validation::ValidateGraph(graph);
-			return RunSubgraph(BuildExecutablePlan(graph), subgraphId, inputs, std::move(device));
-		}
-
 		std::vector<Tensor<D>> RunSubgraph(const ExecutablePlan& plan, SubgraphId subgraphId,
 		                                   std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			ValidateExecutablePlan(plan);
 			return RunSubgraphUnchecked(plan, subgraphId, inputs, std::move(device));
-		}
-
-		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
-		[[deprecated("Use BuildExecutablePlan(graph) and RunForward(plan, ...) for production execution")]]
-		std::vector<Tensor<D>> RunForward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
-		{
-			Validation::ValidateGraph(graph);
-			return RunForward(BuildExecutablePlan(graph), inputs, std::move(device));
 		}
 
 		std::vector<Tensor<D>> RunForward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
@@ -61,15 +44,6 @@ namespace LiteNN::Runtime
 			tapeStore_.clear();
 			tapeStore_.resize(plan.tapeSlots.size());
 			return RunSubgraphUnchecked(plan, plan.forward, inputs, std::move(device));
-		}
-
-		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
-		[[deprecated("Use BuildExecutablePlan(graph) and RunForwardWithTrace(plan, ...) for production execution")]]
-		std::vector<Tensor<D>> RunForwardWithTrace(const Graph& graph, std::span<const Tensor<D>> inputs,
-		                                           TraceCallback callback, D device = D{})
-		{
-			Validation::ValidateGraph(graph);
-			return RunForwardWithTrace(BuildExecutablePlan(graph), inputs, std::move(callback), std::move(device));
 		}
 
 		std::vector<Tensor<D>> RunForwardWithTrace(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
@@ -93,14 +67,6 @@ namespace LiteNN::Runtime
 				traceCallback_ = std::move(previousCallback);
 				throw;
 			}
-		}
-
-		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
-		[[deprecated("Use BuildExecutablePlan(graph) and RunBackward(plan, ...) for production execution")]]
-		std::vector<Tensor<D>> RunBackward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
-		{
-			Validation::ValidateGraph(graph);
-			return RunBackward(BuildExecutablePlan(graph), inputs, std::move(device));
 		}
 
 		std::vector<Tensor<D>> RunBackward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,

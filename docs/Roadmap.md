@@ -1495,8 +1495,8 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] `DumpMLIR` now consumes `ExecutablePlan`, with a public API guard preventing the `Graph` overload from returning.
   - [x] `GraphToMLIR`'s public header now exposes `translateExecutablePlanToMLIR`; compiler pass tests build fixture
     graphs only at the migration boundary and translate executable plans.
-  - [x] Remaining `Interpreter` `Graph` convenience wrappers are explicitly marked as migration/debug-only deprecated APIs;
-    production callers should build `ExecutablePlan` explicitly before interpretation.
+  - [x] Removed remaining `Interpreter` `Graph` convenience wrappers; tests, examples, and benchmarks now build
+    `ExecutablePlan` explicitly before interpretation, and the public API guard prevents the overloads from returning.
 - [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
 - [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
@@ -1519,7 +1519,7 @@ to keep the old architecture alive if they are left in place during vNext.
     environment variables locally before filling `CompilerOptions`, and examples use explicit defaults.
   - [x] `litenn_gguf_convert` now parses compiler environment settings locally in the CLI before filling
     `CompilerOptions`; core compiler APIs remain environment-free.
-- [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and mark or remove helpers that
+- [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and remove helpers that
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
   - [x] Added `ModelBuilder` as a `ModelGraph`-owned construction surface and wired the common `Linear` layer
     create/build helpers through `ModelBuilder&`.
@@ -1527,7 +1527,7 @@ to keep the old architecture alive if they are left in place during vNext.
     `ModelBuilder&` overloads.
   - [x] Deprecated the migrated raw `Graph&` layer helpers so new code is guided toward `ModelBuilder&`.
   - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
-    and deprecate the raw graph variants.
+    and delete the raw graph variants.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
   and CUDA AOT are selected through the same train-step contract.
   - [x] `Trainer` now builds, stores, exposes, and validates `TrainStepPlan`; current numerical execution still uses the

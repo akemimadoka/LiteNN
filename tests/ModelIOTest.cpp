@@ -86,7 +86,7 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
 
-	auto outputs = interpreter.RunForward(loaded, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 16.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
@@ -95,7 +95,7 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 	backwardInputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
 	backwardInputs.emplace_back(Tensor<CPU>({ 1.0f, 1.0f }, { 1, 2 }));
 
-	auto gradients = interpreter.RunBackward(loaded, backwardInputs);
+	auto gradients = interpreter.RunBackward(BuildExecutablePlan(loaded), backwardInputs);
 	ASSERT_EQ(gradients.size(), 3);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 0), 3.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 1), 7.0f);
@@ -140,7 +140,7 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 3.0, 4.0 }, { 2 }, DataType::Float16));
-	auto outputs = interpreter.RunForward(loaded, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_EQ(outputs[0].DType(), DataType::Float16);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 0), 4.0F, 1e-3F);
@@ -195,7 +195,7 @@ TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
-	const auto outputs = interpreter.RunForward(loaded, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 16.0f);
@@ -233,7 +233,7 @@ TEST(ModelIO, SaveLoadExternalWeightsKeepsVariablesAlive)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
-	const auto outputs = interpreter.RunForward(loaded, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 16.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);

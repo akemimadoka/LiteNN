@@ -114,7 +114,7 @@ TEST(GraphValidator, RejectsRuntimeInputMismatch)
 
 	try
 	{
-		(void)interpreter.RunForward(graph, inputs);
+		(void)interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 		FAIL() << "expected runtime input validation to throw";
 	}
 	catch (const std::runtime_error& ex)

@@ -572,13 +572,13 @@ void BMInterpreter(benchmark::State& state, ModelKind kind, std::size_t batch)
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		auto outputs = interp.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 	}
 
 	for (auto _ : state)
 	{
-		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		auto outputs = interp.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 		benchmark::ClobberMemory();
 	}

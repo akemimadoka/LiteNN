@@ -526,7 +526,7 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 	};
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), MakeCPUInputs(inputSpecs));
 	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph), options);
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	auto separated = artifact.SeparateRodata();
@@ -1155,7 +1155,7 @@ TEST(CompiledModuleCUDATest, RunsNativeCastPayloadsOnCUDA)
 		std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{
 			.values = testCase.values, .shape = { 2, 2 }, .dtype = testCase.srcType } };
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1217,7 +1217,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1298,7 +1298,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 			TensorInputSpec{ .values = testCase.biasValues, .shape = { 1, 2 }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1376,7 +1376,7 @@ TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstru
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
 		                                                         .shape = { 2, 3 } } };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), MakeCPUInputs(inputSpecs));
 	auto module = copied.Load(CUDA{});
 	auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
 	ASSERT_EQ(outputs.size(), expected.size());
@@ -1473,7 +1473,7 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		SCOPED_TRACE(testCase.name);
 		Runtime::Interpreter<CPU> interpreter;
 		auto expectedInputs = MakeCPUInputs(testCase.inputs);
-		const auto expected = interpreter.RunForward(testCase.graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(testCase.graph), expectedInputs);
 
 		if (testCase.runCPUAOT)
 		{
@@ -1520,7 +1520,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
@@ -1559,7 +1559,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionLinearChainWithConstantsAndWo
 		.values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 }, .dtype = DataType::Float16 } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
@@ -1594,7 +1594,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
@@ -1787,7 +1787,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 
 		auto interpreterInputs = MakeCPUInputs(testCase.inputs);
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(testCase.graph, interpreterInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(testCase.graph), interpreterInputs);
 
 		auto cpuAOTInputs = MakeCPUInputs(testCase.inputs);
 		auto cpuAOTModule = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(testCase.graph)).Load();

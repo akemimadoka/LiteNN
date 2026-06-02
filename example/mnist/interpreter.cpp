@@ -95,7 +95,7 @@ namespace
 
 			const auto correct = Evaluate(test, options.showSamples, [&](Tensor<CPU> image) {
 				std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
-				return interpreter.RunForward(inferenceGraph, inputs);
+				return interpreter.RunForward(BuildExecutablePlan(inferenceGraph), inputs);
 			});
 			PrintAccuracy(correct, test.Count());
 			return 0;
@@ -106,7 +106,7 @@ namespace
 		const auto test = LoadTestSplit(options);
 		const auto correct = Evaluate(test, options.showSamples, [&](Tensor<CPU> image) {
 			std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
-			return interpreter.RunForward(inferenceGraph, inputs);
+			return interpreter.RunForward(BuildExecutablePlan(inferenceGraph), inputs);
 		});
 		PrintAccuracy(correct, test.Count());
 		return 0;

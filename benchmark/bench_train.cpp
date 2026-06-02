@@ -242,13 +242,13 @@ void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto outputs = interpreter.RunForward(graph, inputs);
+		auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 		benchmark::DoNotOptimize(outputs);
 	}
 
 	for (auto _ : state)
 	{
-		auto outputs = interpreter.RunForward(graph, inputs);
+		auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 		benchmark::DoNotOptimize(outputs);
 		benchmark::ClobberMemory();
 	}
@@ -262,7 +262,7 @@ void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(graph, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
 	std::vector<Tensor<CPU>> outputGradients;
 	outputGradients.push_back(std::move(lossGradient.gradient));
@@ -270,13 +270,13 @@ void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto backwardResults = interpreter.RunBackward(graph, backwardInputs);
+		auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
 		benchmark::DoNotOptimize(backwardResults);
 	}
 
 	for (auto _ : state)
 	{
-		auto backwardResults = interpreter.RunBackward(graph, backwardInputs);
+		auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
 		benchmark::DoNotOptimize(backwardResults);
 		benchmark::ClobberMemory();
 	}
@@ -290,12 +290,12 @@ void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(graph, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
 	std::vector<Tensor<CPU>> outputGradients;
 	outputGradients.push_back(std::move(lossGradient.gradient));
 	auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
-	auto backwardResults = interpreter.RunBackward(graph, backwardInputs);
+	auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
 	const auto inputGradientCount = Optimizer::InferInputGradientCount(graph);
 	Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = 1.0e-3f });
 

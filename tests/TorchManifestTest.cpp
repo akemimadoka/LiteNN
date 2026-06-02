@@ -431,7 +431,7 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 
 	auto inputs = MakeInputs();
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(outputs[0]);
 
@@ -493,7 +493,7 @@ TEST(TorchManifest, ConvertsManifestTensorTargetDType)
 
 	std::array<Tensor<CPU>, 1> inputs{ Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }, DataType::Float32) };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 4.25F, 1e-5F);
@@ -516,7 +516,7 @@ TEST(TorchManifest, ImportsDiffusionFoundationOps)
 		Tensor<CPU>({ 10.0 }, { 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1, 6, 6 }));
 	EXPECT_EQ(outputs[1].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 4 }));
@@ -556,7 +556,7 @@ TEST(TorchManifest, ImportsConcatOp)
 		Tensor<CPU>({ 3.0 }, { 1, 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 3 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 1.0F, 1e-5F);
@@ -609,7 +609,7 @@ TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	constexpr float pi = 3.14159265358979323846F;
@@ -730,7 +730,7 @@ TEST(TorchManifest, ImportsSpatialTransformer2DComposite)
 		Tensor<CPU>({ 0.5, -0.5 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	EXPECT_NEAR(ReadFloat(outputs[0], 1), 3.0F, 1e-5F);
@@ -755,7 +755,7 @@ TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 1, 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(result.graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(result.graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 4u);
 
 	const std::array<float, 4> expectedResidual{ 1.0F, -2.0F, 3.0F, -4.0F };

@@ -82,7 +82,7 @@ TEST(PyTorchGolden, ReLULinearInterpreterMatchesFixture)
 	auto inputs = MakeInputs();
 	Runtime::Interpreter<CPU> interpreter;
 
-	const auto outputs = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchGolden(outputs[0]);
 }

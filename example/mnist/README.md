@@ -26,8 +26,8 @@ and bias parameters use `Initializer::Zeros`. The loss helper computes
 
 ```text
 Trainer<CPU, Optimizer::SGD>::StepSoftmaxCrossEntropy([image], label)
-  -> RunForward(graph, image)
-  -> RunBackward(graph, [image, grad_logits])
+  -> RunForward(BuildExecutablePlan(graph), image)
+  -> RunBackward(BuildExecutablePlan(graph), [image, grad_logits])
   -> StoreVariableGradients
   -> Optimizer::SGD::Step
 ```

@@ -59,7 +59,7 @@ namespace
 		Runtime::Interpreter<CPU> interp;
 		Tensor<CPU> inputTensor = Optimizer::MakeFloatTensor(std::span<const float>(inputData), shape);
 		std::array<Tensor<CPU>, 1> inputs = { std::move(inputTensor) };
-		auto results = interp.RunForward(graph, inputs);
+		auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 		EXPECT_EQ(results.size(), 1u);
 		return std::move(results[0]);
 	}
@@ -67,7 +67,7 @@ namespace
 		std::vector<Tensor<CPU>> RunWithInputs(Graph& graph, std::vector<Tensor<CPU>> inputs)
 		{
 			Runtime::Interpreter<CPU> interp;
-			return interp.RunForward(graph, inputs);
+			return interp.RunForward(BuildExecutablePlan(graph), inputs);
 		}
 
 		std::int32_t ReadInt32(const Tensor<CPU>& t, std::size_t i)

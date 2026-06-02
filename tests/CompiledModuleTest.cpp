@@ -65,7 +65,7 @@ namespace
 	                                      float tolerance = 1e-5f)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(graph, inputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 		auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 		const auto outputs = compiled.Run(inputs);
 
@@ -654,7 +654,7 @@ TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto loaded = artifact.Load();
 	const auto outputs = loaded.Run(inputs);
@@ -690,7 +690,7 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
@@ -1955,7 +1955,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
@@ -1991,7 +1991,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	                                                  DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
@@ -2127,7 +2127,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 	auto inlineModule = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).Load();
 	const auto inlineOutputs = inlineModule.Run(std::span<const Tensor<CPU>>(inputs));
 
@@ -2214,7 +2214,7 @@ TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalR
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(loaded, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(loaded), std::span<const Tensor<CPU>>(inputs));
 
 	CompilerOptions options;
 	options.enableCPUAOTExternalRegions = true;
@@ -2277,7 +2277,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
@@ -2325,7 +2325,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 			std::move(condition),
 			Tensor<CPU>({ 1.5, -2.0 }, { 2 }, DataType::Float32),
 		};
-		const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 		ASSERT_EQ(outputs.size(), expected.size());
 		ExpectTensorNear(outputs[0], expected[0], 1e-5f);

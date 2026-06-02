@@ -46,7 +46,7 @@ namespace
 	std::vector<Tensor<CPU>> RunGraph(Graph& graph, std::vector<Tensor<CPU>> inputs)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		return interpreter.RunForward(graph, inputs);
+		return interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	}
 
 	NodeOutput AddFloatConstant(Subgraph& subgraph, std::initializer_list<double> values,

@@ -36,7 +36,7 @@ namespace
 	std::vector<Tensor<CPU>> RunGraph(Graph& graph, std::vector<Tensor<CPU>> inputs)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		return interpreter.RunForward(graph, inputs);
+		return interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	}
 
 	void ExpectShape(ShapeView shape, std::initializer_list<std::size_t> expected)
