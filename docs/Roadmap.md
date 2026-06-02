@@ -1495,8 +1495,8 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] `DumpMLIR` now consumes `ExecutablePlan`, with a public API guard preventing the `Graph` overload from returning.
   - [x] `GraphToMLIR`'s public header now exposes `translateExecutablePlanToMLIR`; compiler pass tests build fixture
     graphs only at the migration boundary and translate executable plans.
-  - [ ] Move remaining `Interpreter` `Graph` convenience wrappers out of production-facing
-    headers or mark them as migration/debug-only helpers.
+  - [x] Remaining `Interpreter` `Graph` convenience wrappers are explicitly marked as migration/debug-only deprecated APIs;
+    production callers should build `ExecutablePlan` explicitly before interpretation.
 - [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
 - [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make

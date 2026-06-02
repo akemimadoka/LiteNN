@@ -28,7 +28,8 @@ namespace LiteNN::Runtime
 	public:
 		using TraceCallback = std::function<void(SubgraphId, NodeId, const NodeEntry&, std::span<const Tensor<D>>)>;
 
-		// 执行指定子图
+		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
+		[[deprecated("Use BuildExecutablePlan(graph) and RunSubgraph(plan, ...) for production execution")]]
 		std::vector<Tensor<D>> RunSubgraph(const Graph& graph, SubgraphId subgraphId, std::span<const Tensor<D>> inputs,
 		                                   D device = D{})
 		{
@@ -43,7 +44,8 @@ namespace LiteNN::Runtime
 			return RunSubgraphUnchecked(plan, subgraphId, inputs, std::move(device));
 		}
 
-		// 执行前向子图（自动初始化 activation store）
+		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
+		[[deprecated("Use BuildExecutablePlan(graph) and RunForward(plan, ...) for production execution")]]
 		std::vector<Tensor<D>> RunForward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			Validation::ValidateGraph(graph);
@@ -61,7 +63,8 @@ namespace LiteNN::Runtime
 			return RunSubgraphUnchecked(plan, plan.forward, inputs, std::move(device));
 		}
 
-		// 执行前向子图，并在每个节点执行后回调其输出张量；用于诊断中间激活。
+		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
+		[[deprecated("Use BuildExecutablePlan(graph) and RunForwardWithTrace(plan, ...) for production execution")]]
 		std::vector<Tensor<D>> RunForwardWithTrace(const Graph& graph, std::span<const Tensor<D>> inputs,
 		                                           TraceCallback callback, D device = D{})
 		{
@@ -92,7 +95,8 @@ namespace LiteNN::Runtime
 			}
 		}
 
-		// 执行反向子图（使用前向已填充的 activation store）
+		/// Migration/debug-only Graph convenience wrapper. Production callers should build an ExecutablePlan explicitly.
+		[[deprecated("Use BuildExecutablePlan(graph) and RunBackward(plan, ...) for production execution")]]
 		std::vector<Tensor<D>> RunBackward(const Graph& graph, std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			Validation::ValidateGraph(graph);
