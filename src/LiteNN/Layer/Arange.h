@@ -1,4 +1,5 @@
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -38,13 +39,13 @@ namespace LiteNN::Layer
 		return { node, 0 };
 	}
 
-	inline SubgraphId BuildArange(Graph& graph, DataType dtype, std::size_t length, double start = 0.0,
+	inline SubgraphId BuildArange(ModelBuilder& builder, DataType dtype, std::size_t length, double start = 0.0,
 	                             double step = 1.0)
 	{
 		Subgraph subgraph;
 		const auto result = AddArange(subgraph, dtype, length, start, step);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

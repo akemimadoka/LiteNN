@@ -1,4 +1,5 @@
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -55,13 +56,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildReLU(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildReLU(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddReLU(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddGELUErf(Subgraph& subgraph, NodeOutput input)

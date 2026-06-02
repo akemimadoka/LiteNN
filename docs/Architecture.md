@@ -382,7 +382,7 @@ struct Pass {
 
 ```cpp
 // Layer/Activation.h
-SubgraphId BuildReLU(Graph& graph, DataType dtype, ShapeView shape);
+SubgraphId BuildReLU(ModelBuilder& builder, DataType dtype, ShapeView shape);
 // ReLU(x) = max(x, 0)
 
 NodeOutput AddGELU(Subgraph& sg, NodeOutput input);

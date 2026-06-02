@@ -154,10 +154,11 @@ TEST(Interpreter, MatMulWithVariable)
 // 测试 3: CallNode 调用 ReLU 子图
 TEST(Interpreter, ReLU)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 
 	// 构建 ReLU 子图
-	const auto reluId = Layer::BuildReLU(graph, DataType::Float32, { 2, 3 });
+	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 3 });
 
 	// 构建前向子图: y = ReLU(x)
 	Subgraph sg;

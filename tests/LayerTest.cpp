@@ -555,8 +555,9 @@ TEST(LayerRoll, NegativeShiftRotatesAxisZero)
 
 TEST(LayerArange, BuildsFloatSequence)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildArange(graph, DataType::Float32, 5, 1.5, 0.5));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildArange(builder, DataType::Float32, 5, 1.5, 0.5));
 
 	const auto outputs = RunWithInputs(graph, {});
 	ASSERT_EQ(outputs.size(), 1u);
@@ -766,8 +767,9 @@ TEST(LayerGroupNorm, PreservesBatchSeparationForRankFourInput)
 
 TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildAddId(graph, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 0.0f, 0.0f, 0.0f,
@@ -802,9 +804,10 @@ TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 
 TEST(LayerMulMatId, SelectsPerExpertMatrices)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildMulMatId(graph, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 },
-	                                     DataType::Int32, { 2, 2 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 },
+	                                      DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({
@@ -845,9 +848,10 @@ TEST(LayerMulMatId, SelectsPerExpertMatrices)
 
 TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildMulMatId(graph, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 },
-	                                     DataType::Int32, { 2, 2 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 },
+	                                      DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({
@@ -880,8 +884,9 @@ TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 
 TEST(LayerArange, BuildsIntegerSequence)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildArange(graph, DataType::Int32, 4, -2.0, 3.0));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildArange(builder, DataType::Int32, 4, -2.0, 3.0));
 
 	const auto outputs = RunWithInputs(graph, {});
 	ASSERT_EQ(outputs.size(), 1u);

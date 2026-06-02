@@ -509,9 +509,10 @@ TEST(InlinePass, PassthroughCallee)
 // 测试 10: 使用 ReLU Layer（实际 CallNode 场景）
 TEST(InlinePass, ReLULayerInline)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 
-	const auto reluId = Layer::BuildReLU(graph, DataType::Float32, { 2, 3 });
+	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 3 });
 
 	// 前向: y = ReLU(x)
 	Subgraph sg;

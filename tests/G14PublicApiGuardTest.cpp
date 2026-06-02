@@ -52,6 +52,10 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/Layer/RMSNorm.h", "BuildRMSNorm(Graph&", "BuildRMSNorm(ModelBuilder&)" },
 		{ "src/LiteNN/Layer/SwiGLU.h", "CreateSwiGLUMLP(Graph&", "CreateSwiGLUMLP(ModelBuilder&)" },
 		{ "src/LiteNN/Layer/SwiGLU.h", "BuildSwiGLUMLP(Graph&", "BuildSwiGLUMLP(ModelBuilder&)" },
+		{ "src/LiteNN/Layer/Activation.h", "BuildReLU(Graph&", "BuildReLU(ModelBuilder&)" },
+		{ "src/LiteNN/Layer/Arange.h", "BuildArange(Graph&", "BuildArange(ModelBuilder&)" },
+		{ "src/LiteNN/Layer/AddId.h", "BuildAddId(Graph&", "BuildAddId(ModelBuilder&)" },
+		{ "src/LiteNN/Layer/MulMatId.h", "BuildMulMatId(Graph&", "BuildMulMatId(ModelBuilder&)" },
 	};
 
 	for (const auto& entry : forbidden)

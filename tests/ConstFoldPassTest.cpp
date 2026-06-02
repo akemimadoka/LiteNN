@@ -654,10 +654,11 @@ TEST(ConstFoldPass, AfterInlinePass)
 // 测试 16: 全流水线 AutogradPass → InlinePass → ConstFoldPass → FusionPass
 TEST(ConstFoldPass, FullPipeline)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 
 	// 构建 ReLU 子图
-	const auto reluId = Layer::BuildReLU(graph, DataType::Float32, { 2, 2 });
+	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 2 });
 
 	// 前向: y = ReLU(x @ w + b)
 	auto wVar = Variable::Create(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 3, 2 }));
@@ -680,9 +681,10 @@ TEST(ConstFoldPass, FullPipeline)
 	graph.SetForward(fwdId);
 
 	// 参考图
-	Graph refGraph;
+	ModelBuilder refBuilder;
+	Graph& refGraph = refBuilder.MutableGraph();
 	{
-		const auto refReluId = Layer::BuildReLU(refGraph, DataType::Float32, { 2, 2 });
+		const auto refReluId = Layer::BuildReLU(refBuilder, DataType::Float32, { 2, 2 });
 		auto refW = Variable::Create(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 3, 2 }));
 		const auto refWIdx = refGraph.AddVariable(refW);
 
