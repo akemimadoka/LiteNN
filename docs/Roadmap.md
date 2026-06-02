@@ -1523,6 +1523,8 @@ to keep the old architecture alive if they are left in place during vNext.
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
   - [x] Added `ModelBuilder` as a `ModelGraph`-owned construction surface and wired the common `Linear` layer
     create/build helpers through `ModelBuilder&`.
+  - [x] Wired additional variable-owning layer helpers (`LayerNorm`, `RMSNorm`, `SwiGLUMLP`) through
+    `ModelBuilder&` overloads.
   - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
     and deprecate the raw graph variants.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT

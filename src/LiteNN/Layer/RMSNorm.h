@@ -1,6 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -35,6 +36,12 @@ namespace LiteNN::Layer
 		return layer;
 	}
 
+	inline RMSNormLayer CreateRMSNorm(ModelBuilder& builder, std::size_t featureSize,
+	                                  DataType dtype = DataType::Float32, double eps = 1e-6)
+	{
+		return CreateRMSNorm(builder.MutableGraph(), featureSize, dtype, eps);
+	}
+
 	// 在已有子图中追加 RMSNorm 节点（在最后一个轴上归一化）
 	// input 的形状必须是 2D：[batch, featureSize]
 	inline NodeOutput AddRMSNorm(Subgraph& subgraph, const RMSNormLayer& layer, NodeOutput input)
@@ -61,6 +68,11 @@ namespace LiteNN::Layer
 		const auto result = AddRMSNorm(subgraph, layer, { input, 0 });
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
+	}
+
+	inline SubgraphId BuildRMSNorm(ModelBuilder& builder, const RMSNormLayer& layer, std::size_t batchSize = 1)
+	{
+		return BuildRMSNorm(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 

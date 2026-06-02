@@ -1,6 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -36,6 +37,12 @@ namespace LiteNN::Layer
 		layer.betaVariable =
 		    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 0.0)));
 		return layer;
+	}
+
+	inline LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize,
+	                                      DataType dtype = DataType::Float32, double eps = 1e-5)
+	{
+		return CreateLayerNorm(builder.MutableGraph(), featureSize, dtype, eps);
 	}
 
 	// 在已有子图中追加 LayerNorm 节点（在最后一个轴上归一化）

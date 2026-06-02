@@ -1,6 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/Activation.h>
 #include <LiteNN/Layer/Linear.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 
@@ -51,6 +52,13 @@ namespace LiteNN::Layer
 		};
 	}
 
+	inline SwiGLUMLPLayer CreateSwiGLUMLP(ModelBuilder& builder, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
+	                                      Tensor<CPU> downWeight)
+	{
+		return CreateSwiGLUMLP(builder.MutableGraph(), std::move(gateWeight), std::move(upWeight),
+		                       std::move(downWeight));
+	}
+
 	inline NodeOutput AddSwiGLUMLP(Subgraph& subgraph, const SwiGLUMLPLayer& layer, NodeOutput input)
 	{
 		ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
@@ -71,6 +79,11 @@ namespace LiteNN::Layer
 		const auto result = AddSwiGLUMLP(subgraph, layer, { input, 0 });
 		subgraph.SetResults({ result });
 		return graph.AddSubgraph(std::move(subgraph));
+	}
+
+	inline SubgraphId BuildSwiGLUMLP(ModelBuilder& builder, const SwiGLUMLPLayer& layer, std::size_t batchSize = 1)
+	{
+		return BuildSwiGLUMLP(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 
