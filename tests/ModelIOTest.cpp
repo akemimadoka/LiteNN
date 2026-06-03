@@ -154,9 +154,9 @@ TEST(ModelIO, LoadRejectsPreVNextModelVersions)
 	{
 		std::ofstream out(path, std::ios::binary);
 		ASSERT_TRUE(out);
-		out.write(Serialization::Detail::kModelMagic.data(),
-		          static_cast<std::streamsize>(Serialization::Detail::kModelMagic.size()));
-		const std::uint32_t legacyVersion = Serialization::Detail::kModelVersion - 1;
+		out.write(Serialization::Detail::kGraphArchiveMagic.data(),
+		          static_cast<std::streamsize>(Serialization::Detail::kGraphArchiveMagic.size()));
+		const std::uint32_t legacyVersion = Serialization::Detail::kGraphArchiveVersion - 1;
 		out.write(reinterpret_cast<const char*>(&legacyVersion), sizeof(legacyVersion));
 	}
 

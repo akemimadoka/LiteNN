@@ -1503,6 +1503,9 @@ to keep the old architecture alive if they are left in place during vNext.
     `SaveModelExternalWeights` to explicit `SaveGraphArchive` / `LoadGraphArchive` /
     `SaveGraphArchiveExternalWeights`; tools, tests, and examples now opt into graph archive semantics by name, and the
     public API guard prevents the old `Graph`-based `SaveModel` / `LoadModel` names from returning.
+  - [x] Renamed the remaining old-format internals to graph-archive-specific names (`kGraphArchiveMagic`,
+    `kGraphArchiveVersion`, `GraphArchiveNodeKind`) and added guard coverage so the legacy raw node format remains
+    explicitly scoped as graph archive tooling.
 - [x] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal
