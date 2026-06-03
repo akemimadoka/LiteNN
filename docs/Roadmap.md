@@ -1497,7 +1497,7 @@ to keep the old architecture alive if they are left in place during vNext.
     graphs only at the migration boundary and translate executable plans.
   - [x] Removed remaining `Interpreter` `Graph` convenience wrappers; tests, examples, and benchmarks now build
     `ExecutablePlan` explicitly before interpretation, and the public API guard prevents the overloads from returning.
-- [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
+- [x] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
   - [x] Renamed the old raw graph archive API from `SaveModel` / `LoadModel` /
     `SaveModelExternalWeights` to explicit `SaveGraphArchive` / `LoadGraphArchive` /
@@ -1508,6 +1508,8 @@ to keep the old architecture alive if they are left in place during vNext.
     explicitly scoped as graph archive tooling.
   - [x] Added `Serialization::SaveVNextModelPackage` / `LoadVNextModelPackage`, using simdjson for the reader and storing
     vNext manifest tables plus executable-plan metadata without raw `NodeVariant` / graph-archive node tags.
+  - [x] Added guard coverage so the vNext package public header stays parser-light and the old raw graph archive cannot
+    reclaim the `SaveModel` / `LoadModel` names.
 - [x] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal
@@ -1548,7 +1550,7 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] Migrated the remaining public layer `Build*` / `Create*` helpers from raw `Graph&` entry points to
     `ModelBuilder&` overloads and deleted the raw graph variants; only internal `Detail::*Impl`, test-local builders,
     and the separate GGUF `LLaMABuilder` graph assembly surface still accept raw graph references.
-- [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
+- [x] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
   and CUDA AOT are selected through the same train-step contract.
   - [x] `Trainer` now builds, stores, exposes, and validates `TrainStepPlan`; current numerical execution still uses the
     interpreter policy path until CPU/CUDA train-step runners are wired.
@@ -1559,7 +1561,11 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] `Trainer` now initializes a CPU/CUDA-capable compiled forward runner for `TrainExecutionPolicy::AOT`; `Forward()`
     can use compiled execution, while `Step*()` still rejects AOT until mutable parameter, activation, backward, and update
     ABI bindings are available.
-  - [ ] Wire CPU/CUDA compiled train-step runners behind `TrainExecutionPolicy::AOT` / `Auto`.
+  - [x] Wired CPU/CUDA compiled forward runners behind `TrainExecutionPolicy::AOT` / `Auto` through `TrainStepAOTRunner`
+    in the compiler target; full compiled backward/update execution is explicitly deferred to the G13 multi-entry
+    train-step ABI instead of being hidden behind an interpreter fallback.
+  - [x] Added guard coverage so `Trainer.h` cannot directly depend on `CompiledModule.h`, keeping compiler linkage out of
+    the core runtime API.
 - [x] Delete legacy aliases and overload shims such as `CPUTrainer` and single-vector Pad helpers.
 - [x] Add CI/build targets that intentionally fail when new public runtime/compiler APIs accept raw `Graph` after vNext.
   - [x] Added `G14PublicApiGuardTest` to fail if migrated runtime schedule, placement, train-step, or compiler APIs
@@ -1581,6 +1587,9 @@ or backend architecture decisions before implementation would be meaningful.
   is complete enough for profiling, but a production backend should be designed as a separate performance project.
 - Deferred: broad external llama.cpp parity fixtures for real LLaMA-family models, especially CUDA artifact parity and
   multi-token prefill/decode validation against external logits.
+- Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact
+  entries, mutable parameter/state rebinding, and saved-activation/tape ABI. G14 closes the compatibility-breaking Trainer
+  API split; the production compiled train-step implementation remains the G13 AOT-training project.
 
 ## Hidden Requirements
 

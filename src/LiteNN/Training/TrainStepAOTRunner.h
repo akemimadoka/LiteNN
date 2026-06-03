@@ -18,6 +18,10 @@ namespace LiteNN::Training
 	template <Device D>
 	using CompiledForwardRunner = std::function<std::vector<Tensor<D>>(std::span<const Tensor<D>>)>;
 
+	/// Creates the compiled forward half of the vNext train-step contract.
+	///
+	/// Full compiled backward/update execution remains owned by the G13 AOT-training ABI because it needs
+	/// mutable parameter bindings, saved-activation/tape bindings, and named multi-entry artifacts.
 	template <Device D>
 	CompiledForwardRunner<D> CreateCompiledTrainForwardRunner(const ExecutablePlan&, D)
 	{
