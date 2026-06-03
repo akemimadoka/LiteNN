@@ -1138,8 +1138,8 @@ to the long-term SDXL parity queue instead of remaining hidden Phase 3 work.
       - [x] Make all SDXL compile/run entry points load both inline and external-weight `.ltnn` files transparently.
       - [x] Add tests proving external-weight models round-trip, run through the interpreter, and compile through CPU AOT
             external regions without re-inlining the payload.
-      （已完成：model format v21 adds inline/external variable payload records; `SaveModelExternalWeights`
-      writes sibling `.weights.bin` payloads with relative paths, `LoadModel` owns external bytes in `Graph` and
+      （已完成：model format v21 adds inline/external variable payload records; `SaveGraphArchiveExternalWeights`
+      writes sibling `.weights.bin` payloads with relative paths, `LoadGraphArchive` owns external bytes in `Graph` and
       exposes borrowed CPU tensors, `example/sdxl --import --external-weights` plus
       `sdxl_prompt_to_image.py` default to sibling weight files, and ModelIO/CPU AOT tests cover round-trip,
       interpreter run, and external-region compilation after load.）
