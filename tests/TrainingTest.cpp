@@ -60,6 +60,24 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.6f);
 }
 
+TEST(Training, RejectsAOTPolicyUntilCompiledTrainStepRunnerIsAvailable)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
+
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Training::TrainerOptions options;
+	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	EXPECT_THROW((Training::Trainer<CPU, Optimizer::SGD>(graph, Optimizer::SGD(0.1f), options)), std::runtime_error);
+}
+
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 {
 	Graph graph;

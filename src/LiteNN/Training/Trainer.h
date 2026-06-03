@@ -59,6 +59,12 @@ namespace LiteNN::Training
 			trainStepPlan_ = BuildTrainStepPlan(BuildExecutableModule(*graph_), options_.executionPolicy,
 			                                    options_.aotBackendAvailable);
 			ValidateTrainStepPlan(trainStepPlan_);
+			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
+			{
+				throw std::runtime_error(
+				    "Trainer AOT execution policy is not wired yet; use TrainExecutionPolicy::Interpreter or Auto "
+				    "without an AOT train-step backend");
+			}
 		}
 
 		Trainer(Graph& graph, OptimizerT optimizer, D device)
