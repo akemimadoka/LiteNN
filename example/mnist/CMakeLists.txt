@@ -6,7 +6,7 @@ target_compile_definitions(litenn_mnist_common INTERFACE
 )
 
 add_executable(litenn_mnist_interpreter interpreter.cpp)
-target_link_libraries(litenn_mnist_interpreter PRIVATE LiteNN litenn_mnist_common)
+target_link_libraries(litenn_mnist_interpreter PRIVATE LiteNNCompiler litenn_mnist_common)
 
 set(LITENN_MNIST_TARGETS litenn_mnist_interpreter)
 
