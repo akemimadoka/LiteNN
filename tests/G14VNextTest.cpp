@@ -2,6 +2,9 @@
 
 #include <LiteNN.h>
 
+#include <filesystem>
+#include <fstream>
+
 using namespace LiteNN;
 
 namespace
@@ -57,6 +60,50 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_GT(manifest.memory.buffers.size(), 0u);
 	EXPECT_FALSE(manifest.opCoverage.empty());
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(manifest));
+}
+
+TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
+{
+	const auto graph = BuildLinearAddGraph();
+	auto module = BuildExecutableModule(graph);
+	VNextArtifactRef artifact;
+	artifact.name = "cpu_forward";
+	artifact.backend = std::string(BackendCPUAOT);
+	artifact.entryFunction = 0;
+	artifact.regions.push_back({ .name = "instructions",
+	                             .kind = ExternalBufferKind::ObjectFile,
+	                             .relativePath = "artifacts/cpu_forward.o",
+	                             .byteOffset = 0,
+	                             .byteSize = 128,
+	                             .checksum = 123 });
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_roundtrip.json";
+	Serialization::SaveVNextModelPackage(module, path, { artifact });
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+	EXPECT_NO_THROW(ValidateExecutablePlan(package.plan));
+	ASSERT_EQ(package.manifest.functions.size(), 1u);
+	EXPECT_EQ(package.manifest.functions[0].name, "forward");
+	ASSERT_EQ(package.manifest.tensors.size(), 1u);
+	EXPECT_EQ(package.manifest.tensors[0].name, "linear.bias");
+	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
+	EXPECT_EQ(package.manifest.artifacts[0].backend, BackendCPUAOT);
+	ASSERT_EQ(package.plan.subgraphs.size(), module.plan.subgraphs.size());
+	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].opKind, "BinaryOpNode");
+	EXPECT_EQ(package.plan.outputs[0].name, "y");
+}
+
+TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
+{
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_legacy.json";
+	{
+		std::ofstream out(path, std::ios::binary);
+		out << "{\"format\":\"litenn.legacy.graph\"}";
+	}
+	EXPECT_THROW((void)Serialization::LoadVNextModelPackage(path), std::runtime_error);
+	std::filesystem::remove(path);
 }
 
 TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)

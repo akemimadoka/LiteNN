@@ -1506,6 +1506,8 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] Renamed the remaining old-format internals to graph-archive-specific names (`kGraphArchiveMagic`,
     `kGraphArchiveVersion`, `GraphArchiveNodeKind`) and added guard coverage so the legacy raw node format remains
     explicitly scoped as graph archive tooling.
+  - [x] Added `Serialization::SaveVNextModelPackage` / `LoadVNextModelPackage`, using simdjson for the reader and storing
+    vNext manifest tables plus executable-plan metadata without raw `NodeVariant` / graph-archive node tags.
 - [x] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal

@@ -28,6 +28,7 @@
 #include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/Serialization/ImportManifest.h>
 #include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/Serialization/ModelPackageIO.h>
 #include <LiteNN/Serialization/Safetensors.h>
 #include <LiteNN/Serialization/TorchManifest.h>
 #include <LiteNN/Storage.h>
