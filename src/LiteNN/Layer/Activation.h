@@ -86,40 +86,40 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildGELUErf(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildGELUErf(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddGELUErf(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
-	inline SubgraphId BuildSigmoid(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildSigmoid(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddSigmoid(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
-	inline SubgraphId BuildTanh(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildTanh(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddTanh(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
-	inline SubgraphId BuildSiLU(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildSiLU(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddSiLU(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	// GELU 近似：x * 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
@@ -161,13 +161,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildGELU(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildGELU(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddGELU(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	// ELU：x if x > 0, else alpha * (exp(x) - 1)，默认 alpha=1.0
@@ -199,13 +199,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildELU(Graph& graph, DataType dtype, ShapeView shape, double alpha = 1.0)
+	inline SubgraphId BuildELU(ModelBuilder& builder, DataType dtype, ShapeView shape, double alpha = 1.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddELU(subgraph, { input, 0 }, alpha);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddClamp(Subgraph& subgraph, NodeOutput input, double minValue, double maxValue)
@@ -225,13 +225,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildClamp(Graph& graph, DataType dtype, ShapeView shape, double minValue, double maxValue)
+	inline SubgraphId BuildClamp(ModelBuilder& builder, DataType dtype, ShapeView shape, double minValue, double maxValue)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddClamp(subgraph, { input, 0 }, minValue, maxValue);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddLeakyReLU(Subgraph& subgraph, NodeOutput input, double negativeSlope = 0.01)
@@ -250,13 +250,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildLeakyReLU(Graph& graph, DataType dtype, ShapeView shape, double negativeSlope = 0.01)
+	inline SubgraphId BuildLeakyReLU(ModelBuilder& builder, DataType dtype, ShapeView shape, double negativeSlope = 0.01)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddLeakyReLU(subgraph, { input, 0 }, negativeSlope);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddHardSigmoid(Subgraph& subgraph, NodeOutput input)
@@ -271,13 +271,13 @@ namespace LiteNN::Layer
 		return AddClamp(subgraph, { scaled, 0 }, 0.0, 1.0);
 	}
 
-	inline SubgraphId BuildHardSigmoid(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildHardSigmoid(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddHardSigmoid(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddHardSwish(Subgraph& subgraph, NodeOutput input)
@@ -289,13 +289,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildHardSwish(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildHardSwish(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddHardSwish(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	inline NodeOutput AddGELUQuick(Subgraph& subgraph, NodeOutput input)
@@ -310,13 +310,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildGELUQuick(Graph& graph, DataType dtype, ShapeView shape)
+	inline SubgraphId BuildGELUQuick(ModelBuilder& builder, DataType dtype, ShapeView shape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddGELUQuick(subgraph, { input, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

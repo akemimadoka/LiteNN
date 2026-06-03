@@ -1531,6 +1531,9 @@ to keep the old architecture alive if they are left in place during vNext.
     examples, and benchmarks to `ModelBuilder&`; the public API guard prevents those helpers from returning.
   - [x] Started stateless `Build*` migration by moving the actively used `BuildReLU`, `BuildArange`, `BuildAddId`,
     and `BuildMulMatId` helpers to `ModelBuilder&` and guarding against raw `Graph&` reintroduction.
+  - [x] Completed the activation `Build*` helper migration (`BuildGELUErf`, `BuildSigmoid`, `BuildTanh`, `BuildSiLU`,
+    `BuildGELU`, `BuildELU`, `BuildClamp`, `BuildLeakyReLU`, `BuildHardSigmoid`, `BuildHardSwish`,
+    `BuildGELUQuick`) to `ModelBuilder&` with guard coverage.
   - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
     and delete the raw graph variants.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT

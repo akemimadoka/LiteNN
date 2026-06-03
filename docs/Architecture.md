@@ -386,11 +386,11 @@ SubgraphId BuildReLU(ModelBuilder& builder, DataType dtype, ShapeView shape);
 // ReLU(x) = max(x, 0)
 
 NodeOutput AddGELU(Subgraph& sg, NodeOutput input);
-SubgraphId BuildGELU(Graph& graph, DataType dtype, ShapeView shape);
+SubgraphId BuildGELU(ModelBuilder& builder, DataType dtype, ShapeView shape);
 // GELU(x) = x * 0.5 * (1 + tanh(0.7978… * (x + 0.044715 * x³)))  [tanh 近似]
 
 NodeOutput AddELU(Subgraph& sg, NodeOutput input, double alpha = 1.0);
-SubgraphId BuildELU(Graph& graph, DataType dtype, ShapeView shape, double alpha = 1.0);
+SubgraphId BuildELU(ModelBuilder& builder, DataType dtype, ShapeView shape, double alpha = 1.0);
 // ELU(x) = max(x,0) + min(alpha*(exp(x)-1), 0)
 
 // Layer/Softmax.h
