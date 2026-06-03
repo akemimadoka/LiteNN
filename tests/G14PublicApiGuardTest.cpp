@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +30,11 @@ namespace
 		std::string_view pattern;
 		std::string_view replacement;
 	};
+
+	bool EndsWith(std::string_view value, std::string_view suffix)
+	{
+		return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
+	}
 } // namespace
 
 TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloads)
@@ -76,4 +82,41 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		    << entry.file << " must stay plan/module-native; callers should pass " << entry.replacement
 		    << " explicitly at the migration boundary";
 	}
+}
+
+TEST(G14PublicApiGuard, PublicLayerBuildHelpersDoNotAcceptRawGraph)
+{
+	const auto layerDir = std::filesystem::path(LITENN_SOURCE_DIR) / "src" / "LiteNN" / "Layer";
+	const std::regex publicBuildWithGraph(R"(inline\s+SubgraphId\s+(Build[A-Za-z0-9_]+)\s*\(\s*Graph&)");
+	std::vector<std::string> violations;
+
+	for (const auto& entry : std::filesystem::directory_iterator(layerDir))
+	{
+		if (!entry.is_regular_file() || entry.path().extension() != ".h")
+		{
+			continue;
+		}
+
+		const auto relative = std::filesystem::path("src") / "LiteNN" / "Layer" / entry.path().filename();
+		const auto text = ReadSourceFile(relative.generic_string());
+		for (std::sregex_iterator match(text.begin(), text.end(), publicBuildWithGraph), end; match != end; ++match)
+		{
+			const auto helperName = (*match)[1].str();
+			if (EndsWith(helperName, "Impl"))
+			{
+				continue;
+			}
+			violations.push_back(relative.generic_string() + ": " + helperName + "(Graph&)");
+		}
+	}
+
+	EXPECT_TRUE(violations.empty()) << "Public layer Build* helpers must accept ModelBuilder& after vNext:\n"
+	                               << [&]() {
+		                                  std::ostringstream output;
+		                                  for (const auto& violation : violations)
+		                                  {
+			                                  output << violation << '\n';
+		                                  }
+		                                  return output.str();
+	                                  }();
 }

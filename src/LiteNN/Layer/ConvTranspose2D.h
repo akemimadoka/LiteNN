@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <optional>
 #include <stdexcept>
@@ -48,7 +49,7 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildConvTranspose2D(Graph& graph, DataType dtype, ShapeView inputShape,
+	inline SubgraphId BuildConvTranspose2D(ModelBuilder& builder, DataType dtype, ShapeView inputShape,
 	                                       ShapeView weightShape, std::optional<ShapeView> biasShape = std::nullopt,
 	                                       std::vector<std::size_t> strides = { 1, 1 },
 	                                       std::vector<std::size_t> dilations = { 1, 1 },
@@ -69,7 +70,7 @@ namespace LiteNN::Layer
 		                                       std::move(dilations), std::move(lowPads), std::move(highPads),
 		                                       std::move(outputPads), groupCount);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

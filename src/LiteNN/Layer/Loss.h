@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -57,14 +58,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildCrossEntropyLoss(Graph& graph, ShapeView logitsShape)
+	inline SubgraphId BuildCrossEntropyLoss(ModelBuilder& builder, ShapeView logitsShape)
 	{
 		Subgraph subgraph;
 		const auto logits = subgraph.AddParam(DataType::Float32, logitsShape.ToOwned());
 		const auto labels = subgraph.AddParam(DataType::Float32, logitsShape.ToOwned());
 		const auto result = AddCrossEntropyLoss(subgraph, { logits, 0 }, { labels, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

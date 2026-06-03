@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <functional>
 #include <numeric>
@@ -32,13 +33,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildFlatten(Graph& graph, DataType dtype, ShapeView shape, std::size_t startDim = 1)
+	inline SubgraphId BuildFlatten(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t startDim = 1)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddFlatten(subgraph, { input, 0 }, startDim);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -25,13 +26,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildSoftmax(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 1)
+	inline SubgraphId BuildSoftmax(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis = 1)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddSoftmax(subgraph, { input, 0 }, axis);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

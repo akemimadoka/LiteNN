@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <vector>
@@ -51,7 +52,7 @@ namespace LiteNN::Layer
 		                 std::move(lowPads), std::move(highPads), countIncludePad);
 	}
 
-	inline SubgraphId BuildPool2D(Graph& graph, DataType dtype, ShapeView inputShape, PoolMode mode,
+	inline SubgraphId BuildPool2D(ModelBuilder& builder, DataType dtype, ShapeView inputShape, PoolMode mode,
 	                              std::vector<std::size_t> kernelShape,
 	                              std::vector<std::size_t> strides,
 	                              std::vector<std::size_t> lowPads = { 0, 0 },
@@ -63,7 +64,7 @@ namespace LiteNN::Layer
 		const auto result = AddPool2D(subgraph, { input, 0 }, mode, std::move(kernelShape), std::move(strides),
 		                              std::move(lowPads), std::move(highPads), countIncludePad);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

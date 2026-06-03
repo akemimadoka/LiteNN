@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 #include <LiteNN/Layer/Argsort.h>
 
 #include <stdexcept>
@@ -37,13 +38,13 @@ namespace LiteNN::Layer
 		return { nodeId, 0 };
 	}
 
-	inline SubgraphId BuildTopK(Graph& graph, DataType dtype, ShapeView shape, std::size_t k, std::size_t axis = 0)
+	inline SubgraphId BuildTopK(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t k, std::size_t axis = 0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddTopK(subgraph, { input, 0 }, k, axis);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

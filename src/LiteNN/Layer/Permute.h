@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <numeric>
 #include <stdexcept>
@@ -40,14 +41,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildPermute(Graph& graph, DataType dtype, ShapeView shape,
+	inline SubgraphId BuildPermute(ModelBuilder& builder, DataType dtype, ShapeView shape,
 	                               std::vector<std::size_t> permutation)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddPermute(subgraph, { input, 0 }, std::move(permutation));
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 
 	// 便捷的二维转置：交换最后两个维度

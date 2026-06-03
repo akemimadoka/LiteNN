@@ -1,5 +1,6 @@
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <span>
 #include <stdexcept>
@@ -23,7 +24,7 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildPad(Graph& graph, DataType dtype, ShapeView shape, std::span<const std::size_t> lowPads,
+	inline SubgraphId BuildPad(ModelBuilder& builder, DataType dtype, ShapeView shape, std::span<const std::size_t> lowPads,
 	                           std::span<const std::size_t> highPads,
 	                           PadMode mode = PadMode::Constant, double constantValue = 0.0)
 	{
@@ -31,7 +32,7 @@ namespace LiteNN::Layer
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddPad(subgraph, { input, 0 }, lowPads, highPads, mode, constantValue);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

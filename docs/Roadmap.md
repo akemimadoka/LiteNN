@@ -1519,7 +1519,7 @@ to keep the old architecture alive if they are left in place during vNext.
     environment variables locally before filling `CompilerOptions`, and examples use explicit defaults.
   - [x] `litenn_gguf_convert` now parses compiler environment settings locally in the CLI before filling
     `CompilerOptions`; core compiler APIs remain environment-free.
-- [ ] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and remove helpers that
+- [x] Move layer graph-construction helpers to a `ModelBuilder` / `ModelGraph`-owned surface and remove helpers that
   mutate raw `Graph&` while bypassing `TensorType`, schema validation, or external-storage binding.
   - [x] Added `ModelBuilder` as a `ModelGraph`-owned construction surface and wired the common `Linear` layer
     create/build helpers through `ModelBuilder&`.
@@ -1534,8 +1534,9 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] Completed the activation `Build*` helper migration (`BuildGELUErf`, `BuildSigmoid`, `BuildTanh`, `BuildSiLU`,
     `BuildGELU`, `BuildELU`, `BuildClamp`, `BuildLeakyReLU`, `BuildHardSigmoid`, `BuildHardSwish`,
     `BuildGELUQuick`) to `ModelBuilder&` with guard coverage.
-  - [ ] Migrate remaining layer `Build*` / `Create*` helpers from raw `Graph&` entry points to `ModelBuilder&` overloads
-    and delete the raw graph variants.
+  - [x] Migrated the remaining public layer `Build*` / `Create*` helpers from raw `Graph&` entry points to
+    `ModelBuilder&` overloads and deleted the raw graph variants; only internal `Detail::*Impl`, test-local builders,
+    and the separate GGUF `LLaMABuilder` graph assembly surface still accept raw graph references.
 - [ ] Make `Trainer` execute through `TrainStepPlan` and execution policy. Interpreter remains a debug policy, while CPU AOT
   and CUDA AOT are selected through the same train-step contract.
   - [x] `Trainer` now builds, stores, exposes, and validates `TrainStepPlan`; current numerical execution still uses the

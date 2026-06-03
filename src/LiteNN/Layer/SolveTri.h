@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -24,7 +25,7 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildSolveTri(Graph& graph, ShapeView aShape, ShapeView bShape,
+	inline SubgraphId BuildSolveTri(ModelBuilder& builder, ShapeView aShape, ShapeView bShape,
 	                                bool lower = true, bool unitDiagonal = false)
 	{
 		Subgraph subgraph;
@@ -32,7 +33,7 @@ namespace LiteNN::Layer
 		const auto b = subgraph.AddParam(DataType::Float32, bShape.ToOwned());
 		const auto result = AddSolveTri(subgraph, { a, 0 }, { b, 0 }, lower, unitDiagonal);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

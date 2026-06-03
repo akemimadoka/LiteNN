@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <vector>
 
@@ -25,7 +26,7 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildIm2Col(Graph& graph, DataType dtype, ShapeView inputShape,
+	inline SubgraphId BuildIm2Col(ModelBuilder& builder, DataType dtype, ShapeView inputShape,
 	                              std::vector<std::size_t> kernelShape,
 	                              std::vector<std::size_t> strides,
 	                              std::vector<std::size_t> dilations,
@@ -37,7 +38,7 @@ namespace LiteNN::Layer
 		const auto result = AddIm2Col(subgraph, { input, 0 }, std::move(kernelShape), std::move(strides),
 		                              std::move(dilations), std::move(lowPads), std::move(highPads));
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

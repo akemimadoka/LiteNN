@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 
@@ -26,14 +27,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildBatchMatMul(Graph& graph, DataType dtype, ShapeView lhsShape, ShapeView rhsShape)
+	inline SubgraphId BuildBatchMatMul(ModelBuilder& builder, DataType dtype, ShapeView lhsShape, ShapeView rhsShape)
 	{
 		Subgraph subgraph;
 		const auto lhs = subgraph.AddParam(dtype, lhsShape.ToOwned());
 		const auto rhs = subgraph.AddParam(dtype, rhsShape.ToOwned());
 		const auto result = AddBatchMatMul(subgraph, { lhs, 0 }, { rhs, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

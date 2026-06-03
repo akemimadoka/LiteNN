@@ -395,7 +395,7 @@ SubgraphId BuildELU(ModelBuilder& builder, DataType dtype, ShapeView shape, doub
 
 // Layer/Softmax.h
 NodeOutput AddSoftmax(Subgraph& sg, NodeOutput input, std::size_t axis = 1);
-SubgraphId BuildSoftmax(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 1);
+SubgraphId BuildSoftmax(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis = 1);
 // softmax 沿 axis 归一化，采用 max-shift 保证数值稳定
 
 // Layer/LayerNorm.h

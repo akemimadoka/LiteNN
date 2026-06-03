@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -63,13 +64,13 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildL2Norm(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis, double eps = 0.0)
+	inline SubgraphId BuildL2Norm(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis, double eps = 0.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddL2Norm(subgraph, { input, 0 }, axis, eps);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 
