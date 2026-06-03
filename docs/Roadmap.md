@@ -1556,6 +1556,9 @@ to keep the old architecture alive if they are left in place during vNext.
     executing the source `Graph`.
   - [x] `Trainer` now rejects `TrainExecutionPolicy::AOT` instead of silently executing the interpreter path when compiled
     train-step runners are not wired yet.
+  - [x] `Trainer` now initializes a CPU/CUDA-capable compiled forward runner for `TrainExecutionPolicy::AOT`; `Forward()`
+    can use compiled execution, while `Step*()` still rejects AOT until mutable parameter, activation, backward, and update
+    ABI bindings are available.
   - [ ] Wire CPU/CUDA compiled train-step runners behind `TrainExecutionPolicy::AOT` / `Auto`.
 - [x] Delete legacy aliases and overload shims such as `CPUTrainer` and single-vector Pad helpers.
 - [x] Add CI/build targets that intentionally fail when new public runtime/compiler APIs accept raw `Graph` after vNext.

@@ -60,7 +60,7 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.6f);
 }
 
-TEST(Training, RejectsAOTPolicyUntilCompiledTrainStepRunnerIsAvailable)
+TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
 {
 	Graph graph;
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
@@ -74,8 +74,19 @@ TEST(Training, RejectsAOTPolicyUntilCompiledTrainStepRunnerIsAvailable)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	Training::TrainerOptions options;
+	options.buildBackwardIfMissing = false;
 	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
-	EXPECT_THROW((Training::Trainer<CPU, Optimizer::SGD>(graph, Optimizer::SGD(0.1f), options)), std::runtime_error);
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f), options);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	auto outputs = trainer.Forward(inputs);
+
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 6.0f);
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	EXPECT_THROW((void)trainer.Step(inputs, outputGradients), std::runtime_error);
 }
 
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)

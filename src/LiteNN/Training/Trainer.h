@@ -3,6 +3,7 @@
 #include <LiteNN/Optimizer/OptimizerUtils.h>
 #include <LiteNN/Pass/AutogradPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Training/TrainStepAOTRunner.h>
 #include <LiteNN/Training/TrainStepPlan.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -61,9 +62,7 @@ namespace LiteNN::Training
 			ValidateTrainStepPlan(trainStepPlan_);
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
 			{
-				throw std::runtime_error(
-				    "Trainer AOT execution policy is not wired yet; use TrainExecutionPolicy::Interpreter or Auto "
-				    "without an AOT train-step backend");
+				InitializeCompiledForwardRunner();
 			}
 		}
 
@@ -74,19 +73,21 @@ namespace LiteNN::Training
 
 		std::vector<Tensor<D>> Forward(std::span<const Tensor<D>> inputs)
 		{
-			return interpreter_.RunForward(trainStepPlan_.module.plan, inputs, device_);
+			return RunForward(inputs);
 		}
 
 		BasicTrainStepResult<D> Step(std::span<const Tensor<D>> inputs, std::span<const Tensor<D>> outputGradients)
 		{
-			auto outputs = interpreter_.RunForward(trainStepPlan_.module.plan, inputs, device_);
+			EnsureCompiledTrainStepRunnerAvailable();
+			auto outputs = RunForward(inputs);
 			auto backwardResults = BackwardAndStep(inputs, outputGradients);
 			return { std::move(outputs), std::move(backwardResults) };
 		}
 
 		BasicLossTrainStepResult<D> StepSoftmaxCrossEntropy(std::span<const Tensor<D>> inputs, std::size_t targetClass)
 		{
-			auto outputs = interpreter_.RunForward(trainStepPlan_.module.plan, inputs, device_);
+			EnsureCompiledTrainStepRunnerAvailable();
+			auto outputs = RunForward(inputs);
 			if (outputs.size() != 1)
 			{
 				throw std::runtime_error("StepSoftmaxCrossEntropy requires a graph with exactly one output");
@@ -103,7 +104,8 @@ namespace LiteNN::Training
 		BasicLossTrainStepResult<D> StepSoftmaxCrossEntropyBatch(std::span<const Tensor<D>> inputs,
 		                                                         std::span<const std::size_t> targetClasses)
 		{
-			auto outputs = interpreter_.RunForward(trainStepPlan_.module.plan, inputs, device_);
+			EnsureCompiledTrainStepRunnerAvailable();
+			auto outputs = RunForward(inputs);
 			if (outputs.size() != 1)
 			{
 				throw std::runtime_error("StepSoftmaxCrossEntropyBatch requires a graph with exactly one output");
@@ -163,6 +165,35 @@ namespace LiteNN::Training
 		}
 
 	private:
+		void InitializeCompiledForwardRunner()
+		{
+			compiledForward_ = CreateCompiledTrainForwardRunner(trainStepPlan_.module.plan, device_);
+		}
+
+		void EnsureCompiledTrainStepRunnerAvailable() const
+		{
+			if (trainStepPlan_.policy != TrainExecutionPolicy::AOT)
+			{
+				return;
+			}
+			throw std::runtime_error(
+			    "Trainer AOT forward runner is available, but compiled backward/update train-step execution is not "
+			    "wired yet; use Forward() for compiled inference or TrainExecutionPolicy::Interpreter for training");
+		}
+
+		std::vector<Tensor<D>> RunForward(std::span<const Tensor<D>> inputs)
+		{
+			if (trainStepPlan_.policy != TrainExecutionPolicy::AOT)
+			{
+				return interpreter_.RunForward(trainStepPlan_.module.plan, inputs, device_);
+			}
+			if (!compiledForward_)
+			{
+				throw std::runtime_error("Trainer AOT forward runner was not initialized");
+			}
+			return compiledForward_(inputs);
+		}
+
 		static std::vector<Tensor<CPU>> CopyToCPU(std::span<const Tensor<D>> tensors)
 		{
 			std::vector<Tensor<CPU>> cpuTensors;
@@ -216,6 +247,7 @@ namespace LiteNN::Training
 		D device_;
 		Runtime::Interpreter<D> interpreter_;
 		TrainStepPlan trainStepPlan_;
+		CompiledForwardRunner<D> compiledForward_;
 	};
 } // namespace LiteNN::Training
 
