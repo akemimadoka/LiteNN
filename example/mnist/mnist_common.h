@@ -295,14 +295,14 @@ namespace LiteNN::Examples::Mnist
 	inline void SaveMnistModel(const Graph& trainedGraph, const std::filesystem::path& path)
 	{
 		const auto inferGraph = ExtractForwardOnlyGraph(trainedGraph);
-		Serialization::SaveModel(inferGraph, path);
+		Serialization::SaveGraphArchive(inferGraph, path);
 		std::cout << std::format("Model saved to {}\n", path.string());
 	}
 
 	// 从文件加载推理图（已经是 forward-only，无需再提取）
 	inline Graph LoadMnistInferenceModel(const std::filesystem::path& path)
 	{
-		auto graph = Serialization::LoadModel(path);
+		auto graph = Serialization::LoadGraphArchive(path);
 		std::cout << std::format("Model loaded from {}\n", path.string());
 		return graph;
 	}

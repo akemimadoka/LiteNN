@@ -1448,7 +1448,7 @@ namespace LiteNN::Serialization
 		}
 	} // namespace Detail
 
-	inline void SaveModelImpl(const Graph& graph, const std::filesystem::path& path,
+	inline void SaveGraphArchiveImpl(const Graph& graph, const std::filesystem::path& path,
 	                          const std::optional<std::filesystem::path>& externalWeightsPath,
 	                          ExternalWeightSaveOptions externalOptions)
 	{
@@ -1545,20 +1545,20 @@ namespace LiteNN::Serialization
 		}
 	}
 
-	inline void SaveModel(const Graph& graph, const std::filesystem::path& path)
+	inline void SaveGraphArchive(const Graph& graph, const std::filesystem::path& path)
 	{
-		SaveModelImpl(graph, path, std::nullopt, {});
+		SaveGraphArchiveImpl(graph, path, std::nullopt, {});
 	}
 
 	/// Save graph structure and variable metadata to `path`, with selected variable payloads in `externalWeightsPath`.
-	inline void SaveModelExternalWeights(const Graph& graph, const std::filesystem::path& path,
-	                                     const std::filesystem::path& externalWeightsPath,
-	                                     const ExternalWeightSaveOptions& externalOptions = {})
+	inline void SaveGraphArchiveExternalWeights(const Graph& graph, const std::filesystem::path& path,
+	                                            const std::filesystem::path& externalWeightsPath,
+	                                            const ExternalWeightSaveOptions& externalOptions = {})
 	{
-		SaveModelImpl(graph, path, externalWeightsPath, externalOptions);
+		SaveGraphArchiveImpl(graph, path, externalWeightsPath, externalOptions);
 	}
 
-	inline Graph LoadModel(const std::filesystem::path& path)
+	inline Graph LoadGraphArchive(const std::filesystem::path& path)
 	{
 		std::ifstream in(path, std::ios::binary);
 		if (!in)

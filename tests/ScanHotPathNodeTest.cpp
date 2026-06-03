@@ -292,8 +292,8 @@ TEST(ScanHotPathNode, SerializationRoundTripPreservesG52G53Nodes)
 
 	const auto path = std::filesystem::path("litenn_g52_g53_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	auto expected = RunGraph(graph, MakeAllNewNodeInputs());

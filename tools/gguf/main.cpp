@@ -181,7 +181,7 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
 			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
@@ -201,7 +201,7 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
 			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
@@ -223,7 +223,7 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
 			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
@@ -243,7 +243,7 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
 			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
@@ -268,7 +268,7 @@ int main(int argc, char** argv)
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto positionOffset = argc == 6 ? ParseSize(argv[5], "position-offset", true) : 0uz;
 			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, sequenceLength, positionOffset);
-			LiteNN::Serialization::SaveModel(lowered, argv[3]);
+			LiteNN::Serialization::SaveGraphArchive(lowered, argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
 			return 0;
@@ -285,7 +285,7 @@ int main(int argc, char** argv)
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto pastLength = ParseSize(argv[5], "past-length", true);
 			auto lowered = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, sequenceLength, pastLength, pastLength);
-			LiteNN::Serialization::SaveModel(lowered, argv[3]);
+			LiteNN::Serialization::SaveGraphArchive(lowered, argv[3]);
 			std::cout << "Lowered LLaMA decode graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
 			return 0;

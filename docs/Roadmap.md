@@ -1499,6 +1499,10 @@ to keep the old architecture alive if they are left in place during vNext.
     `ExecutablePlan` explicitly before interpretation, and the public API guard prevents the overloads from returning.
 - [ ] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
   serialization. Old graph-archive serialization may exist only as explicitly named migration tooling.
+  - [x] Renamed the old raw graph archive API from `SaveModel` / `LoadModel` /
+    `SaveModelExternalWeights` to explicit `SaveGraphArchive` / `LoadGraphArchive` /
+    `SaveGraphArchiveExternalWeights`; tools, tests, and examples now opt into graph archive semantics by name, and the
+    public API guard prevents the old `Graph`-based `SaveModel` / `LoadModel` names from returning.
 - [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal

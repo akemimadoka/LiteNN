@@ -559,7 +559,7 @@ TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 	std::filesystem::remove(outputPath);
 
 	const auto summary = GGUF::ConvertGGUFArchive(inputPath, outputPath);
-	auto loaded = Serialization::LoadModel(outputPath);
+	auto loaded = Serialization::LoadGraphArchive(outputPath);
 
 	std::filesystem::remove(inputPath);
 	std::filesystem::remove(outputPath);

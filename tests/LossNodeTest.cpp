@@ -173,8 +173,8 @@ TEST(LossNode, ConstFoldSerializationAndDumpKeepLossNodes)
 {
 	auto graph = BuildLossGraph();
 	const auto path = MakeTempPath("litenn_loss_node");
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	const auto dump = Debug::DumpGraph(loaded);

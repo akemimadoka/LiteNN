@@ -171,8 +171,8 @@ TEST(RareNumericalNode, SerializationRoundTripPreservesRareNumericalNodes)
 
 	const auto path = std::filesystem::path("litenn_rare_numerical_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	auto expected = RunGraph(graph, MakeRareNumericalInputs());

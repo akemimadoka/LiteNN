@@ -207,8 +207,8 @@ TEST(DataMovementNode, SerializationRoundTripPreservesG51Nodes)
 
 	const auto path = std::filesystem::path("litenn_g51_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	std::vector<Tensor<CPU>> inputs;

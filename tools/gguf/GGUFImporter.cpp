@@ -681,7 +681,7 @@ namespace LiteNN::GGUF
 	                                const std::filesystem::path& outputPath)
 	{
 		auto result = ImportGGUFArchive(inputPath);
-		Serialization::SaveModel(result.graph, outputPath);
+		Serialization::SaveGraphArchive(result.graph, outputPath);
 		return result.summary;
 	}
 } // namespace LiteNN::GGUF
