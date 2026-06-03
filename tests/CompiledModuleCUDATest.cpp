@@ -259,13 +259,14 @@ namespace
 
 	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		const auto h1 = Layer::CreateLinear(
-		    graph,
+		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 }, dtype),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, dtype));
 		const auto h2 = Layer::CreateLinear(
-		    graph, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, dtype),
+		    builder, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, dtype),
 		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, dtype));
 
 		Subgraph sg;
@@ -275,7 +276,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	class ScopedEnvVar
@@ -364,7 +365,7 @@ namespace
 TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 {
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildSimpleMatMulGraph());
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildSimpleMatMulGraph()));
 		EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		EXPECT_EQ(CompiledModuleArtifact::CopyFromImage(artifact.Image()).Backend(), CompiledModuleBackend::CUDANative);
 		ASSERT_EQ(artifact.InputSpecs().size(), 2u);
@@ -398,8 +399,8 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	{
 		const std::array outputShape{ 2uz, 3uz };
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildBinaryGraph(
-		    BinaryOp::Divide, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape, "broadcast_divide"));
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildBinaryGraph(
+		    BinaryOp::Divide, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape, "broadcast_divide")));
 		EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		EXPECT_EQ(CompiledModuleArtifact::CopyFromImage(artifact.Image()).Backend(), CompiledModuleBackend::CUDANative);
 		ASSERT_EQ(artifact.InputSpecs().size(), 2u);
@@ -453,7 +454,7 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	}
 
 	auto graph = BuildSimplePowGraph();
-	auto compiled = Compiler<CUDA>::Compile(graph, CUDA{});
+	auto compiled = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{});
 
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	ASSERT_GT(compiled.Rodata().size(), 0u);
@@ -485,7 +486,7 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 	}
 
 	auto graph = BuildSimplePowGraph();
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 	auto module = artifact.Load(CUDA{});
 
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
@@ -526,8 +527,8 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 	};
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph, options);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), MakeCPUInputs(inputSpecs));
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph), options);
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);
@@ -561,7 +562,7 @@ TEST(CompiledModuleCUDATest, RunsNativeMatMulWithCUBLAS)
 	}
 
 	auto graph = BuildSimpleMatMulGraph();
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 	auto module = artifact.Load(CUDA{});
 	EXPECT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
@@ -612,7 +613,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBinaryOpsWithCUDATensors)
 	{
 		SCOPED_TRACE(testCase.outputName);
 		auto graph = BuildSimpleBinaryGraph(testCase.op, std::string(testCase.outputName));
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		ASSERT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -712,7 +713,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBroadcastBinaryOpsWithCUDATens
 		const std::array outputShape{ 2uz, 3uz };
 		auto graph = BuildBinaryGraph(testCase.op, testCase.lhsShape, testCase.rhsShape, outputShape,
 		                              std::string(testCase.outputName));
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		ASSERT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -800,7 +801,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 	{
 		SCOPED_TRACE(testCase.outputName);
 		auto graph = BuildSimpleUnaryGraph(testCase.op, std::string(testCase.outputName));
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		ASSERT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -839,7 +840,7 @@ TEST(CompiledModuleCUDATest, RunIntoHonorsExternalCUDAStreamForNativePayload)
 	}
 
 	auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, "sum");
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{});
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 
 	auto lhs = Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
@@ -863,7 +864,7 @@ TEST(CompiledModuleCUDATest, CPUBridgeRejectsAsynchronousRunOptions)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	auto module = Compiler<CUDA>::Compile(BuildSimplePowGraph(), CUDA{});
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(BuildSimplePowGraph()), CUDA{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
 	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
@@ -887,7 +888,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 {
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildReduceGraph(ReduceOp::Mean, 0, { 3 }, "mean_axis0"));
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildReduceGraph(ReduceOp::Mean, 0, { 3 }, "mean_axis0")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -899,7 +900,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 
 	{
 		auto artifact =
-		    Compiler<CUDA>::CompileArtifact(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1"));
+		    Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -911,7 +912,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	}
 
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildSliceGraph(1, 1, 3, { 2, 3 }, "slice_axis1"));
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildSliceGraph(1, 1, 3, { 2, 3 }, "slice_axis1")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -922,7 +923,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 
 	{
 		auto artifact =
-		    Compiler<CUDA>::CompileArtifact(BuildCastGraph(DataType::Float32, DataType::Float16, { 2, 2 }, "cast_f16"));
+		    Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildCastGraph(DataType::Float32, DataType::Float16, { 2, 2 }, "cast_f16")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -960,7 +961,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		{
 			SCOPED_TRACE(testCase.name);
 			auto artifact = Compiler<CUDA>::CompileArtifact(
-			    BuildCastGraph(testCase.srcType, testCase.dstType, { 2, 2 }, testCase.name));
+			    BuildExecutablePlan(BuildCastGraph(testCase.srcType, testCase.dstType, { 2, 2 }, testCase.name)));
 			ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 			const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 			EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -981,7 +982,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	}
 
 	{
-		auto artifact = Compiler<CUDA>::CompileArtifact(BuildSimpleMatMulGraph(DataType::Float16, "matmul_f16"));
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildSimpleMatMulGraph(DataType::Float16, "matmul_f16")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::LibraryCall);
@@ -997,7 +998,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	{
 		auto graph = BuildMatMulBiasGraph(true, DataType::Float16);
 		FusionPass{}.Run(graph);
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -1011,7 +1012,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	{
 		auto graph = BuildMatMulBiasGraph(true);
 		FusionPass{}.Run(graph);
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -1032,7 +1033,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeLowPrecisionNativeLinearChai
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	auto graph = BuildTinyMLPGraph(2, DataType::Float16);
 	FusionPass{}.Run(graph);
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -1148,14 +1149,14 @@ TEST(CompiledModuleCUDATest, RunsNativeCastPayloadsOnCUDA)
 
 		SCOPED_TRACE(testCase.name);
 		auto graph = BuildCastGraph(testCase.srcType, testCase.dstType, { 2, 2 }, testCase.name);
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
 		std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{
 			.values = testCase.values, .shape = { 2, 2 }, .dtype = testCase.srcType } };
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1208,7 +1209,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 
 		SCOPED_TRACE(testCase.name);
 		auto graph = BuildMatMulGraph(testCase.dtype, { 2, 3 }, { 3, 2 }, { 2, 2 }, testCase.name);
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
@@ -1217,7 +1218,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1288,7 +1289,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 		SCOPED_TRACE(testCase.name);
 		auto graph = BuildMatMulBiasGraph(testCase.relu, testCase.dtype);
 		FusionPass{}.Run(graph);
-		auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
@@ -1298,7 +1299,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 			TensorInputSpec{ .values = testCase.biasValues, .shape = { 1, 2 }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
-		const auto expected = interpreter.RunForward(graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1319,7 +1320,7 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeNativeLinearChainPayload)
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	auto graph = BuildTinyMLPGraph(2);
 	FusionPass{}.Run(graph);
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 	const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 	EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -1348,7 +1349,7 @@ TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstru
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 	auto graph = BuildTinyMLPGraph(2);
 	FusionPass{}.Run(graph);
-	auto artifact = Compiler<CUDA>::CompileArtifact(graph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 	const auto inlinePayload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 	ASSERT_GT(inlinePayload.constantData.size(), 0u);
@@ -1376,7 +1377,7 @@ TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstru
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
 		                                                         .shape = { 2, 3 } } };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, MakeCPUInputs(inputSpecs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), MakeCPUInputs(inputSpecs));
 	auto module = copied.Load(CUDA{});
 	auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
 	ASSERT_EQ(outputs.size(), expected.size());
@@ -1473,12 +1474,12 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		SCOPED_TRACE(testCase.name);
 		Runtime::Interpreter<CPU> interpreter;
 		auto expectedInputs = MakeCPUInputs(testCase.inputs);
-		const auto expected = interpreter.RunForward(testCase.graph, expectedInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(testCase.graph), expectedInputs);
 
 		if (testCase.runCPUAOT)
 		{
 			auto cpuAOTInputs = MakeCPUInputs(testCase.inputs);
-			auto cpuAOTOutputs = Compiler<CPU>::CompileArtifact(testCase.graph).Load().Run(cpuAOTInputs);
+			auto cpuAOTOutputs = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(testCase.graph)).Load().Run(cpuAOTInputs);
 			ExpectOutputsNear(cpuAOTOutputs, expected, testCase.tolerance);
 		}
 
@@ -1487,7 +1488,7 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		{
 			FusionPass{}.Run(cudaGraph);
 		}
-		auto artifact = Compiler<CUDA>::CompileArtifact(cudaGraph);
+		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(cudaGraph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		auto module = artifact.Load(CUDA{});
 		ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
@@ -1520,11 +1521,11 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
-	auto artifact = Compiler<CUDA>::CompileArtifact(cudaGraph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(cudaGraph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(cudaGraph);
 	auto module = artifact.Load(CUDA{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
@@ -1559,11 +1560,11 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionLinearChainWithConstantsAndWo
 		.values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f }, .shape = { 2, 3 }, .dtype = DataType::Float16 } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
-	auto artifact = Compiler<CUDA>::CompileArtifact(cudaGraph);
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(cudaGraph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(cudaGraph);
 	auto module = artifact.Load(CUDA{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
@@ -1589,18 +1590,16 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		GTEST_SKIP() << "CUDA driver is not available";
 	}
 
-	ScopedEnvVar enableGraphReplay("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
-
 	auto graph = BuildTinyMLPGraph(2);
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
 		                                                         .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, expectedInputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
 
 	auto cudaGraph = graph;
 	FusionPass{}.Run(cudaGraph);
-	auto module = Compiler<CUDA>::Compile(cudaGraph, CUDA{});
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(cudaGraph), CUDA{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 
 	auto cudaInputs = MakeCUDAInputs(inputSpecs);
@@ -1610,8 +1609,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
 	}
 
-	module.RunInto(cudaInputs, cudaOutputs);
-	module.RunInto(cudaInputs, cudaOutputs);
+	module.RunInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
+	module.RunInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
 
 	std::vector<Tensor<CPU>> cudaCPUOutputs;
 	for (const auto& output : cudaOutputs)
@@ -1623,7 +1622,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 
 TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)
 {
-	auto artifact = Compiler<CUDA>::CompileArtifact(BuildSimpleMatMulGraph());
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildSimpleMatMulGraph()));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 
 	const std::uint64_t rodataSize = artifact.Rodata().size();
@@ -1656,13 +1655,11 @@ TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)
 	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 }
 
-TEST(CompiledModuleCUDATest, RejectsInvalidCUDANativeTargetEnv)
+TEST(CompiledModuleCUDATest, RejectsInvalidExplicitCUDANativeTarget)
 {
 #ifdef LITENN_ENABLE_CUDA_DRIVER
-	ScopedEnvVar env("LITENN_CUDA_AOT_TARGET", "compute_75");
-	EXPECT_THROW((void) CUDANativeNVPTXTargetChip(), std::runtime_error);
-	EXPECT_THROW((void) Compiler<CUDA>::CompileArtifact(BuildSimpleBinaryGraph(BinaryOp::Add, "add")),
-	             std::runtime_error);
+	EXPECT_THROW((void) CUDANativeNVPTXTargetChip("compute_75"), std::runtime_error);
+	EXPECT_EQ(CUDANativeNVPTXTargetChip("sm_75"), "sm_75");
 #else
 	GTEST_SKIP() << "CUDA driver support is not enabled";
 #endif
@@ -1791,14 +1788,14 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 
 		auto interpreterInputs = MakeCPUInputs(testCase.inputs);
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(testCase.graph, interpreterInputs);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(testCase.graph), interpreterInputs);
 
 		auto cpuAOTInputs = MakeCPUInputs(testCase.inputs);
-		auto cpuAOTModule = Compiler<CPU>::CompileArtifact(testCase.graph).Load();
+		auto cpuAOTModule = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(testCase.graph)).Load();
 		auto cpuAOTOutputs = cpuAOTModule.Run(cpuAOTInputs);
 		ExpectOutputsNear(cpuAOTOutputs, expected, testCase.tolerance);
 
-		auto cudaArtifact = Compiler<CUDA>::CompileArtifact(testCase.graph);
+		auto cudaArtifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(testCase.graph));
 		EXPECT_EQ(cudaArtifact.Backend(), testCase.expectedCUDABackend);
 		auto cudaModule = cudaArtifact.Load(CUDA{});
 		EXPECT_EQ(cudaModule.Backend(), testCase.expectedCUDABackend);

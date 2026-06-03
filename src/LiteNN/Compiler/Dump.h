@@ -1,5 +1,5 @@
 #include <LiteNN/Compiler/CompiledModule.h>
-#include <LiteNN/Graph.h>
+#include <LiteNN/ExecutablePlan.h>
 
 #include <string>
 
@@ -16,7 +16,7 @@ namespace LiteNN::Debug
 		AfterLLVMCodegen,
 	};
 
-	std::string DumpMLIR(const Graph& graph, MLIRDumpStage stage = MLIRDumpStage::InputDialect);
+	std::string DumpMLIR(const ExecutablePlan& plan, MLIRDumpStage stage = MLIRDumpStage::InputDialect);
 	std::string DumpCompiledModuleMetadata(const CompiledModuleArtifact& artifact);
 	std::string DumpCompiledModuleMetadata(const CompiledModuleSeparatedArtifact& artifact);
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CPU>& module);

@@ -37,7 +37,7 @@ namespace
 	std::vector<Tensor<CPU>> RunGraph(Graph& graph, std::vector<Tensor<CPU>> inputs)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		return interpreter.RunForward(graph, inputs);
+		return interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	}
 
 	NodeOutput AddFloatConstant(Subgraph& subgraph, std::initializer_list<double> values,
@@ -259,8 +259,8 @@ TEST(ConvolutionPoolingNode, SerializationRoundTripAndDumpPreserveG54Nodes)
 
 	const auto path = std::filesystem::path("litenn_g54_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	auto expected = RunGraph(graph, MakeG54Inputs());

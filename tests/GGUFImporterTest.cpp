@@ -559,7 +559,7 @@ TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 	std::filesystem::remove(outputPath);
 
 	const auto summary = GGUF::ConvertGGUFArchive(inputPath, outputPath);
-	auto loaded = Serialization::LoadModel(outputPath);
+	auto loaded = Serialization::LoadGraphArchive(outputPath);
 
 	std::filesystem::remove(inputPath);
 	std::filesystem::remove(outputPath);
@@ -719,7 +719,7 @@ TEST(GGUFLLaMADecoderBlock, LowersNamedArchiveBlockAndActsAsIdentityWithZeroProj
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f,
 	                                                   5.0f, 6.0f, 7.0f, 8.0f },
 	                                                  { 2, 4 }) };
-	const auto outputs = interpreter.RunForward(graph, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	for (std::size_t i = 0; i < 8; ++i)
 	{
@@ -748,7 +748,7 @@ TEST(GGUFLLaMACausalLM, LowersFullGraphAndRunsCPUForwardOnTokenIds)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().NumElements(), 6u);
 
@@ -768,7 +768,7 @@ TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenPrefillLogits)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 
 	const float expectedScalar = 1.0f / std::sqrt(0.25f + 1.0e-6f);
@@ -787,7 +787,7 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 2 }, { 1 }) };
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().NumElements(), 3u);
 
@@ -848,7 +848,7 @@ TEST(GGUFLLaMACausalLM, LowersDecodeGraphWithExplicitKVCacheInputsAndOutputs)
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 	};
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 3u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), std::vector<std::size_t>({ 1, 3 }));
 	EXPECT_EQ(outputs[1].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
@@ -867,7 +867,7 @@ TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenDecodeLogitsAndCacheUpdate)
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 	};
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 3u);
 
 	const float expectedScalar = 1.0f / std::sqrt(0.25f + 1.0e-6f);
@@ -885,7 +885,7 @@ TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> fullInputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
-	const auto fullOutputs = interpreter.RunForward(fullPrefill, fullInputs);
+	const auto fullOutputs = interpreter.RunForward(BuildExecutablePlan(fullPrefill), fullInputs);
 	ASSERT_EQ(fullOutputs.size(), 1u);
 
 	const std::vector<float> oneTokenPastCache{ 0.0f, 0.0f };
@@ -894,7 +894,7 @@ TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 		MakeFloatTensor(oneTokenPastCache, { 1, 1, 2 }),
 		MakeFloatTensor(oneTokenPastCache, { 1, 1, 2 }),
 	};
-	const auto secondOutputs = interpreter.RunForward(secondStep, secondInputs);
+	const auto secondOutputs = interpreter.RunForward(BuildExecutablePlan(secondStep), secondInputs);
 	ASSERT_EQ(secondOutputs.size(), 3u);
 	EXPECT_EQ(secondOutputs[1].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
 	EXPECT_EQ(secondOutputs[2].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
@@ -913,7 +913,7 @@ TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)
 	const auto archive = BuildTinyLLaMAArchive();
 	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	EXPECT_EQ(artifact.InputSpecs().size(), 1u);
 	EXPECT_EQ(artifact.OutputSpecs().size(), 1u);
 	auto compiled = artifact.Load();
@@ -931,9 +931,9 @@ TEST(GGUFLLaMACausalLM, CompilesSingleTokenFullGraphToCPUArtifactAndMatchesInter
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 2 }, { 1 }) };
-	const auto expected = interpreter.RunForward(lowered, inputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	auto compiled = artifact.Load();
 	const auto outputs = compiled.Run(inputs);
 
@@ -955,9 +955,9 @@ TEST(GGUFLLaMACausalLM, CompilesDecodeGraphToCPUArtifactAndMatchesInterpreter)
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 		MakeFloatTensor(zeroCache, { 1, 1, 2 }),
 	};
-	const auto expected = interpreter.RunForward(lowered, inputs);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 
-	auto artifact = Compiler<CPU>::CompileArtifact(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(lowered));
 	EXPECT_EQ(artifact.InputSpecs().size(), 3u);
 	EXPECT_EQ(artifact.OutputSpecs().size(), 3u);
 	auto compiled = artifact.Load();
@@ -981,7 +981,7 @@ TEST(GGUFLLaMACausalLM, LowersLinearRopeScaling)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
-	const auto outputs = interpreter.RunForward(lowered, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), std::vector<std::size_t>({ 2, 3 }));
 }
@@ -1055,8 +1055,8 @@ TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
-	const auto plainOutputs = interpreter.RunForward(plainLowered, inputs);
-	const auto quantizedOutputs = interpreter.RunForward(quantizedLowered, inputs);
+	const auto plainOutputs = interpreter.RunForward(BuildExecutablePlan(plainLowered), inputs);
+	const auto quantizedOutputs = interpreter.RunForward(BuildExecutablePlan(quantizedLowered), inputs);
 	ASSERT_EQ(plainOutputs.size(), 1u);
 	ASSERT_EQ(quantizedOutputs.size(), 1u);
 	ASSERT_EQ(plainOutputs[0].NumElements(), quantizedOutputs[0].NumElements());

@@ -292,7 +292,7 @@ struct Pass {
 `CompiledModule<CPU>` 是当前 CPU 原生 AOT 运行时封装；`CompiledModule<CUDA>` 采用 native 优先、bridge fallback：可直接加载 `CUDANative` payload 运行 CUDA kernel；不支持 native codegen 的图仍用 CUDA Tensor 作为公开输入/输出边界，内部复用 CPU AOT image/JIT 执行。
 
 - `Compiler<CPU>::CompileArtifact(graph)` 生成拥有 rodata/native object bytes 的 `CompiledModuleArtifact`；这是编译期的稳定产物层，可用于写 carrier object 或延后加载
-- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、parallel min-FLOPs、LLVM opt level、编译阶段诊断、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库默认编译路径不直接读取环境变量，CLI/benchmark/example 可用 `CompilerOptions::FromEnvironment()` 将环境变量转成配置
+- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、parallel min-FLOPs、LLVM opt level、编译阶段诊断、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库编译路径不直接读取环境变量，CLI/benchmark/example 若需要环境变量控制，应在入口层读取并填充该配置对象
 - `Compiler<CPU>::Compile(graph)` 保留为便捷接口，等价于 `CompileArtifact(graph).Load()`
 - `Compiler<CUDA>::CompileArtifact(graph)` 当前优先匹配静态 `Float32` elementwise Negate/Abs/Sqrt/Add/Subtract/Multiply/Divide、同 rank binary broadcast native PTX 和二维 `Float32` MatMul/cuBLAS library call；不匹配时复用 CPU artifact。`Compiler<CUDA>::Compile(graph, CUDA{})` 返回 `CompiledModule<CUDA>`，在 `Run` / `RunInto` / `RunManyInto` 中根据 backend 直接 launch CUDA kernel、调用 cuBLAS 或执行 CPU AOT bridge
 - `CompiledModuleArtifact::FromExportedSymbols(...)` 可从静态库/动态库导出的 `<prefix>_rodata{,_size}`、`<prefix>_instructions{,_size}` 符号恢复拥有型 artifact
@@ -346,14 +346,14 @@ struct Pass {
 
 ## Training API
 
-`LiteNN::Training::CPUTrainer<OptimizerT>` 是当前 CPU 训练路径的轻量封装，负责把 Graph、Interpreter、AutogradPass、loss gradient 和 Optimizer 串起来。
+`LiteNN::Training::Trainer<CPU, OptimizerT>` 是当前 CPU 训练路径的轻量封装，负责把 Graph、Interpreter、AutogradPass、loss gradient 和 Optimizer 串起来。
 
 - 构造时可自动为缺失 backward 的 Graph 运行 `AutogradPass`，随后调用 `ValidateGraph`
 - `Forward(inputs)` 只执行前向
 - `Step(inputs, outputGradients)` 执行 forward → backward → store variable gradients → optimizer step
 - `StepSoftmaxCrossEntropy(inputs, targetClass)` 为单输出 logits 图提供常见分类训练入口
 - `StepSoftmaxCrossEntropyBatch(inputs, targetClasses)` 支持 `[batch, classes]` logits，loss 和 logits gradient 均按 batch 平均
-- `TrainerOptions` 可控制是否自动构建 backward、是否写回 `Variable::Grad()`、是否在 backward 前清零梯度
+- `TrainerOptions` 可控制是否自动构建 backward、是否写回 `Variable::Grad()`、是否在 backward 前清零梯度；当前若解析到 `TrainExecutionPolicy::AOT` 会显式报错，直到 CPU/CUDA compiled train-step runner 接线完成
 
 优化器公共工具位于 `LiteNN::Optimizer`：
 
@@ -361,13 +361,13 @@ struct Pass {
 - `StoreVariableGradients(Graph&, backwardResults, inputGradientCount)` 将 Autograd 结果中的 variable gradients 写回 `Variable::Grad()`
 - `InferInputGradientCount(Graph&)` 根据 backward 参数数量和 forward 输出数量推导输入梯度数量
 
-当前 Trainer 仍是 CPU + eager training API；参数组、学习率调度、checkpoint 训练循环和吞吐优化留在后续 P1/P2。
+当前 Trainer 仍是 CPU + interpreter training API；参数组、学习率调度、checkpoint 训练循环和 AOT train-step runner 留在后续工作。
 
 ---
 
 ## Model Serialization
 
-`LiteNN::Serialization::SaveModel/LoadModel` 提供 Graph + Variable 权重的二进制保存/加载能力。
+`LiteNN::Serialization::SaveGraphArchive/LoadGraphArchive` 提供 Graph + Variable 权重的旧图归档二进制保存/加载能力。vNext 中 `SaveModel/LoadModel` 名称已从 raw Graph archive 上移除，后续保留给 manifest + executable-plan model format。
 
 - 文件包含 magic、format version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、所有 Subgraph 和节点 payload
 - Variable 只保存 `Data()`，加载时由 `Variable::Create` 重新初始化 `Grad()` 为同 shape/dtype/device 的零张量
@@ -382,26 +382,26 @@ struct Pass {
 
 ```cpp
 // Layer/Activation.h
-SubgraphId BuildReLU(Graph& graph, DataType dtype, ShapeView shape);
+SubgraphId BuildReLU(ModelBuilder& builder, DataType dtype, ShapeView shape);
 // ReLU(x) = max(x, 0)
 
 NodeOutput AddGELU(Subgraph& sg, NodeOutput input);
-SubgraphId BuildGELU(Graph& graph, DataType dtype, ShapeView shape);
+SubgraphId BuildGELU(ModelBuilder& builder, DataType dtype, ShapeView shape);
 // GELU(x) = x * 0.5 * (1 + tanh(0.7978… * (x + 0.044715 * x³)))  [tanh 近似]
 
 NodeOutput AddELU(Subgraph& sg, NodeOutput input, double alpha = 1.0);
-SubgraphId BuildELU(Graph& graph, DataType dtype, ShapeView shape, double alpha = 1.0);
+SubgraphId BuildELU(ModelBuilder& builder, DataType dtype, ShapeView shape, double alpha = 1.0);
 // ELU(x) = max(x,0) + min(alpha*(exp(x)-1), 0)
 
 // Layer/Softmax.h
 NodeOutput AddSoftmax(Subgraph& sg, NodeOutput input, std::size_t axis = 1);
-SubgraphId BuildSoftmax(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 1);
+SubgraphId BuildSoftmax(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis = 1);
 // softmax 沿 axis 归一化，采用 max-shift 保证数值稳定
 
 // Layer/LayerNorm.h
 struct LayerNormLayer { SubgraphId subgraph; VariableIdx gammaVariable, betaVariable;
                         std::size_t featureSize; DataType dtype; double eps; };
-LayerNormLayer CreateLayerNorm(Graph& graph, std::size_t featureSize, DataType dtype, double eps = 1e-5);
+LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize, DataType dtype, double eps = 1e-5);
 NodeOutput AddLayerNorm(Subgraph& sg, NodeOutput input, const LayerNormLayer& layer);
 // LayerNorm 归一化最后一维（featureSize），含 learnable gamma/beta，输入形状 [batch, featureSize]
 ```
@@ -465,7 +465,7 @@ src/
     ├── Serialization/
     │   └── ModelIO.h            // Graph + Variable 权重保存/加载
     ├── Training/
-    │   └── Trainer.h            // CPUTrainer 训练 API
+    │   └── Trainer.h            // Trainer<CPU, OptimizerT> 训练 API
     └── Runtime/
         └── Interpreter.h        // 解释执行器
 
@@ -494,8 +494,8 @@ tests/
 ├── AutogradRegressionTest.cpp   // Autograd shape/order 契约回归测试
 ├── ThreadSafetyTest.cpp         // 只读 Graph + 独立 Interpreter 并发 smoke 测试
 ├── MemorySafetyTest.cpp         // sanitizer/debug-heap 长循环覆盖 Tensor view、PolymorphicDevice、CompiledModule image 生命周期
-├── TrainingTest.cpp             // CPUTrainer、loss step、Variable::Grad 写回测试
-├── ModelIOTest.cpp              // SaveModel/LoadModel forward/backward/variable 回归测试
+├── TrainingTest.cpp             // Trainer、loss step、Variable::Grad 写回测试
+├── ModelIOTest.cpp              // SaveGraphArchive/LoadGraphArchive forward/backward/variable 回归测试
 ├── SignatureTest.cpp            // Graph 命名 input/output 签名测试
 ├── ForwardOnlyPassTest.cpp      // 从训练图提取 forward-only 推理图测试
 ├── InlinePassTest.cpp           // InlinePass 内联测试
@@ -533,10 +533,10 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 
 ### P1：用户可用性
 
-- [x] **模型保存/加载**：新增 `LiteNN::Serialization::SaveModel/LoadModel`，序列化 magic/version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、Subgraph、NodeVariant payload，并在加载后运行 `ValidateGraph`。当前已支持本库内部 checkpoint/推理模型 roundtrip；跨版本迁移策略仍需继续完善。
+- [x] **模型保存/加载**：新增 `LiteNN::Serialization::SaveGraphArchive/LoadGraphArchive`，序列化 magic/version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、Subgraph、NodeVariant payload，并在加载后运行 `ValidateGraph`。当前已支持本库内部 checkpoint/推理模型 roundtrip；跨版本迁移策略仍需继续完善。
 - [x] **输入输出命名与签名 API**：`Graph` 支持 `SetInputNames`/`SetOutputNames`、`InputSignature`/`OutputSignature`、`FindInput`/`FindOutput`；`CompiledModule<CPU>` rodata 保存命名 specs，并通过 `InputSpecs`/`OutputSpecs`/`FindInput`/`FindOutput` 查询。当前绑定执行仍按位置传参，命名 binding helper 可后续补。
-- [x] **训练 API**：新增 `LiteNN::Training::CPUTrainer<OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
-- [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `CPUTrainer::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。
+- [x] **训练 API**：新增 `LiteNN::Training::Trainer<CPU, OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
+- [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `Trainer<CPU, OptimizerT>::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。
 - [x] **常用算子覆盖（部分）**：已新增 `Softmax`（带 max-shift 数值稳定）、`GELU`（tanh 近似）、`ELU`（带 alpha 参数）、`LayerNorm`（learnable gamma/beta，2D 输入）层构建工具，通过 `Layer::AddSoftmax`/`BuildSoftmax`、`AddGELU`/`BuildGELU`、`AddELU`/`BuildELU`、`CreateLayerNorm`/`AddLayerNorm` 提供访问。Conv2D、Pooling、BatchNorm、Embedding、Gather/Scatter、Pad 仍待补充。
 - [x] **示例体系（部分）**：MNIST interpreter 示例扩展了 MLP 路径（`--hidden-size N`），支持 `--save` / `--load` 在训练后保存权重或直接加载推理模型；end-to-end 演示完整 train → save → load → evaluate 工作流。`example/carrier` 现已补齐 AOT 静态库/动态库 carrier 加载示例；训练 checkpoint 循环仍待补充。
 
@@ -595,7 +595,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 ### 长期
 
 - **AOT Compiler\<D\>**：将 Graph 编译为设备特定可执行代码（`CompiledModule<D>`）
-  - [x] **Step 1 — MLIR Dialect + Graph→MLIR 翻译器**：定义 `litenn` MLIR Dialect（ODS TableGen，全部 Op），实现 `translateGraphToMLIR()`；SSA 化激活值（Save/Load passthrough）；支持 CondNode/WhileNode region 内联；CompilerTest 4 项测试通过
+  - [x] **Step 1 — MLIR Dialect + ExecutablePlan→MLIR 翻译器**：定义 `litenn` MLIR Dialect（ODS TableGen，全部 Op），实现 `translateExecutablePlanToMLIR()`；SSA 化激活值（Save/Load passthrough）；支持 CondNode/WhileNode region 内联；CompilerTest 4 项测试通过
   - [x] **Step 2 — Lowering Passes**：`litenn` Dialect → 标准 MLIR Dialect（`linalg`/`arith`/`scf`）；tensor 操作映射到 `linalg.generic`/`arith.*`；CondOp/WhileOp → `scf.if`/`scf.while`
   - [x] **Step 3 — Bufferization**：tensor → memref（`one-shot-bufferize`）；内存分配策略
   - [x] **Step 4 — LLVM IR 生成**：convert-linalg-to-loops + convert-scf-to-cf + arith/math/index/memref/func/cf-to-LLVM + reconcile-casts → `translateModuleToLLVMIR()`；LLVMCodegenPassTest 3 项测试通过

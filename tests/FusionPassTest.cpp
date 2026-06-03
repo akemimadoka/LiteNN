@@ -77,7 +77,7 @@ TEST(FusionPass, MatMulBiasAdd)
 	std::array<Tensor<CPU>, 3> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorW), Tensor<CPU>(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	// 运行 FusionPass
 	FusionPass fusionPass;
@@ -89,7 +89,7 @@ TEST(FusionPass, MatMulBiasAdd)
 
 	// 验证数值正确
 	std::array<Tensor<CPU>, 3> inputs2 = { std::move(tensorX), std::move(tensorW), std::move(tensorB) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -127,7 +127,7 @@ TEST(FusionPass, MatMulBiasAddSwapped)
 	std::array<Tensor<CPU>, 3> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorW), Tensor<CPU>(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	FusionPass fusionPass;
 	fusionPass.Run(graph);
@@ -136,7 +136,7 @@ TEST(FusionPass, MatMulBiasAddSwapped)
 	EXPECT_TRUE(HasFusedOpNode(fusedSg, FusionPattern::MatMulBiasAdd));
 
 	std::array<Tensor<CPU>, 3> inputs2 = { std::move(tensorX), std::move(tensorW), std::move(tensorB) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -187,7 +187,7 @@ TEST(FusionPass, MatMulBiasAddReLU)
 	std::array<Tensor<CPU>, 3> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorW), Tensor<CPU>(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	FusionPass fusionPass;
 	fusionPass.Run(graph);
@@ -197,7 +197,7 @@ TEST(FusionPass, MatMulBiasAddReLU)
 	EXPECT_FALSE(HasFusedOpNode(fusedSg, FusionPattern::MatMulBiasAdd));
 
 	std::array<Tensor<CPU>, 3> inputs2 = { std::move(tensorX), std::move(tensorW), std::move(tensorB) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 32; ++i)
@@ -259,7 +259,7 @@ TEST(FusionPass, ElementWiseChainBasic)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	FusionPass fusionPass;
 	fusionPass.Run(graph);
@@ -268,7 +268,7 @@ TEST(FusionPass, ElementWiseChainBasic)
 	EXPECT_TRUE(HasFusedOpNode(fusedSg, FusionPattern::ElementWiseChain));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -305,7 +305,7 @@ TEST(FusionPass, ElementWiseChainLonger)
 	std::array<Tensor<CPU>, 3> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorC), Tensor<CPU>(tensorD) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	FusionPass fusionPass;
 	fusionPass.Run(graph);
@@ -314,7 +314,7 @@ TEST(FusionPass, ElementWiseChainLonger)
 	EXPECT_TRUE(HasFusedOpNode(fusedSg, FusionPattern::ElementWiseChain));
 
 	std::array<Tensor<CPU>, 3> inputs2 = { std::move(tensorX), std::move(tensorC), std::move(tensorD) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -373,11 +373,11 @@ TEST(FusionPass, AfterAutogradPass)
 
 	Runtime::Interpreter<CPU> interpRef;
 	std::array<Tensor<CPU>, 2> inputsRef = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB) };
-	auto expectedFwd = interpRef.RunForward(graphRef, inputsRef);
+	auto expectedFwd = interpRef.RunForward(BuildExecutablePlan(graphRef), inputsRef);
 
 	Tensor<CPU> gradOut({ 1, 1, 1, 1 }, { 2, 2 });
 	std::array<Tensor<CPU>, 3> bwdInputsRef = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB), Tensor<CPU>(gradOut) };
-	auto expectedBwd = interpRef.RunBackward(graphRef, bwdInputsRef);
+	auto expectedBwd = interpRef.RunBackward(BuildExecutablePlan(graphRef), bwdInputsRef);
 
 	// 对原图运行 autograd + fusion
 	AutogradPass autogradPass;
@@ -389,7 +389,7 @@ TEST(FusionPass, AfterAutogradPass)
 	// 验证前向
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 2> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB) };
-	auto actualFwd = interp.RunForward(graph, inputs);
+	auto actualFwd = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(actualFwd.size(), expectedFwd.size());
 	for (std::size_t i = 0; i < 4; ++i)
@@ -399,7 +399,7 @@ TEST(FusionPass, AfterAutogradPass)
 
 	// 验证反向
 	std::array<Tensor<CPU>, 3> bwdInputs = { std::move(tensorX), std::move(tensorB), std::move(gradOut) };
-	auto actualBwd = interp.RunBackward(graph, bwdInputs);
+	auto actualBwd = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	ASSERT_EQ(actualBwd.size(), expectedBwd.size());
 	for (std::size_t i = 0; i < actualBwd.size(); ++i)
@@ -458,7 +458,7 @@ TEST(FusionPass, MultiConsumerBreaksChain)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(graph, inputs);
+	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	FusionPass fusionPass;
 	fusionPass.Run(graph);
@@ -468,7 +468,7 @@ TEST(FusionPass, MultiConsumerBreaksChain)
 	EXPECT_EQ(CountFusedOpNodes(fusedSg), 0);
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(graph, inputs2);
+	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 2);
 	for (std::size_t i = 0; i < 4; ++i)

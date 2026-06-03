@@ -3,6 +3,7 @@
 
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <span>
 #include <stdexcept>
@@ -34,14 +35,14 @@ namespace LiteNN::Layer
 		                  std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
 	}
 
-	inline SubgraphId BuildReshape(Graph& graph, DataType dtype, ShapeView inputShape,
+	inline SubgraphId BuildReshape(ModelBuilder& builder, DataType dtype, ShapeView inputShape,
 	                               std::span<const std::size_t> targetShape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());
 		const auto result = AddReshape(subgraph, { input, 0 }, targetShape);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 
@@ -56,7 +57,7 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildAddId(Graph& graph, DataType dtype, ShapeView aShape, ShapeView bShape, DataType idsType,
+	inline SubgraphId BuildAddId(ModelBuilder& builder, DataType dtype, ShapeView aShape, ShapeView bShape, DataType idsType,
 	                            ShapeView idsShape)
 	{
 		Subgraph subgraph;
@@ -65,7 +66,7 @@ namespace LiteNN::Layer
 		const auto ids = subgraph.AddParam(idsType, idsShape.ToOwned());
 		const auto result = AddId(subgraph, { a, 0 }, { b, 0 }, { ids, 0 });
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

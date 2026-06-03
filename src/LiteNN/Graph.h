@@ -2,12 +2,14 @@
 #include <LiteNN/Metadata.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/TensorType.h>
 #include <cstddef>
 #include <deque>
 #include <memory>
 #include <meta>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,6 +29,8 @@ namespace LiteNN
 	{
 		NodeId node;
 		std::size_t port; // 该节点的第几个输出
+
+		friend bool operator==(const NodeOutput&, const NodeOutput&) = default;
 	};
 
 	// 节点输出的类型和形状元信息
@@ -34,12 +38,32 @@ namespace LiteNN
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static OutputInfo FromType(const TensorType& type)
+		{
+			return { type.dtype, type.StaticShape() };
+		}
 	};
 
 	struct TensorSpec
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static TensorSpec FromType(const TensorType& type)
+		{
+			return { type.dtype, type.StaticShape() };
+		}
 	};
 
 	struct NamedTensorSpec
@@ -47,6 +71,22 @@ namespace LiteNN
 		std::string name;
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static NamedTensorSpec FromType(std::string name, const TensorType& type)
+		{
+			return { std::move(name), type.dtype, type.StaticShape() };
+		}
+	};
+
+	struct NamedTensorType
+	{
+		std::string name;
+		TensorType type;
 	};
 
 	// 节点类型
@@ -633,6 +673,16 @@ namespace LiteNN
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static ActivationSlot FromType(const TensorType& type)
+		{
+			return { type.dtype, type.StaticShape() };
+		}
 	};
 
 	// 循环体的栈式激活值槽位
@@ -640,12 +690,32 @@ namespace LiteNN
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static TapeSlot FromType(const TensorType& type)
+		{
+			return { type.dtype, type.StaticShape() };
+		}
 	};
 
 	struct SubgraphParam
 	{
 		DataType dtype;
 		std::vector<std::size_t> shape;
+
+		TensorType Type() const
+		{
+			return TensorType::Dense(dtype, ShapeView{ shape });
+		}
+
+		static SubgraphParam FromType(const TensorType& type)
+		{
+			return { type.dtype, type.StaticShape() };
+		}
 	};
 
 	class Graph;
@@ -667,6 +737,11 @@ namespace LiteNN
 			return nodeId;
 		}
 
+		NodeId AddParam(const TensorType& type)
+		{
+			return AddParam(type.dtype, type.StaticShape());
+		}
+
 		// 添加一个节点，返回 NodeId
 		// NOTE: 可能导致已有的 GetNodeEntry/GetOutputInfo/Nodes() 返回的引用或 span 失效
 		NodeId AddNode(NodeVariant node, std::vector<OutputInfo> outputInfos)
@@ -674,6 +749,17 @@ namespace LiteNN
 			const auto nodeId = nodes_.size();
 			nodes_.push_back({ std::move(node), std::move(outputInfos) });
 			return nodeId;
+		}
+
+		NodeId AddNode(NodeVariant node, std::span<const TensorType> outputTypes)
+		{
+			std::vector<OutputInfo> outputInfos;
+			outputInfos.reserve(outputTypes.size());
+			for (const auto& type : outputTypes)
+			{
+				outputInfos.push_back(OutputInfo::FromType(type));
+			}
+			return AddNode(std::move(node), std::move(outputInfos));
 		}
 
 		// 设置子图的输出
@@ -749,6 +835,11 @@ namespace LiteNN
 			const auto id = activationSlots_.size();
 			activationSlots_.push_back(std::move(slot));
 			return id;
+		}
+
+		std::size_t AddActivationSlot(const TensorType& type)
+		{
+			return AddActivationSlot(ActivationSlot::FromType(type));
 		}
 
 		void SetForward(SubgraphId id)
@@ -910,11 +1001,21 @@ namespace LiteNN
 			return { param.dtype, param.shape };
 		}
 
+		TensorType InputType(std::size_t index) const
+		{
+			return InputSpec(index).Type();
+		}
+
 		TensorSpec OutputSpec(std::size_t index) const
 		{
 			const auto& forward = GetSubgraph(Forward());
 			const auto& info = forward.GetOutputInfo(forward.Results()[index]);
 			return { info.dtype, info.shape };
+		}
+
+		TensorType OutputType(std::size_t index) const
+		{
+			return OutputSpec(index).Type();
 		}
 
 		std::vector<NamedTensorSpec> InputSignature() const
@@ -929,6 +1030,18 @@ namespace LiteNN
 			return signature;
 		}
 
+		std::vector<NamedTensorType> InputTypeSignature() const
+		{
+			const auto& params = GetSubgraph(Forward()).Params();
+			std::vector<NamedTensorType> signature;
+			signature.reserve(params.size());
+			for (std::size_t i = 0; i < params.size(); ++i)
+			{
+				signature.push_back({ InputName(i), params[i].Type() });
+			}
+			return signature;
+		}
+
 		std::vector<NamedTensorSpec> OutputSignature() const
 		{
 			const auto& forward = GetSubgraph(Forward());
@@ -938,6 +1051,18 @@ namespace LiteNN
 			{
 				const auto& info = forward.GetOutputInfo(forward.Results()[i]);
 				signature.push_back({ OutputName(i), info.dtype, info.shape });
+			}
+			return signature;
+		}
+
+		std::vector<NamedTensorType> OutputTypeSignature() const
+		{
+			const auto& forward = GetSubgraph(Forward());
+			std::vector<NamedTensorType> signature;
+			signature.reserve(forward.Results().size());
+			for (std::size_t i = 0; i < forward.Results().size(); ++i)
+			{
+				signature.push_back({ OutputName(i), forward.GetOutputInfo(forward.Results()[i]).Type() });
 			}
 			return signature;
 		}
@@ -982,6 +1107,11 @@ namespace LiteNN
 			const auto id = tapeSlots_.size();
 			tapeSlots_.push_back(std::move(slot));
 			return id;
+		}
+
+		std::size_t AddTapeSlot(const TensorType& type)
+		{
+			return AddTapeSlot(TapeSlot::FromType(type));
 		}
 
 		const TapeSlot& GetTapeSlot(std::size_t id) const

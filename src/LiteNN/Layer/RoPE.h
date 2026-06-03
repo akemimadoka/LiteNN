@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <cmath>
 #include <span>
@@ -116,14 +117,14 @@ namespace LiteNN::Layer
 		return { restored, 0 };
 	}
 
-	inline SubgraphId BuildRoPE(Graph& graph, DataType dtype, ShapeView shape, double base = 10000.0,
+	inline SubgraphId BuildRoPE(ModelBuilder& builder, DataType dtype, ShapeView shape, double base = 10000.0,
 	                           std::size_t positionOffset = 0, double frequencyScale = 1.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddRoPE(subgraph, { input, 0 }, base, positionOffset, frequencyScale);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

@@ -221,8 +221,9 @@ namespace LiteNN::Examples::Mnist
 			throw std::runtime_error("Unexpected MNIST parameter tensor shape or dtype");
 		}
 
-		Graph graph;
-		const auto classifier = Layer::CreateLinear(graph, std::move(weightTensor), std::move(biasTensor));
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
+		const auto classifier = Layer::CreateLinear(builder, std::move(weightTensor), std::move(biasTensor));
 		if (classifier.weightVariable != kWeightVariableIndex || !classifier.biasVariable ||
 		    *classifier.biasVariable != kBiasVariableIndex)
 		{
@@ -238,7 +239,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	inline Graph BuildTrainableMnistGraph(std::uint32_t seed = 42)
@@ -254,12 +255,13 @@ namespace LiteNN::Examples::Mnist
 	{
 		std::mt19937 rng(seed);
 
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		const auto hidden = Layer::CreateLinear(
-		    graph, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
+		    builder, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
 		    Initializer::Zeros({ 1, hiddenSize }));
 		const auto output = Layer::CreateLinear(
-		    graph, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
+		    builder, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
 		    Initializer::Zeros({ 1, kDigitCount }));
 
 		if (hidden.weightVariable != kMlpHiddenWeightIdx || !hidden.biasVariable ||
@@ -281,7 +283,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	inline Graph BuildInferenceGraphFromTrainedVariables(const Graph& trainedGraph)
@@ -293,14 +295,14 @@ namespace LiteNN::Examples::Mnist
 	inline void SaveMnistModel(const Graph& trainedGraph, const std::filesystem::path& path)
 	{
 		const auto inferGraph = ExtractForwardOnlyGraph(trainedGraph);
-		Serialization::SaveModel(inferGraph, path);
+		Serialization::SaveGraphArchive(inferGraph, path);
 		std::cout << std::format("Model saved to {}\n", path.string());
 	}
 
 	// 从文件加载推理图（已经是 forward-only，无需再提取）
 	inline Graph LoadMnistInferenceModel(const std::filesystem::path& path)
 	{
-		auto graph = Serialization::LoadModel(path);
+		auto graph = Serialization::LoadGraphArchive(path);
 		std::cout << std::format("Model loaded from {}\n", path.string());
 		return graph;
 	}
@@ -318,7 +320,7 @@ namespace LiteNN::Examples::Mnist
 
 	inline void TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options)
 	{
-		Training::CPUTrainer<Optimizer::SGD> trainer(
+		Training::Trainer<CPU, Optimizer::SGD> trainer(
 		    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
 
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)

@@ -35,7 +35,6 @@
 #endif
 
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -75,13 +74,13 @@ namespace
 		if (cudaGetDevice(&deviceIndex) != cudaSuccess)
 		{
 			(void)cudaGetLastError();
-			throw std::runtime_error("LITENN_CUDA_AOT_TARGET=native requires an available CUDA runtime device");
+			throw std::runtime_error("CUDA AOT target 'native' requires an available CUDA runtime device");
 		}
 		cudaDeviceProp properties{};
 		if (cudaGetDeviceProperties(&properties, deviceIndex) != cudaSuccess)
 		{
 			(void)cudaGetLastError();
-			throw std::runtime_error("Failed to query CUDA device properties for LITENN_CUDA_AOT_TARGET=native");
+			throw std::runtime_error("Failed to query CUDA device properties for CUDA AOT target 'native'");
 		}
 		if (properties.major <= 0 || properties.minor < 0)
 		{
@@ -89,28 +88,23 @@ namespace
 		}
 		return std::format("sm_{}{}", properties.major, properties.minor);
 #else
-		throw std::runtime_error("LITENN_CUDA_AOT_TARGET=native requires LiteNN to be built with CUDA support");
+		throw std::runtime_error("CUDA AOT target 'native' requires LiteNN to be built with CUDA support");
 #endif
 	}
 
-	std::string ResolveNVPTXTargetChip()
+	std::string ResolveNVPTXTargetChip(std::string_view requestedTarget = {})
 	{
-		if (const char* env = std::getenv("LITENN_CUDA_AOT_TARGET"))
+		if (!requestedTarget.empty())
 		{
-			const std::string target = env;
-			if (!target.empty())
+			if (requestedTarget == "native")
 			{
-				if (target == "native")
-				{
-					return DetectNativeNVPTXTargetChip();
-				}
-				if (!IsValidNVPTXSMTarget(target))
-				{
-					throw std::runtime_error(
-					    "LITENN_CUDA_AOT_TARGET must be native or an sm_<major><minor> target such as sm_75");
-				}
-				return target;
+				return DetectNativeNVPTXTargetChip();
 			}
+			if (!IsValidNVPTXSMTarget(requestedTarget))
+			{
+				throw std::runtime_error("CUDA AOT target must be native or an sm_<major><minor> target such as sm_75");
+			}
+			return std::string(requestedTarget);
 		}
 		return std::string(kDefaultNVPTXChip);
 	}
@@ -1554,6 +1548,11 @@ std::string CUDANativeNVPTXTargetChip()
 	return ResolveNVPTXTargetChip();
 }
 
+std::string CUDANativeNVPTXTargetChip(std::string_view requestedTarget)
+{
+	return ResolveNVPTXTargetChip(requestedTarget);
+}
+
 std::string CUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op)
 {
 	return EmitBinaryF32PTXFromMLIRNVPTX(op);
@@ -1694,10 +1693,7 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpiloguePTXFromMLIRNVPTX(
 	}
 	catch (const std::exception& ex)
 	{
-		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
-		{
-			llvm::errs() << "CUDA native MatMulBias epilogue codegen failed: " << ex.what() << '\n';
-		}
+		(void)ex;
 		return std::nullopt;
 	}
 }
@@ -1723,10 +1719,7 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesF32PTXFromMLIRNVPTX(
 	}
 	catch (const std::exception& ex)
 	{
-		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
-		{
-			llvm::errs() << "CUDA native MatMulBias epilogue set codegen failed: " << ex.what() << '\n';
-		}
+		(void)ex;
 		return std::nullopt;
 	}
 }
@@ -1740,10 +1733,7 @@ std::optional<std::string> TryCUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(
 	}
 	catch (const std::exception& ex)
 	{
-		if (std::getenv("LITENN_CUDA_NATIVE_CODEGEN_TRACE"))
-		{
-			llvm::errs() << "CUDA native MatMulBias epilogue set codegen failed: " << ex.what() << '\n';
-		}
+		(void)ex;
 		return std::nullopt;
 	}
 }

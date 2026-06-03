@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <span>
 #include <stdexcept>
@@ -54,14 +55,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildCausalMask(Graph& graph, DataType dtype, std::size_t sequenceLength,
+	inline SubgraphId BuildCausalMask(ModelBuilder& builder, DataType dtype, std::size_t sequenceLength,
 	                                double maskedValue = -1.0e9)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, { sequenceLength, sequenceLength });
 		const auto result = AddCausalMask(subgraph, { input, 0 }, maskedValue);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

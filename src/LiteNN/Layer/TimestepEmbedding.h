@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -23,14 +24,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildTimestepEmbedding(Graph& graph, DataType dtype, ShapeView timestepShape,
+	inline SubgraphId BuildTimestepEmbedding(ModelBuilder& builder, DataType dtype, ShapeView timestepShape,
 	                                         std::size_t dim, std::size_t maxPeriod = 10000)
 	{
 		Subgraph subgraph;
 		const auto timesteps = subgraph.AddParam(dtype, timestepShape.ToOwned());
 		const auto result = AddTimestepEmbedding(subgraph, { timesteps, 0 }, dim, maxPeriod);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 #include <LiteNN/Layer/Scan.h>
 
 #include <stdexcept>
@@ -27,13 +28,13 @@ namespace LiteNN::Layer
 		return AddScan(subgraph, input, axis, ScanOp::Sum);
 	}
 
-	inline SubgraphId BuildCumsum(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 0)
+	inline SubgraphId BuildCumsum(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis = 0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddCumsum(subgraph, { input, 0 }, axis);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

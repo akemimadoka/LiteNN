@@ -27,6 +27,7 @@
 #include <LiteNN/Layer/Window.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -58,7 +59,7 @@ namespace
 		Runtime::Interpreter<CPU> interp;
 		Tensor<CPU> inputTensor = Optimizer::MakeFloatTensor(std::span<const float>(inputData), shape);
 		std::array<Tensor<CPU>, 1> inputs = { std::move(inputTensor) };
-		auto results = interp.RunForward(graph, inputs);
+		auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 		EXPECT_EQ(results.size(), 1u);
 		return std::move(results[0]);
 	}
@@ -66,7 +67,7 @@ namespace
 		std::vector<Tensor<CPU>> RunWithInputs(Graph& graph, std::vector<Tensor<CPU>> inputs)
 		{
 			Runtime::Interpreter<CPU> interp;
-			return interp.RunForward(graph, inputs);
+			return interp.RunForward(BuildExecutablePlan(graph), inputs);
 		}
 
 		std::int32_t ReadInt32(const Tensor<CPU>& t, std::size_t i)
@@ -181,6 +182,29 @@ namespace
 			return result;
 		}
 } // namespace
+
+TEST(LayerLinear, BuildsThroughModelBuilderSurface)
+{
+	ModelBuilder builder;
+	auto layer = Layer::CreateLinear(builder,
+	                                 Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 0.5f, -1.0f },
+	                                             { 3, 2 }, DataType::Float32),
+	                                 Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
+	const auto forward = Layer::BuildLinear(builder, layer, 2);
+	builder.SetForward(forward);
+
+	Runtime::Interpreter<CPU> interpreter;
+	auto input = Optimizer::MakeFloatTensor(std::array{ 1.0f, 0.0f, 2.0f, 0.0f, 1.0f, 1.0f }, { 2, 3 });
+	std::array<Tensor<CPU>, 1> inputs{ std::move(input) };
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(builder.Model()), inputs);
+
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_EQ(outputs[0].Shape(), (ShapeView{ 2, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 2.25f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), -0.5f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 3.75f);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 2.5f);
+}
 
 TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 {
@@ -531,8 +555,9 @@ TEST(LayerRoll, NegativeShiftRotatesAxisZero)
 
 TEST(LayerArange, BuildsFloatSequence)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildArange(graph, DataType::Float32, 5, 1.5, 0.5));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildArange(builder, DataType::Float32, 5, 1.5, 0.5));
 
 	const auto outputs = RunWithInputs(graph, {});
 	ASSERT_EQ(outputs.size(), 1u);
@@ -623,8 +648,9 @@ TEST(LayerPad, AppendsZerosAlongEachAxis)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
-	const std::array<std::size_t, 2> paddings{ 1, 2 };
-	const auto out = Layer::AddPad(sg, { input, 0 }, paddings);
+	const std::array<std::size_t, 2> lowPads{ 0, 0 };
+	const std::array<std::size_t, 2> highPads{ 1, 2 };
+	const auto out = Layer::AddPad(sg, { input, 0 }, lowPads, highPads);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -741,8 +767,9 @@ TEST(LayerGroupNorm, PreservesBatchSeparationForRankFourInput)
 
 TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildAddId(graph, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 0.0f, 0.0f, 0.0f,
@@ -777,9 +804,10 @@ TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 
 TEST(LayerMulMatId, SelectsPerExpertMatrices)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildMulMatId(graph, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 },
-	                                     DataType::Int32, { 2, 2 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 },
+	                                      DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({
@@ -820,9 +848,10 @@ TEST(LayerMulMatId, SelectsPerExpertMatrices)
 
 TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildMulMatId(graph, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 },
-	                                     DataType::Int32, { 2, 2 }));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 },
+	                                      DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({
@@ -855,8 +884,9 @@ TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 
 TEST(LayerArange, BuildsIntegerSequence)
 {
-	Graph graph;
-	graph.SetForward(Layer::BuildArange(graph, DataType::Int32, 4, -2.0, 3.0));
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	graph.SetForward(Layer::BuildArange(builder, DataType::Int32, 4, -2.0, 3.0));
 
 	const auto outputs = RunWithInputs(graph, {});
 	ASSERT_EQ(outputs.size(), 1u);
@@ -1109,8 +1139,9 @@ TEST(LayerL2Norm, SupportsAxisZero)
 TEST(LayerLayerNorm, OutputMeanNearZero)
 {
 	// gamma=1, beta=0 → 输出均值应约为 0
-	Graph graph;
-	const auto norm = Layer::CreateLayerNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1133,8 +1164,9 @@ TEST(LayerLayerNorm, OutputMeanNearZero)
 TEST(LayerLayerNorm, OutputVarianceNearOne)
 {
 	// gamma=1, beta=0 → 输出方差应约为 1
-	Graph graph;
-	const auto norm = Layer::CreateLayerNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1198,8 +1230,9 @@ TEST(LayerLayerNorm, BetaShiftsOutput)
 
 TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 {
-	Graph graph;
-	const auto norm = Layer::CreateRMSNorm(graph, 4);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateRMSNorm(builder, 4);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
@@ -1221,8 +1254,9 @@ TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 
 TEST(LayerRMSNorm, ZeroInputStaysZero)
 {
-	Graph graph;
-	const auto norm = Layer::CreateRMSNorm(graph, 3);
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto norm = Layer::CreateRMSNorm(builder, 3);
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
@@ -1338,9 +1372,10 @@ TEST(LayerSiLU, MatchesAnalyticValue)
 
 TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
-	    graph,
+	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }));
@@ -1358,9 +1393,10 @@ TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 
 TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
-	    graph,
+	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	    Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }));
@@ -1380,9 +1416,9 @@ TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 
 TEST(LayerSwiGLU, RejectsMismatchedHiddenSizes)
 {
-	Graph graph;
+	ModelBuilder builder;
 	EXPECT_THROW(static_cast<void>(Layer::CreateSwiGLUMLP(
-	                 graph,
+	                 builder,
 	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
 	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f }, { 2, 3 }),
 	                 Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }))),

@@ -83,12 +83,12 @@ int main(int argc, char** argv)
 		                                                { 2, 3 }));
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
-		const auto interpreted = interpreter.RunForward(imported.graph, inputs);
+		const auto interpreted = interpreter.RunForward(BuildExecutablePlan(imported.graph), inputs);
 		PrintTensor("Interpreter output", interpreted[0]);
 
 #ifdef LITENN_ENABLE_MLIR
 		auto compiled = LiteNN::Compiler<LiteNN::CPU>::Compile(
-		    imported.graph, LiteNN::CompilerOptions::FromEnvironment());
+		    LiteNN::BuildExecutablePlan(imported.graph), LiteNN::CompilerOptions::Defaults());
 		const auto compiledOutputs = compiled.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 		PrintTensor("CPU AOT output", compiledOutputs[0]);
 #else

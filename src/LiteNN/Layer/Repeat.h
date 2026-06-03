@@ -1,3 +1,4 @@
+#include <LiteNN/ModelBuilder.h>
 #ifndef LITENN_LAYER_REPEAT_H
 #define LITENN_LAYER_REPEAT_H
 
@@ -55,14 +56,14 @@ namespace LiteNN::Layer
 		                 std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
 	}
 
-	inline SubgraphId BuildRepeat(Graph& graph, DataType dtype, ShapeView inputShape,
+	inline SubgraphId BuildRepeat(ModelBuilder& builder, DataType dtype, ShapeView inputShape,
 	                              std::span<const std::size_t> targetShape)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());
 		const auto result = AddRepeat(subgraph, { input, 0 }, targetShape);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

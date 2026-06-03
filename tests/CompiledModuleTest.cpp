@@ -65,8 +65,8 @@ namespace
 	                                      float tolerance = 1e-5f)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(graph, inputs);
-		auto compiled = Compiler<CPU>::Compile(graph);
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+		auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 		const auto outputs = compiled.Run(inputs);
 
 		ASSERT_EQ(outputs.size(), expected.size());
@@ -269,14 +269,15 @@ namespace
 
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		const auto h1 = Layer::CreateLinear(
-		    graph,
+		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 },
 		                DataType::Float32),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
-		    graph, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
+		    builder, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
 		    Tensor<CPU>({ 0.05, -0.15 }, { 1, 2 }, DataType::Float32));
 
 		Subgraph sg;
@@ -286,7 +287,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	std::vector<double> MakePatternValues(std::size_t count, double scale)
@@ -306,16 +307,17 @@ namespace
 		constexpr std::size_t kHidden = 64;
 		constexpr std::size_t kOutput = 32;
 
-		Graph graph;
+		ModelBuilder builder;
+		Graph& graph = builder.MutableGraph();
 		auto w1 = MakePatternValues(kInput * kHidden, 0.005);
 		auto b1 = MakePatternValues(kHidden, 0.001);
 		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
 		auto b2 = MakePatternValues(kOutput, 0.001);
 		const auto h1 =
-		    Layer::CreateLinear(graph, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		    Layer::CreateLinear(builder, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
 		                        Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
-		    graph, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
+		    builder, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
 		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
 
 		Subgraph sg;
@@ -325,7 +327,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return graph;
+		return builder.TakeGraph();
 	}
 
 	class ScopedEnvVar
@@ -422,7 +424,7 @@ namespace
 TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	ASSERT_GT(compiled.Rodata().size(), 0u);
 	ASSERT_GT(compiled.Instructions().size(), 0u);
@@ -462,7 +464,7 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 TEST(CompiledModuleTest, WritesCarrierObjectFile)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 
 	const auto path = std::filesystem::temp_directory_path() / "litenn_compiled_module_test.o";
 	artifact.WriteObjectFile(path, "litenn_test_module");
@@ -475,7 +477,7 @@ TEST(CompiledModuleTest, WritesCarrierObjectFile)
 TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	ASSERT_GT(artifact.Rodata().size(), 0u);
@@ -503,7 +505,7 @@ TEST(CompiledModuleTest, CompileArtifactSeparatesObjectGenerationFromLoad)
 TEST(CompiledModuleTest, LoadsSeparatedArtifactFromIndependentRegions)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto separated = artifact.SeparateRodata();
 
 	ASSERT_GT(separated.Metadata().size(), 0u);
@@ -540,7 +542,7 @@ TEST(CompiledModuleTest, LoadsSeparatedArtifactFromIndependentRegions)
 TEST(CompiledModuleTest, LoadsSeparatedArtifactFromExportedSymbolAddresses)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+	auto separated = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).SeparateRodata();
 
 	const std::uint64_t metadataSize = separated.Metadata().size();
 	const std::uint64_t constantsSize = separated.Constants().size();
@@ -575,7 +577,7 @@ TEST(CompiledModuleTest, LoadsSeparatedArtifactFromExportedSymbolAddresses)
 TEST(CompiledModuleTest, SeparatedArtifactValidatesRegionCompatibility)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+	auto separated = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).SeparateRodata();
 
 	EXPECT_NO_THROW((void) separated.WithReboundConstants({
 	    .data = separated.Constants().data(),
@@ -610,7 +612,7 @@ TEST(CompiledModuleTest, SeparatedArtifactValidatesRegionCompatibility)
 TEST(CompiledModuleTest, WritesSeparatedCarrierObjects)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto separated = Compiler<CPU>::CompileArtifact(graph).SeparateRodata();
+	auto separated = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).SeparateRodata();
 
 	const auto root = std::filesystem::temp_directory_path() / "litenn_separated_compiled_module_test";
 	std::filesystem::remove_all(root);
@@ -654,8 +656,8 @@ TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto loaded = artifact.Load();
 	const auto outputs = loaded.Run(inputs);
 
@@ -690,8 +692,8 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-	auto compiled = Compiler<CPU>::Compile(graph);
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -719,7 +721,7 @@ TEST(CompiledModuleTest, CPUFloat16SoftmaxArtifactUsesFloat32Accumulator)
 		Tensor<CPU>(std::span<const double>(inputData), { 1, 4 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -767,7 +769,7 @@ TEST(CompiledModuleTest, CPUFloat16RMSNormArtifactUsesFloat32Accumulator)
 		Tensor<CPU>(std::span<const double>(inputData), { 1, 4 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -810,7 +812,7 @@ TEST(CompiledModuleTest, CPUFloat16MatMulArtifactUsesFloat32Accumulator)
 		Tensor<CPU>({ 300.0, -300.0 }, { 1, 2 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -836,7 +838,7 @@ TEST(CompiledModuleTest, CPUFloat16BatchMatMulArtifactUsesFloat32Accumulator)
 		Tensor<CPU>({ 300.0, 300.0 }, { 1, 2, 1 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -867,7 +869,7 @@ TEST(CompiledModuleTest, CPUFloat16Conv2DArtifactUsesFloat32Accumulator)
 		Tensor<CPU>({ 300.0, -300.0 }, { 1, 2, 1, 1 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -890,7 +892,7 @@ TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
 		Tensor<CPU>({ 10.0, -10.0 }, { 2 }, DataType::Float16),
 	};
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	const auto outputs = compiled.Run(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
@@ -1127,9 +1129,9 @@ TEST(CompiledModuleTest, CPUCrossEntropyBackwardArtifactMatchesInterpreter)
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto copied = CompiledModuleArtifact::CopyFromImage(artifact.Image());
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	auto loaded = CompiledModule<CPU>::Load(compiled.Image());
 
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
@@ -1141,7 +1143,7 @@ TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
 {
 	auto graph = BuildQuantizedConstantOutputGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 
 	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
 	const auto& spec = artifact.OutputSpecs()[0];
@@ -1325,8 +1327,9 @@ TEST(CompiledModuleTest, CUDANativeCodegenBuildsStablePTXPayloadBytes)
 
 TEST(CompiledModuleTest, CUDANativeDefaultTargetUsesModernBaseline)
 {
-	ScopedEnvVar target("LITENN_CUDA_AOT_TARGET", "");
 	EXPECT_EQ(CUDANativeNVPTXTargetChip(), "sm_75");
+	EXPECT_EQ(CUDANativeNVPTXTargetChip("sm_75"), "sm_75");
+	EXPECT_THROW((void) CUDANativeNVPTXTargetChip("compute_75"), std::runtime_error);
 }
 
 TEST(CompiledModuleTest, CUDANativeMLIRNVPTXGeneratesUnaryPTX)
@@ -1590,7 +1593,7 @@ TEST(CompiledModuleTest, CUDANativeInstructionPayloadRejectsUnknownFeatureFlags)
 TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 
 	const std::uint64_t rodataSize = artifact.Rodata().size();
 	const std::uint64_t instructionSize = artifact.Instructions().size();
@@ -1620,7 +1623,7 @@ TEST(CompiledModuleTest, LoadsArtifactFromExportedSymbolAddresses)
 TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	Tensor<CPU> wrongA({ 1, 2, 3 }, { 3 }, DataType::Float32);
 	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
@@ -1643,7 +1646,7 @@ TEST(CompiledModuleTest, ReportsInputMismatchWithExpectedAndActualSignature)
 TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
 	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
@@ -1685,7 +1688,7 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
 	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 16, 5 }, DataType::Float32) };
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	compiled.RunInto(inputs, outputs);
 
 	const double weights[3][5] = {
@@ -1741,7 +1744,7 @@ TEST(CompiledModuleTest, PackedWideMatMulMatchesReference)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
 	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 8, 256 }, DataType::Float32) };
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	compiled.RunInto(inputs, outputs);
 
 	for (std::size_t row = 0; row < 8; ++row)
@@ -1798,7 +1801,7 @@ TEST(CompiledModuleTest, KPanelPackedWideMatMulMatchesReference)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(x) };
 	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { batch, nSize }, DataType::Float32) };
 
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	compiled.RunInto(inputs, outputs);
 
 	for (std::size_t row = 0; row < batch; ++row)
@@ -1818,7 +1821,7 @@ TEST(CompiledModuleTest, KPanelPackedWideMatMulMatchesReference)
 TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	std::vector<std::byte> rodata(compiled.Rodata().begin(), compiled.Rodata().end());
 	ASSERT_GT(rodata.size(), 16u);
@@ -1849,7 +1852,7 @@ TEST(CompiledModuleTest, RejectsRodataWithMismatchedAbiMetadata)
 TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	std::vector<std::byte> rodata(compiled.Rodata().begin(), compiled.Rodata().end());
 	const auto backendOffset = RodataBackendOffset(rodata);
@@ -1881,7 +1884,7 @@ TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
 TEST(CompiledModuleTest, ConcurrentRunUsesIndependentInputAndOutputBuffers)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 	auto loaded = CompiledModule<CPU>::Load(compiled.Image());
 
 	std::vector<std::future<WorkerResult>> futures;
@@ -1901,7 +1904,7 @@ TEST(CompiledModuleTest, ConcurrentRunUsesIndependentInputAndOutputBuffers)
 TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 {
 	auto graph = BuildSimpleAddGraph();
-	auto compiled = Compiler<CPU>::Compile(graph);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph));
 
 	constexpr std::size_t kInvocationCount = 16;
 	std::vector<std::array<Tensor<CPU>, 2>> inputs;
@@ -1954,11 +1957,11 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(optimized, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(optimized), options);
 	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
 	                               artifact.Instructions().size());
 	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
@@ -1990,11 +1993,11 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	                                                  DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(optimized, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(optimized), options);
 	auto separated = artifact.SeparateRodata();
 
 	ASSERT_GT(separated.Constants().size(), 0u);
@@ -2126,11 +2129,11 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
-	auto inlineModule = Compiler<CPU>::CompileArtifact(graph).Load();
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
+	auto inlineModule = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).Load();
 	const auto inlineOutputs = inlineModule.Run(std::span<const Tensor<CPU>>(inputs));
 
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);
 	ASSERT_GT(separated.Weights().size(), 0u);
@@ -2203,9 +2206,9 @@ TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalR
 	std::filesystem::remove(weightsPath);
 	Serialization::ExternalWeightSaveOptions saveOptions;
 	saveOptions.minVariableBytes = 0;
-	Serialization::SaveModelExternalWeights(graph, modelPath, weightsPath, saveOptions);
+	Serialization::SaveGraphArchiveExternalWeights(graph, modelPath, weightsPath, saveOptions);
 
-	auto loaded = Serialization::LoadModel(modelPath);
+	auto loaded = Serialization::LoadGraphArchive(modelPath);
 	std::filesystem::remove(modelPath);
 	std::filesystem::remove(weightsPath);
 
@@ -2213,12 +2216,12 @@ TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalR
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(loaded, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(loaded), std::span<const Tensor<CPU>>(inputs));
 
 	CompilerOptions options;
 	options.enableCPUAOTExternalRegions = true;
 	options.cpuAOTExternalConstantMinBytes = 0;
-	auto artifact = Compiler<CPU>::CompileArtifact(loaded, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(loaded), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Weights().size(), 0u);
 	EXPECT_TRUE(std::ranges::any_of(separated.ExternalTensorInfos(), [](const auto& info) {
@@ -2241,7 +2244,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault
 	options.enableCPUAOTExternalRegions = true;
 
 	auto graph = BuildGenericExternalRegionGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 
 	EXPECT_EQ(separated.Constants().size(), 0u);
@@ -2255,7 +2258,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault
 	std::array<Tensor<CPU>, 1> inputs = {
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
-	auto inlineModule = Compiler<CPU>::CompileArtifact(graph).Load();
+	auto inlineModule = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph)).Load();
 	auto externalModule = artifact.Load();
 	const auto inlineOutputs = inlineModule.Run(std::span<const Tensor<CPU>>(inputs));
 	const auto externalOutputs = externalModule.Run(std::span<const Tensor<CPU>>(inputs));
@@ -2276,9 +2279,9 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);
 	ASSERT_GT(separated.Weights().size(), 0u);
@@ -2304,7 +2307,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 	options.cpuAOTExternalConstantMinBytes = 0;
 
 	auto graph = BuildCondExternalRegionGraph();
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Constants().size(), 0u);
 	ASSERT_GT(separated.Weights().size(), 0u);
@@ -2324,7 +2327,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 			std::move(condition),
 			Tensor<CPU>({ 1.5, -2.0 }, { 2 }, DataType::Float32),
 		};
-		const auto expected = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 		ASSERT_EQ(outputs.size(), expected.size());
 		ExpectTensorNear(outputs[0], expected[0], 1e-5f);
@@ -2334,15 +2337,15 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 	runAndCheck(Tensor<CPU>({ 0.0 }, { 1 }, DataType::Bool));
 }
 
-TEST(CompiledModuleTest, CPUParallelLinearChainAcceptsLegacyExternalConstantsEnvVar)
+TEST(CompiledModuleTest, CPUParallelLinearChainExternalRegionsCanBeExplicitlyEnabled)
 {
-	ScopedEnvVar threads("LITENN_CPU_AOT_THREADS", "4");
-	ScopedEnvVar minFlops("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS", "1");
-	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "0");
-	ScopedEnvVar legacyExternalConstants("LITENN_CPU_AOT_EXTERNAL_CONSTANTS", "1");
+	auto options = CompilerOptions::Defaults();
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCPUAOTExternalRegions = true;
 
 	auto graph = BuildWideLinearChainGraph(64);
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 
 	EXPECT_GT(separated.Constants().size(), 0u);
@@ -2356,11 +2359,15 @@ TEST(CompiledModuleTest, CompilerDefaultsDoNotReadEnvironmentVariables)
 	ScopedEnvVar externalRegions("LITENN_CPU_AOT_EXTERNAL_REGIONS", "1");
 
 	auto graph = BuildWideLinearChainGraph(64);
-	auto defaultArtifact = Compiler<CPU>::CompileArtifact(graph);
-	auto envArtifact = Compiler<CPU>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
+	auto defaultArtifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
+	auto explicitOptions = CompilerOptions::Defaults();
+	explicitOptions.cpuAOTThreadCount = 4;
+	explicitOptions.cpuAOTParallelMinFlops = 1;
+	explicitOptions.enableCPUAOTExternalRegions = true;
+	auto explicitArtifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), explicitOptions);
 
 	EXPECT_EQ(defaultArtifact.SeparateRodata().Weights().size(), 0u);
-	EXPECT_GT(envArtifact.SeparateRodata().Weights().size(), 0u);
+	EXPECT_GT(explicitArtifact.SeparateRodata().Weights().size(), 0u);
 }
 
 struct ExternalTensorMetadataOffsets
@@ -2518,7 +2525,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainRejectsMalformedExternalTensorMet
 	options.enableCPUAOTExternalRegions = true;
 
 	auto graph = BuildWideLinearChainGraph(64);
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.ExternalTensorInfos().size(), 0u);
 
@@ -2572,7 +2579,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainRejectsBroaderMalformedExternalTe
 	options.enableCPUAOTExternalRegions = true;
 
 	auto graph = BuildWideLinearChainGraph(64);
-	auto artifact = Compiler<CPU>::CompileArtifact(graph, options);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), options);
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.ExternalTensorInfos().size(), 0u);
 

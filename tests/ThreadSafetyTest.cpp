@@ -58,7 +58,7 @@ namespace
 
 				std::vector<Tensor<CPU>> fwdInputs;
 				fwdInputs.emplace_back(Tensor<CPU>({ x }, { 1 }));
-				auto forward = interpreter.RunForward(graph, fwdInputs);
+				auto forward = interpreter.RunForward(BuildExecutablePlan(graph), fwdInputs);
 				if (forward.size() != 1 || !NearlyEqual(ReadFloat(forward[0], 0), x * x))
 				{
 					return { false, std::format("worker {} forward mismatch at iteration {}", workerId, iteration) };
@@ -67,7 +67,7 @@ namespace
 				std::vector<Tensor<CPU>> bwdInputs;
 				bwdInputs.emplace_back(Tensor<CPU>({ x }, { 1 }));
 				bwdInputs.emplace_back(Tensor<CPU>({ dy }, { 1 }));
-				auto gradients = interpreter.RunBackward(graph, bwdInputs);
+				auto gradients = interpreter.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 				if (gradients.size() != 1 || !NearlyEqual(ReadFloat(gradients[0], 0), 2.0f * x * dy))
 				{
 					return { false, std::format("worker {} backward mismatch at iteration {}", workerId, iteration) };

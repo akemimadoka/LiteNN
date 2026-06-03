@@ -82,7 +82,7 @@ TEST(PyTorchGolden, ReLULinearInterpreterMatchesFixture)
 	auto inputs = MakeInputs();
 	Runtime::Interpreter<CPU> interpreter;
 
-	const auto outputs = interpreter.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchGolden(outputs[0]);
 }
@@ -93,7 +93,7 @@ TEST(PyTorchGolden, ReLULinearCPUArtifactMatchesFixture)
 	auto graph = BuildReLULinearGraph();
 	auto inputs = MakeInputs();
 
-	auto artifact = Compiler<CPU>::CompileArtifact(graph);
+	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph));
 	auto module = artifact.Load();
 	const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 

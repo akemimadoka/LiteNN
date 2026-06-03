@@ -1,5 +1,6 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
+#include <LiteNN/ModelBuilder.h>
 #include <LiteNN/Layer/Normalization.h>
 
 #include <stdexcept>
@@ -44,14 +45,14 @@ namespace LiteNN::Layer
 		                        numGroups);
 	}
 
-	inline SubgraphId BuildGroupNorm(Graph& graph, DataType dtype, ShapeView shape, std::size_t numGroups,
+	inline SubgraphId BuildGroupNorm(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t numGroups,
 	                                double eps = 1e-5)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddGroupNorm(subgraph, { input, 0 }, numGroups, eps);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

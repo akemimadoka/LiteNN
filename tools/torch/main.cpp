@@ -102,7 +102,7 @@ int main(int argc, char** argv)
 			}
 
 			auto result = LiteNN::Serialization::LoadTorchManifest(manifestPath, inputPath, options);
-			LiteNN::Serialization::SaveModel(result.graph, outputPath);
+			LiteNN::Serialization::SaveGraphArchive(result.graph, outputPath);
 			std::cout << "Imported Torch manifest graph with " << result.graph.VariableCount() << " variable(s), "
 			          << result.graph.GetSubgraph(result.graph.Forward()).NodeCount() << " node(s) into "
 			          << outputPath.string() << '\n';
@@ -158,7 +158,7 @@ int main(int argc, char** argv)
 		options.transpose2D = [&transposes](std::string_view name) { return transposes.contains(name); };
 
 		auto graph = LiteNN::Serialization::ImportSafetensorsVariables(archive, options);
-		LiteNN::Serialization::SaveModel(graph, outputPath);
+		LiteNN::Serialization::SaveGraphArchive(graph, outputPath);
 
 		std::cout << "Imported " << graph.VariableCount() << " safetensors tensors into " << outputPath.string()
 		          << '\n';

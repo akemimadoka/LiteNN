@@ -138,7 +138,7 @@ function(litenn_configure_sanitizer_test_environment)
 endfunction()
 
 file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
-list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|.*\\.module\\.cpp$")
+list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
 list(APPEND LITENN_SOURCES third_party/simdjson/src/simdjson.cpp)
 
 add_library(LiteNN ${LITENN_SOURCES})
@@ -307,6 +307,7 @@ endif()
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_SOURCE})
+    target_compile_definitions(${TEST_NAME} PRIVATE LITENN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(LITENN_ENABLE_MLIR)
         target_compile_definitions(${TEST_NAME} PRIVATE LITENN_ENABLE_MLIR=1)
     endif()
@@ -321,7 +322,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
        OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND (TEST_NAME STREQUAL "MemorySafetyTest"
                                    OR TEST_NAME STREQUAL "PyTorchGoldenTest"
-                                   OR TEST_NAME STREQUAL "TorchManifestTest")))
+                                   OR TEST_NAME STREQUAL "TorchManifestTest"
+                                   OR TEST_NAME STREQUAL "TrainingTest")))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
     else()
         target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)

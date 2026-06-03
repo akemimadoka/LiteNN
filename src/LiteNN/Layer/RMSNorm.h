@@ -1,6 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -22,17 +23,25 @@ namespace LiteNN::Layer
 		double eps{ 1e-6 };
 	};
 
-	// 创建 RMSNorm 层，weight 初始化为 1
-	inline RMSNormLayer CreateRMSNorm(Graph& graph, std::size_t featureSize,
-	                                 DataType dtype = DataType::Float32, double eps = 1e-6)
+	namespace Detail
 	{
-		RMSNormLayer layer;
-		layer.featureSize = featureSize;
-		layer.dtype = dtype;
-		layer.eps = eps;
-		layer.weightVariable =
-		    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 1.0)));
-		return layer;
+		inline RMSNormLayer CreateRMSNormImpl(Graph& graph, std::size_t featureSize,
+		                                      DataType dtype, double eps)
+		{
+			RMSNormLayer layer;
+			layer.featureSize = featureSize;
+			layer.dtype = dtype;
+			layer.eps = eps;
+			layer.weightVariable =
+			    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 1.0)));
+			return layer;
+		}
+	} // namespace Detail
+
+	inline RMSNormLayer CreateRMSNorm(ModelBuilder& builder, std::size_t featureSize,
+	                                  DataType dtype = DataType::Float32, double eps = 1e-6)
+	{
+		return Detail::CreateRMSNormImpl(builder.MutableGraph(), featureSize, dtype, eps);
 	}
 
 	// 在已有子图中追加 RMSNorm 节点（在最后一个轴上归一化）
@@ -54,13 +63,21 @@ namespace LiteNN::Layer
 		                        NodeOutput{ weight, 0 });
 	}
 
-	inline SubgraphId BuildRMSNorm(Graph& graph, const RMSNormLayer& layer, std::size_t batchSize = 1)
+	namespace Detail
 	{
-		Subgraph subgraph;
-		const auto input = subgraph.AddParam(layer.dtype, { batchSize, layer.featureSize });
-		const auto result = AddRMSNorm(subgraph, layer, { input, 0 });
-		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		inline SubgraphId BuildRMSNormImpl(Graph& graph, const RMSNormLayer& layer, std::size_t batchSize)
+		{
+			Subgraph subgraph;
+			const auto input = subgraph.AddParam(layer.dtype, { batchSize, layer.featureSize });
+			const auto result = AddRMSNorm(subgraph, layer, { input, 0 });
+			subgraph.SetResults({ result });
+			return graph.AddSubgraph(std::move(subgraph));
+		}
+	} // namespace Detail
+
+	inline SubgraphId BuildRMSNorm(ModelBuilder& builder, const RMSNormLayer& layer, std::size_t batchSize = 1)
+	{
+		return Detail::BuildRMSNormImpl(builder.MutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 

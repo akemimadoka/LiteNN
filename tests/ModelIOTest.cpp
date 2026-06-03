@@ -5,6 +5,7 @@
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <filesystem>
+#include <fstream>
 #include <vector>
 
 using namespace LiteNN;
@@ -64,9 +65,9 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 
 	const auto path = std::filesystem::path("litenn_modelio_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
+	Serialization::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadModel(path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.InputSignature().size(), 1);
@@ -85,7 +86,7 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
 
-	auto outputs = interpreter.RunForward(loaded, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 16.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
@@ -94,7 +95,7 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 	backwardInputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
 	backwardInputs.emplace_back(Tensor<CPU>({ 1.0f, 1.0f }, { 1, 2 }));
 
-	auto gradients = interpreter.RunBackward(loaded, backwardInputs);
+	auto gradients = interpreter.RunBackward(BuildExecutablePlan(loaded), backwardInputs);
 	ASSERT_EQ(gradients.size(), 3);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 0), 3.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 1), 7.0f);
@@ -124,9 +125,9 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 
 	const auto path = std::filesystem::path("litenn_modelio_low_precision_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
+	Serialization::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadModel(path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -139,11 +140,28 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 3.0, 4.0 }, { 2 }, DataType::Float16));
-	auto outputs = interpreter.RunForward(loaded, inputs);
+	auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_EQ(outputs[0].DType(), DataType::Float16);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 0), 4.0F, 1e-3F);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 6.0F, 1e-3F);
+}
+
+TEST(ModelIO, LoadRejectsPreVNextModelVersions)
+{
+	const auto path = std::filesystem::path("litenn_modelio_legacy_version_reject_test.ltnn");
+	std::filesystem::remove(path);
+	{
+		std::ofstream out(path, std::ios::binary);
+		ASSERT_TRUE(out);
+		out.write(Serialization::Detail::kGraphArchiveMagic.data(),
+		          static_cast<std::streamsize>(Serialization::Detail::kGraphArchiveMagic.size()));
+		const std::uint32_t legacyVersion = Serialization::Detail::kGraphArchiveVersion - 1;
+		out.write(reinterpret_cast<const char*>(&legacyVersion), sizeof(legacyVersion));
+	}
+
+	EXPECT_THROW((void)Serialization::LoadGraphArchive(path), std::runtime_error);
+	std::filesystem::remove(path);
 }
 
 TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
@@ -164,9 +182,9 @@ TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
 
 	const auto path = std::filesystem::path("litenn_modelio_frozen_variable_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
+	Serialization::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadModel(path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -177,7 +195,7 @@ TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
-	const auto outputs = interpreter.RunForward(loaded, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 16.0f);
@@ -194,13 +212,13 @@ TEST(ModelIO, SaveLoadExternalWeightsKeepsVariablesAlive)
 	Serialization::ExternalWeightSaveOptions options;
 	options.minVariableBytes = 0;
 	options.alignment = 16;
-	Serialization::SaveModelExternalWeights(graph, path, weightsPath, options);
+	Serialization::SaveGraphArchiveExternalWeights(graph, path, weightsPath, options);
 
 	ASSERT_TRUE(std::filesystem::exists(path));
 	ASSERT_TRUE(std::filesystem::exists(weightsPath));
 	EXPECT_GT(std::filesystem::file_size(weightsPath), 0u);
 
-	auto loaded = Serialization::LoadModel(path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 	std::filesystem::remove(weightsPath);
 
@@ -215,7 +233,7 @@ TEST(ModelIO, SaveLoadExternalWeightsKeepsVariablesAlive)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f, 3.0f }, { 1, 2 }));
-	const auto outputs = interpreter.RunForward(loaded, inputs);
+	const auto outputs = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(outputs.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 16.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
@@ -235,9 +253,9 @@ TEST(ModelIO, SaveLoadPreservesVariableNamesAndMetadataForWeightArchive)
 
 	const auto path = std::filesystem::path("litenn_modelio_weight_archive_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
+	Serialization::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadModel(path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);

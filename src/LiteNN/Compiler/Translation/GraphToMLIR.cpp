@@ -2,6 +2,7 @@
 #include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
 
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -21,6 +22,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -69,11 +72,73 @@ RankedTensorType convertTensorType(MLIRContext& ctx, DataType dt, ShapeView shap
 	return RankedTensorType::get(dims, convertElementType(ctx, dt));
 }
 
+RankedTensorType convertTensorType(MLIRContext& ctx, const LiteNN::TensorType& type)
+{
+	return convertTensorType(ctx, type.dtype, ShapeView{ type.StaticShape() });
+}
+
 // LiteNN enum → litenn dialect enum
 UnaryOpKind convertUnaryOp(LiteNN::UnaryOp op) { return static_cast<UnaryOpKind>(op); }
 BinaryOpKind convertBinaryOp(LiteNN::BinaryOp op) { return static_cast<BinaryOpKind>(op); }
 ReduceOpKind convertReduceOp(LiteNN::ReduceOp op) { return static_cast<ReduceOpKind>(op); }
 FusionPatternKind convertFusionPattern(FusionPattern pat) { return static_cast<FusionPatternKind>(pat); }
+
+OutputInfo ToOutputInfo(const LiteNN::TensorType& type)
+{
+	return OutputInfo::FromType(type);
+}
+
+struct PlanSubgraphView
+{
+	const ExecutablePlanSubgraph& subgraph;
+
+	std::size_t NodeCount() const
+	{
+		return subgraph.nodes.size();
+	}
+
+	std::span<const LiteNN::TensorType> Params() const
+	{
+		return subgraph.params;
+	}
+
+	std::span<const NodeOutput> Results() const
+	{
+		return subgraph.results;
+	}
+
+	OutputInfo GetOutputInfo(NodeOutput output) const
+	{
+		if (output.node >= subgraph.nodes.size())
+		{
+			throw std::runtime_error("ExecutablePlan MLIR lowering output references an out-of-range node");
+		}
+		const auto& outputs = subgraph.nodes[output.node].outputs;
+		if (output.port >= outputs.size())
+		{
+			throw std::runtime_error("ExecutablePlan MLIR lowering output references an out-of-range port");
+		}
+		return ToOutputInfo(outputs[output.port]);
+	}
+};
+
+Tensor<PolymorphicDevice> MakeHostTensorValue(const TensorStorageRef& storage)
+{
+	if (storage.type.memorySpace != TensorMemorySpace::Host || storage.region.data == nullptr)
+	{
+		throw std::runtime_error("MLIR translation requires host-backed executable plan variables");
+	}
+	const auto byteSize = storage.type.ByteSize().value_or(0);
+	if (storage.storageOffsetBytes > storage.region.byteSize ||
+	    byteSize > storage.region.byteSize - storage.storageOffsetBytes)
+	{
+		throw std::runtime_error("MLIR translation executable plan variable storage is smaller than tensor type");
+	}
+	Tensor<CPU> data(Uninitialized, storage.type.StaticShape(), storage.type.dtype);
+	std::memcpy(data.RawData(), static_cast<const std::byte*>(storage.region.data) + storage.storageOffsetBytes,
+	            byteSize);
+	return data.CopyToDevice(PolymorphicDevice{ CPU{} });
+}
 
 // Extract tensor data to DenseElementsAttr
 DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<PolymorphicDevice>& tensor)
@@ -161,7 +226,7 @@ DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<Polymorphic
 class GraphTranslator
 {
 public:
-	GraphTranslator(const Graph& graph, MLIRContext& ctx) : graph_(graph), ctx_(ctx), builder_(&ctx) {}
+	GraphTranslator(const ExecutablePlan& plan, MLIRContext& ctx) : plan_(plan), ctx_(ctx), builder_(&ctx) {}
 
 	OwningOpRef<ModuleOp> translate()
 	{
@@ -169,13 +234,13 @@ public:
 		builder_.setInsertionPointToStart(module_->getBody());
 
 		// Emit variable declarations
-		for (std::size_t i = 0; i < graph_.VariableCount(); ++i)
+		for (std::size_t i = 0; i < plan_.variables.size(); ++i)
 		{
 			emitVariable(i);
 		}
 
 		// Emit subgraph functions
-		for (std::size_t i = 0; i < graph_.SubgraphCount(); ++i)
+		for (std::size_t i = 0; i < plan_.subgraphs.size(); ++i)
 		{
 			emitSubgraphFunc(i);
 		}
@@ -186,10 +251,9 @@ public:
 private:
 	void emitVariable(std::size_t varIndex)
 	{
-		const auto& var = graph_.GetVariable(varIndex);
-		const auto& data = var->Data();
-		auto tensorType = convertTensorType(ctx_, data.DType(), data.Shape());
-		auto initialValue = convertTensorToAttr(ctx_, data);
+		const auto& variable = plan_.variables[varIndex];
+		auto tensorType = convertTensorType(ctx_, variable.type);
+		auto initialValue = convertTensorToAttr(ctx_, MakeHostTensorValue(variable));
 		auto name = "var_" + std::to_string(varIndex);
 
 		builder_.create<VariableOp>(builder_.getUnknownLoc(), name, tensorType, initialValue);
@@ -197,12 +261,12 @@ private:
 
 	void emitSubgraphFunc(std::size_t sgId)
 	{
-		const auto& sg = graph_.GetSubgraph(sgId);
+		const PlanSubgraphView sg{ plan_.subgraphs[sgId] };
 
 		// Build function type
 		SmallVector<Type> inputTypes;
 		for (const auto& param : sg.Params())
-			inputTypes.push_back(convertTensorType(ctx_, param.dtype, param.shape));
+			inputTypes.push_back(convertTensorType(ctx_, param));
 
 		SmallVector<Type> resultTypes;
 		for (const auto& result : sg.Results())
@@ -238,14 +302,21 @@ private:
 		builder_.create<ReturnOp>(builder_.getUnknownLoc(), returnValues);
 	}
 
-	void emitSubgraphBody(const Subgraph& sg, Block& block, std::vector<SmallVector<Value>>& valueMap,
+	void emitSubgraphBody(const PlanSubgraphView& sg, Block& block, std::vector<SmallVector<Value>>& valueMap,
 	                       std::map<std::size_t, Value>& activationMap, std::map<std::size_t, Value>& tapeMap)
 	{
+		(void) block;
 		for (NodeId nodeId = 0; nodeId < sg.NodeCount(); ++nodeId)
 		{
-			const auto& entry = sg.GetNodeEntry(nodeId);
+			const auto& entry = sg.subgraph.nodes[nodeId];
+			std::vector<OutputInfo> outputInfos;
+			outputInfos.reserve(entry.outputs.size());
+			for (const auto& output : entry.outputs)
+			{
+				outputInfos.push_back(ToOutputInfo(output));
+			}
 			std::visit(
-			    [&](const auto& node) { emitNode(sg, nodeId, node, entry.outputInfos, valueMap, activationMap, tapeMap); },
+			    [&](const auto& node) { emitNode(sg, nodeId, node, outputInfos, valueMap, activationMap, tapeMap); },
 			    entry.node);
 		}
 	}
@@ -612,7 +683,7 @@ private:
 
 	// ---- Per-node emission ----
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const ParamRefNode& node,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const ParamRefNode& node,
 	              std::span<const OutputInfo> /*outputInfos*/, std::vector<SmallVector<Value>>& valueMap,
 	              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 	{
@@ -621,7 +692,7 @@ private:
 		valueMap[nodeId] = { block->getArgument(node.paramIndex) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const ConstantNode& node, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const ConstantNode& node, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -630,7 +701,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const QuantizedConstantNode& node, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const QuantizedConstantNode& node, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -639,7 +710,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const VariableRefNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const VariableRefNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -650,7 +721,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const UnaryOpNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const UnaryOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -660,7 +731,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const BinaryOpNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const BinaryOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -684,7 +755,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const CastNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const CastNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -694,21 +765,21 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const QuantizeNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const QuantizeNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support QuantizeNode yet");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const DequantizeNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const DequantizeNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support DequantizeNode yet");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const CallNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -726,7 +797,7 @@ private:
 			valueMap[nodeId].push_back(result);
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const CondNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const CondNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>& activationMap,
 	              std::map<std::size_t, Value>& tapeMap)
 	{
@@ -749,7 +820,7 @@ private:
 			valueMap[nodeId].push_back(result);
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const WhileNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const WhileNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>& activationMap,
 	              std::map<std::size_t, Value>& tapeMap)
 	{
@@ -771,7 +842,7 @@ private:
 			valueMap[nodeId].push_back(result);
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const SaveActivationNode& node, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const SaveActivationNode& node, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>& activationMap,
 	              std::map<std::size_t, Value>&)
 	{
@@ -781,7 +852,7 @@ private:
 		valueMap[nodeId] = { input };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const LoadActivationNode& node,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const LoadActivationNode& node,
 	              std::span<const OutputInfo>, std::vector<SmallVector<Value>>& valueMap,
 	              std::map<std::size_t, Value>& activationMap, std::map<std::size_t, Value>&)
 	{
@@ -789,7 +860,7 @@ private:
 		valueMap[nodeId] = { activationMap.at(node.slotId) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const TapeSaveActivationNode& node, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const TapeSaveActivationNode& node, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>& tapeMap)
 	{
@@ -798,14 +869,14 @@ private:
 		valueMap[nodeId] = { input };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const TapeLoadActivationNode& node,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const TapeLoadActivationNode& node,
 	              std::span<const OutputInfo>, std::vector<SmallVector<Value>>& valueMap,
 	              std::map<std::size_t, Value>&, std::map<std::size_t, Value>& tapeMap)
 	{
 		valueMap[nodeId] = { tapeMap.at(node.tapeSlotId) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const ReduceOpNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const ReduceOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -816,7 +887,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const ReshapeNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const ReshapeNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -826,7 +897,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const ConcatNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const ConcatNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -840,7 +911,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const SliceNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const SliceNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -853,7 +924,7 @@ private:
 		valueMap[nodeId] = { op.getResult() };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const GetRowsNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const GetRowsNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -897,14 +968,14 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const ArgsortNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const ArgsortNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support ArgsortNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const PermuteNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const PermuteNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -938,7 +1009,7 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const BroadcastToNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const BroadcastToNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -946,7 +1017,7 @@ private:
 		valueMap[nodeId] = { emitBroadcastToValue(input, outputInfos[0].dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const PadNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const PadNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1018,7 +1089,7 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const GatherNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const GatherNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1071,35 +1142,35 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const ScatterNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const ScatterNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support ScatterNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const ScanNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const ScanNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support ScanNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const SSMScanNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const SSMScanNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support SSMScanNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const RWKVWKVNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const RWKVWKVNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support RWKVWKVNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const SoftmaxNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1109,7 +1180,7 @@ private:
 		valueMap[nodeId] = { emitSoftmaxValue(input, dtype, inputInfo.shape, node.axis) };
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const CrossEntropyLossNode& node,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const CrossEntropyLossNode& node,
 	              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 	              std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
@@ -1142,7 +1213,7 @@ private:
 		valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Divide, total, divisor, dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const CrossEntropyLossBackwardNode& node,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const CrossEntropyLossBackwardNode& node,
 	              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 	              std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
@@ -1164,7 +1235,7 @@ private:
 		valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, diff, scale, dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const NormalizationNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const NormalizationNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1216,7 +1287,7 @@ private:
 		valueMap[nodeId] = { emitMaybeCastValue(normalized, computeDType, dtype, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const BatchMatMulNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const BatchMatMulNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1290,14 +1361,14 @@ private:
 		                                         outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const OutProdNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const OutProdNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support OutProdNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const TimestepEmbeddingNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const TimestepEmbeddingNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1358,35 +1429,35 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const SolveTriNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const SolveTriNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support SolveTriNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const SGDStepNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const SGDStepNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support SGDStepNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const AdamWStepNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const AdamWStepNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support AdamWStepNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const Im2ColNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const Im2ColNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support Im2ColNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph& sg, NodeId nodeId, const Conv2DNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const Conv2DNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1565,21 +1636,21 @@ private:
 		valueMap[nodeId] = { emitMaybeCastValue(result, computeDType, outputDType, outputInfos[0].shape) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const ConvTranspose2DNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const ConvTranspose2DNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support ConvTranspose2DNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId, const Pool2DNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const Pool2DNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support Pool2DNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const UpsampleNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const UpsampleNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
@@ -1635,14 +1706,14 @@ private:
 		valueMap[nodeId] = { generic.getResult(0) };
 	}
 
-	void emitNode(const Subgraph&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,
+	void emitNode(const PlanSubgraphView&, NodeId, const MulMatIdNode&, std::span<const OutputInfo>,
 	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
 		throw std::runtime_error("GraphToMLIR does not support MulMatIdNode yet; use the interpreter path");
 	}
 
-	void emitNode(const Subgraph&, NodeId nodeId, const FusedOpNode& node, std::span<const OutputInfo> outputInfos,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const FusedOpNode& node, std::span<const OutputInfo> outputInfos,
 	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>& activationMap,
 	              std::map<std::size_t, Value>& tapeMap)
 	{
@@ -1666,14 +1737,18 @@ private:
 	void emitSubgraphIntoRegion(SubgraphId sgId, Region& region, std::map<std::size_t, Value>& activationMap,
 	                             std::map<std::size_t, Value>& tapeMap)
 	{
-		const auto& sg = graph_.GetSubgraph(sgId);
+		if (sgId >= plan_.subgraphs.size())
+		{
+			throw std::runtime_error("ExecutablePlan MLIR lowering region references an out-of-range subgraph");
+		}
+		const PlanSubgraphView sg{ plan_.subgraphs[sgId] };
 
 		// Create block with params as arguments
 		SmallVector<Type> blockArgTypes;
 		SmallVector<Location> blockArgLocs;
 		for (const auto& param : sg.Params())
 		{
-			blockArgTypes.push_back(convertTensorType(ctx_, param.dtype, param.shape));
+			blockArgTypes.push_back(convertTensorType(ctx_, param));
 			blockArgLocs.push_back(builder_.getUnknownLoc());
 		}
 
@@ -1693,7 +1768,7 @@ private:
 		builder_.create<YieldOp>(builder_.getUnknownLoc(), results);
 	}
 
-	const Graph& graph_;
+	const ExecutablePlan& plan_;
 	MLIRContext& ctx_;
 	OpBuilder builder_;
 	OwningOpRef<ModuleOp> module_;
@@ -1701,12 +1776,18 @@ private:
 
 } // namespace
 
-OwningOpRef<ModuleOp> translateGraphToMLIR(const Graph& graph, MLIRContext& ctx)
+OwningOpRef<ModuleOp> TranslateGraphToMLIRInternal(const Graph& graph, MLIRContext& ctx)
+{
+	Validation::ValidateGraph(graph);
+	return translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx);
+}
+
+OwningOpRef<ModuleOp> translateExecutablePlanToMLIR(const ExecutablePlan& plan, MLIRContext& ctx)
 {
 	ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, math::MathDialect,
 	                tensor::TensorDialect>();
-	Validation::ValidateGraph(graph);
-	GraphTranslator translator(graph, ctx);
+	ValidateExecutablePlan(plan);
+	GraphTranslator translator(plan, ctx);
 	return translator.translate();
 }
 

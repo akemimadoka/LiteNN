@@ -3,6 +3,7 @@
 
 #include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <vector>
@@ -45,7 +46,7 @@ namespace LiteNN::Layer
 		return AddUpsample(subgraph, input, UpsampleMode::Bicubic, std::move(outputSpatialShape), alignCorners);
 	}
 
-	inline SubgraphId BuildUpsample(Graph& graph, DataType dtype, ShapeView inputShape, UpsampleMode mode,
+	inline SubgraphId BuildUpsample(ModelBuilder& builder, DataType dtype, ShapeView inputShape, UpsampleMode mode,
 	                                std::vector<std::size_t> outputSpatialShape,
 	                                bool alignCorners = false)
 	{
@@ -53,7 +54,7 @@ namespace LiteNN::Layer
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());
 		const auto result = AddUpsample(subgraph, { input, 0 }, mode, std::move(outputSpatialShape), alignCorners);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

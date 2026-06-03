@@ -6,14 +6,15 @@
 
 namespace LiteNN
 {
-class Graph;
+struct ExecutablePlan;
 }
 
 namespace litenn
 {
 
-/// Translate a LiteNN Graph to an MLIR module in the litenn dialect.
-mlir::OwningOpRef<mlir::ModuleOp> translateGraphToMLIR(const LiteNN::Graph& graph, mlir::MLIRContext& ctx);
+/// Translate a LiteNN executable plan to an MLIR module in the litenn dialect.
+mlir::OwningOpRef<mlir::ModuleOp> translateExecutablePlanToMLIR(const LiteNN::ExecutablePlan& plan,
+                                                                mlir::MLIRContext& ctx);
 
 } // namespace litenn
 

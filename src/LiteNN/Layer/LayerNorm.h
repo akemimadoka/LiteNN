@@ -1,6 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -23,19 +24,27 @@ namespace LiteNN::Layer
 		double eps{ 1e-5 };
 	};
 
-	// 创建 LayerNorm 层，gamma 初始化为 1，beta 初始化为 0
-	inline LayerNormLayer CreateLayerNorm(Graph& graph, std::size_t featureSize,
+	namespace Detail
+	{
+		inline LayerNormLayer CreateLayerNormImpl(Graph& graph, std::size_t featureSize,
+		                                          DataType dtype, double eps)
+		{
+			LayerNormLayer layer;
+			layer.featureSize = featureSize;
+			layer.dtype = dtype;
+			layer.eps = eps;
+			layer.gammaVariable =
+			    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 1.0)));
+			layer.betaVariable =
+			    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 0.0)));
+			return layer;
+		}
+	} // namespace Detail
+
+	inline LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize,
 	                                      DataType dtype = DataType::Float32, double eps = 1e-5)
 	{
-		LayerNormLayer layer;
-		layer.featureSize = featureSize;
-		layer.dtype = dtype;
-		layer.eps = eps;
-		layer.gammaVariable =
-		    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 1.0)));
-		layer.betaVariable =
-		    graph.AddVariable(Variable::Create(Detail::MakeFilledTensor({ 1, featureSize }, dtype, 0.0)));
-		return layer;
+		return Detail::CreateLayerNormImpl(builder.MutableGraph(), featureSize, dtype, eps);
 	}
 
 	// 在已有子图中追加 LayerNorm 节点（在最后一个轴上归一化）

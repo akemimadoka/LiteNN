@@ -1,3 +1,4 @@
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -33,8 +34,8 @@ namespace LiteNN::Serialization
 
 	namespace Detail
 	{
-		constexpr std::array<char, 8> kModelMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
-		constexpr std::uint32_t kModelVersion = 21;
+		constexpr std::array<char, 8> kGraphArchiveMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };
+		constexpr std::uint32_t kGraphArchiveVersion = 21;
 
 		enum class VariablePayloadKind : std::uint8_t
 		{
@@ -56,7 +57,7 @@ namespace LiteNN::Serialization
 			StringList,
 		};
 
-		enum class NodeKind : std::uint32_t
+		enum class GraphArchiveNodeKind : std::uint32_t
 		{
 			ParamRef = 0,
 			Constant,
@@ -311,7 +312,7 @@ namespace LiteNN::Serialization
 			WriteSizeList(out, params.expressedShape);
 		}
 
-		inline QuantizationParams ReadQuantizationParams(std::istream& in, std::uint32_t version)
+		inline QuantizationParams ReadQuantizationParams(std::istream& in)
 		{
 			QuantizationParams params;
 			params.scheme = static_cast<QuantizationScheme>(ReadScalar<std::uint32_t>(in));
@@ -323,10 +324,7 @@ namespace LiteNN::Serialization
 			params.groupSize = ReadSize(in);
 			params.scales = ReadFloatList(in);
 			params.zeroPoints = ReadI32List(in);
-			if (version >= 5)
-			{
-				params.expressedShape = ReadSizeList(in);
-			}
+			params.expressedShape = ReadSizeList(in);
 			return params;
 		}
 
@@ -341,8 +339,7 @@ namespace LiteNN::Serialization
 			WriteQuantizationParams(out, *params);
 		}
 
-		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in,
-		                                                                        std::uint32_t version)
+		inline std::optional<QuantizationParams> ReadOptionalQuantizationParams(std::istream& in)
 		{
 			const auto hasValue = ReadScalar<std::uint8_t>(in);
 			if (hasValue == 0)
@@ -353,7 +350,7 @@ namespace LiteNN::Serialization
 			{
 				throw std::runtime_error("Invalid quantization metadata presence flag");
 			}
-			return ReadQuantizationParams(in, version);
+			return ReadQuantizationParams(in);
 		}
 
 		inline void WriteShape(std::ostream& out, std::span<const std::size_t> shape)
@@ -757,66 +754,66 @@ namespace LiteNN::Serialization
 				    using T = std::decay_t<decltype(node)>;
 				    if constexpr (std::same_as<T, ParamRefNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::ParamRef));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::ParamRef));
 					    WriteSize(out, node.paramIndex);
 				    }
 				    else if constexpr (std::same_as<T, ConstantNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Constant));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Constant));
 					    WriteTensor(out, node.value);
 				    }
 				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::QuantizedConstant));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::QuantizedConstant));
 					    WriteTensor(out, node.storage);
 					    WriteQuantizationParams(out, node.params);
 				    }
 				    else if constexpr (std::same_as<T, VariableRefNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::VariableRef));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::VariableRef));
 					    WriteSize(out, node.variableIndex);
 				    }
 				    else if constexpr (std::same_as<T, UnaryOpNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::UnaryOp));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::UnaryOp));
 					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
 					    WriteNodeOutput(out, node.input);
 				    }
 				    else if constexpr (std::same_as<T, BinaryOpNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BinaryOp));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::BinaryOp));
 					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
 					    WriteNodeOutput(out, node.lhs);
 					    WriteNodeOutput(out, node.rhs);
 				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Call));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Call));
 					    WriteSize(out, node.callee);
 					    WriteNodeOutputList(out, node.args);
 				    }
 				    else if constexpr (std::same_as<T, CastNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Cast));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Cast));
 					    WriteNodeOutput(out, node.input);
 					    WriteDataType(out, node.targetType);
 				    }
 				    else if constexpr (std::same_as<T, QuantizeNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Quantize));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Quantize));
 					    WriteNodeOutput(out, node.input);
 					    WriteQuantizationParams(out, node.params);
 				    }
 				    else if constexpr (std::same_as<T, DequantizeNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Dequantize));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Dequantize));
 					    WriteNodeOutput(out, node.input);
 					    WriteQuantizationParams(out, node.params);
 					    WriteDataType(out, node.targetType);
 				    }
 				    else if constexpr (std::same_as<T, CondNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Cond));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Cond));
 					    WriteNodeOutput(out, node.condition);
 					    WriteSize(out, node.thenBranch);
 					    WriteSize(out, node.elseBranch);
@@ -824,61 +821,61 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, WhileNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::While));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::While));
 					    WriteSize(out, node.condBranch);
 					    WriteSize(out, node.bodyBranch);
 					    WriteNodeOutputList(out, node.initArgs);
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SaveActivation));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::SaveActivation));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.slotId);
 				    }
 				    else if constexpr (std::same_as<T, LoadActivationNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::LoadActivation));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::LoadActivation));
 					    WriteSize(out, node.slotId);
 				    }
 				    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::TapeSaveActivation));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::TapeSaveActivation));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.tapeSlotId);
 				    }
 				    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::TapeLoadActivation));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::TapeLoadActivation));
 					    WriteSize(out, node.tapeSlotId);
 				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::ReduceOp));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::ReduceOp));
 					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 				    }
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Reshape));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Reshape));
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.targetShape);
 				    }
 				    else if constexpr (std::same_as<T, PermuteNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Permute));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Permute));
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.permutation);
 				    }
 				    else if constexpr (std::same_as<T, BroadcastToNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BroadcastTo));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::BroadcastTo));
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.targetShape);
 				    }
 				    else if constexpr (std::same_as<T, PadNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pad));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Pad));
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.lowPads);
 					    WriteShape(out, node.highPads);
@@ -887,14 +884,14 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, GatherNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Gather));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Gather));
 					    WriteNodeOutput(out, node.data);
 					    WriteNodeOutput(out, node.indices);
 					    WriteSize(out, node.axis);
 				    }
 				    else if constexpr (std::same_as<T, ScatterNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scatter));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Scatter));
 					    WriteNodeOutput(out, node.data);
 					    WriteNodeOutput(out, node.indices);
 					    WriteNodeOutput(out, node.updates);
@@ -903,14 +900,14 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, ScanNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Scan));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Scan));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.op));
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SSMScan));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::SSMScan));
 					    WriteNodeOutput(out, node.state);
 					    WriteNodeOutput(out, node.dt);
 					    WriteNodeOutput(out, node.a);
@@ -920,7 +917,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::RWKVWKV));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::RWKVWKV));
 					    WriteNodeOutput(out, node.key);
 					    WriteNodeOutput(out, node.value);
 					    WriteNodeOutput(out, node.receptance);
@@ -929,26 +926,26 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Softmax));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Softmax));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::CrossEntropyLoss));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::CrossEntropyLoss));
 					    WriteNodeOutput(out, node.logits);
 					    WriteNodeOutput(out, node.labels);
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::CrossEntropyLossBackward));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::CrossEntropyLossBackward));
 					    WriteNodeOutput(out, node.grad);
 					    WriteNodeOutput(out, node.logits);
 					    WriteNodeOutput(out, node.labels);
 				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Normalization));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Normalization));
 					    WriteNodeOutput(out, node.input);
 					    WriteOptionalNodeOutput(out, node.scale);
 					    WriteOptionalNodeOutput(out, node.bias);
@@ -959,26 +956,26 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::BatchMatMul));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::BatchMatMul));
 					    WriteNodeOutput(out, node.lhs);
 					    WriteNodeOutput(out, node.rhs);
 				    }
 				    else if constexpr (std::same_as<T, OutProdNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::OutProd));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::OutProd));
 					    WriteNodeOutput(out, node.lhs);
 					    WriteNodeOutput(out, node.rhs);
 				    }
 				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::TimestepEmbedding));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::TimestepEmbedding));
 					    WriteNodeOutput(out, node.timesteps);
 					    WriteSize(out, node.dim);
 					    WriteSize(out, node.maxPeriod);
 				    }
 				    else if constexpr (std::same_as<T, SolveTriNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SolveTri));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::SolveTri));
 					    WriteNodeOutput(out, node.a);
 					    WriteNodeOutput(out, node.b);
 					    WriteScalar(out, node.lower);
@@ -986,7 +983,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::SGDStep));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::SGDStep));
 					    WriteNodeOutput(out, node.parameter);
 					    WriteNodeOutput(out, node.gradient);
 					    WriteOptionalNodeOutput(out, node.velocity);
@@ -997,7 +994,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::AdamWStep));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::AdamWStep));
 					    WriteNodeOutput(out, node.parameter);
 					    WriteNodeOutput(out, node.gradient);
 					    WriteNodeOutput(out, node.firstMoment);
@@ -1011,7 +1008,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Im2Col));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Im2Col));
 					    WriteNodeOutput(out, node.input);
 					    WriteShape(out, node.kernelShape);
 					    WriteShape(out, node.strides);
@@ -1021,7 +1018,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Conv2D));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Conv2D));
 					    WriteNodeOutput(out, node.input);
 					    WriteNodeOutput(out, node.weight);
 					    WriteOptionalNodeOutput(out, node.bias);
@@ -1033,7 +1030,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::ConvTranspose2D));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::ConvTranspose2D));
 					    WriteNodeOutput(out, node.input);
 					    WriteNodeOutput(out, node.weight);
 					    WriteOptionalNodeOutput(out, node.bias);
@@ -1046,7 +1043,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Pool2D));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Pool2D));
 					    WriteNodeOutput(out, node.input);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
 					    WriteShape(out, node.kernelShape);
@@ -1057,7 +1054,7 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Upsample));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Upsample));
 					    WriteNodeOutput(out, node.input);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.mode));
 					    WriteShape(out, node.outputSpatialShape);
@@ -1065,13 +1062,13 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Concat));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Concat));
 					    WriteNodeOutputList(out, node.inputs);
 					    WriteSize(out, node.axis);
 				    }
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Slice));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Slice));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 					    WriteSize(out, node.start);
@@ -1079,27 +1076,27 @@ namespace LiteNN::Serialization
 				    }
 				    else if constexpr (std::same_as<T, GetRowsNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::GetRows));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::GetRows));
 					    WriteNodeOutput(out, node.data);
 					    WriteNodeOutput(out, node.indices);
 				    }
 				    else if constexpr (std::same_as<T, ArgsortNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::Argsort));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::Argsort));
 					    WriteNodeOutput(out, node.input);
 					    WriteSize(out, node.axis);
 					    WriteScalar(out, static_cast<std::uint32_t>(node.order));
 				    }
 				    else if constexpr (std::same_as<T, MulMatIdNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::MulMatId));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::MulMatId));
 					    WriteNodeOutput(out, node.as);
 					    WriteNodeOutput(out, node.b);
 					    WriteNodeOutput(out, node.ids);
 				    }
 				    else if constexpr (std::same_as<T, FusedOpNode>)
 				    {
-					    WriteScalar(out, static_cast<std::uint32_t>(NodeKind::FusedOp));
+					    WriteScalar(out, static_cast<std::uint32_t>(GraphArchiveNodeKind::FusedOp));
 					    WriteScalar(out, static_cast<std::uint32_t>(node.pattern));
 					    WriteSize(out, node.body);
 					    WriteNodeOutputList(out, node.args);
@@ -1108,91 +1105,91 @@ namespace LiteNN::Serialization
 			    entry.node);
 		}
 
-		inline NodeVariant ReadNodePayload(std::istream& in, std::uint32_t version)
+		inline NodeVariant ReadNodePayload(std::istream& in)
 		{
-			const auto kind = static_cast<NodeKind>(ReadScalar<std::uint32_t>(in));
+			const auto kind = static_cast<GraphArchiveNodeKind>(ReadScalar<std::uint32_t>(in));
 			switch (kind)
 			{
-			case NodeKind::ParamRef:
+			case GraphArchiveNodeKind::ParamRef:
 				return ParamRefNode{ ReadSize(in) };
-			case NodeKind::Constant:
+			case GraphArchiveNodeKind::Constant:
 				return ConstantNode{ ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }) };
-			case NodeKind::QuantizedConstant: {
+			case GraphArchiveNodeKind::QuantizedConstant: {
 				auto storage = ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} });
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return QuantizedConstantNode{ std::move(storage), std::move(params) };
 			}
-			case NodeKind::VariableRef:
+			case GraphArchiveNodeKind::VariableRef:
 				return VariableRefNode{ ReadSize(in) };
-			case NodeKind::UnaryOp: {
+			case GraphArchiveNodeKind::UnaryOp: {
 				const auto op = static_cast<UnaryOp>(ReadScalar<std::uint32_t>(in));
 				return UnaryOpNode{ op, ReadNodeOutput(in) };
 			}
-			case NodeKind::BinaryOp: {
+			case GraphArchiveNodeKind::BinaryOp: {
 				const auto op = static_cast<BinaryOp>(ReadScalar<std::uint32_t>(in));
 				const auto lhs = ReadNodeOutput(in);
 				const auto rhs = ReadNodeOutput(in);
 				return BinaryOpNode{ op, lhs, rhs };
 			}
-			case NodeKind::Call: {
+			case GraphArchiveNodeKind::Call: {
 				const auto callee = ReadSize(in);
 				return CallNode{ callee, ReadNodeOutputList(in) };
 			}
-			case NodeKind::Cast: {
+			case GraphArchiveNodeKind::Cast: {
 				const auto input = ReadNodeOutput(in);
 				return CastNode{ input, ReadDataType(in) };
 			}
-			case NodeKind::Quantize: {
+			case GraphArchiveNodeKind::Quantize: {
 				const auto input = ReadNodeOutput(in);
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return QuantizeNode{ input, std::move(params) };
 			}
-			case NodeKind::Dequantize: {
+			case GraphArchiveNodeKind::Dequantize: {
 				const auto input = ReadNodeOutput(in);
-				auto params = ReadQuantizationParams(in, version);
+				auto params = ReadQuantizationParams(in);
 				return DequantizeNode{ input, std::move(params), ReadDataType(in) };
 			}
-			case NodeKind::Cond: {
+			case GraphArchiveNodeKind::Cond: {
 				const auto condition = ReadNodeOutput(in);
 				const auto thenBranch = ReadSize(in);
 				const auto elseBranch = ReadSize(in);
 				return CondNode{ condition, thenBranch, elseBranch, ReadNodeOutputList(in) };
 			}
-			case NodeKind::While: {
+			case GraphArchiveNodeKind::While: {
 				const auto condBranch = ReadSize(in);
 				const auto bodyBranch = ReadSize(in);
 				return WhileNode{ condBranch, bodyBranch, ReadNodeOutputList(in) };
 			}
-			case NodeKind::SaveActivation: {
+			case GraphArchiveNodeKind::SaveActivation: {
 				const auto input = ReadNodeOutput(in);
 				return SaveActivationNode{ input, ReadSize(in) };
 			}
-			case NodeKind::LoadActivation:
+			case GraphArchiveNodeKind::LoadActivation:
 				return LoadActivationNode{ ReadSize(in) };
-			case NodeKind::TapeSaveActivation: {
+			case GraphArchiveNodeKind::TapeSaveActivation: {
 				const auto input = ReadNodeOutput(in);
 				return TapeSaveActivationNode{ input, ReadSize(in) };
 			}
-			case NodeKind::TapeLoadActivation:
+			case GraphArchiveNodeKind::TapeLoadActivation:
 				return TapeLoadActivationNode{ ReadSize(in) };
-			case NodeKind::ReduceOp: {
+			case GraphArchiveNodeKind::ReduceOp: {
 				const auto op = static_cast<ReduceOp>(ReadScalar<std::uint32_t>(in));
 				const auto input = ReadNodeOutput(in);
 				return ReduceOpNode{ op, input, ReadSize(in) };
 			}
-			case NodeKind::Reshape: {
+			case GraphArchiveNodeKind::Reshape: {
 				const auto input = ReadNodeOutput(in);
 				return ReshapeNode{ input, ReadShape(in) };
 			}
-			case NodeKind::Permute: {
+			case GraphArchiveNodeKind::Permute: {
 				const auto input = ReadNodeOutput(in);
 				return PermuteNode{ input, ReadShape(in) };
 			}
-			case NodeKind::BroadcastTo: {
+			case GraphArchiveNodeKind::BroadcastTo: {
 				const auto input = ReadNodeOutput(in);
 				return BroadcastToNode{ input, ReadShape(in) };
 			}
-			case NodeKind::Pad: {
+			case GraphArchiveNodeKind::Pad: {
 				const auto input = ReadNodeOutput(in);
 				auto lowPads = ReadShape(in);
 				auto highPads = ReadShape(in);
@@ -1200,12 +1197,12 @@ namespace LiteNN::Serialization
 				const auto constantValue = ReadScalar<double>(in);
 				return PadNode{ input, std::move(lowPads), std::move(highPads), mode, constantValue };
 			}
-			case NodeKind::Gather: {
+			case GraphArchiveNodeKind::Gather: {
 				const auto data = ReadNodeOutput(in);
 				const auto indices = ReadNodeOutput(in);
 				return GatherNode{ data, indices, ReadSize(in) };
 			}
-			case NodeKind::Scatter: {
+			case GraphArchiveNodeKind::Scatter: {
 				const auto data = ReadNodeOutput(in);
 				const auto indices = ReadNodeOutput(in);
 				const auto updates = ReadNodeOutput(in);
@@ -1213,13 +1210,13 @@ namespace LiteNN::Serialization
 				const auto mode = static_cast<ScatterMode>(ReadScalar<std::uint32_t>(in));
 				return ScatterNode{ data, indices, updates, axis, mode };
 			}
-			case NodeKind::Scan: {
+			case GraphArchiveNodeKind::Scan: {
 				const auto input = ReadNodeOutput(in);
 				const auto axis = ReadSize(in);
 				const auto op = static_cast<ScanOp>(ReadScalar<std::uint32_t>(in));
 				return ScanNode{ input, axis, op };
 			}
-			case NodeKind::SSMScan: {
+			case GraphArchiveNodeKind::SSMScan: {
 				const auto state = ReadNodeOutput(in);
 				const auto dt = ReadNodeOutput(in);
 				const auto a = ReadNodeOutput(in);
@@ -1227,7 +1224,7 @@ namespace LiteNN::Serialization
 				const auto c = ReadNodeOutput(in);
 				return SSMScanNode{ state, dt, a, b, c, ReadOptionalNodeOutput(in) };
 			}
-			case NodeKind::RWKVWKV: {
+			case GraphArchiveNodeKind::RWKVWKV: {
 				const auto key = ReadNodeOutput(in);
 				const auto value = ReadNodeOutput(in);
 				const auto receptance = ReadNodeOutput(in);
@@ -1235,22 +1232,22 @@ namespace LiteNN::Serialization
 				const auto timeFirst = ReadNodeOutput(in);
 				return RWKVWKVNode{ key, value, receptance, timeDecay, timeFirst };
 			}
-			case NodeKind::Softmax: {
+			case GraphArchiveNodeKind::Softmax: {
 				const auto input = ReadNodeOutput(in);
 				return SoftmaxNode{ input, ReadSize(in) };
 			}
-			case NodeKind::CrossEntropyLoss: {
+			case GraphArchiveNodeKind::CrossEntropyLoss: {
 				const auto logits = ReadNodeOutput(in);
 				const auto labels = ReadNodeOutput(in);
 				return CrossEntropyLossNode{ logits, labels };
 			}
-			case NodeKind::CrossEntropyLossBackward: {
+			case GraphArchiveNodeKind::CrossEntropyLossBackward: {
 				const auto grad = ReadNodeOutput(in);
 				const auto logits = ReadNodeOutput(in);
 				const auto labels = ReadNodeOutput(in);
 				return CrossEntropyLossBackwardNode{ grad, logits, labels };
 			}
-			case NodeKind::Normalization: {
+			case GraphArchiveNodeKind::Normalization: {
 				const auto input = ReadNodeOutput(in);
 				auto scale = ReadOptionalNodeOutput(in);
 				auto bias = ReadOptionalNodeOutput(in);
@@ -1260,30 +1257,30 @@ namespace LiteNN::Serialization
 				const auto epsilon = ReadScalar<double>(in);
 				return NormalizationNode{ input, std::move(scale), std::move(bias), mode, axis, groupCount, epsilon };
 			}
-			case NodeKind::BatchMatMul: {
+			case GraphArchiveNodeKind::BatchMatMul: {
 				const auto lhs = ReadNodeOutput(in);
 				const auto rhs = ReadNodeOutput(in);
 				return BatchMatMulNode{ lhs, rhs };
 			}
-			case NodeKind::OutProd: {
+			case GraphArchiveNodeKind::OutProd: {
 				const auto lhs = ReadNodeOutput(in);
 				const auto rhs = ReadNodeOutput(in);
 				return OutProdNode{ lhs, rhs };
 			}
-			case NodeKind::TimestepEmbedding: {
+			case GraphArchiveNodeKind::TimestepEmbedding: {
 				const auto timesteps = ReadNodeOutput(in);
 				const auto dim = ReadSize(in);
 				const auto maxPeriod = ReadSize(in);
 				return TimestepEmbeddingNode{ timesteps, dim, maxPeriod };
 			}
-			case NodeKind::SolveTri: {
+			case GraphArchiveNodeKind::SolveTri: {
 				const auto a = ReadNodeOutput(in);
 				const auto b = ReadNodeOutput(in);
 				const auto lower = ReadScalar<bool>(in);
 				const auto unitDiagonal = ReadScalar<bool>(in);
 				return SolveTriNode{ a, b, lower, unitDiagonal };
 			}
-			case NodeKind::SGDStep: {
+			case GraphArchiveNodeKind::SGDStep: {
 				const auto parameter = ReadNodeOutput(in);
 				const auto gradient = ReadNodeOutput(in);
 				auto velocity = ReadOptionalNodeOutput(in);
@@ -1294,7 +1291,7 @@ namespace LiteNN::Serialization
 				return SGDStepNode{ parameter, gradient, std::move(velocity), learningRate,
 				                    momentum, weightDecay, nesterov };
 			}
-			case NodeKind::AdamWStep: {
+			case GraphArchiveNodeKind::AdamWStep: {
 				const auto parameter = ReadNodeOutput(in);
 				const auto gradient = ReadNodeOutput(in);
 				const auto firstMoment = ReadNodeOutput(in);
@@ -1308,7 +1305,7 @@ namespace LiteNN::Serialization
 				return AdamWStepNode{ parameter, gradient, firstMoment, secondMoment, learningRate,
 				                      beta1, beta2, epsilon, weightDecay, step };
 			}
-			case NodeKind::Im2Col: {
+			case GraphArchiveNodeKind::Im2Col: {
 				const auto input = ReadNodeOutput(in);
 				auto kernelShape = ReadShape(in);
 				auto strides = ReadShape(in);
@@ -1318,7 +1315,7 @@ namespace LiteNN::Serialization
 				return Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
 				                   std::move(lowPads), std::move(highPads) };
 			}
-			case NodeKind::Conv2D: {
+			case GraphArchiveNodeKind::Conv2D: {
 				const auto input = ReadNodeOutput(in);
 				const auto weight = ReadNodeOutput(in);
 				auto bias = ReadOptionalNodeOutput(in);
@@ -1330,7 +1327,7 @@ namespace LiteNN::Serialization
 				return Conv2DNode{ input, weight, std::move(bias), std::move(strides), std::move(dilations),
 				                   std::move(lowPads), std::move(highPads), groupCount };
 			}
-			case NodeKind::ConvTranspose2D: {
+			case GraphArchiveNodeKind::ConvTranspose2D: {
 				const auto input = ReadNodeOutput(in);
 				const auto weight = ReadNodeOutput(in);
 				auto bias = ReadOptionalNodeOutput(in);
@@ -1344,7 +1341,7 @@ namespace LiteNN::Serialization
 				                            std::move(dilations), std::move(lowPads), std::move(highPads),
 				                            std::move(outputPads), groupCount };
 			}
-			case NodeKind::Pool2D: {
+			case GraphArchiveNodeKind::Pool2D: {
 				const auto input = ReadNodeOutput(in);
 				const auto mode = static_cast<PoolMode>(ReadScalar<std::uint32_t>(in));
 				auto kernelShape = ReadShape(in);
@@ -1355,41 +1352,41 @@ namespace LiteNN::Serialization
 				return Pool2DNode{ input, mode, std::move(kernelShape), std::move(strides), std::move(lowPads),
 				                   std::move(highPads), countIncludePad };
 			}
-			case NodeKind::Upsample: {
+			case GraphArchiveNodeKind::Upsample: {
 				const auto input = ReadNodeOutput(in);
 				const auto mode = static_cast<UpsampleMode>(ReadScalar<std::uint32_t>(in));
 				auto outputSpatialShape = ReadShape(in);
 				const auto alignCorners = ReadScalar<bool>(in);
 				return UpsampleNode{ input, mode, std::move(outputSpatialShape), alignCorners };
 			}
-			case NodeKind::Concat: {
+			case GraphArchiveNodeKind::Concat: {
 				auto inputs = ReadNodeOutputList(in);
 				return ConcatNode{ std::move(inputs), ReadSize(in) };
 			}
-			case NodeKind::Slice: {
+			case GraphArchiveNodeKind::Slice: {
 				const auto input = ReadNodeOutput(in);
 				const auto axis = ReadSize(in);
 				const auto start = ReadSize(in);
 				return SliceNode{ input, axis, start, ReadSize(in) };
 			}
-			case NodeKind::GetRows: {
+			case GraphArchiveNodeKind::GetRows: {
 				const auto data = ReadNodeOutput(in);
 				const auto indices = ReadNodeOutput(in);
 				return GetRowsNode{ data, indices };
 			}
-			case NodeKind::Argsort: {
+			case GraphArchiveNodeKind::Argsort: {
 				const auto input = ReadNodeOutput(in);
-				const auto axis = version >= 10 ? ReadSize(in) : 0uz;
+				const auto axis = ReadSize(in);
 				const auto order = static_cast<SortOrder>(ReadScalar<std::uint32_t>(in));
 				return ArgsortNode{ input, axis, order };
 			}
-			case NodeKind::MulMatId: {
+			case GraphArchiveNodeKind::MulMatId: {
 				const auto as = ReadNodeOutput(in);
 				const auto b = ReadNodeOutput(in);
 				const auto ids = ReadNodeOutput(in);
 				return MulMatIdNode{ as, b, ids };
 			}
-			case NodeKind::FusedOp: {
+			case GraphArchiveNodeKind::FusedOp: {
 				const auto pattern = static_cast<FusionPattern>(ReadScalar<std::uint32_t>(in));
 				const auto body = ReadSize(in);
 				return FusedOpNode{ pattern, body, ReadNodeOutputList(in) };
@@ -1415,7 +1412,7 @@ namespace LiteNN::Serialization
 			WriteNodeOutputList(out, subgraph.Results());
 		}
 
-		inline Subgraph ReadSubgraph(std::istream& in, std::uint32_t version)
+		inline Subgraph ReadSubgraph(std::istream& in)
 		{
 			Subgraph subgraph;
 			const auto paramCount = ReadSize(in);
@@ -1434,7 +1431,7 @@ namespace LiteNN::Serialization
 			for (std::size_t nodeId = 0; nodeId < nodeCount; ++nodeId)
 			{
 				auto outputInfos = ReadOutputInfoList(in);
-				auto node = ReadNodePayload(in, version);
+				auto node = ReadNodePayload(in);
 				if (nodeId < paramCount)
 				{
 					const auto* param = std::get_if<ParamRefNode>(&node);
@@ -1451,11 +1448,12 @@ namespace LiteNN::Serialization
 		}
 	} // namespace Detail
 
-	inline void SaveModelImpl(const Graph& graph, const std::filesystem::path& path,
+	inline void SaveGraphArchiveImpl(const Graph& graph, const std::filesystem::path& path,
 	                          const std::optional<std::filesystem::path>& externalWeightsPath,
 	                          ExternalWeightSaveOptions externalOptions)
 	{
 		Validation::ValidateGraph(graph);
+		ValidateExecutablePlan(BuildExecutablePlan(graph));
 		std::optional<std::ofstream> externalOut;
 		std::string externalPathText;
 		if (externalWeightsPath)
@@ -1476,12 +1474,12 @@ namespace LiteNN::Serialization
 		std::ofstream out(path, std::ios::binary);
 		if (!out)
 		{
-			throw std::runtime_error("Failed to open LiteNN model file for writing");
+			throw std::runtime_error("Failed to open LiteNN graph archive file for writing");
 		}
 
-		out.write(Detail::kModelMagic.data(), static_cast<std::streamsize>(Detail::kModelMagic.size()));
+		out.write(Detail::kGraphArchiveMagic.data(), static_cast<std::streamsize>(Detail::kGraphArchiveMagic.size()));
 		Detail::EnsureWrite(out);
-		Detail::WriteScalar(out, Detail::kModelVersion);
+		Detail::WriteScalar(out, Detail::kGraphArchiveVersion);
 		Detail::WriteSize(out, graph.Forward());
 		Detail::WriteScalar(out, static_cast<std::uint8_t>(graph.Backward().has_value() ? 1 : 0));
 		if (graph.Backward())
@@ -1547,39 +1545,41 @@ namespace LiteNN::Serialization
 		}
 	}
 
-	inline void SaveModel(const Graph& graph, const std::filesystem::path& path)
+	inline void SaveGraphArchive(const Graph& graph, const std::filesystem::path& path)
 	{
-		SaveModelImpl(graph, path, std::nullopt, {});
+		SaveGraphArchiveImpl(graph, path, std::nullopt, {});
 	}
 
 	/// Save graph structure and variable metadata to `path`, with selected variable payloads in `externalWeightsPath`.
-	inline void SaveModelExternalWeights(const Graph& graph, const std::filesystem::path& path,
-	                                     const std::filesystem::path& externalWeightsPath,
-	                                     const ExternalWeightSaveOptions& externalOptions = {})
+	inline void SaveGraphArchiveExternalWeights(const Graph& graph, const std::filesystem::path& path,
+	                                            const std::filesystem::path& externalWeightsPath,
+	                                            const ExternalWeightSaveOptions& externalOptions = {})
 	{
-		SaveModelImpl(graph, path, externalWeightsPath, externalOptions);
+		SaveGraphArchiveImpl(graph, path, externalWeightsPath, externalOptions);
 	}
 
-	inline Graph LoadModel(const std::filesystem::path& path)
+	inline Graph LoadGraphArchive(const std::filesystem::path& path)
 	{
 		std::ifstream in(path, std::ios::binary);
 		if (!in)
 		{
-			throw std::runtime_error("Failed to open LiteNN model file for reading");
+			throw std::runtime_error("Failed to open LiteNN graph archive file for reading");
 		}
 
-		std::array<char, Detail::kModelMagic.size()> magic{};
+		std::array<char, Detail::kGraphArchiveMagic.size()> magic{};
 		in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
 		Detail::EnsureRead(in);
-		if (magic != Detail::kModelMagic)
+		if (magic != Detail::kGraphArchiveMagic)
 		{
-			throw std::runtime_error("Invalid LiteNN model magic header");
+			throw std::runtime_error("Invalid LiteNN graph archive magic header");
 		}
 
 		const auto version = Detail::ReadScalar<std::uint32_t>(in);
-		if (version == 0 || version > Detail::kModelVersion)
+		if (version != Detail::kGraphArchiveVersion)
 		{
-			throw std::runtime_error("Unsupported LiteNN model version");
+			throw std::runtime_error(std::format(
+			    "Unsupported LiteNN graph archive version {}; this vNext branch only loads version {}",
+			    version, Detail::kGraphArchiveVersion));
 		}
 
 		const auto forward = Detail::ReadSize(in);
@@ -1589,23 +1589,13 @@ namespace LiteNN::Serialization
 		{
 			backward = Detail::ReadSize(in);
 		}
-		std::vector<std::string> inputNames;
-		std::vector<std::string> outputNames;
-		if (version >= 2)
-		{
-			inputNames = Detail::ReadStringList(in);
-			outputNames = Detail::ReadStringList(in);
-		}
+		auto inputNames = Detail::ReadStringList(in);
+		auto outputNames = Detail::ReadStringList(in);
 
 		Graph graph;
 		const auto variableCount = Detail::ReadSize(in);
-		std::vector<std::string> variableNames;
-		std::vector<ModelMetadataEntry> metadata;
-		if (version >= 6)
-		{
-			variableNames = Detail::ReadStringList(in);
-			metadata = Detail::ReadMetadataEntries(in);
-		}
+		auto variableNames = Detail::ReadStringList(in);
+		auto metadata = Detail::ReadMetadataEntries(in);
 		std::vector<std::pair<std::filesystem::path, std::shared_ptr<std::vector<std::byte>>>> externalWeightCache;
 		const auto loadExternalWeightFile = [&](const std::string& externalPathText) {
 			auto resolvedPath = Detail::ResolveExternalPath(path, externalPathText);
@@ -1624,48 +1614,37 @@ namespace LiteNN::Serialization
 		for (std::size_t i = 0; i < variableCount; ++i)
 		{
 			std::optional<Tensor<PolymorphicDevice>> tensor;
-			if (version >= 21)
-			{
-				const auto payloadKind =
-				    static_cast<Detail::VariablePayloadKind>(Detail::ReadScalar<std::uint8_t>(in));
-				if (payloadKind == Detail::VariablePayloadKind::Inline)
-				{
-					tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
-				}
-				else if (payloadKind == Detail::VariablePayloadKind::External)
-				{
-					auto spec = Detail::ReadTensorMetadata(in);
-					const auto externalPathText = Detail::ReadString(in);
-					const auto offset = Detail::ReadScalar<std::uint64_t>(in);
-					const auto byteCount = Detail::ReadScalar<std::uint64_t>(in);
-					const auto expectedByteCount = Detail::TensorSpecByteSize(spec);
-					if (byteCount != expectedByteCount)
-					{
-						throw std::runtime_error("LiteNN external variable byte size does not match tensor metadata");
-					}
-					auto storage = loadExternalWeightFile(externalPathText);
-					if (offset > storage->size() || byteCount > storage->size() - offset)
-					{
-						throw std::runtime_error("LiteNN external variable payload is outside the weight file");
-					}
-					auto* data = static_cast<void*>(storage->data() + static_cast<std::size_t>(offset));
-					tensor.emplace(data, ShapeView{ spec.shape }, spec.dtype, PolymorphicDevice{ CPU{} });
-				}
-				else
-				{
-					throw std::runtime_error("LiteNN model contains an unknown variable payload kind");
-				}
-			}
-			else
+			const auto payloadKind =
+			    static_cast<Detail::VariablePayloadKind>(Detail::ReadScalar<std::uint8_t>(in));
+			if (payloadKind == Detail::VariablePayloadKind::Inline)
 			{
 				tensor.emplace(Detail::ReadTensor(in).CopyToDevice(PolymorphicDevice{ CPU{} }));
 			}
-			const auto hasGradStorage = version >= 20 ? Detail::ReadScalar<std::uint8_t>(in) != 0 : true;
-			std::optional<QuantizationParams> quantization;
-			if (version >= 4)
+			else if (payloadKind == Detail::VariablePayloadKind::External)
 			{
-				quantization = Detail::ReadOptionalQuantizationParams(in, version);
+				auto spec = Detail::ReadTensorMetadata(in);
+				const auto externalPathText = Detail::ReadString(in);
+				const auto offset = Detail::ReadScalar<std::uint64_t>(in);
+				const auto byteCount = Detail::ReadScalar<std::uint64_t>(in);
+				const auto expectedByteCount = Detail::TensorSpecByteSize(spec);
+				if (byteCount != expectedByteCount)
+				{
+					throw std::runtime_error("LiteNN external variable byte size does not match tensor metadata");
+				}
+				auto storage = loadExternalWeightFile(externalPathText);
+				if (offset > storage->size() || byteCount > storage->size() - offset)
+				{
+					throw std::runtime_error("LiteNN external variable payload is outside the weight file");
+				}
+				auto* data = static_cast<void*>(storage->data() + static_cast<std::size_t>(offset));
+				tensor.emplace(data, ShapeView{ spec.shape }, spec.dtype, PolymorphicDevice{ CPU{} });
 			}
+			else
+			{
+				throw std::runtime_error("LiteNN model contains an unknown variable payload kind");
+			}
+			const auto hasGradStorage = Detail::ReadScalar<std::uint8_t>(in) != 0;
+			auto quantization = Detail::ReadOptionalQuantizationParams(in);
 			auto variable = Variable::Create(std::move(*tensor), hasGradStorage ? VariableGradStorage::Allocate
 			                                                                    : VariableGradStorage::None);
 			variable->SetQuantization(std::move(quantization));
@@ -1687,7 +1666,7 @@ namespace LiteNN::Serialization
 		const auto subgraphCount = Detail::ReadSize(in);
 		for (std::size_t i = 0; i < subgraphCount; ++i)
 		{
-			graph.AddSubgraph(Detail::ReadSubgraph(in, version));
+			graph.AddSubgraph(Detail::ReadSubgraph(in));
 		}
 		graph.SetForward(forward);
 		if (backward)

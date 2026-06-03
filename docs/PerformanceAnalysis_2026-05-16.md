@@ -11,7 +11,7 @@
 | OS | Windows |
 | 编译器 | MinGW GCC，`build-cuda-mlir-mingw-gcc-bench/`，`LITENN_BUILD_BENCHMARKS=ON`，`LITENN_ENABLE_MLIR=ON`，`LITENN_ENABLE_CUDA=ON` |
 | LLVM target | host CPU 特性（包含 AVX-512），`O3 + Aggressive` |
-| CUDA AOT 目标 | 默认 `sm_30`（环境变量 `LITENN_CUDA_AOT_TARGET` 可改） |
+| CUDA AOT 目标 | 当时默认 `sm_30`（当时可通过环境变量覆盖）；当前实现已改为默认 `sm_75`，非默认目标由显式 target API 传入 |
 | PyTorch | 2.9.1+cu128 / Python 3.11.9 |
 | 基准脚本 | [benchmark/bench.cpp](../benchmark/bench.cpp)、[benchmark/bench.py](../benchmark/bench.py)，`--benchmark_min_time=0.1s` |
 
@@ -204,8 +204,8 @@ CPU AOT 在同尺寸下大约 50 µs（推算自 MLP-512/512 占比），所以 
 
 #### 🥉 P2：扔掉 `sm_30` 默认，启用 Ada/Hopper 特性
 
-`LITENN_CUDA_AOT_TARGET=sm_30` 默认值意味着 NVPTX 输出的 PTX 是 Kepler-class，driver 在 4090 上会做一次 **JIT compile to sm_89**，并且生成的 SASS 不会使用 Ampere/Ada 的 Tensor Core、async copy 等。建议：
-- 默认 `sm_75`（Turing-baseline，覆盖 99% 现役 GPU），并允许 `LITENN_CUDA_AOT_TARGET=native` 自动检测当前设备 SM 版本。
+当时的 `sm_30` 默认值意味着 NVPTX 输出的 PTX 是 Kepler-class，driver 在 4090 上会做一次 **JIT compile to sm_89**，并且生成的 SASS 不会使用 Ampere/Ada 的 Tensor Core、async copy 等。当前实现已经按本建议改为：
+- 默认 `sm_75`（Turing-baseline，覆盖 99% 现役 GPU），并允许调用方通过显式 target API 传入 `native` 自动检测当前设备 SM 版本。
 - 对 cuBLAS library call 没影响（cuBLAS 内部用 SASS），但对未来手写的 PTX kernel 影响巨大。
 
 #### P3：用 cuBLASLt 取代 cuBLAS legacy + 显式 algo selection

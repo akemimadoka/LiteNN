@@ -35,7 +35,7 @@ TEST(PermuteNode, Forward_Transpose2D)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(input) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 6);
 	// 原矩阵 [[1,2,3],[4,5,6]] 转置后 [[1,4],[2,5],[3,6]]
@@ -63,7 +63,7 @@ TEST(PermuteNode, Forward_Permute3D)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(input) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 24);
 
@@ -98,7 +98,7 @@ TEST(PermuteNode, Forward_Identity)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(input) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 	for (std::size_t i = 0; i < 6; ++i)
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(results[0], i), static_cast<float>(i + 1));
@@ -119,7 +119,7 @@ TEST(PermuteNode, Layer_AddTranspose)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(input) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 	ASSERT_EQ(results[0].Shape().Dims[0], 3uz);
 	ASSERT_EQ(results[0].Shape().Dims[1], 2uz);
 	const float expected[] = { 1, 4, 2, 5, 3, 6 };
@@ -149,12 +149,12 @@ TEST(PermuteNode, Backward_Transpose2D)
 	Runtime::Interpreter<CPU> interp;
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
-	(void)interp.RunForward(graph, fwdInputs);
+	(void)interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
 	bwdInputs.emplace_back(Tensor<CPU>({ 10, 20, 30, 40, 50, 60 }, { 3, 2 }));
-	auto gradients = interp.RunBackward(graph, bwdInputs);
+	auto gradients = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	ASSERT_EQ(gradients.size(), 1);
 	ASSERT_EQ(gradients[0].NumElements(), 6);
@@ -189,7 +189,7 @@ TEST(PermuteNode, ConstFold_Transpose)
 
 	std::vector<Tensor<CPU>> inputs;
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 	const float expected[] = { 1, 4, 2, 5, 3, 6 };
 	for (std::size_t i = 0; i < 6; ++i)
 	{

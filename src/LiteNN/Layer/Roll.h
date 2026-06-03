@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <utility>
@@ -50,14 +51,14 @@ namespace LiteNN::Layer
 		return { rolled, 0 };
 	}
 
-	inline SubgraphId BuildRoll(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis,
+	inline SubgraphId BuildRoll(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis,
 	                           std::ptrdiff_t shift)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddRoll(subgraph, { input, 0 }, axis, shift);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

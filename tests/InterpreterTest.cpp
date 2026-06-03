@@ -42,7 +42,7 @@ TEST(Interpreter, Add)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 11);
@@ -72,7 +72,7 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 	std::vector<std::tuple<SubgraphId, NodeId, std::string, std::size_t, bool>> trace;
 	Runtime::Interpreter<CPU> interp;
 	auto results = interp.RunForwardWithTrace(
-	    graph, inputs,
+		BuildExecutablePlan(graph), inputs,
 	    [&](SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry, std::span<const Tensor<CPU>> outputs) {
 		    bool sawNonFinite = false;
 		    for (const auto& output : outputs)
@@ -142,7 +142,7 @@ TEST(Interpreter, MatMulWithVariable)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 122);
@@ -154,10 +154,11 @@ TEST(Interpreter, MatMulWithVariable)
 // 测试 3: CallNode 调用 ReLU 子图
 TEST(Interpreter, ReLU)
 {
-	Graph graph;
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
 
 	// 构建 ReLU 子图
-	const auto reluId = Layer::BuildReLU(graph, DataType::Float32, { 2, 3 });
+	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 3 });
 
 	// 构建前向子图: y = ReLU(x)
 	Subgraph sg;
@@ -174,7 +175,7 @@ TEST(Interpreter, ReLU)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 0);
@@ -211,7 +212,7 @@ TEST(Interpreter, ChainedOps)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 8);
@@ -259,7 +260,7 @@ TEST(Interpreter, AutogradLinear)
 	std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto fwdResults = interp.RunForward(graph, fwdInputs);
+	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	ASSERT_EQ(fwdResults.size(), 1);
 	// x @ w = [1,2,3] @ [[1,2],[3,4],[5,6]] = [22, 28]
@@ -276,7 +277,7 @@ TEST(Interpreter, AutogradLinear)
 	bwdInputs.push_back(std::move(tensorX2));
 	bwdInputs.push_back(std::move(gradY));
 
-	auto bwdResults = interp.RunBackward(graph, bwdInputs);
+	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	// backward results: [grad_x, grad_w, grad_b]
 	ASSERT_EQ(bwdResults.size(), 3);
@@ -326,7 +327,7 @@ TEST(Interpreter, PowScalarBroadcast)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 1);
@@ -360,7 +361,7 @@ TEST(Interpreter, PowElementWise)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorBase), std::move(tensorExp) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 8);
@@ -394,7 +395,7 @@ TEST(Interpreter, MaxMin)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 2);
 
@@ -444,7 +445,7 @@ TEST(Interpreter, ReduceSum)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 2);
 
@@ -481,7 +482,7 @@ TEST(Interpreter, ReduceMean)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 2);
@@ -511,7 +512,7 @@ TEST(Interpreter, ReduceMax)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 4);
@@ -545,7 +546,7 @@ TEST(Interpreter, Reshape)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 2);
 
@@ -588,7 +589,7 @@ TEST(Interpreter, AutogradReduceSum)
 	std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto fwdResults = interp.RunForward(graph, fwdInputs);
+	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	ASSERT_EQ(fwdResults.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 6);  // 1+2+3
@@ -601,7 +602,7 @@ TEST(Interpreter, AutogradReduceSum)
 	bwdInputs.push_back(std::move(tensorX2));
 	bwdInputs.push_back(std::move(gradY));
 
-	auto bwdResults = interp.RunBackward(graph, bwdInputs);
+	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	// d(sum)/dx = all ones [2,3]
 	ASSERT_EQ(bwdResults.size(), 1);
@@ -639,7 +640,7 @@ TEST(Interpreter, MaxMinBroadcast)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(graph, inputs);
+	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 3);
@@ -696,7 +697,7 @@ TEST(Interpreter, CondNode)
 	{
 		Tensor<CPU> tensorX({ 3.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
-		auto results = interp.RunForward(graph, inputs);
+		auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 		ASSERT_EQ(results.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 9);
 	}
@@ -705,7 +706,7 @@ TEST(Interpreter, CondNode)
 	{
 		Tensor<CPU> tensorX({ -2.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
-		auto results = interp.RunForward(graph, inputs);
+		auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
 		ASSERT_EQ(results.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 2);
 	}
@@ -761,7 +762,7 @@ TEST(Interpreter, AutogradCondNode)
 	{
 		Tensor<CPU> tensorX({ 3.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
-		auto fwdResults = interp.RunForward(graph, fwdInputs);
+		auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 		ASSERT_EQ(fwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 9);
 
@@ -770,7 +771,7 @@ TEST(Interpreter, AutogradCondNode)
 		std::vector<Tensor<CPU>> bwdInputs;
 		bwdInputs.push_back(std::move(tensorX2));
 		bwdInputs.push_back(std::move(gradY));
-		auto bwdResults = interp.RunBackward(graph, bwdInputs);
+		auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 		ASSERT_EQ(bwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 6);
@@ -780,7 +781,7 @@ TEST(Interpreter, AutogradCondNode)
 	{
 		Tensor<CPU> tensorX({ -2.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
-		auto fwdResults = interp.RunForward(graph, fwdInputs);
+		auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 		ASSERT_EQ(fwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 2);
 
@@ -789,7 +790,7 @@ TEST(Interpreter, AutogradCondNode)
 		std::vector<Tensor<CPU>> bwdInputs;
 		bwdInputs.push_back(std::move(tensorX2));
 		bwdInputs.push_back(std::move(gradY));
-		auto bwdResults = interp.RunBackward(graph, bwdInputs);
+		auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 		ASSERT_EQ(bwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), -1);
@@ -840,7 +841,7 @@ TEST(Interpreter, AutogradCallNodeWithVariable)
 	std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto fwdResults = interp.RunForward(graph, fwdInputs);
+	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	ASSERT_EQ(fwdResults.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 32);
@@ -853,7 +854,7 @@ TEST(Interpreter, AutogradCallNodeWithVariable)
 	bwdInputs.push_back(std::move(tensorX2));
 	bwdInputs.push_back(std::move(gradY));
 
-	auto bwdResults = interp.RunBackward(graph, bwdInputs);
+	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	// backward results: [grad_x, grad_W, grad_B]
 	ASSERT_EQ(bwdResults.size(), 3);
@@ -920,7 +921,7 @@ TEST(Interpreter, AutogradCallNodeSharedCallee)
 	std::array<Tensor<CPU>, 2> fwdInputs = { std::move(t1), std::move(t2) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto fwdResults = interp.RunForward(graph, fwdInputs);
+	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	ASSERT_EQ(fwdResults.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 18);
@@ -938,7 +939,7 @@ TEST(Interpreter, AutogradCallNodeSharedCallee)
 	bwdInputs.push_back(std::move(t2b));
 	bwdInputs.push_back(std::move(gradY));
 
-	auto bwdResults = interp.RunBackward(graph, bwdInputs);
+	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	// [grad_x1, grad_x2, grad_W]
 	ASSERT_EQ(bwdResults.size(), 3);
@@ -1012,7 +1013,7 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 	{
 		Tensor<CPU> tensorX({ 3.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
-		auto fwdResults = interp.RunForward(graph, fwdInputs);
+		auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 		ASSERT_EQ(fwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 6);
 
@@ -1021,7 +1022,7 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 		std::vector<Tensor<CPU>> bwdInputs;
 		bwdInputs.push_back(std::move(tensorX2));
 		bwdInputs.push_back(std::move(gradY));
-		auto bwdResults = interp.RunBackward(graph, bwdInputs);
+		auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 		// [grad_x, grad_V, grad_W] — sorted by variableIndex: wIdx=0, vIdx=1
 		ASSERT_EQ(bwdResults.size(), 3);
@@ -1035,7 +1036,7 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 	{
 		Tensor<CPU> tensorX({ -4.0 }, { 1 });
 		std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
-		auto fwdResults = interp.RunForward(graph, fwdInputs);
+		auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 		ASSERT_EQ(fwdResults.size(), 1);
 		EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), -20);
 
@@ -1044,7 +1045,7 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 		std::vector<Tensor<CPU>> bwdInputs;
 		bwdInputs.push_back(std::move(tensorX2));
 		bwdInputs.push_back(std::move(gradY));
-		auto bwdResults = interp.RunBackward(graph, bwdInputs);
+		auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 		ASSERT_EQ(bwdResults.size(), 3);
 		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 5);   // grad_x = V = 5
@@ -1099,7 +1100,7 @@ TEST(Interpreter, AutogradNestedCallWithVariable)
 	std::array<Tensor<CPU>, 1> fwdInputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto fwdResults = interp.RunForward(graph, fwdInputs);
+	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
 
 	ASSERT_EQ(fwdResults.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 6);
@@ -1114,7 +1115,7 @@ TEST(Interpreter, AutogradNestedCallWithVariable)
 	bwdInputs.push_back(std::move(tensorX2));
 	bwdInputs.push_back(std::move(gradY));
 
-	auto bwdResults = interp.RunBackward(graph, bwdInputs);
+	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
 
 	// [grad_x, grad_W]
 	ASSERT_EQ(bwdResults.size(), 2);

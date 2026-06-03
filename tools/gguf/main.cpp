@@ -7,8 +7,12 @@
 #include <LiteNN/Serialization/ModelIO.h>
 
 #include <charconv>
+#include <algorithm>
+#include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -42,6 +46,65 @@ namespace
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	bool TruthyEnvValue(const char* value)
+	{
+		if (value == nullptr)
+		{
+			return false;
+		}
+		const std::string_view text{ value };
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	std::optional<std::uint64_t> ParseU64Env(const char* name)
+	{
+		if (const char* value = std::getenv(name))
+		{
+			std::uint64_t parsed{};
+			const std::string_view text{ value };
+			const auto* begin = text.data();
+			const auto* end = begin + text.size();
+			if (const auto result = std::from_chars(begin, end, parsed); result.ec == std::errc{} && result.ptr == end)
+			{
+				return parsed;
+			}
+		}
+		return std::nullopt;
+	}
+
+	LiteNN::CompilerOptions CompilerOptionsFromEnvironment()
+	{
+		auto options = LiteNN::CompilerOptions::Defaults();
+		if (const auto threadCount = ParseU64Env("LITENN_CPU_AOT_THREADS"); threadCount && *threadCount > 0)
+		{
+			options.cpuAOTThreadCount = static_cast<std::size_t>(*threadCount);
+		}
+		if (const auto minFlops = ParseU64Env("LITENN_CPU_AOT_PARALLEL_MIN_FLOPS"))
+		{
+			options.cpuAOTParallelMinFlops = *minFlops;
+		}
+		if (const auto minConstantBytes = ParseU64Env("LITENN_CPU_AOT_EXTERNAL_CONSTANT_MIN_BYTES"))
+		{
+			options.cpuAOTExternalConstantMinBytes = *minConstantBytes;
+		}
+		if (const auto optLevel = ParseU64Env("LITENN_CPU_AOT_LLVM_OPT_LEVEL"))
+		{
+			options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
+		}
+		options.enableCPUAOTExternalRegions =
+		    TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
+		    TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
+		if (const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_REGION_FUSION"))
+		{
+			options.enableCPUAOTExternalRegionFusion = TruthyEnvValue(value);
+		}
+		if (TruthyEnvValue(std::getenv("LITENN_CUDA_DISABLE_NATIVE_AOT")))
+		{
+			options.enableCUDANativeAOT = false;
+		}
+		return options;
+	}
+
 	std::string_view BackendName(LiteNN::CompiledModuleBackend backend)
 	{
 		switch (backend)
@@ -118,9 +181,9 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			    graph, LiteNN::CompilerOptions::FromEnvironment());
+			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFile(argv[3], symbolPrefix);
 			PrintArtifactSummary(artifact, argv[3]);
@@ -138,9 +201,9 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
-			    graph, LiteNN::CompilerOptions::FromEnvironment());
+			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment());
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFile(argv[3], symbolPrefix);
 			PrintArtifactSummary(artifact, argv[3]);
@@ -160,9 +223,9 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			    graph, LiteNN::CompilerOptions::FromEnvironment()).SeparateRodata();
+			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFiles(argv[3], symbolPrefix);
 			PrintSeparatedArtifactSummary(artifact, argv[3]);
@@ -180,9 +243,9 @@ int main(int argc, char** argv)
 				return 1;
 			}
 #if defined(LITENN_GGUF_CONVERT_ENABLE_AOT) && defined(LITENN_ENABLE_CUDA)
-			auto graph = LiteNN::Serialization::LoadModel(argv[2]);
+			auto graph = LiteNN::Serialization::LoadGraphArchive(argv[2]);
 			auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(
-			    graph, LiteNN::CompilerOptions::FromEnvironment()).SeparateRodata();
+			    LiteNN::BuildExecutablePlan(graph), CompilerOptionsFromEnvironment()).SeparateRodata();
 			const std::string_view symbolPrefix = argc == 5 ? std::string_view(argv[4]) : "litenn_gguf_module";
 			artifact.WriteObjectFiles(argv[3], symbolPrefix);
 			PrintSeparatedArtifactSummary(artifact, argv[3]);
@@ -205,7 +268,7 @@ int main(int argc, char** argv)
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto positionOffset = argc == 6 ? ParseSize(argv[5], "position-offset", true) : 0uz;
 			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, sequenceLength, positionOffset);
-			LiteNN::Serialization::SaveModel(lowered, argv[3]);
+			LiteNN::Serialization::SaveGraphArchive(lowered, argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
 			return 0;
@@ -222,7 +285,7 @@ int main(int argc, char** argv)
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto pastLength = ParseSize(argv[5], "past-length", true);
 			auto lowered = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, sequenceLength, pastLength, pastLength);
-			LiteNN::Serialization::SaveModel(lowered, argv[3]);
+			LiteNN::Serialization::SaveGraphArchive(lowered, argv[3]);
 			std::cout << "Lowered LLaMA decode graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
 			return 0;

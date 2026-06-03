@@ -122,8 +122,8 @@ TEST(Quantization, VariableMetadataSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_quantization_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -159,7 +159,7 @@ TEST(Quantization, GraphQuantizeDequantizeRunsInInterpreter)
 	const Tensor<CPU> source({ -1.0, 0.0, 1.0 }, { 3 }, DataType::Float32);
 	std::vector<Tensor<CPU>> inputs;
 	inputs.push_back(source);
-	const auto results = interpreter.RunForward(graph, inputs);
+	const auto results = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), -1.0F);
@@ -191,7 +191,7 @@ TEST(Quantization, ConstFoldQuantizeDequantize)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
-	const auto results = interpreter.RunForward(graph, inputs);
+	const auto results = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), -1.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 1), 0.0F);
@@ -216,13 +216,13 @@ TEST(Quantization, QuantizedConstantPayloadSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_quantized_constant_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
-	const auto results = interpreter.RunForward(loaded, inputs);
+	const auto results = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(results.size(), 1);
 	for (std::size_t i = 0; i < source.NumElements(); ++i)
 	{
@@ -251,8 +251,8 @@ TEST(Quantization, BlockFormatRawPayloadMetadataSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_block_payload_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveModel(graph, path);
-	auto loaded = Serialization::LoadModel(path);
+	Serialization::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	const auto& loadedNode = loaded.GetSubgraph(loaded.Forward()).GetNodeEntry(0).node;
@@ -265,7 +265,7 @@ TEST(Quantization, BlockFormatRawPayloadMetadataSurvivesModelIORoundTrip)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
-	const auto results = interpreter.RunForward(loaded, inputs);
+	const auto results = interpreter.RunForward(BuildExecutablePlan(loaded), inputs);
 	ASSERT_EQ(results.size(), 1);
 	const auto* data = static_cast<const std::uint8_t*>(results[0].RawData());
 	for (std::size_t i = 0; i < rawPayload.NumElements(); ++i)

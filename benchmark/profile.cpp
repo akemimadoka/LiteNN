@@ -4,6 +4,8 @@
 // 2) 将编译产物 (.o) 写到磁盘，并用 objdump 生成 first-class 指令统计
 // 3) 测量 Compile() 自身的耗时（一次性成本）
 
+#include "CompilerOptionsEnv.h"
+
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #ifdef LITENN_ENABLE_CUDA
@@ -37,24 +39,26 @@ using namespace LiteNN;
 
 static Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto fc = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto fc = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 static Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 128 }, rng),
 	    Initializer::Zeros({ 1, 128 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 128, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -62,19 +66,20 @@ static Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	fwd.SetResults({ Layer::AddLinear(fwd, h2, a1) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 512 }, rng),
 	    Initializer::Zeros({ 1, 512 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 512, 256 }, rng),
 	    Initializer::Zeros({ 1, 256 }));
-	const auto h3 = Layer::CreateLinear(graph,
+	const auto h3 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 256, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -83,7 +88,7 @@ static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 	fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 static void Optimize(Graph& graph)
@@ -536,9 +541,8 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 
 		CompiledModuleArtifact artifact;
 		{
-			ScopedEnvVar disableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "0");
 			auto begin = Clock::now();
-			artifact = Compiler<CUDA>::CompileArtifact(graph, CompilerOptions::FromEnvironment());
+			artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph), LiteNNBenchCompilerOptionsFromEnvironment());
 			auto end = Clock::now();
 			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
 		}
@@ -574,20 +578,21 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 
 		auto inputs = MakeCUDAProfileInputs(result.batch);
 		auto outputs = AllocateCUDAProfileOutputs(module);
-		const auto runInto = [&] {
-			module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		const auto runInto = [&](bool enableGraphReplay) {
+			module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs),
+			               CompiledModuleCUDARunOptions{ .enableGraphReplay = enableGraphReplay });
 		};
 
 		{
-			ScopedEnvVar disableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "0");
-			result.nativeFirstMs = TimedOnceMs(runInto);
-			const auto timing = TimedRepeated(runInto, result.batch, 300.0);
+			const auto nativeRun = [&] { runInto(false); };
+			result.nativeFirstMs = TimedOnceMs(nativeRun);
+			const auto timing = TimedRepeated(nativeRun, result.batch, 300.0);
 			result.nativeMeanMs = timing.meanMs;
 		}
 		{
-			ScopedEnvVar enableGraph("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
-			result.graphFirstMs = TimedOnceMs(runInto);
-			const auto timing = TimedRepeated(runInto, result.batch, 300.0);
+			const auto graphRun = [&] { runInto(true); };
+			result.graphFirstMs = TimedOnceMs(graphRun);
+			const auto timing = TimedRepeated(graphRun, result.batch, 300.0);
 			result.graphMeanMs = timing.meanMs;
 		}
 		result.message = "ok";
@@ -644,7 +649,7 @@ int main(int argc, char** argv)
 
 		// Time compile
 		auto cs = Clock::now();
-		auto compiled = Compiler<CPU>::Compile(g, CompilerOptions::FromEnvironment());
+		auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(g), LiteNNBenchCompilerOptionsFromEnvironment());
 		auto ce = Clock::now();
 		const double compileMs = clk::duration<double, std::milli>(ce - cs).count();
 
@@ -745,7 +750,7 @@ int main(int argc, char** argv)
 			    row.compileMs, row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs, row.message);
 		}
 		std::cout << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
-		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with LITENN_CUDA_ENABLE_GRAPH_REPLAY=1.\n";
+		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with enableGraphReplay=true.\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";

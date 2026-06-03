@@ -42,6 +42,8 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
+	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::Interpreter);
+	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(trainer.Plan()));
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
 	std::vector<Tensor<CPU>> outputGradients;
@@ -58,6 +60,36 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.6f);
 }
 
+TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
+
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Training::TrainerOptions options;
+	options.buildBackwardIfMissing = false;
+	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f), options);
+	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::AOT);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	auto outputs = trainer.Forward(inputs);
+
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 6.0f);
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	EXPECT_THROW((void)trainer.Step(inputs, outputGradients), std::runtime_error);
+}
+
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 {
 	Graph graph;
@@ -68,7 +100,7 @@ TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 
 	auto result = trainer.StepSoftmaxCrossEntropy(inputs, 1);
@@ -97,7 +129,7 @@ TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::CPUTrainer<Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 	std::vector<std::size_t> targets = { 0, 1 };
 

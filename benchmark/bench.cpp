@@ -1,5 +1,7 @@
 #include <benchmark/benchmark.h>
 
+#include "CompilerOptionsEnv.h"
+
 #include <LiteNN.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
@@ -84,24 +86,26 @@ void SetThroughputCounters(benchmark::State& state, std::size_t batch);
 
 Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto fc = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto fc = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 128 }, rng),
 	    Initializer::Zeros({ 1, 128 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 128, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -109,19 +113,20 @@ Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	fwd.SetResults({ Layer::AddLinear(fwd, h2, a1) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
-	Graph graph;
-	const auto h1 = Layer::CreateLinear(graph,
+	ModelBuilder builder;
+	Graph& graph = builder.MutableGraph();
+	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 512 }, rng),
 	    Initializer::Zeros({ 1, 512 }));
-	const auto h2 = Layer::CreateLinear(graph,
+	const auto h2 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 512, 256 }, rng),
 	    Initializer::Zeros({ 1, 256 }));
-	const auto h3 = Layer::CreateLinear(graph,
+	const auto h3 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 256, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
@@ -130,7 +135,7 @@ Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 	fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return graph;
+	return builder.TakeGraph();
 }
 
 void Optimize(Graph& graph)
@@ -570,13 +575,13 @@ void BMInterpreter(benchmark::State& state, ModelKind kind, std::size_t batch)
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		auto outputs = interp.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 	}
 
 	for (auto _ : state)
 	{
-		auto outputs = interp.RunForward(graph, std::span<const Tensor<CPU>>(inputs));
+		auto outputs = interp.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 		benchmark::ClobberMemory();
 	}
@@ -615,9 +620,9 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
-	auto options = CompilerOptions::FromEnvironment();
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	options.enableCUDANativeAOT = false;
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, options);
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, options);
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
 		state.SkipWithError("expected CUDA CPU-bridge backend for model benchmark");
@@ -643,7 +648,8 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 	SetThroughputCounters(state, batch);
 }
 
-void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch,
+                              bool enableGraphReplay = false)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -654,7 +660,7 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 	std::mt19937 rng(42);
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, CompilerOptions::FromEnvironment());
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
 		state.SkipWithError("expected CUDA native backend for model benchmark");
@@ -664,15 +670,16 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCUDAInputs(inputData, batch);
 	auto outputs = AllocateCUDAOutputs(module);
+	const CompiledModuleCUDARunOptions runOptions{ .enableGraphReplay = enableGraphReplay };
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -682,8 +689,7 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 
 void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	ScopedEnvVar enableGraphReplay("LITENN_CUDA_ENABLE_GRAPH_REPLAY", "1");
-	BMCUDANativeModelRunInto(state, kind, batch);
+	BMCUDANativeModelRunInto(state, kind, batch, true);
 }
 
 void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
@@ -700,7 +706,7 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 	}
 
 	auto graph = BuildNativeMatMul(batch, width, dtype);
-	auto module = Compiler<CUDA>::Compile(graph, CUDA{}, CompilerOptions::FromEnvironment());
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
 		state.SkipWithError("expected CUDA native backend for MatMul benchmark");
@@ -753,8 +759,8 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	Optimize(graph);
 
-	auto options = CompilerOptions::FromEnvironment();
-	auto compiled = Compiler<CPU>::Compile(graph, options);
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph), options);
 	auto module = CompiledModule<CPU>::Load(compiled.Image());
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeInputs(inputData, batch);
@@ -778,7 +784,7 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t batch, const char* threadCount,
                             void (*optimizer)(Graph&) = Optimize)
 {
-	auto options = CompilerOptions::FromEnvironment();
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	if (threadCount != nullptr)
 	{
 		options.cpuAOTThreadCount = static_cast<std::size_t>(std::stoull(threadCount));
@@ -788,7 +794,7 @@ void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t
 	auto graph = GetModelSpec(kind).build(batch, rng);
 	optimizer(graph);
 
-	auto compiled = Compiler<CPU>::Compile(graph, options);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph), options);
 	auto module = CompiledModule<CPU>::Load(compiled.Image());
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeInputs(inputData, batch);
@@ -831,14 +837,14 @@ void BMEGraphAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t bat
 
 void BMAOTRedundantRunIntoConfigured(benchmark::State& state, std::size_t batch, bool enableEGraph)
 {
-	auto options = CompilerOptions::FromEnvironment();
+	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	auto graph = BuildRedundantAOTGraph(batch);
 	if (enableEGraph)
 	{
 		EGraphPass{}.Run(graph);
 	}
 
-	auto compiled = Compiler<CPU>::Compile(graph, options);
+	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(graph), options);
 	auto module = CompiledModule<CPU>::Load(compiled.Image());
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeInputs(inputData, batch);

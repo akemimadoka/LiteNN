@@ -76,6 +76,7 @@ namespace LiteNN
 	bool CUDANativeSupportsCast(DataType srcType, DataType dstType);
 	std::string CUDANativeCastKernelName(DataType srcType, DataType dstType);
 	std::string CUDANativeNVPTXTargetChip();
+	std::string CUDANativeNVPTXTargetChip(std::string_view requestedTarget);
 
 	/**
 	 * Generates a minimal same-shape CUDA binary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.

@@ -58,7 +58,7 @@ protected:
 
     mlir::OwningOpRef<mlir::ModuleOp> fullPipeline(const Graph& graph)
     {
-        auto module = litenn::translateGraphToMLIR(graph, ctx_);
+        auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
         if (!module)
             return {};
 

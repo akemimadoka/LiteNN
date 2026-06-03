@@ -58,6 +58,29 @@ TEST(GraphValidator, RejectsIncorrectBinaryOutputMetadata)
 	}
 }
 
+TEST(GraphValidator, UsesOpSchemaForNodeArityDiagnostics)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto malformed =
+	    subgraph.AddNode(ParamRefNode{ 0 },
+	                     { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { malformed, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	try
+	{
+		Validation::ValidateGraph(graph);
+		FAIL() << "expected graph validation to throw";
+	}
+	catch (const Validation::GraphValidationError& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("ParamRefNode expected output count"), std::string::npos);
+		EXPECT_NE(message.find("nodeKind=ParamRefNode"), std::string::npos);
+	}
+}
+
 TEST(GraphValidator, RejectsCallSignatureMismatch)
 {
 	Graph graph;
@@ -91,7 +114,7 @@ TEST(GraphValidator, RejectsRuntimeInputMismatch)
 
 	try
 	{
-		(void)interpreter.RunForward(graph, inputs);
+		(void)interpreter.RunForward(BuildExecutablePlan(graph), inputs);
 		FAIL() << "expected runtime input validation to throw";
 	}
 	catch (const std::runtime_error& ex)

@@ -18,16 +18,16 @@ logits = image @ weight + bias
 ```
 
 Graph construction uses `LiteNN::Layer::CreateLinear` / `AddLinear`. Training
-uses `LiteNN::Training::CPUTrainer`, `Optimizer::SoftmaxCrossEntropyWithLogits`,
+uses `LiteNN::Training::Trainer<CPU, Optimizer::SGD>`, `Optimizer::SoftmaxCrossEntropyWithLogits`,
 and `Optimizer::SGD`.
 Weight parameters are initialized with `LiteNN::Initializer::XavierUniform`,
 and bias parameters use `Initializer::Zeros`. The loss helper computes
-`dLoss/dLogits`, then `CPUTrainer` passes the gradient to the LiteNN backward graph:
+`dLoss/dLogits`, then `Trainer<CPU, Optimizer::SGD>` passes the gradient to the LiteNN backward graph:
 
 ```text
-CPUTrainer::StepSoftmaxCrossEntropy([image], label)
-  -> RunForward(graph, image)
-  -> RunBackward(graph, [image, grad_logits])
+Trainer<CPU, Optimizer::SGD>::StepSoftmaxCrossEntropy([image], label)
+  -> RunForward(BuildExecutablePlan(graph), image)
+  -> RunBackward(BuildExecutablePlan(graph), [image, grad_logits])
   -> StoreVariableGradients
   -> Optimizer::SGD::Step
 ```

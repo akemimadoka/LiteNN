@@ -2,6 +2,7 @@
 #define LITENN_LAYER_SCAN_H
 
 #include <LiteNN/Graph.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 
@@ -31,14 +32,14 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildScan(Graph& graph, DataType dtype, ShapeView shape, std::size_t axis = 0,
+	inline SubgraphId BuildScan(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis = 0,
 	                            ScanOp op = ScanOp::Sum)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
 		const auto result = AddScan(subgraph, { input, 0 }, axis, op);
 		subgraph.SetResults({ result });
-		return graph.AddSubgraph(std::move(subgraph));
+		return builder.AddSubgraph(std::move(subgraph));
 	}
 } // namespace LiteNN::Layer
 

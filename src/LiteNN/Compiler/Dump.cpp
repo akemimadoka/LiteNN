@@ -27,6 +27,7 @@
 #include <format>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace LiteNN::Debug
 {
@@ -122,12 +123,12 @@ namespace
 		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
 	}
 
-	mlir::OwningOpRef<mlir::ModuleOp> CreateTranslatedModule(const Graph& graph, mlir::MLIRContext& ctx)
+	mlir::OwningOpRef<mlir::ModuleOp> CreateTranslatedModule(const ExecutablePlan& plan, mlir::MLIRContext& ctx)
 	{
-		auto module = litenn::translateGraphToMLIR(graph, ctx);
+		auto module = litenn::translateExecutablePlanToMLIR(plan, ctx);
 		if (!module)
 		{
-			throw std::runtime_error("Failed to translate LiteNN graph to MLIR");
+			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
 		}
 		if (mlir::failed(mlir::verify(*module)))
 		{
@@ -191,12 +192,12 @@ namespace
 	}
 } // namespace
 
-	std::string DumpMLIR(const Graph& graph, MLIRDumpStage stage)
+	std::string DumpMLIR(const ExecutablePlan& plan, MLIRDumpStage stage)
 	{
 		mlir::MLIRContext ctx;
 		SetupDumpMLIRContext(ctx);
 
-		auto module = CreateTranslatedModule(graph, ctx);
+		auto module = CreateTranslatedModule(plan, ctx);
 		if (stage == MLIRDumpStage::InputDialect)
 		{
 			return PrintModule(*module);
