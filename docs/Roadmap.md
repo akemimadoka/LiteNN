@@ -1503,13 +1503,15 @@ to keep the old architecture alive if they are left in place during vNext.
     `SaveModelExternalWeights` to explicit `SaveGraphArchive` / `LoadGraphArchive` /
     `SaveGraphArchiveExternalWeights`; tools, tests, and examples now opt into graph archive semantics by name, and the
     public API guard prevents the old `Graph`-based `SaveModel` / `LoadModel` names from returning.
-- [ ] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
+- [x] Make compiler lowering plan-native: remove the `ExecutablePlan -> Graph -> MLIR/native matcher` bridge and make
   GraphToMLIR / native CPU / native CUDA entry points consume plan/module/region data directly.
   - [x] Public CPU/CUDA compiler and MLIR dump entry points are plan-native; legacy graph bridging is now an internal
     lowering implementation detail rather than the caller contract.
   - [x] Centralized the temporary `ExecutablePlan -> Graph -> MLIR` bridge inside `GraphToMLIR.cpp`; `DumpMLIR`,
     `CompiledModule`, and compiler pass tests call the plan-native translation entry point.
-  - [ ] Replace the internal `ExecutablePlan -> Graph` lowering bridge with direct plan/module/region lowering.
+  - [x] Replaced the internal `ExecutablePlan -> Graph -> MLIR` rebuilding bridge with direct `ExecutablePlan`
+    subgraph/variable metadata lowering in `GraphToMLIR.cpp`; the guard test prevents `BuildMLIRGraphFromPlan` from
+    returning.
 - [x] Remove library-internal environment-variable reads. `CompilerOptions`, `CUDAOptions`, and runtime/config objects own
   behavior; CLI, benchmarks, and examples may still populate those options from environment variables.
   - [x] `CUDANativeNVPTXTargetChip()` no longer reads `LITENN_CUDA_AOT_TARGET`; callers that need a non-default target must

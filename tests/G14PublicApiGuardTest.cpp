@@ -47,6 +47,8 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Compiler/Dump.h", "DumpMLIR(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR", "BuildExecutablePlan(graph)" },
+		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.cpp", "BuildMLIRGraphFromPlan",
+		  "direct ExecutablePlan lowering" },
 		{ "src/LiteNN/Runtime/Interpreter.h", "RunSubgraph(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Runtime/Interpreter.h", "RunForward(const Graph&", "BuildExecutablePlan(graph)" },
 		{ "src/LiteNN/Runtime/Interpreter.h", "RunForwardWithTrace(const Graph&", "BuildExecutablePlan(graph)" },
