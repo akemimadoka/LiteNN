@@ -6575,6 +6575,19 @@ void CompiledModule<CPU>::WriteObjectFile(const std::filesystem::path& path, std
 }
 
 #ifdef LITENN_ENABLE_CUDA
+namespace
+{
+	void RequireCUDACPUBridgeAllowed(const CUDA& device, std::string_view operation)
+	{
+		if (device.hostFallbackPolicy != CUDAHostFallbackPolicy::Allow)
+		{
+			throw std::runtime_error(std::format(
+			    "CompiledModule<CUDA> CPU bridge for {} is disabled; load with CUDAHostFallbackPolicy::Allow or lower the runtime schedule to a native CUDA artifact with explicit fallback steps",
+			    operation));
+		}
+	}
+}
+
 struct CompiledModule<CUDA>::Impl
 {
 	std::vector<std::byte> rodata;
@@ -6627,6 +6640,7 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleImage image, CUDA 
 
 	if (impl->backend == CompiledModuleBackend::CPUNative)
 	{
+		RequireCUDACPUBridgeAllowed(impl->device, "CPU-native artifact");
 		impl->cpuModule = CompiledModule<CPU>::Load({
 		    .rodata = impl->rodata.data(),
 		    .rodataSize = impl->rodata.size(),
@@ -6816,7 +6830,9 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 		auto inputDevice = inputs[i].CurDevice();
 		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].RawData(), inputs[i].NumElements(),
 		                              cpuInput.DType(), cpuInput.RawData(),
-		                              CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+		                              CUDAExecutionOptions{ .stream = options.stream,
+		                                                    .synchronize = true,
+		                                                    .allowHostFallback = true });
 		cpuInputs.push_back(std::move(cpuInput));
 	}
 
@@ -6832,7 +6848,9 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	{
 		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].RawData(),
 		                                cpuOutputs[i].DType(), cpuOutputs[i].RawData(), cpuOutputs[i].NumElements(),
-		                                CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
+		                                CUDAExecutionOptions{ .stream = options.stream,
+		                                                      .synchronize = true,
+		                                                      .allowHostFallback = true });
 	}
 }
 

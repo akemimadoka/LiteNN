@@ -37,9 +37,14 @@ static std::vector<float> QuantizeAsFloat32(std::span<const float> values, DataT
 	return ReadAsFloat32(quantized);
 }
 
+static CUDA CUDAWithHostFallback()
+{
+	return CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow };
+}
+
 static std::vector<float> RoundTripFloat32ThroughCUDA(std::span<const float> values, DataType dataType)
 {
-	CUDA device{};
+	auto device = CUDAWithHostFallback();
 	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
 	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
 	                                values.size());
@@ -51,7 +56,7 @@ static std::vector<float> RoundTripFloat32ThroughCUDA(std::span<const float> val
 
 static std::vector<float> ConvertCUDADeviceToFloat32(std::span<const float> values, DataType dataType)
 {
-	CUDA device{};
+	auto device = CUDAWithHostFallback();
 	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
 	Tensor<CUDA> converted(Uninitialized, { values.size() }, DataType::Float32, device);
 	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
@@ -92,8 +97,9 @@ TEST(CUDADevice, RoundTripAndElementwiseFallback)
 	}
 
 	Tensor<CPU> cpuTensor({ 1, 2, 3, 4, 5, 6 }, { 2, 3 });
-	auto cudaTensor = cpuTensor.CopyToDevice(CUDA{});
-	auto cudaClone = cudaTensor.CopyToDevice(CUDA{});
+	const auto fallbackDevice = CUDAWithHostFallback();
+	auto cudaTensor = cpuTensor.CopyToDevice(fallbackDevice);
+	auto cudaClone = cudaTensor.CopyToDevice(fallbackDevice);
 	auto sum = cudaTensor + cudaTensor;
 	auto backToCpu = sum.CopyToDevice(CPU{});
 	auto cloneBackToCpu = cudaClone.CopyToDevice(CPU{});
@@ -102,6 +108,27 @@ TEST(CUDADevice, RoundTripAndElementwiseFallback)
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(backToCpu, i), ReadFloat(cpuTensor, i) * 2.0F);
 		EXPECT_FLOAT_EQ(ReadFloat(cloneBackToCpu, i), ReadFloat(cpuTensor, i));
+	}
+}
+
+TEST(CUDADevice, HostFallbackRequiresExplicitPolicy)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+
+	Tensor<CPU> cpuTensor({ 1, 2, 3, 4 }, { 2, 2 });
+	auto strict = cpuTensor.CopyToDevice(CUDA{});
+	EXPECT_THROW((void)(strict + strict), std::runtime_error);
+
+	const auto fallbackDevice = CUDAWithHostFallback();
+	auto fallback = cpuTensor.CopyToDevice(fallbackDevice);
+	auto sum = fallback + fallback;
+	auto backToCpu = sum.CopyToDevice(CPU{});
+	for (auto i = 0uz; i < cpuTensor.NumElements(); ++i)
+	{
+		EXPECT_FLOAT_EQ(ReadFloat(backToCpu, i), ReadFloat(cpuTensor, i) * 2.0F);
 	}
 }
 

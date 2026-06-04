@@ -86,6 +86,33 @@ namespace LiteNN
 			return std::vector<std::byte>(ElementSize(type) * size);
 		}
 
+		bool AllowsHostFallback(const CUDA& device, const CUDAExecutionOptions& options) noexcept
+		{
+			return options.allowHostFallback ||
+			       device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow;
+		}
+
+		void RequireHostFallbackAllowed(const CUDA& device, const CUDAExecutionOptions& options,
+		                                std::string_view operation)
+		{
+			if (!AllowsHostFallback(device, options))
+			{
+				throw std::runtime_error(std::format(
+				    "CUDA host fallback for {} is disabled; add an explicit runtime schedule fallback step or set CUDAHostFallbackPolicy::Allow for this debug/fallback path",
+				    operation));
+			}
+		}
+
+		CUDAExecutionOptions DeviceDefaultCUDAOptions(const CUDA& device) noexcept
+		{
+			return CUDAExecutionOptions{
+			    .stream = nullptr,
+			    .synchronize = true,
+			    .enableCUBLASLt = false,
+			    .allowHostFallback = device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow,
+			};
+		}
+
 		void CheckCUDA(cudaError_t status, std::string_view action)
 		{
 			if (status != cudaSuccess)
@@ -1776,7 +1803,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size,
 	                                   DataType dstType, void* dst)
 	{
-		CopyToCPU(device, srcType, src, size, dstType, dst, CUDAExecutionOptions{});
+		CopyToCPU(device, srcType, src, size, dstType, dst, DeviceDefaultCUDAOptions(device));
 	}
 
 	void DeviceTraits<CUDA>::CopyToCPU(CUDA& device, DataType srcType, const void* src, std::size_t size,
@@ -1809,6 +1836,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			return;
 		}
 
+		RequireHostFallbackAllowed(device, options, "D2H data type conversion");
 		auto hostSrc = MakeHostBuffer(srcType, size);
 		CheckCUDA(cudaMemcpyAsync(hostSrc.data(), src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost, stream),
 		          "cudaMemcpyAsync D2H");
@@ -1820,7 +1848,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
 	                                     const void* src, std::size_t size)
 	{
-		CopyFromCPU(device, dstType, dst, srcType, src, size, CUDAExecutionOptions{});
+		CopyFromCPU(device, dstType, dst, srcType, src, size, DeviceDefaultCUDAOptions(device));
 	}
 
 	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
@@ -1853,6 +1881,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			return;
 		}
 
+		RequireHostFallbackAllowed(device, options, "H2D data type conversion");
 		auto hostDst = MakeHostBuffer(dstType, size);
 		CPU cpu;
 		DeviceTraits<CPU>::ConvertTo(cpu, srcType, src, size, dstType, hostDst.data());
@@ -1878,6 +1907,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			return;
 		}
 
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "device data type conversion");
 		auto hostSrc = MakeHostBuffer(srcType, size);
 		auto hostDst = MakeHostBuffer(dstType, size);
 		CheckCUDA(cudaMemcpy(hostSrc.data(), src, ElementSize(srcType) * size, cudaMemcpyDeviceToHost),
@@ -1891,6 +1921,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoUnaryOp(CUDA& device, UnaryOp unaryOp, void* dst, DataType type, ShapeView shape,
 	                                   const void* src)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "unary op");
 		const auto resultType = ResolveUnaryResultType(unaryOp, type);
 		const auto resultShape = ResolveUnaryResultShape(unaryOp, shape);
 		auto hostSrc = MakeHostBuffer(type, shape.NumElements());
@@ -1905,7 +1936,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
 	                                    const void* src1, DataType type2, ShapeView shape2, const void* src2)
 	{
-		DoBinaryOp(device, binaryOp, dst, type1, shape1, src1, type2, shape2, src2, CUDAExecutionOptions{});
+		DoBinaryOp(device, binaryOp, dst, type1, shape1, src1, type2, shape2, src2, DeviceDefaultCUDAOptions(device));
 	}
 
 	void DeviceTraits<CUDA>::DoBinaryOp(CUDA& device, BinaryOp binaryOp, void* dst, DataType type1, ShapeView shape1,
@@ -1922,6 +1953,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			throw std::runtime_error("Stream-aware asynchronous CUDA binary fallback is not supported");
 		}
 
+		RequireHostFallbackAllowed(device, options, "binary op");
 		const auto resultType = ResolveBinaryResultType(binaryOp, type1, type2);
 		const auto resultShape = ResolveBinaryResultShape(binaryOp, shape1, shape2);
 		auto hostSrc1 = MakeHostBuffer(type1, shape1.NumElements());
@@ -1939,6 +1971,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoReduceOp(CUDA& device, ReduceOp reduceOp, void* dst, DataType type, ShapeView shape,
 	                                    const void* src, std::size_t axis)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "reduce op");
 		const auto resultType = ResolveReduceResultType(reduceOp, type);
 		const auto resultShape = ResolveReduceResultShape(reduceOp, shape, axis);
 		auto hostSrc = MakeHostBuffer(type, shape.NumElements());
@@ -1953,6 +1986,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoConcatOp(CUDA& device, void* dst, DataType type, const void* const* srcPtrs,
 	                                    const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "concat op");
 		const auto resultShape = ResolveConcatResultShape(srcShapes, inputCount, axis);
 		std::vector<std::vector<std::byte>> hostInputs;
 		std::vector<const void*> hostPtrs;
@@ -1974,6 +2008,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoSliceOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 	                                   std::size_t axis, std::size_t start, std::size_t length)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "slice op");
 		const auto resultShape = ResolveSliceResultShape(srcShape, axis, start, length);
 		auto hostSrc = MakeHostBuffer(type, srcShape.NumElements());
 		auto hostDst = MakeHostBuffer(type, ShapeView{ resultShape }.NumElements());
@@ -1988,6 +2023,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	                                    const void* data, DataType indexType, ShapeView indexShape,
 	                                    const void* indices)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "get-rows op");
 		const auto resultShape = ResolveGetRowsResultShape(dataShape, indexShape);
 		auto hostData = MakeHostBuffer(dataType, dataShape.NumElements());
 		auto hostIndices = MakeHostBuffer(indexType, indexShape.NumElements());
@@ -2005,6 +2041,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	void DeviceTraits<CUDA>::DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape,
 	                                    const void* src, ShapeView permutation)
 	{
+		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "permute op");
 		const auto numElements = srcShape.NumElements();
 		auto hostSrc = MakeHostBuffer(type, numElements);
 		auto hostDst = MakeHostBuffer(type, numElements);

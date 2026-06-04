@@ -13,9 +13,17 @@
 
 namespace LiteNN
 {
+	/// Host fallback is an explicit execution policy, not part of CUDA device identity.
+	enum class CUDAHostFallbackPolicy
+	{
+		Reject,
+		Allow
+	};
+
 	struct CUDA
 	{
 		int deviceIndex = 0;
+		CUDAHostFallbackPolicy hostFallbackPolicy{ CUDAHostFallbackPolicy::Reject };
 		mutable std::string infoCache;
 
 		bool operator==(const CUDA& other) const
@@ -72,6 +80,7 @@ namespace LiteNN
 		void* stream{};
 		bool synchronize{ true };
 		bool enableCUBLASLt{};
+		bool allowHostFallback{};
 	};
 
 	class CUDADriverModule

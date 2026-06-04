@@ -417,7 +417,9 @@ void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind,
 	auto graph = BuildInferenceGraph(kind, batch);
 	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	options.enableCUDANativeAOT = false;
-	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, options);
+	auto module = Compiler<CUDA>::Compile(
+	    BuildExecutablePlan(graph), CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow },
+	    options);
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
 		state.SkipWithError("expected CUDA CPU fallback backend");

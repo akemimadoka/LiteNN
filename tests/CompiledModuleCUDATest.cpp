@@ -91,6 +91,11 @@ namespace
 		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 	}
 
+	CUDA CUDAWithHostFallback()
+	{
+		return CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow };
+	}
+
 	Graph BuildBinaryGraph(BinaryOp op, std::span<const std::size_t> lhsShape, std::span<const std::size_t> rhsShape,
 	                       std::span<const std::size_t> outputShape, std::string outputName)
 	{
@@ -454,7 +459,8 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	}
 
 	auto graph = BuildSimplePowGraph();
-	auto compiled = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{});
+	const auto bridgeDevice = CUDAWithHostFallback();
+	auto compiled = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), bridgeDevice);
 
 	EXPECT_EQ(compiled.Backend(), CompiledModuleBackend::CPUNative);
 	ASSERT_GT(compiled.Rodata().size(), 0u);
@@ -462,8 +468,8 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	EXPECT_EQ(compiled.FindInput("lhs"), 0u);
 	EXPECT_EQ(compiled.FindOutput("pow"), 0u);
 
-	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
-	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
+	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
 	auto outputs = compiled.Run(inputs);
@@ -471,8 +477,8 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutput, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 
-	auto loaded = CompiledModule<CUDA>::Load(compiled.Image(), CUDA{});
-	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
+	auto loaded = CompiledModule<CUDA>::Load(compiled.Image(), bridgeDevice);
+	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, bridgeDevice) };
 	loaded.RunInto(inputs, out);
 	auto cpuOutInto = out[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutInto, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
@@ -487,18 +493,39 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 
 	auto graph = BuildSimplePowGraph();
 	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
-	auto module = artifact.Load(CUDA{});
+	const auto bridgeDevice = CUDAWithHostFallback();
+	auto module = artifact.Load(bridgeDevice);
 
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
 	EXPECT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
 
-	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
-	auto rhs = Tensor<CPU>({ 3, 2, 1, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
+	auto rhs = Tensor<CPU>({ 3, 2, 1, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
 	auto outputs = module.Run(inputs);
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutput, std::array{ 8.0f, 9.0f, 4.0f, 1.0f });
+}
+
+TEST(CompiledModuleCUDATest, CPUBridgeRequiresExplicitFallbackPolicy)
+{
+	auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(BuildSimplePowGraph()));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CPUNative);
+
+	try
+	{
+		(void)artifact.Load(CUDA{});
+		FAIL() << "expected strict CUDA load to reject CPU bridge";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("CPU bridge"), std::string::npos);
+		EXPECT_NE(message.find("CUDAHostFallbackPolicy::Allow"), std::string::npos);
+	}
+
+	EXPECT_NO_THROW((void)artifact.Load(CUDAWithHostFallback()));
 }
 
 TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
@@ -547,10 +574,11 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 		ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), expected[0], 1e-4f);
 	};
 
-	auto artifactLoaded = artifact.Load(CUDA{});
+	const auto bridgeDevice = CUDAWithHostFallback();
+	auto artifactLoaded = artifact.Load(bridgeDevice);
 	runAndCheck(artifactLoaded);
 
-	auto separatedLoaded = CompiledModule<CUDA>::Load(separated.Image(), CUDA{});
+	auto separatedLoaded = CompiledModule<CUDA>::Load(separated.Image(), bridgeDevice);
 	runAndCheck(separatedLoaded);
 }
 
@@ -864,12 +892,13 @@ TEST(CompiledModuleCUDATest, CPUBridgeRejectsAsynchronousRunOptions)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(BuildSimplePowGraph()), CUDA{});
+	const auto bridgeDevice = CUDAWithHostFallback();
+	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(BuildSimplePowGraph()), bridgeDevice);
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
-	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
-	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto lhs = Tensor<CPU>({ 2, 3, 4, 5 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
+	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
-	std::array<Tensor<CUDA>, 1> outputs = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
+	std::array<Tensor<CUDA>, 1> outputs = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, bridgeDevice) };
 
 	try
 	{
@@ -1797,7 +1826,10 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 
 		auto cudaArtifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(testCase.graph));
 		EXPECT_EQ(cudaArtifact.Backend(), testCase.expectedCUDABackend);
-		auto cudaModule = cudaArtifact.Load(CUDA{});
+		const auto cudaDevice = testCase.expectedCUDABackend == CompiledModuleBackend::CPUNative
+		                            ? CUDAWithHostFallback()
+		                            : CUDA{};
+		auto cudaModule = cudaArtifact.Load(cudaDevice);
 		EXPECT_EQ(cudaModule.Backend(), testCase.expectedCUDABackend);
 		auto cudaInputs = MakeCUDAInputs(testCase.inputs);
 		auto cudaOutputs = cudaModule.Run(cudaInputs);
