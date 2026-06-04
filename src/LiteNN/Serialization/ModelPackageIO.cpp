@@ -279,6 +279,24 @@ namespace LiteNN::Serialization
 			out << "]}";
 		}
 
+		void RuntimeBufferBindingJson(std::ostream& out, const RuntimeBufferBinding& binding)
+		{
+			out << "{\"name\":";
+			JsonString(out, binding.name);
+			out << ",\"type\":";
+			TensorTypeJson(out, binding.type);
+			out << ",\"ownership\":" << EnumValue(binding.ownership) << ",\"externalKind\":"
+			    << EnumValue(binding.externalKind) << ",\"memorySpace\":" << EnumValue(binding.memorySpace)
+			    << ",\"memoryBuffer\":" << binding.memoryBuffer << ",\"byteOffset\":" << binding.byteOffset
+			    << ",\"byteSize\":" << binding.byteSize << ",\"alignment\":" << binding.alignment
+			    << ",\"checksum\":" << binding.checksum << ",\"mutability\":" << EnumValue(binding.mutability)
+			    << ",\"rebindPolicy\":" << EnumValue(binding.rebindPolicy) << ",\"strides\":";
+			NumberList(out, binding.strides);
+			out << ",\"layoutTag\":";
+			JsonString(out, binding.layoutTag);
+			out << ",\"aliasSet\":" << binding.aliasSet << '}';
+		}
+
 		void PlanJson(std::ostream& out, const ExecutablePlan& plan)
 		{
 			out << "{\"forward\":" << plan.forward << ",\"backward\":";
@@ -483,7 +501,16 @@ namespace LiteNN::Serialization
 				NumberList(out, step.outputBuffers);
 				out << '}';
 			}
-			out << "],\"runtimeStates\":[],\"tensors\":[";
+			out << "],\"runtimeStates\":[],\"bufferBindings\":[";
+			for (std::size_t i = 0; i < manifest.bufferBindings.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				RuntimeBufferBindingJson(out, manifest.bufferBindings[i]);
+			}
+			out << "],\"tensors\":[";
 			for (std::size_t i = 0; i < manifest.tensors.size(); ++i)
 			{
 				if (i != 0)
@@ -693,6 +720,32 @@ namespace LiteNN::Serialization
 			return memory;
 		}
 
+		RuntimeBufferBinding ParseRuntimeBufferBinding(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			RuntimeBufferBinding binding;
+			binding.name = AsString(Member(object, "name", label), label);
+			binding.type = ParseTensorType(Member(object, "type", label), label);
+			binding.ownership = static_cast<BufferOwnership>(AsUInt(Member(object, "ownership", label), label));
+			binding.externalKind =
+			    static_cast<ExternalBufferKind>(AsUInt(Member(object, "externalKind", label), label));
+			binding.memorySpace =
+			    static_cast<TensorMemorySpace>(AsUInt(Member(object, "memorySpace", label), label));
+			binding.memoryBuffer = static_cast<std::size_t>(AsUInt(Member(object, "memoryBuffer", label), label));
+			binding.byteOffset = static_cast<std::size_t>(AsUInt(Member(object, "byteOffset", label), label));
+			binding.byteSize = static_cast<std::size_t>(AsUInt(Member(object, "byteSize", label), label));
+			binding.alignment = static_cast<std::size_t>(AsUInt(Member(object, "alignment", label), label));
+			binding.checksum = AsUInt(Member(object, "checksum", label), label);
+			binding.mutability = static_cast<BufferMutability>(AsUInt(Member(object, "mutability", label), label));
+			binding.rebindPolicy =
+			    static_cast<BufferRebindPolicy>(AsUInt(Member(object, "rebindPolicy", label), label));
+			binding.strides = SizeList(Member(object, "strides", label), label);
+			binding.layoutTag = AsString(Member(object, "layoutTag", label), label);
+			binding.aliasSet = static_cast<std::size_t>(AsUInt(Member(object, "aliasSet", label), label));
+			ValidateRuntimeBufferBinding(binding);
+			return binding;
+		}
+
 		ExecutablePlan ParsePlan(simdjson::dom::element value)
 		{
 			const auto object = AsObject(value, "plan");
@@ -829,6 +882,11 @@ namespace LiteNN::Serialization
 				manifest.partitions.push_back(std::move(partition));
 			}
 			manifest.memory = ParseMemory(Member(object, "memory", "manifest.memory"), "manifest.memory");
+			for (const auto item : AsArray(Member(object, "bufferBindings", "manifest.bufferBindings"),
+			                              "manifest.bufferBindings"))
+			{
+				manifest.bufferBindings.push_back(ParseRuntimeBufferBinding(item, "manifest.bufferBindings"));
+			}
 			for (const auto item : AsArray(Member(object, "runtimeSteps", "manifest.runtimeSteps"),
 			                              "manifest.runtimeSteps"))
 			{

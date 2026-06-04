@@ -92,6 +92,7 @@ namespace LiteNN::Runtime
 		ExecutableModule module;
 		MemoryPlan memory;
 		std::vector<RuntimeStateBinding> states;
+		std::vector<RuntimeBufferBinding> bufferBindings;
 		std::vector<RuntimeScheduleStep> steps;
 	};
 
@@ -180,6 +181,29 @@ namespace LiteNN::Runtime
 			                                    .aliasSet = bufferId });
 			schedule.memory.persistentBytes += *byteSize;
 			state.memoryBuffer = bufferId;
+		}
+
+		schedule.bufferBindings.reserve(schedule.module.plan.variables.size() + schedule.states.size());
+		for (std::size_t i = 0; i < schedule.module.plan.variables.size(); ++i)
+		{
+			const auto& variable = schedule.module.plan.variables[i];
+			schedule.bufferBindings.push_back(ToRuntimeBufferBinding(
+			    variable.region.name.empty() ? std::format("variable.{}", i) : variable.region.name, variable, i));
+		}
+		for (const auto& state : schedule.states)
+		{
+			RuntimeBufferBinding binding;
+			binding.name = state.name;
+			binding.type = state.type;
+			binding.ownership = BufferOwnership::Owned;
+			binding.externalKind = ExternalBufferKind::None;
+			binding.memorySpace = state.type.memorySpace;
+			binding.memoryBuffer = *state.memoryBuffer;
+			binding.byteSize = state.type.ByteSize().value_or(0);
+			binding.alignment = 1;
+			binding.mutability = state.mutability;
+			binding.rebindPolicy = BufferRebindPolicy::CompatibleMetadata;
+			schedule.bufferBindings.push_back(std::move(binding));
 		}
 
 		for (const auto& state : schedule.states)
@@ -333,6 +357,28 @@ namespace LiteNN::Runtime
 			if (schedule.memory.buffers[*state.memoryBuffer].kind != MemoryBufferKind::Persistent)
 			{
 				throw std::runtime_error("Runtime state binding must use a persistent buffer");
+			}
+		}
+		for (const auto& binding : schedule.bufferBindings)
+		{
+			ValidateRuntimeBufferBinding(binding);
+			if (binding.memoryBuffer >= schedule.memory.buffers.size())
+			{
+				throw std::runtime_error("Runtime buffer binding references an invalid memory buffer: " + binding.name);
+			}
+			const auto& buffer = schedule.memory.buffers[binding.memoryBuffer];
+			if (buffer.memorySpace != binding.type.memorySpace)
+			{
+				throw std::runtime_error("Runtime buffer binding memory space does not match its memory buffer: " +
+				                         binding.name);
+			}
+			if (binding.byteSize != 0 && binding.byteSize > buffer.byteSize)
+			{
+				throw std::runtime_error("Runtime buffer binding is larger than its memory buffer: " + binding.name);
+			}
+			if (buffer.alignment == 0 || binding.alignment == 0)
+			{
+				throw std::runtime_error("Runtime buffer binding has invalid alignment: " + binding.name);
 			}
 		}
 	}

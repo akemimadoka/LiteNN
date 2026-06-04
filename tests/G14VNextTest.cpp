@@ -59,6 +59,8 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_EQ(manifest.artifacts[0].backend, BackendCPUAOT);
 	EXPECT_FALSE(manifest.runtimeSteps.empty());
 	EXPECT_GT(manifest.memory.buffers.size(), 0u);
+	ASSERT_FALSE(manifest.bufferBindings.empty());
+	EXPECT_EQ(manifest.bufferBindings[0].name, "linear.bias");
 	EXPECT_FALSE(manifest.opCoverage.empty());
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(manifest));
 }
@@ -85,6 +87,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 		EXPECT_NE(json.find("\"op\":"), std::string::npos);
 		EXPECT_EQ(json.find("\"opKind\""), std::string::npos);
+		EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
@@ -95,6 +98,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.manifest.functions[0].name, "forward");
 	ASSERT_EQ(package.manifest.tensors.size(), 1u);
 	EXPECT_EQ(package.manifest.tensors[0].name, "linear.bias");
+	ASSERT_FALSE(package.manifest.bufferBindings.empty());
+	EXPECT_EQ(package.manifest.bufferBindings[0].name, "linear.bias");
 	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
 	EXPECT_EQ(package.manifest.artifacts[0].backend, BackendCPUAOT);
 	ASSERT_EQ(package.plan.subgraphs.size(), module.plan.subgraphs.size());
@@ -130,6 +135,8 @@ TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 	ASSERT_EQ(schedule.states.size(), 1u);
 	ASSERT_TRUE(schedule.states[0].memoryBuffer.has_value());
 	EXPECT_LT(*schedule.states[0].memoryBuffer, schedule.memory.buffers.size());
+	ASSERT_GE(schedule.bufferBindings.size(), 2u);
+	EXPECT_EQ(schedule.bufferBindings.back().name, "kv.cache.0");
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 	const auto trace = Runtime::TraceRuntimeSchedule(schedule);
 	ASSERT_EQ(trace.size(), 3u);
@@ -187,6 +194,10 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 
 	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
 	manifest.runtimeSteps[0].id = 99;
+	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
+
+	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest.bufferBindings[0].memoryBuffer = manifest.memory.buffers.size();
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 }
 

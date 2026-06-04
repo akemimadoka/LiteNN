@@ -76,6 +76,7 @@ namespace LiteNN
 		std::vector<ExecutablePartition> partitions;
 		MemoryPlan memory;
 		std::vector<Runtime::RuntimeStateBinding> runtimeStates;
+		std::vector<RuntimeBufferBinding> bufferBindings;
 		std::vector<Runtime::RuntimeScheduleStep> runtimeSteps;
 		std::vector<VNextExternalTensorRef> tensors;
 		std::vector<VNextArtifactRef> artifacts;
@@ -111,6 +112,7 @@ namespace LiteNN
 		Runtime::ValidateRuntimeSchedule(schedule);
 		manifest.memory = std::move(schedule.memory);
 		manifest.runtimeStates = std::move(schedule.states);
+		manifest.bufferBindings = std::move(schedule.bufferBindings);
 		manifest.runtimeSteps = std::move(schedule.steps);
 		manifest.artifacts = std::move(artifacts);
 		manifest.opCoverage = registry.CoverageReport();
@@ -223,6 +225,20 @@ namespace LiteNN
 				{
 					throw std::runtime_error(std::format("vNext runtime step {} references invalid output buffer", i));
 				}
+			}
+		}
+		for (const auto& binding : manifest.bufferBindings)
+		{
+			ValidateRuntimeBufferBinding(binding);
+			if (binding.memoryBuffer >= manifest.memory.buffers.size())
+			{
+				throw std::runtime_error("vNext runtime buffer binding references an invalid memory buffer: " +
+				                         binding.name);
+			}
+			const auto& buffer = manifest.memory.buffers[binding.memoryBuffer];
+			if (buffer.memorySpace != binding.type.memorySpace)
+			{
+				throw std::runtime_error("vNext runtime buffer binding memory space mismatch: " + binding.name);
 			}
 		}
 		for (std::size_t i = 0; i < manifest.tensors.size(); ++i)

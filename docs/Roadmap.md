@@ -1589,10 +1589,10 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     diffusion sampler stages in one artifact ABI.
   - [ ] Bind mutable parameters, optimizer state, saved activations, KV cache, latent state, and workspace buffers explicitly.
   - [ ] Reject artifacts whose required entry or state binding is missing rather than falling back implicitly.
-- [ ] Replace runtime `Tensor<PolymorphicDevice>` binding assumptions with explicit buffer/storage handles.
-  - [ ] Add public buffer binding descriptors for owned, borrowed, external, mapped, device-owned, and user-owned memory.
-  - [ ] Route runtime schedules and vNext package manifests through those descriptors.
-  - [ ] Validate dtype, layout, shape, memory space, mutability, alignment, checksum, and rebind policy at bind time.
+- [x] Replace runtime `Tensor<PolymorphicDevice>` binding assumptions with explicit buffer/storage handles.
+  - [x] Add public buffer binding descriptors for owned, borrowed, external, mapped, device-owned, and user-owned memory.
+  - [x] Route runtime schedules and vNext package manifests through those descriptors.
+  - [x] Validate dtype, layout, shape, memory space, mutability, alignment, checksum, and rebind policy at bind time.
 - [ ] Make `TensorType` the only public shape/type contract at runtime/compiler/importer boundaries.
   - [ ] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
   - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
