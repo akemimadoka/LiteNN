@@ -139,6 +139,34 @@ TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 	EXPECT_NO_THROW(Serialization::ValidateImporterOwnedManifest(manifest));
 }
 
+TEST(G14Remaining, CompatibilityOpsAreReportedByImporterDiagnostics)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto experts = subgraph.AddParam(DataType::Float32, { 2, 3, 1 });
+	const auto input = subgraph.AddParam(DataType::Float32, { 2, 1, 4 });
+	const auto ids = subgraph.AddParam(DataType::Int32, { 1, 4 });
+	const auto routed = subgraph.AddNode(
+	    MulMatIdNode{ { experts, 0 }, { input, 0 }, { ids, 0 } },
+	    { OutputInfo{ DataType::Float32, { 3, 1, 4 } } });
+	subgraph.SetResults({ { routed, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	const auto plan = BuildExecutablePlan(graph);
+	const auto diagnostics = CollectExecutablePlanCompatibilityDiagnostics(plan);
+	ASSERT_EQ(diagnostics.size(), 1u);
+	EXPECT_EQ(diagnostics[0].opKind, "MulMatIdNode");
+	EXPECT_EQ(diagnostics[0].domain, OpDomain::GGMLCompatibility);
+	EXPECT_NE(diagnostics[0].message.find("compatibility domain"), std::string::npos);
+
+	auto manifest = Serialization::BuildImporterOwnedManifest("gguf", std::move(graph));
+	Serialization::AddImportCompatibilityDiagnostics(manifest);
+	ASSERT_EQ(manifest.diagnostics.size(), 1u);
+	EXPECT_EQ(manifest.diagnostics[0].kind, Serialization::ImportDiagnosticKind::CompatibilityOp);
+	EXPECT_NE(manifest.diagnostics[0].message.find("tagged compatibility partition"), std::string::npos);
+	EXPECT_NO_THROW(Serialization::ValidateImporterOwnedManifest(manifest));
+}
+
 TEST(G14Remaining, MigrationRulesAreExecutableInvariants)
 {
 	const auto graph = BuildTrainableGraph();

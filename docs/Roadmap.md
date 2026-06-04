@@ -1599,7 +1599,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
       fields.
   - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
     - [x] Guard compiled artifact signatures against reintroducing raw `dtype`/`shape` fields.
-- [ ] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
+- [x] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
   - [x] Mark compatibility-only ops with an explicit schema domain.
   - [x] Move builder helpers and docs for `AddId` and `MulMatId` under a compatibility namespace/surface.
   - [x] Move window helpers, relative-position helpers, and remaining ggml-only layout utilities under a compatibility
@@ -1607,7 +1607,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Move `AddWindowPartition` / `AddWindowUnpartition` to `Compatibility::GGML`.
     - [x] Move `AddGetRelativePosition` / `AddRelativePositionBias2D` to `Compatibility::GGML`.
     - [x] Move remaining ggml-only layout utilities such as `AddRepeat` and `AddSSMConv`.
-  - [ ] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
+  - [x] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
     partition with diagnostics.
 - [ ] Make fallback explicit in runtime schedules and backend placement.
   - [x] Add explicit backend placement fallback steps and a strict policy that rejects fallback placements.

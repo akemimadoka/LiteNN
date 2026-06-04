@@ -20,7 +20,8 @@ namespace LiteNN::Serialization
 		UnsupportedLayout,
 		MissingMetadata,
 		UnsupportedStateABI,
-		UnsupportedBackendCapability
+		UnsupportedBackendCapability,
+		CompatibilityOp
 	};
 
 	struct ImportDiagnostic
@@ -80,6 +81,19 @@ namespace LiteNN::Serialization
 				    std::format("{}:{}:{}", issue.subgraph, issue.node, issue.opKind),
 				    std::format("backend '{}' cannot lower op '{}'", backend, issue.opKind)));
 			}
+		}
+	}
+
+	inline void AddImportCompatibilityDiagnostics(ImporterOwnedManifest& manifest,
+	                                              const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	{
+		const auto plan = BuildExecutablePlan(manifest.model, registry);
+		for (const auto& diagnostic : CollectExecutablePlanCompatibilityDiagnostics(plan, registry))
+		{
+			manifest.diagnostics.push_back(MakeImportDiagnostic(
+			    ImportDiagnosticKind::CompatibilityOp,
+			    std::format("{}:{}:{}", diagnostic.subgraph, diagnostic.node, diagnostic.opKind),
+			    diagnostic.message));
 		}
 	}
 

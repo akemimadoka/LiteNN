@@ -146,6 +146,15 @@ namespace LiteNN
 		std::string fallback;
 	};
 
+	struct ExecutablePlanCompatibilityDiagnostic
+	{
+		SubgraphId subgraph{};
+		NodeId node{};
+		std::string opKind;
+		OpDomain domain{ OpDomain::Core };
+		std::string message;
+	};
+
 	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
 	                             std::string value)
 	{
@@ -764,6 +773,36 @@ namespace LiteNN
 			}
 		}
 		return issues;
+	}
+
+	inline std::vector<ExecutablePlanCompatibilityDiagnostic> CollectExecutablePlanCompatibilityDiagnostics(
+	    const ExecutablePlan& plan, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	{
+		ValidateExecutablePlan(plan, registry);
+		std::vector<ExecutablePlanCompatibilityDiagnostic> diagnostics;
+		for (std::size_t subgraphIndex = 0; subgraphIndex < plan.subgraphs.size(); ++subgraphIndex)
+		{
+			const auto& subgraph = plan.subgraphs[subgraphIndex];
+			for (std::size_t nodeIndex = 0; nodeIndex < subgraph.nodes.size(); ++nodeIndex)
+			{
+				const auto& node = subgraph.nodes[nodeIndex];
+				const auto& schema = registry.Require(node.op.kind);
+				if (schema.domain == OpDomain::Core)
+				{
+					continue;
+				}
+				diagnostics.push_back({
+				    .subgraph = subgraph.sourceSubgraph,
+				    .node = node.sourceNode,
+				    .opKind = node.op.kind,
+				    .domain = schema.domain,
+				    .message = std::format(
+				        "op '{}' remains in compatibility domain; importer must lower it to core ops or keep it in a tagged compatibility partition",
+				        node.op.kind),
+				});
+			}
+		}
+		return diagnostics;
 	}
 
 	inline void RequireExecutablePlanBackendSupport(const ExecutablePlan& plan, std::string_view backend,
