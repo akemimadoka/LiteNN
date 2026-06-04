@@ -3,6 +3,7 @@
 
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/MemoryPlan.h>
+#include <LiteNN/Runtime/Placement.h>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -64,6 +65,7 @@ namespace LiteNN::Runtime
 		DispatchRegion,
 		Transfer,
 		Sync,
+		Fallback,
 		StateRead,
 		StateWrite
 	};
@@ -75,6 +77,7 @@ namespace LiteNN::Runtime
 		FunctionId function{};
 		RegionId region{};
 		std::string backend;
+		std::string fallbackBackend;
 		std::vector<std::size_t> inputBuffers;
 		std::vector<std::size_t> outputBuffers;
 	};
@@ -106,6 +109,8 @@ namespace LiteNN::Runtime
 			return "transfer";
 		case RuntimeScheduleStepKind::Sync:
 			return "sync";
+		case RuntimeScheduleStepKind::Fallback:
+			return "fallback";
 		case RuntimeScheduleStepKind::StateRead:
 			return "state-read";
 		case RuntimeScheduleStepKind::StateWrite:
@@ -273,6 +278,21 @@ namespace LiteNN::Runtime
 		return schedule;
 	}
 
+	inline void AppendPlacementFallbackSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
+	{
+		for (const auto& fallback : placement.fallbackSteps)
+		{
+			RuntimeScheduleStep step;
+			step.id = schedule.steps.size();
+			step.kind = RuntimeScheduleStepKind::Fallback;
+			step.backend = fallback.requestedBackend;
+			step.fallbackBackend = fallback.fallbackBackend;
+			step.inputBuffers = fallback.inputBuffers;
+			step.outputBuffers = fallback.outputBuffers;
+			schedule.steps.push_back(std::move(step));
+		}
+	}
+
 	inline std::vector<RuntimeTraceEvent> TraceRuntimeSchedule(const RuntimeSchedule& schedule)
 	{
 		std::vector<RuntimeTraceEvent> events;
@@ -284,6 +304,12 @@ namespace LiteNN::Runtime
 			{
 				message = std::format("dispatch region {} function {} on {}", step.region, step.function,
 				                      step.backend);
+			}
+			else if (step.kind == RuntimeScheduleStepKind::Fallback)
+			{
+				message = std::format("fallback from {} to {} inputBuffers={} outputBuffers={}",
+				                      step.backend, step.fallbackBackend,
+				                      step.inputBuffers.size(), step.outputBuffers.size());
 			}
 			else
 			{
@@ -323,6 +349,13 @@ namespace LiteNN::Runtime
 				if (step.backend.empty())
 				{
 					throw std::runtime_error("Runtime dispatch step has empty backend");
+				}
+			}
+			if (step.kind == RuntimeScheduleStepKind::Fallback)
+			{
+				if (step.backend.empty() || step.fallbackBackend.empty())
+				{
+					throw std::runtime_error("Runtime fallback step must name requested and fallback backends");
 				}
 			}
 			for (const auto buffer : step.inputBuffers)

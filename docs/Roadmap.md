@@ -1610,7 +1610,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Add explicit backend placement fallback steps and a strict policy that rejects fallback placements.
   - [ ] Disallow hidden backend fallback inside device/compiler paths unless the runtime schedule contains transfer/fallback
     steps.
-  - [ ] Add profile/trace records for fallback, transfer, and synchronization steps.
+  - [x] Add profile/trace records for fallback, transfer, and synchronization steps.
   - [x] Reject artifacts or placement plans when fallback policy is stricter than the available backend capability.
 - [ ] Demote old graph archives to migration/development tooling only.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.

@@ -100,6 +100,19 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	ASSERT_EQ(placement.fallbackSteps.size(), 1u);
 	EXPECT_EQ(placement.fallbackSteps[0].fallbackBackend, BackendCPUInterpreter);
 	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
+
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(BuildExecutablePlan(graph)));
+	Runtime::AppendPlacementFallbackSteps(schedule, placement);
+	ASSERT_FALSE(schedule.steps.empty());
+	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::Fallback);
+	EXPECT_EQ(schedule.steps.back().backend, BackendCUDANative);
+	EXPECT_EQ(schedule.steps.back().fallbackBackend, BackendCPUInterpreter);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+	const auto trace = Runtime::TraceRuntimeSchedule(schedule);
+	ASSERT_FALSE(trace.empty());
+	EXPECT_EQ(trace.back().kind, Runtime::RuntimeScheduleStepKind::Fallback);
+	EXPECT_NE(trace.back().message.find("fallback from"), std::string::npos);
+
 	EXPECT_THROW((void)Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends, registry, {},
 	                                              Runtime::PlacementFallbackPolicy::RejectFallback),
 	             std::runtime_error);
