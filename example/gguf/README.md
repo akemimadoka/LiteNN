@@ -17,7 +17,9 @@ Run the self-contained C++ example:
 build\example\gguf\litenn_gguf_conversion_example.exe
 ```
 
-The program creates a tiny GGUF fixture, imports it, lowers it, saves both `.ltnn` files, and runs the lowered graph with the CPU interpreter.
+The program creates a tiny GGUF fixture, imports it, lowers it, writes vNext
+package manifests for the imported/prefill/decode graphs, and runs the lowered
+graph with the CPU interpreter.
 
 Command-line conversion for a real file:
 

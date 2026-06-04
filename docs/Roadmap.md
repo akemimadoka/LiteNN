@@ -1619,6 +1619,9 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.
   - [x] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
   - [ ] Make production examples write/load vNext packages or compiled artifacts.
+    - [x] Move MNIST and GGUF conversion examples to vNext package manifests / compiled carrier artifacts instead of
+      graph archive save/load.
+    - [ ] Move the SDXL example's graph-workbench commands to vNext package or compiled-artifact entry points.
 - [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
   - [ ] Stop letting `Trainer` mutate graph variables implicitly.
   - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.

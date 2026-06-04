@@ -3,6 +3,7 @@
 
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <array>
 #include <filesystem>
@@ -155,17 +156,17 @@ int main(int argc, char** argv)
 		std::filesystem::create_directories(outputDir);
 
 		const auto ggufPath = WriteTinyLLaMAGGUF(outputDir / "tiny_llama.gguf");
-		const auto archivePath = outputDir / "tiny_llama.archive.ltnn";
-		const auto loweredPath = outputDir / "tiny_llama.prefill.ltnn";
-		const auto decodePath = outputDir / "tiny_llama.decode.ltnn";
+		const auto archivePath = outputDir / "tiny_llama.archive.vnext.json";
+		const auto loweredPath = outputDir / "tiny_llama.prefill.vnext.json";
+		const auto decodePath = outputDir / "tiny_llama.decode.vnext.json";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
-		LiteNN::Serialization::Migration::SaveGraphArchive(imported.graph, archivePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(imported.graph), archivePath);
 
 		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, 2);
-		LiteNN::Serialization::Migration::SaveGraphArchive(lowered, loweredPath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(lowered), loweredPath);
 		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, 1, 1, 1);
-		LiteNN::Serialization::Migration::SaveGraphArchive(decode, decodePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(decode), decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
 		LiteNN::CPU cpu;
@@ -193,9 +194,9 @@ int main(int argc, char** argv)
 
 		std::cout << "Imported " << imported.summary.tensorCount << " tensors and "
 		          << imported.summary.metadataCount << " metadata entries\n";
-		std::cout << "Archive: " << archivePath.string() << '\n';
-		std::cout << "Lowered prefill graph: " << loweredPath.string() << '\n';
-		std::cout << "Lowered decode graph: " << decodePath.string() << '\n';
+		std::cout << "Archive vNext package: " << archivePath.string() << '\n';
+		std::cout << "Lowered prefill vNext package: " << loweredPath.string() << '\n';
+		std::cout << "Lowered decode vNext package: " << decodePath.string() << '\n';
 		std::cout << "Logits shape: [" << outputs[0].Shape()[0] << ", " << outputs[0].Shape()[1] << "]\n";
 		std::cout << "Decode updated key shape: [" << decodeOutputs[1].Shape()[0] << ", "
 		          << decodeOutputs[1].Shape()[1] << ", " << decodeOutputs[1].Shape()[2] << "]\n";

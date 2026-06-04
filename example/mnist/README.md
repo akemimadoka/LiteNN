@@ -35,7 +35,9 @@ Trainer<CPU, Optimizer::SGD>::StepSoftmaxCrossEntropy([image], label)
 After training, both examples call `ExtractForwardOnlyGraph` so inference and
 AOT compilation use a forward-only graph with the trained weights and without
 backward/activation-save nodes. The graph exposes named signatures:
-`image -> logits`.
+`image -> logits`. Passing `--save <path>` writes a vNext package manifest for
+that forward-only graph; `litenn_mnist_aot --object <path>` writes the compiled
+carrier object used for static/shared-library embedding.
 
 ## Dataset
 
@@ -71,6 +73,12 @@ Interpreter training and inference:
 
 ```powershell
 build\example\mnist\litenn_mnist_interpreter.exe --epochs 3 --train-limit 1000 --test-limit 1000
+```
+
+Write a vNext package manifest after interpreter training:
+
+```powershell
+build\example\mnist\litenn_mnist_interpreter.exe --epochs 3 --train-limit 1000 --test-limit 1000 --save build\mnist.vnext.json
 ```
 
 AOT compile/load after training:

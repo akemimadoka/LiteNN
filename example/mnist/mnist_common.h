@@ -58,10 +58,8 @@ namespace LiteNN::Examples::Mnist
 		std::uint32_t seed = 42;
 		// 0 = 单层线性模型，>0 = 两层 MLP（指定隐藏层宽度）
 		std::size_t hiddenSize = 0;
-		// 训练结束后保存推理图的路径（可选）
+		// 训练结束后保存 vNext 推理 package 的路径（可选）
 		std::optional<std::filesystem::path> saveModelPath;
-		// 跳过训练，直接从该路径加载推理图（可选）
-		std::optional<std::filesystem::path> loadModelPath;
 	};
 
 	struct MnistSplit
@@ -291,20 +289,12 @@ namespace LiteNN::Examples::Mnist
 		return ExtractForwardOnlyGraph(trainedGraph);
 	}
 
-	// 将训练后的推理图保存到文件（forward-only 提取后保存）
-	inline void SaveMnistModel(const Graph& trainedGraph, const std::filesystem::path& path)
+	// 将训练后的推理图保存为 vNext package（forward-only 提取后保存）
+	inline void SaveMnistModelPackage(const Graph& trainedGraph, const std::filesystem::path& path)
 	{
 		const auto inferGraph = ExtractForwardOnlyGraph(trainedGraph);
-		Serialization::Migration::SaveGraphArchive(inferGraph, path);
-		std::cout << std::format("Model saved to {}\n", path.string());
-	}
-
-	// 从文件加载推理图（已经是 forward-only，无需再提取）
-	inline Graph LoadMnistInferenceModel(const std::filesystem::path& path)
-	{
-		auto graph = Serialization::Migration::LoadGraphArchive(path);
-		std::cout << std::format("Model loaded from {}\n", path.string());
-		return graph;
+		Serialization::SaveVNextModelPackage(BuildExecutableModule(inferGraph), path);
+		std::cout << std::format("vNext model package saved to {}\n", path.string());
 	}
 
 	inline const float* FloatData(const Tensor<CPU>& tensor)
@@ -425,11 +415,6 @@ namespace LiteNN::Examples::Mnist
 		if (arg == "--save")
 		{
 			options.saveModelPath = std::filesystem::path(std::string(RequireValue(index, argc, argv, arg)));
-			return true;
-		}
-		if (arg == "--load")
-		{
-			options.loadModelPath = std::filesystem::path(std::string(RequireValue(index, argc, argv, arg)));
 			return true;
 		}
 		if (arg == "--epochs")

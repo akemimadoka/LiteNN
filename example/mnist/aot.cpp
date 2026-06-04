@@ -90,6 +90,10 @@ namespace
 		TrainMnistGraph(trainingGraph, train, options.mnist);
 
 		auto inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
+		if (options.mnist.saveModelPath)
+		{
+			SaveMnistModelPackage(trainingGraph, *options.mnist.saveModelPath);
+		}
 		auto module = CompileAndLoadFromArtifact(inferenceGraph, options);
 
 		const auto correct = Evaluate(test, options.mnist.showSamples, [&](Tensor<CPU> image) {

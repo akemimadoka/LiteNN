@@ -18,12 +18,11 @@ namespace
 	{
 		std::cout << std::format(
 		    "Usage: {} [--data DIR] [--train-limit N] [--test-limit N] [--epochs N] [--learning-rate X] [--seed N]\n"
-		    "       {} [--hidden-size N] [--save PATH] [--load PATH]\n"
+		    "       {} [--hidden-size N] [--save PATH]\n"
 		    "\n"
 		    "Trains MNIST classification with LiteNN Runtime::Interpreter Backward/SGD, then evaluates it.\n"
 		    "  --hidden-size N  Use a 2-layer MLP (input->N->10) instead of the default linear model.\n"
-		    "  --save PATH      After training, save the inference model to PATH.\n"
-		    "  --load PATH      Skip training; load a previously-saved inference model from PATH.\n"
+		    "  --save PATH      After training, save the inference model as a vNext package manifest.\n"
 		    "Default data directory: {}\n\n",
 		    exe, exe, std::filesystem::path(LITENN_MNIST_DEFAULT_DATA_DIR).string());
 		PrintCommonOptions();
@@ -53,57 +52,39 @@ namespace
 		Runtime::Interpreter<CPU> interpreter;
 		Graph inferenceGraph;
 
-		if (options.loadModelPath)
+		const auto useMlp = options.hiddenSize > 0;
+		const auto hiddenSize = useMlp ? options.hiddenSize : std::size_t{0};
+
+		std::cout << std::format("Loading MNIST from {}\n", options.dataDir.string());
+		const auto train = LoadTrainSplit(options);
+		const auto test = LoadTestSplit(options);
+
+		if (useMlp)
 		{
-			// 跳过训练，直接从文件加载推理图
-			inferenceGraph = LoadMnistInferenceModel(*options.loadModelPath);
+			std::cout << std::format("Training 2-layer MLP (784->{}->10) with {} images\n",
+			                         hiddenSize, train.Count());
+			auto trainingGraph = BuildTrainableMlpGraph(options.seed, hiddenSize);
+			TrainMnistGraph(trainingGraph, train, options);
+
+			if (options.saveModelPath)
+			{
+				SaveMnistModelPackage(trainingGraph, *options.saveModelPath);
+			}
+			inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
 		}
 		else
 		{
-			const auto useMlp = options.hiddenSize > 0;
-			const auto hiddenSize = useMlp ? options.hiddenSize : std::size_t{0};
+			std::cout << std::format("Training linear softmax classifier with {} images\n", train.Count());
+			auto trainingGraph = BuildTrainableMnistGraph(options.seed);
+			TrainMnistGraph(trainingGraph, train, options);
 
-			std::cout << std::format("Loading MNIST from {}\n", options.dataDir.string());
-			const auto train = LoadTrainSplit(options);
-			const auto test = LoadTestSplit(options);
-
-			if (useMlp)
+			if (options.saveModelPath)
 			{
-				std::cout << std::format("Training 2-layer MLP (784->{}->10) with {} images\n",
-				                         hiddenSize, train.Count());
-				auto trainingGraph = BuildTrainableMlpGraph(options.seed, hiddenSize);
-				TrainMnistGraph(trainingGraph, train, options);
-
-				if (options.saveModelPath)
-				{
-					SaveMnistModel(trainingGraph, *options.saveModelPath);
-				}
-				inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
+				SaveMnistModelPackage(trainingGraph, *options.saveModelPath);
 			}
-			else
-			{
-				std::cout << std::format("Training linear softmax classifier with {} images\n", train.Count());
-				auto trainingGraph = BuildTrainableMnistGraph(options.seed);
-				TrainMnistGraph(trainingGraph, train, options);
-
-				if (options.saveModelPath)
-				{
-					SaveMnistModel(trainingGraph, *options.saveModelPath);
-				}
-				inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
-			}
-
-			const auto correct = Evaluate(test, options.showSamples, [&](Tensor<CPU> image) {
-				std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
-				return interpreter.RunForward(BuildExecutablePlan(inferenceGraph), inputs);
-			});
-			PrintAccuracy(correct, test.Count());
-			return 0;
+			inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
 		}
 
-		// load 路径：需要单独加载测试集
-		std::cout << std::format("Loading MNIST test split from {}\n", options.dataDir.string());
-		const auto test = LoadTestSplit(options);
 		const auto correct = Evaluate(test, options.showSamples, [&](Tensor<CPU> image) {
 			std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
 			return interpreter.RunForward(BuildExecutablePlan(inferenceGraph), inputs);

@@ -169,6 +169,22 @@ TEST(G14PublicApiGuard, GraphArchiveApisStayMigrationScoped)
 	}
 }
 
+TEST(G14PublicApiGuard, ProductionExamplesDoNotUseGraphArchiveMigrationApis)
+{
+	const std::vector<std::string_view> files{
+		"example/mnist/mnist_common.h",
+		"example/mnist/interpreter.cpp",
+		"example/mnist/aot.cpp",
+		"example/gguf/conversion_example.cpp",
+	};
+	for (const auto file : files)
+	{
+		const auto text = ReadSourceFile(file);
+		EXPECT_EQ(text.find("Serialization::Migration::SaveGraphArchive"), std::string::npos) << file;
+		EXPECT_EQ(text.find("Serialization::Migration::LoadGraphArchive"), std::string::npos) << file;
+	}
+}
+
 TEST(G14PublicApiGuard, CompiledTensorSpecUsesTensorTypeContract)
 {
 	const auto text = ReadSourceFile("src/LiteNN/Compiler/CompiledModule.h");
