@@ -5,11 +5,14 @@
 #include <LiteNN/OpSchema.h>
 #include <LiteNN/Storage.h>
 #include <LiteNN/TensorType.h>
+#include <cstdint>
 #include <format>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,9 +51,26 @@ namespace LiteNN
 		std::string name;
 	};
 
+	struct ExecutablePlanAttribute
+	{
+		std::string name;
+		std::string value;
+	};
+
+	struct ExecutablePlanOp
+	{
+		std::string kind;
+		std::uint32_t schemaId{};
+		OpCategory category{ OpCategory::Custom };
+		OpEffect effect{ OpEffect::Pure };
+		std::vector<ExecutablePlanAttribute> attributes;
+	};
+
 	struct ExecutablePlanNode
 	{
 		NodeId sourceNode{};
+		ExecutablePlanOp op;
+		// Internal execution payload. vNext packages and public runtime/compiler boundaries must use op/schema/type facts.
 		NodeVariant node;
 		std::string opKind;
 		OpCategory category{ OpCategory::Custom };
@@ -125,6 +145,399 @@ namespace LiteNN
 		BackendSupportLevel support{ BackendSupportLevel::Unsupported };
 		std::string fallback;
 	};
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
+	                             std::string value)
+	{
+		attributes.push_back({ std::move(name), std::move(value) });
+	}
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
+	                             std::size_t value)
+	{
+		AddPlanAttribute(attributes, std::move(name), std::to_string(value));
+	}
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, double value)
+	{
+		AddPlanAttribute(attributes, std::move(name), std::format("{}", value));
+	}
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, bool value)
+	{
+		AddPlanAttribute(attributes, std::move(name), std::string(value ? "true" : "false"));
+	}
+
+	template <typename Enum>
+		requires std::is_enum_v<Enum>
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, Enum value)
+	{
+		AddPlanAttribute(attributes, std::move(name), static_cast<std::size_t>(value));
+	}
+
+	inline std::string JoinSizeList(std::span<const std::size_t> values)
+	{
+		std::string text;
+		for (std::size_t i = 0; i < values.size(); ++i)
+		{
+			if (i != 0)
+			{
+				text += ',';
+			}
+			text += std::to_string(values[i]);
+		}
+		return text;
+	}
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
+	                             const std::vector<std::size_t>& values)
+	{
+		AddPlanAttribute(attributes, std::move(name), JoinSizeList(values));
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ParamRefNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "paramIndex", node.paramIndex);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ConstantNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "dtype", node.value.DType());
+		AddPlanAttribute(attrs, "shape", node.value.Shape().ToOwned());
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizedConstantNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs = PlanAttributesForNode(ConstantNode{ node.storage });
+		AddPlanAttribute(attrs, "quantizationScheme", node.params.scheme);
+		AddPlanAttribute(attrs, "quantizationStorageType", node.params.storageType);
+		AddPlanAttribute(attrs, "quantizationExpressedType", node.params.expressedType);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const VariableRefNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "variableIndex", node.variableIndex);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const UnaryOpNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "op", node.op);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const BinaryOpNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "op", node.op);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const CallNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "callee", node.callee);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const CastNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "targetType", node.targetType);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizeNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "scheme", node.params.scheme);
+		AddPlanAttribute(attrs, "storageType", node.params.storageType);
+		AddPlanAttribute(attrs, "expressedType", node.params.expressedType);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const DequantizeNode& node)
+	{
+		auto attrs = PlanAttributesForNode(QuantizeNode{ node.input, node.params });
+		AddPlanAttribute(attrs, "targetType", node.targetType);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const CondNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "thenBranch", node.thenBranch);
+		AddPlanAttribute(attrs, "elseBranch", node.elseBranch);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const WhileNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "condBranch", node.condBranch);
+		AddPlanAttribute(attrs, "bodyBranch", node.bodyBranch);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const SaveActivationNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "slotId", node.slotId);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const LoadActivationNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "slotId", node.slotId);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const TapeSaveActivationNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "tapeSlotId", node.tapeSlotId);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const TapeLoadActivationNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "tapeSlotId", node.tapeSlotId);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ReduceOpNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "op", node.op);
+		AddPlanAttribute(attrs, "axis", node.axis);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ReshapeNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "targetShape", node.targetShape);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const PermuteNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "permutation", node.permutation);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const BroadcastToNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "targetShape", node.targetShape);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const PadNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "lowPads", node.lowPads);
+		AddPlanAttribute(attrs, "highPads", node.highPads);
+		AddPlanAttribute(attrs, "mode", node.mode);
+		AddPlanAttribute(attrs, "constantValue", node.constantValue);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const GatherNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ScatterNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		AddPlanAttribute(attrs, "mode", node.mode);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ScanNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		AddPlanAttribute(attrs, "op", node.op);
+		return attrs;
+	}
+
+	template <typename T>
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const T&)
+	{
+		return {};
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const SoftmaxNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const NormalizationNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "mode", node.mode);
+		AddPlanAttribute(attrs, "axis", node.axis);
+		AddPlanAttribute(attrs, "groupCount", node.groupCount);
+		AddPlanAttribute(attrs, "epsilon", node.epsilon);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const TimestepEmbeddingNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "dim", node.dim);
+		AddPlanAttribute(attrs, "maxPeriod", node.maxPeriod);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const SolveTriNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "lower", node.lower);
+		AddPlanAttribute(attrs, "unitDiagonal", node.unitDiagonal);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const SGDStepNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "learningRate", node.learningRate);
+		AddPlanAttribute(attrs, "momentum", node.momentum);
+		AddPlanAttribute(attrs, "weightDecay", node.weightDecay);
+		AddPlanAttribute(attrs, "nesterov", node.nesterov);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const AdamWStepNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "learningRate", node.learningRate);
+		AddPlanAttribute(attrs, "beta1", node.beta1);
+		AddPlanAttribute(attrs, "beta2", node.beta2);
+		AddPlanAttribute(attrs, "epsilon", node.epsilon);
+		AddPlanAttribute(attrs, "weightDecay", node.weightDecay);
+		AddPlanAttribute(attrs, "step", node.step);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const Im2ColNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "kernelShape", node.kernelShape);
+		AddPlanAttribute(attrs, "strides", node.strides);
+		AddPlanAttribute(attrs, "dilations", node.dilations);
+		AddPlanAttribute(attrs, "lowPads", node.lowPads);
+		AddPlanAttribute(attrs, "highPads", node.highPads);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const Conv2DNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "strides", node.strides);
+		AddPlanAttribute(attrs, "dilations", node.dilations);
+		AddPlanAttribute(attrs, "lowPads", node.lowPads);
+		AddPlanAttribute(attrs, "highPads", node.highPads);
+		AddPlanAttribute(attrs, "groupCount", node.groupCount);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ConvTranspose2DNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "strides", node.strides);
+		AddPlanAttribute(attrs, "dilations", node.dilations);
+		AddPlanAttribute(attrs, "lowPads", node.lowPads);
+		AddPlanAttribute(attrs, "highPads", node.highPads);
+		AddPlanAttribute(attrs, "outputPads", node.outputPads);
+		AddPlanAttribute(attrs, "groupCount", node.groupCount);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const Pool2DNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "mode", node.mode);
+		AddPlanAttribute(attrs, "kernelShape", node.kernelShape);
+		AddPlanAttribute(attrs, "strides", node.strides);
+		AddPlanAttribute(attrs, "lowPads", node.lowPads);
+		AddPlanAttribute(attrs, "highPads", node.highPads);
+		AddPlanAttribute(attrs, "countIncludePad", node.countIncludePad);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const UpsampleNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "mode", node.mode);
+		AddPlanAttribute(attrs, "outputSpatialShape", node.outputSpatialShape);
+		AddPlanAttribute(attrs, "alignCorners", node.alignCorners);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ConcatNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const SliceNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		AddPlanAttribute(attrs, "start", node.start);
+		AddPlanAttribute(attrs, "length", node.length);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ArgsortNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "axis", node.axis);
+		AddPlanAttribute(attrs, "order", node.order);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const FusedOpNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "pattern", node.pattern);
+		AddPlanAttribute(attrs, "body", node.body);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> ExtractPlanAttributes(const NodeVariant& node)
+	{
+		return std::visit([](const auto& concrete) { return PlanAttributesForNode(concrete); }, node);
+	}
+
+	inline ExecutablePlanOp BuildExecutablePlanOp(const NodeVariant& node, const OpSchema& schema,
+	                                              std::uint32_t schemaId)
+	{
+		return { .kind = schema.kind,
+			     .schemaId = schemaId,
+			     .category = schema.category,
+			     .effect = schema.effect,
+			     .attributes = ExtractPlanAttributes(node) };
+	}
 
 	inline void ValidateExecutableTensorType(const TensorType& type, std::string_view context)
 	{
@@ -234,16 +647,38 @@ namespace LiteNN
 					throw std::runtime_error(std::format("subgraph {} node {} sourceNode mismatch: {}", subgraphIndex,
 					                                    nodeIndex, node.sourceNode));
 				}
-				const auto& schema = registry.Require(node.opKind);
+				if (node.op.kind.empty())
+				{
+					throw std::runtime_error(std::format("subgraph {} node {} has empty executable op kind",
+					                                    subgraphIndex, nodeIndex));
+				}
+				if (!node.opKind.empty() && node.opKind != node.op.kind)
+				{
+					throw std::runtime_error(std::format("subgraph {} node {} op kind mismatch: {} vs {}",
+					                                    subgraphIndex, nodeIndex, node.op.kind, node.opKind));
+				}
+				if (node.category != node.op.category || node.effect != node.op.effect)
+				{
+					throw std::runtime_error(std::format("subgraph {} node {} op metadata mismatch",
+					                                    subgraphIndex, nodeIndex));
+				}
+				const auto expectedSchemaId = static_cast<std::uint32_t>(registry.IndexOf(node.op.kind));
+				if (node.op.schemaId != expectedSchemaId)
+				{
+					throw std::runtime_error(std::format("subgraph {} node {} schema id mismatch: expected {}, got {}",
+					                                    subgraphIndex, nodeIndex, expectedSchemaId,
+					                                    node.op.schemaId));
+				}
+				const auto& schema = registry.Require(node.op.kind);
 				if (!schema.AllowsInputCount(node.inputs.size()))
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} {} input count {} violates schema",
-					                                    subgraphIndex, nodeIndex, node.opKind, node.inputs.size()));
+					                                    subgraphIndex, nodeIndex, node.op.kind, node.inputs.size()));
 				}
 				if (!schema.AllowsOutputCount(node.outputs.size()))
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} {} output count {} violates schema",
-					                                    subgraphIndex, nodeIndex, node.opKind, node.outputs.size()));
+					                                    subgraphIndex, nodeIndex, node.op.kind, node.outputs.size()));
 				}
 				for (std::size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
 				{
@@ -314,7 +749,7 @@ namespace LiteNN
 			for (std::size_t nodeIndex = 0; nodeIndex < subgraph.nodes.size(); ++nodeIndex)
 			{
 				const auto& node = subgraph.nodes[nodeIndex];
-				const auto& schema = registry.Require(node.opKind);
+				const auto& schema = registry.Require(node.op.kind);
 				const auto* capability = schema.FindCapability(backend);
 				const auto support = capability ? capability->support : BackendSupportLevel::Unsupported;
 				if (support == BackendSupportLevel::Unsupported ||
@@ -322,7 +757,7 @@ namespace LiteNN
 				{
 					issues.push_back({ .subgraph = subgraph.sourceSubgraph,
 					                   .node = node.sourceNode,
-					                   .opKind = node.opKind,
+					                   .opKind = node.op.kind,
 					                   .support = support,
 					                   .fallback = capability ? capability->fallback : std::string{} });
 				}
@@ -403,6 +838,8 @@ namespace LiteNN
 
 				ExecutablePlanNode planNode;
 				planNode.sourceNode = nodeId;
+				planNode.op = BuildExecutablePlanOp(entry.node, schema,
+				                                     static_cast<std::uint32_t>(registry.IndexOf(opKind)));
 				planNode.node = entry.node;
 				planNode.opKind = opKind;
 				planNode.category = schema.category;

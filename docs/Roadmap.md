@@ -1572,6 +1572,58 @@ to keep the old architecture alive if they are left in place during vNext.
     reintroduce raw `Graph` overloads.
   - [x] Extended `G14PublicApiGuardTest` to cover the migrated `DumpMLIR` entry point.
 
+#### G14.12 Second Break Window: Remove Remaining High-Value Old Contracts
+
+Purpose: use the remaining vNext break window to remove the old contracts that would otherwise survive behind the new
+names. These items are intentionally kept inside G14 rather than deferred, because they are most valuable before downstream
+model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
+
+- [x] Make `ExecutablePlan` schema/attribute-native instead of raw-node-native.
+  - [x] Add a plan-level op descriptor with schema id/kind, category/effect, input/output type facts, and serialized attrs.
+  - [x] Make vNext package node records use the descriptor instead of raw `NodeVariant` or graph-archive node tags.
+  - [x] Keep raw node payloads only as an internal execution/migration payload until interpreter/compiler lowering consume
+    descriptors directly.
+  - [x] Add guard coverage so vNext package serialization cannot reintroduce raw node variant fields.
+- [ ] Make compiled artifacts multi-entry and state-binding-native.
+  - [ ] Represent named entries such as `forward`, `loss`, `backward`, `optimizer_step`, `prefill`, `decode_step`, and
+    diffusion sampler stages in one artifact ABI.
+  - [ ] Bind mutable parameters, optimizer state, saved activations, KV cache, latent state, and workspace buffers explicitly.
+  - [ ] Reject artifacts whose required entry or state binding is missing rather than falling back implicitly.
+- [ ] Replace runtime `Tensor<PolymorphicDevice>` binding assumptions with explicit buffer/storage handles.
+  - [ ] Add public buffer binding descriptors for owned, borrowed, external, mapped, device-owned, and user-owned memory.
+  - [ ] Route runtime schedules and vNext package manifests through those descriptors.
+  - [ ] Validate dtype, layout, shape, memory space, mutability, alignment, checksum, and rebind policy at bind time.
+- [ ] Make `TensorType` the only public shape/type contract at runtime/compiler/importer boundaries.
+  - [ ] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
+  - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
+- [ ] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
+  - [ ] Mark compatibility-only ops with an explicit schema domain.
+  - [ ] Move builder helpers and docs for `AddId`, `MulMatId`, window helpers, and ggml-only layout utilities under a
+    compatibility namespace/surface.
+  - [ ] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
+    partition with diagnostics.
+- [ ] Make fallback explicit in runtime schedules and backend placement.
+  - [ ] Disallow hidden backend fallback inside device/compiler paths unless the schedule contains transfer/fallback steps.
+  - [ ] Add profile/trace records for fallback, transfer, and synchronization steps.
+  - [ ] Reject artifacts when fallback policy is stricter than the available backend capability.
+- [ ] Demote old graph archives to migration/development tooling only.
+  - [x] Remove graph archive convenience paths from vNext package builders and examples.
+  - [ ] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
+  - [ ] Make production examples write/load vNext packages or compiled artifacts.
+- [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
+  - [ ] Stop letting `Trainer` mutate graph variables implicitly.
+  - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
+  - [ ] Make checkpoint save/load share the same state binding contract.
+- [ ] Replace mutating `Graph&` pass contracts with typed transform pipelines.
+  - [ ] Define separate transform stages for `ModelGraph -> ModelGraph`, `ModelGraph -> ExecutablePlan`,
+    `ExecutablePlan -> ExecutablePlan`, and `ExecutablePlan -> BackendPlan`.
+  - [ ] Add pass invalidation/debug dump metadata to each stage.
+  - [ ] Keep raw graph mutation only inside migration and construction helpers.
+- [ ] Split build/distribution components along real deployment boundaries.
+  - [ ] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
+  - [ ] Split importers, CUDA compiler/runtime, training AOT runners, tools, and examples into opt-in targets.
+  - [ ] Add guard tests for dependency creep across component boundaries.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,

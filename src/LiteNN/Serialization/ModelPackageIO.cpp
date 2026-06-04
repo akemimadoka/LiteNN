@@ -202,6 +202,28 @@ namespace LiteNN::Serialization
 			out << ']';
 		}
 
+		void PlanOpJson(std::ostream& out, const ExecutablePlanOp& op)
+		{
+			out << "{\"kind\":";
+			JsonString(out, op.kind);
+			out << ",\"schemaId\":" << op.schemaId << ",\"category\":" << EnumValue(op.category)
+			    << ",\"effect\":" << EnumValue(op.effect) << ",\"attributes\":[";
+			for (std::size_t i = 0; i < op.attributes.size(); ++i)
+			{
+				const auto& attr = op.attributes[i];
+				if (i != 0)
+				{
+					out << ',';
+				}
+				out << "{\"name\":";
+				JsonString(out, attr.name);
+				out << ",\"value\":";
+				JsonString(out, attr.value);
+				out << '}';
+			}
+			out << "]}";
+		}
+
 		void TensorRefJson(std::ostream& out, const VNextExternalTensorRef& tensor)
 		{
 			out << "{\"name\":";
@@ -342,10 +364,9 @@ namespace LiteNN::Serialization
 					{
 						out << ',';
 					}
-					out << "{\"sourceNode\":" << node.sourceNode << ",\"opKind\":";
-					JsonString(out, node.opKind);
-					out << ",\"category\":" << EnumValue(node.category) << ",\"effect\":" << EnumValue(node.effect)
-					    << ",\"inputs\":";
+					out << "{\"sourceNode\":" << node.sourceNode << ",\"op\":";
+					PlanOpJson(out, node.op);
+					out << ",\"inputs\":";
 					NodeOutputListJson(out, node.inputs);
 					out << ",\"outputs\":[";
 					for (std::size_t o = 0; o < node.outputs.size(); ++o)
@@ -570,6 +591,23 @@ namespace LiteNN::Serialization
 			return result;
 		}
 
+		ExecutablePlanOp ParsePlanOp(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			ExecutablePlanOp op;
+			op.kind = AsString(Member(object, "kind", label), label);
+			op.schemaId = static_cast<std::uint32_t>(AsUInt(Member(object, "schemaId", label), label));
+			op.category = static_cast<OpCategory>(AsUInt(Member(object, "category", label), label));
+			op.effect = static_cast<OpEffect>(AsUInt(Member(object, "effect", label), label));
+			for (const auto item : AsArray(Member(object, "attributes", label), label))
+			{
+				const auto attr = AsObject(item, label);
+				op.attributes.push_back({ .name = AsString(Member(attr, "name", label), label),
+					                      .value = AsString(Member(attr, "value", label), label) });
+			}
+			return op;
+		}
+
 		VNextExternalTensorRef ParseTensorRef(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -702,12 +740,10 @@ namespace LiteNN::Serialization
 					node.sourceNode =
 					    static_cast<NodeId>(AsUInt(Member(nodeObject, "sourceNode", "plan.node.sourceNode"),
 					                              "plan.node.sourceNode"));
-					node.opKind = AsString(Member(nodeObject, "opKind", "plan.node.opKind"), "plan.node.opKind");
-					node.category =
-					    static_cast<OpCategory>(AsUInt(Member(nodeObject, "category", "plan.node.category"),
-					                                  "plan.node.category"));
-					node.effect = static_cast<OpEffect>(
-					    AsUInt(Member(nodeObject, "effect", "plan.node.effect"), "plan.node.effect"));
+					node.op = ParsePlanOp(Member(nodeObject, "op", "plan.node.op"), "plan.node.op");
+					node.opKind = node.op.kind;
+					node.category = node.op.category;
+					node.effect = node.op.effect;
 					node.inputs = NodeOutputList(Member(nodeObject, "inputs", "plan.node.inputs"), "plan.node.inputs");
 					node.outputs =
 					    TensorTypeList(Member(nodeObject, "outputs", "plan.node.outputs"), "plan.node.outputs");

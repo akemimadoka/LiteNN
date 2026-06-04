@@ -124,14 +124,6 @@ namespace LiteNN
 		return manifest;
 	}
 
-	inline VNextPackageManifest BuildVNextPackageManifest(
-	    const Graph& graph, std::vector<VNextArtifactRef> artifacts = {},
-	    VNextPackageLayout layout = {}, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
-	{
-		return BuildVNextPackageManifest(BuildExecutableModule(graph, registry), std::move(artifacts), std::move(layout),
-		                                 registry);
-	}
-
 	inline void ValidateVNextPackageManifest(const VNextPackageManifest& manifest)
 	{
 		if (manifest.versions.manifest == 0 || manifest.versions.opSet == 0 || manifest.versions.dtypeSet == 0 ||

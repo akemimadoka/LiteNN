@@ -44,6 +44,10 @@ TEST(ExecutablePlanTest, BuildsPlanFromGraphSnapshot)
 	EXPECT_EQ(subgraph.nodes[0].opKind, "ParamRefNode");
 	EXPECT_EQ(subgraph.nodes[1].opKind, "VariableRefNode");
 	EXPECT_EQ(subgraph.nodes[2].opKind, "BinaryOpNode");
+	EXPECT_EQ(subgraph.nodes[2].op.kind, "BinaryOpNode");
+	EXPECT_EQ(subgraph.nodes[2].op.category, OpCategory::Elementwise);
+	EXPECT_FALSE(subgraph.nodes[2].op.attributes.empty());
+	EXPECT_EQ(subgraph.nodes[2].op.attributes[0].name, "op");
 	EXPECT_TRUE(std::holds_alternative<BinaryOpNode>(subgraph.nodes[2].node));
 	EXPECT_EQ(subgraph.nodes[2].category, OpCategory::Elementwise);
 	ASSERT_EQ(subgraph.nodes[2].inputs.size(), 2);
@@ -118,8 +122,12 @@ TEST(ExecutablePlanTest, ValidationRejectsSchemaAndReferenceErrors)
 {
 	auto plan = BuildExecutablePlan(BuildSmallGraph());
 	auto badKind = plan;
-	badKind.subgraphs[0].nodes[2].opKind = "MissingNode";
+	badKind.subgraphs[0].nodes[2].op.kind = "MissingNode";
 	EXPECT_THROW(ValidateExecutablePlan(badKind), std::runtime_error);
+
+	auto badSchema = plan;
+	badSchema.subgraphs[0].nodes[2].op.schemaId = 999;
+	EXPECT_THROW(ValidateExecutablePlan(badSchema), std::runtime_error);
 
 	auto badInput = plan;
 	badInput.subgraphs[0].nodes[2].inputs[0] = { 99, 0 };

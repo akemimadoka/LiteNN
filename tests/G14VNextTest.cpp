@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 using namespace LiteNN;
 
@@ -79,6 +80,12 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_roundtrip.json";
 	Serialization::SaveVNextModelPackage(module, path, { artifact });
+	{
+		std::ifstream input(path, std::ios::binary);
+		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		EXPECT_NE(json.find("\"op\":"), std::string::npos);
+		EXPECT_EQ(json.find("\"opKind\""), std::string::npos);
+	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
 
@@ -91,7 +98,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
 	EXPECT_EQ(package.manifest.artifacts[0].backend, BackendCPUAOT);
 	ASSERT_EQ(package.plan.subgraphs.size(), module.plan.subgraphs.size());
-	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].opKind, "BinaryOpNode");
+	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].op.kind, "BinaryOpNode");
+	EXPECT_FALSE(package.plan.subgraphs[package.plan.forward].nodes[2].op.attributes.empty());
 	EXPECT_EQ(package.plan.outputs[0].name, "y");
 }
 
@@ -161,11 +169,11 @@ TEST(G14VNext, MemoryPlanAssignsStaticValuesAndReusesWorkspace)
 
 TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 {
-	auto manifest = BuildVNextPackageManifest(BuildLinearAddGraph());
+	auto manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
 	manifest.versions.artifactABI = 0;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildLinearAddGraph());
+	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
 	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entryFunction = 0 });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
@@ -173,11 +181,11 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	manifest.artifacts[0].entryFunction = 99;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildLinearAddGraph());
+	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
 	manifest.layout.mode = "legacy";
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildLinearAddGraph());
+	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
 	manifest.runtimeSteps[0].id = 99;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 }

@@ -167,6 +167,16 @@ namespace LiteNN
 			throw std::runtime_error("Unknown LiteNN op schema: " + std::string(kind));
 		}
 
+		std::size_t IndexOf(std::string_view kind) const
+		{
+			const auto it = indexByKind_.find(std::string(kind));
+			if (it == indexByKind_.end())
+			{
+				throw std::runtime_error("Unknown LiteNN op schema: " + std::string(kind));
+			}
+			return it->second;
+		}
+
 		OpSchema& MutableRequire(std::string_view kind)
 		{
 			const auto it = indexByKind_.find(std::string(kind));

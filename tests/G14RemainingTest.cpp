@@ -102,7 +102,7 @@ TEST(G14Remaining, MigrationRulesAreExecutableInvariants)
 {
 	const auto graph = BuildTrainableGraph();
 	const auto plan = BuildExecutablePlan(graph);
-	const auto manifest = BuildVNextPackageManifest(graph);
+	const auto manifest = BuildVNextPackageManifest(BuildExecutableModule(plan));
 	const auto rules = VNextMigrationRules();
 
 	EXPECT_GE(rules.size(), 7u);
