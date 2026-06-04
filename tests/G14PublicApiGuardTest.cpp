@@ -96,6 +96,8 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/Layer/AddId.h", "namespace LiteNN::Layer", "LiteNN::Compatibility::GGML" },
 		{ "src/LiteNN/Layer/MulMatId.h", "BuildMulMatId(Graph&", "BuildMulMatId(ModelBuilder&)" },
 		{ "src/LiteNN/Layer/MulMatId.h", "namespace LiteNN::Layer", "LiteNN::Compatibility::GGML" },
+		{ "src/LiteNN/Layer/Window.h", "namespace LiteNN::Layer", "LiteNN::Compatibility::GGML" },
+		{ "src/LiteNN/Layer/RelativePosition.h", "namespace LiteNN::Layer", "LiteNN::Compatibility::GGML" },
 	};
 
 	for (const auto& entry : forbidden)

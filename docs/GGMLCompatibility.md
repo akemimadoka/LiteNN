@@ -41,13 +41,13 @@ These surfaces intentionally preserve ggml contracts and should be treated as im
 - Shape contract: target rank must be at least the input rank, and each target dimension must be an integer multiple of the corresponding input dimension after leading-one padding.
 - Internals: it rewrites through `Reshape + BroadcastTo + Reshape`, so non-singleton dimensions tile in row-major order.
 
-### `Layer::AddWindowPartition` and `Layer::AddWindowUnpartition`
+### `Compatibility::GGML::AddWindowPartition` and `Compatibility::GGML::AddWindowUnpartition`
 
 - Purpose: represent ggml `WIN_PART` / `WIN_UNPART` for vision-style local attention paths.
 - Shape contract: inputs use LiteNN row-major semantic `[channels, width, height, batch]`; partition output is `[channels, window, window, windows * batch]` with zero padding to a multiple of the window size.
 - Reason it is compatibility-only: the helper preserves the ggml/SAM-style channel-width-height-batch convention locally instead of introducing it as a general LiteNN image layout.
 
-### `Layer::AddGetRelativePosition` and `Layer::AddRelativePositionBias2D`
+### `Compatibility::GGML::AddGetRelativePosition` and `Compatibility::GGML::AddRelativePositionBias2D`
 
 - Purpose: represent ggml `GET_REL_POS` / `ADD_REL_POS` in vision attention lowering.
 - Shape contract: `AddGetRelativePosition` gathers from `[2 * size - 1, channels]` into `[query, key, channels]` for the ggml-compatible `query == key` case. `AddRelativePositionBias2D` adds width and height relative-position bias to scores shaped `[qH, qW, kH, kW, heads]`.

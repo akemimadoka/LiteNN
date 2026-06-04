@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	namespace Detail
 	{
@@ -60,12 +60,12 @@ namespace LiteNN::Layer
 
 		const std::vector<std::size_t> lowPads{ 0uz, 0uz, 0uz, 0uz };
 		const std::vector<std::size_t> highPads{ 0uz, padWidth, padHeight, 0uz };
-		const auto padded = AddPad(subgraph, input, lowPads, highPads, PadMode::Constant, 0.0);
+		const auto padded = Layer::AddPad(subgraph, input, lowPads, highPads, PadMode::Constant, 0.0);
 		const std::vector<std::size_t> splitShape{ channels, windowsWide, windowSize, windowsHigh, windowSize, batch };
-		const auto split = AddReshape(subgraph, padded, splitShape);
-		const auto partitioned = AddPermute(subgraph, split, { 0uz, 2uz, 4uz, 1uz, 3uz, 5uz });
+		const auto split = Layer::AddReshape(subgraph, padded, splitShape);
+		const auto partitioned = Layer::AddPermute(subgraph, split, { 0uz, 2uz, 4uz, 1uz, 3uz, 5uz });
 		const std::vector<std::size_t> outputShape{ channels, windowSize, windowSize, windowsWide * windowsHigh * batch };
-		return AddReshape(subgraph, partitioned, outputShape);
+		return Layer::AddReshape(subgraph, partitioned, outputShape);
 	}
 
 	inline NodeOutput AddWindowUnpartition(Subgraph& subgraph, NodeOutput input, std::size_t width,
@@ -101,10 +101,10 @@ namespace LiteNN::Layer
 		const auto batch = info.shape[3] / windowCount;
 
 		const std::vector<std::size_t> splitShape{ channels, windowSize, windowSize, windowsWide, windowsHigh, batch };
-		const auto split = AddReshape(subgraph, input, splitShape);
-		const auto unpermuted = AddPermute(subgraph, split, { 0uz, 3uz, 1uz, 4uz, 2uz, 5uz });
+		const auto split = Layer::AddReshape(subgraph, input, splitShape);
+		const auto unpermuted = Layer::AddPermute(subgraph, split, { 0uz, 3uz, 1uz, 4uz, 2uz, 5uz });
 		const std::vector<std::size_t> paddedShape{ channels, paddedWidth, paddedHeight, batch };
-		auto current = AddReshape(subgraph, unpermuted, paddedShape);
+		auto current = Layer::AddReshape(subgraph, unpermuted, paddedShape);
 		if (paddedWidth != width)
 		{
 			current = Detail::AddSlice(subgraph, current, 1uz, 0uz, width);
@@ -115,6 +115,6 @@ namespace LiteNN::Layer
 		}
 		return current;
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif

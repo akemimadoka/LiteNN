@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	namespace Detail
 	{
@@ -53,8 +53,8 @@ namespace LiteNN::Layer
 		}
 
 		const auto indices = Detail::MakeRelativePositionIndexTensor(querySize, keySize);
-		const auto indexNode = Detail::AddConstant(subgraph, indices);
-		return AddGather(subgraph, relativePosition, { indexNode, 0 }, 0uz);
+		const auto indexNode = Layer::Detail::AddConstant(subgraph, indices);
+		return Layer::AddGather(subgraph, relativePosition, { indexNode, 0 }, 0uz);
 	}
 
 	inline NodeOutput AddRelativePositionBias2D(Subgraph& subgraph, NodeOutput scores,
@@ -85,10 +85,10 @@ namespace LiteNN::Layer
 		}
 
 		const std::vector<std::size_t> scoreShape = scoreInfo.shape;
-		const auto widthReshaped = AddReshape(subgraph, widthBias, { 1uz, queryWidth, 1uz, keyWidth, heads });
-		const auto widthExpanded = AddBroadcastTo(subgraph, widthReshaped, scoreShape);
-		const auto heightReshaped = AddReshape(subgraph, heightBias, { queryHeight, 1uz, keyHeight, 1uz, heads });
-		const auto heightExpanded = AddBroadcastTo(subgraph, heightReshaped, scoreShape);
+		const auto widthReshaped = Layer::AddReshape(subgraph, widthBias, { 1uz, queryWidth, 1uz, keyWidth, heads });
+		const auto widthExpanded = Layer::AddBroadcastTo(subgraph, widthReshaped, scoreShape);
+		const auto heightReshaped = Layer::AddReshape(subgraph, heightBias, { queryHeight, 1uz, keyHeight, 1uz, heads });
+		const auto heightExpanded = Layer::AddBroadcastTo(subgraph, heightReshaped, scoreShape);
 
 		const auto withWidth = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, scores, widthExpanded },
 		                                      { OutputInfo{ scoreInfo.dtype, scoreShape } });
@@ -96,6 +96,6 @@ namespace LiteNN::Layer
 		                                       { OutputInfo{ scoreInfo.dtype, scoreShape } });
 		return { withHeight, 0 };
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif

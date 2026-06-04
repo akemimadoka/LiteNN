@@ -1577,8 +1577,8 @@ TEST(LayerWindow, PartitionAndUnpartitionRoundTripsPaddedImage)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 3, 2, 1 });
-	const auto partitioned = Layer::AddWindowPartition(sg, { input, 0 }, 2);
-	const auto restored = Layer::AddWindowUnpartition(sg, partitioned, 3, 2, 2);
+	const auto partitioned = Compatibility::GGML::AddWindowPartition(sg, { input, 0 }, 2);
+	const auto restored = Compatibility::GGML::AddWindowUnpartition(sg, partitioned, 3, 2, 2);
 	sg.SetResults({ partitioned, restored });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1604,7 +1604,7 @@ TEST(LayerRelativePosition, BuildsSAMStyleRelativePositionTable)
 	Graph graph;
 	Subgraph sg;
 	const auto table = sg.AddParam(DataType::Float32, { 3, 1 });
-	const auto relPos = Layer::AddGetRelativePosition(sg, { table, 0 }, 2, 2);
+	const auto relPos = Compatibility::GGML::AddGetRelativePosition(sg, { table, 0 }, 2, 2);
 	sg.SetResults({ relPos });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1625,7 +1625,7 @@ TEST(LayerRelativePosition, Adds2DRelativePositionBias)
 	const auto scores = sg.AddParam(DataType::Float32, { 1, 2, 1, 2, 1 });
 	const auto widthBias = sg.AddParam(DataType::Float32, { 2, 2, 1 });
 	const auto heightBias = sg.AddParam(DataType::Float32, { 1, 1, 1 });
-	const auto biased = Layer::AddRelativePositionBias2D(sg, { scores, 0 }, { widthBias, 0 }, { heightBias, 0 });
+	const auto biased = Compatibility::GGML::AddRelativePositionBias2D(sg, { scores, 0 }, { widthBias, 0 }, { heightBias, 0 });
 	sg.SetResults({ biased });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
