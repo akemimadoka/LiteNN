@@ -1597,9 +1597,10 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [ ] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
   - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
 - [ ] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
-  - [ ] Mark compatibility-only ops with an explicit schema domain.
-  - [ ] Move builder helpers and docs for `AddId`, `MulMatId`, window helpers, and ggml-only layout utilities under a
-    compatibility namespace/surface.
+  - [x] Mark compatibility-only ops with an explicit schema domain.
+  - [x] Move builder helpers and docs for `AddId` and `MulMatId` under a compatibility namespace/surface.
+  - [ ] Move window helpers, relative-position helpers, and remaining ggml-only layout utilities under a compatibility
+    namespace/surface.
   - [ ] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
     partition with diagnostics.
 - [ ] Make fallback explicit in runtime schedules and backend placement.

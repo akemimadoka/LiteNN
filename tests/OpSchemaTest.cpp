@@ -43,6 +43,10 @@ TEST(OpSchemaTest, CapturesCoreArityAndCategories)
 	EXPECT_FALSE(sgd.AllowsInputCount(4));
 	EXPECT_TRUE(sgd.AllowsOutputCount(1));
 	EXPECT_TRUE(sgd.AllowsOutputCount(2));
+
+	const auto& mulMatId = registry.Require("MulMatIdNode");
+	EXPECT_EQ(mulMatId.domain, OpDomain::GGMLCompatibility);
+	EXPECT_EQ(binary.domain, OpDomain::Core);
 }
 
 TEST(OpSchemaTest, ReportsBackendCapabilities)
@@ -83,6 +87,12 @@ TEST(OpSchemaTest, BuildsCoverageReportForDefaultBackends)
 	EXPECT_EQ(binary->capabilities[0].support, BackendSupportLevel::Native);
 	EXPECT_EQ(binary->capabilities[1].backend, BackendCPUAOT);
 	EXPECT_EQ(binary->capabilities[1].support, BackendSupportLevel::Unsupported);
+
+	const auto mulMatId = std::ranges::find_if(report, [](const OpCoverageRow& row) {
+		return row.kind == "MulMatIdNode";
+	});
+	ASSERT_NE(mulMatId, report.end());
+	EXPECT_EQ(mulMatId->domain, OpDomain::GGMLCompatibility);
 }
 
 TEST(OpSchemaTest, ExtractsInputsFromNodePayloads)

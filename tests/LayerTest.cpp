@@ -769,7 +769,8 @@ TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.MutableGraph();
-	graph.SetForward(Layer::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
+	graph.SetForward(
+	    Compatibility::GGML::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 0.0f, 0.0f, 0.0f,
@@ -806,8 +807,8 @@ TEST(LayerMulMatId, SelectsPerExpertMatrices)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.MutableGraph();
-	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 },
-	                                      DataType::Int32, { 2, 2 }));
+	graph.SetForward(Compatibility::GGML::BuildMulMatId(
+	    builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 }, DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({
@@ -850,8 +851,8 @@ TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.MutableGraph();
-	graph.SetForward(Layer::BuildMulMatId(builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 },
-	                                      DataType::Int32, { 2, 2 }));
+	graph.SetForward(Compatibility::GGML::BuildMulMatId(
+	    builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 }, DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({

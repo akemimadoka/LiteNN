@@ -22,14 +22,14 @@ These operators and helpers keep ordinary LiteNN semantics even when they appear
 
 These surfaces intentionally preserve ggml contracts and should be treated as importer-lowering utilities, not as generic LiteNN math building blocks.
 
-### `Layer::AddMulMatId` and `MulMatIdNode`
+### `Compatibility::GGML::AddMulMatId` and `MulMatIdNode`
 
 - Purpose: represent ggml `MUL_MAT_ID` for MoE routing.
 - Shape contract: `as=[k, m, expertCount]`, `b=[k, usedExpertSlots, tokenCount]`, `ids=[usedExperts, tokenCount]`.
 - Result contract: always Float32 `[m, usedExperts, tokenCount]`.
 - Reason it is compatibility-only: the dimension order is ggml-specific and does not follow LiteNN's otherwise normal matrix conventions.
 
-### `Layer::AddId`
+### `Compatibility::GGML::AddId`
 
 - Purpose: match ggml `ADD_ID` semantics by adding expert-selected bias rows into `a[:, usedExpert, token]`.
 - Internals: it rewrites through LiteNN `Transpose`, `GetRows`, `Reshape`, and `Add`, but the public shape contract remains tied to ggml expert/token ordering.

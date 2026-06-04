@@ -43,6 +43,12 @@ namespace LiteNN
 		ControlFlow
 	};
 
+	enum class OpDomain
+	{
+		Core,
+		GGMLCompatibility
+	};
+
 	enum class BackendSupportLevel
 	{
 		Unsupported,
@@ -76,6 +82,7 @@ namespace LiteNN
 	struct OpCoverageRow
 	{
 		std::string kind;
+		OpDomain domain{ OpDomain::Core };
 		OpCategory category{ OpCategory::Custom };
 		std::vector<BackendCapability> capabilities;
 	};
@@ -85,6 +92,7 @@ namespace LiteNN
 		static constexpr std::size_t DynamicArity = std::numeric_limits<std::size_t>::max();
 
 		std::string kind;
+		OpDomain domain{ OpDomain::Core };
 		OpCategory category{ OpCategory::Custom };
 		OpEffect effect{ OpEffect::Pure };
 		std::size_t minInputs{};
@@ -208,7 +216,7 @@ namespace LiteNN
 			rows.reserve(schemas_.size());
 			for (const auto& schema : schemas_)
 			{
-				OpCoverageRow row{ .kind = schema.kind, .category = schema.category };
+				OpCoverageRow row{ .kind = schema.kind, .domain = schema.domain, .category = schema.category };
 				row.capabilities.reserve(backends.size());
 				for (const auto backend : backends)
 				{
@@ -273,6 +281,7 @@ namespace LiteNN
 		struct NodeSchemaTraits
 		{
 			static constexpr OpCategory Category = OpCategory::Custom;
+			static constexpr OpDomain Domain = OpDomain::Core;
 			static constexpr OpEffect Effect = OpEffect::Pure;
 			static constexpr std::size_t MinInputs = 0;
 			static constexpr std::size_t MaxInputs = OpSchema::DynamicArity;
@@ -582,6 +591,7 @@ namespace LiteNN
 		struct NodeSchemaTraits<MulMatIdNode> : NodeSchemaTraits<ScatterNode>
 		{
 			static constexpr OpCategory Category = OpCategory::LinearAlgebra;
+			static constexpr OpDomain Domain = OpDomain::GGMLCompatibility;
 		};
 
 		template <>
@@ -591,11 +601,26 @@ namespace LiteNN
 		};
 
 		template <typename NodeT>
+		consteval OpDomain NodeSchemaDomain()
+		{
+			using Traits = NodeSchemaTraits<NodeT>;
+			if constexpr (requires { Traits::Domain; })
+			{
+				return Traits::Domain;
+			}
+			else
+			{
+				return OpDomain::Core;
+			}
+		}
+
+		template <typename NodeT>
 		OpSchema MakeNodeSchema()
 		{
 			using Traits = NodeSchemaTraits<NodeT>;
 			return {
 				.kind = std::string(NodeTypeName<NodeT>()),
+				.domain = NodeSchemaDomain<NodeT>(),
 				.category = Traits::Category,
 				.effect = Traits::Effect,
 				.minInputs = Traits::MinInputs,

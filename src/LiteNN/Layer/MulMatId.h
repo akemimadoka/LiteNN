@@ -6,7 +6,7 @@
 #ifndef LITENN_LAYER_MULMATID_H
 #define LITENN_LAYER_MULMATID_H
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	// Add ggml-compatible MUL_MAT_ID lowering. Shapes follow ggml order:
 	// as=[k, m, expertCount], b=[k, usedExpertSlots, tokenCount], ids=[usedExperts, tokenCount].
@@ -58,6 +58,6 @@ namespace LiteNN::Layer
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif

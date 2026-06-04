@@ -6,7 +6,7 @@
 #ifndef LITENN_LAYER_ADDID_H
 #define LITENN_LAYER_ADDID_H
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	// 匹配 ggml_add_id：对 a[:, usedExpert, token] 加上 b[:, ids[usedExpert, token]]。
 	inline NodeOutput AddId(Subgraph& subgraph, NodeOutput a, NodeOutput b, NodeOutput ids)
@@ -68,6 +68,6 @@ namespace LiteNN::Layer
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif
