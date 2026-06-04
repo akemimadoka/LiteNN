@@ -160,12 +160,12 @@ int main(int argc, char** argv)
 		const auto decodePath = outputDir / "tiny_llama.decode.ltnn";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
-		LiteNN::Serialization::SaveGraphArchive(imported.graph, archivePath);
+		LiteNN::Serialization::Migration::SaveGraphArchive(imported.graph, archivePath);
 
 		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, 2);
-		LiteNN::Serialization::SaveGraphArchive(lowered, loweredPath);
+		LiteNN::Serialization::Migration::SaveGraphArchive(lowered, loweredPath);
 		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, 1, 1, 1);
-		LiteNN::Serialization::SaveGraphArchive(decode, decodePath);
+		LiteNN::Serialization::Migration::SaveGraphArchive(decode, decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
 		LiteNN::CPU cpu;

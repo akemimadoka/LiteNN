@@ -367,7 +367,7 @@ struct Pass {
 
 ## Model Serialization
 
-`LiteNN::Serialization::SaveGraphArchive/LoadGraphArchive` 提供 Graph + Variable 权重的旧图归档二进制保存/加载能力。vNext 中 `SaveModel/LoadModel` 名称已从 raw Graph archive 上移除，后续保留给 manifest + executable-plan model format。
+`LiteNN::Serialization::Migration::SaveGraphArchive/LoadGraphArchive` 提供 Graph + Variable 权重的旧图归档二进制保存/加载能力。vNext 中 `SaveModel/LoadModel` 名称已从 raw Graph archive 上移除，后续保留给 manifest + executable-plan model format。
 
 - 文件包含 magic、format version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、所有 Subgraph 和节点 payload
 - Variable 只保存 `Data()`，加载时由 `Variable::Create` 重新初始化 `Grad()` 为同 shape/dtype/device 的零张量
@@ -533,7 +533,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 
 ### P1：用户可用性
 
-- [x] **模型保存/加载**：新增 `LiteNN::Serialization::SaveGraphArchive/LoadGraphArchive`，序列化 magic/version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、Subgraph、NodeVariant payload，并在加载后运行 `ValidateGraph`。当前已支持本库内部 checkpoint/推理模型 roundtrip；跨版本迁移策略仍需继续完善。
+- [x] **模型保存/加载**：新增 `LiteNN::Serialization::Migration::SaveGraphArchive/LoadGraphArchive`，序列化 magic/version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、Subgraph、NodeVariant payload，并在加载后运行 `ValidateGraph`。当前已支持本库内部 checkpoint/推理模型 roundtrip；跨版本迁移策略仍需继续完善。
 - [x] **输入输出命名与签名 API**：`Graph` 支持 `SetInputNames`/`SetOutputNames`、`InputSignature`/`OutputSignature`、`FindInput`/`FindOutput`；`CompiledModule<CPU>` rodata 保存命名 specs，并通过 `InputSpecs`/`OutputSpecs`/`FindInput`/`FindOutput` 查询。当前绑定执行仍按位置传参，命名 binding helper 可后续补。
 - [x] **训练 API**：新增 `LiteNN::Training::Trainer<CPU, OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
 - [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `Trainer<CPU, OptimizerT>::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。

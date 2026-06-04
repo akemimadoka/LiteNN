@@ -259,8 +259,8 @@ TEST(ConvolutionPoolingNode, SerializationRoundTripAndDumpPreserveG54Nodes)
 
 	const auto path = std::filesystem::path("litenn_g54_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::LoadGraphArchive(path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	auto expected = RunGraph(graph, MakeG54Inputs());

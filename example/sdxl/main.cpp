@@ -181,12 +181,12 @@ namespace
 		{
 			LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
 			externalOptions.minVariableBytes = externalWeightMinBytes;
-			LiteNN::Serialization::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
+			LiteNN::Serialization::Migration::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
 			                                                *externalWeightsPath, externalOptions);
 		}
 		else
 		{
-			LiteNN::Serialization::SaveGraphArchive(imported.graph, outputPath);
+			LiteNN::Serialization::Migration::SaveGraphArchive(imported.graph, outputPath);
 		}
 		std::cout << std::format("Wrote LiteNN graph {} with {} variable(s), {} input(s), {} output(s)\n",
 		                         outputPath.string(), imported.graph.VariableCount(),
@@ -1160,7 +1160,7 @@ namespace
 	                   const std::filesystem::path& objectPath,
 	                   std::string_view symbolPrefix)
 	{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-object");
 		auto artifact = TimedStep("compile-object codegen",
@@ -1192,7 +1192,7 @@ namespace
 
 	void PrintModelCompileBudget(const std::filesystem::path& graphPath)
 	{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-budget");
 	}
@@ -1688,7 +1688,7 @@ namespace
 		result.iterations = options.iterations;
 
 		auto begin = BenchmarkClock::now();
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cpu");
 		auto artifact =
@@ -1774,7 +1774,7 @@ namespace
 		}
 		LiteNN::CUDA device{};
 		auto begin = BenchmarkClock::now();
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cuda");
 		auto artifact =
@@ -1859,7 +1859,7 @@ namespace
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "run-model");
 		auto artifact = TimedStep("run-model codegen",
@@ -1885,7 +1885,7 @@ namespace
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "run-model-with-inputs");
 		auto artifact = TimedStep("run-model-with-inputs codegen",
@@ -1911,7 +1911,7 @@ namespace
 	                             const std::filesystem::path& inputPath,
 	                             const FiniteDiagnosticOptions& options)
 	{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		const auto inputSpecs = GraphInputSpecs(graph);
 		const auto outputSpecs = GraphOutputSpecs(graph);
 		auto inputs = MakeInputsFromSafetensors(inputSpecs, inputPath, false);
@@ -1995,7 +1995,7 @@ namespace
 
 	void CompileRawObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath)
 	{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-raw-object");
 		auto artifact = TimedStep("compile-raw-object codegen",
@@ -2024,7 +2024,7 @@ namespace
 	                         std::string_view filePrefix,
 	                         const ExampleCompilerSettings& compilerSettings = {})
 	{
-		auto graph = LiteNN::Serialization::LoadGraphArchive(graphPath);
+		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions(compilerSettings);
 		PrintCompileBudget(graph, options, "compile-image-regions");
 		auto artifact = TimedStep("compile-image-regions codegen",

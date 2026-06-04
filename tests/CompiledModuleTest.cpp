@@ -2206,9 +2206,9 @@ TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalR
 	std::filesystem::remove(weightsPath);
 	Serialization::ExternalWeightSaveOptions saveOptions;
 	saveOptions.minVariableBytes = 0;
-	Serialization::SaveGraphArchiveExternalWeights(graph, modelPath, weightsPath, saveOptions);
+	Serialization::Migration::SaveGraphArchiveExternalWeights(graph, modelPath, weightsPath, saveOptions);
 
-	auto loaded = Serialization::LoadGraphArchive(modelPath);
+	auto loaded = Serialization::Migration::LoadGraphArchive(modelPath);
 	std::filesystem::remove(modelPath);
 	std::filesystem::remove(weightsPath);
 

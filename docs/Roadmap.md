@@ -1614,7 +1614,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Reject artifacts or placement plans when fallback policy is stricter than the available backend capability.
 - [ ] Demote old graph archives to migration/development tooling only.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.
-  - [ ] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
+  - [x] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
   - [ ] Make production examples write/load vNext packages or compiled artifacts.
 - [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
   - [ ] Stop letting `Trainer` mutate graph variables implicitly.

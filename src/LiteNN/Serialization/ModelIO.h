@@ -1545,6 +1545,8 @@ namespace LiteNN::Serialization
 		}
 	}
 
+	namespace Migration
+	{
 	inline void SaveGraphArchive(const Graph& graph, const std::filesystem::path& path)
 	{
 		SaveGraphArchiveImpl(graph, path, std::nullopt, {});
@@ -1686,6 +1688,7 @@ namespace LiteNN::Serialization
 		Validation::ValidateGraph(graph);
 		return graph;
 	}
+	} // namespace Migration
 } // namespace LiteNN::Serialization
 
 #endif

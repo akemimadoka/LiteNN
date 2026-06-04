@@ -147,3 +147,24 @@ TEST(G14PublicApiGuard, PublicLayerBuildHelpersDoNotAcceptRawGraph)
 		                                  return output.str();
 	                                  }();
 }
+
+TEST(G14PublicApiGuard, GraphArchiveApisStayMigrationScoped)
+{
+	const auto text = ReadSourceFile("src/LiteNN/Serialization/ModelIO.h");
+	const auto migrationBegin = text.find("namespace Migration");
+	const auto migrationEnd = text.find("} // namespace Migration");
+	ASSERT_NE(migrationBegin, std::string::npos);
+	ASSERT_NE(migrationEnd, std::string::npos);
+
+	for (const auto* pattern : {
+	         "inline void SaveGraphArchive(",
+	         "inline void SaveGraphArchiveExternalWeights(",
+	         "inline Graph LoadGraphArchive(",
+	     })
+	{
+		const auto position = text.find(pattern);
+		ASSERT_NE(position, std::string::npos) << pattern;
+		EXPECT_GT(position, migrationBegin) << pattern;
+		EXPECT_LT(position, migrationEnd) << pattern;
+	}
+}

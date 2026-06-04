@@ -122,8 +122,8 @@ TEST(Quantization, VariableMetadataSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_quantization_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::LoadGraphArchive(path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -216,8 +216,8 @@ TEST(Quantization, QuantizedConstantPayloadSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_quantized_constant_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::LoadGraphArchive(path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	Runtime::Interpreter<CPU> interpreter;
@@ -251,8 +251,8 @@ TEST(Quantization, BlockFormatRawPayloadMetadataSurvivesModelIORoundTrip)
 
 	const auto path = std::filesystem::path("litenn_block_payload_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::LoadGraphArchive(path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	const auto& loadedNode = loaded.GetSubgraph(loaded.Forward()).GetNodeEntry(0).node;

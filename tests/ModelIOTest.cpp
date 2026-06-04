@@ -65,9 +65,9 @@ TEST(ModelIO, SaveLoadPreservesForwardBackwardAndVariables)
 
 	const auto path = std::filesystem::path("litenn_modelio_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadGraphArchive(path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.InputSignature().size(), 1);
@@ -125,9 +125,9 @@ TEST(ModelIO, SaveLoadPreservesLowPrecisionScalarDTypes)
 
 	const auto path = std::filesystem::path("litenn_modelio_low_precision_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadGraphArchive(path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -160,7 +160,7 @@ TEST(ModelIO, LoadRejectsPreVNextModelVersions)
 		out.write(reinterpret_cast<const char*>(&legacyVersion), sizeof(legacyVersion));
 	}
 
-	EXPECT_THROW((void)Serialization::LoadGraphArchive(path), std::runtime_error);
+	EXPECT_THROW((void)Serialization::Migration::LoadGraphArchive(path), std::runtime_error);
 	std::filesystem::remove(path);
 }
 
@@ -182,9 +182,9 @@ TEST(ModelIO, SaveLoadPreservesFrozenVariablesWithoutGradientStorage)
 
 	const auto path = std::filesystem::path("litenn_modelio_frozen_variable_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadGraphArchive(path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
@@ -212,13 +212,13 @@ TEST(ModelIO, SaveLoadExternalWeightsKeepsVariablesAlive)
 	Serialization::ExternalWeightSaveOptions options;
 	options.minVariableBytes = 0;
 	options.alignment = 16;
-	Serialization::SaveGraphArchiveExternalWeights(graph, path, weightsPath, options);
+	Serialization::Migration::SaveGraphArchiveExternalWeights(graph, path, weightsPath, options);
 
 	ASSERT_TRUE(std::filesystem::exists(path));
 	ASSERT_TRUE(std::filesystem::exists(weightsPath));
 	EXPECT_GT(std::filesystem::file_size(weightsPath), 0u);
 
-	auto loaded = Serialization::LoadGraphArchive(path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 	std::filesystem::remove(weightsPath);
 
@@ -253,9 +253,9 @@ TEST(ModelIO, SaveLoadPreservesVariableNamesAndMetadataForWeightArchive)
 
 	const auto path = std::filesystem::path("litenn_modelio_weight_archive_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::SaveGraphArchive(graph, path);
+	Serialization::Migration::SaveGraphArchive(graph, path);
 
-	auto loaded = Serialization::LoadGraphArchive(path);
+	auto loaded = Serialization::Migration::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	ASSERT_EQ(loaded.VariableCount(), 1);
