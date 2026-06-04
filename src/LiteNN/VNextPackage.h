@@ -5,6 +5,7 @@
 #include <LiteNN/MemoryPlan.h>
 #include <LiteNN/OpSchema.h>
 #include <LiteNN/Runtime/Scheduler.h>
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <optional>
@@ -50,11 +51,19 @@ namespace LiteNN
 		std::uint64_t checksum{};
 	};
 
+	struct VNextArtifactEntryRef
+	{
+		std::string name;
+		FunctionId function{};
+		std::vector<std::string> requiredStateBindings;
+		std::vector<std::string> requiredBufferBindings;
+	};
+
 	struct VNextArtifactRef
 	{
 		std::string name;
 		std::string backend;
-		FunctionId entryFunction{};
+		std::vector<VNextArtifactEntryRef> entries;
 		std::vector<VNextArtifactRegionRef> regions;
 		std::vector<VNextExternalTensorRef> externalTensors;
 	};
@@ -272,9 +281,43 @@ namespace LiteNN
 			{
 				throw std::runtime_error("vNext artifact '" + artifact.name + "' has empty backend");
 			}
-			if (artifact.entryFunction >= manifest.functions.size())
+			if (artifact.entries.empty())
 			{
-				throw std::runtime_error("vNext artifact '" + artifact.name + "' references an unknown function");
+				throw std::runtime_error("vNext artifact '" + artifact.name + "' has no named entries");
+			}
+			for (const auto& entry : artifact.entries)
+			{
+				if (entry.name.empty())
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' has an entry with empty name");
+				}
+				if (entry.function >= manifest.functions.size())
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+					                         "' references an unknown function");
+				}
+				for (const auto& stateName : entry.requiredStateBindings)
+				{
+					const auto found = std::ranges::any_of(manifest.runtimeStates, [&](const auto& state) {
+						return state.name == stateName;
+					});
+					if (!found)
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+						                         "' requires missing runtime state binding: " + stateName);
+					}
+				}
+				for (const auto& bufferName : entry.requiredBufferBindings)
+				{
+					const auto found = std::ranges::any_of(manifest.bufferBindings, [&](const auto& binding) {
+						return binding.name == bufferName;
+					});
+					if (!found)
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+						                         "' requires missing buffer binding: " + bufferName);
+					}
+				}
 			}
 			if (artifact.regions.empty())
 			{

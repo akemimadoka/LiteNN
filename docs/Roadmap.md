@@ -1584,11 +1584,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Keep raw node payloads only as an internal execution/migration payload until interpreter/compiler lowering consume
     descriptors directly.
   - [x] Add guard coverage so vNext package serialization cannot reintroduce raw node variant fields.
-- [ ] Make compiled artifacts multi-entry and state-binding-native.
-  - [ ] Represent named entries such as `forward`, `loss`, `backward`, `optimizer_step`, `prefill`, `decode_step`, and
+- [x] Make compiled artifacts multi-entry and state-binding-native.
+  - [x] Represent named entries such as `forward`, `loss`, `backward`, `optimizer_step`, `prefill`, `decode_step`, and
     diffusion sampler stages in one artifact ABI.
-  - [ ] Bind mutable parameters, optimizer state, saved activations, KV cache, latent state, and workspace buffers explicitly.
-  - [ ] Reject artifacts whose required entry or state binding is missing rather than falling back implicitly.
+  - [x] Bind mutable parameters, optimizer state, saved activations, KV cache, latent state, and workspace buffers explicitly.
+  - [x] Reject artifacts whose required entry or state binding is missing rather than falling back implicitly.
 - [x] Replace runtime `Tensor<PolymorphicDevice>` binding assumptions with explicit buffer/storage handles.
   - [x] Add public buffer binding descriptors for owned, borrowed, external, mapped, device-owned, and user-owned memory.
   - [x] Route runtime schedules and vNext package manifests through those descriptors.

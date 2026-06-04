@@ -202,6 +202,20 @@ namespace LiteNN::Serialization
 			out << ']';
 		}
 
+		void StringListJson(std::ostream& out, const std::vector<std::string>& values)
+		{
+			out << '[';
+			for (std::size_t i = 0; i < values.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				JsonString(out, values[i]);
+			}
+			out << ']';
+		}
+
 		void PlanOpJson(std::ostream& out, const ExecutablePlanOp& op)
 		{
 			out << "{\"kind\":";
@@ -531,7 +545,23 @@ namespace LiteNN::Serialization
 				JsonString(out, a.name);
 				out << ",\"backend\":";
 				JsonString(out, a.backend);
-				out << ",\"entryFunction\":" << a.entryFunction << ",\"regions\":[";
+				out << ",\"entries\":[";
+				for (std::size_t j = 0; j < a.entries.size(); ++j)
+				{
+					const auto& entry = a.entries[j];
+					if (j != 0)
+					{
+						out << ',';
+					}
+					out << "{\"name\":";
+					JsonString(out, entry.name);
+					out << ",\"function\":" << entry.function << ",\"requiredStateBindings\":";
+					StringListJson(out, entry.requiredStateBindings);
+					out << ",\"requiredBufferBindings\":";
+					StringListJson(out, entry.requiredBufferBindings);
+					out << '}';
+				}
+				out << "],\"regions\":[";
 				for (std::size_t j = 0; j < a.regions.size(); ++j)
 				{
 					const auto& r = a.regions[j];
@@ -614,6 +644,16 @@ namespace LiteNN::Serialization
 			for (const auto item : AsArray(value, label))
 			{
 				result.push_back(ParseNodeOutput(item, label));
+			}
+			return result;
+		}
+
+		std::vector<std::string> StringList(simdjson::dom::element value, std::string_view label)
+		{
+			std::vector<std::string> result;
+			for (const auto item : AsArray(value, label))
+			{
+				result.push_back(AsString(item, label));
 			}
 			return result;
 		}
@@ -916,9 +956,22 @@ namespace LiteNN::Serialization
 				VNextArtifactRef artifact;
 				artifact.name = AsString(Member(a, "name", "artifact.name"), "artifact.name");
 				artifact.backend = AsString(Member(a, "backend", "artifact.backend"), "artifact.backend");
-				artifact.entryFunction =
-				    static_cast<FunctionId>(AsUInt(Member(a, "entryFunction", "artifact.entryFunction"),
-				                                   "artifact.entryFunction"));
+				for (const auto entryItem : AsArray(Member(a, "entries", "artifact.entries"), "artifact.entries"))
+				{
+					const auto entryObject = AsObject(entryItem, "artifact.entries");
+					artifact.entries.push_back({
+					    .name = AsString(Member(entryObject, "name", "artifact.entry.name"), "artifact.entry.name"),
+					    .function = static_cast<FunctionId>(AsUInt(Member(entryObject, "function",
+					                                                        "artifact.entry.function"),
+					                                               "artifact.entry.function")),
+					    .requiredStateBindings = StringList(Member(entryObject, "requiredStateBindings",
+					                                                "artifact.entry.requiredStateBindings"),
+					                                        "artifact.entry.requiredStateBindings"),
+					    .requiredBufferBindings = StringList(Member(entryObject, "requiredBufferBindings",
+					                                                 "artifact.entry.requiredBufferBindings"),
+					                                         "artifact.entry.requiredBufferBindings"),
+					});
+				}
 				for (const auto regionItem : AsArray(Member(a, "regions", "artifact.regions"), "artifact.regions"))
 				{
 					const auto r = AsObject(regionItem, "artifact.regions");

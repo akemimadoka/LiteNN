@@ -39,7 +39,9 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	VNextArtifactRef artifact;
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
-	artifact.entryFunction = 0;
+	artifact.entries.push_back({ .name = "forward",
+		                         .function = 0,
+		                         .requiredBufferBindings = { "linear.bias" } });
 	artifact.regions.push_back({ .name = "instructions",
 	                             .kind = ExternalBufferKind::ObjectFile,
 	                             .relativePath = "artifacts/cpu_forward.o",
@@ -57,6 +59,8 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_EQ(manifest.tensors[0].type.StaticShape(), (std::vector<std::size_t>{ 2, 2 }));
 	ASSERT_EQ(manifest.artifacts.size(), 1u);
 	EXPECT_EQ(manifest.artifacts[0].backend, BackendCPUAOT);
+	ASSERT_EQ(manifest.artifacts[0].entries.size(), 1u);
+	EXPECT_EQ(manifest.artifacts[0].entries[0].name, "forward");
 	EXPECT_FALSE(manifest.runtimeSteps.empty());
 	EXPECT_GT(manifest.memory.buffers.size(), 0u);
 	ASSERT_FALSE(manifest.bufferBindings.empty());
@@ -72,7 +76,9 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	VNextArtifactRef artifact;
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
-	artifact.entryFunction = 0;
+	artifact.entries.push_back({ .name = "forward",
+		                         .function = 0,
+		                         .requiredBufferBindings = { "linear.bias" } });
 	artifact.regions.push_back({ .name = "instructions",
 	                             .kind = ExternalBufferKind::ObjectFile,
 	                             .relativePath = "artifacts/cpu_forward.o",
@@ -88,6 +94,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 		EXPECT_NE(json.find("\"op\":"), std::string::npos);
 		EXPECT_EQ(json.find("\"opKind\""), std::string::npos);
 		EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
+		EXPECT_NE(json.find("\"entries\""), std::string::npos);
+		EXPECT_EQ(json.find("\"entryFunction\""), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
@@ -102,6 +110,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.manifest.bufferBindings[0].name, "linear.bias");
 	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
 	EXPECT_EQ(package.manifest.artifacts[0].backend, BackendCPUAOT);
+	ASSERT_EQ(package.manifest.artifacts[0].entries.size(), 1u);
+	EXPECT_EQ(package.manifest.artifacts[0].entries[0].requiredBufferBindings[0], "linear.bias");
 	ASSERT_EQ(package.plan.subgraphs.size(), module.plan.subgraphs.size());
 	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].op.kind, "BinaryOpNode");
 	EXPECT_FALSE(package.plan.subgraphs[package.plan.forward].nodes[2].op.attributes.empty());
@@ -181,11 +191,22 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
-	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entryFunction = 0 });
+	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entries = { { .name = "forward" } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest.artifacts[0].backend = std::string(BackendCPUAOT);
-	manifest.artifacts[0].entryFunction = 99;
+	manifest.artifacts[0].entries[0].function = 99;
+	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
+
+	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest.artifacts.push_back({ .name = "missing-binding",
+		                           .backend = std::string(BackendCPUAOT),
+		                           .entries = { { .name = "forward",
+		                                          .function = 0,
+		                                          .requiredBufferBindings = { "missing.weight" } } },
+		                           .regions = { { .name = "instructions",
+		                                          .relativePath = "artifacts/missing.o",
+		                                          .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));

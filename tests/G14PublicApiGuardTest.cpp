@@ -64,6 +64,8 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		  "private implementation parsing in ModelPackageIO.cpp" },
 		{ "src/LiteNN/Serialization/ModelPackageIO.cpp", "\\\"opKind\\\"",
 		  "schema/attribute op records in the vNext package plan" },
+		{ "src/LiteNN/Serialization/ModelPackageIO.cpp", "entryFunction",
+		  "named artifact entries in the vNext package artifact ABI" },
 		{ "src/LiteNN/VNextPackage.h", "BuildVNextPackageManifest(\n\t    const Graph&",
 		  "BuildExecutableModule(BuildExecutablePlan(graph)) at the migration boundary" },
 		{ "src/LiteNN/Training/Trainer.h", "#include <LiteNN/Compiler/CompiledModule.h>",
