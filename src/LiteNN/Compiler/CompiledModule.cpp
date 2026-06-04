@@ -865,10 +865,11 @@ namespace
 		AppendU32(rodata, static_cast<std::uint32_t>(inputs.size()));
 		AppendU32(rodata, static_cast<std::uint32_t>(outputs.size()));
 
-		const auto appendSpec = [&](const CompiledTensorSpec& spec) {
-			AppendU32(rodata, static_cast<std::uint32_t>(spec.dtype));
-			AppendU32(rodata, static_cast<std::uint32_t>(spec.shape.size()));
-			for (auto dim : spec.shape)
+	const auto appendSpec = [&](const CompiledTensorSpec& spec) {
+			const auto shape = spec.type.StaticShape();
+			AppendU32(rodata, static_cast<std::uint32_t>(spec.type.dtype));
+			AppendU32(rodata, static_cast<std::uint32_t>(shape.size()));
+			for (auto dim : shape)
 			{
 				AppendU64(rodata, static_cast<std::uint64_t>(dim));
 			}
@@ -941,10 +942,11 @@ namespace
 			{
 				throw std::runtime_error("Compiled module rodata contains an invalid data type");
 			}
-			spec.dtype = static_cast<DataType>(dtypeValue);
+			const auto dtype = static_cast<DataType>(dtypeValue);
 
 			const auto rank = ReadU32(rodata, offset);
-			spec.shape.reserve(rank);
+			std::vector<std::size_t> shape;
+			shape.reserve(rank);
 			for (std::uint32_t i = 0; i < rank; ++i)
 			{
 				const auto dim = ReadU64(rodata, offset);
@@ -952,8 +954,9 @@ namespace
 				{
 					throw std::runtime_error("Compiled module rodata shape dimension is too large");
 				}
-				spec.shape.push_back(static_cast<std::size_t>(dim));
+				shape.push_back(static_cast<std::size_t>(dim));
 			}
+			spec.type = TensorType::Dense(dtype, ShapeView{ shape });
 			if (version >= 2)
 			{
 				spec.name = ReadString(rodata, offset);
@@ -963,7 +966,7 @@ namespace
 				spec.quantization = ReadQuantizationParams(rodata, offset);
 				try
 				{
-					ValidateQuantizationParams(*spec.quantization, ShapeView{ spec.shape }, spec.dtype);
+					ValidateQuantizationParams(*spec.quantization, ShapeView{ shape }, dtype);
 				}
 				catch (const std::exception& ex)
 				{
@@ -2430,7 +2433,7 @@ namespace
 	std::uint64_t NumElements(const CompiledTensorSpec& spec)
 	{
 		std::uint64_t n = 1;
-		for (const auto dim : spec.shape)
+		for (const auto dim : spec.type.StaticShape())
 		{
 			n *= static_cast<std::uint64_t>(dim);
 		}
@@ -2439,13 +2442,14 @@ namespace
 
 	std::vector<std::uint64_t> ContiguousStrides(const CompiledTensorSpec& spec)
 	{
-		std::vector<std::uint64_t> strides(spec.shape.size());
+		const auto shape = spec.type.StaticShape();
+		std::vector<std::uint64_t> strides(shape.size());
 		if (!strides.empty())
 		{
 			strides.back() = 1;
 			for (std::size_t i = strides.size() - 1; i > 0; --i)
 			{
-				strides[i - 1] = strides[i] * static_cast<std::uint64_t>(spec.shape[i]);
+				strides[i - 1] = strides[i] * static_cast<std::uint64_t>(shape[i]);
 			}
 		}
 		return strides;
@@ -2536,13 +2540,14 @@ namespace
 	llvm::Value* BuildMemRefDescriptor(llvm::IRBuilder<>& builder, llvm::Value* data, const CompiledTensorSpec& spec)
 	{
 		auto& ctx = builder.getContext();
-		auto* descTy = GetMemRefDescriptorType(ctx, spec.shape.size());
+		const auto shape = spec.type.StaticShape();
+		auto* descTy = GetMemRefDescriptorType(ctx, shape.size());
 		llvm::Value* desc = llvm::PoisonValue::get(descTy);
 		desc = builder.CreateInsertValue(desc, data, { 0 });
 		desc = builder.CreateInsertValue(desc, data, { 1 });
 		desc = builder.CreateInsertValue(desc, builder.getInt64(0), { 2 });
 
-		std::vector<std::uint64_t> sizes(spec.shape.begin(), spec.shape.end());
+		std::vector<std::uint64_t> sizes(shape.begin(), shape.end());
 		desc = builder.CreateInsertValue(desc, BuildI64Array(builder, sizes), { 3 });
 
 		const auto strides = ContiguousStrides(spec);
@@ -2654,7 +2659,7 @@ namespace
 		auto* descTy = llvm::cast<llvm::StructType>(descriptor->getType());
 		const unsigned dataField = descTy->getNumElements() == 5 ? 1 : 0;
 		auto* sourceData = builder.CreateExtractValue(descriptor, { dataField });
-		const auto byteCount = NumElements(spec) * LiteNN::ElementByteSize(spec.dtype);
+		const auto byteCount = NumElements(spec) * LiteNN::ElementByteSize(spec.type.dtype);
 		builder.CreateMemCpy(outputData, llvm::Align(1), sourceData, llvm::Align(1), builder.getInt64(byteCount));
 	}
 
@@ -2675,8 +2680,7 @@ namespace
 	CompiledTensorSpec ExternalTensorAsSpec(const CompiledModuleExternalTensorInfo& info)
 	{
 		return {
-			.dtype = info.dtype,
-			.shape = info.shape,
+			.type = TensorType::Dense(info.dtype, ShapeView{ info.shape }),
 			.name = info.name,
 		};
 	}
@@ -2786,7 +2790,7 @@ namespace
 
 		if (sretStorage)
 		{
-			if (outputs.size() == 1 && IsMemRefDescriptorType(ctx, sretType, outputs[0].shape.size()))
+			if (outputs.size() == 1 && IsMemRefDescriptorType(ctx, sretType, outputs[0].type.Rank()))
 			{
 				auto* descriptor = builder.CreateLoad(sretType, sretStorage);
 				CopyDescriptorToOutput(builder, descriptor, outputArray, 0, outputs[0]);
@@ -2818,7 +2822,7 @@ namespace
 
 		if (outputs.size() == 1)
 		{
-			auto* expectedDescTy = GetMemRefDescriptorType(ctx, outputs[0].shape.size());
+			auto* expectedDescTy = GetMemRefDescriptorType(ctx, outputs[0].type.Rank());
 			if (retTy == expectedDescTy)
 			{
 				CopyDescriptorToOutput(builder, call, outputArray, 0, outputs[0]);
@@ -3161,12 +3165,13 @@ namespace
 	template <Device D>
 	void ValidateTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec, std::size_t inputIndex)
 	{
-		if (tensor.DType() != spec.dtype || tensor.Shape() != ShapeView{ spec.shape })
+		const auto shape = spec.type.StaticShape();
+		if (tensor.DType() != spec.type.dtype || tensor.Shape() != ShapeView{ shape })
 		{
 			const auto label =
 			    spec.name.empty() ? std::to_string(inputIndex) : std::format("{} ('{}')", inputIndex, spec.name);
 			throw std::runtime_error(std::format("CompiledModule input {} mismatch: expected {}, got {}", label,
-			                                     Validation::FormatInfo(spec.dtype, spec.shape),
+			                                     Validation::FormatInfo(spec.type.dtype, shape),
 			                                     Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
 	}
@@ -3175,12 +3180,13 @@ namespace
 	void ValidateOutputTensorAgainstSpec(const Tensor<D>& tensor, const CompiledTensorSpec& spec,
 	                                     std::size_t outputIndex)
 	{
-		if (tensor.DType() != spec.dtype || tensor.Shape() != ShapeView{ spec.shape })
+		const auto shape = spec.type.StaticShape();
+		if (tensor.DType() != spec.type.dtype || tensor.Shape() != ShapeView{ shape })
 		{
 			const auto label =
 			    spec.name.empty() ? std::to_string(outputIndex) : std::format("{} ('{}')", outputIndex, spec.name);
 			throw std::runtime_error(std::format("CompiledModule output {} mismatch: expected {}, got {}", label,
-			                                     Validation::FormatInfo(spec.dtype, spec.shape),
+			                                     Validation::FormatInfo(spec.type.dtype, shape),
 			                                     Validation::FormatInfo(tensor.DType(), tensor.Shape().Dims)));
 		}
 	}
@@ -4629,11 +4635,12 @@ namespace
 		        { .kind = CUDANativeArgumentKind::OutputTensor,
 		          .index = 0,
 		          .byteOffset = 0,
-		          .byteSize = TensorByteSize(outputSpecs[0].dtype, outputSpecs[0].shape) },
+		          .byteSize = TensorByteSize(outputSpecs[0].type.dtype, outputSpecs[0].type.StaticShape()) },
 		        { .kind = CUDANativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
 		          .byteOffset = 0,
-		          .byteSize = TensorByteSize(inputSpecs[plan->inputIndex].dtype, inputSpecs[plan->inputIndex].shape) },
+		          .byteSize = TensorByteSize(inputSpecs[plan->inputIndex].type.dtype,
+		                                     inputSpecs[plan->inputIndex].type.StaticShape()) },
 		        { .kind = CUDANativeArgumentKind::Scalar,
 		          .index = 0,
 		          .byteOffset = 0,
@@ -4806,7 +4813,7 @@ namespace
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
-		const auto dtype = outputSpecs[0].dtype;
+		const auto dtype = outputSpecs[0].type.dtype;
 
 		CUDANativeInstructionPayload payload;
 		payload.binaryKind = CUDANativeBinaryKind::LibraryCall;
@@ -6370,7 +6377,7 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 	outputPtrs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CPU{});
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
 		outputPtrs.push_back(outputs.back().RawData());
 	}
 
@@ -6723,7 +6730,7 @@ std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>
 	outputs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, impl_->device);
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, impl_->device);
 	}
 	RunInto(inputs, outputs, options);
 	return outputs;
@@ -6817,7 +6824,7 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	cpuOutputs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
-		cpuOutputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CPU{});
+		cpuOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
 	}
 	impl_->cpuModule.RunInto(cpuInputs, cpuOutputs);
 

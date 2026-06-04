@@ -406,11 +406,11 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 		ASSERT_EQ(artifact.InputSpecs().size(), 2u);
 		ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
 		EXPECT_EQ(artifact.InputSpecs()[0].name, "lhs");
-		EXPECT_EQ(artifact.InputSpecs()[0].shape, (std::vector<std::size_t>{ 2, 3 }));
+		EXPECT_EQ(artifact.InputSpecs()[0].type.StaticShape(), (std::vector<std::size_t>{ 2, 3 }));
 		EXPECT_EQ(artifact.InputSpecs()[1].name, "rhs");
-		EXPECT_EQ(artifact.InputSpecs()[1].shape, (std::vector<std::size_t>{ 1, 3 }));
+		EXPECT_EQ(artifact.InputSpecs()[1].type.StaticShape(), (std::vector<std::size_t>{ 1, 3 }));
 		EXPECT_EQ(artifact.OutputSpecs()[0].name, "broadcast_divide");
-		EXPECT_EQ(artifact.OutputSpecs()[0].shape, (std::vector<std::size_t>{ 2, 3 }));
+		EXPECT_EQ(artifact.OutputSpecs()[0].type.StaticShape(), (std::vector<std::size_t>{ 2, 3 }));
 
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
 		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
@@ -1606,7 +1606,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 	std::vector<Tensor<CUDA>> cudaOutputs;
 	for (const auto& spec : module.OutputSpecs())
 	{
-		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
 	}
 
 	module.RunInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });

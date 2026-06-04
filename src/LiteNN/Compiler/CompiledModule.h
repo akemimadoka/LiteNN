@@ -29,21 +29,19 @@ namespace LiteNN
 
 	struct CompiledTensorSpec
 	{
-		DataType dtype{};
-		std::vector<std::size_t> shape;
+		TensorType type;
 		std::string name;
 		std::optional<QuantizationParams> quantization;
 
 		TensorType Type() const
 		{
-			return TensorType::Dense(dtype, ShapeView{ shape });
+			return type;
 		}
 
 		static CompiledTensorSpec FromType(std::string name, const TensorType& type,
 		                                   std::optional<QuantizationParams> quantization = std::nullopt)
 		{
-			return { .dtype = type.dtype,
-				     .shape = type.StaticShape(),
+			return { .type = type,
 				     .name = std::move(name),
 				     .quantization = std::move(quantization) };
 		}

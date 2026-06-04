@@ -168,3 +168,18 @@ TEST(G14PublicApiGuard, GraphArchiveApisStayMigrationScoped)
 		EXPECT_LT(position, migrationEnd) << pattern;
 	}
 }
+
+TEST(G14PublicApiGuard, CompiledTensorSpecUsesTensorTypeContract)
+{
+	const auto text = ReadSourceFile("src/LiteNN/Compiler/CompiledModule.h");
+	const auto specBegin = text.find("struct CompiledTensorSpec");
+	const auto imageBegin = text.find("struct CompiledModuleImage");
+	ASSERT_NE(specBegin, std::string::npos);
+	ASSERT_NE(imageBegin, std::string::npos);
+	const auto specBody = text.substr(specBegin, imageBegin - specBegin);
+
+	EXPECT_NE(specBody.find("TensorType type"), std::string::npos);
+	EXPECT_EQ(specBody.find("DataType dtype"), std::string::npos);
+	EXPECT_EQ(specBody.find("std::vector<std::size_t> shape"), std::string::npos);
+	EXPECT_EQ(specBody.find("ShapeView{ shape }"), std::string::npos);
+}

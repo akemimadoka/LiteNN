@@ -1280,7 +1280,7 @@ namespace
 
 	std::string CompiledSpecToString(const LiteNN::CompiledTensorSpec& spec)
 	{
-		return std::format("{} {}", LiteNN::DataTypeName(spec.dtype), ShapeToString(spec.shape));
+		return std::format("{} {}", LiteNN::DataTypeName(spec.type.dtype), ShapeToString(spec.type.StaticShape()));
 	}
 
 	std::vector<LiteNN::CompiledTensorSpec> GraphInputSpecs(const LiteNN::Graph& graph)
@@ -1290,11 +1290,8 @@ namespace
 		specs.reserve(signature.size());
 		for (const auto& input : signature)
 		{
-			specs.push_back(LiteNN::CompiledTensorSpec{
-			    .dtype = input.dtype,
-			    .shape = input.shape,
-			    .name = input.name,
-			});
+			specs.push_back(LiteNN::CompiledTensorSpec::FromType(
+			    input.name, LiteNN::TensorType::Dense(input.dtype, LiteNN::ShapeView{ input.shape })));
 		}
 		return specs;
 	}
@@ -1306,11 +1303,8 @@ namespace
 		specs.reserve(signature.size());
 		for (const auto& output : signature)
 		{
-			specs.push_back(LiteNN::CompiledTensorSpec{
-			    .dtype = output.dtype,
-			    .shape = output.shape,
-			    .name = output.name,
-			});
+			specs.push_back(LiteNN::CompiledTensorSpec::FromType(
+			    output.name, LiteNN::TensorType::Dense(output.dtype, LiteNN::ShapeView{ output.shape })));
 		}
 		return specs;
 	}
@@ -1319,17 +1313,18 @@ namespace
 	                         const LiteNN::Serialization::SafetensorsTensorInfo& tensor,
 	                         const std::filesystem::path& inputPath)
 	{
-		if (tensor.dtype != spec.dtype)
+		const auto specShape = spec.type.StaticShape();
+		if (tensor.dtype != spec.type.dtype)
 		{
 			throw std::runtime_error(std::format(
 			    "Input tensor '{}' from {} has dtype {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), LiteNN::DataTypeName(tensor.dtype), LiteNN::DataTypeName(spec.dtype)));
+			    inputPath.string(), LiteNN::DataTypeName(tensor.dtype), LiteNN::DataTypeName(spec.type.dtype)));
 		}
-		if (tensor.shape != spec.shape)
+		if (tensor.shape != specShape)
 		{
 			throw std::runtime_error(std::format(
 			    "Input tensor '{}' from {} has shape {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), ShapeToString(tensor.shape), ShapeToString(spec.shape)));
+			    inputPath.string(), ShapeToString(tensor.shape), ShapeToString(specShape)));
 		}
 	}
 
@@ -1339,7 +1334,7 @@ namespace
 		inputs.reserve(specs.size());
 		for (const auto& spec : specs)
 		{
-			inputs.emplace_back(LiteNN::Tensor<LiteNN::CPU>(spec.shape, spec.dtype));
+			inputs.emplace_back(LiteNN::Tensor<LiteNN::CPU>(spec.type.StaticShape(), spec.type.dtype));
 		}
 		return inputs;
 	}
@@ -1429,7 +1424,7 @@ namespace
 			{
 				if (zeroFillMissing)
 				{
-					inputs.emplace_back(spec.shape, spec.dtype);
+					inputs.emplace_back(spec.type.StaticShape(), spec.type.dtype);
 					std::cout << std::format("  input {} '{}' zero-filled ({})\n", i, spec.name,
 					                         CompiledSpecToString(spec))
 					          << std::flush;
@@ -1439,7 +1434,7 @@ namespace
 				    "Missing compiled input '{}' in safetensors bindings file {}", spec.name, inputPath.string()));
 			}
 			ValidateBoundTensor(spec, *tensor, inputPath);
-			auto& input = inputs.emplace_back(LiteNN::Uninitialized, spec.shape, spec.dtype);
+			auto& input = inputs.emplace_back(LiteNN::Uninitialized, spec.type.StaticShape(), spec.type.dtype);
 			const auto bytes = archive.TensorData(*tensor);
 			std::memcpy(input.RawData(), bytes.data(), bytes.size());
 			std::cout << std::format("  input {} '{}' bound from {}:{} ({} byte(s))\n", i, spec.name,
@@ -1525,8 +1520,8 @@ namespace
 
 	std::uint64_t SpecByteSize(const LiteNN::CompiledTensorSpec& spec)
 	{
-		return static_cast<std::uint64_t>(LiteNN::ShapeView{ spec.shape }.NumElements()) *
-		       LiteNN::ElementByteSize(spec.dtype);
+		return static_cast<std::uint64_t>(LiteNN::ShapeView{ spec.type.StaticShape() }.NumElements()) *
+		       LiteNN::ElementByteSize(spec.type.dtype);
 	}
 
 	std::uint64_t SpecBytes(std::span<const LiteNN::CompiledTensorSpec> specs)
@@ -1546,7 +1541,7 @@ namespace
 		outputs.reserve(specs.size());
 		for (const auto& spec : specs)
 		{
-			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.shape }, spec.dtype,
+			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() }, spec.type.dtype,
 			                     LiteNN::CPU{});
 		}
 		return outputs;
@@ -1751,7 +1746,7 @@ namespace
 		outputs.reserve(specs.size());
 		for (const auto& spec : specs)
 		{
-			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.shape }, spec.dtype, device);
+			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() }, spec.type.dtype, device);
 		}
 		return outputs;
 	}

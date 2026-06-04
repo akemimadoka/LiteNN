@@ -1148,8 +1148,8 @@ TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
 	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
 	const auto& spec = artifact.OutputSpecs()[0];
 	EXPECT_EQ(spec.name, "quantized_weight");
-	EXPECT_EQ(spec.dtype, DataType::Int8);
-	EXPECT_EQ(spec.shape, (std::vector<std::size_t>{ 2, 2 }));
+	EXPECT_EQ(spec.type.dtype, DataType::Int8);
+	EXPECT_EQ(spec.type.StaticShape(), (std::vector<std::size_t>{ 2, 2 }));
 	ASSERT_TRUE(spec.quantization.has_value());
 	EXPECT_EQ(spec.quantization->scheme, QuantizationScheme::Affine);
 	EXPECT_EQ(spec.quantization->storageType, DataType::Int8);
