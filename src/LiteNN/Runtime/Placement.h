@@ -26,6 +26,12 @@ namespace LiteNN::Runtime
 		double workspacePressureCost{ 1.0 / (1024.0 * 1024.0) };
 	};
 
+	enum class PlacementFallbackPolicy
+	{
+		AllowExplicitFallback,
+		RejectFallback
+	};
+
 	struct PlacementDecision
 	{
 		SubgraphId subgraph{};
@@ -37,11 +43,22 @@ namespace LiteNN::Runtime
 		std::string fallback;
 	};
 
+	struct PlacementFallbackStep
+	{
+		SubgraphId subgraph{};
+		NodeId node{};
+		std::string requestedBackend;
+		std::string fallbackBackend;
+		std::vector<std::size_t> inputBuffers;
+		std::vector<std::size_t> outputBuffers;
+	};
+
 	struct PlacementPlan
 	{
 		ExecutablePlan plan;
 		MemoryPlan memory;
 		std::vector<PlacementDecision> decisions;
+		std::vector<PlacementFallbackStep> fallbackSteps;
 		std::vector<ExecutablePartition> partitions;
 		std::vector<OpCoverageRow> coverage;
 	};
@@ -90,7 +107,8 @@ namespace LiteNN::Runtime
 	inline PlacementDecision ChoosePlacementForNode(const ExecutablePlanNode& node, const MemoryPlan& memory,
 	                                               std::span<const std::string_view> candidateBackends,
 	                                               const OpSchemaRegistry& registry,
-	                                               const CostModelWeights& weights)
+	                                               const CostModelWeights& weights,
+	                                               PlacementFallbackPolicy fallbackPolicy)
 	{
 		const auto& schema = registry.Require(node.opKind);
 		PlacementDecision best{ .node = node.sourceNode,
@@ -102,6 +120,16 @@ namespace LiteNN::Runtime
 			if (!capability || capability->support == BackendSupportLevel::Unsupported)
 			{
 				continue;
+			}
+			if (capability->support == BackendSupportLevel::Fallback &&
+			    fallbackPolicy == PlacementFallbackPolicy::RejectFallback)
+			{
+				continue;
+			}
+			if (capability->support == BackendSupportLevel::Fallback && capability->fallback.empty())
+			{
+				throw std::runtime_error("Fallback capability for op '" + node.opKind +
+				                         "' must name an explicit fallback backend");
 			}
 			bool legal = true;
 			for (const auto& output : node.outputs)
@@ -136,7 +164,9 @@ namespace LiteNN::Runtime
 	                                        std::span<const std::string_view> candidateBackends =
 	                                            std::span<const std::string_view>{ DefaultBackendNames },
 	                                        const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
-	                                        CostModelWeights weights = {})
+	                                        CostModelWeights weights = {},
+	                                        PlacementFallbackPolicy fallbackPolicy =
+	                                            PlacementFallbackPolicy::AllowExplicitFallback)
 	{
 		ValidateExecutablePlan(plan, registry);
 		PlacementPlan placement;
@@ -148,8 +178,32 @@ namespace LiteNN::Runtime
 		{
 			for (const auto& node : subgraph.nodes)
 			{
-				auto decision = ChoosePlacementForNode(node, placement.memory, candidateBackends, registry, weights);
+				auto decision =
+				    ChoosePlacementForNode(node, placement.memory, candidateBackends, registry, weights, fallbackPolicy);
 				decision.subgraph = subgraph.sourceSubgraph;
+				if (decision.support == BackendSupportLevel::Fallback)
+				{
+					PlacementFallbackStep step{ .subgraph = decision.subgraph,
+						                        .node = decision.node,
+						                        .requestedBackend = decision.backend,
+						                        .fallbackBackend = decision.fallback };
+					for (const auto input : node.inputs)
+					{
+						if (const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, input))
+						{
+							step.inputBuffers.push_back(assignment->buffer);
+						}
+					}
+					for (std::size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
+					{
+						if (const auto* assignment = FindMemoryAssignment(
+						        placement.memory, subgraph.sourceSubgraph, { node.sourceNode, outputIndex }))
+						{
+							step.outputBuffers.push_back(assignment->buffer);
+						}
+					}
+					placement.fallbackSteps.push_back(std::move(step));
+				}
 				placement.decisions.push_back(std::move(decision));
 			}
 		}
@@ -195,6 +249,21 @@ namespace LiteNN::Runtime
 			if (decision.support == BackendSupportLevel::Unsupported)
 			{
 				throw std::runtime_error("PlacementPlan decision uses unsupported backend");
+			}
+			if (decision.support == BackendSupportLevel::Fallback)
+			{
+				if (decision.fallback.empty())
+				{
+					throw std::runtime_error("PlacementPlan fallback decision has empty fallback backend");
+				}
+				const auto found = std::ranges::any_of(placement.fallbackSteps, [&](const PlacementFallbackStep& step) {
+					return step.subgraph == decision.subgraph && step.node == decision.node &&
+					       step.requestedBackend == decision.backend && step.fallbackBackend == decision.fallback;
+				});
+				if (!found)
+				{
+					throw std::runtime_error("PlacementPlan fallback decision is missing an explicit fallback step");
+				}
 			}
 		}
 	}

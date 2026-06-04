@@ -77,6 +77,34 @@ TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
 }
 
+TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 1 });
+	subgraph.SetResults({ { input, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("ParamRefNode", {
+	                                                .backend = std::string(BackendCUDANative),
+	                                                .support = BackendSupportLevel::Fallback,
+	                                                .fallback = std::string(BackendCPUInterpreter),
+	                                                .relativeCost = 1.0,
+	                                            });
+	constexpr std::array<std::string_view, 1> backends{ BackendCUDANative };
+	const auto placement = Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends, registry);
+
+	ASSERT_EQ(placement.decisions.size(), 1u);
+	EXPECT_EQ(placement.decisions[0].support, BackendSupportLevel::Fallback);
+	ASSERT_EQ(placement.fallbackSteps.size(), 1u);
+	EXPECT_EQ(placement.fallbackSteps[0].fallbackBackend, BackendCPUInterpreter);
+	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
+	EXPECT_THROW((void)Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends, registry, {},
+	                                              Runtime::PlacementFallbackPolicy::RejectFallback),
+	             std::runtime_error);
+}
+
 TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 {
 	auto manifest = Serialization::BuildImporterOwnedManifest("torch+safetensors", BuildTrainableGraph());

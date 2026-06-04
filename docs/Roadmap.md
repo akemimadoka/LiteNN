@@ -1604,9 +1604,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [ ] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
     partition with diagnostics.
 - [ ] Make fallback explicit in runtime schedules and backend placement.
-  - [ ] Disallow hidden backend fallback inside device/compiler paths unless the schedule contains transfer/fallback steps.
+  - [x] Add explicit backend placement fallback steps and a strict policy that rejects fallback placements.
+  - [ ] Disallow hidden backend fallback inside device/compiler paths unless the runtime schedule contains transfer/fallback
+    steps.
   - [ ] Add profile/trace records for fallback, transfer, and synchronization steps.
-  - [ ] Reject artifacts when fallback policy is stricter than the available backend capability.
+  - [x] Reject artifacts or placement plans when fallback policy is stricter than the available backend capability.
 - [ ] Demote old graph archives to migration/development tooling only.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.
   - [ ] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
