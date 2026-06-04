@@ -35,7 +35,7 @@ These surfaces intentionally preserve ggml contracts and should be treated as im
 - Internals: it rewrites through LiteNN `Transpose`, `GetRows`, `Reshape`, and `Add`, but the public shape contract remains tied to ggml expert/token ordering.
 - Reason it is compatibility-only: the helper is shaped around imported MoE routing layout rather than a general-purpose bias-add abstraction.
 
-### `Layer::AddRepeat`
+### `Compatibility::GGML::AddRepeat`
 
 - Purpose: represent ggml `REPEAT` tiling without adding a dedicated repeat node.
 - Shape contract: target rank must be at least the input rank, and each target dimension must be an integer multiple of the corresponding input dimension after leading-one padding.
@@ -53,7 +53,7 @@ These surfaces intentionally preserve ggml contracts and should be treated as im
 - Shape contract: `AddGetRelativePosition` gathers from `[2 * size - 1, channels]` into `[query, key, channels]` for the ggml-compatible `query == key` case. `AddRelativePositionBias2D` adds width and height relative-position bias to scores shaped `[qH, qW, kH, kW, heads]`.
 - Internals: these helpers rewrite through constant `Gather`, `Reshape`, `BroadcastTo`, and `Add`.
 
-### `Layer::AddSSMConv`
+### `Compatibility::GGML::AddSSMConv`
 
 - Purpose: represent ggml `SSM_CONV` for Mamba-style depthwise causal convolution input buffers.
 - Shape contract: `convInput=[kernel - 1 + tokens, channels, batch]`, `weight=[kernel, channels]`, result `[channels, tokens, batch]`.

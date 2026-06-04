@@ -1555,7 +1555,7 @@ TEST(LayerRepeat, TilesNonSingletonDimensions)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
-	const auto repeated = Layer::AddRepeat(sg, { input, 0 }, { 4, 4 });
+	const auto repeated = Compatibility::GGML::AddRepeat(sg, { input, 0 }, { 4, 4 });
 	sg.SetResults({ repeated });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1649,7 +1649,7 @@ TEST(LayerSSMConv, MatchesRowwiseDepthwiseConvolution)
 	Subgraph sg;
 	const auto convInput = sg.AddParam(DataType::Float32, { 4, 2, 1 });
 	const auto weight = sg.AddParam(DataType::Float32, { 2, 2 });
-	const auto output = Layer::AddSSMConv(sg, { convInput, 0 }, { weight, 0 });
+	const auto output = Compatibility::GGML::AddSSMConv(sg, { convInput, 0 }, { weight, 0 });
 	sg.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

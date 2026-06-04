@@ -479,11 +479,11 @@ Status: 已按 G5.1–G5.4 的实际 Node 覆盖标注；这里记录 P2 覆盖�
 - [x] G2.2 P2 `PAD`、`CUMSUM`：由 G5.1 / G5.2 的新 Node 直接驱动 Layer 重写。
       （已完成：`PadNode` 与 `ScanNode`；`Layer::AddPad` 和 `Layer::AddCumsum` 已迁移。）
 - [x] G2.2 P2 `REPEAT`：由 `BroadcastTo + Reshape` 或专用 Layer 收口。
-      （已完成：`Layer::AddRepeat` 通过 `Reshape + BroadcastTo + Reshape` 表达 ggml-style tiling，
+      （已完成：`Compatibility::GGML::AddRepeat` 通过 `Reshape + BroadcastTo + Reshape` 表达 ggml-style tiling，
       覆盖非 singleton 维度重复并有 `LayerRepeat` 测试。）
 - [x] G2.2 P2 `WIN_PART`、`WIN_UNPART`、`GET_REL_POS`、`ADD_REL_POS`：以 ggml 兼容 Layer 落地，
       明确标注为 compatibility-only，不引入新 Node。
-      （已完成：`Layer::AddWindowPartition` / `AddWindowUnpartition`、`AddGetRelativePosition`、
+      （已完成：`Compatibility::GGML::AddWindowPartition` / `AddWindowUnpartition`、`AddGetRelativePosition`、
       `AddRelativePositionBias2D` 均复用现有 Pad/Permute/Reshape/Gather/Broadcast/Add 底座；
       `LayerWindow` 与 `LayerRelativePosition` 覆盖数值行为。）
 - [x] G2.2 P2 `CONV_1D/2D/3D`、`CONV_TRANSPOSE_*`、`IM2COL`、`POOL_*`、`UPSCALE`：由 G5.4 驱动。
@@ -495,7 +495,7 @@ Status: 已按 G5.1–G5.4 的实际 Node 覆盖标注；这里记录 P2 覆盖�
 - [x] G2.2 P2 `SSM_SCAN`：由 G5.2 `SSMScanNode` 驱动。
       （已完成：`SSM_SCAN` 的最小 CPU reference Node，含验证、序列化、解释器、常量折叠与 pass 接入。）
 - [x] G2.2 P2 `SSM_CONV`：由兼容 Layer 映射到 grouped `Conv2DNode`，真实 Mamba 端到端接入后再扩展参数布局。
-      （已完成：`Layer::AddSSMConv` 将 ggml `[kernel - 1 + tokens, channels, batch]` buffer
+      （已完成：`Compatibility::GGML::AddSSMConv` 将 ggml `[kernel - 1 + tokens, channels, batch]` buffer
       与 `[kernel, channels]` depthwise weight 改写为 grouped `Conv2DNode`，并由 `LayerSSMConv` 验证。）
 - [x] G2.2 P2 RWKV-style recurrence substrate：由 G5.2 `RWKVWKVNode` 驱动。
       （已完成：`RWKVWKVNode` 最小 CPU reference，含验证、序列化、解释器、常量折叠与 pass 接入。）
@@ -1599,11 +1599,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
 - [ ] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
   - [x] Mark compatibility-only ops with an explicit schema domain.
   - [x] Move builder helpers and docs for `AddId` and `MulMatId` under a compatibility namespace/surface.
-  - [ ] Move window helpers, relative-position helpers, and remaining ggml-only layout utilities under a compatibility
+  - [x] Move window helpers, relative-position helpers, and remaining ggml-only layout utilities under a compatibility
     namespace/surface.
     - [x] Move `AddWindowPartition` / `AddWindowUnpartition` to `Compatibility::GGML`.
     - [x] Move `AddGetRelativePosition` / `AddRelativePositionBias2D` to `Compatibility::GGML`.
-    - [ ] Move remaining ggml-only layout utilities such as `AddRepeat` and `AddSSMConv`.
+    - [x] Move remaining ggml-only layout utilities such as `AddRepeat` and `AddSSMConv`.
   - [ ] Require import legalization to lower compatibility ops to semantic ops or keep them in a tagged compatibility
     partition with diagnostics.
 - [ ] Make fallback explicit in runtime schedules and backend placement.

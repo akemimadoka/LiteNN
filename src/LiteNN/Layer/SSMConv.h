@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	inline NodeOutput AddSSMConv(Subgraph& subgraph, NodeOutput convInput, NodeOutput weight)
 	{
@@ -33,15 +33,15 @@ namespace LiteNN::Layer
 		}
 		const auto tokens = inputLength - kernel + 1uz;
 
-		const auto inputBCL = AddPermute(subgraph, convInput, { 2uz, 1uz, 0uz });
-		const auto inputNCHW = AddReshape(subgraph, inputBCL, { batch, channels, 1uz, inputLength });
-		const auto weightCK = AddPermute(subgraph, weight, { 1uz, 0uz });
-		const auto weightGrouped = AddReshape(subgraph, weightCK, { channels, 1uz, 1uz, kernel });
-		const auto convolved = AddConv2D(subgraph, inputNCHW, weightGrouped, std::nullopt,
-		                                { 1uz, 1uz }, { 1uz, 1uz }, { 0uz, 0uz }, { 0uz, 0uz }, channels);
-		const auto convolvedBCT = AddReshape(subgraph, convolved, { batch, channels, tokens });
-		return AddPermute(subgraph, convolvedBCT, { 1uz, 2uz, 0uz });
+		const auto inputBCL = Layer::AddPermute(subgraph, convInput, { 2uz, 1uz, 0uz });
+		const auto inputNCHW = Layer::AddReshape(subgraph, inputBCL, { batch, channels, 1uz, inputLength });
+		const auto weightCK = Layer::AddPermute(subgraph, weight, { 1uz, 0uz });
+		const auto weightGrouped = Layer::AddReshape(subgraph, weightCK, { channels, 1uz, 1uz, kernel });
+		const auto convolved = Layer::AddConv2D(subgraph, inputNCHW, weightGrouped, std::nullopt,
+		                                       { 1uz, 1uz }, { 1uz, 1uz }, { 0uz, 0uz }, { 0uz, 0uz }, channels);
+		const auto convolvedBCT = Layer::AddReshape(subgraph, convolved, { batch, channels, tokens });
+		return Layer::AddPermute(subgraph, convolvedBCT, { 1uz, 2uz, 0uz });
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif

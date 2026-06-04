@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace LiteNN::Layer
+namespace LiteNN::Compatibility::GGML
 {
 	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input,
 	                            std::span<const std::size_t> targetShape)
@@ -44,9 +44,9 @@ namespace LiteNN::Layer
 			broadcastShape.push_back(inputDim);
 		}
 
-		const auto expanded = AddReshape(subgraph, input, reshapedShape);
-		const auto tiled = AddBroadcastTo(subgraph, expanded, broadcastShape);
-		return AddReshape(subgraph, tiled, targetShape);
+		const auto expanded = Layer::AddReshape(subgraph, input, reshapedShape);
+		const auto tiled = Layer::AddBroadcastTo(subgraph, expanded, broadcastShape);
+		return Layer::AddReshape(subgraph, tiled, targetShape);
 	}
 
 	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input,
@@ -65,6 +65,6 @@ namespace LiteNN::Layer
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}
-} // namespace LiteNN::Layer
+} // namespace LiteNN::Compatibility::GGML
 
 #endif
