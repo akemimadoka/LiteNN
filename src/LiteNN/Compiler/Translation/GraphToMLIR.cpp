@@ -1436,11 +1436,39 @@ private:
 		throw std::runtime_error("GraphToMLIR does not support SolveTriNode yet; use the interpreter path");
 	}
 
-	void emitNode(const PlanSubgraphView&, NodeId, const SGDStepNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const SGDStepNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support SGDStepNode yet; use the interpreter path");
+		if (outputInfos.empty())
+		{
+			throw std::runtime_error("GraphToMLIR SGDStepNode requires an updated-parameter output");
+		}
+		if (node.momentum != 0.0 || node.velocity.has_value() || outputInfos.size() != 1)
+		{
+			throw std::runtime_error("GraphToMLIR SGDStepNode currently supports only momentum-free SGD");
+		}
+		if (outputInfos[0].dtype != DataType::Float32)
+		{
+			throw std::runtime_error("GraphToMLIR SGDStepNode currently supports Float32 tensors only");
+		}
+
+		const auto shape = outputInfos[0].shape;
+		auto parameter = getVal(valueMap, node.parameter);
+		auto gradient = getVal(valueMap, node.gradient);
+		auto regularizedGradient = gradient;
+		if (node.weightDecay != 0.0)
+		{
+			auto weightDecay = emitFilledConstant(DataType::Float32, shape, node.weightDecay);
+			auto decay = emitBinaryValue(LiteNN::BinaryOp::Multiply, parameter, weightDecay, DataType::Float32, shape);
+			regularizedGradient =
+			    emitBinaryValue(LiteNN::BinaryOp::Add, gradient, decay, DataType::Float32, shape);
+		}
+		auto learningRate = emitFilledConstant(DataType::Float32, shape, node.learningRate);
+		auto scaledUpdate =
+		    emitBinaryValue(LiteNN::BinaryOp::Multiply, regularizedGradient, learningRate, DataType::Float32, shape);
+		valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Subtract, parameter, scaledUpdate, DataType::Float32,
+		                                      shape) };
 	}
 
 	void emitNode(const PlanSubgraphView&, NodeId, const AdamWStepNode&, std::span<const OutputInfo>,

@@ -1650,6 +1650,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
       - [x] Train-step plans now expose named artifact entries for `forward`, `backward`, `loss`, and optimizer
         update nodes, with ABI binding indices for mutable parameters, gradients, loss inputs, optimizer state, and
         updated outputs.
+      - [x] CPU MLIR lowering now supports momentum-free `SGDStepNode`, allowing the first optimizer update entry to
+        compile as an AOT artifact and match interpreter results.
       - [ ] Move loss and optimizer update execution itself into named compiled artifact entries with mutable state
         bindings, eliminating the per-step runner refresh.
   - [x] Make checkpoint save/load share the same state binding contract.

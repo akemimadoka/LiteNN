@@ -1126,6 +1126,26 @@ TEST(CompiledModuleTest, CPUCrossEntropyBackwardArtifactMatchesInterpreter)
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
 }
 
+TEST(CompiledModuleTest, CPUSGDStepArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto parameter = sg.AddParam(DataType::Float32, { 4 });
+	const auto gradient = sg.AddParam(DataType::Float32, { 4 });
+	const auto update = sg.AddNode(
+	    SGDStepNode{ { parameter, 0 }, { gradient, 0 }, std::nullopt, 0.25, 0.0, 0.1, false },
+	    { OutputInfo{ DataType::Float32, { 4 } } });
+	sg.SetResults({ { update, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 2> inputs = {
+		Tensor<CPU>({ 1.0, -2.0, 4.0, -8.0 }, { 4 }, DataType::Float32),
+		Tensor<CPU>({ 0.5, -0.25, 0.125, -0.0625 }, { 4 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 {
 	auto graph = BuildSimpleAddGraph();
