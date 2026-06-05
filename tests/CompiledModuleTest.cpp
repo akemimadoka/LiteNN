@@ -2016,8 +2016,8 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	for (const auto& info : externalInfos)
 	{
 		externalNames.push_back(info.name);
-		EXPECT_EQ(info.dtype, DataType::Float32);
-		EXPECT_GT(info.shape.size(), 0u);
+		EXPECT_EQ(info.type.dtype, DataType::Float32);
+		EXPECT_GT(info.type.StaticShape().size(), 0u);
 		EXPECT_GT(info.byteSize, 0u);
 		EXPECT_EQ(info.byteOffset % info.alignment, 0u);
 		if (info.region == "weights")
@@ -2140,12 +2140,12 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 	const auto externalInfos = separated.ExternalTensorInfos();
 	ASSERT_EQ(externalInfos.size(), 2u);
 	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
-		return info.name == "scale.weight" && info.region == "weights" && info.dtype == DataType::Float32 &&
-		       info.shape == std::vector<std::size_t>{ 2, 2 };
+		return info.name == "scale.weight" && info.region == "weights" && info.type.dtype == DataType::Float32 &&
+		       info.type.StaticShape() == std::vector<std::size_t>{ 2, 2 };
 	}));
 	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
-		return info.name.starts_with("constant_") && info.region == "constants" && info.dtype == DataType::Float32 &&
-		       info.shape == std::vector<std::size_t>{ 1, 2 };
+		return info.name.starts_with("constant_") && info.region == "constants" &&
+		       info.type.dtype == DataType::Float32 && info.type.StaticShape() == std::vector<std::size_t>{ 1, 2 };
 	}));
 
 	auto runAndCheck = [&](CompiledModule<CPU>& module) {
@@ -2225,8 +2225,8 @@ TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalR
 	auto separated = artifact.SeparateRodata();
 	ASSERT_GT(separated.Weights().size(), 0u);
 	EXPECT_TRUE(std::ranges::any_of(separated.ExternalTensorInfos(), [](const auto& info) {
-		return info.name == "scale.weight" && info.region == "weights" && info.dtype == DataType::Float32 &&
-		       info.shape == std::vector<std::size_t>{ 2, 2 };
+		return info.name == "scale.weight" && info.region == "weights" && info.type.dtype == DataType::Float32 &&
+		       info.type.StaticShape() == std::vector<std::size_t>{ 2, 2 };
 	}));
 
 	auto module = artifact.Load();
@@ -2253,7 +2253,7 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault
 	ASSERT_EQ(externalInfos.size(), 1u);
 	EXPECT_EQ(externalInfos[0].name, "scale.weight");
 	EXPECT_EQ(externalInfos[0].region, "weights");
-	EXPECT_EQ(externalInfos[0].shape, (std::vector<std::size_t>{ 2, 2 }));
+	EXPECT_EQ(externalInfos[0].type.StaticShape(), (std::vector<std::size_t>{ 2, 2 }));
 
 	std::array<Tensor<CPU>, 1> inputs = {
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),

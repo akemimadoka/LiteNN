@@ -1597,6 +1597,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [ ] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
     - [x] Move `CompiledTensorSpec` to an authoritative `TensorType type` contract instead of public `dtype`/`shape`
       fields.
+    - [x] Move `CompiledModuleExternalTensorInfo` to `TensorType type` instead of public `dtype`/`shape` fields.
   - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
     - [x] Guard compiled artifact signatures against reintroducing raw `dtype`/`shape` fields.
 - [x] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.

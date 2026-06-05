@@ -106,8 +106,7 @@ namespace LiteNN
 	{
 		std::string name;
 		std::string region;
-		DataType dtype{};
-		std::vector<std::size_t> shape;
+		TensorType type;
 		std::uint64_t byteOffset{};
 		std::uint64_t byteSize{};
 		std::uint64_t alignment{ 1 };

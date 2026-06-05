@@ -97,7 +97,8 @@ namespace
 	{
 		return std::format("{}: region={} offset={} bytes={} align={} checksum={} policy={} {}",
 		                   info.name, info.region, info.byteOffset, info.byteSize, info.alignment, info.checksum,
-		                   FormatRebindPolicy(info.rebindPolicy), Validation::FormatInfo(info.dtype, info.shape));
+		                   FormatRebindPolicy(info.rebindPolicy),
+		                   Validation::FormatInfo(info.type.dtype, info.type.StaticShape()));
 	}
 
 	std::string PrintModule(mlir::ModuleOp module)

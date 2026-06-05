@@ -204,4 +204,14 @@ TEST(G14PublicApiGuard, CompiledTensorSpecUsesTensorTypeContract)
 	EXPECT_EQ(specBody.find("DataType dtype"), std::string::npos);
 	EXPECT_EQ(specBody.find("std::vector<std::size_t> shape"), std::string::npos);
 	EXPECT_EQ(specBody.find("ShapeView{ shape }"), std::string::npos);
+
+	const auto externalBegin = text.find("struct CompiledModuleExternalTensorInfo");
+	const auto optionsBegin = text.find("struct CompilerOptions");
+	ASSERT_NE(externalBegin, std::string::npos);
+	ASSERT_NE(optionsBegin, std::string::npos);
+	const auto externalBody = text.substr(externalBegin, optionsBegin - externalBegin);
+
+	EXPECT_NE(externalBody.find("TensorType type"), std::string::npos);
+	EXPECT_EQ(externalBody.find("DataType dtype"), std::string::npos);
+	EXPECT_EQ(externalBody.find("std::vector<std::size_t> shape"), std::string::npos);
 }

@@ -1046,9 +1046,10 @@ namespace
 	{
 		AppendString(out, info.name);
 		AppendString(out, info.region);
-		AppendU32(out, static_cast<std::uint32_t>(info.dtype));
-		AppendU32(out, static_cast<std::uint32_t>(info.shape.size()));
-		for (const auto dim : info.shape)
+		AppendU32(out, static_cast<std::uint32_t>(info.type.dtype));
+		const auto shape = info.type.StaticShape();
+		AppendU32(out, static_cast<std::uint32_t>(shape.size()));
+		for (const auto dim : shape)
 		{
 			AppendU64(out, static_cast<std::uint64_t>(dim));
 		}
@@ -1070,9 +1071,10 @@ namespace
 		{
 			throw std::runtime_error("Compiled module separated metadata contains an invalid external tensor data type");
 		}
-		info.dtype = static_cast<DataType>(dtypeValue);
+		const auto dtype = static_cast<DataType>(dtypeValue);
 		const auto rank = ReadU32(bytes, offset);
-		info.shape.reserve(rank);
+		std::vector<std::size_t> shape;
+		shape.reserve(rank);
 		for (std::uint32_t i = 0; i < rank; ++i)
 		{
 			const auto dim = ReadU64(bytes, offset);
@@ -1081,8 +1083,9 @@ namespace
 				throw std::runtime_error(
 				    "Compiled module separated metadata external tensor shape dimension is too large");
 			}
-			info.shape.push_back(static_cast<std::size_t>(dim));
+			shape.push_back(static_cast<std::size_t>(dim));
 		}
+		info.type = TensorType::Dense(dtype, ShapeView{ shape });
 		info.byteOffset = ReadU64(bytes, offset);
 		info.byteSize = ReadU64(bytes, offset);
 		info.alignment = ReadU64(bytes, offset);
@@ -1577,8 +1580,7 @@ namespace
 		return {
 			.name = std::move(name),
 			.region = std::string(regionName),
-			.dtype = DataType::Float32,
-			.shape = std::vector<std::size_t>(shape.begin(), shape.end()),
+			.type = TensorType::Dense(DataType::Float32, ShapeView{ shape }),
 			.byteOffset = byteOffset,
 			.byteSize = byteSize,
 			.alignment = alignment,
@@ -1603,8 +1605,7 @@ namespace
 		return {
 			.name = std::move(name),
 			.region = std::string(regionName),
-			.dtype = dtype,
-			.shape = std::vector<std::size_t>(shape.begin(), shape.end()),
+			.type = TensorType::Dense(dtype, ShapeView{ shape }),
 			.byteOffset = byteOffset,
 			.byteSize = byteSize,
 			.alignment = alignment,
@@ -2093,7 +2094,7 @@ namespace
 			{
 				const auto& external = result.externalTensorInfos[externalId];
 				hiddenNodesByExternalId[externalId] =
-				    rebuilt.AddParam(external.dtype, std::vector<std::size_t>(external.shape.begin(), external.shape.end()));
+				    rebuilt.AddParam(external.type.dtype, external.type.StaticShape());
 			}
 
 			std::vector<std::vector<NodeOutput>> outputMap(original.NodeCount());
@@ -2680,7 +2681,7 @@ namespace
 	CompiledTensorSpec ExternalTensorAsSpec(const CompiledModuleExternalTensorInfo& info)
 	{
 		return {
-			.type = TensorType::Dense(info.dtype, ShapeView{ info.shape }),
+			.type = info.type,
 			.name = info.name,
 		};
 	}
