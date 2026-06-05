@@ -90,21 +90,27 @@ namespace LiteNN
 		std::vector<std::string> candidateBackends;
 	};
 
-	// Graph → Graph 变换的基类
-	struct Pass
+	namespace Migration
 	{
-		virtual ~Pass() = default;
-		virtual std::string_view Name() const noexcept
+		/// Migration-only Graph -> Graph mutation pass.
+		///
+		/// New production pipelines should prefer the typed transform stages below. This adapter remains for
+		/// construction-time graph rewrites such as autograd, inlining, constant folding, fusion, and e-graph rewrites.
+		struct GraphMutationPass
 		{
-			return "Pass";
-		}
-		virtual std::vector<TransformInvalidation> Invalidates() const
-		{
-			return { TransformInvalidation::GraphTopology, TransformInvalidation::TypeFacts,
-			         TransformInvalidation::ExecutablePlan };
-		}
-		virtual void Run(Graph& graph) = 0;
-	};
+			virtual ~GraphMutationPass() = default;
+			virtual std::string_view Name() const noexcept
+			{
+				return "GraphMutationPass";
+			}
+			virtual std::vector<TransformInvalidation> Invalidates() const
+			{
+				return { TransformInvalidation::GraphTopology, TransformInvalidation::TypeFacts,
+				         TransformInvalidation::ExecutablePlan };
+			}
+			virtual void Run(Graph& graph) = 0;
+		};
+	} // namespace Migration
 
 	struct ModelGraphTransformStage
 	{};
@@ -214,11 +220,11 @@ namespace LiteNN
 	}
 
 	inline TransformResult<ModelGraph> RunModelGraphPassPipeline(
-	    ModelGraph model, std::span<Pass* const> passes,
+	    ModelGraph model, std::span<Migration::GraphMutationPass* const> passes,
 	    const TransformPipelineOptions& options = {})
 	{
 		std::vector<TransformStepMetadata> steps;
-		for (Pass* pass : passes)
+		for (Migration::GraphMutationPass* pass : passes)
 		{
 			if (pass == nullptr)
 			{

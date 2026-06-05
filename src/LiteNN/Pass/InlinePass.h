@@ -12,7 +12,7 @@ namespace LiteNN
 	// 内联 Pass：将 CallNode 展开为其 callee 子图的内容
 	// 消除函数调用开销并暴露跨子图优化机会
 	// 应在 AutogradPass 之后、ConstFoldPass/FusionPass 之前运行
-	class InlinePass : public Pass
+	class InlinePass : public Migration::GraphMutationPass
 	{
 	public:
 		void Run(Graph& graph) override

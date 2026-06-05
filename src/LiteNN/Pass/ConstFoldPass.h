@@ -17,7 +17,7 @@ namespace LiteNN
 	// 常量折叠 Pass：在编译期评估所有输入均为常量的节点，
 	// 并消除恒等操作（x+0, x*1 等），减少运行时计算量
 	// 应在 InlinePass 之后、FusionPass 之前运行
-	class ConstFoldPass : public Pass
+	class ConstFoldPass : public Migration::GraphMutationPass
 	{
 	public:
 		void Run(Graph& graph) override

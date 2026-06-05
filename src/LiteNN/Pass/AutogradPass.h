@@ -11,7 +11,7 @@ namespace LiteNN
 {
 	// 自动微分 Pass：对 forward 子图生成 backward 子图
 	// 采用保存中间激活值方式，通过 ActivationStore 共享前向/反向数据
-	class AutogradPass : public Pass
+	class AutogradPass : public Migration::GraphMutationPass
 	{
 	public:
 		void Run(Graph& graph) override

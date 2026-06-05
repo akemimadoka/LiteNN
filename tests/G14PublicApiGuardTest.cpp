@@ -334,3 +334,24 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	                             "    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp"),
 	          std::string::npos);
 }
+
+TEST(G14PublicApiGuard, RawGraphMutationPassesAreMigrationScoped)
+{
+	const auto passHeader = ReadSourceFile("src/LiteNN/Pass.h");
+	EXPECT_EQ(passHeader.find("\n\tstruct Pass"), std::string::npos);
+	EXPECT_NE(passHeader.find("namespace Migration"), std::string::npos);
+	EXPECT_NE(passHeader.find("struct GraphMutationPass"), std::string::npos);
+	EXPECT_NE(passHeader.find("std::span<Migration::GraphMutationPass* const>"), std::string::npos);
+
+	const std::vector<std::string_view> graphMutationPassHeaders{
+		"src/LiteNN/Pass/AutogradPass.h",   "src/LiteNN/Pass/ConstFoldPass.h",
+		"src/LiteNN/Pass/EGraphPass.h",     "src/LiteNN/Pass/ForwardOnlyPass.h",
+		"src/LiteNN/Pass/FusionPass.h",     "src/LiteNN/Pass/InlinePass.h",
+	};
+	for (const auto header : graphMutationPassHeaders)
+	{
+		const auto text = ReadSourceFile(header);
+		EXPECT_NE(text.find("Migration::GraphMutationPass"), std::string::npos) << header;
+		EXPECT_EQ(text.find("public Pass"), std::string::npos) << header;
+	}
+}

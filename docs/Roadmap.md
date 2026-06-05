@@ -1653,7 +1653,10 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Added `TransformStageKind`, stage traits, `BackendPlan`, and typed pipeline entry points in `Pass.h`.
   - [x] Add pass invalidation/debug dump metadata to each stage.
     - [x] Added `TransformStepMetadata`, invalidation categories, object stats, and debug dump callbacks with tests.
-  - [ ] Keep raw graph mutation only inside migration and construction helpers.
+  - [x] Keep raw graph mutation only inside migration and construction helpers.
+    - [x] Moved the old root `Pass` contract to `Migration::GraphMutationPass` and updated graph-rewrite passes,
+      typed pipeline adapters, and guard coverage so new production pass APIs do not reintroduce a raw `Graph&`
+      mutation contract.
 - [ ] Split build/distribution components along real deployment boundaries.
   - [x] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
     - [x] Added `G14PublicApiGuard` coverage over core/runtime/training headers so deployment-specific includes cannot

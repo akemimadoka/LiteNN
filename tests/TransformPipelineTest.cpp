@@ -25,7 +25,7 @@ namespace
 		return graph;
 	}
 
-	class RecordingPass : public Pass
+	class RecordingPass : public Migration::GraphMutationPass
 	{
 	public:
 		std::string_view Name() const noexcept override
@@ -51,13 +51,13 @@ namespace
 TEST(TransformPipeline, RunsModelGraphPassesWithoutCallerOwnedGraphMutation)
 {
 	RecordingPass pass;
-	std::array<Pass*, 1> passes{ &pass };
+	std::array<Migration::GraphMutationPass*, 1> passes{ &pass };
 	std::vector<TransformStepMetadata> dumps;
 	TransformPipelineOptions options;
 	options.debugDump = [&](const TransformStepMetadata& step) { dumps.push_back(step); };
 
-	auto result = RunModelGraphPassPipeline(ModelGraph{ BuildSmallGraph() }, std::span<Pass* const>{ passes },
-	                                        options);
+	auto result = RunModelGraphPassPipeline(ModelGraph{ BuildSmallGraph() },
+	                                        std::span<Migration::GraphMutationPass* const>{ passes }, options);
 
 	EXPECT_EQ(pass.runs, 1);
 	ASSERT_EQ(result.steps.size(), 1u);
