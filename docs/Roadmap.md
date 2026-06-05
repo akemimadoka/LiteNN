@@ -1651,7 +1651,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         bindings, eliminating the per-step runner refresh.
   - [x] Make checkpoint save/load share the same state binding contract.
     - [x] Added `StateDict` save/load helpers over `ParameterSet` and exposed them through `Trainer`.
-- [ ] Replace mutating `Graph&` pass contracts with typed transform pipelines.
+- [x] Replace mutating `Graph&` pass contracts with typed transform pipelines.
   - [x] Define separate transform stages for `ModelGraph -> ModelGraph`, `ModelGraph -> ExecutablePlan`,
     `ExecutablePlan -> ExecutablePlan`, and `ExecutablePlan -> BackendPlan`.
     - [x] Added `TransformStageKind`, stage traits, `BackendPlan`, and typed pipeline entry points in `Pass.h`.
@@ -1661,11 +1661,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Moved the old root `Pass` contract to `Migration::GraphMutationPass` and updated graph-rewrite passes,
       typed pipeline adapters, and guard coverage so new production pass APIs do not reintroduce a raw `Graph&`
       mutation contract.
-- [ ] Split build/distribution components along real deployment boundaries.
+- [x] Split build/distribution components along real deployment boundaries.
   - [x] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
     - [x] Added `G14PublicApiGuard` coverage over core/runtime/training headers so deployment-specific includes cannot
       creep into the minimal runtime boundary.
-  - [ ] Split importers, CUDA compiler/runtime, training AOT runners, tools, and examples into opt-in targets.
+  - [x] Split importers, CUDA compiler/runtime, training AOT runners, tools, and examples into opt-in targets.
     - [x] Split the runtime build into `LiteNNCore`, `LiteNNImporters`, and the full `LiteNN` interface target so
       safetensors/Torch manifest/vNext package IO and simdjson are opt-in for minimal runtime consumers.
     - [x] Split CUDA runtime support into `LiteNNCUDARuntime`, keeping CUDA Toolkit libraries off `LiteNNCore`.
