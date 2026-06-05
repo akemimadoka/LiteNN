@@ -5847,17 +5847,17 @@ CompilerOptions CompilerOptions::Defaults()
 	return {};
 }
 
-CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const CompilerOptions& options)
+CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, const CompilerOptions& options)
 {
 	CompileBudgetEstimate estimate;
-	estimate.subgraphCount = graph.SubgraphCount();
-	estimate.variableCount = graph.VariableCount();
+	estimate.subgraphCount = plan.subgraphs.size();
+	estimate.variableCount = plan.variables.size();
 	estimate.cpuAOTExternalRegionsEnabled = options.enableCPUAOTExternalRegions;
 
-	for (const auto& variable : graph.Variables())
+	for (const auto& variable : plan.variables)
 	{
-		const auto byteSize = static_cast<std::uint64_t>(variable->Data().NumElements()) *
-		                      LiteNN::ElementByteSize(variable->Data().DType());
+		const auto byteSize = static_cast<std::uint64_t>(
+		    variable.LogicalByteSize().value_or(variable.region.byteSize));
 		estimate.variablePayloadBytes = SaturatedAddU64(estimate.variablePayloadBytes, byteSize);
 		if (options.enableCPUAOTExternalRegions)
 		{
@@ -5870,13 +5870,11 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const Co
 		}
 	}
 
-	for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+	for (const auto& subgraph : plan.subgraphs)
 	{
-		const auto& subgraph = graph.GetSubgraph(subgraphId);
-		estimate.nodeCount += subgraph.NodeCount();
-		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		estimate.nodeCount += subgraph.nodes.size();
+		for (const auto& entry : subgraph.nodes)
 		{
-			const auto& entry = subgraph.GetNodeEntry(nodeId);
 			std::visit(
 			    [&](const auto& node) {
 				    using T = std::decay_t<decltype(node)>;
@@ -5919,6 +5917,11 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const Co
 		}
 	}
 	return estimate;
+}
+
+CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const CompilerOptions& options)
+{
+	return EstimateCompileBudget(BuildExecutablePlan(graph), options);
 }
 
 CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,

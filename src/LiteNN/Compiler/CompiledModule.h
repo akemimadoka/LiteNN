@@ -155,6 +155,7 @@ namespace LiteNN
 	};
 
 	/// Estimate tensor payload pressure before invoking MLIR/LLVM code generation.
+	CompileBudgetEstimate EstimateCompileBudget(const ExecutablePlan& plan, const CompilerOptions& options);
 	CompileBudgetEstimate EstimateCompileBudget(const Graph& graph, const CompilerOptions& options);
 
 	struct CompiledModuleInvocation

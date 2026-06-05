@@ -182,7 +182,7 @@ namespace
 			LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
 			externalOptions.minVariableBytes = externalWeightMinBytes;
 			LiteNN::Serialization::Migration::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
-			                                                *externalWeightsPath, externalOptions);
+			                                                                  *externalWeightsPath, externalOptions);
 		}
 		else
 		{
@@ -1163,10 +1163,10 @@ namespace
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-object");
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto artifact = TimedStep("compile-object codegen",
 		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			                              LiteNN::BuildExecutablePlan(graph), options);
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		                          });
 		auto separated = artifact.SeparateRodata();
 		if (!separated.Constants().empty() || !separated.Weights().empty() ||
@@ -1285,26 +1285,24 @@ namespace
 
 	std::vector<LiteNN::CompiledTensorSpec> GraphInputSpecs(const LiteNN::Graph& graph)
 	{
-		const auto signature = graph.InputSignature();
+		const auto signature = graph.InputTypeSignature();
 		std::vector<LiteNN::CompiledTensorSpec> specs;
 		specs.reserve(signature.size());
 		for (const auto& input : signature)
 		{
-			specs.push_back(LiteNN::CompiledTensorSpec::FromType(
-			    input.name, LiteNN::TensorType::Dense(input.dtype, LiteNN::ShapeView{ input.shape })));
+			specs.push_back(LiteNN::CompiledTensorSpec::FromType(input.name, input.type));
 		}
 		return specs;
 	}
 
 	std::vector<LiteNN::CompiledTensorSpec> GraphOutputSpecs(const LiteNN::Graph& graph)
 	{
-		const auto signature = graph.OutputSignature();
+		const auto signature = graph.OutputTypeSignature();
 		std::vector<LiteNN::CompiledTensorSpec> specs;
 		specs.reserve(signature.size());
 		for (const auto& output : signature)
 		{
-			specs.push_back(LiteNN::CompiledTensorSpec::FromType(
-			    output.name, LiteNN::TensorType::Dense(output.dtype, LiteNN::ShapeView{ output.shape })));
+			specs.push_back(LiteNN::CompiledTensorSpec::FromType(output.name, output.type));
 		}
 		return specs;
 	}
@@ -1685,10 +1683,10 @@ namespace
 
 		auto begin = BenchmarkClock::now();
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cpu");
-		auto artifact =
-		    LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(LiteNN::BuildExecutablePlan(graph), compilerOptions);
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, compilerOptions);
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1771,10 +1769,10 @@ namespace
 		LiteNN::CUDA device{};
 		auto begin = BenchmarkClock::now();
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto compilerOptions = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, compilerOptions, "benchmark-cuda");
-		auto artifact =
-		    LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(LiteNN::BuildExecutablePlan(graph), compilerOptions);
+		auto artifact = LiteNN::Compiler<LiteNN::CUDA>::CompileArtifact(plan, compilerOptions);
 		auto end = BenchmarkClock::now();
 		result.compileMs = ElapsedMs(begin, end);
 		result.backend = std::string(BackendName(artifact.Backend()));
@@ -1855,13 +1853,13 @@ namespace
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
-		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+			auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+			auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto options = MakeExampleCompilerOptions();
-		PrintCompileBudget(graph, options, "run-model");
+			PrintCompileBudget(graph, options, "run-model");
 		auto artifact = TimedStep("run-model codegen",
 		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			                              LiteNN::BuildExecutablePlan(graph), options);
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		                          });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1881,13 +1879,13 @@ namespace
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
 		{
-		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+			auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+			auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto options = MakeExampleCompilerOptions();
-		PrintCompileBudget(graph, options, "run-model-with-inputs");
+			PrintCompileBudget(graph, options, "run-model-with-inputs");
 		auto artifact = TimedStep("run-model-with-inputs codegen",
 		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			                              LiteNN::BuildExecutablePlan(graph), options);
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		                          });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
@@ -1910,6 +1908,7 @@ namespace
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
 		const auto inputSpecs = GraphInputSpecs(graph);
 		const auto outputSpecs = GraphOutputSpecs(graph);
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto inputs = MakeInputsFromSafetensors(inputSpecs, inputPath, false);
 
 		std::size_t visitedNodes = 0;
@@ -1923,7 +1922,6 @@ namespace
 		          << std::flush;
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
-		const auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto outputs = interpreter.RunForwardWithTrace(
 		    plan, std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs.data(), inputs.size()),
 		    [&](LiteNN::SubgraphId subgraphId, LiteNN::NodeId nodeId, const LiteNN::NodeEntry& entry,
@@ -1992,12 +1990,12 @@ namespace
 	void CompileRawObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath)
 	{
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(graph, options, "compile-raw-object");
 		auto artifact = TimedStep("compile-raw-object codegen",
 		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			                              LiteNN::BuildExecutablePlan(graph), options);
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		                          });
 		std::ofstream out(objectPath, std::ios::binary);
 		if (!out)
@@ -2021,12 +2019,12 @@ namespace
 	                         const ExampleCompilerSettings& compilerSettings = {})
 	{
 		auto graph = LiteNN::Serialization::Migration::LoadGraphArchive(graphPath);
+		auto plan = LiteNN::BuildExecutablePlan(graph);
 		auto options = MakeExampleCompilerOptions(compilerSettings);
 		PrintCompileBudget(graph, options, "compile-image-regions");
 		auto artifact = TimedStep("compile-image-regions codegen",
 		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(
-			                              LiteNN::BuildExecutablePlan(graph), options);
+			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		                          });
 		std::filesystem::create_directories(outputDir);
 		const auto prefix = std::string(filePrefix);

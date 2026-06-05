@@ -1626,6 +1626,9 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Move MNIST and GGUF conversion examples to vNext package manifests / compiled carrier artifacts instead of
       graph archive save/load.
     - [ ] Move the SDXL example's graph-workbench commands to vNext package or compiled-artifact entry points.
+      - [x] vNext package external-weight loading now binds sibling weight files into loaded plan storage.
+      - [ ] SDXL compile/run/benchmark/diagnostic commands still use graph archives until vNext package node execution
+        payloads are executable after descriptor-based round-trip loading.
 - [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
   - [x] Stop letting `Trainer` mutate graph variables implicitly.
     - [x] `Trainer` now binds a `ParameterSet` at construction and routes zero-grad, variable-gradient storage, and

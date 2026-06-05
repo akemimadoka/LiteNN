@@ -1,6 +1,7 @@
 #ifndef LITENN_SERIALIZATION_MODELPACKAGEIO_H
 #define LITENN_SERIALIZATION_MODELPACKAGEIO_H
 
+#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/VNextPackage.h>
 
 #include <filesystem>
@@ -17,6 +18,9 @@ namespace LiteNN::Serialization
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
 	                           std::vector<VNextArtifactRef> artifacts = {},
 	                           VNextPackageLayout layout = {});
+	void SaveVNextModelPackageExternalWeights(const Graph& graph, const std::filesystem::path& path,
+	                                          const std::filesystem::path& externalWeightsPath,
+	                                          const ExternalWeightSaveOptions& externalOptions = {});
 
 	VNextModelPackage LoadVNextModelPackage(const std::filesystem::path& path);
 } // namespace LiteNN::Serialization

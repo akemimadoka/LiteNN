@@ -1,11 +1,14 @@
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
+#include <algorithm>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #include <simdjson.h>
 
@@ -737,6 +740,63 @@ namespace LiteNN::Serialization
 				     .viewMutability = tensor.mutability };
 		}
 
+		std::shared_ptr<const std::vector<std::byte>> ReadExternalTensorFile(const std::filesystem::path& path)
+		{
+			std::ifstream in(path, std::ios::binary | std::ios::ate);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to open vNext external tensor file: " + path.string());
+			}
+			const auto size = in.tellg();
+			if (size < 0)
+			{
+				throw std::runtime_error("Failed to determine vNext external tensor file size: " + path.string());
+			}
+			auto storage = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(size));
+			in.seekg(0, std::ios::beg);
+			if (!storage->empty())
+			{
+				in.read(reinterpret_cast<char*>(storage->data()), static_cast<std::streamsize>(storage->size()));
+				if (!in)
+				{
+					throw std::runtime_error("Failed to read vNext external tensor file: " + path.string());
+				}
+			}
+			return storage;
+		}
+
+		void BindExternalTensorFiles(ExecutablePlan& plan, const std::filesystem::path& packagePath)
+		{
+			std::map<std::filesystem::path, std::shared_ptr<const std::vector<std::byte>>> cache;
+			const auto base = packagePath.parent_path();
+			for (auto& variable : plan.variables)
+			{
+				if (!variable.IsExternal())
+				{
+					continue;
+				}
+				if (variable.region.name.empty())
+				{
+					throw std::runtime_error("vNext external tensor variable has an empty relative path");
+				}
+				const auto relative = std::filesystem::path(variable.region.name);
+				const auto resolved = relative.is_absolute() ? relative : base / relative;
+				auto [it, inserted] = cache.try_emplace(resolved);
+				if (inserted)
+				{
+					it->second = ReadExternalTensorFile(resolved);
+				}
+				const auto& storage = it->second;
+				if (variable.region.byteOffset > storage->size() ||
+				    variable.region.byteSize > storage->size() - variable.region.byteOffset)
+				{
+					throw std::runtime_error("vNext external tensor view exceeds file size: " + resolved.string());
+				}
+				variable.region.data = storage->data();
+				variable.region.owner = storage;
+			}
+		}
+
 		MemoryPlan ParseMemory(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -1026,6 +1086,69 @@ namespace LiteNN::Serialization
 		}
 	}
 
+	void SaveVNextModelPackageExternalWeights(const Graph& graph, const std::filesystem::path& path,
+	                                          const std::filesystem::path& externalWeightsPath,
+	                                          const ExternalWeightSaveOptions& externalOptions)
+	{
+		if (std::filesystem::absolute(externalWeightsPath).lexically_normal() ==
+		    std::filesystem::absolute(path).lexically_normal())
+		{
+			throw std::runtime_error("LiteNN vNext external weight file must be different from the package file");
+		}
+
+		Validation::ValidateGraph(graph);
+		auto module = BuildExecutableModule(graph);
+		std::ofstream weights(externalWeightsPath, std::ios::binary);
+		if (!weights)
+		{
+			throw std::runtime_error("Failed to open LiteNN vNext external weight file for writing: " +
+			                         externalWeightsPath.string());
+		}
+
+		std::error_code ec;
+		auto relativePath = std::filesystem::relative(externalWeightsPath, path.parent_path(), ec);
+		const auto externalPathText = ec ? externalWeightsPath.string() : relativePath.string();
+
+		for (std::size_t i = 0; i < graph.VariableCount(); ++i)
+		{
+			const auto& tensor = graph.GetVariable(i)->Data();
+			const auto byteCount = static_cast<std::size_t>(tensor.NumElements() * ElementByteSize(tensor.DType()));
+			const auto rawPosition = weights.tellp();
+			if (rawPosition == std::streampos(-1))
+			{
+				throw std::runtime_error("Failed to determine LiteNN vNext external weight output offset");
+			}
+			const auto rawOffset = static_cast<std::uint64_t>(rawPosition);
+			const auto alignment = std::max<std::uint64_t>(externalOptions.alignment, 1);
+			const auto alignedOffset = ((rawOffset + alignment - 1) / alignment) * alignment;
+			std::vector<char> padding(static_cast<std::size_t>(alignedOffset - rawOffset), '\0');
+			if (!padding.empty())
+			{
+				weights.write(padding.data(), static_cast<std::streamsize>(padding.size()));
+			}
+			weights.write(static_cast<const char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
+			if (!weights)
+			{
+				throw std::runtime_error("Failed to write LiteNN vNext external weight payload");
+			}
+
+			auto& storage = module.plan.variables.at(i);
+			storage.region.ownership = BufferOwnership::External;
+			storage.region.externalKind = ExternalBufferKind::User;
+			storage.region.memorySpace = TensorMemorySpaceFor(tensor.CurDevice());
+			storage.region.name = externalPathText;
+			storage.region.data = nullptr;
+			storage.region.byteOffset = static_cast<std::size_t>(alignedOffset);
+			storage.region.byteSize = byteCount;
+			storage.region.alignment = static_cast<std::size_t>(alignment);
+			storage.region.mutability = BufferMutability::Immutable;
+			storage.region.rebindPolicy = BufferRebindPolicy::ExactMetadataAndChecksum;
+			storage.storageOffsetBytes = 0;
+		}
+
+		SaveVNextModelPackage(module, path);
+	}
+
 	VNextModelPackage LoadVNextModelPackage(const std::filesystem::path& path)
 	{
 		std::ifstream in(path, std::ios::binary);
@@ -1054,6 +1177,7 @@ namespace LiteNN::Serialization
 		VNextModelPackage package;
 		package.manifest = ParseManifest(Member(rootObject, "manifest", "package.manifest"));
 		package.plan = ParsePlan(Member(rootObject, "plan", "package.plan"));
+		BindExternalTensorFiles(package.plan, path);
 		ValidateVNextPackageManifest(package.manifest);
 		ValidateExecutablePlan(package.plan);
 		return package;

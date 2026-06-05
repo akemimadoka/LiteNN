@@ -118,6 +118,37 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.plan.outputs[0].name, "y");
 }
 
+TEST(G14VNext, VNextModelPackageExternalWeightsBindLoadedPlanStorage)
+{
+	const auto graph = BuildLinearAddGraph();
+	const auto root = std::filesystem::temp_directory_path();
+	const auto path = root / "litenn_vnext_external_weights.json";
+	const auto weightsPath = root / "litenn_vnext_external_weights.bin";
+
+	Serialization::ExternalWeightSaveOptions options;
+	options.minVariableBytes = 0;
+	Serialization::SaveVNextModelPackageExternalWeights(graph, path, weightsPath, options);
+
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	ASSERT_EQ(package.plan.variables.size(), 1u);
+	EXPECT_TRUE(package.plan.variables[0].IsExternal());
+	ASSERT_NE(package.plan.variables[0].region.data, nullptr);
+	EXPECT_EQ(package.plan.variables[0].region.owner.use_count(), 1);
+
+	const auto& region = package.plan.variables[0].region;
+	ASSERT_GE(region.byteSize, 4u * sizeof(float));
+	const auto* bytes = static_cast<const std::byte*>(region.data);
+	ASSERT_NE(bytes, nullptr);
+	const auto* values = reinterpret_cast<const float*>(bytes + region.byteOffset);
+	EXPECT_FLOAT_EQ(values[0], 10.0F);
+	EXPECT_FLOAT_EQ(values[1], 20.0F);
+	EXPECT_FLOAT_EQ(values[2], 30.0F);
+	EXPECT_FLOAT_EQ(values[3], 40.0F);
+
+	std::filesystem::remove(path);
+	std::filesystem::remove(weightsPath);
+}
+
 TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
 {
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_legacy.json";

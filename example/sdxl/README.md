@@ -67,7 +67,8 @@ python311 example/sdxl/sdxl_manifest_probe.py \
 Import a LiteNN Torch manifest plus SDXL weights into a serialized graph:
 
 ```sh
-litenn_sdxl_example --import sdxl_unet_manifest.json path/to/sdxl.safetensors sdxl_unet.ltnn --allow-extra-tensors
+litenn_sdxl_example --import sdxl_unet_manifest.json path/to/sdxl.safetensors sdxl_unet.ltnn \
+  --allow-extra-tensors
 ```
 
 Write an input-binding safetensors file for a smoke manifest:
