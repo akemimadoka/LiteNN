@@ -18,22 +18,36 @@ namespace LiteNN::Training
 	template <Device D>
 	using CompiledForwardRunner = std::function<std::vector<Tensor<D>>(std::span<const Tensor<D>>)>;
 
+	template <Device D>
+	using CompiledBackwardRunner = std::function<std::vector<Tensor<D>>(std::span<const Tensor<D>>)>;
+
 	/// Creates the compiled forward half of the vNext train-step contract.
-	///
-	/// Full compiled backward/update execution remains owned by the G13 AOT-training ABI because it needs
-	/// mutable parameter bindings, saved-activation/tape bindings, and named multi-entry artifacts.
 	template <Device D>
 	CompiledForwardRunner<D> CreateCompiledTrainForwardRunner(const ExecutablePlan&, D)
 	{
 		throw std::runtime_error("Trainer AOT forward runner is not available for this device");
 	}
 
+	/// Creates the compiled backward half of the vNext train-step contract.
+	///
+	/// Optimizer/loss/update execution remains owned by the named multi-entry train-step artifact ABI; this runner
+	/// intentionally compiles the explicit backward graph only.
+	template <Device D>
+	CompiledBackwardRunner<D> CreateCompiledTrainBackwardRunner(const ExecutablePlan&, D)
+	{
+		throw std::runtime_error("Trainer AOT backward runner is not available for this device");
+	}
+
 	template <>
 	CompiledForwardRunner<CPU> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CPU device);
+	template <>
+	CompiledBackwardRunner<CPU> CreateCompiledTrainBackwardRunner(const ExecutablePlan& plan, CPU device);
 
 #ifdef LITENN_ENABLE_CUDA
 	template <>
 	CompiledForwardRunner<CUDA> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CUDA device);
+	template <>
+	CompiledBackwardRunner<CUDA> CreateCompiledTrainBackwardRunner(const ExecutablePlan& plan, CUDA device);
 #endif
 } // namespace LiteNN::Training
 

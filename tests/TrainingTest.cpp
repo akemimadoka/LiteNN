@@ -100,7 +100,7 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 3.0f);
 }
 
-TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
+TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 {
 	Graph graph;
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
@@ -114,7 +114,6 @@ TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	Training::TrainerOptions options;
-	options.buildBackwardIfMissing = false;
 	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
 	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f), options);
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::AOT);
@@ -127,7 +126,22 @@ TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 6.0f);
 	std::vector<Tensor<CPU>> outputGradients;
 	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
-	EXPECT_THROW((void)trainer.Step(inputs, outputGradients), std::runtime_error);
+
+	auto firstStep = trainer.Step(inputs, outputGradients);
+	ASSERT_EQ(firstStep.outputs.size(), 1);
+	ASSERT_EQ(firstStep.backwardResults.size(), 2);
+	EXPECT_FLOAT_EQ(ReadFloat(firstStep.outputs[0], 0), 6.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(firstStep.backwardResults[0], 0), 6.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(firstStep.backwardResults[1], 0), 4.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.6f);
+
+	auto secondStep = trainer.Step(inputs, outputGradients);
+	ASSERT_EQ(secondStep.outputs.size(), 1);
+	ASSERT_EQ(secondStep.backwardResults.size(), 2);
+	EXPECT_FLOAT_EQ(ReadFloat(secondStep.outputs[0], 0), 5.2f);
+	EXPECT_FLOAT_EQ(ReadFloat(secondStep.backwardResults[0], 0), 5.2f);
+	EXPECT_FLOAT_EQ(ReadFloat(secondStep.backwardResults[1], 0), 4.0f);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.2f);
 }
 
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)

@@ -190,6 +190,7 @@ namespace LiteNN::Training
 		void InitializeCompiledForwardRunner()
 		{
 			compiledForward_ = CreateCompiledTrainForwardRunner(trainStepPlan_.module.plan, device_);
+			compiledBackward_ = CreateCompiledTrainBackwardRunner(trainStepPlan_.module.plan, device_);
 		}
 
 		void EnsureCompiledTrainStepRunnerAvailable() const
@@ -198,9 +199,10 @@ namespace LiteNN::Training
 			{
 				return;
 			}
-			throw std::runtime_error(
-			    "Trainer AOT forward runner is available, but compiled backward/update train-step execution is not "
-			    "wired yet; use Forward() for compiled inference or TrainExecutionPolicy::Interpreter for training");
+			if (!compiledForward_ || !compiledBackward_)
+			{
+				throw std::runtime_error("Trainer AOT train-step runners were not initialized");
+			}
 		}
 
 		std::vector<Tensor<D>> RunForward(std::span<const Tensor<D>> inputs)
@@ -252,7 +254,7 @@ namespace LiteNN::Training
 				backwardInputs.push_back(gradient);
 			}
 
-			auto backwardResults = interpreter_.RunBackward(trainStepPlan_.module.plan, backwardInputs, device_);
+			auto backwardResults = RunBackward(backwardInputs);
 			const auto inputGradientCount = inputs.size();
 			auto cpuBackwardResults = CopyToCPU(backwardResults);
 			if (options_.storeVariableGradients)
@@ -260,7 +262,24 @@ namespace LiteNN::Training
 				LiteNN::Optimizer::StoreVariableGradients(parameters_, cpuBackwardResults, inputGradientCount);
 			}
 			optimizer_.Step(parameters_, cpuBackwardResults, inputGradientCount);
+			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
+			{
+				InitializeCompiledForwardRunner();
+			}
 			return backwardResults;
+		}
+
+		std::vector<Tensor<D>> RunBackward(std::span<const Tensor<D>> inputs)
+		{
+			if (trainStepPlan_.policy != TrainExecutionPolicy::AOT)
+			{
+				return interpreter_.RunBackward(trainStepPlan_.module.plan, inputs, device_);
+			}
+			if (!compiledBackward_)
+			{
+				throw std::runtime_error("Trainer AOT backward runner was not initialized");
+			}
+			return compiledBackward_(inputs);
 		}
 
 		Graph* graph_;
@@ -271,6 +290,7 @@ namespace LiteNN::Training
 		Runtime::Interpreter<D> interpreter_;
 		TrainStepPlan trainStepPlan_;
 		CompiledForwardRunner<D> compiledForward_;
+		CompiledBackwardRunner<D> compiledBackward_;
 	};
 } // namespace LiteNN::Training
 
