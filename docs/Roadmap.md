@@ -1593,8 +1593,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Add public buffer binding descriptors for owned, borrowed, external, mapped, device-owned, and user-owned memory.
   - [x] Route runtime schedules and vNext package manifests through those descriptors.
   - [x] Validate dtype, layout, shape, memory space, mutability, alignment, checksum, and rebind policy at bind time.
-- [ ] Make `TensorType` the only public shape/type contract at runtime/compiler/importer boundaries.
-  - [ ] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
+- [x] Make `TensorType` the only public shape/type contract at runtime/compiler/importer boundaries.
+  - [x] Remove new public API dependencies on `OutputInfo`, `TensorSpec`, and raw `ShapeView` outside migration helpers.
     - [x] Move `CompiledTensorSpec` to an authoritative `TensorType type` contract instead of public `dtype`/`shape`
       fields.
     - [x] Move `CompiledModuleExternalTensorInfo` to `TensorType type` instead of public `dtype`/`shape` fields.
