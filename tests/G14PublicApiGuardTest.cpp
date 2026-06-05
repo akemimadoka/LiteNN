@@ -258,3 +258,48 @@ TEST(G14PublicApiGuard, StableBoundaryHeadersKeepTensorTypeAsShapeTypeContract)
 		}
 	}
 }
+
+TEST(G14PublicApiGuard, CoreRuntimeHeadersDoNotPullDeploymentSpecificDependencies)
+{
+	const std::vector<std::string_view> headers{
+		"src/LiteNN/DType.h",
+		"src/LiteNN/Device.h",
+		"src/LiteNN/ExecutablePlan.h",
+		"src/LiteNN/Graph.h",
+		"src/LiteNN/MemoryPlan.h",
+		"src/LiteNN/ModelBuilder.h",
+		"src/LiteNN/OpSchema.h",
+		"src/LiteNN/Pass.h",
+		"src/LiteNN/Runtime/Placement.h",
+		"src/LiteNN/Runtime/Scheduler.h",
+		"src/LiteNN/Storage.h",
+		"src/LiteNN/Tensor.h",
+		"src/LiteNN/TensorType.h",
+		"src/LiteNN/Training/StateDict.h",
+		"src/LiteNN/Training/TrainStepPlan.h",
+		"src/LiteNN/Training/Trainer.h",
+	};
+	const std::vector<std::string_view> forbiddenIncludes{
+		"#include <LiteNN/Compiler/",
+		"#include <LiteNN/Device/CUDA.h>",
+		"#include <LiteNN/Serialization/Safetensors.h>",
+		"#include <LiteNN/Serialization/TorchManifest.h>",
+		"#include <LiteNN/Serialization/GGUF",
+		"#include <LiteNN/GGUF",
+		"#include <simdjson",
+		"#include <gguf",
+		"#include <cuda",
+		"#include <cublas",
+		"example/",
+	};
+
+	for (const auto header : headers)
+	{
+		const auto text = ReadSourceFile(header);
+		for (const auto include : forbiddenIncludes)
+		{
+			EXPECT_EQ(text.find(include), std::string::npos)
+			    << header << " must stay in the core/runtime distribution boundary and not depend on " << include;
+		}
+	}
+}

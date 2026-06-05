@@ -1651,9 +1651,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Added `TransformStepMetadata`, invalidation categories, object stats, and debug dump callbacks with tests.
   - [ ] Keep raw graph mutation only inside migration and construction helpers.
 - [ ] Split build/distribution components along real deployment boundaries.
-  - [ ] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
+  - [x] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
+    - [x] Added `G14PublicApiGuard` coverage over core/runtime/training headers so deployment-specific includes cannot
+      creep into the minimal runtime boundary.
   - [ ] Split importers, CUDA compiler/runtime, training AOT runners, tools, and examples into opt-in targets.
-  - [ ] Add guard tests for dependency creep across component boundaries.
+  - [x] Add guard tests for dependency creep across component boundaries.
 
 ### Long-Term Deferred Queue
 
