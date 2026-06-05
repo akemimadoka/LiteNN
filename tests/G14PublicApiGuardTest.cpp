@@ -303,3 +303,17 @@ TEST(G14PublicApiGuard, CoreRuntimeHeadersDoNotPullDeploymentSpecificDependencie
 		}
 	}
 }
+
+TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
+{
+	const auto text = ReadSourceFile("CMakeLists.txt");
+
+	EXPECT_NE(text.find("add_library(LiteNNCore"), std::string::npos);
+	EXPECT_NE(text.find("add_library(LiteNNImporters"), std::string::npos);
+	EXPECT_NE(text.find("add_library(LiteNN INTERFACE)"), std::string::npos);
+	EXPECT_NE(text.find("add_library(LiteNN::LiteNNCore ALIAS LiteNNCore)"), std::string::npos);
+	EXPECT_NE(text.find("add_library(LiteNN::LiteNNImporters ALIAS LiteNNImporters)"), std::string::npos);
+	EXPECT_NE(text.find("target_link_libraries(LiteNNImporters PUBLIC LiteNNCore)"), std::string::npos);
+	EXPECT_NE(text.find("target_link_libraries(LiteNN INTERFACE LiteNNCore LiteNNImporters)"), std::string::npos);
+	EXPECT_NE(text.find("third_party/simdjson/src/simdjson.cpp"), std::string::npos);
+}

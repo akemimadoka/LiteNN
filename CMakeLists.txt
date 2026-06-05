@@ -137,59 +137,86 @@ function(litenn_configure_sanitizer_test_environment)
     endif()
 endfunction()
 
-file(GLOB_RECURSE LITENN_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
-list(FILTER LITENN_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
-list(APPEND LITENN_SOURCES third_party/simdjson/src/simdjson.cpp)
+file(GLOB_RECURSE LITENN_ALL_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+set(LITENN_CORE_SOURCES ${LITENN_ALL_SOURCES})
+list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
+list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Serialization/(Safetensors|TorchManifest|ModelPackageIO)\\.(cpp|h)$")
 
-add_library(LiteNN ${LITENN_SOURCES})
+set(LITENN_IMPORTER_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/Safetensors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/Safetensors.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/TorchManifest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/TorchManifest.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/ModelPackageIO.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/ModelPackageIO.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/src/simdjson.cpp
+)
+
+add_library(LiteNNCore ${LITENN_CORE_SOURCES})
+add_library(LiteNNImporters ${LITENN_IMPORTER_SOURCES})
+add_library(LiteNN INTERFACE)
 
 add_library(LiteNN::LiteNN ALIAS LiteNN)
+add_library(LiteNN::LiteNNCore ALIAS LiteNNCore)
+add_library(LiteNN::LiteNNImporters ALIAS LiteNNImporters)
 
-target_include_directories(LiteNN PUBLIC
+target_include_directories(LiteNNCore PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_include_directories(LiteNN PRIVATE
+target_include_directories(LiteNNImporters PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_include_directories(LiteNNImporters PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/src
 )
 
-target_compile_features(LiteNN PUBLIC cxx_std_26)
+target_link_libraries(LiteNNImporters PUBLIC LiteNNCore)
+target_link_libraries(LiteNN INTERFACE LiteNNCore LiteNNImporters)
+
+target_compile_features(LiteNNCore PUBLIC cxx_std_26)
+target_compile_features(LiteNNImporters PUBLIC cxx_std_26)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(LiteNN PUBLIC -freflection-latest)
+    target_compile_options(LiteNNCore PUBLIC -freflection-latest)
+    target_compile_options(LiteNNImporters PUBLIC -freflection-latest)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(LiteNN PUBLIC -freflection)
+    target_compile_options(LiteNNCore PUBLIC -freflection)
+    target_compile_options(LiteNNImporters PUBLIC -freflection)
 endif()
-litenn_enable_sanitizers(LiteNN)
+litenn_enable_sanitizers(LiteNNCore)
+litenn_enable_sanitizers(LiteNNImporters)
 
 litenn_detect_msys2_mingw(using_msys2_mingw)
 if(using_msys2_mingw)
-    target_compile_options(LiteNN PUBLIC -Wa,-mbig-obj)
+    target_compile_options(LiteNNCore PUBLIC -Wa,-mbig-obj)
+    target_compile_options(LiteNNImporters PUBLIC -Wa,-mbig-obj)
 endif()
 
 if(LITENN_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
-    target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_CUDA=1)
-    target_link_libraries(LiteNN PUBLIC CUDA::cudart CUDA::cublas)
+    target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUDA=1)
+    target_link_libraries(LiteNNCore PUBLIC CUDA::cudart CUDA::cublas)
     if(TARGET CUDA::cublasLt)
-        target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_CUBLASLT=1)
-        target_link_libraries(LiteNN PUBLIC CUDA::cublasLt)
+        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUBLASLT=1)
+        target_link_libraries(LiteNNCore PUBLIC CUDA::cublasLt)
     endif()
     if(TARGET CUDA::cuda_driver)
-        target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_CUDA_DRIVER=1)
-        target_link_libraries(LiteNN PUBLIC CUDA::cuda_driver)
+        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUDA_DRIVER=1)
+        target_link_libraries(LiteNNCore PUBLIC CUDA::cuda_driver)
     else()
         message(WARNING "CUDA::cuda_driver target is unavailable; CUDA native AOT driver runtime will be disabled")
     endif()
     if(TARGET CUDA::nvrtc)
-        target_compile_definitions(LiteNN PUBLIC LITENN_ENABLE_NVRTC=1)
-        target_link_libraries(LiteNN PUBLIC CUDA::nvrtc)
+        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_NVRTC=1)
+        target_link_libraries(LiteNNCore PUBLIC CUDA::nvrtc)
     else()
         message(WARNING "CUDA::nvrtc target is unavailable; CUDA low-precision native conversion kernels will fall back to the CPU bridge")
     endif()
 endif()
 
-set(LITENN_HEADERS ${LITENN_SOURCES})
+set(LITENN_HEADERS ${LITENN_CORE_SOURCES} ${LITENN_IMPORTER_SOURCES})
 list(FILTER LITENN_HEADERS EXCLUDE REGEX "src/.*\\.cpp$")
 set(LITENN_MODULE_HEADERS ${LITENN_HEADERS})
 
@@ -224,11 +251,11 @@ if(LITENN_WITH_MODULES)
         DEPENDS ${LITENN_MODULE_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN.ixx.template" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GenerateModule.py"
         VERBATIM
     )
-    target_sources(LiteNN PRIVATE
+    target_sources(LiteNNCore PRIVATE
         src/LiteNN/Device.module.cpp
         src/LiteNN/Debug/Dump.module.cpp
     )
-    target_sources(LiteNN PUBLIC
+    target_sources(LiteNNCore PUBLIC
         FILE_SET litenn_modules TYPE CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN
         FILES ${LITENN_GENERATED_MODULE_INTERFACE}
@@ -242,12 +269,21 @@ if(LITENN_WITH_MODULES)
     )
 endif()
 
-install(TARGETS LiteNN
+install(TARGETS LiteNNCore
     EXPORT LiteNNRuntimeTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ${LITENN_RUNTIME_INSTALL_EXTRA_ARGS}
+)
+install(TARGETS LiteNNImporters
+    EXPORT LiteNNRuntimeTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(TARGETS LiteNN
+    EXPORT LiteNNRuntimeTargets
 )
 
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/
