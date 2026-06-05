@@ -16,9 +16,6 @@ file(GLOB_RECURSE LITENN_COMPILER_SOURCES CONFIGURE_DEPENDS
     *.cpp
     *.h
 )
-list(APPEND LITENN_COMPILER_SOURCES
-    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp
-)
 
 if(NOT LITENN_ENABLE_CUDA)
     list(FILTER LITENN_COMPILER_SOURCES EXCLUDE REGEX "CUDANativeCodegen\\.(cpp|h)$")
@@ -27,16 +24,24 @@ endif()
 add_library(LiteNNCompiler
     ${LITENN_COMPILER_SOURCES}
 )
+add_library(LiteNNTrainingAOT
+    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp
+    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.h
+)
 
 add_library(LiteNN::LiteNNCompiler ALIAS LiteNNCompiler)
+add_library(LiteNN::LiteNNTrainingAOT ALIAS LiteNNTrainingAOT)
 
 add_dependencies(LiteNNCompiler LiteNNCompilerIncGen)
+add_dependencies(LiteNNTrainingAOT LiteNNCompilerIncGen)
 
 if(DEFINED LLVM_ENABLE_RTTI AND NOT LLVM_ENABLE_RTTI)
     if(MSVC)
         target_compile_options(LiteNNCompiler PRIVATE /GR-)
+        target_compile_options(LiteNNTrainingAOT PRIVATE /GR-)
     else()
         target_compile_options(LiteNNCompiler PRIVATE -fno-rtti)
+        target_compile_options(LiteNNTrainingAOT PRIVATE -fno-rtti)
     endif()
 endif()
 
@@ -49,8 +54,13 @@ target_include_directories(LiteNNCompiler PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+target_include_directories(LiteNNTrainingAOT PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 
 target_link_libraries(LiteNNCompiler PUBLIC LiteNN)
+target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)
 set(LITENN_LLVM_COMPONENTS
     native
     nativecodegen
@@ -146,6 +156,12 @@ target_link_libraries(LiteNNCompiler PUBLIC
 )
 
 install(TARGETS LiteNNCompiler
+    EXPORT LiteNNCompilerTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(TARGETS LiteNNTrainingAOT
     EXPORT LiteNNCompilerTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

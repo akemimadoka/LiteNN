@@ -257,6 +257,7 @@ if(LITENN_ENABLE_MLIR)
 
     add_subdirectory(src/LiteNN/Compiler)
     litenn_enable_sanitizers(LiteNNCompiler)
+    litenn_enable_sanitizers(LiteNNTrainingAOT)
 
     get_target_property(LITENN_COMPILER_HEADERS LiteNNCompiler SOURCES)
     list(FILTER LITENN_COMPILER_HEADERS EXCLUDE REGEX ".*\\.cpp$")
@@ -394,6 +395,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
                                    OR TEST_NAME STREQUAL "TorchManifestTest"
                                    OR TEST_NAME STREQUAL "TrainingTest")))
         target_link_libraries(${TEST_NAME} PRIVATE LiteNNCompiler GTest::gtest_main)
+        if(TEST_NAME STREQUAL "TrainingTest")
+            target_link_libraries(${TEST_NAME} PRIVATE LiteNNTrainingAOT)
+        endif()
     else()
         target_link_libraries(${TEST_NAME} PRIVATE LiteNN GTest::gtest_main)
     endif()

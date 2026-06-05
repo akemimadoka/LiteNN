@@ -69,7 +69,7 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/VNextPackage.h", "BuildVNextPackageManifest(\n\t    const Graph&",
 		  "BuildExecutableModule(BuildExecutablePlan(graph)) at the migration boundary" },
 		{ "src/LiteNN/Training/Trainer.h", "#include <LiteNN/Compiler/CompiledModule.h>",
-		  "TrainStepAOTRunner in LiteNNCompiler" },
+		  "TrainStepAOTRunner in LiteNNTrainingAOT" },
 		{ "src/LiteNN/Training/Trainer.h", "Trainer AOT execution policy is not wired yet",
 		  "explicit forward runner plus train-step diagnostic" },
 		{ "src/LiteNN/Training/Trainer.h", "Optimizer::ZeroGradients(*graph_",
@@ -322,4 +322,15 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_NE(text.find("target_link_libraries(LiteNN INTERFACE LiteNNCUDARuntime)"), std::string::npos);
 	EXPECT_EQ(text.find("target_link_libraries(LiteNNCore PUBLIC CUDA::"), std::string::npos);
 	EXPECT_NE(text.find("third_party/simdjson/src/simdjson.cpp"), std::string::npos);
+
+	const auto compilerCmake = ReadSourceFile("src/LiteNN/Compiler/CMakeLists.txt");
+	EXPECT_NE(compilerCmake.find("add_library(LiteNNTrainingAOT"), std::string::npos);
+	EXPECT_NE(compilerCmake.find("add_library(LiteNN::LiteNNTrainingAOT ALIAS LiteNNTrainingAOT)"),
+	          std::string::npos);
+	EXPECT_NE(compilerCmake.find("target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)"),
+	          std::string::npos);
+	EXPECT_NE(compilerCmake.find("src/LiteNN/Training/TrainStepAOTRunner.cpp"), std::string::npos);
+	EXPECT_EQ(compilerCmake.find("list(APPEND LITENN_COMPILER_SOURCES\n"
+	                             "    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp"),
+	          std::string::npos);
 }
