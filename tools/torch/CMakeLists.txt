@@ -4,5 +4,6 @@ target_link_libraries(litenn_safetensors_convert PRIVATE LiteNN)
 litenn_enable_sanitizers(litenn_safetensors_convert)
 
 install(TARGETS litenn_safetensors_convert
+    COMPONENT LiteNNTools
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

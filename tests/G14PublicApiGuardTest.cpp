@@ -312,6 +312,8 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_NE(text.find("add_library(LiteNNImporters"), std::string::npos);
 	EXPECT_NE(text.find("add_library(LiteNNCUDARuntime"), std::string::npos);
 	EXPECT_NE(text.find("add_library(LiteNN INTERFACE)"), std::string::npos);
+	EXPECT_NE(text.find("option(LITENN_BUILD_EXAMPLES \"Build LiteNN example programs\" OFF)"), std::string::npos);
+	EXPECT_NE(text.find("option(LITENN_BUILD_TOOLS \"Build LiteNN standalone tool programs\" OFF)"), std::string::npos);
 	EXPECT_NE(text.find("add_library(LiteNN::LiteNNCore ALIAS LiteNNCore)"), std::string::npos);
 	EXPECT_NE(text.find("add_library(LiteNN::LiteNNImporters ALIAS LiteNNImporters)"), std::string::npos);
 	EXPECT_NE(text.find("add_library(LiteNN::LiteNNCUDARuntime ALIAS LiteNNCUDARuntime)"), std::string::npos);
@@ -333,6 +335,11 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_EQ(compilerCmake.find("list(APPEND LITENN_COMPILER_SOURCES\n"
 	                             "    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp"),
 	          std::string::npos);
+
+	const auto ggufToolCmake = ReadSourceFile("tools/gguf/CMakeLists.txt");
+	const auto torchToolCmake = ReadSourceFile("tools/torch/CMakeLists.txt");
+	EXPECT_NE(ggufToolCmake.find("COMPONENT LiteNNTools"), std::string::npos);
+	EXPECT_NE(torchToolCmake.find("COMPONENT LiteNNTools"), std::string::npos);
 }
 
 TEST(G14PublicApiGuard, RawGraphMutationPassesAreMigrationScoped)

@@ -22,5 +22,6 @@ endif()
 litenn_enable_sanitizers(litenn_gguf_convert)
 
 install(TARGETS litenn_gguf_convert
+    COMPONENT LiteNNTools
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
