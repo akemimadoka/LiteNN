@@ -1146,6 +1146,32 @@ TEST(CompiledModuleTest, CPUSGDStepArtifactMatchesInterpreter)
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
 }
 
+TEST(CompiledModuleTest, CPUAdamWStepArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto parameter = sg.AddParam(DataType::Float32, { 4 });
+	const auto gradient = sg.AddParam(DataType::Float32, { 4 });
+	const auto firstMoment = sg.AddParam(DataType::Float32, { 4 });
+	const auto secondMoment = sg.AddParam(DataType::Float32, { 4 });
+	const auto update = sg.AddNode(
+	    AdamWStepNode{ { parameter, 0 }, { gradient, 0 }, { firstMoment, 0 }, { secondMoment, 0 },
+	                   0.05, 0.9, 0.999, 1.0e-8, 0.01, 3 },
+	    { OutputInfo{ DataType::Float32, { 4 } }, OutputInfo{ DataType::Float32, { 4 } },
+	      OutputInfo{ DataType::Float32, { 4 } } });
+	sg.SetResults({ { update, 0 }, { update, 1 }, { update, 2 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array<Tensor<CPU>, 4> inputs = {
+		Tensor<CPU>({ 1.0, -2.0, 4.0, -8.0 }, { 4 }, DataType::Float32),
+		Tensor<CPU>({ 0.5, -0.25, 0.125, -0.0625 }, { 4 }, DataType::Float32),
+		Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 4 }, DataType::Float32),
+		Tensor<CPU>({ 0.01, 0.02, 0.03, 0.04 }, { 4 }, DataType::Float32),
+	};
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
+}
+
 TEST(CompiledModuleTest, ExposesBackendMetadataAcrossArtifactAndLoad)
 {
 	auto graph = BuildSimpleAddGraph();

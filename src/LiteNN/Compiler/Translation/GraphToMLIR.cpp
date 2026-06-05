@@ -1471,11 +1471,84 @@ private:
 		                                      shape) };
 	}
 
-	void emitNode(const PlanSubgraphView&, NodeId, const AdamWStepNode&, std::span<const OutputInfo>,
-	              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+	void emitNode(const PlanSubgraphView&, NodeId nodeId, const AdamWStepNode& node, std::span<const OutputInfo> outputInfos,
+	              std::vector<SmallVector<Value>>& valueMap, std::map<std::size_t, Value>&,
 	              std::map<std::size_t, Value>&)
 	{
-		throw std::runtime_error("GraphToMLIR does not support AdamWStepNode yet; use the interpreter path");
+		if (outputInfos.size() != 3)
+		{
+			throw std::runtime_error("GraphToMLIR AdamWStepNode requires parameter, firstMoment, and secondMoment outputs");
+		}
+		for (const auto& output : outputInfos)
+		{
+			if (output.dtype != DataType::Float32)
+			{
+				throw std::runtime_error("GraphToMLIR AdamWStepNode currently supports Float32 tensors only");
+			}
+		}
+
+		auto loc = builder_.getUnknownLoc();
+		auto parameter = getVal(valueMap, node.parameter);
+		auto gradient = getVal(valueMap, node.gradient);
+		auto firstMoment = getVal(valueMap, node.firstMoment);
+		auto secondMoment = getVal(valueMap, node.secondMoment);
+		auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+		const auto rank = resultType.getRank();
+		auto elemType = resultType.getElementType();
+		SmallVector<Value> outputs;
+		outputs.reserve(3);
+		for (const auto& output : outputInfos)
+		{
+			auto type = convertTensorType(ctx_, output.dtype, output.shape);
+			outputs.push_back(builder_.create<tensor::EmptyOp>(loc, type.getShape(), type.getElementType()));
+		}
+
+		SmallVector<AffineMap> maps;
+		maps.reserve(7);
+		auto identityMap = AffineMap::getMultiDimIdentityMap(rank, &ctx_);
+		for (std::size_t i = 0; i < 7; ++i)
+		{
+			maps.push_back(identityMap);
+		}
+		SmallVector<utils::IteratorType> iterTypes(rank, utils::IteratorType::parallel);
+		auto biasCorrection1 = 1.0 - std::pow(node.beta1, static_cast<double>(node.step));
+		auto biasCorrection2 = 1.0 - std::pow(node.beta2, static_cast<double>(node.step));
+
+		auto generic = builder_.create<linalg::GenericOp>(
+		    loc, convertOutputInfos(outputInfos), ValueRange{ parameter, gradient, firstMoment, secondMoment },
+		    outputs, maps, iterTypes,
+		    [&](OpBuilder& b, Location l, ValueRange args) {
+			    auto beta1 = emitScalarConstant(b, l, elemType, node.beta1);
+			    auto beta2 = emitScalarConstant(b, l, elemType, node.beta2);
+			    auto oneMinusBeta1 = emitScalarConstant(b, l, elemType, 1.0 - node.beta1);
+			    auto oneMinusBeta2 = emitScalarConstant(b, l, elemType, 1.0 - node.beta2);
+			    auto learningRate = emitScalarConstant(b, l, elemType, node.learningRate);
+			    auto weightDecay = emitScalarConstant(b, l, elemType, node.weightDecay);
+			    auto bias1 = emitScalarConstant(b, l, elemType, biasCorrection1);
+			    auto bias2 = emitScalarConstant(b, l, elemType, biasCorrection2);
+			    auto epsilon = emitScalarConstant(b, l, elemType, node.epsilon);
+			    auto one = emitScalarConstant(b, l, elemType, 1.0);
+
+			    auto updatedFirst = b.create<arith::AddFOp>(
+			        l, b.create<arith::MulFOp>(l, beta1, args[2]).getResult(),
+			        b.create<arith::MulFOp>(l, oneMinusBeta1, args[1]).getResult()).getResult();
+			    auto gradientSquared = b.create<arith::MulFOp>(l, args[1], args[1]).getResult();
+			    auto updatedSecond = b.create<arith::AddFOp>(
+			        l, b.create<arith::MulFOp>(l, beta2, args[3]).getResult(),
+			        b.create<arith::MulFOp>(l, oneMinusBeta2, gradientSquared).getResult()).getResult();
+			    auto firstHat = b.create<arith::DivFOp>(l, updatedFirst, bias1).getResult();
+			    auto secondHat = b.create<arith::DivFOp>(l, updatedSecond, bias2).getResult();
+			    auto denom = b.create<arith::AddFOp>(l, b.create<math::SqrtOp>(l, secondHat).getResult(), epsilon)
+			                     .getResult();
+			    auto decayScale = b.create<arith::SubFOp>(
+			        l, one, b.create<arith::MulFOp>(l, learningRate, weightDecay).getResult()).getResult();
+			    auto decayedParameter = b.create<arith::MulFOp>(l, args[0], decayScale).getResult();
+			    auto normalizedUpdate = b.create<arith::DivFOp>(l, firstHat, denom).getResult();
+			    auto scaledUpdate = b.create<arith::MulFOp>(l, learningRate, normalizedUpdate).getResult();
+			    auto updatedParameter = b.create<arith::SubFOp>(l, decayedParameter, scaledUpdate).getResult();
+			    b.create<linalg::YieldOp>(l, ValueRange{ updatedParameter, updatedFirst, updatedSecond });
+		    });
+		valueMap[nodeId] = { generic.getResult(0), generic.getResult(1), generic.getResult(2) };
 	}
 
 	void emitNode(const PlanSubgraphView&, NodeId, const Im2ColNode&, std::span<const OutputInfo>,
