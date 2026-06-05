@@ -1639,8 +1639,10 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
     - [x] Optimizer utility, SGD, and Adam update paths now accept `ParameterSet` directly; raw `Graph&` overloads are
       compatibility wrappers at the migration boundary.
-    - [ ] Move optimizer state, loss inputs, and update outputs into the compiled train-step artifact ABI instead of the
-      current host-side optimizer objects.
+    - [x] Train-step plans now expose explicit ABI bindings for mutable parameters, gradients, optimizer state inputs,
+      loss inputs, updated parameters, updated optimizer states, and saved activations.
+    - [ ] Execute optimizer state, loss inputs, and update outputs through compiled train-step artifact entries instead of
+      the current host-side optimizer objects.
   - [x] Make checkpoint save/load share the same state binding contract.
     - [x] Added `StateDict` save/load helpers over `ParameterSet` and exposed them through `Trainer`.
 - [ ] Replace mutating `Graph&` pass contracts with typed transform pipelines.

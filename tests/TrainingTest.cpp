@@ -3,6 +3,8 @@
 #include <LiteNN.h>
 
 #include <cmath>
+#include <optional>
+#include <ranges>
 #include <vector>
 
 using namespace LiteNN;
@@ -44,6 +46,15 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::Interpreter);
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(trainer.Plan()));
+	const auto countAbiRole = [&](Training::TrainStepABIRole role) {
+		return static_cast<std::size_t>(std::ranges::count_if(
+		    trainer.Plan().abiBindings,
+		    [&](const Training::TrainStepABIBinding& binding) { return binding.role == role; }));
+	};
+	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::MutableParameter), 1u);
+	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::Gradient), 1u);
+	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::LossInput), 1u);
+	EXPECT_EQ(trainer.Plan().abiBindings[0].runtimeState, std::optional<std::size_t>{ 0u });
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
 	std::vector<Tensor<CPU>> outputGradients;
