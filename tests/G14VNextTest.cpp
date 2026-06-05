@@ -145,6 +145,17 @@ TEST(G14VNext, VNextModelPackageExternalWeightsBindLoadedPlanStorage)
 	EXPECT_FLOAT_EQ(values[2], 30.0F);
 	EXPECT_FLOAT_EQ(values[3], 40.0F);
 
+	Runtime::Interpreter<CPU> interpreter;
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F }, { 2, 2 }, DataType::Float32));
+	const auto outputs = interpreter.RunForward(package.plan, inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	const auto* outputValues = static_cast<const float*>(outputs[0].RawData());
+	EXPECT_FLOAT_EQ(outputValues[0], 11.0F);
+	EXPECT_FLOAT_EQ(outputValues[1], 22.0F);
+	EXPECT_FLOAT_EQ(outputValues[2], 33.0F);
+	EXPECT_FLOAT_EQ(outputValues[3], 44.0F);
+
 	std::filesystem::remove(path);
 	std::filesystem::remove(weightsPath);
 }

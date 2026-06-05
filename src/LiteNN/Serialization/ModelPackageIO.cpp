@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 
 #include <simdjson.h>
 
@@ -797,6 +798,132 @@ namespace LiteNN::Serialization
 			}
 		}
 
+		const std::string& RequirePlanAttribute(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto it = std::ranges::find_if(op.attributes, [&](const ExecutablePlanAttribute& attr) {
+				return attr.name == name;
+			});
+			if (it == op.attributes.end())
+			{
+				throw std::runtime_error("vNext node descriptor for '" + op.kind +
+				                         "' is missing attribute: " + std::string(name));
+			}
+			return it->value;
+		}
+
+		std::size_t PlanAttributeSize(const ExecutablePlanOp& op, std::string_view name)
+		{
+			return static_cast<std::size_t>(std::stoull(RequirePlanAttribute(op, name)));
+		}
+
+		template <typename Enum>
+			requires std::is_enum_v<Enum>
+		Enum PlanAttributeEnum(const ExecutablePlanOp& op, std::string_view name)
+		{
+			return static_cast<Enum>(PlanAttributeSize(op, name));
+		}
+
+		std::vector<std::size_t> PlanAttributeSizeList(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto& text = RequirePlanAttribute(op, name);
+			std::vector<std::size_t> values;
+			if (text.empty())
+			{
+				return values;
+			}
+			std::stringstream stream(text);
+			std::string item;
+			while (std::getline(stream, item, ','))
+			{
+				if (item.empty())
+				{
+					throw std::runtime_error("vNext node descriptor for '" + op.kind +
+					                         "' has an empty size-list item: " + std::string(name));
+				}
+				values.push_back(static_cast<std::size_t>(std::stoull(item)));
+			}
+			return values;
+		}
+
+		NodeOutput RequireNodeInput(std::span<const NodeOutput> inputs, std::size_t index,
+		                            std::string_view opKind)
+		{
+			if (index >= inputs.size())
+			{
+				throw std::runtime_error("vNext node descriptor for '" + std::string(opKind) +
+				                         "' has too few inputs");
+			}
+			return inputs[index];
+		}
+
+		NodeVariant HydrateExecutablePlanNodePayload(const ExecutablePlanOp& op,
+		                                             std::span<const NodeOutput> inputs)
+		{
+			if (op.kind == "ParamRefNode")
+			{
+				return ParamRefNode{ PlanAttributeSize(op, "paramIndex") };
+			}
+			if (op.kind == "VariableRefNode")
+			{
+				return VariableRefNode{ PlanAttributeSize(op, "variableIndex") };
+			}
+			if (op.kind == "UnaryOpNode")
+			{
+				return UnaryOpNode{ PlanAttributeEnum<UnaryOp>(op, "op"),
+					                RequireNodeInput(inputs, 0, op.kind) };
+			}
+			if (op.kind == "BinaryOpNode")
+			{
+				return BinaryOpNode{ PlanAttributeEnum<BinaryOp>(op, "op"),
+					                 RequireNodeInput(inputs, 0, op.kind),
+					                 RequireNodeInput(inputs, 1, op.kind) };
+			}
+			if (op.kind == "CastNode")
+			{
+				return CastNode{ RequireNodeInput(inputs, 0, op.kind),
+					             PlanAttributeEnum<DataType>(op, "targetType") };
+			}
+			if (op.kind == "ReduceOpNode")
+			{
+				return ReduceOpNode{ PlanAttributeEnum<ReduceOp>(op, "op"),
+					                 RequireNodeInput(inputs, 0, op.kind),
+					                 PlanAttributeSize(op, "axis") };
+			}
+			if (op.kind == "ReshapeNode")
+			{
+				return ReshapeNode{ RequireNodeInput(inputs, 0, op.kind),
+					                PlanAttributeSizeList(op, "targetShape") };
+			}
+			if (op.kind == "PermuteNode")
+			{
+				return PermuteNode{ RequireNodeInput(inputs, 0, op.kind),
+					                PlanAttributeSizeList(op, "permutation") };
+			}
+			if (op.kind == "BroadcastToNode")
+			{
+				return BroadcastToNode{ RequireNodeInput(inputs, 0, op.kind),
+					                    PlanAttributeSizeList(op, "targetShape") };
+			}
+			if (op.kind == "SoftmaxNode")
+			{
+				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind),
+					                PlanAttributeSize(op, "axis") };
+			}
+			if (op.kind == "ConcatNode")
+			{
+				return ConcatNode{ std::vector<NodeOutput>(inputs.begin(), inputs.end()),
+					               PlanAttributeSize(op, "axis") };
+			}
+			if (op.kind == "SliceNode")
+			{
+				return SliceNode{ RequireNodeInput(inputs, 0, op.kind),
+					              PlanAttributeSize(op, "axis"),
+					              PlanAttributeSize(op, "start"),
+					              PlanAttributeSize(op, "length") };
+			}
+			throw std::runtime_error("vNext node descriptor cannot hydrate executable payload for op: " + op.kind);
+		}
+
 		MemoryPlan ParseMemory(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -900,6 +1027,7 @@ namespace LiteNN::Serialization
 					node.inputs = NodeOutputList(Member(nodeObject, "inputs", "plan.node.inputs"), "plan.node.inputs");
 					node.outputs =
 					    TensorTypeList(Member(nodeObject, "outputs", "plan.node.outputs"), "plan.node.outputs");
+					node.node = HydrateExecutablePlanNodePayload(node.op, node.inputs);
 					subgraph.nodes.push_back(std::move(node));
 				}
 				subgraph.results =
