@@ -141,6 +141,7 @@ file(GLOB_RECURSE LITENN_ALL_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 set(LITENN_CORE_SOURCES ${LITENN_ALL_SOURCES})
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Serialization/(Safetensors|TorchManifest|ModelPackageIO)\\.(cpp|h)$")
+list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Device/CUDA\\.(cpp|h)$")
 
 set(LITENN_IMPORTER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/Safetensors.cpp
@@ -150,6 +151,10 @@ set(LITENN_IMPORTER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/ModelPackageIO.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/ModelPackageIO.h
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/src/simdjson.cpp
+)
+set(LITENN_CUDA_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/CUDA.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/CUDA.h
 )
 
 add_library(LiteNNCore ${LITENN_CORE_SOURCES})
@@ -196,27 +201,47 @@ endif()
 
 if(LITENN_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
-    target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUDA=1)
-    target_link_libraries(LiteNNCore PUBLIC CUDA::cudart CUDA::cublas)
+    add_library(LiteNNCUDARuntime ${LITENN_CUDA_RUNTIME_SOURCES})
+    add_library(LiteNN::LiteNNCUDARuntime ALIAS LiteNNCUDARuntime)
+    target_include_directories(LiteNNCUDARuntime PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    target_compile_features(LiteNNCUDARuntime PUBLIC cxx_std_26)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(LiteNNCUDARuntime PUBLIC -freflection-latest)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(LiteNNCUDARuntime PUBLIC -freflection)
+    endif()
+    if(using_msys2_mingw)
+        target_compile_options(LiteNNCUDARuntime PUBLIC -Wa,-mbig-obj)
+    endif()
+    litenn_enable_sanitizers(LiteNNCUDARuntime)
+    target_compile_definitions(LiteNNCUDARuntime PUBLIC LITENN_ENABLE_CUDA=1)
+    target_link_libraries(LiteNNCUDARuntime PUBLIC LiteNNCore CUDA::cudart CUDA::cublas)
+    target_link_libraries(LiteNN INTERFACE LiteNNCUDARuntime)
     if(TARGET CUDA::cublasLt)
-        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUBLASLT=1)
-        target_link_libraries(LiteNNCore PUBLIC CUDA::cublasLt)
+        target_compile_definitions(LiteNNCUDARuntime PUBLIC LITENN_ENABLE_CUBLASLT=1)
+        target_link_libraries(LiteNNCUDARuntime PUBLIC CUDA::cublasLt)
     endif()
     if(TARGET CUDA::cuda_driver)
-        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_CUDA_DRIVER=1)
-        target_link_libraries(LiteNNCore PUBLIC CUDA::cuda_driver)
+        target_compile_definitions(LiteNNCUDARuntime PUBLIC LITENN_ENABLE_CUDA_DRIVER=1)
+        target_link_libraries(LiteNNCUDARuntime PUBLIC CUDA::cuda_driver)
     else()
         message(WARNING "CUDA::cuda_driver target is unavailable; CUDA native AOT driver runtime will be disabled")
     endif()
     if(TARGET CUDA::nvrtc)
-        target_compile_definitions(LiteNNCore PUBLIC LITENN_ENABLE_NVRTC=1)
-        target_link_libraries(LiteNNCore PUBLIC CUDA::nvrtc)
+        target_compile_definitions(LiteNNCUDARuntime PUBLIC LITENN_ENABLE_NVRTC=1)
+        target_link_libraries(LiteNNCUDARuntime PUBLIC CUDA::nvrtc)
     else()
         message(WARNING "CUDA::nvrtc target is unavailable; CUDA low-precision native conversion kernels will fall back to the CPU bridge")
     endif()
 endif()
 
 set(LITENN_HEADERS ${LITENN_CORE_SOURCES} ${LITENN_IMPORTER_SOURCES})
+if(LITENN_ENABLE_CUDA)
+    list(APPEND LITENN_HEADERS ${LITENN_CUDA_RUNTIME_SOURCES})
+endif()
 list(FILTER LITENN_HEADERS EXCLUDE REGEX "src/.*\\.cpp$")
 set(LITENN_MODULE_HEADERS ${LITENN_HEADERS})
 
@@ -282,6 +307,14 @@ install(TARGETS LiteNNImporters
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+if(LITENN_ENABLE_CUDA)
+    install(TARGETS LiteNNCUDARuntime
+        EXPORT LiteNNRuntimeTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
 install(TARGETS LiteNN
     EXPORT LiteNNRuntimeTargets
 )

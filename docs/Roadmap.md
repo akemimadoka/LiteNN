@@ -1661,7 +1661,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [ ] Split importers, CUDA compiler/runtime, training AOT runners, tools, and examples into opt-in targets.
     - [x] Split the runtime build into `LiteNNCore`, `LiteNNImporters`, and the full `LiteNN` interface target so
       safetensors/Torch manifest/vNext package IO and simdjson are opt-in for minimal runtime consumers.
-    - [ ] Split CUDA runtime support, training AOT runners, tools, and examples into similarly explicit opt-in targets.
+    - [x] Split CUDA runtime support into `LiteNNCUDARuntime`, keeping CUDA Toolkit libraries off `LiteNNCore`.
+    - [ ] Split training AOT runners, tools, and examples into similarly explicit opt-in targets.
   - [x] Add guard tests for dependency creep across component boundaries.
 
 ### Long-Term Deferred Queue
