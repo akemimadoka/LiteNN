@@ -226,3 +226,35 @@ TEST(G14PublicApiGuard, CompiledTensorSpecUsesTensorTypeContract)
 	EXPECT_EQ(tensorInfoBody.find("DataType dtype"), std::string::npos);
 	EXPECT_EQ(tensorInfoBody.find("std::vector<std::size_t> shape"), std::string::npos);
 }
+
+TEST(G14PublicApiGuard, StableBoundaryHeadersKeepTensorTypeAsShapeTypeContract)
+{
+	const std::vector<std::string_view> headers{
+		"src/LiteNN/Compiler/CompiledModule.h",
+		"src/LiteNN/Compiler/Dump.h",
+		"src/LiteNN/Runtime/Placement.h",
+		"src/LiteNN/Runtime/Scheduler.h",
+		"src/LiteNN/Serialization/ModelPackageIO.h",
+		"src/LiteNN/Serialization/Safetensors.h",
+		"src/LiteNN/Serialization/TorchManifest.h",
+	};
+	const std::vector<std::string_view> forbidden{
+		"OutputInfo",
+		" TensorSpec",
+		"<TensorSpec",
+		"std::vector<TensorSpec>",
+		"DataType dtype",
+		"std::vector<std::size_t> shape",
+		"ShapeView shape",
+	};
+
+	for (const auto header : headers)
+	{
+		const auto text = ReadSourceFile(header);
+		for (const auto pattern : forbidden)
+		{
+			EXPECT_EQ(text.find(pattern), std::string::npos)
+			    << header << " must expose TensorType as the single shape/type contract, not " << pattern;
+		}
+	}
+}
