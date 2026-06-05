@@ -60,6 +60,35 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.6f);
 }
 
+TEST(Training, TrainerExposesParameterSetAndStateDict)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
+	graph.SetVariableName(weightIndex, "linear.weight");
+
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
+	ASSERT_EQ(trainer.Parameters().Size(), 1);
+	EXPECT_EQ(trainer.Parameters()[0].name, "linear.weight");
+
+	auto state = trainer.SaveStateDict();
+	ASSERT_EQ(state.parameters.size(), 1);
+	EXPECT_EQ(state.parameters[0].name, "linear.weight");
+	EXPECT_FLOAT_EQ(ReadFloat(state.parameters[0].value, 0), 3.0f);
+
+	*static_cast<float*>(trainer.Parameters()[0].Parameter().RawData()) = 42.0f;
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 42.0f);
+	trainer.LoadStateDict(state);
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 3.0f);
+}
+
 TEST(Training, AOTPolicyRunsForwardThroughCompiledRunnerAndRejectsTrainStep)
 {
 	Graph graph;

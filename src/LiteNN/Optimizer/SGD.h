@@ -36,15 +36,22 @@ namespace LiteNN::Optimizer
 
 		void Step(Graph& graph, std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount)
 		{
-			Detail::ValidateBackwardResults(graph, backwardResults, inputGradientCount);
+			auto parameters = Training::ParameterSet::BindGraph(graph);
+			Step(parameters, backwardResults, inputGradientCount);
+		}
+
+		void Step(Training::ParameterSet& parameters, std::span<const Tensor<CPU>> backwardResults,
+		          std::size_t inputGradientCount)
+		{
+			Detail::ValidateBackwardResults(parameters, backwardResults, inputGradientCount);
 			if (options_.momentum != 0.0f)
 			{
-				EnsureVelocity(graph);
+				EnsureVelocity(parameters);
 			}
 
-			for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+			for (std::size_t variableIndex = 0; variableIndex < parameters.Size(); ++variableIndex)
 			{
-				auto& variable = graph.GetVariable(variableIndex)->Data();
+				auto& variable = parameters[variableIndex].Parameter();
 				const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 				Detail::ValidateVariableGradient(variable, gradient, variableIndex);
 
@@ -95,12 +102,12 @@ namespace LiteNN::Optimizer
 			}
 		}
 
-		void EnsureVelocity(const Graph& graph)
+		void EnsureVelocity(const Training::ParameterSet& parameters)
 		{
-			velocity_.resize(graph.VariableCount());
-			for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+			velocity_.resize(parameters.Size());
+			for (std::size_t variableIndex = 0; variableIndex < parameters.Size(); ++variableIndex)
 			{
-				const auto elementCount = graph.GetVariable(variableIndex)->Data().NumElements();
+				const auto elementCount = parameters[variableIndex].Parameter().NumElements();
 				if (velocity_[variableIndex].size() != elementCount)
 				{
 					velocity_[variableIndex].assign(elementCount, 0.0f);

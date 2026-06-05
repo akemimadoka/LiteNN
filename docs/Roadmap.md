@@ -1623,9 +1623,17 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
       graph archive save/load.
     - [ ] Move the SDXL example's graph-workbench commands to vNext package or compiled-artifact entry points.
 - [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
-  - [ ] Stop letting `Trainer` mutate graph variables implicitly.
+  - [x] Stop letting `Trainer` mutate graph variables implicitly.
+    - [x] `Trainer` now binds a `ParameterSet` at construction and routes zero-grad, variable-gradient storage, and
+      optimizer updates through that explicit state binding.
+    - [x] Added guard coverage so `Trainer.h` cannot regress to `Optimizer::*(*graph_)` mutation paths.
   - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
-  - [ ] Make checkpoint save/load share the same state binding contract.
+    - [x] Optimizer utility, SGD, and Adam update paths now accept `ParameterSet` directly; raw `Graph&` overloads are
+      compatibility wrappers at the migration boundary.
+    - [ ] Move optimizer state, loss inputs, and update outputs into the compiled train-step artifact ABI instead of the
+      current host-side optimizer objects.
+  - [x] Make checkpoint save/load share the same state binding contract.
+    - [x] Added `StateDict` save/load helpers over `ParameterSet` and exposed them through `Trainer`.
 - [ ] Replace mutating `Graph&` pass contracts with typed transform pipelines.
   - [ ] Define separate transform stages for `ModelGraph -> ModelGraph`, `ModelGraph -> ExecutablePlan`,
     `ExecutablePlan -> ExecutablePlan`, and `ExecutablePlan -> BackendPlan`.

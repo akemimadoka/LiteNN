@@ -1,4 +1,5 @@
 #include <LiteNN/Graph.h>
+#include <LiteNN/Training/StateDict.h>
 
 #include <cstring>
 #include <cstdint>
@@ -34,6 +35,16 @@ namespace LiteNN::Optimizer::Detail
 		if (backwardResults.size() < inputGradientCount + graph.VariableCount())
 		{
 			throw std::runtime_error("Backward result count does not include all variable gradients");
+		}
+	}
+
+	inline void ValidateBackwardResults(const Training::ParameterSet& parameters,
+	                                    std::span<const Tensor<CPU>> backwardResults,
+	                                    std::size_t inputGradientCount)
+	{
+		if (backwardResults.size() < inputGradientCount + parameters.Size())
+		{
+			throw std::runtime_error("Backward result count does not include all parameter gradients");
 		}
 	}
 
@@ -77,27 +88,40 @@ namespace LiteNN::Optimizer
 		return Detail::InferInputGradientCount(graph);
 	}
 
+	inline void ZeroGradients(Training::ParameterSet& parameters)
+	{
+		for (auto& parameter : parameters.Entries())
+		{
+			Detail::ZeroTensor(parameter.Gradient());
+		}
+	}
+
 	inline void ZeroGradients(Graph& graph)
 	{
-		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+		auto parameters = Training::ParameterSet::BindGraph(graph);
+		ZeroGradients(parameters);
+	}
+
+	inline void StoreVariableGradients(Training::ParameterSet& parameters, std::span<const Tensor<CPU>> backwardResults,
+	                                   std::size_t inputGradientCount)
+	{
+		Detail::ValidateBackwardResults(parameters, backwardResults, inputGradientCount);
+		for (std::size_t variableIndex = 0; variableIndex < parameters.Size(); ++variableIndex)
 		{
-			Detail::ZeroTensor(graph.GetVariable(variableIndex)->Grad());
+			auto& variable = parameters[variableIndex].Parameter();
+			auto& targetGrad = parameters[variableIndex].Gradient();
+			const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
+			Detail::ValidateVariableGradient(variable, gradient, variableIndex);
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.RawData(),
+			                                             gradient.DType(), gradient.RawData(), gradient.NumElements());
 		}
 	}
 
 	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults,
 	                                   std::size_t inputGradientCount)
 	{
-		Detail::ValidateBackwardResults(graph, backwardResults, inputGradientCount);
-		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
-		{
-			auto& variable = graph.GetVariable(variableIndex)->Data();
-			auto& targetGrad = graph.GetVariable(variableIndex)->Grad();
-			const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
-			Detail::ValidateVariableGradient(variable, gradient, variableIndex);
-			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.RawData(),
-			                                             gradient.DType(), gradient.RawData(), gradient.NumElements());
-		}
+		auto parameters = Training::ParameterSet::BindGraph(graph);
+		StoreVariableGradients(parameters, backwardResults, inputGradientCount);
 	}
 
 	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults)

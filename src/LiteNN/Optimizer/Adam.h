@@ -33,16 +33,23 @@ namespace LiteNN::Optimizer
 
 		void Step(Graph& graph, std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount)
 		{
-			Detail::ValidateBackwardResults(graph, backwardResults, inputGradientCount);
-			EnsureState(graph);
+			auto parameters = Training::ParameterSet::BindGraph(graph);
+			Step(parameters, backwardResults, inputGradientCount);
+		}
+
+		void Step(Training::ParameterSet& parameters, std::span<const Tensor<CPU>> backwardResults,
+		          std::size_t inputGradientCount)
+		{
+			Detail::ValidateBackwardResults(parameters, backwardResults, inputGradientCount);
+			EnsureState(parameters);
 			++step_;
 
 			const auto beta1Correction = 1.0f - std::pow(options_.beta1, static_cast<float>(step_));
 			const auto beta2Correction = 1.0f - std::pow(options_.beta2, static_cast<float>(step_));
 
-			for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+			for (std::size_t variableIndex = 0; variableIndex < parameters.Size(); ++variableIndex)
 			{
-				auto& variable = graph.GetVariable(variableIndex)->Data();
+				auto& variable = parameters[variableIndex].Parameter();
 				const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 				Detail::ValidateVariableGradient(variable, gradient, variableIndex);
 
@@ -89,13 +96,13 @@ namespace LiteNN::Optimizer
 			}
 		}
 
-		void EnsureState(const Graph& graph)
+		void EnsureState(const Training::ParameterSet& parameters)
 		{
-			firstMoment_.resize(graph.VariableCount());
-			secondMoment_.resize(graph.VariableCount());
-			for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+			firstMoment_.resize(parameters.Size());
+			secondMoment_.resize(parameters.Size());
+			for (std::size_t variableIndex = 0; variableIndex < parameters.Size(); ++variableIndex)
 			{
-				const auto elementCount = graph.GetVariable(variableIndex)->Data().NumElements();
+				const auto elementCount = parameters[variableIndex].Parameter().NumElements();
 				if (firstMoment_[variableIndex].size() != elementCount)
 				{
 					firstMoment_[variableIndex].assign(elementCount, 0.0f);

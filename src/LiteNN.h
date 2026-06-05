@@ -34,6 +34,7 @@
 #include <LiteNN/Storage.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/TensorType.h>
+#include <LiteNN/Training/StateDict.h>
 #include <LiteNN/Training/TrainStepPlan.h>
 #include <LiteNN/Training/Trainer.h>
 #include <LiteNN/Validation/GraphValidator.h>

@@ -3,6 +3,7 @@
 #include <LiteNN/Optimizer/OptimizerUtils.h>
 #include <LiteNN/Pass/AutogradPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Training/StateDict.h>
 #include <LiteNN/Training/TrainStepAOTRunner.h>
 #include <LiteNN/Training/TrainStepPlan.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -57,6 +58,7 @@ namespace LiteNN::Training
 				autograd.Run(*graph_);
 			}
 			Validation::ValidateGraph(*graph_);
+			parameters_ = ParameterSet::BindGraph(*graph_);
 			trainStepPlan_ = BuildTrainStepPlan(BuildExecutableModule(*graph_), options_.executionPolicy,
 			                                    options_.aotBackendAvailable);
 			ValidateTrainStepPlan(trainStepPlan_);
@@ -121,7 +123,27 @@ namespace LiteNN::Training
 
 		void ZeroGradients()
 		{
-			LiteNN::Optimizer::ZeroGradients(*graph_);
+			LiteNN::Optimizer::ZeroGradients(parameters_);
+		}
+
+		ParameterSet& Parameters()
+		{
+			return parameters_;
+		}
+
+		const ParameterSet& Parameters() const
+		{
+			return parameters_;
+		}
+
+		StateDict SaveStateDict() const
+		{
+			return LiteNN::Training::SaveStateDict(parameters_);
+		}
+
+		void LoadStateDict(const StateDict& state)
+		{
+			LiteNN::Training::LoadStateDict(parameters_, state);
 		}
 
 		OptimizerT& Optimizer()
@@ -216,7 +238,7 @@ namespace LiteNN::Training
 
 			if (options_.zeroVariableGradientsBeforeBackward)
 			{
-				LiteNN::Optimizer::ZeroGradients(*graph_);
+				LiteNN::Optimizer::ZeroGradients(parameters_);
 			}
 
 			std::vector<Tensor<D>> backwardInputs;
@@ -235,13 +257,14 @@ namespace LiteNN::Training
 			auto cpuBackwardResults = CopyToCPU(backwardResults);
 			if (options_.storeVariableGradients)
 			{
-				LiteNN::Optimizer::StoreVariableGradients(*graph_, cpuBackwardResults, inputGradientCount);
+				LiteNN::Optimizer::StoreVariableGradients(parameters_, cpuBackwardResults, inputGradientCount);
 			}
-			optimizer_.Step(*graph_, cpuBackwardResults, inputGradientCount);
+			optimizer_.Step(parameters_, cpuBackwardResults, inputGradientCount);
 			return backwardResults;
 		}
 
 		Graph* graph_;
+		ParameterSet parameters_;
 		OptimizerT optimizer_;
 		TrainerOptions options_;
 		D device_;
