@@ -464,8 +464,7 @@ namespace LiteNN::Serialization
 				archive.tensors_.push_back({
 				    .name = std::string(name),
 				    .storageDType = storageDType,
-				    .dtype = dtype,
-				    .shape = std::move(shape),
+				    .type = TensorType::Dense(dtype, ShapeView{ shape }),
 				    .dataBegin = begin,
 				    .dataEnd = end,
 				});
@@ -523,12 +522,13 @@ namespace LiteNN::Serialization
 
 	Tensor<CPU> SafetensorsArchive::TensorAsCPU(const SafetensorsTensorInfo& tensor, bool transpose2D) const
 	{
-		Tensor<CPU> result(Uninitialized, ShapeView{ tensor.shape }, tensor.dtype);
+		const auto shape = tensor.type.StaticShape();
+		Tensor<CPU> result(Uninitialized, ShapeView{ shape }, tensor.type.dtype);
 		const auto bytes = TensorData(tensor);
 		std::memcpy(result.RawData(), bytes.data(), bytes.size());
 		if (transpose2D)
 		{
-			if (tensor.shape.size() != 2)
+			if (shape.size() != 2)
 			{
 				throw std::runtime_error("Safetensors transpose hook requires a rank-2 tensor: " + tensor.name);
 			}

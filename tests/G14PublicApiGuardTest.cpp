@@ -214,4 +214,15 @@ TEST(G14PublicApiGuard, CompiledTensorSpecUsesTensorTypeContract)
 	EXPECT_NE(externalBody.find("TensorType type"), std::string::npos);
 	EXPECT_EQ(externalBody.find("DataType dtype"), std::string::npos);
 	EXPECT_EQ(externalBody.find("std::vector<std::size_t> shape"), std::string::npos);
+
+	const auto safetensorsText = ReadSourceFile("src/LiteNN/Serialization/Safetensors.h");
+	const auto tensorInfoBegin = safetensorsText.find("struct SafetensorsTensorInfo");
+	const auto importOptionsBegin = safetensorsText.find("struct SafetensorsImportOptions");
+	ASSERT_NE(tensorInfoBegin, std::string::npos);
+	ASSERT_NE(importOptionsBegin, std::string::npos);
+	const auto tensorInfoBody = safetensorsText.substr(tensorInfoBegin, importOptionsBegin - tensorInfoBegin);
+
+	EXPECT_NE(tensorInfoBody.find("TensorType type"), std::string::npos);
+	EXPECT_EQ(tensorInfoBody.find("DataType dtype"), std::string::npos);
+	EXPECT_EQ(tensorInfoBody.find("std::vector<std::size_t> shape"), std::string::npos);
 }

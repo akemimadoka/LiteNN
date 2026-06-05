@@ -161,8 +161,8 @@ namespace
 			for (std::size_t i = 0; i < preview; ++i)
 			{
 				const auto& tensor = archive.Tensors()[i];
-				std::cout << std::format("  {} {} {}\n", tensor.name, LiteNN::DataTypeName(tensor.dtype),
-				                         ShapeToString(tensor.shape));
+				std::cout << std::format("  {} {} {}\n", tensor.name, LiteNN::DataTypeName(tensor.type.dtype),
+				                         ShapeToString(tensor.type.StaticShape()));
 			}
 		}
 	}
@@ -1314,17 +1314,18 @@ namespace
 	                         const std::filesystem::path& inputPath)
 	{
 		const auto specShape = spec.type.StaticShape();
-		if (tensor.dtype != spec.type.dtype)
+		const auto tensorShape = tensor.type.StaticShape();
+		if (tensor.type.dtype != spec.type.dtype)
 		{
 			throw std::runtime_error(std::format(
 			    "Input tensor '{}' from {} has dtype {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), LiteNN::DataTypeName(tensor.dtype), LiteNN::DataTypeName(spec.type.dtype)));
+			    inputPath.string(), LiteNN::DataTypeName(tensor.type.dtype), LiteNN::DataTypeName(spec.type.dtype)));
 		}
-		if (tensor.shape != specShape)
+		if (tensorShape != specShape)
 		{
 			throw std::runtime_error(std::format(
 			    "Input tensor '{}' from {} has shape {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), ShapeToString(tensor.shape), ShapeToString(specShape)));
+			    inputPath.string(), ShapeToString(tensorShape), ShapeToString(specShape)));
 		}
 	}
 

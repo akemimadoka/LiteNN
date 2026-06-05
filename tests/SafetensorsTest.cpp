@@ -85,9 +85,9 @@ TEST(Safetensors, ReadsMetadataDTypesAndPayloads)
 	ASSERT_EQ(archive.Tensors().size(), 2u);
 	const auto* weightInfo = archive.FindTensor("linear.weight");
 	ASSERT_NE(weightInfo, nullptr);
-	EXPECT_EQ(weightInfo->dtype, DataType::Float32);
+	EXPECT_EQ(weightInfo->type.dtype, DataType::Float32);
 	EXPECT_EQ(weightInfo->storageDType, "F32");
-	EXPECT_EQ(weightInfo->shape, (std::vector<std::size_t>{ 2, 3 }));
+	EXPECT_EQ(weightInfo->type.StaticShape(), (std::vector<std::size_t>{ 2, 3 }));
 	EXPECT_EQ(weightInfo->ByteSize(), 24u);
 
 	const auto weight = archive.TensorAsCPU(*weightInfo);
@@ -97,7 +97,7 @@ TEST(Safetensors, ReadsMetadataDTypesAndPayloads)
 
 	const auto* biasInfo = archive.FindTensor("linear.bias");
 	ASSERT_NE(biasInfo, nullptr);
-	EXPECT_EQ(biasInfo->dtype, DataType::Int64);
+	EXPECT_EQ(biasInfo->type.dtype, DataType::Int64);
 	const auto bias = archive.TensorAsCPU(*biasInfo);
 	EXPECT_EQ(ReadI64(bias, 0), 7);
 	EXPECT_EQ(ReadI64(bias, 1), 8);

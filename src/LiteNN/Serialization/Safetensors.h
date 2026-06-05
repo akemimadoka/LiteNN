@@ -1,6 +1,7 @@
 #include <LiteNN/DType.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
+#include <LiteNN/TensorType.h>
 
 #include <cstddef>
 #include <filesystem>
@@ -20,8 +21,7 @@ namespace LiteNN::Serialization
 	{
 		std::string name;
 		std::string storageDType;
-		DataType dtype{};
-		std::vector<std::size_t> shape;
+		TensorType type;
 		std::size_t dataBegin{};
 		std::size_t dataEnd{};
 

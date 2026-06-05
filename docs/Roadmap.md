@@ -1598,8 +1598,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Move `CompiledTensorSpec` to an authoritative `TensorType type` contract instead of public `dtype`/`shape`
       fields.
     - [x] Move `CompiledModuleExternalTensorInfo` to `TensorType type` instead of public `dtype`/`shape` fields.
+    - [x] Move safetensors importer tensor metadata to `TensorType type` while keeping source `storageDType` as file
+      provenance.
   - [ ] Add guards for runtime/compiler/importer headers so type-only APIs cannot regress.
     - [x] Guard compiled artifact signatures against reintroducing raw `dtype`/`shape` fields.
+    - [x] Guard safetensors importer tensor metadata against reintroducing raw `dtype`/`shape` fields.
 - [x] Move ggml/llama.cpp compatibility-only operators out of the core semantic op surface.
   - [x] Mark compatibility-only ops with an explicit schema domain.
   - [x] Move builder helpers and docs for `AddId` and `MulMatId` under a compatibility namespace/surface.

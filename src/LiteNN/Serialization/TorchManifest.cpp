@@ -524,20 +524,21 @@ namespace LiteNN::Serialization
 				if (auto dtypeText = FindString(object, "dtype", "tensor dtype"))
 				{
 					const auto expected = MapTorchManifestDataType(*dtypeText);
-					if (tensorInfo->dtype != expected)
+					if (tensorInfo->type.dtype != expected)
 					{
 						throw std::runtime_error(std::format(
 						    "Torch manifest tensor '{}' dtype mismatch: expected {}, got {}", name,
-						    DataTypeName(expected), DataTypeName(tensorInfo->dtype)));
+						    DataTypeName(expected), DataTypeName(tensorInfo->type.dtype)));
 					}
 				}
 				if (auto sourceShape = FindShape(object, "source_shape", "tensor source_shape"))
 				{
-					if (!SameShape(tensorInfo->shape, *sourceShape))
+					const auto tensorShape = tensorInfo->type.StaticShape();
+					if (!SameShape(tensorShape, *sourceShape))
 					{
 						throw std::runtime_error(std::format(
 						    "Torch manifest tensor '{}' source shape mismatch: expected {}, got {}", name,
-						    ShapeToString(*sourceShape), ShapeToString(tensorInfo->shape)));
+						    ShapeToString(*sourceShape), ShapeToString(tensorShape)));
 					}
 				}
 
