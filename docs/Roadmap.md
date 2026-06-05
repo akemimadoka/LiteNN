@@ -1644,9 +1644,11 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
   - [x] Make checkpoint save/load share the same state binding contract.
     - [x] Added `StateDict` save/load helpers over `ParameterSet` and exposed them through `Trainer`.
 - [ ] Replace mutating `Graph&` pass contracts with typed transform pipelines.
-  - [ ] Define separate transform stages for `ModelGraph -> ModelGraph`, `ModelGraph -> ExecutablePlan`,
+  - [x] Define separate transform stages for `ModelGraph -> ModelGraph`, `ModelGraph -> ExecutablePlan`,
     `ExecutablePlan -> ExecutablePlan`, and `ExecutablePlan -> BackendPlan`.
-  - [ ] Add pass invalidation/debug dump metadata to each stage.
+    - [x] Added `TransformStageKind`, stage traits, `BackendPlan`, and typed pipeline entry points in `Pass.h`.
+  - [x] Add pass invalidation/debug dump metadata to each stage.
+    - [x] Added `TransformStepMetadata`, invalidation categories, object stats, and debug dump callbacks with tests.
   - [ ] Keep raw graph mutation only inside migration and construction helpers.
 - [ ] Split build/distribution components along real deployment boundaries.
   - [ ] Keep core type/runtime headers free of compiler, CUDA, simdjson, GGUF, safetensors, and example-only dependencies.
