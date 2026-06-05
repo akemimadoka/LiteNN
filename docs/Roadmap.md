@@ -1621,18 +1621,18 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     steps.
   - [x] Add profile/trace records for fallback, transfer, and synchronization steps.
   - [x] Reject artifacts or placement plans when fallback policy is stricter than the available backend capability.
-- [ ] Demote old graph archives to migration/development tooling only.
+- [x] Demote old graph archives to migration/development tooling only.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.
   - [x] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
-  - [ ] Make production examples write/load vNext packages or compiled artifacts.
+  - [x] Make production examples write/load vNext packages or compiled artifacts.
     - [x] Move MNIST and GGUF conversion examples to vNext package manifests / compiled carrier artifacts instead of
       graph archive save/load.
-    - [ ] Move the SDXL example's graph-workbench commands to vNext package or compiled-artifact entry points.
+    - [x] Move the SDXL example's graph-workbench commands to vNext package or compiled-artifact entry points.
       - [x] vNext package external-weight loading now binds sibling weight files into loaded plan storage.
       - [x] vNext package loading now hydrates executable payloads for core descriptor nodes such as param/variable
         refs, unary/binary ops, cast, reshape, permute, reduce, softmax, broadcast, concat, and slice.
-      - [ ] SDXL compile/run/benchmark/diagnostic commands still use graph archives until vNext package node execution
-        payloads are executable after descriptor-based round-trip loading.
+      - [x] SDXL `--import-package` writes vNext packages; compile/run/benchmark/diagnostic commands accept vNext
+        package manifests directly, and the prompt/benchmark harnesses default to `.ltnn.json` package inputs.
 - [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
   - [x] Stop letting `Trainer` mutate graph variables implicitly.
     - [x] `Trainer` now binds a `ParameterSet` at construction and routes zero-grad, variable-gradient storage, and

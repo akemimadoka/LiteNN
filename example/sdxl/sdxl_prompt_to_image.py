@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inline-model-weights",
         action="store_true",
-        help="Embed imported tensor payloads in .ltnn instead of writing sibling .weights.bin files",
+        help="Embed imported tensor payloads in the vNext package instead of writing sibling .weights.bin files",
     )
     parser.add_argument(
         "--external-weight-min-bytes",
@@ -248,8 +248,8 @@ def main() -> int:
     decoded = args.workdir / "decoded_image.safetensors"
     unet_manifest = args.workdir / "unet_manifest.json"
     vae_manifest = args.workdir / "vae_manifest.json"
-    unet_graph = args.workdir / "unet.ltnn"
-    vae_graph = args.workdir / "vae.ltnn"
+    unet_graph = args.workdir / "unet.ltnn.json"
+    vae_graph = args.workdir / "vae.ltnn.json"
     unet_weights = args.workdir / "unet.weights.bin"
     vae_weights = args.workdir / "vae.weights.bin"
     unet_obj = args.workdir / "unet.obj"
@@ -306,8 +306,8 @@ def main() -> int:
         str(args.width),
     ]
 
-    unet_import_command = [str(args.exe), "--import", str(unet_manifest), str(args.checkpoint), str(unet_graph), "--allow-extra-tensors"]
-    vae_import_command = [str(args.exe), "--import", str(vae_manifest), str(args.checkpoint), str(vae_graph), "--allow-extra-tensors"]
+    unet_import_command = [str(args.exe), "--import-package", str(unet_manifest), str(args.checkpoint), str(unet_graph), "--allow-extra-tensors"]
+    vae_import_command = [str(args.exe), "--import-package", str(vae_manifest), str(args.checkpoint), str(vae_graph), "--allow-extra-tensors"]
     if not args.inline_model_weights:
         unet_import_command += [
             "--external-weights",

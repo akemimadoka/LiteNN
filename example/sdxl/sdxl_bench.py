@@ -158,7 +158,7 @@ def main() -> int:
     args.workdir.mkdir(parents=True, exist_ok=True)
 
     manifest = args.workdir / f"{args.probe}_manifest.json"
-    graph = args.workdir / f"{args.probe}.ltnn"
+    graph = args.workdir / f"{args.probe}.ltnn.json"
     inputs = args.workdir / f"{args.probe}_inputs.safetensors"
     obj = args.workdir / f"{args.probe}.obj"
     if os.name == "nt":
@@ -200,7 +200,7 @@ def main() -> int:
         ),
         (
             "import+serialize",
-            [str(args.exe), "--import", str(manifest), str(args.safetensors), str(graph), "--allow-extra-tensors"],
+            [str(args.exe), "--import-package", str(manifest), str(args.safetensors), str(graph), "--allow-extra-tensors"],
         ),
         (
             "write-inputs",

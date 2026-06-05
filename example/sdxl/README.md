@@ -64,10 +64,10 @@ python311 example/sdxl/sdxl_manifest_probe.py \
   --emit-skeleton-plan build/sdxl_skeleton_plan.json
 ```
 
-Import a LiteNN Torch manifest plus SDXL weights into a serialized graph:
+Import a LiteNN Torch manifest plus SDXL weights into a vNext package:
 
 ```sh
-litenn_sdxl_example --import sdxl_unet_manifest.json path/to/sdxl.safetensors sdxl_unet.ltnn \
+litenn_sdxl_example --import-package sdxl_unet_manifest.json path/to/sdxl.safetensors sdxl_unet.ltnn.json \
   --allow-extra-tensors
 ```
 
@@ -97,8 +97,8 @@ python311 example/sdxl/sdxl_manifest_probe.py \
   --width 64 \
   --context-tokens 4 \
   --emit-probe-manifest build/sdxl_spatial_2d_manifest.json
-litenn_sdxl_example --import build/sdxl_spatial_2d_manifest.json path/to/sdxl.safetensors \
-  build/sdxl_spatial_2d.ltnn --allow-extra-tensors
+litenn_sdxl_example --import-package build/sdxl_spatial_2d_manifest.json path/to/sdxl.safetensors \
+  build/sdxl_spatial_2d.ltnn.json --allow-extra-tensors
 python311 example/sdxl/sdxl_export_spatial_transformer_fixture.py \
   --generative-models path/to/generative-models \
   --config path/to/generative-models/configs/inference/sd_xl_base.yaml \
@@ -108,7 +108,7 @@ python311 example/sdxl/sdxl_export_spatial_transformer_fixture.py \
   --context-tokens 4 \
   --inputs-output build/sdxl_spatial_2d_inputs.safetensors \
   --reference-output build/sdxl_spatial_2d_reference.safetensors
-litenn_sdxl_example --run-model-with-inputs build/sdxl_spatial_2d.ltnn \
+litenn_sdxl_example --run-model-with-inputs build/sdxl_spatial_2d.ltnn.json \
   build/sdxl_spatial_2d_inputs.safetensors --output build/sdxl_spatial_2d_actual.safetensors
 python311 example/sdxl/sdxl_compare_safetensors.py \
   --actual build/sdxl_spatial_2d_actual.safetensors \
@@ -141,24 +141,24 @@ when binding conditioning into a low-precision manifest.
 Compile the serialized graph into a carrier object:
 
 ```sh
-litenn_sdxl_example --compile-object sdxl_unet.ltnn sdxl_unet.obj litenn_sdxl_module
+litenn_sdxl_example --compile-object sdxl_unet.ltnn.json sdxl_unet.obj litenn_sdxl_module
 ```
 
 For diagnostics, `--run-model` compiles and runs a serialized graph in-process, and `--compile-raw-object` writes the
 instruction object that is normally embedded into the carrier object:
 
 ```sh
-litenn_sdxl_example --run-model sdxl_unet.ltnn
-litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors
-litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors \
+litenn_sdxl_example --run-model sdxl_unet.ltnn.json
+litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn.json build/sdxl_spatial_2d_inputs.safetensors
+litenn_sdxl_example --run-model-with-inputs sdxl_unet.ltnn.json build/sdxl_spatial_2d_inputs.safetensors \
   --output build/sdxl_step_output.safetensors
-litenn_sdxl_example --diagnose-model-with-inputs sdxl_unet.ltnn build/sdxl_spatial_2d_inputs.safetensors \
+litenn_sdxl_example --diagnose-model-with-inputs sdxl_unet.ltnn.json build/sdxl_spatial_2d_inputs.safetensors \
   --max-nodes 1000
-litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn build/sdxl_unet_inputs.safetensors \
+litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn.json build/sdxl_unet_inputs.safetensors \
   --device cpu --warmup 1 --iterations 5 --json build/sdxl_cpu_aot_step.json
-litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn build/sdxl_unet_inputs.safetensors \
+litenn_sdxl_example --benchmark-model-with-inputs sdxl_unet.ltnn.json build/sdxl_unet_inputs.safetensors \
   --device cuda --warmup 1 --iterations 5 --json build/sdxl_cuda_aot_step.json
-litenn_sdxl_example --compile-raw-object sdxl_unet.ltnn sdxl_unet.raw.obj
+litenn_sdxl_example --compile-raw-object sdxl_unet.ltnn.json sdxl_unet.raw.obj
 ```
 
 `--benchmark-model-with-inputs` reports compile/load/input-bind/upload/run timing separately and records rodata,
@@ -304,8 +304,8 @@ with BF16 or freshly re-imported F16 weights/activations. F16 requires the mixed
 generated Tanh path in current LiteNN builds; re-import older `.ltnn` graphs that were created before those fixes. The
 SDXL CLI now fails by default when sampler or run-with-inputs outputs contain NaN/Inf; pass `--allow-nonfinite` only
 when intentionally collecting broken intermediate artifacts for debugging. BF16 is still the recommended first mode for
-large local smoke runs because it keeps a wider exponent range. The prompt harness now imports LiteNN graphs as `.ltnn`
-metadata plus sibling
+large local smoke runs because it keeps a wider exponent range. The prompt harness now imports LiteNN graphs as
+vNext `.ltnn.json` package manifests plus sibling
 `unet.weights.bin` / `vae.weights.bin` files by default; pass `--inline-model-weights` only when intentionally testing
 the older inline format. SDXL compile/run/benchmark commands also enable CPU AOT external regions through explicit
 `CompilerOptions`, so large VariableRef weights become separated runtime weight regions instead of MLIR/LLVM constants.
@@ -316,7 +316,7 @@ SDXL-sized monolithic modules because LLVM O1/O3 module optimization is not yet 
 `--cpu-aot-llvm-opt-level` to `--compile-image-regions` when explicitly testing higher optimization levels. Each compile
 command prints a budget line with graph size, tensor payload, projected inline MLIR payload, and projected separated
 constants/weights; use
-`litenn_sdxl_example --compile-budget <graph.ltnn>` to print the same budget without entering MLIR/LLVM codegen. The
+`litenn_sdxl_example --compile-budget <graph.ltnn.json>` to print the same budget without entering MLIR/LLVM codegen. The
 one-shot harness has a preflight guard:
 `--max-unet-weight-mib` defaults to `2048` and stops before importing/compiling full UNet manifests whose tensor payload
 would drive CPU AOT memory into tens of GiB. Use `--max-unet-weight-mib 0` only when intentionally running the full
@@ -354,9 +354,9 @@ python311 example\sdxl\sdxl_export_conditioning.py ^
 python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe unet-conditioning-smoke ^
   --height 64 --width 64 --emit-probe-manifest %OUT%\unet_manifest.json
-%LITENN_EXE% --import %OUT%\unet_manifest.json %CKPT% %OUT%\unet.ltnn --allow-extra-tensors ^
+%LITENN_EXE% --import-package %OUT%\unet_manifest.json %CKPT% %OUT%\unet.ltnn.json --allow-extra-tensors ^
   --external-weights %OUT%\unet.weights.bin
-%LITENN_EXE% --compile-object %OUT%\unet.ltnn %OUT%\unet.obj litenn_sdxl_unet
+%LITENN_EXE% --compile-object %OUT%\unet.ltnn.json %OUT%\unet.obj litenn_sdxl_unet
 %CXX% -shared %OUT%\unet.obj %OUT%\litenn_sdxl_unet_exports.def -o %OUT%\unet.dll
 
 %LITENN_EXE% --denoise-latent %OUT%\unet.dll %OUT%\conditioning.safetensors %OUT%\final_latent.safetensors ^
@@ -366,9 +366,9 @@ python311 example\sdxl\sdxl_manifest_probe.py ^
 python311 example\sdxl\sdxl_manifest_probe.py ^
   --config %CONFIG% --safetensors %CKPT% --probe vae-decode-full ^
   --height 64 --width 64 --vae-mid-attention-policy skip --emit-probe-manifest %OUT%\vae_manifest.json
-%LITENN_EXE% --import %OUT%\vae_manifest.json %CKPT% %OUT%\vae.ltnn --allow-extra-tensors ^
+%LITENN_EXE% --import-package %OUT%\vae_manifest.json %CKPT% %OUT%\vae.ltnn.json --allow-extra-tensors ^
   --external-weights %OUT%\vae.weights.bin
-%LITENN_EXE% --compile-object %OUT%\vae.ltnn %OUT%\vae.obj litenn_sdxl_vae
+%LITENN_EXE% --compile-object %OUT%\vae.ltnn.json %OUT%\vae.obj litenn_sdxl_vae
 %CXX% -shared %OUT%\vae.obj %OUT%\litenn_sdxl_vae_exports.def -o %OUT%\vae.dll
 
 %LITENN_EXE% --load-dll-with-inputs %OUT%\vae.dll %OUT%\final_latent.safetensors litenn_sdxl_vae ^
@@ -390,7 +390,7 @@ python311 example\sdxl\sdxl_reference_unet_step.py ^
   --inputs %OUT%\step_inputs.safetensors --output %OUT%\reference_noise_pred.safetensors ^
   --output-dtype F32
 
-%LITENN_EXE% --run-model-with-inputs %OUT%\unet.ltnn %OUT%\step_inputs.safetensors ^
+%LITENN_EXE% --run-model-with-inputs %OUT%\unet.ltnn.json %OUT%\step_inputs.safetensors ^
   --output %OUT%\litenn_noise_pred.safetensors
 
 python311 example\sdxl\sdxl_compare_artifacts.py ^
@@ -407,7 +407,7 @@ backend or dtype-specific budget. For prompt-conditioned parity, create the same
 The same expanded flow can avoid DLL/shared-object linking by writing separated image regions:
 
 ```bat
-%LITENN_EXE% --compile-image-regions %OUT%\unet.ltnn %OUT%\unet_regions litenn_sdxl_unet ^
+%LITENN_EXE% --compile-image-regions %OUT%\unet.ltnn.json %OUT%\unet_regions litenn_sdxl_unet ^
   --cpu-aot-llvm-opt-level 0
 %LITENN_EXE% --denoise-latent-image ^
   %OUT%\unet_regions\litenn_sdxl_unet.rodata.bin ^
@@ -416,7 +416,7 @@ The same expanded flow can avoid DLL/shared-object linking by writing separated 
   --steps 2 --seed 1234 --scheduler edm --sigma-max 14.6146 --sigma-min 0.0292 ^
   --rho 3 --denoiser-contract sgm-edm --cfg-mode dual --cfg-scale 6
 
-%LITENN_EXE% --compile-image-regions %OUT%\vae.ltnn %OUT%\vae_regions litenn_sdxl_vae ^
+%LITENN_EXE% --compile-image-regions %OUT%\vae.ltnn.json %OUT%\vae_regions litenn_sdxl_vae ^
   --cpu-aot-llvm-opt-level 0
 %LITENN_EXE% --run-image-with-inputs ^
   %OUT%\vae_regions\litenn_sdxl_vae.rodata.bin ^
