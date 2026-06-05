@@ -60,6 +60,73 @@ TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(train));
 }
 
+TEST(G14Remaining, TrainStepPlanExposesNamedArtifactEntries)
+{
+	const auto graph = BuildTrainableGraph();
+	const auto train = Training::BuildTrainStepPlan(BuildExecutableModule(graph), Training::TrainExecutionPolicy::AOT,
+	                                                true);
+
+	const auto findEntry = [&](std::string_view name) -> const Training::TrainStepArtifactEntry* {
+		for (const auto& entry : train.artifactEntries)
+		{
+			if (entry.name == name)
+			{
+				return &entry;
+			}
+		}
+		return nullptr;
+	};
+
+	const auto* forward = findEntry("forward");
+	ASSERT_NE(forward, nullptr);
+	EXPECT_EQ(forward->kind, Training::TrainStepArtifactEntryKind::Forward);
+	ASSERT_TRUE(forward->function.has_value());
+	EXPECT_EQ(*forward->function, train.forwardFunction);
+	EXPECT_FALSE(forward->outputBindings.empty());
+
+	const auto* backward = findEntry("backward");
+	ASSERT_NE(backward, nullptr);
+	EXPECT_EQ(backward->kind, Training::TrainStepArtifactEntryKind::Backward);
+	ASSERT_TRUE(backward->function.has_value());
+	ASSERT_TRUE(train.backwardFunction.has_value());
+	EXPECT_EQ(*backward->function, *train.backwardFunction);
+	EXPECT_FALSE(backward->inputBindings.empty());
+	EXPECT_FALSE(backward->outputBindings.empty());
+
+	const auto* loss = findEntry("loss");
+	ASSERT_NE(loss, nullptr);
+	EXPECT_EQ(loss->kind, Training::TrainStepArtifactEntryKind::Loss);
+	EXPECT_FALSE(loss->function.has_value());
+	EXPECT_FALSE(loss->inputBindings.empty());
+	EXPECT_FALSE(loss->outputBindings.empty());
+
+	ASSERT_EQ(train.updates.size(), 1u);
+	const auto* update = findEntry(train.updates[0].name);
+	ASSERT_NE(update, nullptr);
+	EXPECT_EQ(update->kind, Training::TrainStepArtifactEntryKind::OptimizerUpdate);
+	ASSERT_TRUE(update->update.has_value());
+	EXPECT_EQ(*update->update, 0u);
+	EXPECT_FALSE(update->inputBindings.empty());
+	EXPECT_FALSE(update->outputBindings.empty());
+
+	const auto hasBindingRole = [&](const Training::TrainStepArtifactEntry& entry,
+	                                std::span<const std::size_t> bindings,
+	                                Training::TrainStepABIRole role) {
+		for (const auto binding : bindings)
+		{
+			if (train.abiBindings[binding].role == role)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+	EXPECT_TRUE(hasBindingRole(*update, update->inputBindings, Training::TrainStepABIRole::MutableParameter));
+	EXPECT_TRUE(hasBindingRole(*update, update->inputBindings, Training::TrainStepABIRole::Gradient));
+	EXPECT_TRUE(hasBindingRole(*update, update->outputBindings, Training::TrainStepABIRole::UpdatedParameter));
+	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(train));
+}
+
 TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 {
 	const auto graph = BuildTrainableGraph();

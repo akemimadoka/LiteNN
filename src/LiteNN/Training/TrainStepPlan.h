@@ -11,6 +11,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -78,6 +79,40 @@ namespace LiteNN::Training
 		std::optional<std::size_t> runtimeState;
 	};
 
+	enum class TrainStepArtifactEntryKind
+	{
+		Forward,
+		Backward,
+		Loss,
+		OptimizerUpdate
+	};
+
+	inline std::string_view TrainStepArtifactEntryKindName(TrainStepArtifactEntryKind kind) noexcept
+	{
+		switch (kind)
+		{
+		case TrainStepArtifactEntryKind::Forward:
+			return "forward";
+		case TrainStepArtifactEntryKind::Backward:
+			return "backward";
+		case TrainStepArtifactEntryKind::Loss:
+			return "loss";
+		case TrainStepArtifactEntryKind::OptimizerUpdate:
+			return "optimizer-update";
+		}
+		return "unknown";
+	}
+
+	struct TrainStepArtifactEntry
+	{
+		std::string name;
+		TrainStepArtifactEntryKind kind{ TrainStepArtifactEntryKind::Forward };
+		std::optional<FunctionId> function;
+		std::optional<std::size_t> update;
+		std::vector<std::size_t> inputBindings;
+		std::vector<std::size_t> outputBindings;
+	};
+
 	struct TrainStepPlan
 	{
 		ExecutableModule module;
@@ -85,6 +120,7 @@ namespace LiteNN::Training
 		std::optional<FunctionId> backwardFunction;
 		std::vector<OptimizerUpdateSpec> updates;
 		std::vector<TrainStepABIBinding> abiBindings;
+		std::vector<TrainStepArtifactEntry> artifactEntries;
 		std::vector<Runtime::RuntimeStateBinding> runtimeStates;
 		Runtime::RuntimeSchedule schedule;
 		TrainExecutionPolicy policy{ TrainExecutionPolicy::Auto };
@@ -250,6 +286,108 @@ namespace LiteNN::Training
 		return bindings;
 	}
 
+	inline std::vector<std::size_t> FindTrainStepBindingsByRole(
+	    std::span<const TrainStepABIBinding> bindings, TrainStepABIRole role)
+	{
+		std::vector<std::size_t> indices;
+		for (std::size_t i = 0; i < bindings.size(); ++i)
+		{
+			if (bindings[i].role == role)
+			{
+				indices.push_back(i);
+			}
+		}
+		return indices;
+	}
+
+	inline std::vector<std::size_t> FindTrainStepBindingsByRoleAndPrefix(
+	    std::span<const TrainStepABIBinding> bindings, TrainStepABIRole role, std::string_view prefix)
+	{
+		std::vector<std::size_t> indices;
+		for (std::size_t i = 0; i < bindings.size(); ++i)
+		{
+			if (bindings[i].role == role && bindings[i].name.starts_with(prefix))
+			{
+				indices.push_back(i);
+			}
+		}
+		return indices;
+	}
+
+	inline void AppendTrainStepBindings(std::vector<std::size_t>& destination, std::vector<std::size_t> source)
+	{
+		destination.insert(destination.end(), source.begin(), source.end());
+	}
+
+	inline std::vector<TrainStepArtifactEntry> BuildTrainStepArtifactEntries(
+	    const ExecutableModule& module, const TrainStepPlan& plan)
+	{
+		std::vector<TrainStepArtifactEntry> entries;
+		entries.reserve(2 + module.plan.outputs.size() + plan.updates.size());
+
+		TrainStepArtifactEntry forward;
+		forward.name = "forward";
+		forward.kind = TrainStepArtifactEntryKind::Forward;
+		forward.function = plan.forwardFunction;
+		AppendTrainStepBindings(forward.outputBindings,
+		                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::LossInput));
+		entries.push_back(std::move(forward));
+
+		if (plan.backwardFunction)
+		{
+			TrainStepArtifactEntry backward;
+			backward.name = "backward";
+			backward.kind = TrainStepArtifactEntryKind::Backward;
+			backward.function = plan.backwardFunction;
+			AppendTrainStepBindings(backward.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::LossInput));
+			AppendTrainStepBindings(backward.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::Gradient));
+			AppendTrainStepBindings(backward.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::MutableParameter));
+			AppendTrainStepBindings(backward.outputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::Gradient));
+			entries.push_back(std::move(backward));
+		}
+
+		for (std::size_t outputIndex = 0; outputIndex < module.plan.outputs.size(); ++outputIndex)
+		{
+			TrainStepArtifactEntry loss;
+			loss.name = outputIndex == 0 ? "loss" : std::format("loss.{}", outputIndex);
+			loss.kind = TrainStepArtifactEntryKind::Loss;
+			AppendTrainStepBindings(loss.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::LossInput));
+			AppendTrainStepBindings(loss.outputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::Gradient));
+			entries.push_back(std::move(loss));
+		}
+
+		for (std::size_t updateIndex = 0; updateIndex < plan.updates.size(); ++updateIndex)
+		{
+			const auto& update = plan.updates[updateIndex];
+			TrainStepArtifactEntry updateEntry;
+			updateEntry.name = update.name;
+			updateEntry.kind = TrainStepArtifactEntryKind::OptimizerUpdate;
+			updateEntry.update = updateIndex;
+			AppendTrainStepBindings(updateEntry.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::MutableParameter));
+			AppendTrainStepBindings(updateEntry.inputBindings,
+			                         FindTrainStepBindingsByRole(plan.abiBindings, TrainStepABIRole::Gradient));
+			AppendTrainStepBindings(updateEntry.inputBindings,
+			                         FindTrainStepBindingsByRoleAndPrefix(
+			                             plan.abiBindings, TrainStepABIRole::OptimizerState, update.name));
+			AppendTrainStepBindings(updateEntry.outputBindings,
+			                         FindTrainStepBindingsByRoleAndPrefix(
+			                             plan.abiBindings, TrainStepABIRole::UpdatedParameter, update.name));
+			AppendTrainStepBindings(updateEntry.outputBindings,
+			                         FindTrainStepBindingsByRoleAndPrefix(
+			                             plan.abiBindings, TrainStepABIRole::UpdatedOptimizerState, update.name));
+			entries.push_back(std::move(updateEntry));
+		}
+
+		return entries;
+	}
+
 	inline TrainStepPlan BuildTrainStepPlan(ExecutableModule module,
 	                                        TrainExecutionPolicy policy = TrainExecutionPolicy::Auto,
 	                                        bool hasAOTBackend = false)
@@ -274,6 +412,7 @@ namespace LiteNN::Training
 			    "mutable-parameter", module.plan.variables[i].type));
 		}
 		train.abiBindings = BuildTrainStepABIBindings(module, train.runtimeStates, train.updates);
+		train.artifactEntries = BuildTrainStepArtifactEntries(module, train);
 		train.schedule = Runtime::BuildRuntimeSchedule(module, train.runtimeStates);
 		Runtime::ValidateRuntimeSchedule(train.schedule);
 		train.module = std::move(module);
@@ -319,6 +458,47 @@ namespace LiteNN::Training
 			{
 				throw std::runtime_error("TrainStepPlan ABI binding references an invalid runtime state: " +
 				                         binding.name);
+			}
+		}
+		for (std::size_t entryIndex = 0; entryIndex < plan.artifactEntries.size(); ++entryIndex)
+		{
+			const auto& entry = plan.artifactEntries[entryIndex];
+			if (entry.name.empty())
+			{
+				throw std::runtime_error("TrainStepPlan artifact entry name cannot be empty");
+			}
+			if (entry.function && *entry.function >= plan.module.functions.size())
+			{
+				throw std::runtime_error("TrainStepPlan artifact entry references an invalid function: " +
+				                         entry.name);
+			}
+			if (entry.update && *entry.update >= plan.updates.size())
+			{
+				throw std::runtime_error("TrainStepPlan artifact entry references an invalid optimizer update: " +
+				                         entry.name);
+			}
+			for (const auto binding : entry.inputBindings)
+			{
+				if (binding >= plan.abiBindings.size())
+				{
+					throw std::runtime_error(std::format(
+					    "TrainStepPlan artifact entry {} has invalid input binding {}", entry.name, binding));
+				}
+			}
+			for (const auto binding : entry.outputBindings)
+			{
+				if (binding >= plan.abiBindings.size())
+				{
+					throw std::runtime_error(std::format(
+					    "TrainStepPlan artifact entry {} has invalid output binding {}", entry.name, binding));
+				}
+			}
+			for (std::size_t previous = 0; previous < entryIndex; ++previous)
+			{
+				if (plan.artifactEntries[previous].name == entry.name)
+				{
+					throw std::runtime_error("TrainStepPlan artifact entry name is duplicated: " + entry.name);
+				}
 			}
 		}
 	}

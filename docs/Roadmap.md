@@ -1647,6 +1647,9 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
       the current host-side optimizer objects.
       - [x] `Trainer` AOT policy now executes both compiled forward and compiled backward runners; after host-side
         optimizer updates it refreshes runners so subsequent steps see updated parameter payloads.
+      - [x] Train-step plans now expose named artifact entries for `forward`, `backward`, `loss`, and optimizer
+        update nodes, with ABI binding indices for mutable parameters, gradients, loss inputs, optimizer state, and
+        updated outputs.
       - [ ] Move loss and optimizer update execution itself into named compiled artifact entries with mutable state
         bindings, eliminating the per-step runner refresh.
   - [x] Make checkpoint save/load share the same state binding contract.
