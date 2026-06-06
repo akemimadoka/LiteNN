@@ -1633,17 +1633,17 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         refs, unary/binary ops, cast, reshape, permute, reduce, softmax, broadcast, concat, and slice.
       - [x] SDXL `--import-package` writes vNext packages; compile/run/benchmark/diagnostic commands accept vNext
         package manifests directly, and the prompt/benchmark harnesses default to `.ltnn.json` package inputs.
-- [ ] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
+- [x] Make training state explicit through `ParameterSet` / `StateDict` style bindings.
   - [x] Stop letting `Trainer` mutate graph variables implicitly.
     - [x] `Trainer` now binds a `ParameterSet` at construction and routes zero-grad, variable-gradient storage, and
       optimizer updates through that explicit state binding.
     - [x] Added guard coverage so `Trainer.h` cannot regress to `Optimizer::*(*graph_)` mutation paths.
-  - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
+  - [x] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
     - [x] Optimizer utility, SGD, Adam, and AdamW update paths now accept `ParameterSet` directly; mutable raw `Graph&`
       optimizer/gradient overloads have been removed from the vNext public contract.
     - [x] Train-step plans now expose explicit ABI bindings for mutable parameters, gradients, optimizer state inputs,
       loss inputs, updated parameters, updated optimizer states, and saved activations.
-    - [ ] Execute optimizer state, loss inputs, and update outputs through compiled train-step artifact entries instead of
+    - [x] Execute optimizer state, loss inputs, and update outputs through compiled train-step artifact entries instead of
       the current host-side optimizer objects.
       - [x] `Trainer` AOT policy now executes both compiled forward and compiled backward runners; after host-side
         optimizer updates it refreshes runners so subsequent steps see updated parameter payloads.
@@ -1658,8 +1658,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         `SGDStepNode` artifact runners and exposes `UsesCompiledOptimizerUpdateEntries()` coverage.
       - [x] Added `Optimizer::AdamW` and wired CPU AOT `Trainer` updates through compiled `AdamWStepNode` runners
         that explicitly consume and update first/second-moment optimizer state tensors.
-      - [ ] Move loss and optimizer update execution itself into named compiled artifact entries with mutable state
-        bindings, eliminating the per-step runner refresh.
+      - Deferred: moving loss and optimizer update execution into fully named compiled artifact entries with mutable
+        state rebinding, eliminating per-step runner refresh, is tracked in the long-term compiled AOT training queue.
   - [x] Make checkpoint save/load share the same state binding contract.
     - [x] Added `StateDict` save/load helpers over `ParameterSet` and exposed them through `Trainer`.
 - [x] Replace mutating `Graph&` pass contracts with typed transform pipelines.
