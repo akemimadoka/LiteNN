@@ -236,7 +236,8 @@ std::vector<Tensor<CPU>> MakeBackwardInputs(std::span<const Tensor<CPU>> forward
 
 void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	auto graph = BuildTrainingGraph(kind, batch);
+	ModelGraph model(BuildTrainingGraph(kind, batch));
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interpreter;
@@ -258,7 +259,8 @@ void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t
 
 void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	auto graph = BuildTrainingGraph(kind, batch);
+	ModelGraph model(BuildTrainingGraph(kind, batch));
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto inputData = MakeInputData(batch);
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
@@ -286,7 +288,8 @@ void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_
 
 void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	auto graph = BuildTrainingGraph(kind, batch);
+	ModelGraph model(BuildTrainingGraph(kind, batch));
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto inputData = MakeInputData(batch);
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
@@ -316,12 +319,13 @@ void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::
 
 void BMTrainCPUFullStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 {
-	auto graph = BuildTrainingGraph(kind, batch);
+	ModelGraph model(BuildTrainingGraph(kind, batch));
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto inputData = MakeInputData(batch);
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Training::Trainer<CPU, Optimizer::SGD> trainer(
-	    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }),
+	    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }),
 	    Training::TrainerOptions{ .buildBackwardIfMissing = false });
 
 	for (int i = 0; i < kWarmupIterations; ++i)

@@ -51,8 +51,9 @@ namespace LiteNN::Training
 	class Trainer
 	{
 	public:
-		Trainer(Graph& graph, OptimizerT optimizer, TrainerOptions options = {}, D device = D{})
-		    : graph_(&graph), optimizer_(std::move(optimizer)), options_(options), device_(std::move(device))
+		Trainer(ModelGraph& model, OptimizerT optimizer, TrainerOptions options = {}, D device = D{})
+		    : model_(&model), graph_(&model.UnsafeMutableGraph()), optimizer_(std::move(optimizer)), options_(options),
+		      device_(std::move(device))
 		{
 			if (options_.buildBackwardIfMissing && !graph_->Backward())
 			{
@@ -71,8 +72,8 @@ namespace LiteNN::Training
 			}
 		}
 
-		Trainer(Graph& graph, OptimizerT optimizer, D device)
-		    : Trainer(graph, std::move(optimizer), TrainerOptions{}, std::move(device))
+		Trainer(ModelGraph& model, OptimizerT optimizer, D device)
+		    : Trainer(model, std::move(optimizer), TrainerOptions{}, std::move(device))
 		{
 		}
 
@@ -392,6 +393,7 @@ namespace LiteNN::Training
 			return compiledBackward_(inputs);
 		}
 
+		ModelGraph* model_;
 		Graph* graph_;
 		ParameterSet parameters_;
 		OptimizerT optimizer_;

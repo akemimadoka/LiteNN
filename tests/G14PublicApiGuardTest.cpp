@@ -74,6 +74,8 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		  "Detail::BuildExecutableModuleFromGraph(graph) inside internal construction/test adapters" },
 		{ "src/LiteNN/Training/Trainer.h", "#include <LiteNN/Compiler/CompiledModule.h>",
 		  "TrainStepAOTRunner in LiteNNTrainingAOT" },
+		{ "src/LiteNN/Training/Trainer.h", "Trainer(Graph&",
+		  "Trainer(ModelGraph&) with explicit unsafe graph access inside the implementation" },
 		{ "src/LiteNN/Training/Trainer.h", "Trainer AOT execution policy is not wired yet",
 		  "explicit forward runner plus train-step diagnostic" },
 		{ "src/LiteNN/Training/Trainer.h", "Optimizer::ZeroGradients(*graph_",

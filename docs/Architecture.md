@@ -346,14 +346,14 @@ struct Pass {
 
 ## Training API
 
-`LiteNN::Training::Trainer<CPU, OptimizerT>` 是当前 CPU 训练路径的轻量封装，负责把 Graph、Interpreter、AutogradPass、loss gradient 和 Optimizer 串起来。
+`LiteNN::Training::Trainer<CPU, OptimizerT>` 是当前 CPU 训练路径的轻量封装，构造入口接收 `ModelGraph&`，内部通过显式 unsafe graph view 串起 AutogradPass、Interpreter/AOT runner、loss gradient 和 Optimizer。
 
-- 构造时可自动为缺失 backward 的 Graph 运行 `AutogradPass`，随后调用 `ValidateGraph`
+- 构造时可自动为缺失 backward 的模型运行 `AutogradPass`，随后调用 `ValidateGraph`
 - `Forward(inputs)` 只执行前向
 - `Step(inputs, outputGradients)` 执行 forward → backward → store variable gradients → optimizer step
 - `StepSoftmaxCrossEntropy(inputs, targetClass)` 为单输出 logits 图提供常见分类训练入口
 - `StepSoftmaxCrossEntropyBatch(inputs, targetClasses)` 支持 `[batch, classes]` logits，loss 和 logits gradient 均按 batch 平均
-- `TrainerOptions` 可控制是否自动构建 backward、是否写回 `Variable::Grad()`、是否在 backward 前清零梯度；当前若解析到 `TrainExecutionPolicy::AOT` 会显式报错，直到 CPU/CUDA compiled train-step runner 接线完成
+- `TrainerOptions` 可控制是否自动构建 backward、是否写回 `Variable::Grad()`、是否在 backward 前清零梯度，以及选择 `Interpreter` / `AOT` / `Auto` 执行策略
 
 优化器公共工具位于 `LiteNN::Optimizer`：
 
@@ -542,7 +542,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 
 - [x] **模型保存/加载**：raw Graph archive 已删除；生产模型保存/加载走 vNext package / compiled artifact，并在加载后运行 manifest、plan 和 buffer binding 校验。
 - [x] **输入输出命名与签名 API**：`Graph` 支持 `SetInputNames`/`SetOutputNames`、`InputSignature`/`OutputSignature`、`FindInput`/`FindOutput`；`CompiledModule<CPU>` rodata 保存命名 specs，并通过 `InputSpecs`/`OutputSpecs`/`FindInput`/`FindOutput` 查询。当前绑定执行仍按位置传参，命名 binding helper 可后续补。
-- [x] **训练 API**：新增 `LiteNN::Training::Trainer<CPU, OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
+- [x] **训练 API**：`LiteNN::Training::Trainer<CPU, OptimizerT>` 现在从 `ModelGraph&` 构造，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
 - [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `Trainer<CPU, OptimizerT>::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。
 - [x] **常用算子覆盖（部分）**：已新增 `Softmax`（带 max-shift 数值稳定）、`GELU`（tanh 近似）、`ELU`（带 alpha 参数）、`LayerNorm`（learnable gamma/beta，2D 输入）层构建工具，通过 `Layer::AddSoftmax`/`BuildSoftmax`、`AddGELU`/`BuildGELU`、`AddELU`/`BuildELU`、`CreateLayerNorm`/`AddLayerNorm` 提供访问。Conv2D、Pooling、BatchNorm、Embedding、Gather/Scatter、Pad 仍待补充。
 - [x] **示例体系（部分）**：MNIST interpreter 示例扩展了 MLP 路径（`--hidden-size N`），支持 `--save` / `--load` 在训练后保存权重或直接加载推理模型；end-to-end 演示完整 train → save → load → evaluate 工作流。`example/carrier` 现已补齐 AOT 静态库/动态库 carrier 加载示例；训练 checkpoint 循环仍待补充。

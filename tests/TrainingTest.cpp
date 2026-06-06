@@ -32,7 +32,8 @@ namespace
 
 TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
 
 	Subgraph sg;
@@ -43,7 +44,7 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(model, Optimizer::SGD(0.1f));
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::Interpreter);
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(trainer.Plan()));
 	const auto countAbiRole = [&](Training::TrainStepABIRole role) {
@@ -73,7 +74,8 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 
 TEST(Training, TrainerExposesParameterSetAndStateDict)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
 	graph.SetVariableName(weightIndex, "linear.weight");
 
@@ -85,7 +87,7 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(model, Optimizer::SGD(0.1f));
 	ASSERT_EQ(trainer.Parameters().Size(), 1);
 	EXPECT_EQ(trainer.Parameters()[0].name, "linear.weight");
 
@@ -102,7 +104,8 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 
 TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
 
 	Subgraph sg;
@@ -115,7 +118,7 @@ TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 
 	Training::TrainerOptions options;
 	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
-	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f), options);
+	Training::Trainer<CPU, Optimizer::SGD> trainer(model, Optimizer::SGD(0.1f), options);
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::AOT);
 	EXPECT_TRUE(trainer.UsesCompiledOptimizerUpdateEntries());
 
@@ -147,7 +150,8 @@ TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 
 TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
 
 	Subgraph sg;
@@ -166,7 +170,7 @@ TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
 	adamwOptions.beta2 = 0.0f;
 	adamwOptions.epsilon = 1.0e-8f;
 	adamwOptions.weightDecay = 0.0f;
-	Training::Trainer<CPU, Optimizer::AdamW> trainer(graph, Optimizer::AdamW(adamwOptions), options);
+	Training::Trainer<CPU, Optimizer::AdamW> trainer(model, Optimizer::AdamW(adamwOptions), options);
 	EXPECT_TRUE(trainer.UsesCompiledOptimizerUpdateEntries());
 
 	std::vector<Tensor<CPU>> inputs;
@@ -192,7 +196,8 @@ TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
 
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto logitsIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0f, 0.0f }, { 2 })));
 
 	Subgraph sg;
@@ -200,7 +205,7 @@ TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(model, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 
 	auto result = trainer.StepSoftmaxCrossEntropy(inputs, 1);
@@ -220,7 +225,8 @@ TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 
 TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
 {
-	Graph graph;
+	ModelGraph model;
+	Graph& graph = model.UnsafeMutableGraph();
 	const auto logitsIndex =
 	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f }, { 2, 2 })));
 
@@ -229,7 +235,7 @@ TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
 	sg.SetResults({ { logits, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(1.0f));
+	Training::Trainer<CPU, Optimizer::SGD> trainer(model, Optimizer::SGD(1.0f));
 	std::vector<Tensor<CPU>> inputs;
 	std::vector<std::size_t> targets = { 0, 1 };
 

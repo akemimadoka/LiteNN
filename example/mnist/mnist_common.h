@@ -311,8 +311,9 @@ namespace LiteNN::Examples::Mnist
 
 	inline void TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options)
 	{
+		ModelGraph model(std::move(graph));
 		Training::Trainer<CPU, Optimizer::SGD> trainer(
-		    graph, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
+		    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
 
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)
 		{
@@ -341,6 +342,7 @@ namespace LiteNN::Examples::Mnist
 			std::cout << std::format("epoch {}/{}: loss={:.4f}, train_accuracy={:.2f}%\n",
 			                         epoch + 1, options.epochs, averageLoss, accuracy);
 		}
+		graph = model.UnsafeTakeGraph();
 	}
 
 	inline void PrintLogits(const Tensor<CPU>& logits)

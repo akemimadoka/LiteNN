@@ -16,7 +16,7 @@
 
 ### 训练
 
-1. 构建含 `Variable` 的训练图
+1. 通过 `ModelGraph` / `ModelBuilder` 构建含 `Variable` 的训练模型
 2. 使用 `Training::Trainer<CPU, Optimizer>`
 3. 通过 `Step` / `StepSoftmaxCrossEntropy` / `StepSoftmaxCrossEntropyBatch` 执行训练循环
 

@@ -1775,11 +1775,15 @@ Break candidates that can still materially improve vNext:
     round-trip tests, and changed guard coverage to reject any reintroduced graph archive API.
   - Note: earlier G14 entries that mention keeping graph archives as internal development tooling are superseded by this
     final break-window deletion.
-- [ ] Move `Trainer` construction away from raw `Graph&`.
+- [x] Move `Trainer` construction away from raw `Graph&`.
   - Benefit: keeps training aligned with `ModelGraph`, `ExecutablePlan`, and future `TrainStepPlan` contracts instead of
     mutating a construction graph directly.
   - Hidden need: existing training tests and examples need a stable `ModelGraph`/plan handoff for autograd expansion,
     parameter binding, and optional AOT policy.
+  - [x] `Trainer<Device, Optimizer>` now constructs from `ModelGraph&`; implementation-local autograd expansion,
+    validation, parameter binding, and train-step planning use the explicitly unsafe graph view internally.
+  - [x] Training tests, MNIST training helper, and training benchmark call sites now hand off `ModelGraph`, with guard
+    coverage preventing `Trainer(Graph&)` from returning.
 - [ ] Demote or remove `CompiledModule` Tensor convenience `Run` APIs from the stable ABI.
   - Benefit: compiled execution would have one production ABI centered on `CompiledTensorBinding`, with Tensor helpers
     living as adapters rather than core runtime contracts.
