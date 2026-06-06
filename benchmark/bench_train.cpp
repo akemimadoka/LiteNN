@@ -76,7 +76,7 @@ Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& r
 {
 	const auto& spec = GetTrainModelSpec(kind);
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	std::vector<Layer::LinearLayer> layers;
 	std::size_t inputSize = 784;
 	for (const auto hiddenSize : spec.hiddenSizes)
@@ -96,7 +96,7 @@ Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& r
 	graph.SetForward(graph.AddSubgraph(std::move(forward)));
 	graph.SetInputNames({ "image" });
 	graph.SetOutputNames({ "logits" });
-	return builder.TakeGraph();
+	return builder.UnsafeTakeGraph();
 }
 
 void OptimizeInferenceGraph(Graph& graph)

@@ -655,7 +655,7 @@ TEST(ConstFoldPass, AfterInlinePass)
 TEST(ConstFoldPass, FullPipeline)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 
 	// 构建 ReLU 子图
 	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 2 });
@@ -682,7 +682,7 @@ TEST(ConstFoldPass, FullPipeline)
 
 	// 参考图
 	ModelBuilder refBuilder;
-	Graph& refGraph = refBuilder.MutableGraph();
+	Graph& refGraph = refBuilder.UnsafeMutableGraph();
 	{
 		const auto refReluId = Layer::BuildReLU(refBuilder, DataType::Float32, { 2, 2 });
 		auto refW = Variable::Create(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 3, 2 }));

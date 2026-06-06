@@ -87,7 +87,7 @@ void SetThroughputCounters(benchmark::State& state, std::size_t batch);
 Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto fc = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 10 }, rng),
 	    Initializer::Zeros({ 1, 10 }));
@@ -95,13 +95,13 @@ Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 	const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return builder.TakeGraph();
+	return builder.UnsafeTakeGraph();
 }
 
 Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 128 }, rng),
 	    Initializer::Zeros({ 1, 128 }));
@@ -113,13 +113,13 @@ Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 	fwd.SetResults({ Layer::AddLinear(fwd, h2, a1) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return builder.TakeGraph();
+	return builder.UnsafeTakeGraph();
 }
 
 Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto h1 = Layer::CreateLinear(builder,
 	    Initializer::XavierUniform({ 784, 512 }, rng),
 	    Initializer::Zeros({ 1, 512 }));
@@ -135,7 +135,7 @@ Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 	fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
 	graph.SetForward(graph.AddSubgraph(std::move(fwd)));
-	return builder.TakeGraph();
+	return builder.UnsafeTakeGraph();
 }
 
 void Optimize(Graph& graph)

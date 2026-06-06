@@ -41,7 +41,7 @@ namespace LiteNN::Layer
 	inline RMSNormLayer CreateRMSNorm(ModelBuilder& builder, std::size_t featureSize,
 	                                  DataType dtype = DataType::Float32, double eps = 1e-6)
 	{
-		return Detail::CreateRMSNormImpl(builder.MutableGraph(), featureSize, dtype, eps);
+		return Detail::CreateRMSNormImpl(builder.UnsafeMutableGraph(), featureSize, dtype, eps);
 	}
 
 	// 在已有子图中追加 RMSNorm 节点（在最后一个轴上归一化）
@@ -77,7 +77,7 @@ namespace LiteNN::Layer
 
 	inline SubgraphId BuildRMSNorm(ModelBuilder& builder, const RMSNormLayer& layer, std::size_t batchSize = 1)
 	{
-		return Detail::BuildRMSNormImpl(builder.MutableGraph(), layer, batchSize);
+		return Detail::BuildRMSNormImpl(builder.UnsafeMutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 

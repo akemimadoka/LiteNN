@@ -44,7 +44,7 @@ namespace LiteNN::Layer
 	inline LayerNormLayer CreateLayerNorm(ModelBuilder& builder, std::size_t featureSize,
 	                                      DataType dtype = DataType::Float32, double eps = 1e-5)
 	{
-		return Detail::CreateLayerNormImpl(builder.MutableGraph(), featureSize, dtype, eps);
+		return Detail::CreateLayerNormImpl(builder.UnsafeMutableGraph(), featureSize, dtype, eps);
 	}
 
 	// 在已有子图中追加 LayerNorm 节点（在最后一个轴上归一化）

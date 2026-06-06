@@ -180,7 +180,7 @@ namespace LiteNN
 
 	inline TransformStats CollectTransformStats(const ModelGraph& model)
 	{
-		return CollectTransformStats(model.GraphView());
+		return CollectTransformStats(model.UnsafeGraphView());
 	}
 
 	inline TransformStats CollectTransformStats(const ExecutablePlan& plan)
@@ -231,10 +231,10 @@ namespace LiteNN
 				throw std::runtime_error("ModelGraph transform pipeline contains a null pass");
 			}
 			const auto before = CollectTransformStats(model);
-			pass->Run(model.MutableGraph());
+			pass->Run(model.UnsafeMutableGraph());
 			if (options.validateAfterEachStep)
 			{
-				Validation::ValidateGraph(model.GraphView());
+				Validation::ValidateGraph(model.UnsafeGraphView());
 			}
 			EmitTransformStep(steps,
 			                  { .stage = TransformStageKind::ModelGraphToModelGraph,
@@ -253,7 +253,7 @@ namespace LiteNN
 	{
 		if (options.validateAfterEachStep)
 		{
-			Validation::ValidateGraph(model.GraphView());
+			Validation::ValidateGraph(model.UnsafeGraphView());
 		}
 		const auto before = CollectTransformStats(model);
 		auto plan = BuildExecutablePlan(model, registry);

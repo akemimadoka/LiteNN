@@ -510,7 +510,7 @@ TEST(InlinePass, PassthroughCallee)
 TEST(InlinePass, ReLULayerInline)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 
 	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 3 });
 

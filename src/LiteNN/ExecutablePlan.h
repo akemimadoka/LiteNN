@@ -25,17 +25,17 @@ namespace LiteNN
 
 		explicit ModelGraph(Graph graph) : graph_(std::move(graph)) {}
 
-		Graph& MutableGraph() noexcept
+		Graph& UnsafeMutableGraph() noexcept
 		{
 			return graph_;
 		}
 
-		const Graph& GraphView() const noexcept
+		const Graph& UnsafeGraphView() const noexcept
 		{
 			return graph_;
 		}
 
-		Graph TakeGraph() noexcept
+		Graph UnsafeTakeGraph() noexcept
 		{
 			return std::move(graph_);
 		}
@@ -944,7 +944,7 @@ namespace LiteNN
 	inline ExecutablePlan BuildExecutablePlan(const ModelGraph& model,
 	                                          const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
-		return Detail::BuildExecutablePlanFromGraph(model.GraphView(), registry);
+		return Detail::BuildExecutablePlanFromGraph(model.UnsafeGraphView(), registry);
 	}
 
 	inline ExecutableModule BuildExecutableModule(ExecutablePlan plan)

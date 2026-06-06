@@ -271,7 +271,7 @@ namespace
 	Graph BuildTinyLinearChainGraph(std::size_t batch)
 	{
 		ModelBuilder builder;
-		Graph& graph = builder.MutableGraph();
+		Graph& graph = builder.UnsafeMutableGraph();
 		const auto h1 = Layer::CreateLinear(
 		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 },
@@ -288,7 +288,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return builder.TakeGraph();
+		return builder.UnsafeTakeGraph();
 	}
 
 	std::vector<double> MakePatternValues(std::size_t count, double scale)
@@ -309,7 +309,7 @@ namespace
 		constexpr std::size_t kOutput = 32;
 
 		ModelBuilder builder;
-		Graph& graph = builder.MutableGraph();
+		Graph& graph = builder.UnsafeMutableGraph();
 		auto w1 = MakePatternValues(kInput * kHidden, 0.005);
 		auto b1 = MakePatternValues(kHidden, 0.001);
 		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
@@ -328,7 +328,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return builder.TakeGraph();
+		return builder.UnsafeTakeGraph();
 	}
 
 	class ScopedEnvVar

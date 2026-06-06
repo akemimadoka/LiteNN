@@ -1538,8 +1538,8 @@ to keep the old architecture alive if they are left in place during vNext.
     create/build helpers through `ModelBuilder&`.
   - [x] Wired additional variable-owning layer helpers (`LayerNorm`, `RMSNorm`, `SwiGLUMLP`) through
     `ModelBuilder&` overloads.
-  - [x] Added `ModelGraph::TakeGraph()` / `ModelBuilder::TakeGraph()` so builder-based construction can still hand
-    existing graph-oriented passes a completed `Graph` at the internal construction/test boundary.
+  - [x] Added `ModelGraph::UnsafeTakeGraph()` / `ModelBuilder::UnsafeTakeGraph()` so builder-based construction can still
+    hand existing graph-oriented passes a completed `Graph` at the internal construction/test boundary.
   - [x] Deleted migrated raw `Graph&` layer helpers (`Linear`, `LayerNorm`, `RMSNorm`, `SwiGLUMLP`) and moved tests,
     examples, and benchmarks to `ModelBuilder&`; the public API guard prevents those helpers from returning.
   - [x] Started stateless `Build*` migration by moving the actively used `BuildReLU`, `BuildArange`, `BuildAddId`,
@@ -1695,7 +1695,7 @@ prototype-era architecture.
 
 Break candidates that can still materially improve vNext:
 
-- [ ] Make `Graph` a construction/internal object only and move the stable public model contract to `ModelGraph` /
+- [x] Make `Graph` a construction/internal object only and move the stable public model contract to `ModelGraph` /
   `ModelBuilder`.
   - Benefit: prevents frontends, importers, passes, and runtimes from depending on mutable node storage, `OutputInfo`,
     `TensorSpec`, and `Tensor<PolymorphicDevice>` internals.
@@ -1704,6 +1704,9 @@ Break candidates that can still materially improve vNext:
   - [x] Removed the newly introduced `LiteNN::Migration::BuildExecutable*FromGraph` bridge; raw `Graph` plan/module
     conversion now lives under `LiteNN::Detail` for internal construction and tests, while stable callers use
     `ModelGraph`, `ExecutablePlan`, or `ExecutableModule`.
+  - [x] Renamed `ModelGraph` / `ModelBuilder` raw graph escape hatches to `UnsafeMutableGraph`,
+    `UnsafeGraphView`, and `UnsafeTakeGraph`, added `ModelBuilder::BuildExecutablePlan()`, and guarded against
+    reintroducing unprefixed raw graph accessors.
 - [x] Replace public mutable `GraphMutationPass::Run(Graph&)` style pass APIs with typed transform objects everywhere.
   - Benefit: lets optimization, autograd, legalization, lowering, and validation share invalidation/debug metadata without
     relying on in-place mutation order.

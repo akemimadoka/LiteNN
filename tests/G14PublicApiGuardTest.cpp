@@ -412,3 +412,24 @@ TEST(G14PublicApiGuard, RawGraphMutationPassesAreInternalDetailScoped)
 		EXPECT_EQ(text.find("public Pass"), std::string::npos) << header;
 	}
 }
+
+TEST(G14PublicApiGuard, ModelGraphRawGraphAccessIsExplicitlyUnsafe)
+{
+	const auto executablePlan = ReadSourceFile("src/LiteNN/ExecutablePlan.h");
+	const auto modelBuilder = ReadSourceFile("src/LiteNN/ModelBuilder.h");
+
+	EXPECT_NE(executablePlan.find("Graph& UnsafeMutableGraph()"), std::string::npos);
+	EXPECT_NE(executablePlan.find("const Graph& UnsafeGraphView()"), std::string::npos);
+	EXPECT_NE(executablePlan.find("Graph UnsafeTakeGraph()"), std::string::npos);
+	EXPECT_NE(modelBuilder.find("Graph& UnsafeMutableGraph()"), std::string::npos);
+	EXPECT_NE(modelBuilder.find("const Graph& UnsafeGraphView()"), std::string::npos);
+	EXPECT_NE(modelBuilder.find("Graph UnsafeTakeGraph()"), std::string::npos);
+	EXPECT_NE(modelBuilder.find("ExecutablePlan BuildExecutablePlan("), std::string::npos);
+
+	EXPECT_EQ(executablePlan.find("Graph& MutableGraph()"), std::string::npos);
+	EXPECT_EQ(executablePlan.find("const Graph& GraphView()"), std::string::npos);
+	EXPECT_EQ(executablePlan.find("Graph TakeGraph()"), std::string::npos);
+	EXPECT_EQ(modelBuilder.find("Graph& MutableGraph()"), std::string::npos);
+	EXPECT_EQ(modelBuilder.find("const Graph& GraphView()"), std::string::npos);
+	EXPECT_EQ(modelBuilder.find("Graph TakeGraph()"), std::string::npos);
+}

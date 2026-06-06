@@ -25,44 +25,49 @@ namespace LiteNN
 			return model_;
 		}
 
-		Graph& MutableGraph() noexcept
+		Graph& UnsafeMutableGraph() noexcept
 		{
-			return model_.MutableGraph();
+			return model_.UnsafeMutableGraph();
 		}
 
-		const Graph& GraphView() const noexcept
+		const Graph& UnsafeGraphView() const noexcept
 		{
-			return model_.GraphView();
+			return model_.UnsafeGraphView();
 		}
 
-		Graph TakeGraph() noexcept
+		Graph UnsafeTakeGraph() noexcept
 		{
-			return model_.TakeGraph();
+			return model_.UnsafeTakeGraph();
+		}
+
+		ExecutablePlan BuildExecutablePlan(const OpSchemaRegistry& registry = DefaultOpSchemaRegistry()) const
+		{
+			return LiteNN::BuildExecutablePlan(model_, registry);
 		}
 
 		std::size_t AddVariable(std::shared_ptr<Variable> variable)
 		{
-			return MutableGraph().AddVariable(std::move(variable));
+			return UnsafeMutableGraph().AddVariable(std::move(variable));
 		}
 
 		void SetVariableName(std::size_t variableIndex, std::string name)
 		{
-			MutableGraph().SetVariableName(variableIndex, std::move(name));
+			UnsafeMutableGraph().SetVariableName(variableIndex, std::move(name));
 		}
 
 		SubgraphId AddSubgraph(Subgraph subgraph)
 		{
-			return MutableGraph().AddSubgraph(std::move(subgraph));
+			return UnsafeMutableGraph().AddSubgraph(std::move(subgraph));
 		}
 
 		void SetForward(SubgraphId subgraph)
 		{
-			MutableGraph().SetForward(subgraph);
+			UnsafeMutableGraph().SetForward(subgraph);
 		}
 
 		void SetBackward(SubgraphId subgraph)
 		{
-			MutableGraph().SetBackward(subgraph);
+			UnsafeMutableGraph().SetBackward(subgraph);
 		}
 
 	private:

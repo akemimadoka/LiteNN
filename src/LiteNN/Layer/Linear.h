@@ -68,12 +68,12 @@ namespace LiteNN::Layer
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight)
 	{
-		return Detail::CreateLinearImpl(builder.MutableGraph(), std::move(weight));
+		return Detail::CreateLinearImpl(builder.UnsafeMutableGraph(), std::move(weight));
 	}
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight, Tensor<CPU> bias)
 	{
-		return Detail::CreateLinearImpl(builder.MutableGraph(), std::move(weight), std::move(bias));
+		return Detail::CreateLinearImpl(builder.UnsafeMutableGraph(), std::move(weight), std::move(bias));
 	}
 
 	inline NodeOutput AddLinear(Subgraph& subgraph, const LinearLayer& layer, NodeOutput input)
@@ -118,7 +118,7 @@ namespace LiteNN::Layer
 
 	inline SubgraphId BuildLinear(ModelBuilder& builder, const LinearLayer& layer, std::size_t batchSize = 1)
 	{
-		return Detail::BuildLinearImpl(builder.MutableGraph(), layer, batchSize);
+		return Detail::BuildLinearImpl(builder.UnsafeMutableGraph(), layer, batchSize);
 	}
 } // namespace LiteNN::Layer
 

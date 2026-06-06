@@ -155,7 +155,7 @@ TEST(Interpreter, MatMulWithVariable)
 TEST(Interpreter, ReLU)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 
 	// 构建 ReLU 子图
 	const auto reluId = Layer::BuildReLU(builder, DataType::Float32, { 2, 3 });

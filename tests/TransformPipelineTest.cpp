@@ -67,7 +67,7 @@ TEST(TransformPipeline, RunsModelGraphPassesWithoutCallerOwnedGraphMutation)
 	ASSERT_EQ(result.steps[0].invalidates.size(), 2u);
 	ASSERT_EQ(dumps.size(), 1u);
 	EXPECT_EQ(dumps[0].passName, "RecordingPass");
-	EXPECT_NO_THROW(Validation::ValidateGraph(result.value.GraphView()));
+	EXPECT_NO_THROW(Validation::ValidateGraph(result.value.UnsafeGraphView()));
 }
 
 TEST(TransformPipeline, BuildsExecutablePlanAsTypedStage)

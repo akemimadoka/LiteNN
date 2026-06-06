@@ -267,7 +267,7 @@ namespace
 	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
 		ModelBuilder builder;
-		Graph& graph = builder.MutableGraph();
+		Graph& graph = builder.UnsafeMutableGraph();
 		const auto h1 = Layer::CreateLinear(
 		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 }, dtype),
@@ -283,7 +283,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "logits" });
-		return builder.TakeGraph();
+		return builder.UnsafeTakeGraph();
 	}
 
 	class ScopedEnvVar

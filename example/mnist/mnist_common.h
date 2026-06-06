@@ -221,7 +221,7 @@ namespace LiteNN::Examples::Mnist
 		}
 
 		ModelBuilder builder;
-		Graph& graph = builder.MutableGraph();
+		Graph& graph = builder.UnsafeMutableGraph();
 		const auto classifier = Layer::CreateLinear(builder, std::move(weightTensor), std::move(biasTensor));
 		if (classifier.weightVariable != kWeightVariableIndex || !classifier.biasVariable ||
 		    *classifier.biasVariable != kBiasVariableIndex)
@@ -238,7 +238,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return builder.TakeGraph();
+		return builder.UnsafeTakeGraph();
 	}
 
 	inline Graph BuildTrainableMnistGraph(std::uint32_t seed = 42)
@@ -255,7 +255,7 @@ namespace LiteNN::Examples::Mnist
 		std::mt19937 rng(seed);
 
 		ModelBuilder builder;
-		Graph& graph = builder.MutableGraph();
+		Graph& graph = builder.UnsafeMutableGraph();
 		const auto hidden = Layer::CreateLinear(
 		    builder, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
 		    Initializer::Zeros({ 1, hiddenSize }));
@@ -282,7 +282,7 @@ namespace LiteNN::Examples::Mnist
 		graph.SetForward(forwardId);
 		graph.SetInputNames({ "image" });
 		graph.SetOutputNames({ "logits" });
-		return builder.TakeGraph();
+		return builder.UnsafeTakeGraph();
 	}
 
 	inline Graph BuildInferenceGraphFromTrainedVariables(const Graph& trainedGraph)

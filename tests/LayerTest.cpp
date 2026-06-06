@@ -556,7 +556,7 @@ TEST(LayerRoll, NegativeShiftRotatesAxisZero)
 TEST(LayerArange, BuildsFloatSequence)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	graph.SetForward(Layer::BuildArange(builder, DataType::Float32, 5, 1.5, 0.5));
 
 	const auto outputs = RunWithInputs(graph, {});
@@ -768,7 +768,7 @@ TEST(LayerGroupNorm, PreservesBatchSeparationForRankFourInput)
 TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	graph.SetForward(
 	    Compatibility::GGML::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
 
@@ -806,7 +806,7 @@ TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 TEST(LayerMulMatId, SelectsPerExpertMatrices)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	graph.SetForward(Compatibility::GGML::BuildMulMatId(
 	    builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 }, DataType::Int32, { 2, 2 }));
 
@@ -850,7 +850,7 @@ TEST(LayerMulMatId, SelectsPerExpertMatrices)
 TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	graph.SetForward(Compatibility::GGML::BuildMulMatId(
 	    builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 }, DataType::Int32, { 2, 2 }));
 
@@ -886,7 +886,7 @@ TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 TEST(LayerArange, BuildsIntegerSequence)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	graph.SetForward(Layer::BuildArange(builder, DataType::Int32, 4, -2.0, 3.0));
 
 	const auto outputs = RunWithInputs(graph, {});
@@ -1141,7 +1141,7 @@ TEST(LayerLayerNorm, OutputMeanNearZero)
 {
 	// gamma=1, beta=0 → 输出均值应约为 0
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
@@ -1166,7 +1166,7 @@ TEST(LayerLayerNorm, OutputVarianceNearOne)
 {
 	// gamma=1, beta=0 → 输出方差应约为 1
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto norm = Layer::CreateLayerNorm(builder, 4);
 
 	Subgraph sg;
@@ -1232,7 +1232,7 @@ TEST(LayerLayerNorm, BetaShiftsOutput)
 TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto norm = Layer::CreateRMSNorm(builder, 4);
 
 	Subgraph sg;
@@ -1256,7 +1256,7 @@ TEST(LayerRMSNorm, OutputMeanSquareNearOne)
 TEST(LayerRMSNorm, ZeroInputStaysZero)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto norm = Layer::CreateRMSNorm(builder, 3);
 
 	Subgraph sg;
@@ -1374,7 +1374,7 @@ TEST(LayerSiLU, MatchesAnalyticValue)
 TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
 	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
@@ -1395,7 +1395,7 @@ TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 {
 	ModelBuilder builder;
-	Graph& graph = builder.MutableGraph();
+	Graph& graph = builder.UnsafeMutableGraph();
 	const auto layer = Layer::CreateSwiGLUMLP(
 	    builder,
 	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
