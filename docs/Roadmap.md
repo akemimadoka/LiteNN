@@ -1639,8 +1639,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
       optimizer updates through that explicit state binding.
     - [x] Added guard coverage so `Trainer.h` cannot regress to `Optimizer::*(*graph_)` mutation paths.
   - [ ] Bind trainable parameters, gradients, optimizer state, loss inputs, and update outputs through the train-step ABI.
-    - [x] Optimizer utility, SGD, and Adam update paths now accept `ParameterSet` directly; raw `Graph&` overloads are
-      compatibility wrappers at the migration boundary.
+    - [x] Optimizer utility, SGD, Adam, and AdamW update paths now accept `ParameterSet` directly; mutable raw `Graph&`
+      optimizer/gradient overloads have been removed from the vNext public contract.
     - [x] Train-step plans now expose explicit ABI bindings for mutable parameters, gradients, optimizer state inputs,
       loss inputs, updated parameters, updated optimizer states, and saved activations.
     - [ ] Execute optimizer state, loss inputs, and update outputs through compiled train-step artifact entries instead of

@@ -298,16 +298,17 @@ void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::
 	auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
 	auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
 	const auto inputGradientCount = Optimizer::InferInputGradientCount(graph);
+	auto parameters = Training::ParameterSet::BindGraph(graph);
 	Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = 1.0e-3f });
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		optimizer.Step(graph, backwardResults, inputGradientCount);
+		optimizer.Step(parameters, backwardResults, inputGradientCount);
 	}
 
 	for (auto _ : state)
 	{
-		optimizer.Step(graph, backwardResults, inputGradientCount);
+		optimizer.Step(parameters, backwardResults, inputGradientCount);
 		benchmark::ClobberMemory();
 	}
 	SetThroughputCounters(state, batch);

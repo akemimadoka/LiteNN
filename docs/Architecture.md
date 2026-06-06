@@ -357,11 +357,13 @@ struct Pass {
 
 优化器公共工具位于 `LiteNN::Optimizer`：
 
-- `ZeroGradients(Graph&)` 清空所有 Variable 的 `grad_`
-- `StoreVariableGradients(Graph&, backwardResults, inputGradientCount)` 将 Autograd 结果中的 variable gradients 写回 `Variable::Grad()`
+- `Training::ParameterSet::BindGraph(graph)` 显式绑定可训练参数和梯度状态
+- `ZeroGradients(ParameterSet&)` 清空所有已绑定参数的 `grad_`
+- `StoreVariableGradients(ParameterSet&, backwardResults, inputGradientCount)` 将 Autograd 结果中的 parameter gradients 写回 `Variable::Grad()`
 - `InferInputGradientCount(Graph&)` 根据 backward 参数数量和 forward 输出数量推导输入梯度数量
 
-当前 Trainer 仍是 CPU + interpreter training API；参数组、学习率调度、checkpoint 训练循环和 AOT train-step runner 留在后续工作。
+当前 Trainer 支持 interpreter 与 CPU AOT forward/backward runner；optimizer state/update 已开始通过显式
+`ParameterSet` / compiled train-step entry 迁移，完整 fused train-step artifact 仍在后续工作中。
 
 ---
 

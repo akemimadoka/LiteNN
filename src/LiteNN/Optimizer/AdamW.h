@@ -37,17 +37,6 @@ namespace LiteNN::Optimizer
 			return step_;
 		}
 
-		void Step(Graph& graph, std::span<const Tensor<CPU>> backwardResults)
-		{
-			Step(graph, backwardResults, Detail::InferInputGradientCount(graph));
-		}
-
-		void Step(Graph& graph, std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount)
-		{
-			auto parameters = Training::ParameterSet::BindGraph(graph);
-			Step(parameters, backwardResults, inputGradientCount);
-		}
-
 		void Step(Training::ParameterSet& parameters, std::span<const Tensor<CPU>> backwardResults,
 		          std::size_t inputGradientCount)
 		{

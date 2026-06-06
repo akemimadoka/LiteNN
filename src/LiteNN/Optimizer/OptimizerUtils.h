@@ -96,12 +96,6 @@ namespace LiteNN::Optimizer
 		}
 	}
 
-	inline void ZeroGradients(Graph& graph)
-	{
-		auto parameters = Training::ParameterSet::BindGraph(graph);
-		ZeroGradients(parameters);
-	}
-
 	inline void StoreVariableGradients(Training::ParameterSet& parameters, std::span<const Tensor<CPU>> backwardResults,
 	                                   std::size_t inputGradientCount)
 	{
@@ -117,17 +111,6 @@ namespace LiteNN::Optimizer
 		}
 	}
 
-	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults,
-	                                   std::size_t inputGradientCount)
-	{
-		auto parameters = Training::ParameterSet::BindGraph(graph);
-		StoreVariableGradients(parameters, backwardResults, inputGradientCount);
-	}
-
-	inline void StoreVariableGradients(Graph& graph, std::span<const Tensor<CPU>> backwardResults)
-	{
-		StoreVariableGradients(graph, backwardResults, InferInputGradientCount(graph));
-	}
 } // namespace LiteNN::Optimizer
 
 #endif
