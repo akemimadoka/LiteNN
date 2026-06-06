@@ -64,7 +64,7 @@ namespace
 	CompiledModule<CPU> CompileAndLoadFromArtifact(const Graph& graph, const AotOptions& options)
 	{
 		std::cout << "Compiling graph with LiteNN AOT\n";
-		auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(graph), CompilerOptions::Defaults());
+		auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), CompilerOptions::Defaults());
 
 		if (options.writeObject)
 		{

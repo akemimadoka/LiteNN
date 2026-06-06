@@ -542,7 +542,7 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		CompiledModuleArtifact artifact;
 		{
 			auto begin = Clock::now();
-			artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph), LiteNNBenchCompilerOptionsFromEnvironment());
+			artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), LiteNNBenchCompilerOptionsFromEnvironment());
 			auto end = Clock::now();
 			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
 		}
@@ -649,7 +649,7 @@ int main(int argc, char** argv)
 
 		// Time compile
 		auto cs = Clock::now();
-		auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(g), LiteNNBenchCompilerOptionsFromEnvironment());
+		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(g), LiteNNBenchCompilerOptionsFromEnvironment());
 		auto ce = Clock::now();
 		const double compileMs = clk::duration<double, std::milli>(ce - cs).count();
 

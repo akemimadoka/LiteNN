@@ -31,7 +31,7 @@ namespace
 TEST(ExecutablePlanTest, BuildsPlanFromGraphSnapshot)
 {
 	const auto graph = BuildSmallGraph();
-	const auto plan = BuildExecutablePlan(graph);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 
 	ASSERT_EQ(plan.subgraphs.size(), 1);
 	EXPECT_EQ(plan.forward, graph.Forward());
@@ -88,7 +88,7 @@ TEST(ExecutablePlanTest, PreservesQuantizedVariableStorageMetadata)
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 	graph.SetOutputNames({ "weight" });
 
-	const auto plan = BuildExecutablePlan(graph);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 	ASSERT_EQ(plan.variables.size(), 1);
 	ASSERT_TRUE(plan.variables[0].quantization.has_value());
 	EXPECT_EQ(plan.variables[0].quantization->storageType, DataType::Int8);
@@ -99,7 +99,7 @@ TEST(ExecutablePlanTest, PreservesQuantizedVariableStorageMetadata)
 
 TEST(ExecutablePlanTest, BuildsExecutableModuleWithFunctionsRegionsAndPartitions)
 {
-	const auto module = BuildExecutableModule(BuildSmallGraph());
+	const auto module = Detail::BuildExecutableModuleFromGraph(BuildSmallGraph());
 
 	ASSERT_EQ(module.functions.size(), 1);
 	EXPECT_EQ(module.functions[0].name, "forward");
@@ -120,7 +120,7 @@ TEST(ExecutablePlanTest, BuildsExecutableModuleWithFunctionsRegionsAndPartitions
 
 TEST(ExecutablePlanTest, ValidationRejectsSchemaAndReferenceErrors)
 {
-	auto plan = BuildExecutablePlan(BuildSmallGraph());
+	auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
 	auto badKind = plan;
 	badKind.subgraphs[0].nodes[2].op.kind = "MissingNode";
 	EXPECT_THROW(ValidateExecutablePlan(badKind), std::runtime_error);
@@ -144,7 +144,7 @@ TEST(ExecutablePlanTest, ValidationRejectsSchemaAndReferenceErrors)
 
 TEST(ExecutablePlanTest, ReportsBackendUnsupportedOpsBeforeLowering)
 {
-	const auto plan = BuildExecutablePlan(BuildSmallGraph());
+	const auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
 
 	EXPECT_NO_THROW(RequireExecutablePlanBackendSupport(plan, BackendCPUInterpreter));
 

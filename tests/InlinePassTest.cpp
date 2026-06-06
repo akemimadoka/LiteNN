@@ -68,7 +68,7 @@ TEST(InlinePass, BasicInline)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	// 运行 InlinePass
 	InlinePass inlinePass;
@@ -80,7 +80,7 @@ TEST(InlinePass, BasicInline)
 
 	// 验证数值正确
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -118,7 +118,7 @@ TEST(InlinePass, MultiParamInline)
 	std::array<Tensor<CPU>, 2> inputs = { Tensor<CPU>(tensorX1), Tensor<CPU>(tensorX2) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -126,7 +126,7 @@ TEST(InlinePass, MultiParamInline)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 2> inputs2 = { std::move(tensorX1), std::move(tensorX2) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(actual[0], 0), 13);
@@ -168,7 +168,7 @@ TEST(InlinePass, NestedCallNode)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -177,7 +177,7 @@ TEST(InlinePass, NestedCallNode)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	// Negate(Negate(x)) = x
@@ -217,7 +217,7 @@ TEST(InlinePass, MultiOutputCallee)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -225,7 +225,7 @@ TEST(InlinePass, MultiOutputCallee)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	// For x=-3: Negate(-3)=3, Abs(-3)=3, sum=6
@@ -275,7 +275,7 @@ TEST(InlinePass, CondNodeBranchesNotInlined)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorCond), std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	// cond=true → Negate: Negate(-3)=3, Negate(5)=-5
@@ -368,7 +368,7 @@ TEST(InlinePass, VariableRefAndConstant)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -376,7 +376,7 @@ TEST(InlinePass, VariableRefAndConstant)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	// x * W + C = [5*2+10, 7*3+20] = [20, 41]
@@ -433,10 +433,10 @@ TEST(InlinePass, AfterAutogradPass)
 
 	Runtime::Interpreter<CPU> interpRef;
 	std::array<Tensor<CPU>, 1> refInputs = { Tensor<CPU>(tensorX) };
-	auto expectedFwd = interpRef.RunForward(BuildExecutablePlan(refGraph), refInputs);
+	auto expectedFwd = interpRef.RunForward(Detail::BuildExecutablePlanFromGraph(refGraph), refInputs);
 
 	std::array<Tensor<CPU>, 2> refBwdInputs = { Tensor<CPU>(tensorX), Tensor<CPU>(gradOut) };
-	auto expectedBwd = interpRef.RunBackward(BuildExecutablePlan(refGraph), refBwdInputs);
+	auto expectedBwd = interpRef.RunBackward(Detail::BuildExecutablePlanFromGraph(refGraph), refBwdInputs);
 
 	// 测试图：autograd → inline
 	autograd.Run(graph);
@@ -445,7 +445,7 @@ TEST(InlinePass, AfterAutogradPass)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	auto actualFwd = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto actualFwd = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	ASSERT_EQ(actualFwd.size(), expectedFwd.size());
 	for (std::size_t i = 0; i < actualFwd[0].NumElements(); ++i)
@@ -454,7 +454,7 @@ TEST(InlinePass, AfterAutogradPass)
 	}
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto actualBwd = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto actualBwd = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(actualBwd.size(), expectedBwd.size());
 	for (std::size_t i = 0; i < actualBwd.size(); ++i)
@@ -491,7 +491,7 @@ TEST(InlinePass, PassthroughCallee)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -499,7 +499,7 @@ TEST(InlinePass, PassthroughCallee)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(actual[0], 0), -10);
@@ -526,7 +526,7 @@ TEST(InlinePass, ReLULayerInline)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -535,7 +535,7 @@ TEST(InlinePass, ReLULayerInline)
 	EXPECT_FALSE(HasCallNode(graph.GetSubgraph(graph.Forward())));
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 6; ++i)

@@ -77,7 +77,7 @@ namespace LiteNN::Training
 			                                           options.weightDecay, options.nesterov);
 			sg.SetResults(outputs);
 			graph.SetForward(graph.AddSubgraph(std::move(sg)));
-			ValidateExecutablePlan(BuildExecutablePlan(graph));
+			ValidateExecutablePlan(Detail::BuildExecutablePlanFromGraph(graph));
 			return graph;
 		}
 
@@ -105,7 +105,7 @@ namespace LiteNN::Training
 			                            options.beta2, options.epsilon, options.weightDecay, step);
 			sg.SetResults(outputs);
 			graph.SetForward(graph.AddSubgraph(std::move(sg)));
-			ValidateExecutablePlan(BuildExecutablePlan(graph));
+			ValidateExecutablePlan(Detail::BuildExecutablePlanFromGraph(graph));
 			return graph;
 		}
 	} // namespace
@@ -143,7 +143,7 @@ namespace LiteNN::Training
 #ifndef LITENN_ENABLE_MLIR
 		throw std::runtime_error("Trainer AOT SGD update runner requires LiteNNCompiler/MLIR support");
 #else
-		auto module = Compiler<CPU>::Compile(BuildExecutablePlan(BuildSGDUpdateGraph(parameterType, options)));
+		auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(BuildSGDUpdateGraph(parameterType, options)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
 			return module.Run(inputs);
 		};
@@ -158,7 +158,7 @@ namespace LiteNN::Training
 #ifndef LITENN_ENABLE_MLIR
 		throw std::runtime_error("Trainer AOT AdamW update runner requires LiteNNCompiler/MLIR support");
 #else
-		auto module = Compiler<CPU>::Compile(BuildExecutablePlan(BuildAdamWUpdateGraph(parameterType, options, step)));
+		auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(BuildAdamWUpdateGraph(parameterType, options, step)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
 			return module.Run(inputs);
 		};

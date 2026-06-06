@@ -293,7 +293,7 @@ namespace LiteNN::Examples::Mnist
 	inline void SaveMnistModelPackage(const Graph& trainedGraph, const std::filesystem::path& path)
 	{
 		const auto inferGraph = ExtractForwardOnlyGraph(trainedGraph);
-		Serialization::SaveVNextModelPackage(BuildExecutableModule(inferGraph), path);
+		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(inferGraph), path);
 		std::cout << std::format("vNext model package saved to {}\n", path.string());
 	}
 

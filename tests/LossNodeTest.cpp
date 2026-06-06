@@ -105,7 +105,7 @@ TEST(LossNode, CrossEntropyLossMatchesGGMLStyleSoftLabels)
 	std::vector<Tensor<CPU>> inputs;
 	inputs.push_back(MakeFloatTensor(logits, { 2, 3 }));
 	inputs.push_back(MakeFloatTensor(labels, { 2, 3 }));
-	const auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(outputs.size(), 1u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), std::vector<std::size_t>({ 1 }));
@@ -130,7 +130,7 @@ TEST(LossNode, CrossEntropyBackwardMatchesSoftmaxMinusLabels)
 	inputs.push_back(MakeFloatTensor({ 2.0 }, { 1 }));
 	inputs.push_back(MakeFloatTensor(logitsData, { 2, 3 }));
 	inputs.push_back(MakeFloatTensor(labelsData, { 2, 3 }));
-	const auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	const std::vector<float> expected = {
 	    0.0900306f, 0.244728f, -0.334759f,
@@ -154,12 +154,12 @@ TEST(LossNode, AutogradUsesCrossEntropyBackwardForLogits)
 	std::vector<Tensor<CPU>> forwardInputs;
 	forwardInputs.push_back(MakeFloatTensor(logits, { 2, 3 }));
 	forwardInputs.push_back(MakeFloatTensor(labels, { 2, 3 }));
-	static_cast<void>(interpreter.RunForward(BuildExecutablePlan(graph), forwardInputs));
+	static_cast<void>(interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), forwardInputs));
 	std::vector<Tensor<CPU>> backwardInputs;
 	backwardInputs.push_back(MakeFloatTensor(logits, { 2, 3 }));
 	backwardInputs.push_back(MakeFloatTensor(labels, { 2, 3 }));
 	backwardInputs.push_back(MakeFloatTensor({ 1.0 }, { 1 }));
-	const auto gradients = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
+	const auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
 
 	ASSERT_GE(gradients.size(), 2u);
 	EXPECT_NEAR(ReadFloat(gradients[0], 2), -0.167379f, 1e-5f);
@@ -173,8 +173,8 @@ TEST(LossNode, ConstFoldSerializationAndDumpKeepLossNodes)
 {
 	auto graph = BuildLossGraph();
 	const auto path = MakeTempPath("litenn_loss_node");
-	Serialization::Migration::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Migration::LoadGraphArchive(path);
+	Serialization::Detail::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Detail::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	const auto dump = Debug::DumpGraph(loaded);
@@ -192,7 +192,7 @@ TEST(LossNode, ConstFoldSerializationAndDumpKeepLossNodes)
 	ConstFoldPass{}.Run(constGraph);
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(BuildExecutablePlan(constGraph), {});
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(constGraph), {});
 	const std::vector<double> constLogits = { 1.0, 2.0, 3.0 };
 	const std::vector<double> constLabels = { 0.0, 0.0, 1.0 };
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), ExpectedCrossEntropy(constLogits, constLabels, 3), 1e-6);

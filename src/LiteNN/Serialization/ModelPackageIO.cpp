@@ -1225,7 +1225,7 @@ namespace LiteNN::Serialization
 		}
 
 		Validation::ValidateGraph(graph);
-		auto module = BuildExecutableModule(graph);
+		auto module = ::LiteNN::Detail::BuildExecutableModuleFromGraph(graph);
 		std::ofstream weights(externalWeightsPath, std::ios::binary);
 		if (!weights)
 		{

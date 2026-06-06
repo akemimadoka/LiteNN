@@ -369,11 +369,11 @@ struct Pass {
 
 ## Model Serialization
 
-`LiteNN::Serialization::Migration::SaveGraphArchive/LoadGraphArchive` 提供 Graph + Variable 权重的旧图归档二进制保存/加载能力。vNext 中 `SaveModel/LoadModel` 名称已从 raw Graph archive 上移除，后续保留给 manifest + executable-plan model format。
+`LiteNN::Serialization::Detail::SaveGraphArchive/LoadGraphArchive` 保留 Graph + Variable 权重的内部图归档二进制保存/加载能力，仅用于回归测试、开发诊断和显式转换工具。vNext 中稳定模型保存/加载入口是 manifest + executable-plan package；`SaveModel/LoadModel` 名称不再指向 raw Graph archive。
 
 - 文件包含 magic、format version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、所有 Subgraph 和节点 payload
 - Variable 只保存 `Data()`，加载时由 `Variable::Create` 重新初始化 `Grad()` 为同 shape/dtype/device 的零张量
-- 当前格式为内部 binary format，适合 checkpoint 与本库内推理模型导出；跨版本迁移策略仍需后续完善
+- 当前格式为内部 binary format，不承诺跨版本兼容；生产导出应使用 vNext package / compiled artifact
 - 加载后会调用 `ValidateGraph`，保证损坏或不兼容模型尽早失败
 
 ---
@@ -438,7 +438,7 @@ src/
     │   └── CUDA.cpp              // CUDA Runtime 分配/拷贝、cuBLAS MatMul、Driver module shell 与 CPU fallback op 实现
     ├── Tensor.h                  // Tensor<D> 模板，所有张量操作
     ├── Graph.h                   // Graph, Subgraph, NodeVariant 等核心类型
-    ├── Pass.h                    // Pass 基类
+├── Pass.h                    // typed transform pipeline + internal graph mutation adapter
     ├── Initializer/
     │   └── Initializer.h         // Xavier/He/Normal/Uniform/Zero 初始化工具
     ├── Layer/
@@ -465,7 +465,7 @@ src/
     ├── Validation/
     │   └── GraphValidator.h     // Graph 静态校验与诊断
     ├── Serialization/
-    │   └── ModelIO.h            // Graph + Variable 权重保存/加载
+    │   └── ModelIO.h            // internal graph archive helpers + vNext package support
     ├── Training/
     │   └── Trainer.h            // Trainer<CPU, OptimizerT> 训练 API
     └── Runtime/
@@ -535,7 +535,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 
 ### P1：用户可用性
 
-- [x] **模型保存/加载**：新增 `LiteNN::Serialization::Migration::SaveGraphArchive/LoadGraphArchive`，序列化 magic/version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、Subgraph、NodeVariant payload，并在加载后运行 `ValidateGraph`。当前已支持本库内部 checkpoint/推理模型 roundtrip；跨版本迁移策略仍需继续完善。
+- [x] **模型保存/加载**：raw Graph archive 已降级为 `LiteNN::Serialization::Detail::SaveGraphArchive/LoadGraphArchive` 内部开发/测试工具，不承诺跨版本兼容；生产模型保存/加载走 vNext package / compiled artifact，并在加载后运行 manifest、plan 和 buffer binding 校验。
 - [x] **输入输出命名与签名 API**：`Graph` 支持 `SetInputNames`/`SetOutputNames`、`InputSignature`/`OutputSignature`、`FindInput`/`FindOutput`；`CompiledModule<CPU>` rodata 保存命名 specs，并通过 `InputSpecs`/`OutputSpecs`/`FindInput`/`FindOutput` 查询。当前绑定执行仍按位置传参，命名 binding helper 可后续补。
 - [x] **训练 API**：新增 `LiteNN::Training::Trainer<CPU, OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
 - [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `Trainer<CPU, OptimizerT>::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。

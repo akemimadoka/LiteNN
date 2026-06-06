@@ -65,7 +65,7 @@ TEST(WhileNode, Forward_Basic)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 128.0f);
@@ -114,7 +114,7 @@ TEST(WhileNode, Forward_MultiCarry)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 2);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 55.0f);
@@ -160,7 +160,7 @@ TEST(WhileNode, Forward_ZeroIteration)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 42.0f); // 未修改
@@ -218,10 +218,10 @@ TEST(WhileNode, Autograd_Simple)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// d_x = 2^7 = 128（7 次迭代，每次梯度乘以 2）
 	ASSERT_EQ(bwdResults.size(), 1);
@@ -270,10 +270,10 @@ TEST(WhileNode, Autograd_ZeroIteration)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// 零迭代 → 恒等映射，梯度 = 1
 	ASSERT_EQ(bwdResults.size(), 1);
@@ -323,11 +323,11 @@ TEST(WhileNode, Autograd_Addition)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto fwdResults = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 	EXPECT_FLOAT_EQ(ReadFloat(fwdResults[0], 0), 105.0f);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// 加法的梯度传播：d_x = 1（加法不改变梯度）
 	ASSERT_EQ(bwdResults.size(), 1);

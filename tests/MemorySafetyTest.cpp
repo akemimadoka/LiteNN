@@ -146,7 +146,7 @@ TEST(MemorySafetyTest, CompiledModuleLoadCopiesImageAcrossLifetimeCycles)
 	// still validates LiteNN's image copy/lifetime behavior, but that specific
 	// LSan report should not be interpreted as evidence that LiteNN retained the
 	// copied rodata or instruction buffers.
-	auto compiled = Compiler<CPU>::Compile(BuildExecutablePlan(BuildSimpleAddGraph()));
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()));
 
 	for (int iteration = 0; iteration < kCompiledModuleStressIterations; ++iteration)
 	{

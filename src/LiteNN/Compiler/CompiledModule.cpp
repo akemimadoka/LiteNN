@@ -5705,7 +5705,7 @@ namespace
 
 	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
 	{
-		auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx);
+		auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
 		if (!module)
 		{
 			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
@@ -5920,7 +5920,7 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, 
 
 CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const CompilerOptions& options)
 {
-	return EstimateCompileBudget(BuildExecutablePlan(graph), options);
+	return EstimateCompileBudget(Detail::BuildExecutablePlanFromGraph(graph), options);
 }
 
 CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,

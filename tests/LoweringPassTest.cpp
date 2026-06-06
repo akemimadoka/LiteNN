@@ -47,7 +47,7 @@ protected:
     // Translate graph, run the lowering pass, return the module.
     mlir::OwningOpRef<mlir::ModuleOp> translateAndLower(const Graph& graph)
     {
-        auto module = litenn::translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx_);
+        auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx_);
         if (!module)
             return {};
 

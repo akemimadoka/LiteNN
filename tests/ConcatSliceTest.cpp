@@ -38,7 +38,7 @@ TEST(ConcatSlice, ConcatForward_Axis0)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 12);
@@ -67,7 +67,7 @@ TEST(ConcatSlice, ConcatForward_Axis1)
 	std::array<Tensor<CPU>, 2> inputs = { std::move(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 10);
@@ -100,7 +100,7 @@ TEST(ConcatSlice, ConcatForward_ThreeInputs)
 	std::array<Tensor<CPU>, 3> inputs = { std::move(tensorA), std::move(tensorB), std::move(tensorC) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	for (std::size_t i = 0; i < 6; ++i)
@@ -125,7 +125,7 @@ TEST(ConcatSlice, SliceForward_Basic)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 6);
@@ -153,7 +153,7 @@ TEST(ConcatSlice, SliceForward_Axis1)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 6);
@@ -187,7 +187,7 @@ TEST(ConcatSlice, ConcatSlice_RoundTrip)
 	std::array<Tensor<CPU>, 2> inputs = { Tensor<CPU>(tensorA), std::move(tensorB) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 6);
@@ -223,10 +223,10 @@ TEST(ConcatSlice, ConcatGrad)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 2> fwdInputs = { Tensor<CPU>(tensorA), Tensor<CPU>(tensorB) };
-	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto fwdResults = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 3> bwdInputs = { std::move(tensorA), std::move(tensorB), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// grad_a = dy[0:2, :] = [[10,20],[30,40]]
 	ASSERT_EQ(bwdResults.size(), 2);
@@ -262,10 +262,10 @@ TEST(ConcatSlice, SliceGrad)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	auto fwdResults = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto fwdResults = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// grad_x = Concat([zeros[1,2], dy, zeros[1,2]], axis=0) → [4,2]
 	// = [[0,0], [10,20], [30,40], [0,0]]
@@ -303,11 +303,11 @@ TEST(ConcatSlice, ConcatGrad_ThreeInputs)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 3> fwdInputs = { Tensor<CPU>(tensorA), Tensor<CPU>(tensorB), Tensor<CPU>(tensorC) };
-	interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 4> bwdInputs = { std::move(tensorA), std::move(tensorB), std::move(tensorC),
 		                                      std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(bwdResults.size(), 3);
 	// grad_a = dy[0:1] = [1,2,3]
@@ -345,10 +345,10 @@ TEST(ConcatSlice, SliceGrad_EdgeCase_Start0)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// grad_x = Concat([dy, zeros[1,2]], axis=0) → [[10,20],[30,40],[0,0]]
 	ASSERT_EQ(bwdResults.size(), 1);
@@ -380,10 +380,10 @@ TEST(ConcatSlice, SliceGrad_EdgeCase_End)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto bwdResults = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	// grad_x = Concat([zeros[1,2], dy], axis=0) → [[0,0],[10,20],[30,40]]
 	ASSERT_EQ(bwdResults.size(), 1);
@@ -426,7 +426,7 @@ TEST(ConcatSlice, ConstFold_Concat)
 	// 验证数值
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	ASSERT_EQ(results.size(), 1);
 	for (std::size_t i = 0; i < 6; ++i)
 	{
@@ -456,7 +456,7 @@ TEST(ConcatSlice, ConstFold_Slice)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	ASSERT_EQ(results.size(), 1);
 	ASSERT_EQ(results[0].NumElements(), 3);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 4);
@@ -492,7 +492,7 @@ TEST(ConcatSlice, InlinePass_ConcatInCallee)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 2> inputs = { Tensor<CPU>(tensorX1), Tensor<CPU>(tensorX2) };
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	InlinePass inlinePass;
 	inlinePass.Run(graph);
@@ -510,7 +510,7 @@ TEST(ConcatSlice, InlinePass_ConcatInCallee)
 	EXPECT_FALSE(hasCall);
 
 	std::array<Tensor<CPU>, 2> inputs2 = { std::move(tensorX1), std::move(tensorX2) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 4; ++i)
@@ -561,14 +561,14 @@ TEST(ConcatSlice, FullPipeline)
 
 	Runtime::Interpreter<CPU> interpRef;
 	std::array<Tensor<CPU>, 1> refFwd = { Tensor<CPU>(tensorX) };
-	auto expectedFwd = interpRef.RunForward(BuildExecutablePlan(refGraph), refFwd);
+	auto expectedFwd = interpRef.RunForward(Detail::BuildExecutablePlanFromGraph(refGraph), refFwd);
 
 	std::array<Tensor<CPU>, 2> refBwd = { Tensor<CPU>(tensorX), Tensor<CPU>(gradOut) };
-	auto expectedBwd = interpRef.RunBackward(BuildExecutablePlan(refGraph), refBwd);
+	auto expectedBwd = interpRef.RunBackward(Detail::BuildExecutablePlanFromGraph(refGraph), refBwd);
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 1> fwdInputs = { Tensor<CPU>(tensorX) };
-	auto actualFwd = interp.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto actualFwd = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	ASSERT_EQ(actualFwd.size(), expectedFwd.size());
 	for (std::size_t i = 0; i < actualFwd[0].NumElements(); ++i)
@@ -577,7 +577,7 @@ TEST(ConcatSlice, FullPipeline)
 	}
 
 	std::array<Tensor<CPU>, 2> bwdInputs = { std::move(tensorX), std::move(gradOut) };
-	auto actualBwd = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto actualBwd = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(actualBwd.size(), expectedBwd.size());
 	for (std::size_t i = 0; i < actualBwd.size(); ++i)

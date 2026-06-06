@@ -41,14 +41,14 @@ TEST(AutogradRegression, BroadcastAddReducesParamGradientToOriginalShape)
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
 	fwdInputs.emplace_back(Tensor<CPU>({ 10, 20, 30 }, { 1, 3 }));
-	(void)interpreter.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	(void)interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
 	bwdInputs.emplace_back(Tensor<CPU>({ 10, 20, 30 }, { 1, 3 }));
 	bwdInputs.emplace_back(Tensor<CPU>({ 1, 1, 1, 1, 1, 1 }, { 2, 3 }));
 
-	auto gradients = interpreter.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(gradients.size(), 2);
 	EXPECT_EQ(ShapeOf(gradients[0]), (std::vector<std::size_t>{ 2, 3 }));
@@ -95,13 +95,13 @@ TEST(AutogradRegression, VariableGradientsAreReturnedAfterInputGradientsInVariab
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
-	(void)interpreter.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	(void)interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
 	bwdInputs.emplace_back(Tensor<CPU>({ 1 }, { 1 }));
 
-	auto gradients = interpreter.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(gradients.size(), 3);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 0), 19.0f);
@@ -131,7 +131,7 @@ TEST(AutogradRegression, MultipleOutputGradientsAccumulateIntoSharedInput)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 4 }, { 1 }));
-	auto forward = interpreter.RunForward(BuildExecutablePlan(graph), fwdInputs);
+	auto forward = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	ASSERT_EQ(forward.size(), 2);
 	EXPECT_FLOAT_EQ(ReadFloat(forward[0], 0), 16.0f);
@@ -142,7 +142,7 @@ TEST(AutogradRegression, MultipleOutputGradientsAccumulateIntoSharedInput)
 	bwdInputs.emplace_back(Tensor<CPU>({ 2 }, { 1 }));
 	bwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
 
-	auto gradients = interpreter.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(gradients.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[0], 0), 19.0f);

@@ -40,19 +40,23 @@ namespace
 TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloads)
 {
 	const std::vector<ForbiddenPattern> forbidden{
-		{ "src/LiteNN/Runtime/Scheduler.h", "BuildRuntimeSchedule(const Graph&", "BuildExecutableModule(graph)" },
-		{ "src/LiteNN/Runtime/Placement.h", "BuildPlacementPlan(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Training/TrainStepPlan.h", "BuildTrainStepPlan(const Graph&", "BuildExecutableModule(graph)" },
-		{ "src/LiteNN/Compiler/CompiledModule.h", "CompileArtifact(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Compiler/Dump.h", "DumpMLIR(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR", "BuildExecutablePlan(graph)" },
+		{ "src/LiteNN/ExecutablePlan.h", "BuildExecutablePlan(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph" },
+		{ "src/LiteNN/ExecutablePlan.h", "BuildExecutableModule(const Graph&",
+		  "Detail::BuildExecutableModuleFromGraph" },
+		{ "src/LiteNN/Runtime/Scheduler.h", "BuildRuntimeSchedule(const Graph&", "Detail::BuildExecutableModuleFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Placement.h", "BuildPlacementPlan(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Training/TrainStepPlan.h", "BuildTrainStepPlan(const Graph&", "Detail::BuildExecutableModuleFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/CompiledModule.h", "CompileArtifact(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/Dump.h", "DumpMLIR(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR", "Detail::BuildExecutablePlanFromGraph(graph)" },
 		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.cpp", "BuildMLIRGraphFromPlan",
 		  "direct ExecutablePlan lowering" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunSubgraph(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunForward(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunForwardWithTrace(const Graph&", "BuildExecutablePlan(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunBackward(const Graph&", "BuildExecutablePlan(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunSubgraph(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunForward(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunForwardWithTrace(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunBackward(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
 		{ "src/LiteNN/Serialization/ModelIO.h", "SaveModel(const Graph&", "SaveGraphArchive(graph)" },
 		{ "src/LiteNN/Serialization/ModelIO.h", "SaveModelExternalWeights(const Graph&",
 		  "SaveGraphArchiveExternalWeights(graph)" },
@@ -67,7 +71,7 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		{ "src/LiteNN/Serialization/ModelPackageIO.cpp", "entryFunction",
 		  "named artifact entries in the vNext package artifact ABI" },
 		{ "src/LiteNN/VNextPackage.h", "BuildVNextPackageManifest(\n\t    const Graph&",
-		  "BuildExecutableModule(BuildExecutablePlan(graph)) at the migration boundary" },
+		  "Detail::BuildExecutableModuleFromGraph(graph) inside internal construction/test adapters" },
 		{ "src/LiteNN/Training/Trainer.h", "#include <LiteNN/Compiler/CompiledModule.h>",
 		  "TrainStepAOTRunner in LiteNNTrainingAOT" },
 		{ "src/LiteNN/Training/Trainer.h", "Trainer AOT execution policy is not wired yet",
@@ -119,7 +123,7 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		const auto text = ReadSourceFile(entry.file);
 		EXPECT_EQ(text.find(entry.pattern), std::string::npos)
 		    << entry.file << " must stay plan/module-native; callers should pass " << entry.replacement
-		    << " explicitly at the migration boundary";
+		    << " explicitly at the internal construction/test boundary";
 	}
 }
 
@@ -160,13 +164,16 @@ TEST(G14PublicApiGuard, PublicLayerBuildHelpersDoNotAcceptRawGraph)
 	                                  }();
 }
 
-TEST(G14PublicApiGuard, GraphArchiveApisStayMigrationScoped)
+TEST(G14PublicApiGuard, GraphArchiveApisStayInternalDetailScoped)
 {
 	const auto text = ReadSourceFile("src/LiteNN/Serialization/ModelIO.h");
-	const auto migrationBegin = text.find("namespace Migration");
-	const auto migrationEnd = text.find("} // namespace Migration");
-	ASSERT_NE(migrationBegin, std::string::npos);
-	ASSERT_NE(migrationEnd, std::string::npos);
+	EXPECT_EQ(text.find("namespace Migration"), std::string::npos);
+	EXPECT_EQ(text.find("} // namespace Migration"), std::string::npos);
+
+	const auto graphArchiveBegin = text.find("inline void SaveGraphArchive(");
+	const auto graphArchiveEnd = text.find("} // namespace Detail", graphArchiveBegin);
+	ASSERT_NE(graphArchiveBegin, std::string::npos);
+	ASSERT_NE(graphArchiveEnd, std::string::npos);
 
 	for (const auto* pattern : {
 	         "inline void SaveGraphArchive(",
@@ -176,12 +183,12 @@ TEST(G14PublicApiGuard, GraphArchiveApisStayMigrationScoped)
 	{
 		const auto position = text.find(pattern);
 		ASSERT_NE(position, std::string::npos) << pattern;
-		EXPECT_GT(position, migrationBegin) << pattern;
-		EXPECT_LT(position, migrationEnd) << pattern;
+		EXPECT_GE(position, graphArchiveBegin) << pattern;
+		EXPECT_LT(position, graphArchiveEnd) << pattern;
 	}
 }
 
-TEST(G14PublicApiGuard, ProductionExamplesDoNotUseGraphArchiveMigrationApis)
+TEST(G14PublicApiGuard, ProductionExamplesDoNotUseGraphArchiveDetailApis)
 {
 	const std::vector<std::string_view> files{
 		"example/mnist/mnist_common.h",
@@ -192,8 +199,8 @@ TEST(G14PublicApiGuard, ProductionExamplesDoNotUseGraphArchiveMigrationApis)
 	for (const auto file : files)
 	{
 		const auto text = ReadSourceFile(file);
-		EXPECT_EQ(text.find("Serialization::Migration::SaveGraphArchive"), std::string::npos) << file;
-		EXPECT_EQ(text.find("Serialization::Migration::LoadGraphArchive"), std::string::npos) << file;
+		EXPECT_EQ(text.find("Serialization::Detail::SaveGraphArchive"), std::string::npos) << file;
+		EXPECT_EQ(text.find("Serialization::Detail::LoadGraphArchive"), std::string::npos) << file;
 	}
 }
 
@@ -348,13 +355,13 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_NE(torchToolCmake.find("COMPONENT LiteNNTools"), std::string::npos);
 }
 
-TEST(G14PublicApiGuard, RawGraphMutationPassesAreMigrationScoped)
+TEST(G14PublicApiGuard, RawGraphMutationPassesAreInternalDetailScoped)
 {
 	const auto passHeader = ReadSourceFile("src/LiteNN/Pass.h");
 	EXPECT_EQ(passHeader.find("\n\tstruct Pass"), std::string::npos);
-	EXPECT_NE(passHeader.find("namespace Migration"), std::string::npos);
+	EXPECT_EQ(passHeader.find("namespace Migration"), std::string::npos);
 	EXPECT_NE(passHeader.find("struct GraphMutationPass"), std::string::npos);
-	EXPECT_NE(passHeader.find("std::span<Migration::GraphMutationPass* const>"), std::string::npos);
+	EXPECT_NE(passHeader.find("std::span<Detail::GraphMutationPass* const>"), std::string::npos);
 
 	const std::vector<std::string_view> graphMutationPassHeaders{
 		"src/LiteNN/Pass/AutogradPass.h",   "src/LiteNN/Pass/ConstFoldPass.h",
@@ -364,7 +371,7 @@ TEST(G14PublicApiGuard, RawGraphMutationPassesAreMigrationScoped)
 	for (const auto header : graphMutationPassHeaders)
 	{
 		const auto text = ReadSourceFile(header);
-		EXPECT_NE(text.find("Migration::GraphMutationPass"), std::string::npos) << header;
+		EXPECT_NE(text.find("Detail::GraphMutationPass"), std::string::npos) << header;
 		EXPECT_EQ(text.find("public Pass"), std::string::npos) << header;
 	}
 }

@@ -93,7 +93,7 @@ TEST(ConstFoldPass, FullConstantFold)
 	// 验证数值
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 5.0f);
@@ -126,7 +126,7 @@ TEST(ConstFoldPass, PartialConstantFold)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ConstFoldPass constFold;
 	constFold.Run(graph);
@@ -136,7 +136,7 @@ TEST(ConstFoldPass, PartialConstantFold)
 	EXPECT_EQ(CountOpNodes(foldedSg), 1); // 只剩 Add
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(actual[0], 0), ReadFloat(expected[0], 0));
@@ -167,7 +167,7 @@ TEST(ConstFoldPass, ConstantUnaryOp)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), -3.0f);
@@ -197,7 +197,7 @@ TEST(ConstFoldPass, ConstantCast)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_EQ(results[0].DType(), DataType::Float64);
@@ -228,7 +228,7 @@ TEST(ConstFoldPass, ConstantReduceOp)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	// Sum along axis 0: [1+3, 2+4] = [4, 6]
@@ -260,7 +260,7 @@ TEST(ConstFoldPass, ConstantReshape)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 1.0f);
@@ -297,7 +297,7 @@ TEST(ConstFoldPass, AddZeroElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 42.0f);
@@ -331,7 +331,7 @@ TEST(ConstFoldPass, MulOneElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 99.0f);
@@ -366,7 +366,7 @@ TEST(ConstFoldPass, MulZeroElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 0.0f);
@@ -400,7 +400,7 @@ TEST(ConstFoldPass, ZeroAddElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 42.0f);
@@ -434,7 +434,7 @@ TEST(ConstFoldPass, ZeroMulElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 0.0f);
@@ -463,7 +463,7 @@ TEST(ConstFoldPass, BroadcastNoElimination)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ConstFoldPass constFold;
 	constFold.Run(graph);
@@ -480,7 +480,7 @@ TEST(ConstFoldPass, BroadcastNoElimination)
 	// 改用 x[1,3] + 0[2,3] → 输出 [2,3]，x 被广播，消除不安全
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 6; ++i)
@@ -511,7 +511,7 @@ TEST(ConstFoldPass, BroadcastNoEliminationActual)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto expected = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto expected = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ConstFoldPass constFold;
 	constFold.Run(graph);
@@ -521,7 +521,7 @@ TEST(ConstFoldPass, BroadcastNoEliminationActual)
 	EXPECT_GT(CountOpNodes(foldedSg), 0); // Add 仍然存在
 
 	std::array<Tensor<CPU>, 1> inputs2 = { std::move(tensorX) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs2);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs2);
 
 	ASSERT_EQ(actual.size(), 1);
 	for (std::size_t i = 0; i < 6; ++i)
@@ -557,7 +557,7 @@ TEST(ConstFoldPass, DoubleNegateElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 7.0f);
@@ -595,7 +595,7 @@ TEST(ConstFoldPass, DeadNodeElimination)
 	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
 
 	Runtime::Interpreter<CPU> interp;
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), -5.0f);
@@ -643,7 +643,7 @@ TEST(ConstFoldPass, AfterInlinePass)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 0> inputs = {};
-	auto results = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	ASSERT_EQ(results.size(), 1);
 	// [3, 5] * [2, 2] = [6, 10]
@@ -722,11 +722,11 @@ TEST(ConstFoldPass, FullPipeline)
 
 	Runtime::Interpreter<CPU> interp;
 	std::array<Tensor<CPU>, 2> inputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB) };
-	auto actual = interp.RunForward(BuildExecutablePlan(graph), inputs);
+	auto actual = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	Runtime::Interpreter<CPU> interpRef;
 	std::array<Tensor<CPU>, 2> refInputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB) };
-	auto expected = interpRef.RunForward(BuildExecutablePlan(refGraph), refInputs);
+	auto expected = interpRef.RunForward(Detail::BuildExecutablePlanFromGraph(refGraph), refInputs);
 
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual[0].NumElements(); ++i)
@@ -737,10 +737,10 @@ TEST(ConstFoldPass, FullPipeline)
 	// 验证反向
 	Tensor<CPU> gradOut({ 1, 1, 1, 1 }, { 2, 2 });
 	std::array<Tensor<CPU>, 3> bwdInputs = { Tensor<CPU>(tensorX), Tensor<CPU>(tensorB), Tensor<CPU>(gradOut) };
-	auto actualBwd = interp.RunBackward(BuildExecutablePlan(graph), bwdInputs);
+	auto actualBwd = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	std::array<Tensor<CPU>, 3> refBwdInputs = { std::move(tensorX), std::move(tensorB), std::move(gradOut) };
-	auto expectedBwd = interpRef.RunBackward(BuildExecutablePlan(refGraph), refBwdInputs);
+	auto expectedBwd = interpRef.RunBackward(Detail::BuildExecutablePlanFromGraph(refGraph), refBwdInputs);
 
 	ASSERT_EQ(actualBwd.size(), expectedBwd.size());
 	for (std::size_t i = 0; i < actualBwd.size(); ++i)

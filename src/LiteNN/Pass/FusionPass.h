@@ -13,7 +13,7 @@ namespace LiteNN
 	// 算子融合 Pass：识别可融合的操作模式，将多个节点合并为 FusedOpNode
 	// 语义不变：FusedOpNode 持有 body 子图，Interpreter 直接执行 body；AOT 编译器可据 pattern 生成优化内核
 	// 应在 AutogradPass 之后运行
-	class FusionPass : public Migration::GraphMutationPass
+	class FusionPass : public Detail::GraphMutationPass
 	{
 	public:
 		void Run(Graph& graph) override

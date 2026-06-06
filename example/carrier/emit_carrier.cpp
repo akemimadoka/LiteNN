@@ -22,7 +22,7 @@ namespace
 		std::filesystem::create_directories(outputPath.parent_path());
 
 		auto artifact =
-		    Compiler<CPU>::CompileArtifact(BuildExecutablePlan(BuildCarrierExampleGraph()), CompilerOptions::Defaults());
+		    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildCarrierExampleGraph()), CompilerOptions::Defaults());
 		artifact.WriteObjectFile(outputPath, symbolPrefix);
 
 		std::cout << std::format(

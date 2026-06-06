@@ -161,12 +161,12 @@ int main(int argc, char** argv)
 		const auto decodePath = outputDir / "tiny_llama.decode.vnext.json";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(imported.graph), archivePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.graph), archivePath);
 
 		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, 2);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(lowered), loweredPath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered), loweredPath);
 		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, 1, 1, 1);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(decode), decodePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(decode), decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
 		LiteNN::CPU cpu;
@@ -176,7 +176,7 @@ int main(int argc, char** argv)
 		                                               LiteNN::DataType::Int32, tokenIdValues.data(),
 		                                               tokenIdValues.size());
 		std::array<LiteNN::Tensor<LiteNN::CPU>, 1> inputs = { std::move(tokenIds) };
-		const auto outputs = interpreter.RunForward(BuildExecutablePlan(lowered), inputs);
+		const auto outputs = interpreter.RunForward(LiteNN::Detail::BuildExecutablePlanFromGraph(lowered), inputs);
 
 		LiteNN::Tensor<LiteNN::CPU> decodeTokenIds(LiteNN::Uninitialized, { 1 }, LiteNN::DataType::Int32, cpu);
 		const std::array<std::int32_t, 1> decodeTokenIdValues = { 2 };
@@ -190,7 +190,8 @@ int main(int argc, char** argv)
 			std::move(pastKeys),
 			std::move(pastValues),
 		};
-		const auto decodeOutputs = interpreter.RunForward(BuildExecutablePlan(decode), decodeInputs);
+		const auto decodeOutputs =
+		    interpreter.RunForward(LiteNN::Detail::BuildExecutablePlanFromGraph(decode), decodeInputs);
 
 		std::cout << "Imported " << imported.summary.tensorCount << " tensors and "
 		          << imported.summary.metadataCount << " metadata entries\n";

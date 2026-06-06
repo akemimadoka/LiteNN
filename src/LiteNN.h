@@ -15,7 +15,7 @@
 #include <LiteNN/MemoryPlan.h>
 #include <LiteNN/Metadata.h>
 #include <LiteNN/Misc.h>
-#include <LiteNN/MigrationRules.h>
+#include <LiteNN/VNextRules.h>
 #include <LiteNN/ModelBuilder.h>
 #include <LiteNN/OpSchema.h>
 #include <LiteNN/Optimizer/Optimizer.h>

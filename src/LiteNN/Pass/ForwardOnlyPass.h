@@ -346,7 +346,7 @@ namespace LiteNN
 		return Detail::ForwardOnlyExtractor(graph).Extract();
 	}
 
-	class ForwardOnlyPass : public Migration::GraphMutationPass
+	class ForwardOnlyPass : public Detail::GraphMutationPass
 	{
 	public:
 		void Run(Graph& graph) override

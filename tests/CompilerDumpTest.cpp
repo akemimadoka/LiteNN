@@ -53,7 +53,7 @@ namespace
 
 TEST(CompilerDumpTest, DumpsInputDialectMlir)
 {
-	auto dump = Debug::DumpMLIR(BuildExecutablePlan(BuildSimpleAddGraph()), Debug::MLIRDumpStage::InputDialect);
+	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()), Debug::MLIRDumpStage::InputDialect);
 
 	EXPECT_NE(dump.find("litenn.func @subgraph_0"), std::string::npos);
 	EXPECT_NE(dump.find("litenn.binary"), std::string::npos);
@@ -61,7 +61,7 @@ TEST(CompilerDumpTest, DumpsInputDialectMlir)
 
 TEST(CompilerDumpTest, DumpsLoweredMlir)
 {
-	auto dump = Debug::DumpMLIR(BuildExecutablePlan(BuildSimpleAddGraph()), Debug::MLIRDumpStage::AfterLowering);
+	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()), Debug::MLIRDumpStage::AfterLowering);
 
 	EXPECT_EQ(dump.find("litenn.binary"), std::string::npos);
 	EXPECT_NE(dump.find("func.func"), std::string::npos);
@@ -69,7 +69,7 @@ TEST(CompilerDumpTest, DumpsLoweredMlir)
 
 TEST(CompilerDumpTest, DumpsCompiledModuleMetadata)
 {
-	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(BuildSimpleAddGraph()));
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()));
 	auto dump = Debug::DumpCompiledModuleMetadata(artifact);
 
 	EXPECT_NE(dump.find("compiled_module {"), std::string::npos);
@@ -87,7 +87,7 @@ TEST(CompilerDumpTest, DumpsSeparatedArtifactExternalTensorMetadata)
 	options.cpuAOTParallelMinFlops = 1;
 	options.enableCPUAOTExternalRegions = true;
 
-	auto artifact = Compiler<CPU>::CompileArtifact(BuildExecutablePlan(BuildExternalLinearGraph()), options);
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildExternalLinearGraph()), options);
 	auto separated = artifact.SeparateRodata();
 	auto dump = Debug::DumpCompiledModuleMetadata(separated);
 

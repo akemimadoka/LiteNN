@@ -840,8 +840,10 @@ namespace LiteNN
 		return device.Is<CPU>() ? TensorMemorySpace::Host : TensorMemorySpace::Device;
 	}
 
-	inline ExecutablePlan BuildExecutablePlan(const Graph& graph,
-	                                          const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	namespace Detail
+	{
+	inline ExecutablePlan BuildExecutablePlanFromGraph(const Graph& graph,
+	                                                   const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		ExecutablePlan plan;
 		plan.forward = graph.Forward();
@@ -937,11 +939,12 @@ namespace LiteNN
 		ValidateExecutablePlan(plan, registry);
 		return plan;
 	}
+	} // namespace Detail
 
 	inline ExecutablePlan BuildExecutablePlan(const ModelGraph& model,
 	                                          const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
-		return BuildExecutablePlan(model.GraphView(), registry);
+		return Detail::BuildExecutablePlanFromGraph(model.GraphView(), registry);
 	}
 
 	inline ExecutableModule BuildExecutableModule(ExecutablePlan plan)
@@ -997,11 +1000,14 @@ namespace LiteNN
 		return module;
 	}
 
-	inline ExecutableModule BuildExecutableModule(const Graph& graph,
-	                                              const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	namespace Detail
 	{
-		return BuildExecutableModule(BuildExecutablePlan(graph, registry));
+	inline ExecutableModule BuildExecutableModuleFromGraph(const Graph& graph,
+	                                                       const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	{
+		return BuildExecutableModule(BuildExecutablePlanFromGraph(graph, registry));
 	}
+	} // namespace Detail
 
 	inline ExecutableModule BuildExecutableModule(const ModelGraph& model,
 	                                              const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())

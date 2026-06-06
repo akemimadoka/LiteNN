@@ -106,11 +106,11 @@ TEST(EGraphPass, EliminatesPureRedundancyAndExplainsRewrites)
 	auto graph = BuildRedundantPureGraph();
 	const auto input = MakeInput();
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(input));
+	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
 
 	EGraphPass pass;
 	pass.Run(graph);
-	const auto actual = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(input));
+	const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
 
 	ExpectOutputsNear(actual, expected);
 	EXPECT_EQ(graph.GetSubgraph(graph.Forward()).NodeCount(), 1u);
@@ -147,8 +147,8 @@ TEST(EGraphPass, PreservesNumericsOnRandomizedInputs)
 			Tensor<CPU>(yValues, { 2, 2 }, DataType::Float32),
 		};
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), std::span<const Tensor<CPU>>(originalInputs));
-		const auto actual = interpreter.RunForward(BuildExecutablePlan(optimized), std::span<const Tensor<CPU>>(optimizedInputs));
+		const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(originalInputs));
+		const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(optimized), std::span<const Tensor<CPU>>(optimizedInputs));
 		ExpectOutputsNear(actual, expected);
 	}
 }

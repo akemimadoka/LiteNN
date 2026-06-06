@@ -1466,7 +1466,7 @@ Completed notes:
   diagnostics, weight/layout/quantization/LoRA mapping records, tokenizer/config metadata buckets, module names, backend
   capability diagnostics, and `G14Remaining` coverage.
 
-#### G14.10 Compatibility-Breaking Cleanup and Migration Rules
+#### G14.10 Compatibility-Breaking Cleanup and vNext Rules
 
 - [x] Keep multi-output nodes as a core invariant.
 - [x] Keep explicit rodata/instruction/external-weight loading, but formalize it through the storage/artifact ABI.
@@ -1475,11 +1475,11 @@ Completed notes:
   stable.
 - [x] Remove serializer knowledge of raw `NodeVariant` layout after schema-driven op serialization is available.
 - [x] Remove backend-specific CUDA/CPU shortcuts once they can be represented as capability, cost, layout, or artifact metadata.
-- [x] Mark old graph-builder helpers as migration-only when they bypass `TensorType`, schema validation, or external-storage
+- [x] Mark old graph-builder helpers as internal-only when they bypass `TensorType`, schema validation, or external-storage
   binding rules.
-- [x] Completed migration contract in `MigrationRules.h`: executable vNext migration rules for multi-output preservation,
-  storage/artifact ABI usage, interpreter-vs-production execution, Graph entrypoint migration, schema serialization,
-  backend shortcut migration, and builder-helper migration, with invariant validation covered by `G14Remaining`.
+- [x] Replaced `MigrationRules.h` with `VNextRules.h`: executable vNext invariants for multi-output preservation,
+  storage/artifact ABI usage, interpreter-vs-production execution, Graph entrypoint cleanup, schema serialization,
+  backend shortcut cleanup, and builder-helper contracts, with invariant validation covered by `G14Remaining`.
 
 #### G14.11 vNext Breakability Audit Follow-Up
 
@@ -1494,7 +1494,7 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] Removed `Graph` overloads from CPU/CUDA compiler public APIs; callers must pass `ExecutablePlan` explicitly.
   - [x] `DumpMLIR` now consumes `ExecutablePlan`, with a public API guard preventing the `Graph` overload from returning.
   - [x] `GraphToMLIR`'s public header now exposes `translateExecutablePlanToMLIR`; compiler pass tests build fixture
-    graphs only at the migration boundary and translate executable plans.
+    graphs only at the internal construction/test boundary and translate executable plans.
   - [x] Removed remaining `Interpreter` `Graph` convenience wrappers; tests, examples, and benchmarks now build
     `ExecutablePlan` explicitly before interpretation, and the public API guard prevents the overloads from returning.
 - [x] Replace `ModelIO`'s raw `NodeVariant` / `NodeKind` serialization with vNext manifest + executable-plan
@@ -1539,7 +1539,7 @@ to keep the old architecture alive if they are left in place during vNext.
   - [x] Wired additional variable-owning layer helpers (`LayerNorm`, `RMSNorm`, `SwiGLUMLP`) through
     `ModelBuilder&` overloads.
   - [x] Added `ModelGraph::TakeGraph()` / `ModelBuilder::TakeGraph()` so builder-based construction can still hand
-    existing graph-oriented passes a completed `Graph` at the migration boundary.
+    existing graph-oriented passes a completed `Graph` at the internal construction/test boundary.
   - [x] Deleted migrated raw `Graph&` layer helpers (`Linear`, `LayerNorm`, `RMSNorm`, `SwiGLUMLP`) and moved tests,
     examples, and benchmarks to `ModelBuilder&`; the public API guard prevents those helpers from returning.
   - [x] Started stateless `Build*` migration by moving the actively used `BuildReLU`, `BuildArange`, `BuildAddId`,
@@ -1581,7 +1581,7 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
 - [x] Make `ExecutablePlan` schema/attribute-native instead of raw-node-native.
   - [x] Add a plan-level op descriptor with schema id/kind, category/effect, input/output type facts, and serialized attrs.
   - [x] Make vNext package node records use the descriptor instead of raw `NodeVariant` or graph-archive node tags.
-  - [x] Keep raw node payloads only as an internal execution/migration payload until interpreter/compiler lowering consume
+  - [x] Keep raw node payloads only as an internal execution payload until interpreter/compiler lowering consume
     descriptors directly.
   - [x] Add guard coverage so vNext package serialization cannot reintroduce raw node variant fields.
 - [x] Make compiled artifacts multi-entry and state-binding-native.
@@ -1621,9 +1621,10 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     steps.
   - [x] Add profile/trace records for fallback, transfer, and synchronization steps.
   - [x] Reject artifacts or placement plans when fallback policy is stricter than the available backend capability.
-- [x] Demote old graph archives to migration/development tooling only.
+- [x] Demote old graph archives to internal/development tooling only.
   - [x] Remove graph archive convenience paths from vNext package builders and examples.
-  - [x] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly migration-scoped tooling/tests.
+  - [x] Keep `SaveGraphArchive` / `LoadGraphArchive` names only under explicitly internal `Serialization::Detail`
+    tooling/tests.
   - [x] Make production examples write/load vNext packages or compiled artifacts.
     - [x] Move MNIST and GGUF conversion examples to vNext package manifests / compiled carrier artifacts instead of
       graph archive save/load.
@@ -1668,8 +1669,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
     - [x] Added `TransformStageKind`, stage traits, `BackendPlan`, and typed pipeline entry points in `Pass.h`.
   - [x] Add pass invalidation/debug dump metadata to each stage.
     - [x] Added `TransformStepMetadata`, invalidation categories, object stats, and debug dump callbacks with tests.
-  - [x] Keep raw graph mutation only inside migration and construction helpers.
-    - [x] Moved the old root `Pass` contract to `Migration::GraphMutationPass` and updated graph-rewrite passes,
+  - [x] Keep raw graph mutation only inside internal construction helpers.
+    - [x] Moved the old root `Pass` contract to `Detail::GraphMutationPass` and updated graph-rewrite passes,
       typed pipeline adapters, and guard coverage so new production pass APIs do not reintroduce a raw `Graph&`
       mutation contract.
 - [x] Split build/distribution components along real deployment boundaries.
@@ -1694,24 +1695,29 @@ prototype-era architecture.
 
 Break candidates that can still materially improve vNext:
 
-- [ ] Make `Graph` a construction/migration object only and move the stable public model contract to `ModelGraph` /
+- [ ] Make `Graph` a construction/internal object only and move the stable public model contract to `ModelGraph` /
   `ModelBuilder`.
   - Benefit: prevents frontends, importers, passes, and runtimes from depending on mutable node storage, `OutputInfo`,
     `TensorSpec`, and `Tensor<PolymorphicDevice>` internals.
   - Hidden need: public examples and importers must take or return `ModelGraph` / packages, with raw `Graph` exposed only
-    through explicitly named migration/test helpers.
-- [ ] Replace public mutable `GraphMutationPass::Run(Graph&)` style pass APIs with typed transform objects everywhere.
+    through explicitly named internal/test helpers.
+  - [x] Removed the newly introduced `LiteNN::Migration::BuildExecutable*FromGraph` bridge; raw `Graph` plan/module
+    conversion now lives under `LiteNN::Detail` for internal construction and tests, while stable callers use
+    `ModelGraph`, `ExecutablePlan`, or `ExecutableModule`.
+- [x] Replace public mutable `GraphMutationPass::Run(Graph&)` style pass APIs with typed transform objects everywhere.
   - Benefit: lets optimization, autograd, legalization, lowering, and validation share invalidation/debug metadata without
     relying on in-place mutation order.
-  - Hidden need: existing graph-rewrite passes can remain internally mutating during migration, but their public entry must
+  - Hidden need: existing graph-rewrite passes can remain internally mutating, but their public entry must
     be `Transform<ModelGraph, ModelGraph>`, `Transform<ModelGraph, ExecutablePlan>`, or `Transform<ExecutablePlan, ...>`.
+  - [x] Removed the `Migration::GraphMutationPass` name; construction-time graph mutation now sits in
+    `Detail::GraphMutationPass`, and `G14PublicApiGuard` asserts that `namespace Migration` is not reintroduced.
 - [ ] Make compiled execution accept explicit typed buffer bindings instead of tensor vectors / raw entry pointer arrays.
   - Benefit: unifies external rodata, mutable parameters, CUDA buffers, mobile mmap, and stateful entry execution under one
     ABI, and makes shape/dtype/layout validation happen before dispatch.
   - Hidden need: keep `Tensor` convenience wrappers only as adapter helpers around `RuntimeBufferBinding`.
 - [ ] Hide or split untyped tensor memory access from the stable public API.
   - Benefit: reduces accidental aliasing, dtype punning, and cross-device mutation bugs from public `RawData()` use.
-  - Hidden need: provide typed span/read-write view helpers and an unsafe/migration namespace for low-level tests and
+  - Hidden need: provide typed span/read-write view helpers and an unsafe/internal namespace for low-level tests and
     custom kernels.
 - [ ] Make CUDA eager fallback explicit rather than hidden inside `DeviceTraits<CUDA>` operations.
   - Benefit: runtime schedules and profiles would report host fallback and transfers instead of silently paying CPU bridge
@@ -1723,11 +1729,13 @@ Break candidates that can still materially improve vNext:
   - Benefit: prevents the convenient all-in-one include from freezing importer/compiler/tool dependencies into the minimal
     runtime ABI.
   - Hidden need: examples can still use the full umbrella, but install/export components should advertise narrower headers.
-- [ ] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit migration include/target.
+- [ ] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit internal include/target.
   - Benefit: makes pre-vNext graph archives impossible to use accidentally in production code while preserving tests and
     one-off conversion tooling.
   - Hidden need: conversion tools should prefer vNext package input/output and require an explicit command name for graph
-    archive migration.
+    archive conversion.
+  - [x] Removed `Serialization::Migration::{SaveGraphArchive,LoadGraphArchive}`; remaining graph archive helpers are
+    `Serialization::Detail` internals used by tests and explicit conversion tooling.
 
 Recommendation: treat the first three items as the only remaining break-window candidates that can justify delaying vNext
 if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear

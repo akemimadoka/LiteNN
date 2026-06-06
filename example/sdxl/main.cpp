@@ -191,19 +191,19 @@ namespace
 			}
 			else
 			{
-				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::BuildExecutableModule(imported.graph), outputPath);
+				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.graph), outputPath);
 			}
 		}
 		else if (externalWeightsPath)
 		{
 			LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
 			externalOptions.minVariableBytes = externalWeightMinBytes;
-			LiteNN::Serialization::Migration::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
+			LiteNN::Serialization::Detail::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
 			                                                                  *externalWeightsPath, externalOptions);
 		}
 		else
 		{
-			LiteNN::Serialization::Migration::SaveGraphArchive(imported.graph, outputPath);
+			LiteNN::Serialization::Detail::SaveGraphArchive(imported.graph, outputPath);
 		}
 		std::cout << std::format("Wrote LiteNN graph {} with {} variable(s), {} input(s), {} output(s)\n",
 		                         outputPath.string(), imported.graph.VariableCount(),
@@ -365,7 +365,7 @@ namespace
 		{
 			return LiteNN::Serialization::LoadVNextModelPackage(path).plan;
 		}
-		return LiteNN::BuildExecutablePlan(LiteNN::Serialization::Migration::LoadGraphArchive(path));
+		return LiteNN::Detail::BuildExecutablePlanFromGraph(LiteNN::Serialization::Detail::LoadGraphArchive(path));
 	}
 
 	template <typename F>

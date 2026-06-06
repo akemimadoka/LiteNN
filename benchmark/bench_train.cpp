@@ -243,13 +243,13 @@ void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+		auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 		benchmark::DoNotOptimize(outputs);
 	}
 
 	for (auto _ : state)
 	{
-		auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+		auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 		benchmark::DoNotOptimize(outputs);
 		benchmark::ClobberMemory();
 	}
@@ -263,7 +263,7 @@ void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+	auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
 	std::vector<Tensor<CPU>> outputGradients;
 	outputGradients.push_back(std::move(lossGradient.gradient));
@@ -271,13 +271,13 @@ void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
+		auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
 		benchmark::DoNotOptimize(backwardResults);
 	}
 
 	for (auto _ : state)
 	{
-		auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
+		auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
 		benchmark::DoNotOptimize(backwardResults);
 		benchmark::ClobberMemory();
 	}
@@ -291,12 +291,12 @@ void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::
 	const auto targets = MakeTargets(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+	auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
 	std::vector<Tensor<CPU>> outputGradients;
 	outputGradients.push_back(std::move(lossGradient.gradient));
 	auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
-	auto backwardResults = interpreter.RunBackward(BuildExecutablePlan(graph), backwardInputs);
+	auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
 	const auto inputGradientCount = Optimizer::InferInputGradientCount(graph);
 	auto parameters = Training::ParameterSet::BindGraph(graph);
 	Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = 1.0e-3f });
@@ -362,7 +362,7 @@ void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CPU>::Compile(BuildExecutablePlan(graph), options);
+	auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph), options);
 	const auto inputData = MakeInputData(batch);
 	auto inputs = MakeCPUInputs(inputData, batch);
 	auto outputs = AllocateCPUOutputs(module);
@@ -419,7 +419,7 @@ void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind,
 	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
 	options.enableCUDANativeAOT = false;
 	auto module = Compiler<CUDA>::Compile(
-	    BuildExecutablePlan(graph), CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow },
+	    Detail::BuildExecutablePlanFromGraph(graph), CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow },
 	    options);
 	if (module.Backend() != CompiledModuleBackend::CPUNative)
 	{
@@ -454,7 +454,7 @@ void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std:
 	}
 
 	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CUDA>::Compile(BuildExecutablePlan(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
+	auto module = Compiler<CUDA>::Compile(Detail::BuildExecutablePlanFromGraph(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
 	if (module.Backend() != CompiledModuleBackend::CUDANative)
 	{
 		state.SkipWithError("expected CUDA native backend");

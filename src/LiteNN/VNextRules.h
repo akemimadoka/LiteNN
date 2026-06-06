@@ -1,52 +1,50 @@
-#ifndef LITENN_MIGRATION_RULES_H
-#define LITENN_MIGRATION_RULES_H
+#ifndef LITENN_VNEXT_RULES_H
+#define LITENN_VNEXT_RULES_H
 
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/VNextPackage.h>
 
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace LiteNN
 {
-	enum class MigrationRuleSeverity
+	enum class VNextRuleSeverity
 	{
 		Info,
 		Warning,
 		Error
 	};
 
-	struct MigrationRule
+	struct VNextRule
 	{
 		std::string id;
-		MigrationRuleSeverity severity{ MigrationRuleSeverity::Warning };
+		VNextRuleSeverity severity{ VNextRuleSeverity::Warning };
 		std::string message;
 	};
 
-	inline std::vector<MigrationRule> VNextMigrationRules()
+	inline std::vector<VNextRule> VNextRules()
 	{
 		return {
-			{ "multi-output-core", MigrationRuleSeverity::Error,
+			{ "multi-output-core", VNextRuleSeverity::Error,
 			  "multi-output nodes are a core invariant and must not be flattened by importers or backends" },
-			{ "artifact-storage-abi", MigrationRuleSeverity::Error,
+			{ "artifact-storage-abi", VNextRuleSeverity::Error,
 			  "rodata, instructions, and external weights must be represented through storage/artifact ABI metadata" },
-			{ "interpreter-reference", MigrationRuleSeverity::Warning,
+			{ "interpreter-reference", VNextRuleSeverity::Warning,
 			  "Interpreter remains the reference/debug path; production execution should consume executable plans" },
-			{ "graph-entrypoints-migration", MigrationRuleSeverity::Warning,
-			  "direct Graph runtime/compiler entry points are migration conveniences and should lower to ExecutablePlan" },
-			{ "schema-serialization", MigrationRuleSeverity::Warning,
+			{ "graph-entrypoints", VNextRuleSeverity::Warning,
+			  "runtime/compiler entry points should consume ModelGraph, ExecutablePlan, or ExecutableModule contracts" },
+			{ "schema-serialization", VNextRuleSeverity::Warning,
 			  "serializer knowledge of raw NodeVariant layout is temporary until schema-driven op serialization lands" },
-			{ "backend-shortcuts", MigrationRuleSeverity::Warning,
+			{ "backend-shortcuts", VNextRuleSeverity::Warning,
 			  "CPU/CUDA shortcuts should move into capability, cost, layout, or artifact metadata" },
-			{ "builder-helper-migration", MigrationRuleSeverity::Warning,
-			  "graph-builder helpers that bypass TensorType, schema validation, or external storage are migration-only" },
+			{ "builder-helper-contract", VNextRuleSeverity::Warning,
+			  "builder helpers should preserve TensorType, schema validation, and external storage metadata" },
 		};
 	}
 
-	inline void ValidateVNextMigrationInvariants(const ExecutablePlan& plan,
-	                                             const VNextPackageManifest* manifest = nullptr)
+	inline void ValidateVNextInvariants(const ExecutablePlan& plan, const VNextPackageManifest* manifest = nullptr)
 	{
 		ValidateExecutablePlan(plan);
 		for (const auto& subgraph : plan.subgraphs)
@@ -69,7 +67,7 @@ namespace LiteNN
 			{
 				if (artifact.regions.empty())
 				{
-					throw std::runtime_error("vNext migration invariant failed: artifact must expose regions");
+					throw std::runtime_error("vNext invariant failed: artifact must expose regions");
 				}
 			}
 		}

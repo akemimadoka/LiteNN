@@ -25,7 +25,7 @@ namespace
 		return graph;
 	}
 
-	class RecordingPass : public Migration::GraphMutationPass
+	class RecordingPass : public Detail::GraphMutationPass
 	{
 	public:
 		std::string_view Name() const noexcept override
@@ -51,13 +51,13 @@ namespace
 TEST(TransformPipeline, RunsModelGraphPassesWithoutCallerOwnedGraphMutation)
 {
 	RecordingPass pass;
-	std::array<Migration::GraphMutationPass*, 1> passes{ &pass };
+	std::array<Detail::GraphMutationPass*, 1> passes{ &pass };
 	std::vector<TransformStepMetadata> dumps;
 	TransformPipelineOptions options;
 	options.debugDump = [&](const TransformStepMetadata& step) { dumps.push_back(step); };
 
 	auto result = RunModelGraphPassPipeline(ModelGraph{ BuildSmallGraph() },
-	                                        std::span<Migration::GraphMutationPass* const>{ passes }, options);
+	                                        std::span<Detail::GraphMutationPass* const>{ passes }, options);
 
 	EXPECT_EQ(pass.runs, 1);
 	ASSERT_EQ(result.steps.size(), 1u);
@@ -85,7 +85,7 @@ TEST(TransformPipeline, BuildsExecutablePlanAsTypedStage)
 
 TEST(TransformPipeline, RunsExecutablePlanTransformsWithInvalidationMetadata)
 {
-	auto plan = BuildExecutablePlan(BuildSmallGraph());
+	auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
 	NamedExecutablePlanTransform transform{
 		.name = "NoOpPlanTransform",
 		.run = [](ExecutablePlan& target) { ValidateExecutablePlan(target); },
@@ -104,7 +104,7 @@ TEST(TransformPipeline, RunsExecutablePlanTransformsWithInvalidationMetadata)
 
 TEST(TransformPipeline, BuildsBackendPlanAsTypedStage)
 {
-	auto plan = BuildExecutablePlan(BuildSmallGraph());
+	auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
 	std::array<std::string_view, 1> backends{ BackendCPUInterpreter };
 
 	auto result = RunExecutablePlanToBackendPlanPipeline(std::move(plan), std::span<const std::string_view>{ backends });

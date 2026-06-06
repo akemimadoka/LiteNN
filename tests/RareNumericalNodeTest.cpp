@@ -43,7 +43,7 @@ namespace
 	std::vector<Tensor<CPU>> RunGraph(Graph& graph, std::vector<Tensor<CPU>> inputs)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		return interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+		return interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	}
 
 	NodeOutput AddFloatConstant(Subgraph& subgraph, std::initializer_list<double> values,
@@ -171,8 +171,8 @@ TEST(RareNumericalNode, SerializationRoundTripPreservesRareNumericalNodes)
 
 	const auto path = std::filesystem::path("litenn_rare_numerical_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::Migration::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Migration::LoadGraphArchive(path);
+	Serialization::Detail::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Detail::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	auto expected = RunGraph(graph, MakeRareNumericalInputs());

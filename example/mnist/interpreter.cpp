@@ -87,7 +87,7 @@ namespace
 
 		const auto correct = Evaluate(test, options.showSamples, [&](Tensor<CPU> image) {
 			std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
-			return interpreter.RunForward(BuildExecutablePlan(inferenceGraph), inputs);
+			return interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(inferenceGraph), inputs);
 		});
 		PrintAccuracy(correct, test.Count());
 		return 0;

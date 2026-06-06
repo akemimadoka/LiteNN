@@ -1453,7 +1453,7 @@ namespace LiteNN::Serialization
 	                          ExternalWeightSaveOptions externalOptions)
 	{
 		Validation::ValidateGraph(graph);
-		ValidateExecutablePlan(BuildExecutablePlan(graph));
+		ValidateExecutablePlan(::LiteNN::Detail::BuildExecutablePlanFromGraph(graph));
 		std::optional<std::ofstream> externalOut;
 		std::string externalPathText;
 		if (externalWeightsPath)
@@ -1545,7 +1545,7 @@ namespace LiteNN::Serialization
 		}
 	}
 
-	namespace Migration
+	namespace Detail
 	{
 	inline void SaveGraphArchive(const Graph& graph, const std::filesystem::path& path)
 	{
@@ -1688,7 +1688,7 @@ namespace LiteNN::Serialization
 		Validation::ValidateGraph(graph);
 		return graph;
 	}
-	} // namespace Migration
+	} // namespace Detail
 } // namespace LiteNN::Serialization
 
 #endif

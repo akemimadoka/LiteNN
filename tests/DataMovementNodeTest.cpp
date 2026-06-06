@@ -36,7 +36,7 @@ namespace
 	std::vector<Tensor<CPU>> RunGraph(Graph& graph, std::vector<Tensor<CPU>> inputs)
 	{
 		Runtime::Interpreter<CPU> interpreter;
-		return interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+		return interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	}
 
 	void ExpectShape(ShapeView shape, std::initializer_list<std::size_t> expected)
@@ -207,8 +207,8 @@ TEST(DataMovementNode, SerializationRoundTripPreservesG51Nodes)
 
 	const auto path = std::filesystem::path("litenn_g51_nodes_roundtrip_test.ltnn");
 	std::filesystem::remove(path);
-	Serialization::Migration::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Migration::LoadGraphArchive(path);
+	Serialization::Detail::SaveGraphArchive(graph, path);
+	auto loaded = Serialization::Detail::LoadGraphArchive(path);
 	std::filesystem::remove(path);
 
 	std::vector<Tensor<CPU>> inputs;

@@ -62,7 +62,7 @@ TEST(ForwardOnlyPass, ExtractsInferenceGraphFromAutogradGraph)
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
-	auto trainingForward = interpreter.RunForward(BuildExecutablePlan(graph), inputs);
+	auto trainingForward = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	auto forwardOnly = ExtractForwardOnlyGraph(graph);
 	EXPECT_FALSE(forwardOnly.Backward().has_value());
@@ -75,7 +75,7 @@ TEST(ForwardOnlyPass, ExtractsInferenceGraphFromAutogradGraph)
 	EXPECT_EQ(forwardOnly.OutputSignature()[0].name, "y");
 
 	Runtime::Interpreter<CPU> forwardOnlyInterpreter;
-	auto inferenceForward = forwardOnlyInterpreter.RunForward(BuildExecutablePlan(forwardOnly), inputs);
+	auto inferenceForward = forwardOnlyInterpreter.RunForward(Detail::BuildExecutablePlanFromGraph(forwardOnly), inputs);
 	ASSERT_EQ(trainingForward.size(), 1u);
 	ASSERT_EQ(inferenceForward.size(), 1u);
 	EXPECT_FLOAT_EQ(ReadFloat(inferenceForward[0], 0), ReadFloat(trainingForward[0], 0));

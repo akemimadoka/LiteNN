@@ -1880,7 +1880,7 @@ private:
 OwningOpRef<ModuleOp> TranslateGraphToMLIRInternal(const Graph& graph, MLIRContext& ctx)
 {
 	Validation::ValidateGraph(graph);
-	return translateExecutablePlanToMLIR(BuildExecutablePlan(graph), ctx);
+	return translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
 }
 
 OwningOpRef<ModuleOp> translateExecutablePlanToMLIR(const ExecutablePlan& plan, MLIRContext& ctx)

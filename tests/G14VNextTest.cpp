@@ -35,7 +35,7 @@ namespace
 TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 {
 	const auto graph = BuildLinearAddGraph();
-	auto module = BuildExecutableModule(graph);
+	auto module = Detail::BuildExecutableModuleFromGraph(graph);
 	VNextArtifactRef artifact;
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
@@ -72,7 +72,7 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 {
 	const auto graph = BuildLinearAddGraph();
-	auto module = BuildExecutableModule(graph);
+	auto module = Detail::BuildExecutableModuleFromGraph(graph);
 	VNextArtifactRef artifact;
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
@@ -177,7 +177,7 @@ TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 	auto kvCache = Runtime::MakeKVCacheState("kv.cache.0",
 	                                         TensorType::Dense(DataType::Float32, ShapeView{ 1, 2, 4 }));
 
-	const auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(graph), { kvCache });
+	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { kvCache });
 
 	ASSERT_EQ(schedule.steps.size(), 3u);
 	EXPECT_EQ(schedule.steps[0].kind, Runtime::RuntimeScheduleStepKind::StateRead);
@@ -199,7 +199,7 @@ TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 TEST(G14VNext, MemoryPlanAssignsStaticValuesAndReusesWorkspace)
 {
 	const auto graph = BuildLinearAddGraph();
-	const auto plan = BuildExecutablePlan(graph);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 	const auto memory = BuildMemoryPlan(plan);
 
 	EXPECT_EQ(memory.externalVariables.size(), 1u);
@@ -228,11 +228,11 @@ TEST(G14VNext, MemoryPlanAssignsStaticValuesAndReusesWorkspace)
 
 TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 {
-	auto manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	auto manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.versions.artifactABI = 0;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entries = { { .name = "forward" } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
@@ -240,7 +240,7 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	manifest.artifacts[0].entries[0].function = 99;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.artifacts.push_back({ .name = "missing-binding",
 		                           .backend = std::string(BackendCPUAOT),
 		                           .entries = { { .name = "forward",
@@ -251,22 +251,22 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 		                                          .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.layout.mode = "legacy";
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.runtimeSteps[0].id = 99;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
-	manifest = BuildVNextPackageManifest(BuildExecutableModule(BuildLinearAddGraph()));
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.bufferBindings[0].memoryBuffer = manifest.memory.buffers.size();
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 }
 
 TEST(G14VNext, MemoryPlanRejectsHiddenMemorySpaceCopies)
 {
-	auto plan = BuildExecutablePlan(BuildLinearAddGraph());
+	auto plan = Detail::BuildExecutablePlanFromGraph(BuildLinearAddGraph());
 	auto& subgraph = plan.subgraphs[plan.forward];
 	subgraph.nodes[2].outputs[0].memorySpace = TensorMemorySpace::Device;
 	plan.outputs[0].type.memorySpace = TensorMemorySpace::Device;

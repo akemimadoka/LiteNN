@@ -145,7 +145,7 @@ namespace LiteNN
 	 * expressions, records equivalence classes for safe rewrites, and extracts a deterministic
 	 * simplified graph. Stateful/runtime-only nodes remain opaque boundaries.
 	 */
-	class EGraphPass : public Migration::GraphMutationPass
+	class EGraphPass : public Detail::GraphMutationPass
 	{
 	public:
 		explicit EGraphPass(EGraphOptions options = {}) : options_(std::move(options)) {}

@@ -49,7 +49,7 @@ namespace
 TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto train = Training::BuildTrainStepPlan(BuildExecutableModule(graph), Training::TrainExecutionPolicy::Auto,
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph), Training::TrainExecutionPolicy::Auto,
 	                                                true);
 
 	EXPECT_EQ(train.policy, Training::TrainExecutionPolicy::AOT);
@@ -63,7 +63,7 @@ TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 TEST(G14Remaining, TrainStepPlanExposesNamedArtifactEntries)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto train = Training::BuildTrainStepPlan(BuildExecutableModule(graph), Training::TrainExecutionPolicy::AOT,
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph), Training::TrainExecutionPolicy::AOT,
 	                                                true);
 
 	const auto findEntry = [&](std::string_view name) -> const Training::TrainStepArtifactEntry* {
@@ -131,7 +131,7 @@ TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 {
 	const auto graph = BuildTrainableGraph();
 	constexpr std::array<std::string_view, 1> backends{ BackendCPUInterpreter };
-	const auto placement = Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends);
+	const auto placement = Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends);
 
 	EXPECT_FALSE(placement.decisions.empty());
 	EXPECT_FALSE(placement.coverage.empty());
@@ -160,7 +160,7 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	                                                .relativeCost = 1.0,
 	                                            });
 	constexpr std::array<std::string_view, 1> backends{ BackendCUDANative };
-	const auto placement = Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends, registry);
+	const auto placement = Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends, registry);
 
 	ASSERT_EQ(placement.decisions.size(), 1u);
 	EXPECT_EQ(placement.decisions[0].support, BackendSupportLevel::Fallback);
@@ -168,7 +168,7 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	EXPECT_EQ(placement.fallbackSteps[0].fallbackBackend, BackendCPUInterpreter);
 	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
 
-	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(BuildExecutablePlan(graph)));
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(Detail::BuildExecutablePlanFromGraph(graph)));
 	Runtime::AppendPlacementFallbackSteps(schedule, placement);
 	ASSERT_FALSE(schedule.steps.empty());
 	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::Fallback);
@@ -180,7 +180,7 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	EXPECT_EQ(trace.back().kind, Runtime::RuntimeScheduleStepKind::Fallback);
 	EXPECT_NE(trace.back().message.find("fallback from"), std::string::npos);
 
-	EXPECT_THROW((void)Runtime::BuildPlacementPlan(BuildExecutablePlan(graph), backends, registry, {},
+	EXPECT_THROW((void)Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends, registry, {},
 	                                              Runtime::PlacementFallbackPolicy::RejectFallback),
 	             std::runtime_error);
 }
@@ -219,7 +219,7 @@ TEST(G14Remaining, CompatibilityOpsAreReportedByImporterDiagnostics)
 	subgraph.SetResults({ { routed, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
-	const auto plan = BuildExecutablePlan(graph);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 	const auto diagnostics = CollectExecutablePlanCompatibilityDiagnostics(plan);
 	ASSERT_EQ(diagnostics.size(), 1u);
 	EXPECT_EQ(diagnostics[0].opKind, "MulMatIdNode");
@@ -234,13 +234,13 @@ TEST(G14Remaining, CompatibilityOpsAreReportedByImporterDiagnostics)
 	EXPECT_NO_THROW(Serialization::ValidateImporterOwnedManifest(manifest));
 }
 
-TEST(G14Remaining, MigrationRulesAreExecutableInvariants)
+TEST(G14Remaining, VNextRulesAreExecutableInvariants)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto plan = BuildExecutablePlan(graph);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 	const auto manifest = BuildVNextPackageManifest(BuildExecutableModule(plan));
-	const auto rules = VNextMigrationRules();
+	const auto rules = VNextRules();
 
 	EXPECT_GE(rules.size(), 7u);
-	EXPECT_NO_THROW(ValidateVNextMigrationInvariants(plan, &manifest));
+	EXPECT_NO_THROW(ValidateVNextInvariants(plan, &manifest));
 }

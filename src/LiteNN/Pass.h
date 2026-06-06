@@ -90,11 +90,11 @@ namespace LiteNN
 		std::vector<std::string> candidateBackends;
 	};
 
-	namespace Migration
+	namespace Detail
 	{
-		/// Migration-only Graph -> Graph mutation pass.
+		/// Internal construction-time Graph -> Graph mutation pass.
 		///
-		/// New production pipelines should prefer the typed transform stages below. This adapter remains for
+		/// Production pipelines should prefer the typed transform stages below. This adapter remains for
 		/// construction-time graph rewrites such as autograd, inlining, constant folding, fusion, and e-graph rewrites.
 		struct GraphMutationPass
 		{
@@ -110,7 +110,7 @@ namespace LiteNN
 			}
 			virtual void Run(Graph& graph) = 0;
 		};
-	} // namespace Migration
+	} // namespace Detail
 
 	struct ModelGraphTransformStage
 	{};
@@ -220,11 +220,11 @@ namespace LiteNN
 	}
 
 	inline TransformResult<ModelGraph> RunModelGraphPassPipeline(
-	    ModelGraph model, std::span<Migration::GraphMutationPass* const> passes,
+	    ModelGraph model, std::span<Detail::GraphMutationPass* const> passes,
 	    const TransformPipelineOptions& options = {})
 	{
 		std::vector<TransformStepMetadata> steps;
-		for (Migration::GraphMutationPass* pass : passes)
+		for (Detail::GraphMutationPass* pass : passes)
 		{
 			if (pass == nullptr)
 			{

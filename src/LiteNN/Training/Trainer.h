@@ -61,7 +61,7 @@ namespace LiteNN::Training
 			}
 			Validation::ValidateGraph(*graph_);
 			parameters_ = ParameterSet::BindGraph(*graph_);
-			trainStepPlan_ = BuildTrainStepPlan(BuildExecutableModule(*graph_), options_.executionPolicy,
+			trainStepPlan_ = BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(*graph_), options_.executionPolicy,
 			                                    options_.aotBackendAvailable);
 			ValidateTrainStepPlan(trainStepPlan_);
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
