@@ -430,6 +430,7 @@ src/
 ├── LiteNNCore.h                  // core/runtime/model-building surface
 ├── LiteNNRuntime.h               // core + interpreter/runtime helpers
 ├── LiteNNImporters.h             // opt-in importer/package/safetensors/torch manifest surface
+├── LiteNNCompiler.h              // opt-in AOT compiler/artifact surface
 ├── LiteNN.ixx                    // C++26 module 导出（TODO: 完善）
 └── LiteNN/
     ├── Misc.h                    // 工具：EnumDispatch, ShapeView, EnumToString

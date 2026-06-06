@@ -1727,13 +1727,15 @@ Break candidates that can still materially improve vNext:
   - [x] `CUDAHostFallbackPolicy` defaults to `Reject`; eager CUDA fallback paths and the compiled CUDA CPU bridge require
     explicit `CUDAHostFallbackPolicy::Allow` / runtime fallback policy, with `CUDADevice` and `CompiledModuleCUDATest`
     coverage.
-- [ ] Split umbrella includes into stable deployment surfaces such as `LiteNNCore.h`, `LiteNNImporters.h`,
+- [x] Split umbrella includes into stable deployment surfaces such as `LiteNNCore.h`, `LiteNNImporters.h`,
   `LiteNNCompiler.h`, and `LiteNNTools.h`.
   - Benefit: prevents the convenient all-in-one include from freezing importer/compiler/tool dependencies into the minimal
     runtime ABI.
   - Hidden need: examples can still use the full umbrella, but install/export components should advertise narrower headers.
   - [x] Added `LiteNNCore.h`, `LiteNNRuntime.h`, and `LiteNNImporters.h`; `LiteNN.h` now includes only `LiteNNCore.h`,
     while importer/package users opt into `LiteNNImporters.h` or concrete serialization headers.
+  - [x] Added `LiteNNCompiler.h` for compiled module/artifact, compiler dump, and plan-to-MLIR translation users; tool
+    entry points remain standalone executables/components rather than a public C++ umbrella.
   - [x] Added guard coverage so `LiteNN.h` / `LiteNNCore.h` cannot pull package IO, safetensors, torch manifest, or graph
     archive headers back into the default runtime surface.
 - [x] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit internal include/target.

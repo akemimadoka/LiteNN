@@ -145,6 +145,7 @@ endfunction()
 
 file(GLOB_RECURSE LITENN_ALL_SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 set(LITENN_CORE_SOURCES ${LITENN_ALL_SOURCES})
+list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNNCompiler\\.h$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Serialization/(Safetensors|TorchManifest|ModelPackageIO)\\.(cpp|h)$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Device/CUDA\\.(cpp|h)$")

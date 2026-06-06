@@ -383,6 +383,13 @@ TEST(G14PublicApiGuard, UmbrellaHeadersExposeNarrowDeploymentSurfaces)
 	const auto packageHeader = ReadSourceFile("src/LiteNN/Serialization/ModelPackageIO.h");
 	EXPECT_NE(packageHeader.find("#include <LiteNN/Serialization/ExternalWeights.h>"), std::string::npos);
 	EXPECT_EQ(packageHeader.find("#include <LiteNN/Serialization/ModelIO.h>"), std::string::npos);
+
+	const auto compiler = ReadSourceFile("src/LiteNNCompiler.h");
+	EXPECT_NE(compiler.find("#include <LiteNNCore.h>"), std::string::npos);
+	EXPECT_NE(compiler.find("#include <LiteNN/Compiler/CompiledModule.h>"), std::string::npos);
+	EXPECT_NE(compiler.find("#include <LiteNN/Compiler/Dump.h>"), std::string::npos);
+	EXPECT_NE(compiler.find("#include <LiteNN/Compiler/Translation/GraphToMLIR.h>"), std::string::npos);
+	EXPECT_EQ(compiler.find("#include <LiteNNImporters.h>"), std::string::npos);
 }
 
 TEST(G14PublicApiGuard, RawGraphMutationPassesAreInternalDetailScoped)
