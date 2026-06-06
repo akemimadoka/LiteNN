@@ -1719,11 +1719,14 @@ Break candidates that can still materially improve vNext:
   - Benefit: reduces accidental aliasing, dtype punning, and cross-device mutation bugs from public `RawData()` use.
   - Hidden need: provide typed span/read-write view helpers and an unsafe/internal namespace for low-level tests and
     custom kernels.
-- [ ] Make CUDA eager fallback explicit rather than hidden inside `DeviceTraits<CUDA>` operations.
+- [x] Make CUDA eager fallback explicit rather than hidden inside `DeviceTraits<CUDA>` operations.
   - Benefit: runtime schedules and profiles would report host fallback and transfers instead of silently paying CPU bridge
     costs.
   - Hidden need: either reject unsupported eager CUDA ops by default or require an explicit `HostFallbackPolicy` at the
     call site.
+  - [x] `CUDAHostFallbackPolicy` defaults to `Reject`; eager CUDA fallback paths and the compiled CUDA CPU bridge require
+    explicit `CUDAHostFallbackPolicy::Allow` / runtime fallback policy, with `CUDADevice` and `CompiledModuleCUDATest`
+    coverage.
 - [ ] Split umbrella includes into stable deployment surfaces such as `LiteNNCore.h`, `LiteNNImporters.h`,
   `LiteNNCompiler.h`, and `LiteNNTools.h`.
   - Benefit: prevents the convenient all-in-one include from freezing importer/compiler/tool dependencies into the minimal
