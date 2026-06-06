@@ -1686,6 +1686,53 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         component.
   - [x] Add guard tests for dependency creep across component boundaries.
 
+#### G14.13 Final Break-Window Audit
+
+Purpose: capture the remaining places where another compatibility break could still buy major long-term simplification.
+These are not small feature gaps; each item removes an old public contract that can otherwise keep vNext coupled to the
+prototype-era architecture.
+
+Break candidates that can still materially improve vNext:
+
+- [ ] Make `Graph` a construction/migration object only and move the stable public model contract to `ModelGraph` /
+  `ModelBuilder`.
+  - Benefit: prevents frontends, importers, passes, and runtimes from depending on mutable node storage, `OutputInfo`,
+    `TensorSpec`, and `Tensor<PolymorphicDevice>` internals.
+  - Hidden need: public examples and importers must take or return `ModelGraph` / packages, with raw `Graph` exposed only
+    through explicitly named migration/test helpers.
+- [ ] Replace public mutable `GraphMutationPass::Run(Graph&)` style pass APIs with typed transform objects everywhere.
+  - Benefit: lets optimization, autograd, legalization, lowering, and validation share invalidation/debug metadata without
+    relying on in-place mutation order.
+  - Hidden need: existing graph-rewrite passes can remain internally mutating during migration, but their public entry must
+    be `Transform<ModelGraph, ModelGraph>`, `Transform<ModelGraph, ExecutablePlan>`, or `Transform<ExecutablePlan, ...>`.
+- [ ] Make compiled execution accept explicit typed buffer bindings instead of tensor vectors / raw entry pointer arrays.
+  - Benefit: unifies external rodata, mutable parameters, CUDA buffers, mobile mmap, and stateful entry execution under one
+    ABI, and makes shape/dtype/layout validation happen before dispatch.
+  - Hidden need: keep `Tensor` convenience wrappers only as adapter helpers around `RuntimeBufferBinding`.
+- [ ] Hide or split untyped tensor memory access from the stable public API.
+  - Benefit: reduces accidental aliasing, dtype punning, and cross-device mutation bugs from public `RawData()` use.
+  - Hidden need: provide typed span/read-write view helpers and an unsafe/migration namespace for low-level tests and
+    custom kernels.
+- [ ] Make CUDA eager fallback explicit rather than hidden inside `DeviceTraits<CUDA>` operations.
+  - Benefit: runtime schedules and profiles would report host fallback and transfers instead of silently paying CPU bridge
+    costs.
+  - Hidden need: either reject unsupported eager CUDA ops by default or require an explicit `HostFallbackPolicy` at the
+    call site.
+- [ ] Split umbrella includes into stable deployment surfaces such as `LiteNNCore.h`, `LiteNNImporters.h`,
+  `LiteNNCompiler.h`, and `LiteNNTools.h`.
+  - Benefit: prevents the convenient all-in-one include from freezing importer/compiler/tool dependencies into the minimal
+    runtime ABI.
+  - Hidden need: examples can still use the full umbrella, but install/export components should advertise narrower headers.
+- [ ] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit migration include/target.
+  - Benefit: makes pre-vNext graph archives impossible to use accidentally in production code while preserving tests and
+    one-off conversion tooling.
+  - Hidden need: conversion tools should prefer vNext package input/output and require an explicit command name for graph
+    archive migration.
+
+Recommendation: treat the first three items as the only remaining break-window candidates that can justify delaying vNext
+if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear
+namespaces, diagnostics, and package/component boundaries.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,
@@ -1704,6 +1751,21 @@ or backend architecture decisions before implementation would be meaningful.
 - Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact
   entries, mutable parameter/state rebinding, and saved-activation/tape ABI. G14 closes the compatibility-breaking Trainer
   API split; the production compiled train-step implementation remains the G13 AOT-training project.
+
+### Non-Blocking Improvement Queue
+
+These improvements do not require a compatibility break and should not block vNext once the public ABI direction is chosen.
+
+- Improve production CPU GEMM and convolution kernels, or integrate a backend library, without changing public graph/model
+  APIs.
+- Expand CUDA native lowering coverage for reductions, normalization, convolutions, attention, and fused training kernels.
+- Add richer benchmark rows for compile time, train-step latency, workspace pressure, and numerical drift.
+- Replace environment-variable notes in older performance documents with CLI/config examples where the core library already
+  owns explicit option objects.
+- Add CI matrix coverage for minimal runtime, importer-enabled, compiler-enabled, CUDA-enabled, and tools/examples-enabled
+  build profiles.
+- Generate public operator/backend coverage documentation directly from `OpSchemaRegistry`.
+- Add more external golden fixtures for PyTorch, llama.cpp, GGUF, and SDXL parity.
 
 ## Hidden Requirements
 
