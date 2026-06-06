@@ -58,7 +58,7 @@ namespace
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		return static_cast<const float*>(cpuTensor.RawData())[index];
+		return static_cast<const float*>(cpuTensor.UnsafeRawData())[index];
 	}
 
 	float ReadFloat(const Tensor<PolymorphicDevice>& tensor, std::size_t index)
@@ -101,7 +101,7 @@ namespace
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
-		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.RawData(), DataType::Int32, values.begin(),
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.UnsafeRawData(), DataType::Int32, values.begin(),
 		                              values.size());
 		return tensor;
 	}
@@ -110,7 +110,7 @@ namespace
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Float32, device);
-		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Float32, tensor.RawData(), DataType::Float32, values.data(),
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Float32, tensor.UnsafeRawData(), DataType::Float32, values.data(),
 		                              values.size());
 		return tensor;
 	}
@@ -367,8 +367,8 @@ namespace
 		const auto rowCount = data.NumElements() / rowSize;
 		const auto rowBytes = (rowSize / static_cast<std::size_t>(traits->blck_size)) * traits->type_size;
 		Tensor<CPU> storage(Uninitialized, { rowCount * rowBytes }, DataType::UInt8);
-		const auto* src = static_cast<const float*>(data.RawData());
-		auto* dst = static_cast<std::uint8_t*>(storage.RawData());
+		const auto* src = static_cast<const float*>(data.UnsafeRawData());
+		auto* dst = static_cast<std::uint8_t*>(storage.UnsafeRawData());
 		for (std::size_t row = 0; row < rowCount; ++row)
 		{
 			traits->from_float_ref(src + row * rowSize, dst + row * rowBytes, static_cast<int64_t>(rowSize));
@@ -529,7 +529,7 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(params.expressedShape, std::vector<std::size_t>({ 32 }));
 
 	const auto quantizedBytes = quantized.Data().CopyToDevice(CPU{});
-	const auto* rawBytes = static_cast<const std::uint8_t*>(quantizedBytes.RawData());
+	const auto* rawBytes = static_cast<const std::uint8_t*>(quantizedBytes.UnsafeRawData());
 	EXPECT_EQ(rawBytes[0], 0x10u);
 	EXPECT_EQ(rawBytes[17], 0x7fu);
 }

@@ -15,7 +15,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
 	bool HasActivationNode(const Graph& graph)

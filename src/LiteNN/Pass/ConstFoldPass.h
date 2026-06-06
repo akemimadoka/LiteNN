@@ -39,7 +39,7 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoUnaryOp(device, op, result.RawData(), input.DType(), input.Shape(), input.RawData());
+			DeviceTraits<CPU>::DoUnaryOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData());
 			return result;
 		}
 
@@ -48,8 +48,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoBinaryOp(device, op, result.RawData(), lhs.DType(), lhs.Shape(), lhs.RawData(),
-			                              rhs.DType(), rhs.Shape(), rhs.RawData());
+			DeviceTraits<CPU>::DoBinaryOp(device, op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(), lhs.UnsafeRawData(),
+			                              rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
 			return result;
 		}
 
@@ -57,8 +57,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, input.Shape(), targetType, device);
-			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), targetType,
-			                            result.RawData());
+			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), targetType,
+			                            result.UnsafeRawData());
 			return result;
 		}
 
@@ -87,7 +87,7 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoReduceOp(device, op, result.RawData(), input.DType(), input.Shape(), input.RawData(),
+			DeviceTraits<CPU>::DoReduceOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
 			                              axis);
 			return result;
 		}
@@ -96,8 +96,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), outInfo.dtype,
-			                            result.RawData());
+			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), outInfo.dtype,
+			                            result.UnsafeRawData());
 			return result;
 		}
 
@@ -106,7 +106,7 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoPermuteOp(device, result.RawData(), input.DType(), input.Shape(), input.RawData(),
+			DeviceTraits<CPU>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
 			                              ShapeView{ permutation });
 			return result;
 		}
@@ -234,10 +234,10 @@ namespace LiteNN
 			for (const auto& input : node.inputs)
 			{
 				const auto& t = *constValues[input.node];
-				srcPtrs.push_back(t.RawData());
+				srcPtrs.push_back(t.UnsafeRawData());
 				srcShapes.push_back(t.Shape());
 			}
-			DeviceTraits<CPU>::DoConcatOp(device, result.RawData(), outInfo.dtype, srcPtrs.data(), srcShapes.data(),
+			DeviceTraits<CPU>::DoConcatOp(device, result.UnsafeRawData(), outInfo.dtype, srcPtrs.data(), srcShapes.data(),
 			                              srcPtrs.size(), node.axis);
 			return result;
 		}
@@ -246,7 +246,7 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoSliceOp(device, result.RawData(), outInfo.dtype, input.Shape(), input.RawData(),
+			DeviceTraits<CPU>::DoSliceOp(device, result.UnsafeRawData(), outInfo.dtype, input.Shape(), input.UnsafeRawData(),
 			                             node.axis, node.start, node.length);
 			return result;
 		}
@@ -255,8 +255,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoGetRowsOp(device, result.RawData(), data.DType(), data.Shape(), data.RawData(),
-			                              indices.DType(), indices.Shape(), indices.RawData());
+			DeviceTraits<CPU>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(), data.UnsafeRawData(),
+			                              indices.DType(), indices.Shape(), indices.UnsafeRawData());
 			return result;
 		}
 
@@ -266,7 +266,7 @@ namespace LiteNN
 		{
 			return EnumDispatch(t.DType(), [&]<DataType TypeValue> -> bool {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				const auto* data = static_cast<const T*>(t.RawData());
+				const auto* data = static_cast<const T*>(t.UnsafeRawData());
 				for (auto i = 0uz; i < t.NumElements(); ++i)
 				{
 					if (data[i] != T(0))
@@ -282,7 +282,7 @@ namespace LiteNN
 		{
 			return EnumDispatch(t.DType(), [&]<DataType TypeValue> -> bool {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				const auto* data = static_cast<const T*>(t.RawData());
+				const auto* data = static_cast<const T*>(t.UnsafeRawData());
 				for (auto i = 0uz; i < t.NumElements(); ++i)
 				{
 					if (data[i] != T(1))

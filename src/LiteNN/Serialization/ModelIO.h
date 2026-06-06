@@ -668,7 +668,7 @@ namespace LiteNN::Serialization
 			WriteDataType(out, cpuTensor.DType());
 			WriteShape(out, cpuTensor.Shape().Dims);
 			const auto byteCount = cpuTensor.NumElements() * LiteNN::ElementByteSize(cpuTensor.DType());
-			out.write(static_cast<const char*>(cpuTensor.RawData()), static_cast<std::streamsize>(byteCount));
+			out.write(static_cast<const char*>(cpuTensor.UnsafeRawData()), static_cast<std::streamsize>(byteCount));
 			EnsureWrite(out);
 		}
 
@@ -712,13 +712,13 @@ namespace LiteNN::Serialization
 		{
 			if constexpr (std::same_as<D, CPU>)
 			{
-				out.write(static_cast<const char*>(tensor.RawData()), static_cast<std::streamsize>(TensorByteSize(tensor)));
+				out.write(static_cast<const char*>(tensor.UnsafeRawData()), static_cast<std::streamsize>(TensorByteSize(tensor)));
 				EnsureWrite(out);
 			}
 			else
 			{
 				auto cpuTensor = tensor.CopyToDevice(CPU{});
-				out.write(static_cast<const char*>(cpuTensor.RawData()),
+				out.write(static_cast<const char*>(cpuTensor.UnsafeRawData()),
 				          static_cast<std::streamsize>(TensorByteSize(cpuTensor)));
 				EnsureWrite(out);
 			}
@@ -735,7 +735,7 @@ namespace LiteNN::Serialization
 			const auto shape = ReadShape(in);
 			Tensor<CPU> tensor(Uninitialized, ShapeView{ shape }, dtype, CPU{});
 			const auto byteCount = tensor.NumElements() * LiteNN::ElementByteSize(dtype);
-			in.read(static_cast<char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
+			in.read(static_cast<char*>(tensor.UnsafeRawData()), static_cast<std::streamsize>(byteCount));
 			EnsureRead(in);
 			return tensor;
 		}

@@ -56,8 +56,8 @@ namespace LiteNN::Optimizer
 				                                                options_.learningRate, options_.beta1,
 				                                                options_.beta2, options_.epsilon,
 				                                                options_.weightDecay, step_);
-				DeviceTraits<PolymorphicDevice>::CopyFromCPU(variable.CurDevice(), variable.DType(), variable.RawData(),
-				                                             cpuResults[0].DType(), cpuResults[0].RawData(),
+				DeviceTraits<PolymorphicDevice>::CopyFromCPU(variable.CurDevice(), variable.DType(), variable.UnsafeRawData(),
+				                                             cpuResults[0].DType(), cpuResults[0].UnsafeRawData(),
 				                                             cpuResults[0].NumElements());
 				firstMoment_[variableIndex] = std::move(cpuResults[1]);
 				secondMoment_[variableIndex] = std::move(cpuResults[2]);

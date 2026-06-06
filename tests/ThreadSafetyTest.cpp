@@ -23,7 +23,7 @@ namespace
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		return static_cast<const float*>(cpuTensor.RawData())[index];
+		return static_cast<const float*>(cpuTensor.UnsafeRawData())[index];
 	}
 
 	bool NearlyEqual(float lhs, float rhs)

@@ -300,7 +300,7 @@ namespace LiteNN::Examples::Mnist
 
 	inline const float* FloatData(const Tensor<CPU>& tensor)
 	{
-		return static_cast<const float*>(tensor.RawData());
+		return static_cast<const float*>(tensor.UnsafeRawData());
 	}
 
 	inline int ArgMaxLogits(const Tensor<CPU>& logits)

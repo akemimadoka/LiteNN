@@ -47,7 +47,6 @@ TEST(Tensor, TypedDataViewsValidateDType)
 	const auto& constTensor = tensor;
 	EXPECT_FLOAT_EQ(constTensor.Data<float>()[1], 42.0F);
 	EXPECT_THROW((void) constTensor.Data<double>(), std::runtime_error);
-	EXPECT_EQ(tensor.UnsafeRawData(), tensor.RawData());
 }
 
 TEST(DataType, LowPrecisionMetadata)

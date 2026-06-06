@@ -16,7 +16,7 @@ namespace
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		return static_cast<const float*>(cpuTensor.RawData())[index];
+		return static_cast<const float*>(cpuTensor.UnsafeRawData())[index];
 	}
 
 	float ReadAsFloat(const Tensor<CPU>& tensor, std::size_t index)
@@ -24,9 +24,9 @@ namespace
 		auto cpuTensor = tensor.CopyToDevice(CPU{});
 		Tensor<CPU> converted(Uninitialized, cpuTensor.Shape(), DataType::Float32);
 		CPU cpu;
-		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.RawData(), cpuTensor.NumElements(),
-		                             DataType::Float32, converted.RawData());
-		return static_cast<const float*>(converted.RawData())[index];
+		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.UnsafeRawData(), cpuTensor.NumElements(),
+		                             DataType::Float32, converted.UnsafeRawData());
+		return static_cast<const float*>(converted.UnsafeRawData())[index];
 	}
 
 	float ReadVariableDataFloat(const Graph& graph, std::size_t variableIndex, std::size_t elementIndex)

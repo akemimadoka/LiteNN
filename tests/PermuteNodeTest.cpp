@@ -13,7 +13,7 @@ using namespace LiteNN;
 
 static float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return static_cast<const float*>(t.UnsafeRawData())[i];
 }
 
 // ============================================================

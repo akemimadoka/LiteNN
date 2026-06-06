@@ -142,8 +142,8 @@ namespace LiteNN::GGUF
 			}
 
 			Tensor<CPU> dequantizedF32(Uninitialized, params.expressedShape, DataType::Float32);
-			const auto* src = static_cast<const std::uint8_t*>(storage.RawData());
-			auto* dst = static_cast<float*>(dequantizedF32.RawData());
+			const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+			auto* dst = static_cast<float*>(dequantizedF32.UnsafeRawData());
 			for (std::size_t row = 0; row < rowCount; ++row)
 			{
 				traits->to_float(src + row * rowBytes, dst + row * rowSize, static_cast<int64_t>(rowSize));
@@ -156,8 +156,8 @@ namespace LiteNN::GGUF
 
 			CPU cpu;
 			Tensor<CPU> converted(Uninitialized, params.expressedShape, params.expressedType, cpu);
-			DeviceTraits<CPU>::ConvertTo(cpu, DataType::Float32, dequantizedF32.RawData(), dequantizedF32.NumElements(),
-			                             params.expressedType, converted.RawData());
+			DeviceTraits<CPU>::ConvertTo(cpu, DataType::Float32, dequantizedF32.UnsafeRawData(), dequantizedF32.NumElements(),
+			                             params.expressedType, converted.UnsafeRawData());
 			return converted;
 		}
 

@@ -433,3 +433,12 @@ TEST(G14PublicApiGuard, ModelGraphRawGraphAccessIsExplicitlyUnsafe)
 	EXPECT_EQ(modelBuilder.find("const Graph& GraphView()"), std::string::npos);
 	EXPECT_EQ(modelBuilder.find("Graph TakeGraph()"), std::string::npos);
 }
+
+TEST(G14PublicApiGuard, TensorRawDataCompatibilityForwarderIsRemoved)
+{
+	const auto tensorHeader = ReadSourceFile("src/LiteNN/Tensor.h");
+	EXPECT_NE(tensorHeader.find("UnsafeRawData()"), std::string::npos);
+	EXPECT_EQ(tensorHeader.find(" RawData()"), std::string::npos);
+	EXPECT_EQ(tensorHeader.find(".RawData()"), std::string::npos);
+	EXPECT_EQ(tensorHeader.find("->RawData()"), std::string::npos);
+}

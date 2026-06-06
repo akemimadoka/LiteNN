@@ -42,8 +42,8 @@ namespace LiteNN::Optimizer
 				const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 				Detail::ValidateVariableGradient(variable, gradient, variableIndex);
 
-				auto* data = static_cast<float*>(variable.RawData());
-				const auto* grad = static_cast<const float*>(gradient.RawData());
+				auto* data = static_cast<float*>(variable.UnsafeRawData());
+				const auto* grad = static_cast<const float*>(gradient.UnsafeRawData());
 				auto& firstMoment = firstMoment_[variableIndex];
 				auto& secondMoment = secondMoment_[variableIndex];
 

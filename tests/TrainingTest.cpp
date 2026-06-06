@@ -14,7 +14,7 @@ namespace
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		const auto cpuTensor = tensor.CopyToDevice(CPU{});
-		return static_cast<const float*>(cpuTensor.RawData())[index];
+		return static_cast<const float*>(cpuTensor.UnsafeRawData())[index];
 	}
 
 	float ReadVariableDataFloat(const Graph& graph, std::size_t variableIndex, std::size_t elementIndex)
@@ -94,7 +94,7 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 	EXPECT_EQ(state.parameters[0].name, "linear.weight");
 	EXPECT_FLOAT_EQ(ReadFloat(state.parameters[0].value, 0), 3.0f);
 
-	*static_cast<float*>(trainer.Parameters()[0].Parameter().RawData()) = 42.0f;
+	*static_cast<float*>(trainer.Parameters()[0].Parameter().UnsafeRawData()) = 42.0f;
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 42.0f);
 	trainer.LoadStateDict(state);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 3.0f);

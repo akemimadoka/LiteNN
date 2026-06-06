@@ -151,8 +151,8 @@ namespace LiteNN::Training
 				throw std::runtime_error("StateDict parameter type mismatch: " + binding.name);
 			}
 			auto& parameter = binding.Parameter();
-			DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(), parameter.RawData(),
-			                                             entry->value.DType(), entry->value.RawData(),
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(), parameter.UnsafeRawData(),
+			                                             entry->value.DType(), entry->value.UnsafeRawData(),
 			                                             entry->value.NumElements());
 		}
 	}

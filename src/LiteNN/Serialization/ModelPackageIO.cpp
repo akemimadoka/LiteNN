@@ -1255,7 +1255,7 @@ namespace LiteNN::Serialization
 			{
 				weights.write(padding.data(), static_cast<std::streamsize>(padding.size()));
 			}
-			weights.write(static_cast<const char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
+			weights.write(static_cast<const char*>(tensor.UnsafeRawData()), static_cast<std::streamsize>(byteCount));
 			if (!weights)
 			{
 				throw std::runtime_error("Failed to write LiteNN vNext external weight payload");

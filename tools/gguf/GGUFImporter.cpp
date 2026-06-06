@@ -441,7 +441,7 @@ namespace LiteNN::GGUF
 		{
 			Tensor<CPU> tensor(Uninitialized, shape, dtype);
 			SeekTo(input, offset);
-			ReadExact(input, tensor.RawData(), tensor.NumElements() * ElementByteSize(dtype), tensorName);
+			ReadExact(input, tensor.UnsafeRawData(), tensor.NumElements() * ElementByteSize(dtype), tensorName);
 			return tensor;
 		}
 
@@ -450,7 +450,7 @@ namespace LiteNN::GGUF
 		{
 			Tensor<CPU> tensor(Uninitialized, { bytes }, DataType::UInt8);
 			SeekTo(input, offset);
-			ReadExact(input, tensor.RawData(), bytes, tensorName);
+			ReadExact(input, tensor.UnsafeRawData(), bytes, tensorName);
 			return tensor;
 		}
 

@@ -489,7 +489,7 @@ namespace LiteNN
 			bool allZero = true;
 			EnumDispatch(cpuTensor.DType(), [&]<DataType TypeValue> {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				const auto* data = static_cast<const T*>(cpuTensor.RawData());
+				const auto* data = static_cast<const T*>(cpuTensor.UnsafeRawData());
 				for (std::size_t i = 0; i < cpuTensor.NumElements(); ++i)
 				{
 					if (data[i] != T{})

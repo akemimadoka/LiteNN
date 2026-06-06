@@ -12,7 +12,7 @@ namespace LiteNN::Layer::Detail
 		Tensor<CPU> tensor(Uninitialized, shape, dtype);
 		EnumDispatch(dtype, [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			auto* data = static_cast<T*>(tensor.RawData());
+			auto* data = static_cast<T*>(tensor.UnsafeRawData());
 			std::fill(data, data + tensor.NumElements(), static_cast<T>(value));
 		});
 		return tensor;

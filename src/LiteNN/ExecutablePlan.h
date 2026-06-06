@@ -905,7 +905,7 @@ namespace LiteNN
 			const auto memorySpace = TensorMemorySpaceFor(tensor.CurDevice());
 			storage.type = TensorType::Dense(tensor.DType(), tensor.Shape(), memorySpace);
 			storage.quantization = graph.GetVariable(i)->Quantization();
-			storage.region = MakeBorrowedBufferRegion(tensor.RawData(), storage.type.ByteSize().value_or(0), memorySpace);
+			storage.region = MakeBorrowedBufferRegion(tensor.UnsafeRawData(), storage.type.ByteSize().value_or(0), memorySpace);
 			storage.region.name = graph.VariableName(i);
 			plan.variables.push_back(std::move(storage));
 		}

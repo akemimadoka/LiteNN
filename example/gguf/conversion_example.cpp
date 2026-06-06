@@ -172,7 +172,7 @@ int main(int argc, char** argv)
 		LiteNN::CPU cpu;
 		LiteNN::Tensor<LiteNN::CPU> tokenIds(LiteNN::Uninitialized, { 2 }, LiteNN::DataType::Int32, cpu);
 		const std::array<std::int32_t, 2> tokenIdValues = { 0, 1 };
-		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, tokenIds.RawData(),
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, tokenIds.UnsafeRawData(),
 		                                               LiteNN::DataType::Int32, tokenIdValues.data(),
 		                                               tokenIdValues.size());
 		std::array<LiteNN::Tensor<LiteNN::CPU>, 1> inputs = { std::move(tokenIds) };
@@ -180,7 +180,7 @@ int main(int argc, char** argv)
 
 		LiteNN::Tensor<LiteNN::CPU> decodeTokenIds(LiteNN::Uninitialized, { 1 }, LiteNN::DataType::Int32, cpu);
 		const std::array<std::int32_t, 1> decodeTokenIdValues = { 2 };
-		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, decodeTokenIds.RawData(),
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, decodeTokenIds.UnsafeRawData(),
 		                                               LiteNN::DataType::Int32, decodeTokenIdValues.data(),
 		                                               decodeTokenIdValues.size());
 		LiteNN::Tensor<LiteNN::CPU> pastKeys({ 0.0F, 0.0F }, { 1, 1, 2 });

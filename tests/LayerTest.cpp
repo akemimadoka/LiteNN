@@ -40,7 +40,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 	{
-		return static_cast<const float*>(t.RawData())[i];
+		return static_cast<const float*>(t.UnsafeRawData())[i];
 	}
 
 	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
@@ -48,7 +48,7 @@ namespace
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
-		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.RawData(), DataType::Int32, values.begin(),
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.UnsafeRawData(), DataType::Int32, values.begin(),
 		                              values.size());
 		return tensor;
 	}
@@ -72,7 +72,7 @@ namespace
 
 		std::int32_t ReadInt32(const Tensor<CPU>& t, std::size_t i)
 		{
-			return static_cast<const std::int32_t*>(t.RawData())[i];
+			return static_cast<const std::int32_t*>(t.UnsafeRawData())[i];
 		}
 
 		struct FlashAttnReferenceOptions

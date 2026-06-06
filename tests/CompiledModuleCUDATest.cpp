@@ -31,14 +31,14 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 	{
-		return static_cast<const float*>(t.RawData())[i];
+		return static_cast<const float*>(t.UnsafeRawData())[i];
 	}
 
 	std::vector<float> ReadAsFloat32(const Tensor<CPU>& tensor)
 	{
 		std::vector<float> values(tensor.NumElements());
 		CPU cpu;
-		DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.RawData(), tensor.NumElements(), DataType::Float32,
+		DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), DataType::Float32,
 		                             values.data());
 		return values;
 	}

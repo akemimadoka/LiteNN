@@ -135,7 +135,7 @@ Tensor<PolymorphicDevice> MakeHostTensorValue(const TensorStorageRef& storage)
 		throw std::runtime_error("MLIR translation executable plan variable storage is smaller than tensor type");
 	}
 	Tensor<CPU> data(Uninitialized, storage.type.StaticShape(), storage.type.dtype);
-	std::memcpy(data.RawData(), static_cast<const std::byte*>(storage.region.data) + storage.storageOffsetBytes,
+	std::memcpy(data.UnsafeRawData(), static_cast<const std::byte*>(storage.region.data) + storage.storageOffsetBytes,
 	            byteSize);
 	return data.CopyToDevice(PolymorphicDevice{ CPU{} });
 }
@@ -147,7 +147,7 @@ DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<Polymorphic
 	auto cpuTensor = tensor.CopyToDevice(CPU{});
 
 	const auto numElements = std::max(ShapeView{ cpuTensor.Shape() }.NumElements(), std::size_t(1));
-	const auto* rawData = cpuTensor.RawData();
+	const auto* rawData = cpuTensor.UnsafeRawData();
 
 	switch (tensor.DType())
 	{
@@ -332,7 +332,7 @@ private:
 		Tensor<CPU> tensor(Uninitialized, ownedShape, dtype);
 		EnumDispatch(dtype, [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			auto* data = static_cast<T*>(tensor.RawData());
+			auto* data = static_cast<T*>(tensor.UnsafeRawData());
 			std::fill(data, data + tensor.NumElements(), static_cast<T>(value));
 		});
 		auto poly = tensor.CopyToDevice(PolymorphicDevice{ CPU{} });

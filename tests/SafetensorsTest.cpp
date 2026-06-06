@@ -63,12 +63,12 @@ namespace
 
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
 	std::int64_t ReadI64(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const std::int64_t*>(tensor.RawData())[index];
+		return static_cast<const std::int64_t*>(tensor.UnsafeRawData())[index];
 	}
 } // namespace
 

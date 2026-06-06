@@ -21,7 +21,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
 	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
@@ -29,7 +29,7 @@ namespace
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
-		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.RawData(), DataType::Int32, values.begin(),
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.UnsafeRawData(), DataType::Int32, values.begin(),
 		                               values.size());
 		return tensor;
 	}

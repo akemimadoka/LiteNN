@@ -15,7 +15,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 	{
-		return static_cast<const float*>(t.RawData())[i];
+		return static_cast<const float*>(t.UnsafeRawData())[i];
 	}
 
 	void ExpectOutputsNear(const std::vector<Tensor<CPU>>& actual, const std::vector<Tensor<CPU>>& expected,

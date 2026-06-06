@@ -21,7 +21,7 @@ namespace LiteNN::Layer
 			Tensor<CPU> tensor(Uninitialized, { length }, dtype);
 			EnumDispatch(dtype, [&]<DataType TypeValue> {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				auto* data = static_cast<T*>(tensor.RawData());
+				auto* data = static_cast<T*>(tensor.UnsafeRawData());
 				for (auto index = 0uz; index < length; ++index)
 				{
 					data[index] = static_cast<T>(start + step * static_cast<double>(index));

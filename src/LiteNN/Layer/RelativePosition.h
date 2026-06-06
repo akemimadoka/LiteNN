@@ -19,7 +19,7 @@ namespace LiteNN::Compatibility::GGML
 		inline Tensor<CPU> MakeRelativePositionIndexTensor(std::size_t querySize, std::size_t keySize)
 		{
 			Tensor<CPU> indices(Uninitialized, { querySize, keySize }, DataType::Int32);
-			auto* data = static_cast<std::int32_t*>(indices.RawData());
+			auto* data = static_cast<std::int32_t*>(indices.UnsafeRawData());
 			for (auto query = 0uz; query < querySize; ++query)
 			{
 				for (auto key = 0uz; key < keySize; ++key)

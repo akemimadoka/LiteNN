@@ -19,7 +19,7 @@ namespace
 {
 	float ReadFloat(const LiteNN::Tensor<LiteNN::CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
 	void PrintTensor(std::string_view label, const LiteNN::Tensor<LiteNN::CPU>& tensor)

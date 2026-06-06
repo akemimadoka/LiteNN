@@ -1755,6 +1755,39 @@ Break candidates that can still materially improve vNext:
     `Serialization::Detail` internals used by tests and explicit conversion tooling.
   - [x] Split `ExternalWeightSaveOptions` into `Serialization/ExternalWeights.h`, allowing `ModelPackageIO.h` to stop
     including `ModelIO.h`; tests and conversion tools that still use graph archives now include `ModelIO.h` explicitly.
+- [x] Remove the remaining `Tensor::RawData()` compatibility forwarding API.
+  - Benefit: makes every untyped buffer access visibly unsafe at the call site instead of preserving a familiar old
+    convenience name.
+  - Hidden need: low-level kernels, serializers, tests, and device bridges must use `UnsafeRawData()` deliberately, while
+    ordinary CPU element access should prefer `Data<T>()` / `MutableData<T>()`.
+  - [x] Removed the `RawData()` forwarding methods, migrated low-level call sites to `UnsafeRawData()`, and added
+    guard coverage so the old method name cannot re-enter `Tensor.h`.
+- [ ] Delete graph-archive legacy format facilities rather than keeping them in `Serialization::Detail`.
+  - Benefit: removes the last pre-vNext model file format, node-kind enum, and graph-shaped serialization path from the
+    branch.
+  - Hidden need: tools/examples/tests that still need persistence must use vNext packages, separated weights, or compiled
+    artifacts; explicit conversion helpers can live outside the public runtime surface only if they do not preserve the
+    old loader.
+- [ ] Move `Trainer` construction away from raw `Graph&`.
+  - Benefit: keeps training aligned with `ModelGraph`, `ExecutablePlan`, and future `TrainStepPlan` contracts instead of
+    mutating a construction graph directly.
+  - Hidden need: existing training tests and examples need a stable `ModelGraph`/plan handoff for autograd expansion,
+    parameter binding, and optional AOT policy.
+- [ ] Demote or remove `CompiledModule` Tensor convenience `Run` APIs from the stable ABI.
+  - Benefit: compiled execution would have one production ABI centered on `CompiledTensorBinding`, with Tensor helpers
+    living as adapters rather than core runtime contracts.
+  - Hidden need: benchmarks/examples need small helper wrappers so application code can still be ergonomic without
+    freezing Tensor ownership into compiled execution.
+- [ ] Make importer results stop exposing raw `Graph` directly.
+  - Benefit: importers become producers of `ImporterOwnedManifest`, `ModelGraph`, or vNext packages, rather than leaking
+    construction storage.
+  - Hidden need: GGUF/Torch/SDXL conversion tools need explicit internal access only while lowering or diagnostics still
+    inspect raw graph details.
+- [ ] Replace the public borrowed-memory Tensor constructor with an explicit unsafe factory or `TensorView`.
+  - Benefit: makes lifetime/aliasing hazards clear and avoids a raw `void*` constructor that looks like ordinary Tensor
+    ownership.
+  - Hidden need: compiled bindings, external buffers, and tests need a lightweight borrowed view path that cannot be
+    mistaken for owning storage.
 
 Recommendation: treat the first three items as the only remaining break-window candidates that can justify delaying vNext
 if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear

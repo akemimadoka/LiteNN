@@ -38,7 +38,7 @@ namespace LiteNN::Initializer
 				if constexpr (IsFloatingDataType(TypeValue))
 				{
 					using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-					auto* data = static_cast<T*>(tensor.RawData());
+					auto* data = static_cast<T*>(tensor.UnsafeRawData());
 					for (std::size_t i = 0; i < tensor.NumElements(); ++i)
 					{
 						data[i] = static_cast<T>(generator());
@@ -75,7 +75,7 @@ namespace LiteNN::Initializer
 		Tensor<CPU> tensor(Uninitialized, shape, dtype);
 		EnumDispatch(dtype, [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			auto* data = static_cast<T*>(tensor.RawData());
+			auto* data = static_cast<T*>(tensor.UnsafeRawData());
 			std::fill(data, data + tensor.NumElements(), static_cast<T>(value));
 		});
 		return tensor;

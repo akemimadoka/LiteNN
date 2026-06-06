@@ -25,7 +25,7 @@ namespace LiteNN::Optimizer
 			throw std::runtime_error("Tensor initializer element count does not match shape");
 		}
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Float32);
-		std::memcpy(tensor.RawData(), values.data(), values.size() * sizeof(float));
+		std::memcpy(tensor.UnsafeRawData(), values.data(), values.size() * sizeof(float));
 		return tensor;
 	}
 
@@ -40,7 +40,7 @@ namespace LiteNN::Optimizer
 			throw std::runtime_error("SoftmaxCrossEntropyWithLogits target class is out of range");
 		}
 
-		const auto* data = static_cast<const float*>(logits.RawData());
+		const auto* data = static_cast<const float*>(logits.UnsafeRawData());
 		const auto maxLogit = *std::max_element(data, data + logits.NumElements());
 
 		double sumExp = 0.0;
@@ -80,7 +80,7 @@ namespace LiteNN::Optimizer
 			throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch target count does not match batch size");
 		}
 
-		const auto* data = static_cast<const float*>(logits.RawData());
+		const auto* data = static_cast<const float*>(logits.UnsafeRawData());
 		std::vector<float> gradient(logits.NumElements());
 		double totalLoss = 0.0;
 		const auto invBatch = 1.0f / static_cast<float>(batchSize);

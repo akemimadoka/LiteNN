@@ -1502,7 +1502,7 @@ namespace
 			return std::nullopt;
 		}
 		std::vector<float> values(cpuTensor.NumElements());
-		std::memcpy(values.data(), cpuTensor.RawData(), values.size() * sizeof(float));
+		std::memcpy(values.data(), cpuTensor.UnsafeRawData(), values.size() * sizeof(float));
 		return values;
 	}
 
@@ -1646,12 +1646,12 @@ namespace
 		bytes.resize(oldSize + byteSize);
 		if (tensor.CurDevice().template As<CPU>() != nullptr)
 		{
-			std::memcpy(bytes.data() + oldSize, tensor.RawData(), byteSize);
+			std::memcpy(bytes.data() + oldSize, tensor.UnsafeRawData(), byteSize);
 		}
 		else
 		{
 			const auto cpuTensor = tensor.CopyToDevice(CPU{});
-			std::memcpy(bytes.data() + oldSize, cpuTensor.RawData(), byteSize);
+			std::memcpy(bytes.data() + oldSize, cpuTensor.UnsafeRawData(), byteSize);
 		}
 		return offset;
 	}
@@ -3220,7 +3220,7 @@ namespace
 	CompiledTensorBinding MakeBindingFromTensor(Tensor<D>& tensor, std::string name = {},
 	                                            std::optional<QuantizationParams> quantization = std::nullopt)
 	{
-		return { .data = tensor.RawData(),
+		return { .data = tensor.UnsafeRawData(),
 			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
 			     .name = std::move(name),
 			     .quantization = std::move(quantization) };
@@ -3230,7 +3230,7 @@ namespace
 	CompiledTensorBinding MakeBindingFromTensor(const Tensor<D>& tensor, std::string name = {},
 	                                            std::optional<QuantizationParams> quantization = std::nullopt)
 	{
-		return { .data = const_cast<void*>(tensor.RawData()),
+		return { .data = const_cast<void*>(tensor.UnsafeRawData()),
 			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
 			     .name = std::move(name),
 			     .quantization = std::move(quantization) };
@@ -3463,7 +3463,7 @@ namespace
 		{
 			payload.constantData.resize(static_cast<std::size_t>(offset));
 		}
-		const auto* begin = reinterpret_cast<const std::byte*>(cpuTensor.RawData());
+		const auto* begin = reinterpret_cast<const std::byte*>(cpuTensor.UnsafeRawData());
 		payload.constantData.insert(payload.constantData.end(), begin, begin + byteSize);
 		return offset;
 	}
@@ -3953,7 +3953,7 @@ namespace
 		const auto cpuTensor = constant->value.CopyToDevice(CPU{});
 		std::vector<double> values(cpuTensor.NumElements());
 		CPU cpu;
-		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.RawData(), cpuTensor.NumElements(),
+		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.UnsafeRawData(), cpuTensor.NumElements(),
 		                             DataType::Float64, values.data());
 		for (double value : values)
 		{
@@ -5360,11 +5360,11 @@ namespace
 		key.pointers.reserve(inputs.size() + outputs.size());
 		for (const auto& input : inputs)
 		{
-			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(input.RawData()));
+			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(input.UnsafeRawData()));
 		}
 		for (auto& output : outputs)
 		{
-			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(output.RawData()));
+			key.pointers.push_back(reinterpret_cast<std::uintptr_t>(output.UnsafeRawData()));
 		}
 		return key;
 	}
@@ -5478,7 +5478,7 @@ namespace
 		{
 			throw std::runtime_error(std::format("CUDA native {} argument byte range is out of bounds", label));
 		}
-		auto* base = static_cast<std::byte*>(tensor.RawData());
+		auto* base = static_cast<std::byte*>(tensor.UnsafeRawData());
 		return base + argument.byteOffset;
 	}
 
@@ -5491,7 +5491,7 @@ namespace
 		{
 			throw std::runtime_error(std::format("CUDA native {} argument byte range is out of bounds", label));
 		}
-		auto* base = reinterpret_cast<const std::byte*>(tensor.RawData());
+		auto* base = reinterpret_cast<const std::byte*>(tensor.UnsafeRawData());
 		return const_cast<std::byte*>(base + argument.byteOffset);
 	}
 
@@ -5569,8 +5569,8 @@ namespace
 			(void) TensorArgumentPointer(outputArg, output, "output");
 			(void) ConstTensorArgumentPointer(lhsArg, lhs, "input");
 			(void) ConstTensorArgumentPointer(rhsArg, rhs, "input");
-			DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.RawData(), lhs.DType(), lhs.Shape(),
-			                               lhs.RawData(), rhs.DType(), rhs.Shape(), rhs.RawData(),
+			DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, output.UnsafeRawData(), lhs.DType(), lhs.Shape(),
+			                               lhs.UnsafeRawData(), rhs.DType(), rhs.Shape(), rhs.UnsafeRawData(),
 			                               ToCUDAExecutionOptions(options));
 			return;
 		}
@@ -5584,8 +5584,8 @@ namespace
 		Tensor<CUDA> outputView(outputPtr, { m, n }, *dtype, device);
 		Tensor<CUDA> lhsView(lhsPtr, { m, k }, *dtype, device);
 		Tensor<CUDA> rhsView(rhsPtr, { k, n }, *dtype, device);
-		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.RawData(), lhsView.DType(), lhsView.Shape(),
-		                               lhsView.RawData(), rhsView.DType(), rhsView.Shape(), rhsView.RawData(),
+		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.UnsafeRawData(), lhsView.DType(), lhsView.Shape(),
+		                               lhsView.UnsafeRawData(), rhsView.DType(), rhsView.Shape(), rhsView.UnsafeRawData(),
 		                               ToCUDAExecutionOptions(options));
 	}
 
@@ -6908,8 +6908,8 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	{
 		Tensor<CPU> cpuInput(Uninitialized, inputs[i].Shape(), inputs[i].DType(), CPU{});
 		auto inputDevice = inputs[i].CurDevice();
-		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].RawData(), inputs[i].NumElements(),
-		                              cpuInput.DType(), cpuInput.RawData(),
+		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].UnsafeRawData(), inputs[i].NumElements(),
+		                              cpuInput.DType(), cpuInput.UnsafeRawData(),
 		                              CUDAExecutionOptions{ .stream = options.stream,
 		                                                    .synchronize = true,
 		                                                    .allowHostFallback = true });
@@ -6926,8 +6926,8 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 
 	for (std::size_t i = 0; i < outputs.size(); ++i)
 	{
-		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].RawData(),
-		                                cpuOutputs[i].DType(), cpuOutputs[i].RawData(), cpuOutputs[i].NumElements(),
+		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].UnsafeRawData(),
+		                                cpuOutputs[i].DType(), cpuOutputs[i].UnsafeRawData(), cpuOutputs[i].NumElements(),
 		                                CUDAExecutionOptions{ .stream = options.stream,
 		                                                      .synchronize = true,
 		                                                      .allowHostFallback = true });

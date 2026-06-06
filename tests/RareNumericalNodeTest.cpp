@@ -21,7 +21,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
 	void ExpectShape(ShapeView shape, std::initializer_list<std::size_t> expected)

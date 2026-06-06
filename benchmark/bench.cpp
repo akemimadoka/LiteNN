@@ -490,13 +490,13 @@ void BMCUDADeviceMatMul(benchmark::State& state, std::size_t batch, std::size_t 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
 		auto output = lhs.MatMul(rhs);
-		benchmark::DoNotOptimize(output.RawData());
+		benchmark::DoNotOptimize(output.UnsafeRawData());
 	}
 
 	for (auto _ : state)
 	{
 		auto output = lhs.MatMul(rhs);
-		benchmark::DoNotOptimize(output.RawData());
+		benchmark::DoNotOptimize(output.UnsafeRawData());
 		benchmark::ClobberMemory();
 	}
 

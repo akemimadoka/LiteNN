@@ -199,7 +199,7 @@ namespace LiteNN::Detail
 		const auto offset = BroadcastOffsetForLinear(tensor, targetShape, targetLinear);
 		return EnumDispatch(tensor.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			return static_cast<double>(static_cast<const T*>(tensor.RawData())[offset]);
+			return static_cast<double>(static_cast<const T*>(tensor.UnsafeRawData())[offset]);
 		});
 	}
 
@@ -237,9 +237,9 @@ namespace LiteNN::Detail
 
 		EnumDispatch(lhs.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* lhsPtr = static_cast<const T*>(lhs.RawData());
-			const auto* rhsPtr = static_cast<const T*>(rhs.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* lhsPtr = static_cast<const T*>(lhs.UnsafeRawData());
+			const auto* rhsPtr = static_cast<const T*>(rhs.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			std::vector<std::size_t> coord(leadRank, 0uz);
 			for (auto batch = 0uz; batch < batchCount; ++batch)
@@ -324,9 +324,9 @@ namespace LiteNN::Detail
 
 		EnumDispatch(lhs.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* lhsPtr = static_cast<const T*>(lhs.RawData());
-			const auto* rhsPtr = static_cast<const T*>(rhs.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* lhsPtr = static_cast<const T*>(lhs.UnsafeRawData());
+			const auto* rhsPtr = static_cast<const T*>(rhs.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			std::vector<std::size_t> coord(leadRank, 0uz);
 			for (auto batch = 0uz; batch < batchCount; ++batch)
@@ -387,13 +387,13 @@ namespace LiteNN::Detail
 
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, outputShape, DataType::Float32, cpu);
-		auto* dst = static_cast<float*>(result.RawData());
+		auto* dst = static_cast<float*>(result.UnsafeRawData());
 		const auto count = timesteps.Shape()[0];
 		const auto half = dim / 2;
 
 		EnumDispatch(timesteps.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(timesteps.RawData());
+			const auto* src = static_cast<const T*>(timesteps.UnsafeRawData());
 			for (auto i = 0uz; i < count; ++i)
 			{
 				const auto timestep = static_cast<float>(src[i]);
@@ -430,9 +430,9 @@ namespace LiteNN::Detail
 		const auto n = a.Shape()[rank - 1];
 		const auto rhsCols = b.Shape()[rank - 1];
 		const auto batchCount = Product(std::span<const std::size_t>{ outputShape }.subspan(0, rank - 2));
-		const auto* aPtr = static_cast<const float*>(a.RawData());
-		const auto* bPtr = static_cast<const float*>(b.RawData());
-		auto* dst = static_cast<float*>(result.RawData());
+		const auto* aPtr = static_cast<const float*>(a.UnsafeRawData());
+		const auto* bPtr = static_cast<const float*>(b.UnsafeRawData());
+		auto* dst = static_cast<float*>(result.UnsafeRawData());
 
 		for (auto batch = 0uz; batch < batchCount; ++batch)
 		{
@@ -496,11 +496,11 @@ namespace LiteNN::Detail
 			updatedVelocity.emplace(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
 		}
 
-		const auto* parameterPtr = static_cast<const float*>(parameter.RawData());
-		const auto* gradientPtr = static_cast<const float*>(gradient.RawData());
-		const auto* velocityPtr = velocity ? static_cast<const float*>(velocity->RawData()) : nullptr;
-		auto* parameterOut = static_cast<float*>(updatedParameter.RawData());
-		auto* velocityOut = updatedVelocity ? static_cast<float*>(updatedVelocity->RawData()) : nullptr;
+		const auto* parameterPtr = static_cast<const float*>(parameter.UnsafeRawData());
+		const auto* gradientPtr = static_cast<const float*>(gradient.UnsafeRawData());
+		const auto* velocityPtr = velocity ? static_cast<const float*>(velocity->UnsafeRawData()) : nullptr;
+		auto* parameterOut = static_cast<float*>(updatedParameter.UnsafeRawData());
+		auto* velocityOut = updatedVelocity ? static_cast<float*>(updatedVelocity->UnsafeRawData()) : nullptr;
 		for (auto index = 0uz; index < parameter.NumElements(); ++index)
 		{
 			const auto decayedGradient =
@@ -566,13 +566,13 @@ namespace LiteNN::Detail
 		Tensor<CPU> updatedFirstMoment(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
 		Tensor<CPU> updatedSecondMoment(Uninitialized, parameter.Shape(), DataType::Float32, cpu);
 
-		const auto* parameterPtr = static_cast<const float*>(parameter.RawData());
-		const auto* gradientPtr = static_cast<const float*>(gradient.RawData());
-		const auto* firstPtr = static_cast<const float*>(firstMoment.RawData());
-		const auto* secondPtr = static_cast<const float*>(secondMoment.RawData());
-		auto* parameterOut = static_cast<float*>(updatedParameter.RawData());
-		auto* firstOut = static_cast<float*>(updatedFirstMoment.RawData());
-		auto* secondOut = static_cast<float*>(updatedSecondMoment.RawData());
+		const auto* parameterPtr = static_cast<const float*>(parameter.UnsafeRawData());
+		const auto* gradientPtr = static_cast<const float*>(gradient.UnsafeRawData());
+		const auto* firstPtr = static_cast<const float*>(firstMoment.UnsafeRawData());
+		const auto* secondPtr = static_cast<const float*>(secondMoment.UnsafeRawData());
+		auto* parameterOut = static_cast<float*>(updatedParameter.UnsafeRawData());
+		auto* firstOut = static_cast<float*>(updatedFirstMoment.UnsafeRawData());
+		auto* secondOut = static_cast<float*>(updatedSecondMoment.UnsafeRawData());
 		const auto biasCorrection1 = 1.0 - std::pow(beta1, static_cast<double>(step));
 		const auto biasCorrection2 = 1.0 - std::pow(beta2, static_cast<double>(step));
 		for (auto index = 0uz; index < parameter.NumElements(); ++index)
@@ -623,8 +623,8 @@ namespace LiteNN::Detail
 
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			for (auto o = 0uz; o < outer; ++o)
 			{
 				for (auto i = 0uz; i < inner; ++i)
@@ -682,8 +682,8 @@ namespace LiteNN::Detail
 
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			for (auto o = 0uz; o < outer; ++o)
 			{
 				for (auto i = 0uz; i < inner; ++i)
@@ -766,8 +766,8 @@ namespace LiteNN::Detail
 
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			if (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::RMSNorm)
 			{
 				if (input.Shape().NumDim() == 0 || axis >= input.Shape().NumDim())
@@ -907,8 +907,8 @@ namespace LiteNN::Detail
 		const auto channels = state.Shape()[1];
 		EnumDispatch(state.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* statePtr = static_cast<const T*>(state.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* statePtr = static_cast<const T*>(state.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			std::vector<double> hidden(channels, 0.0);
 			for (auto step = 0uz; step < steps; ++step)
 			{
@@ -962,10 +962,10 @@ namespace LiteNN::Detail
 		const auto channels = key.Shape()[1];
 		EnumDispatch(key.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* keyPtr = static_cast<const T*>(key.RawData());
-			const auto* valuePtr = static_cast<const T*>(value.RawData());
-			const auto* receptancePtr = static_cast<const T*>(receptance.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* keyPtr = static_cast<const T*>(key.UnsafeRawData());
+			const auto* valuePtr = static_cast<const T*>(value.UnsafeRawData());
+			const auto* receptancePtr = static_cast<const T*>(receptance.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			std::vector<double> aa(channels, 0.0);
 			std::vector<double> bb(channels, 0.0);
 
@@ -1015,8 +1015,8 @@ namespace LiteNN::Detail
 		ValidateCrossEntropyInputs(logits, labels);
 		const auto classCount = logits.Shape().Dims.back();
 		const auto rowCount = logits.NumElements() / classCount;
-		const auto* logitsPtr = static_cast<const float*>(logits.RawData());
-		const auto* labelsPtr = static_cast<const float*>(labels.RawData());
+		const auto* logitsPtr = static_cast<const float*>(logits.UnsafeRawData());
+		const auto* labelsPtr = static_cast<const float*>(labels.UnsafeRawData());
 		double totalLoss = 0.0;
 
 		for (auto row = 0uz; row < rowCount; ++row)
@@ -1039,7 +1039,7 @@ namespace LiteNN::Detail
 
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, { 1 }, DataType::Float32, cpu);
-		*static_cast<float*>(result.RawData()) = static_cast<float>(totalLoss / static_cast<double>(rowCount));
+		*static_cast<float*>(result.UnsafeRawData()) = static_cast<float>(totalLoss / static_cast<double>(rowCount));
 		return result;
 	}
 
@@ -1055,12 +1055,12 @@ namespace LiteNN::Detail
 		const auto classCount = logits.Shape().Dims.back();
 		const auto rowCount = logits.NumElements() / classCount;
 		const auto scale =
-		    static_cast<double>(*static_cast<const float*>(grad.RawData())) / static_cast<double>(rowCount);
-		const auto* logitsPtr = static_cast<const float*>(logits.RawData());
-		const auto* labelsPtr = static_cast<const float*>(labels.RawData());
+		    static_cast<double>(*static_cast<const float*>(grad.UnsafeRawData())) / static_cast<double>(rowCount);
+		const auto* logitsPtr = static_cast<const float*>(logits.UnsafeRawData());
+		const auto* labelsPtr = static_cast<const float*>(labels.UnsafeRawData());
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, logits.Shape(), DataType::Float32, cpu);
-		auto* dst = static_cast<float*>(result.RawData());
+		auto* dst = static_cast<float*>(result.UnsafeRawData());
 
 		for (auto row = 0uz; row < rowCount; ++row)
 		{
@@ -1302,8 +1302,8 @@ namespace LiteNN::Detail
 		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			std::vector<std::size_t> outCoord(spatialRank, 0uz);
 			std::vector<std::size_t> kernelCoord(spatialRank, 0uz);
 
@@ -1398,10 +1398,10 @@ namespace LiteNN::Detail
 		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			const auto* filter = static_cast<const T*>(weight.RawData());
-			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			const auto* filter = static_cast<const T*>(weight.UnsafeRawData());
+			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			for (auto n = 0uz; n < batch; ++n)
 			{
@@ -1497,10 +1497,10 @@ namespace LiteNN::Detail
 		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			const auto* filter = static_cast<const T*>(weight.RawData());
-			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			const auto* filter = static_cast<const T*>(weight.UnsafeRawData());
+			const auto* biasData = bias == nullptr ? nullptr : static_cast<const T*>(bias->UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			std::fill(dst, dst + result.NumElements(), static_cast<T>(0));
 			if (biasData != nullptr)
@@ -1598,8 +1598,8 @@ namespace LiteNN::Detail
 		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			for (auto n = 0uz; n < batch; ++n)
 			{
 				for (auto c = 0uz; c < channels; ++c)
@@ -1720,8 +1720,8 @@ namespace LiteNN::Detail
 		Tensor<CPU> result(Uninitialized, outputShape, input.DType(), cpu);
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			for (auto n = 0uz; n < batch; ++n)
 			{

@@ -286,12 +286,12 @@ namespace LiteNN::Runtime
 			assert(tensor.NumElements() == 1 && tensor.DType() == DataType::Bool);
 			if constexpr (std::same_as<D, CPU>)
 			{
-				return *static_cast<const bool*>(tensor.RawData());
+				return *static_cast<const bool*>(tensor.UnsafeRawData());
 			}
 			else
 			{
 				const auto cpuTensor = tensor.CopyToDevice(CPU{});
-				return *static_cast<const bool*>(cpuTensor.RawData());
+				return *static_cast<const bool*>(cpuTensor.UnsafeRawData());
 			}
 		}
 
@@ -363,8 +363,8 @@ namespace LiteNN::Runtime
 				}
 				else
 				{
-					const auto* src = static_cast<const T*>(input.RawData());
-					auto* dst = static_cast<std::int32_t*>(result.RawData());
+					const auto* src = static_cast<const T*>(input.UnsafeRawData());
+					auto* dst = static_cast<std::int32_t*>(result.UnsafeRawData());
 					std::vector<std::int32_t> orderIndices(axisSize);
 
 					for (auto outer = 0uz; outer < outerSize; ++outer)
@@ -394,7 +394,7 @@ namespace LiteNN::Runtime
 		{
 			CPU cpu;
 			Tensor<CPU> result(Uninitialized, { as.Shape()[1], ids.Shape()[0], b.Shape()[2] }, DataType::Float32, cpu);
-			auto* dst = static_cast<float*>(result.RawData());
+			auto* dst = static_cast<float*>(result.UnsafeRawData());
 
 			EnumDispatch(as.DType(), [&]<DataType AsTypeValue> {
 				using AsT = typename DeviceTraits<CPU>::template DataTypeMapping<AsTypeValue>;
@@ -402,9 +402,9 @@ namespace LiteNN::Runtime
 					using BT = typename DeviceTraits<CPU>::template DataTypeMapping<BTypeValue>;
 
 					auto run = [&]<typename IdT>() {
-						const auto* asPtr = static_cast<const AsT*>(as.RawData());
-						const auto* bPtr = static_cast<const BT*>(b.RawData());
-						const auto* idsPtr = static_cast<const IdT*>(ids.RawData());
+						const auto* asPtr = static_cast<const AsT*>(as.UnsafeRawData());
+						const auto* bPtr = static_cast<const BT*>(b.UnsafeRawData());
+						const auto* idsPtr = static_cast<const IdT*>(ids.UnsafeRawData());
 
 						const auto k = as.Shape()[0];
 						const auto m = as.Shape()[1];
@@ -504,8 +504,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoUnaryOp(device, node.op, result.RawData(), input.DType(), input.Shape(),
-			                           input.RawData());
+			DeviceTraits<D>::DoUnaryOp(device, node.op, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                           input.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -518,8 +518,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoBinaryOp(device, node.op, result.RawData(), lhs.DType(), lhs.Shape(), lhs.RawData(),
-			                            rhs.DType(), rhs.Shape(), rhs.RawData());
+			DeviceTraits<D>::DoBinaryOp(device, node.op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(), lhs.UnsafeRawData(),
+			                            rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -530,8 +530,8 @@ namespace LiteNN::Runtime
 			const auto& input = GetValue(slots, node.input);
 
 			Tensor<D> result(Uninitialized, input.Shape(), node.targetType, device);
-			DeviceTraits<D>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), node.targetType,
-			                           result.RawData());
+			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), node.targetType,
+			                           result.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -671,8 +671,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoReduceOp(device, node.op, result.RawData(), input.DType(), input.Shape(),
-			                            input.RawData(), node.axis);
+			DeviceTraits<D>::DoReduceOp(device, node.op, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                            input.UnsafeRawData(), node.axis);
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -686,8 +686,8 @@ namespace LiteNN::Runtime
 			// 复制数据到新 shape 的 tensor
 			const auto& outputInfo = entry.outputInfos[0];
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::ConvertTo(device, input.DType(), input.RawData(), input.NumElements(), outputInfo.dtype,
-			                           result.RawData());
+			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), outputInfo.dtype,
+			                           result.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -699,7 +699,7 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoPermuteOp(device, result.RawData(), input.DType(), input.Shape(), input.RawData(),
+			DeviceTraits<D>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
 			                            ShapeView{ node.permutation });
 			slots[nodeId].push_back(std::move(result));
 		}
@@ -1121,12 +1121,12 @@ namespace LiteNN::Runtime
 			for (const auto& input : node.inputs)
 			{
 				const auto& t = GetValue(slots, input);
-				srcPtrs.push_back(t.RawData());
+				srcPtrs.push_back(t.UnsafeRawData());
 				srcShapes.push_back(t.Shape());
 			}
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoConcatOp(device, result.RawData(), outputInfo.dtype, srcPtrs.data(), srcShapes.data(),
+			DeviceTraits<D>::DoConcatOp(device, result.UnsafeRawData(), outputInfo.dtype, srcPtrs.data(), srcShapes.data(),
 			                            srcPtrs.size(), node.axis);
 			slots[nodeId].push_back(std::move(result));
 		}
@@ -1139,7 +1139,7 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoSliceOp(device, result.RawData(), outputInfo.dtype, input.Shape(), input.RawData(),
+			DeviceTraits<D>::DoSliceOp(device, result.UnsafeRawData(), outputInfo.dtype, input.Shape(), input.UnsafeRawData(),
 			                           node.axis, node.start, node.length);
 			slots[nodeId].push_back(std::move(result));
 		}
@@ -1153,8 +1153,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoGetRowsOp(device, result.RawData(), data.DType(), data.Shape(), data.RawData(),
-			                            indices.DType(), indices.Shape(), indices.RawData());
+			DeviceTraits<D>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(), data.UnsafeRawData(),
+			                            indices.DType(), indices.Shape(), indices.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 

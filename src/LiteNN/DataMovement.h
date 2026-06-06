@@ -164,8 +164,8 @@ namespace LiteNN::Detail
 
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 
 			for (auto linear = 0uz; linear < outputElements; ++linear)
 			{
@@ -204,8 +204,8 @@ namespace LiteNN::Detail
 
 		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-			const auto* src = static_cast<const T*>(input.RawData());
-			auto* dst = static_cast<T*>(result.RawData());
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
 			const auto padValue = CastPadValue<T>(constantValue);
 
 			for (auto linear = 0uz; linear < outputElements; ++linear)
@@ -265,9 +265,9 @@ namespace LiteNN::Detail
 		EnumDispatch(data.DType(), [&]<DataType DataTypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<DataTypeValue>;
 			auto run = [&]<typename IndexT>() {
-				const auto* src = static_cast<const T*>(data.RawData());
-				const auto* idx = static_cast<const IndexT*>(indices.RawData());
-				auto* dst = static_cast<T*>(result.RawData());
+				const auto* src = static_cast<const T*>(data.UnsafeRawData());
+				const auto* idx = static_cast<const IndexT*>(indices.UnsafeRawData());
+				auto* dst = static_cast<T*>(result.UnsafeRawData());
 				for (auto outOuter = 0uz; outOuter < outer; ++outOuter)
 				{
 					for (auto indexLinear = 0uz; indexLinear < indexCount; ++indexLinear)
@@ -310,7 +310,7 @@ namespace LiteNN::Detail
 		}
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, data.Shape(), data.DType(), cpu);
-		DeviceTraits<CPU>::ConvertTo(cpu, data.DType(), data.RawData(), data.NumElements(), data.DType(), result.RawData());
+		DeviceTraits<CPU>::ConvertTo(cpu, data.DType(), data.UnsafeRawData(), data.NumElements(), data.DType(), result.UnsafeRawData());
 
 		const auto axisDim = data.Shape()[axis];
 		auto outer = 1uz;
@@ -328,9 +328,9 @@ namespace LiteNN::Detail
 		EnumDispatch(data.DType(), [&]<DataType DataTypeValue> {
 			using T = typename DeviceTraits<CPU>::template DataTypeMapping<DataTypeValue>;
 			auto run = [&]<typename IndexT>() {
-				const auto* idx = static_cast<const IndexT*>(indices.RawData());
-				const auto* updatePtr = static_cast<const T*>(updates.RawData());
-				auto* dst = static_cast<T*>(result.RawData());
+				const auto* idx = static_cast<const IndexT*>(indices.UnsafeRawData());
+				const auto* updatePtr = static_cast<const T*>(updates.UnsafeRawData());
+				auto* dst = static_cast<T*>(result.UnsafeRawData());
 				for (auto outOuter = 0uz; outOuter < outer; ++outOuter)
 				{
 					for (auto indexLinear = 0uz; indexLinear < indexCount; ++indexLinear)

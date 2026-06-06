@@ -14,7 +14,7 @@ namespace
 {
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
-		return static_cast<const float*>(tensor.RawData())[index];
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 } // namespace
 
@@ -25,7 +25,7 @@ TEST(Quantization, PerTensorAffineQuantizeDequantizeRoundTrip)
 
 	const auto quantized = QuantizeAffine(source, params);
 	ASSERT_EQ(quantized.Storage().DType(), DataType::Int8);
-	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().RawData());
+	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().UnsafeRawData());
 	EXPECT_EQ(storage[0], -2);
 	EXPECT_EQ(storage[1], 0);
 	EXPECT_EQ(storage[2], 3);
@@ -42,7 +42,7 @@ TEST(Quantization, PerAxisAffineUsesAxisScale)
 	const auto params = PerAxisAffineQuantization(DataType::Int8, 0, { 1.0F, 10.0F }, { 0, 0 });
 
 	const auto quantized = QuantizeAffine(source, params);
-	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().RawData());
+	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().UnsafeRawData());
 	EXPECT_EQ(storage[0], 1);
 	EXPECT_EQ(storage[1], 2);
 	EXPECT_EQ(storage[2], 3);
@@ -66,7 +66,7 @@ TEST(Quantization, GroupedAffineUsesPerLineGroups)
 	    GroupedAffineQuantization(DataType::Int8, 1, 2, { 1.0F, 10.0F, 3.0F, 40.0F }, { 0, 0, 0, 0 });
 
 	const auto quantized = QuantizeAffine(source, params);
-	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().RawData());
+	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().UnsafeRawData());
 	EXPECT_EQ(storage[0], 1);
 	EXPECT_EQ(storage[1], 2);
 	EXPECT_EQ(storage[2], 1);
@@ -89,7 +89,7 @@ TEST(Quantization, UInt8ZeroPointIsApplied)
 	const auto params = PerTensorAffineQuantization(DataType::UInt8, 0.5F, 128);
 
 	const auto quantized = QuantizeAffine(source, params);
-	const auto* storage = static_cast<const std::uint8_t*>(quantized.Storage().RawData());
+	const auto* storage = static_cast<const std::uint8_t*>(quantized.Storage().UnsafeRawData());
 	EXPECT_EQ(storage[0], 126);
 	EXPECT_EQ(storage[1], 128);
 	EXPECT_EQ(storage[2], 130);
@@ -268,7 +268,7 @@ TEST(Quantization, BlockFormatRawPayloadMetadataSurvivesModelIORoundTrip)
 	std::vector<Tensor<CPU>> inputs;
 	const auto results = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(loaded), inputs);
 	ASSERT_EQ(results.size(), 1);
-	const auto* data = static_cast<const std::uint8_t*>(results[0].RawData());
+	const auto* data = static_cast<const std::uint8_t*>(results[0].UnsafeRawData());
 	for (std::size_t i = 0; i < rawPayload.NumElements(); ++i)
 	{
 		EXPECT_EQ(data[i], static_cast<std::uint8_t>(i + 1));

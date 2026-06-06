@@ -18,14 +18,14 @@ using namespace LiteNN;
 
 static float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 {
-	return static_cast<const float*>(tensor.RawData())[index];
+	return static_cast<const float*>(tensor.UnsafeRawData())[index];
 }
 
 static std::vector<float> ReadAsFloat32(const Tensor<CPU>& tensor)
 {
 	std::vector<float> values(tensor.NumElements());
 	CPU cpu;
-	DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.RawData(), tensor.NumElements(), DataType::Float32,
+	DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), DataType::Float32,
 	                             values.data());
 	return values;
 }
@@ -34,7 +34,7 @@ static std::vector<float> QuantizeAsFloat32(std::span<const float> values, DataT
 {
 	Tensor<CPU> quantized(Uninitialized, { values.size() }, dataType);
 	CPU cpu;
-	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.RawData(), DataType::Float32, values.data(), values.size());
+	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.UnsafeRawData(), DataType::Float32, values.data(), values.size());
 	return ReadAsFloat32(quantized);
 }
 
@@ -58,10 +58,10 @@ static std::vector<float> RoundTripFloat32ThroughCUDA(std::span<const float> val
 {
 	auto device = CUDAWithHostFallback();
 	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
-	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
+	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.UnsafeRawData(), DataType::Float32, values.data(),
 	                                values.size());
 	std::vector<float> result(values.size());
-	DeviceTraits<CUDA>::CopyToCPU(device, dataType, quantized.RawData(), values.size(), DataType::Float32,
+	DeviceTraits<CUDA>::CopyToCPU(device, dataType, quantized.UnsafeRawData(), values.size(), DataType::Float32,
 	                              result.data());
 	return result;
 }
@@ -71,12 +71,12 @@ static std::vector<float> ConvertCUDADeviceToFloat32(std::span<const float> valu
 	auto device = CUDAWithHostFallback();
 	Tensor<CUDA> quantized(Uninitialized, { values.size() }, dataType, device);
 	Tensor<CUDA> converted(Uninitialized, { values.size() }, DataType::Float32, device);
-	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.RawData(), DataType::Float32, values.data(),
+	DeviceTraits<CUDA>::CopyFromCPU(device, dataType, quantized.UnsafeRawData(), DataType::Float32, values.data(),
 	                                values.size());
-	DeviceTraits<CUDA>::ConvertTo(device, dataType, quantized.RawData(), values.size(), DataType::Float32,
-	                              converted.RawData());
+	DeviceTraits<CUDA>::ConvertTo(device, dataType, quantized.UnsafeRawData(), values.size(), DataType::Float32,
+	                              converted.UnsafeRawData());
 	std::vector<float> result(values.size());
-	DeviceTraits<CUDA>::CopyToCPU(device, DataType::Float32, converted.RawData(), values.size(), DataType::Float32,
+	DeviceTraits<CUDA>::CopyToCPU(device, DataType::Float32, converted.UnsafeRawData(), values.size(), DataType::Float32,
 	                              result.data());
 	return result;
 }
@@ -475,8 +475,8 @@ DONE:
 	auto cudaInput = input.CopyToDevice(CUDA{});
 	Tensor<CUDA> cudaOutput(Uninitialized, { 4 }, DataType::Float32, CUDA{});
 
-	void* outPtr = cudaOutput.RawData();
-	void* inPtr = cudaInput.RawData();
+	void* outPtr = cudaOutput.UnsafeRawData();
+	void* inPtr = cudaInput.UnsafeRawData();
 	std::uint32_t count = 4;
 	std::array<void*, 3> args = {
 		&outPtr,

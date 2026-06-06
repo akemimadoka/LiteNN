@@ -264,8 +264,8 @@ namespace LiteNN
 			}
 			Tensor<CPU> converted(Uninitialized, tensor.Shape(), DataType::Float32);
 			CPU cpu;
-			DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.RawData(), tensor.NumElements(), DataType::Float32,
-			                             converted.RawData());
+			DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), DataType::Float32,
+			                             converted.UnsafeRawData());
 			return converted;
 		}
 	} // namespace QuantizationDetail
@@ -450,13 +450,13 @@ namespace LiteNN
 		Tensor<CPU> storage(Uninitialized, source.Shape(), params.storageType);
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
 		const auto sourceF32 = QuantizationDetail::CopyToFloat32(source);
-		const auto* src = static_cast<const float*>(sourceF32.RawData());
+		const auto* src = static_cast<const float*>(sourceF32.UnsafeRawData());
 
 		EnumDispatch(params.storageType, [&]<DataType StorageTypeValue> {
 			if constexpr (StorageTypeValue == DataType::Int8 || StorageTypeValue == DataType::UInt8)
 			{
 				using StorageT = typename DeviceTraits<CPU>::template DataTypeMapping<StorageTypeValue>;
-				auto* dst = static_cast<StorageT*>(storage.RawData());
+				auto* dst = static_cast<StorageT*>(storage.UnsafeRawData());
 				const auto minValue = QuantizationDetail::StorageMin<StorageT>();
 				const auto maxValue = QuantizationDetail::StorageMax<StorageT>();
 				for (std::size_t i = 0; i < source.NumElements(); ++i)
@@ -486,12 +486,12 @@ namespace LiteNN
 			if constexpr (StorageTypeValue == DataType::Int8 || StorageTypeValue == DataType::UInt8)
 			{
 				using StorageT = typename DeviceTraits<CPU>::template DataTypeMapping<StorageTypeValue>;
-				const auto* src = static_cast<const StorageT*>(storage.RawData());
+				const auto* src = static_cast<const StorageT*>(storage.UnsafeRawData());
 				EnumDispatch(targetType, [&]<DataType TargetTypeValue> {
 					if constexpr (IsFloatingDataType(TargetTypeValue))
 					{
 						using TargetT = typename DeviceTraits<CPU>::template DataTypeMapping<TargetTypeValue>;
-						auto* dst = static_cast<TargetT*>(result.RawData());
+						auto* dst = static_cast<TargetT*>(result.UnsafeRawData());
 						for (std::size_t i = 0; i < storage.NumElements(); ++i)
 						{
 							const auto scaleIndex =

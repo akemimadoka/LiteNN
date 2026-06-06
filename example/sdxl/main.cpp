@@ -825,7 +825,7 @@ namespace
 	{
 		std::mt19937 rng(seed);
 		std::normal_distribution<float> dist(0.0F, static_cast<float>(sigma));
-		auto* data = static_cast<T*>(tensor.RawData());
+		auto* data = static_cast<T*>(tensor.UnsafeRawData());
 		for (std::size_t i = 0; i < tensor.NumElements(); ++i)
 		{
 			data[i] = static_cast<T>(dist(rng));
@@ -860,7 +860,7 @@ namespace
 	template <typename T>
 	void FillScalarTyped(LiteNN::Tensor<LiteNN::CPU>& tensor, double value)
 	{
-		auto* data = static_cast<T*>(tensor.RawData());
+		auto* data = static_cast<T*>(tensor.UnsafeRawData());
 		for (std::size_t i = 0; i < tensor.NumElements(); ++i)
 		{
 			data[i] = static_cast<T>(value);
@@ -897,8 +897,8 @@ namespace
 	                           LiteNN::Tensor<LiteNN::CPU>& destination,
 	                           double scale)
 	{
-		const auto* src = static_cast<const T*>(source.RawData());
-		auto* dst = static_cast<T*>(destination.RawData());
+		const auto* src = static_cast<const T*>(source.UnsafeRawData());
+		auto* dst = static_cast<T*>(destination.UnsafeRawData());
 		for (std::size_t i = 0; i < source.NumElements(); ++i)
 		{
 			dst[i] = static_cast<T>(static_cast<double>(src[i]) * scale);
@@ -940,7 +940,7 @@ namespace
 	TensorStats ComputeTensorStatsTyped(const LiteNN::Tensor<LiteNN::CPU>& tensor)
 	{
 		TensorStats stats;
-		const auto* data = static_cast<const T*>(tensor.RawData());
+		const auto* data = static_cast<const T*>(tensor.UnsafeRawData());
 		double sum = 0.0;
 		double sumSquares = 0.0;
 		for (std::size_t i = 0; i < tensor.NumElements(); ++i)
@@ -995,9 +995,9 @@ namespace
 	                                     double sigma,
 	                                     double dt)
 	{
-		auto* latentData = static_cast<T*>(latent.RawData());
-		const auto* condData = static_cast<const T*>(condPrediction.RawData());
-		const auto* uncondData = uncondPrediction == nullptr ? nullptr : static_cast<const T*>(uncondPrediction->RawData());
+		auto* latentData = static_cast<T*>(latent.UnsafeRawData());
+		const auto* condData = static_cast<const T*>(condPrediction.UnsafeRawData());
+		const auto* uncondData = uncondPrediction == nullptr ? nullptr : static_cast<const T*>(uncondPrediction->UnsafeRawData());
 		for (std::size_t i = 0; i < latent.NumElements(); ++i)
 		{
 			const auto state = static_cast<double>(latentData[i]);
@@ -1153,7 +1153,7 @@ namespace
 		}
 		WriteU64LE(out, static_cast<std::uint64_t>(header.size()));
 		out.write(header.data(), static_cast<std::streamsize>(header.size()));
-		out.write(static_cast<const char*>(tensor.RawData()), static_cast<std::streamsize>(byteCount));
+		out.write(static_cast<const char*>(tensor.UnsafeRawData()), static_cast<std::streamsize>(byteCount));
 		if (!out)
 		{
 			throw std::runtime_error("Failed to write safetensors output file");
@@ -1506,7 +1506,7 @@ namespace
 			ValidateBoundTensor(spec, *tensor, inputPath);
 			auto& input = inputs.emplace_back(LiteNN::Uninitialized, spec.type.StaticShape(), spec.type.dtype);
 			const auto bytes = archive.TensorData(*tensor);
-			std::memcpy(input.RawData(), bytes.data(), bytes.size());
+			std::memcpy(input.UnsafeRawData(), bytes.data(), bytes.size());
 			std::cout << std::format("  input {} '{}' bound from {}:{} ({} byte(s))\n", i, spec.name,
 			                         inputPath.string(), matchedName, tensor->ByteSize())
 			          << std::flush;

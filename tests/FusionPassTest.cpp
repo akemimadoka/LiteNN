@@ -13,7 +13,7 @@ using namespace LiteNN;
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
 static float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return static_cast<const float*>(t.UnsafeRawData())[i];
 }
 
 // 辅助函数: 检查子图中是否存在 FusedOpNode

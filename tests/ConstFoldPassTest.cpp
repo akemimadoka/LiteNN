@@ -13,13 +13,13 @@ using namespace LiteNN;
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
 static float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return static_cast<const float*>(t.UnsafeRawData())[i];
 }
 
 // 辅助函数: 读取 CPU Tensor 的第 i 个 double 元素
 static double ReadDouble(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const double*>(t.RawData())[i];
+	return static_cast<const double*>(t.UnsafeRawData())[i];
 }
 
 // 辅助函数: 计算子图中 ConstantNode 的数量

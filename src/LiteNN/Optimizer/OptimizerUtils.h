@@ -77,7 +77,7 @@ namespace LiteNN::Optimizer::Detail
 		{
 			throw std::runtime_error("CPU training utilities currently require CPU-backed tensors");
 		}
-		std::memset(tensor.RawData(), 0, tensor.AllocatedNumElements() * LiteNN::ElementByteSize(tensor.DType()));
+		std::memset(tensor.UnsafeRawData(), 0, tensor.AllocatedNumElements() * LiteNN::ElementByteSize(tensor.DType()));
 	}
 } // namespace LiteNN::Optimizer::Detail
 
@@ -106,8 +106,8 @@ namespace LiteNN::Optimizer
 			auto& targetGrad = parameters[variableIndex].Gradient();
 			const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 			Detail::ValidateVariableGradient(variable, gradient, variableIndex);
-			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.RawData(),
-			                                             gradient.DType(), gradient.RawData(), gradient.NumElements());
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.UnsafeRawData(),
+			                                             gradient.DType(), gradient.UnsafeRawData(), gradient.NumElements());
 		}
 	}
 

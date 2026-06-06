@@ -525,7 +525,7 @@ namespace LiteNN::Serialization
 		const auto shape = tensor.type.StaticShape();
 		Tensor<CPU> result(Uninitialized, ShapeView{ shape }, tensor.type.dtype);
 		const auto bytes = TensorData(tensor);
-		std::memcpy(result.RawData(), bytes.data(), bytes.size());
+		std::memcpy(result.UnsafeRawData(), bytes.data(), bytes.size());
 		if (transpose2D)
 		{
 			if (shape.size() != 2)

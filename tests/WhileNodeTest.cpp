@@ -12,13 +12,13 @@ using namespace LiteNN;
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
 static float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return static_cast<const float*>(t.UnsafeRawData())[i];
 }
 
 // 辅助函数: 读取 CPU Tensor 的标量 Int64
 static std::int64_t ReadInt64(const Tensor<CPU>& t, std::size_t i = 0)
 {
-	return static_cast<const std::int64_t*>(t.RawData())[i];
+	return static_cast<const std::int64_t*>(t.UnsafeRawData())[i];
 }
 
 // ============================================================

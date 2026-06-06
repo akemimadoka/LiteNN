@@ -194,7 +194,7 @@ namespace LiteNN
 		{
 			return EnumDispatch(t.DType(), [&]<DataType TypeValue> -> bool {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				const auto* data = static_cast<const T*>(t.RawData());
+				const auto* data = static_cast<const T*>(t.UnsafeRawData());
 				for (auto i = 0uz; i < t.NumElements(); ++i)
 				{
 					if (data[i] != T(0))
@@ -210,7 +210,7 @@ namespace LiteNN
 		{
 			return EnumDispatch(t.DType(), [&]<DataType TypeValue> -> bool {
 				using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
-				const auto* data = static_cast<const T*>(t.RawData());
+				const auto* data = static_cast<const T*>(t.UnsafeRawData());
 				for (auto i = 0uz; i < t.NumElements(); ++i)
 				{
 					if (data[i] != T(1))

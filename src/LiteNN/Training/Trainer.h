@@ -332,8 +332,8 @@ namespace LiteNN::Training
 						throw std::runtime_error("Trainer AOT optimizer update runner returned no outputs");
 					}
 					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
-					                                             parameter.RawData(), updateOutputs[0].DType(),
-					                                             updateOutputs[0].RawData(),
+					                                             parameter.UnsafeRawData(), updateOutputs[0].DType(),
+					                                             updateOutputs[0].UnsafeRawData(),
 					                                             updateOutputs[0].NumElements());
 				}
 				return true;
@@ -365,8 +365,8 @@ namespace LiteNN::Training
 						throw std::runtime_error("Trainer AOT AdamW update runner returned an unexpected output count");
 					}
 					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
-					                                             parameter.RawData(), updateOutputs[0].DType(),
-					                                             updateOutputs[0].RawData(),
+					                                             parameter.UnsafeRawData(), updateOutputs[0].DType(),
+					                                             updateOutputs[0].UnsafeRawData(),
 					                                             updateOutputs[0].NumElements());
 					optimizer_.FirstMoment(parameterIndex) = std::move(updateOutputs[1]);
 					optimizer_.SecondMoment(parameterIndex) = std::move(updateOutputs[2]);

@@ -480,8 +480,8 @@ namespace LiteNN::Serialization
 
 			CPU device;
 			Tensor<CPU> converted(Uninitialized, tensor.Shape(), targetType, device);
-			DeviceTraits<CPU>::ConvertTo(device, tensor.DType(), tensor.RawData(), tensor.NumElements(), targetType,
-			                             converted.RawData());
+			DeviceTraits<CPU>::ConvertTo(device, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), targetType,
+			                             converted.UnsafeRawData());
 			report.foldedConstants.push_back(std::format("tensor {}: converted {} -> {}", manifestName,
 			                                             DataTypeName(tensor.DType()), DataTypeName(targetType)));
 			return converted;

@@ -15,7 +15,7 @@ using namespace LiteNN;
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
 float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return static_cast<const float*>(t.UnsafeRawData())[i];
 }
 
 // 测试 1: 简单二元操作 y = a + b
@@ -81,7 +81,7 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 			    {
 				    continue;
 			    }
-			    const auto* data = static_cast<const float*>(output.RawData());
+			    const auto* data = static_cast<const float*>(output.UnsafeRawData());
 			    for (std::size_t i = 0; i < output.NumElements(); ++i)
 			    {
 				    sawNonFinite = sawNonFinite || !std::isfinite(static_cast<double>(data[i]));
