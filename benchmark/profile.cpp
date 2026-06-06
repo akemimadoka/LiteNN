@@ -396,34 +396,34 @@ static Timing TimedRun(const CompiledModule<CPU>& module,
                        std::span<const Tensor<CPU>> inputs,
                        std::size_t batch)
 {
-	for (int i = 0; i < 5; ++i) (void)module.Run(inputs);
+	for (int i = 0; i < 5; ++i) (void)module.RunTensors(inputs);
 	auto t0 = Clock::now();
-	(void)module.Run(inputs);
+	(void)module.RunTensors(inputs);
 	auto t1 = Clock::now();
 	const double probeMs = clk::duration<double, std::milli>(t1 - t0).count();
 	const auto iters = static_cast<std::size_t>(
 	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
 	auto a = Clock::now();
-	for (std::size_t i = 0; i < iters; ++i) (void)module.Run(inputs);
+	for (std::size_t i = 0; i < iters; ++i) (void)module.RunTensors(inputs);
 	auto b = Clock::now();
 	const double total = clk::duration<double, std::milli>(b - a).count();
 	return { total / iters, batch * iters / (total * 1e-3) };
 }
 
-static Timing TimedRunInto(const CompiledModule<CPU>& module,
+static Timing TimedRunTensorsInto(const CompiledModule<CPU>& module,
                            std::span<const Tensor<CPU>> inputs,
                            std::span<Tensor<CPU>> outputs,
                            std::size_t batch)
 {
-	for (int i = 0; i < 5; ++i) module.RunInto(inputs, outputs);
+	for (int i = 0; i < 5; ++i) module.RunTensorsInto(inputs, outputs);
 	auto t0 = Clock::now();
-	module.RunInto(inputs, outputs);
+	module.RunTensorsInto(inputs, outputs);
 	auto t1 = Clock::now();
 	const double probeMs = clk::duration<double, std::milli>(t1 - t0).count();
 	const auto iters = static_cast<std::size_t>(
 	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
 	auto a = Clock::now();
-	for (std::size_t i = 0; i < iters; ++i) module.RunInto(inputs, outputs);
+	for (std::size_t i = 0; i < iters; ++i) module.RunTensorsInto(inputs, outputs);
 	auto b = Clock::now();
 	const double total = clk::duration<double, std::milli>(b - a).count();
 	return { total / iters, batch * iters / (total * 1e-3) };
@@ -579,7 +579,7 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		auto inputs = MakeCUDAProfileInputs(result.batch);
 		auto outputs = AllocateCUDAProfileOutputs(module);
 		const auto runInto = [&](bool enableGraphReplay) {
-			module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs),
+			module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs),
 			               CompiledModuleCUDARunOptions{ .enableGraphReplay = enableGraphReplay });
 		};
 
@@ -688,7 +688,7 @@ int main(int argc, char** argv)
 		    DataType::Float32, CPU{});
 
 		const auto tRun     = TimedRun(compiled, inputs, batch);
-		const auto tRunInto = TimedRunInto(compiled, inputs, outputs, batch);
+		const auto tRunInto = TimedRunTensorsInto(compiled, inputs, outputs, batch);
 
 		const double allocUs = (tRun.meanMs - tRunInto.meanMs) * 1000.0;
 		const double speedup = tRun.meanMs / std::max(tRunInto.meanMs, 1e-6);

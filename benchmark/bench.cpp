@@ -609,7 +609,7 @@ std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module
 	return outputs;
 }
 
-void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMCUDACPUFallbackRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -637,12 +637,12 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -650,7 +650,7 @@ void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind kind, std::size
 	SetThroughputCounters(state, batch);
 }
 
-void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch,
+void BMCUDANativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch,
                               bool enableGraphReplay = false)
 {
 	if (!IsCUDADeviceAvailable())
@@ -676,12 +676,12 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs), runOptions);
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -689,12 +689,12 @@ void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind kind, std::size
 	SetThroughputCounters(state, batch);
 }
 
-void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMCUDANativeGraphModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
-	BMCUDANativeModelRunInto(state, kind, batch, true);
+	BMCUDANativeModelRunTensorsInto(state, kind, batch, true);
 }
 
-void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
+void BMCUDANativeMatMulRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
 {
 	if (!IsCUDADeviceAvailable())
 	{
@@ -721,12 +721,12 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs));
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -734,22 +734,22 @@ void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t batch, std::
 	SetThroughputCounters(state, batch);
 }
 #else
-void BMCUDACPUFallbackRunInto(benchmark::State& state, ModelKind, std::size_t)
+void BMCUDACPUFallbackRunTensorsInto(benchmark::State& state, ModelKind, std::size_t)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
 
-void BMCUDANativeMatMulRunInto(benchmark::State& state, std::size_t, std::size_t, DataType)
+void BMCUDANativeMatMulRunTensorsInto(benchmark::State& state, std::size_t, std::size_t, DataType)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
 
-void BMCUDANativeModelRunInto(benchmark::State& state, ModelKind, std::size_t)
+void BMCUDANativeModelRunTensorsInto(benchmark::State& state, ModelKind, std::size_t)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
 
-void BMCUDANativeGraphModelRunInto(benchmark::State& state, ModelKind, std::size_t)
+void BMCUDANativeGraphModelRunTensorsInto(benchmark::State& state, ModelKind, std::size_t)
 {
 	state.SkipWithError("LiteNN benchmark build has no CUDA support");
 }
@@ -769,13 +769,13 @@ void BMAOTRun(benchmark::State& state, ModelKind kind, std::size_t batch)
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+		auto outputs = module.RunTensors(std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 	}
 
 	for (auto _ : state)
 	{
-		auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+		auto outputs = module.RunTensors(std::span<const Tensor<CPU>>(inputs));
 		benchmark::DoNotOptimize(outputs);
 		benchmark::ClobberMemory();
 	}
@@ -804,12 +804,12 @@ void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -817,7 +817,7 @@ void BMAOTRunIntoConfigured(benchmark::State& state, ModelKind kind, std::size_t
 	SetThroughputCounters(state, batch);
 }
 
-void BMAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMAOTRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
 	BMAOTRunIntoConfigured(state, kind, batch, nullptr);
 }
@@ -832,7 +832,7 @@ void BMAOTRunIntoT16(benchmark::State& state, ModelKind kind, std::size_t batch)
 	BMAOTRunIntoConfigured(state, kind, batch, "16");
 }
 
-void BMEGraphAOTRunInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+void BMEGraphAOTRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 {
 	BMAOTRunIntoConfigured(state, kind, batch, nullptr, OptimizeWithEGraph);
 }
@@ -854,12 +854,12 @@ void BMAOTRedundantRunIntoConfigured(benchmark::State& state, std::size_t batch,
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -867,12 +867,12 @@ void BMAOTRedundantRunIntoConfigured(benchmark::State& state, std::size_t batch,
 	SetThroughputCounters(state, batch);
 }
 
-void BMAOTRedundantRawRunInto(benchmark::State& state, std::size_t batch)
+void BMAOTRedundantRawRunTensorsInto(benchmark::State& state, std::size_t batch)
 {
 	BMAOTRedundantRunIntoConfigured(state, batch, false);
 }
 
-void BMEGraphAOTRedundantRunInto(benchmark::State& state, std::size_t batch)
+void BMEGraphAOTRedundantRunTensorsInto(benchmark::State& state, std::size_t batch)
 {
 	BMAOTRedundantRunIntoConfigured(state, batch, true);
 }
@@ -895,19 +895,19 @@ void RegisterBenchmarks()
 			RegisterBenchmarkCase("AOTRun", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRun(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMAOTRunInto(state, kind, batch); });
+			    [=](benchmark::State& state) { BMAOTRunTensorsInto(state, kind, batch); });
 			RegisterBenchmarkCase("EGraphAOTRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMEGraphAOTRunInto(state, kind, batch); });
+			    [=](benchmark::State& state) { BMEGraphAOTRunTensorsInto(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunIntoT1", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunIntoT1(state, kind, batch); });
 			RegisterBenchmarkCase("AOTRunIntoT16", kind, batch,
 			    [=](benchmark::State& state) { BMAOTRunIntoT16(state, kind, batch); });
 			RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMCUDACPUFallbackRunInto(state, kind, batch); });
+			    [=](benchmark::State& state) { BMCUDACPUFallbackRunTensorsInto(state, kind, batch); });
 			RegisterBenchmarkCase("CUDANativeRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMCUDANativeModelRunInto(state, kind, batch); });
+			    [=](benchmark::State& state) { BMCUDANativeModelRunTensorsInto(state, kind, batch); });
 			RegisterBenchmarkCase("CUDANativeGraphRunInto", kind, batch,
-			    [=](benchmark::State& state) { BMCUDANativeGraphModelRunInto(state, kind, batch); });
+			    [=](benchmark::State& state) { BMCUDANativeGraphModelRunTensorsInto(state, kind, batch); });
 #endif
 		}
 	}
@@ -917,12 +917,12 @@ void RegisterBenchmarks()
 	{
 		auto* rawCase = benchmark::RegisterBenchmark(
 		    std::format("AOTRedundantRawRunInto/RedundantIdentity/batch:{}", batch),
-		    [=](benchmark::State& state) { BMAOTRedundantRawRunInto(state, batch); });
+		    [=](benchmark::State& state) { BMAOTRedundantRawRunTensorsInto(state, batch); });
 		rawCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 		auto* egraphCase = benchmark::RegisterBenchmark(
 		    std::format("EGraphAOTRedundantRunInto/RedundantIdentity/batch:{}", batch),
-		    [=](benchmark::State& state) { BMEGraphAOTRedundantRunInto(state, batch); });
+		    [=](benchmark::State& state) { BMEGraphAOTRedundantRunTensorsInto(state, batch); });
 		egraphCase->UseRealTime()->Unit(benchmark::kMillisecond);
 	}
 
@@ -943,7 +943,7 @@ void RegisterBenchmarks()
 			auto* benchmarkCase = benchmark::RegisterBenchmark(
 			    std::format("CUDANativeMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch,
 			                nativeMatMulWidth),
-			    [=](benchmark::State& state) { BMCUDANativeMatMulRunInto(state, batch, nativeMatMulWidth, dtype); });
+			    [=](benchmark::State& state) { BMCUDANativeMatMulRunTensorsInto(state, batch, nativeMatMulWidth, dtype); });
 			benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 		}
 	}

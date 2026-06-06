@@ -98,7 +98,7 @@ namespace
 
 		const auto correct = Evaluate(test, options.mnist.showSamples, [&](Tensor<CPU> image) {
 			std::array<Tensor<CPU>, 1> inputs = { std::move(image) };
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		});
 
 		PrintAccuracy(correct, test.Count());

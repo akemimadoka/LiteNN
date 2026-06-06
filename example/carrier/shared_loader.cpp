@@ -108,7 +108,7 @@ int main(int argc, char** argv)
 		});
 		auto module = artifact.Load();
 		auto inputs = MakeSampleInputs();
-		auto outputs = module.Run(inputs);
+		auto outputs = module.RunTensors(inputs);
 		VerifySampleOutputs(outputs);
 		PrintRunSummary("Shared", module, outputs);
 		return 0;

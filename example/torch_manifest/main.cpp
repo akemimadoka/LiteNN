@@ -91,7 +91,7 @@ int main(int argc, char** argv)
 #ifdef LITENN_ENABLE_MLIR
 		auto compiled = LiteNN::Compiler<LiteNN::CPU>::Compile(
 		    LiteNN::Detail::BuildExecutablePlanFromGraph(imported.model.UnsafeGraphView()), LiteNN::CompilerOptions::Defaults());
-		const auto compiledOutputs = compiled.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
+		const auto compiledOutputs = compiled.RunTensors(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 		PrintTensor("CPU AOT output", compiledOutputs[0]);
 #else
 		std::cout << "CPU AOT output skipped because LiteNNCompiler is not available in this build.\n";

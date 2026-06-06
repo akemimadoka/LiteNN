@@ -118,7 +118,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CPU>::Compile(plan);
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}
@@ -131,7 +131,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CPU>::Compile(BuildBackwardEntryPlan(plan));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}
@@ -145,7 +145,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(BuildSGDUpdateGraph(parameterType, options)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}
@@ -160,7 +160,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(BuildAdamWUpdateGraph(parameterType, options, step)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}
@@ -174,7 +174,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CUDA>::Compile(plan, std::move(device));
 		return [module = std::move(module)](std::span<const Tensor<CUDA>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}
@@ -187,7 +187,7 @@ namespace LiteNN::Training
 #else
 		auto module = Compiler<CUDA>::Compile(BuildBackwardEntryPlan(plan), std::move(device));
 		return [module = std::move(module)](std::span<const Tensor<CUDA>> inputs) {
-			return module.Run(inputs);
+			return module.RunTensors(inputs);
 		};
 #endif
 	}

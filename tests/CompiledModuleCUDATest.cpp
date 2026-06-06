@@ -485,14 +485,14 @@ TEST(CompiledModuleCUDATest, RunsCPUAOTBridgeWithCUDATensors)
 	auto rhs = Tensor<CPU>({ 1, 2, 3, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
-	auto outputs = compiled.Run(inputs);
+	auto outputs = compiled.RunTensors(inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutput, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 
 	auto loaded = CompiledModule<CUDA>::Load(compiled.Image(), bridgeDevice);
 	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, bridgeDevice) };
-	loaded.RunInto(inputs, out);
+	loaded.RunTensorsInto(inputs, out);
 	auto cpuOutInto = out[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutInto, std::array{ 2.0f, 9.0f, 64.0f, 1.0f });
 }
@@ -516,7 +516,7 @@ TEST(CompiledModuleCUDATest, ArtifactLoadsAsCUDABridge)
 	auto rhs = Tensor<CPU>({ 3, 2, 1, 0 }, { 2, 2 }, DataType::Float32).CopyToDevice(bridgeDevice);
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
-	auto outputs = module.Run(inputs);
+	auto outputs = module.RunTensors(inputs);
 	auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 	ExpectTensorNear(cpuOutput, std::array{ 8.0f, 9.0f, 4.0f, 1.0f });
 }
@@ -582,7 +582,7 @@ TEST(CompiledModuleCUDATest, CUDABridgeLoadsCPUAOTExternalRegions)
 	auto runAndCheck = [&](CompiledModule<CUDA>& module)
 	{
 		EXPECT_EQ(module.Backend(), CompiledModuleBackend::CPUNative);
-		auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
+		auto outputs = module.RunTensors(MakeCUDAInputs(inputSpecs));
 		ASSERT_EQ(outputs.size(), expected.size());
 		ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), expected[0], 1e-4f);
 	};
@@ -615,12 +615,12 @@ TEST(CompiledModuleCUDATest, RunsNativeMatMulWithCUBLAS)
 	auto rhs = Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
-	auto outputs = module.Run(inputs);
+	auto outputs = module.RunTensors(inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 
 	std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
-	module.RunInto(inputs, out);
+	module.RunTensorsInto(inputs, out);
 	ExpectTensorNear(out[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 }
 
@@ -667,13 +667,13 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBinaryOpsWithCUDATensors)
 		auto rhs = Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 		std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
-		auto outputs = module.Run(inputs);
+		auto outputs = module.RunTensors(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutput, testCase.expected);
 
 		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
-		module.RunInto(inputs, out);
+		module.RunTensorsInto(inputs, out);
 		auto cpuOutInto = out[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutInto, testCase.expected);
 	}
@@ -771,12 +771,12 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseBroadcastBinaryOpsWithCUDATens
 		               .CopyToDevice(CUDA{});
 		std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
 
-		auto outputs = module.Run(inputs);
+		auto outputs = module.RunTensors(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), testCase.expected);
 
 		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 3 }, DataType::Float32, CUDA{}) };
-		module.RunInto(inputs, out);
+		module.RunTensorsInto(inputs, out);
 		ExpectTensorNear(out[0].CopyToDevice(CPU{}), testCase.expected);
 	}
 }
@@ -857,13 +857,13 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		                 .CopyToDevice(CUDA{});
 		std::array<Tensor<CUDA>, 1> inputs = { std::move(input) };
 
-		auto outputs = module.Run(inputs);
+		auto outputs = module.RunTensors(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		auto cpuOutput = outputs[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutput, testCase.expected, testCase.tolerance);
 
 		std::array<Tensor<CUDA>, 1> out = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
-		module.RunInto(inputs, out);
+		module.RunTensorsInto(inputs, out);
 		auto cpuOutInto = out[0].CopyToDevice(CPU{});
 		ExpectTensorNear(cpuOutInto, testCase.expected, testCase.tolerance);
 	}
@@ -891,7 +891,7 @@ TEST(CompiledModuleCUDATest, RunIntoHonorsExternalCUDAStreamForNativePayload)
 
 	cudaStream_t stream{};
 	ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
-	module.RunInto(inputs, outputs, CompiledModuleCUDARunOptions{ .stream = stream, .synchronize = false });
+	module.RunTensorsInto(inputs, outputs, CompiledModuleCUDARunOptions{ .stream = stream, .synchronize = false });
 	EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
 	EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 
@@ -915,7 +915,7 @@ TEST(CompiledModuleCUDATest, CPUBridgeRejectsAsynchronousRunOptions)
 
 	try
 	{
-		module.RunInto(inputs, outputs, CompiledModuleCUDARunOptions{ .synchronize = false });
+		module.RunTensorsInto(inputs, outputs, CompiledModuleCUDARunOptions{ .synchronize = false });
 		FAIL() << "expected CPU bridge async policy validation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -1202,7 +1202,7 @@ TEST(CompiledModuleCUDATest, RunsNativeCastPayloadsOnCUDA)
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
-		auto cudaOutputs = module.Run(cudaInputs);
+		auto cudaOutputs = module.RunTensors(cudaInputs);
 		ASSERT_EQ(cudaOutputs.size(), 1u);
 		auto actual = cudaOutputs[0].CopyToDevice(CPU{});
 		ExpectTensorNear(actual, expected[0], testCase.tolerance);
@@ -1274,7 +1274,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
-		auto cudaOutputs = module.Run(cudaInputs);
+		auto cudaOutputs = module.RunTensors(cudaInputs);
 		ASSERT_EQ(cudaOutputs.size(), 1u);
 		ExpectTensorNear(cudaOutputs[0].CopyToDevice(CPU{}), expected[0], testCase.tolerance);
 		++executedCases;
@@ -1364,7 +1364,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 
 		auto module = artifact.Load(CUDA{});
 		auto cudaInputs = MakeCUDAInputs(inputSpecs);
-		auto cudaOutputs = module.Run(cudaInputs);
+		auto cudaOutputs = module.RunTensors(cudaInputs);
 		ASSERT_EQ(cudaOutputs.size(), 1u);
 		ExpectTensorNear(cudaOutputs[0].CopyToDevice(CPU{}), expected[0], testCase.tolerance);
 		++executedCases;
@@ -1440,7 +1440,7 @@ TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstru
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), MakeCPUInputs(inputSpecs));
 	auto module = copied.Load(CUDA{});
-	auto outputs = module.Run(MakeCUDAInputs(inputSpecs));
+	auto outputs = module.RunTensors(MakeCUDAInputs(inputSpecs));
 	ASSERT_EQ(outputs.size(), expected.size());
 	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), expected[0], 1e-4f);
 #else
@@ -1540,7 +1540,7 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		if (testCase.runCPUAOT)
 		{
 			auto cpuAOTInputs = MakeCPUInputs(testCase.inputs);
-			auto cpuAOTOutputs = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(testCase.graph)).Load().Run(cpuAOTInputs);
+			auto cpuAOTOutputs = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(testCase.graph)).Load().RunTensors(cpuAOTInputs);
 			ExpectOutputsNear(cpuAOTOutputs, expected, testCase.tolerance);
 		}
 
@@ -1555,7 +1555,7 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 
 		auto cudaInputs = MakeCUDAInputs(testCase.inputs);
-		auto cudaOutputs = module.Run(cudaInputs);
+		auto cudaOutputs = module.RunTensors(cudaInputs);
 		std::vector<Tensor<CPU>> cudaCPUOutputs;
 		cudaCPUOutputs.reserve(cudaOutputs.size());
 		for (const auto& output : cudaOutputs)
@@ -1592,7 +1592,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 
 	auto cudaInputs = MakeCUDAInputs(inputSpecs);
-	auto cudaOutputs = module.Run(cudaInputs);
+	auto cudaOutputs = module.RunTensors(cudaInputs);
 	std::vector<Tensor<CPU>> cudaCPUOutputs;
 	for (const auto& output : cudaOutputs)
 	{
@@ -1631,7 +1631,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionLinearChainWithConstantsAndWo
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
 
 	auto cudaInputs = MakeCUDAInputs(inputSpecs);
-	auto cudaOutputs = module.Run(cudaInputs);
+	auto cudaOutputs = module.RunTensors(cudaInputs);
 	std::vector<Tensor<CPU>> cudaCPUOutputs;
 	for (const auto& output : cudaOutputs)
 	{
@@ -1670,8 +1670,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
 	}
 
-	module.RunInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
-	module.RunInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
+	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
+	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
 
 	std::vector<Tensor<CPU>> cudaCPUOutputs;
 	for (const auto& output : cudaOutputs)
@@ -1711,7 +1711,7 @@ TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)
 	auto lhs = Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	auto rhs = Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
 	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
-	auto outputs = module.Run(inputs);
+	auto outputs = module.RunTensors(inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectTensorNear(outputs[0].CopyToDevice(CPU{}), std::array{ 70.0f, 100.0f, 150.0f, 220.0f });
 }
@@ -1853,7 +1853,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 
 		auto cpuAOTInputs = MakeCPUInputs(testCase.inputs);
 		auto cpuAOTModule = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(testCase.graph)).Load();
-		auto cpuAOTOutputs = cpuAOTModule.Run(cpuAOTInputs);
+		auto cpuAOTOutputs = cpuAOTModule.RunTensors(cpuAOTInputs);
 		ExpectOutputsNear(cpuAOTOutputs, expected, testCase.tolerance);
 
 		auto cudaArtifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(testCase.graph));
@@ -1864,7 +1864,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 		auto cudaModule = cudaArtifact.Load(cudaDevice);
 		EXPECT_EQ(cudaModule.Backend(), testCase.expectedCUDABackend);
 		auto cudaInputs = MakeCUDAInputs(testCase.inputs);
-		auto cudaOutputs = cudaModule.Run(cudaInputs);
+		auto cudaOutputs = cudaModule.RunTensors(cudaInputs);
 
 		std::vector<Tensor<CPU>> cudaCPUOutputs;
 		cudaCPUOutputs.reserve(cudaOutputs.size());

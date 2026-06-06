@@ -170,7 +170,7 @@ TEST(MemorySafetyTest, CompiledModuleLoadCopiesImageAcrossLifetimeCycles)
 		    Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32),
 		};
 
-		auto outputs = loaded.Run(inputs);
+		auto outputs = loaded.RunTensors(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), static_cast<float>(iteration + 11));
 		EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), static_cast<float>(iteration + 22));

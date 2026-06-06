@@ -373,12 +373,12 @@ void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -437,12 +437,12 @@ void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind,
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}
@@ -471,12 +471,12 @@ void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std:
 
 	for (int i = 0; i < kWarmupIterations; ++i)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 	}
 
 	for (auto _ : state)
 	{
-		module.RunInto(inputs, outputs);
+		module.RunTensorsInto(inputs, outputs);
 		benchmark::DoNotOptimize(outputs.data());
 		benchmark::ClobberMemory();
 	}

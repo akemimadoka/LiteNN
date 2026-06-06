@@ -6398,7 +6398,7 @@ CompiledModule<CPU> CompiledModule<CPU>::LoadBorrowedExternalRegions(CompiledMod
 	return module;
 }
 
-std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> inputs) const
+std::vector<Tensor<CPU>> CompiledModule<CPU>::RunTensors(std::span<const Tensor<CPU>> inputs) const
 {
 	if (!impl_ || !impl_->entry)
 	{
@@ -6410,11 +6410,11 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 	{
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
 	}
-	RunInto(inputs, outputs);
+	RunTensorsInto(inputs, outputs);
 	return outputs;
 }
 
-void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const
+void CompiledModule<CPU>::RunTensorsInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const
 {
 	llvm::SmallVector<CompiledTensorBinding, 8> inputBindings;
 	inputBindings.reserve(inputs.size());
@@ -6473,7 +6473,7 @@ void CompiledModule<CPU>::RunIntoBindings(std::span<const CompiledTensorBinding>
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
-void CompiledModule<CPU>::RunManyInto(std::span<const CompiledModuleInvocation> invocations,
+void CompiledModule<CPU>::RunManyTensorsInto(std::span<const CompiledModuleTensorInvocation> invocations,
                                       std::size_t threadCount) const
 {
 	std::vector<CompiledModuleBindingInvocation> bindingInvocations;
@@ -6797,12 +6797,12 @@ CompiledModule<CUDA> CompiledModule<CUDA>::LoadBorrowedExternalRegions(CompiledM
 	return Load(image, std::move(device));
 }
 
-std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs) const
+std::vector<Tensor<CUDA>> CompiledModule<CUDA>::RunTensors(std::span<const Tensor<CUDA>> inputs) const
 {
-	return Run(inputs, CompiledModuleCUDARunOptions{});
+	return RunTensors(inputs, CompiledModuleCUDARunOptions{});
 }
 
-std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>> inputs,
+std::vector<Tensor<CUDA>> CompiledModule<CUDA>::RunTensors(std::span<const Tensor<CUDA>> inputs,
                                                     CompiledModuleCUDARunOptions options) const
 {
 	if (!impl_)
@@ -6826,16 +6826,16 @@ std::vector<Tensor<CUDA>> CompiledModule<CUDA>::Run(std::span<const Tensor<CUDA>
 	{
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, impl_->device);
 	}
-	RunInto(inputs, outputs, options);
+	RunTensorsInto(inputs, outputs, options);
 	return outputs;
 }
 
-void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const
+void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const
 {
-	RunInto(inputs, outputs, CompiledModuleCUDARunOptions{});
+	RunTensorsInto(inputs, outputs, CompiledModuleCUDARunOptions{});
 }
 
-void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
                                    CompiledModuleCUDARunOptions options) const
 {
 	if (!impl_)
@@ -6922,7 +6922,7 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	{
 		cpuOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
 	}
-	impl_->cpuModule.RunInto(cpuInputs, cpuOutputs);
+	impl_->cpuModule.RunTensorsInto(cpuInputs, cpuOutputs);
 
 	for (std::size_t i = 0; i < outputs.size(); ++i)
 	{
@@ -6934,7 +6934,7 @@ void CompiledModule<CUDA>::RunInto(std::span<const Tensor<CUDA>> inputs, std::sp
 	}
 }
 
-void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocation> invocations,
+void CompiledModule<CUDA>::RunManyTensorsInto(std::span<const CompiledModuleCUDATensorInvocation> invocations,
                                        std::size_t threadCount) const
 {
 	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
@@ -6946,7 +6946,7 @@ void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocat
 	{
 		for (const auto& invocation : invocations)
 		{
-			RunInto(invocation.inputs, invocation.outputs, invocation.options);
+			RunTensorsInto(invocation.inputs, invocation.outputs, invocation.options);
 		}
 		return;
 	}
@@ -6968,7 +6968,7 @@ void CompiledModule<CUDA>::RunManyInto(std::span<const CompiledModuleCUDAInvocat
 			try
 			{
 				const auto& invocation = invocations[index];
-				RunInto(invocation.inputs, invocation.outputs, invocation.options);
+				RunTensorsInto(invocation.inputs, invocation.outputs, invocation.options);
 			}
 			catch (...)
 			{

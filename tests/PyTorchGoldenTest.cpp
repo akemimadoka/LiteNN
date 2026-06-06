@@ -95,7 +95,7 @@ TEST(PyTorchGolden, ReLULinearCPUArtifactMatchesFixture)
 
 	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
 	auto module = artifact.Load();
-	const auto outputs = module.Run(std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = module.RunTensors(std::span<const Tensor<CPU>>(inputs));
 
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchGolden(outputs[0]);

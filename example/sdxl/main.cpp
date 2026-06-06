@@ -1764,13 +1764,13 @@ namespace
 
 		for (std::size_t i = 0; i < options.warmup; ++i)
 		{
-			module.RunInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
+			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
 			               std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
 		}
 		begin = BenchmarkClock::now();
 		for (std::size_t i = 0; i < options.iterations; ++i)
 		{
-			module.RunInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
+			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
 			               std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
 		}
 		end = BenchmarkClock::now();
@@ -1854,13 +1854,13 @@ namespace
 
 		for (std::size_t i = 0; i < options.warmup; ++i)
 		{
-			module.RunInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
+			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
 			               std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
 		}
 		begin = BenchmarkClock::now();
 		for (std::size_t i = 0; i < options.iterations; ++i)
 		{
-			module.RunInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
+			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
 			               std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
 		}
 		end = BenchmarkClock::now();
@@ -1893,7 +1893,7 @@ namespace
 	    std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs,
 	    bool failOnNonFinite = true)
 	{
-		auto outputs = module.Run(inputs);
+		auto outputs = module.RunTensors(inputs);
 		PrintOutputs(module.OutputSpecs(), outputs, failOnNonFinite);
 		return outputs;
 	}
@@ -2390,9 +2390,9 @@ namespace
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> uncondOutputs;
 			if (cfgMode == "dual")
 			{
-				uncondOutputs = module.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(uncondInputs));
+				uncondOutputs = module.RunTensors(std::span<const LiteNN::Tensor<LiteNN::CPU>>(uncondInputs));
 			}
-			const auto outputs = module.Run(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
+			const auto outputs = module.RunTensors(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 			const auto* uncondPrediction = cfgMode == "dual" ? &uncondOutputs[*noiseOutput] : nullptr;
 			const auto noiseStats = ComputeTensorStats(outputs[*noiseOutput]);
 			std::optional<TensorStats> uncondNoiseStats;

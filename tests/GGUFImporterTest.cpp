@@ -923,7 +923,7 @@ TEST(GGUFLLaMACausalLM, CompilesSingleTokenFullGraphToCPUArtifactAndMatchesInter
 
 	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(lowered));
 	auto compiled = artifact.Load();
-	const auto outputs = compiled.Run(inputs);
+	const auto outputs = compiled.RunTensors(inputs);
 
 	ASSERT_EQ(expected.size(), 1u);
 	ASSERT_EQ(outputs.size(), 1u);
@@ -949,7 +949,7 @@ TEST(GGUFLLaMACausalLM, CompilesDecodeGraphToCPUArtifactAndMatchesInterpreter)
 	EXPECT_EQ(artifact.InputSpecs().size(), 3u);
 	EXPECT_EQ(artifact.OutputSpecs().size(), 3u);
 	auto compiled = artifact.Load();
-	const auto outputs = compiled.Run(inputs);
+	const auto outputs = compiled.RunTensors(inputs);
 
 	ASSERT_EQ(expected.size(), 3u);
 	ASSERT_EQ(outputs.size(), 3u);

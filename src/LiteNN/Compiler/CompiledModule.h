@@ -158,7 +158,7 @@ namespace LiteNN
 	CompileBudgetEstimate EstimateCompileBudget(const ExecutablePlan& plan, const CompilerOptions& options);
 	CompileBudgetEstimate EstimateCompileBudget(const Graph& graph, const CompilerOptions& options);
 
-	struct CompiledModuleInvocation
+	struct CompiledModuleTensorInvocation
 	{
 		std::span<const Tensor<CPU>> inputs;
 		std::span<Tensor<CPU>> outputs;
@@ -340,21 +340,21 @@ namespace LiteNN
 		/// The caller must keep image.constants and image.weights stable for every run of the returned module.
 		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image);
 
-		/// Runs the compiled entry point and returns newly allocated output tensors.
-		std::vector<Tensor<CPU>> Run(std::span<const Tensor<CPU>> inputs) const;
+		/// Adapter helper: runs with Tensor inputs and returns newly allocated output tensors.
+		std::vector<Tensor<CPU>> RunTensors(std::span<const Tensor<CPU>> inputs) const;
 
-		/// Runs the compiled entry point into caller-provided output tensors.
-		void RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const;
+		/// Adapter helper: runs with Tensor inputs into caller-provided output tensors.
+		void RunTensorsInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const;
 
 		/// Runs the compiled entry point with explicit typed input/output buffer bindings.
 		void RunIntoBindings(std::span<const CompiledTensorBinding> inputs,
 		                     std::span<const CompiledTensorBinding> outputs) const;
 
 		/// Runs independent invocations concurrently when threadCount > 1.
-		/// Concurrent Run/RunInto/RunManyInto calls are supported when each call uses
+		/// Concurrent binding or Tensor-adapter calls are supported when each call uses
 		/// independent input/output buffers.
-		void RunManyInto(std::span<const CompiledModuleInvocation> invocations,
-		                 std::size_t threadCount = 0) const;
+		void RunManyTensorsInto(std::span<const CompiledModuleTensorInvocation> invocations,
+		                        std::size_t threadCount = 0) const;
 		void RunManyIntoBindings(std::span<const CompiledModuleBindingInvocation> invocations,
 		                         std::size_t threadCount = 0) const;
 
@@ -399,7 +399,7 @@ namespace LiteNN
 		bool enableCUBLASLt{ true };
 	};
 
-	struct CompiledModuleCUDAInvocation
+	struct CompiledModuleCUDATensorInvocation
 	{
 		std::span<const Tensor<CUDA>> inputs;
 		std::span<Tensor<CUDA>> outputs;
@@ -422,14 +422,14 @@ namespace LiteNN
 		static CompiledModule Load(CompiledModuleSeparatedImage image, CUDA device = CUDA{});
 		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image, CUDA device = CUDA{});
 
-		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs) const;
-		std::vector<Tensor<CUDA>> Run(std::span<const Tensor<CUDA>> inputs,
-		                             CompiledModuleCUDARunOptions options) const;
-		void RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const;
-		void RunInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
-		             CompiledModuleCUDARunOptions options) const;
-		void RunManyInto(std::span<const CompiledModuleCUDAInvocation> invocations,
-		                 std::size_t threadCount = 0) const;
+		std::vector<Tensor<CUDA>> RunTensors(std::span<const Tensor<CUDA>> inputs) const;
+		std::vector<Tensor<CUDA>> RunTensors(std::span<const Tensor<CUDA>> inputs,
+		                                     CompiledModuleCUDARunOptions options) const;
+		void RunTensorsInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs) const;
+		void RunTensorsInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
+		                    CompiledModuleCUDARunOptions options) const;
+		void RunManyTensorsInto(std::span<const CompiledModuleCUDATensorInvocation> invocations,
+		                        std::size_t threadCount = 0) const;
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;

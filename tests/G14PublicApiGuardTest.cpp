@@ -462,3 +462,21 @@ TEST(G14PublicApiGuard, ImporterResultsDoNotExposeRawGraphFields)
 		EXPECT_EQ(text.find("Graph graph"), std::string::npos) << header;
 	}
 }
+
+TEST(G14PublicApiGuard, CompiledModuleTensorHelpersAreExplicitAdapters)
+{
+	const auto header = ReadSourceFile("src/LiteNN/Compiler/CompiledModule.h");
+	EXPECT_NE(header.find("RunTensors(std::span<const Tensor<CPU>>"), std::string::npos);
+	EXPECT_NE(header.find("RunTensorsInto(std::span<const Tensor<CPU>>"), std::string::npos);
+	EXPECT_NE(header.find("RunManyTensorsInto(std::span<const CompiledModuleTensorInvocation>"), std::string::npos);
+	EXPECT_NE(header.find("RunTensors(std::span<const Tensor<CUDA>>"), std::string::npos);
+	EXPECT_NE(header.find("RunTensorsInto(std::span<const Tensor<CUDA>>"), std::string::npos);
+	EXPECT_NE(header.find("RunManyTensorsInto(std::span<const CompiledModuleCUDATensorInvocation>"), std::string::npos);
+
+	EXPECT_EQ(header.find(" Run(std::span<const Tensor<CPU>>"), std::string::npos);
+	EXPECT_EQ(header.find(" RunInto(std::span<const Tensor<CPU>>"), std::string::npos);
+	EXPECT_EQ(header.find(" RunManyInto(std::span<const CompiledModuleInvocation>"), std::string::npos);
+	EXPECT_EQ(header.find(" Run(std::span<const Tensor<CUDA>>"), std::string::npos);
+	EXPECT_EQ(header.find(" RunInto(std::span<const Tensor<CUDA>>"), std::string::npos);
+	EXPECT_EQ(header.find(" RunManyInto(std::span<const CompiledModuleCUDAInvocation>"), std::string::npos);
+}

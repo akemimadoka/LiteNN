@@ -1784,11 +1784,15 @@ Break candidates that can still materially improve vNext:
     validation, parameter binding, and train-step planning use the explicitly unsafe graph view internally.
   - [x] Training tests, MNIST training helper, and training benchmark call sites now hand off `ModelGraph`, with guard
     coverage preventing `Trainer(Graph&)` from returning.
-- [ ] Demote or remove `CompiledModule` Tensor convenience `Run` APIs from the stable ABI.
+- [x] Demote or remove `CompiledModule` Tensor convenience `Run` APIs from the stable ABI.
   - Benefit: compiled execution would have one production ABI centered on `CompiledTensorBinding`, with Tensor helpers
     living as adapters rather than core runtime contracts.
   - Hidden need: benchmarks/examples need small helper wrappers so application code can still be ergonomic without
     freezing Tensor ownership into compiled execution.
+  - Completed on 2026-06-07: Tensor convenience execution was renamed to explicit adapter helpers
+    `RunTensors` / `RunTensorsInto` / `RunManyTensorsInto`; the stable production path remains
+    `RunIntoBindings` / `RunManyIntoBindings`, with `G14PublicApiGuard` preventing the old Tensor-span `Run` ABI from
+    returning.
 - [x] Make importer results stop exposing raw `Graph` directly.
   - Benefit: importers become producers of `ImporterOwnedManifest`, `ModelGraph`, or vNext packages, rather than leaking
     construction storage.
