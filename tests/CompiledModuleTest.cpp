@@ -462,6 +462,55 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
 }
 
+TEST(CompiledModuleTest, RunsWithExplicitTypedBufferBindings)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+
+	std::array<float, 4> lhs{ 1.0f, 2.0f, 3.0f, 4.0f };
+	std::array<float, 4> rhs{ 10.0f, 20.0f, 30.0f, 40.0f };
+	std::array<float, 4> sum{};
+	const auto matrixType = MakeTensorType(DataType::Float32, std::array<std::size_t, 2>{ 2, 2 });
+	std::array<CompiledTensorBinding, 2> inputs = {
+		CompiledTensorBinding{ .data = lhs.data(), .type = matrixType, .name = "lhs" },
+		CompiledTensorBinding{ .data = rhs.data(), .type = matrixType, .name = "rhs" },
+	};
+	std::array<CompiledTensorBinding, 1> outputs = {
+		CompiledTensorBinding{ .data = sum.data(), .type = matrixType, .name = "sum" },
+	};
+
+	compiled.RunIntoBindings(inputs, outputs);
+
+	EXPECT_FLOAT_EQ(sum[0], 11.0f);
+	EXPECT_FLOAT_EQ(sum[1], 22.0f);
+	EXPECT_FLOAT_EQ(sum[2], 33.0f);
+	EXPECT_FLOAT_EQ(sum[3], 44.0f);
+}
+
+TEST(CompiledModuleTest, TypedBufferBindingsValidateNamesAndTypes)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+
+	std::array<float, 4> lhs{};
+	std::array<float, 4> rhs{};
+	std::array<float, 4> sum{};
+	const auto matrixType = MakeTensorType(DataType::Float32, std::array<std::size_t, 2>{ 2, 2 });
+	std::array<CompiledTensorBinding, 2> inputs = {
+		CompiledTensorBinding{ .data = lhs.data(), .type = matrixType, .name = "not_lhs" },
+		CompiledTensorBinding{ .data = rhs.data(), .type = matrixType, .name = "rhs" },
+	};
+	std::array<CompiledTensorBinding, 1> outputs = {
+		CompiledTensorBinding{ .data = sum.data(), .type = matrixType, .name = "sum" },
+	};
+
+	EXPECT_THROW(compiled.RunIntoBindings(inputs, outputs), std::runtime_error);
+
+	inputs[0].name = "lhs";
+	inputs[0].type = MakeTensorType(DataType::Float32, std::array<std::size_t, 1>{ 4 });
+	EXPECT_THROW(compiled.RunIntoBindings(inputs, outputs), std::runtime_error);
+}
+
 TEST(CompiledModuleTest, WritesCarrierObjectFile)
 {
 	auto graph = BuildSimpleAddGraph();

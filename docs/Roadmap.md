@@ -1711,10 +1711,13 @@ Break candidates that can still materially improve vNext:
     be `Transform<ModelGraph, ModelGraph>`, `Transform<ModelGraph, ExecutablePlan>`, or `Transform<ExecutablePlan, ...>`.
   - [x] Removed the `Migration::GraphMutationPass` name; construction-time graph mutation now sits in
     `Detail::GraphMutationPass`, and `G14PublicApiGuard` asserts that `namespace Migration` is not reintroduced.
-- [ ] Make compiled execution accept explicit typed buffer bindings instead of tensor vectors / raw entry pointer arrays.
+- [x] Make compiled execution accept explicit typed buffer bindings instead of tensor vectors / raw entry pointer arrays.
   - Benefit: unifies external rodata, mutable parameters, CUDA buffers, mobile mmap, and stateful entry execution under one
     ABI, and makes shape/dtype/layout validation happen before dispatch.
   - Hidden need: keep `Tensor` convenience wrappers only as adapter helpers around `RuntimeBufferBinding`.
+  - [x] Added `CompiledTensorBinding` / `CompiledModuleBindingInvocation` and CPU `RunIntoBindings` /
+    `RunManyIntoBindings`; existing `Tensor` span calls now adapt into typed bindings before dispatch, with name,
+    shape, dtype, and null-buffer validation covered by `CompiledModuleTest`.
 - [ ] Hide or split untyped tensor memory access from the stable public API.
   - Benefit: reduces accidental aliasing, dtype punning, and cross-device mutation bugs from public `RawData()` use.
   - Hidden need: provide typed span/read-write view helpers and an unsafe/internal namespace for low-level tests and

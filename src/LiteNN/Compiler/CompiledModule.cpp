@@ -3192,6 +3192,50 @@ namespace
 		}
 	}
 
+	void ValidateBindingAgainstSpec(const CompiledTensorBinding& binding, const CompiledTensorSpec& spec,
+	                                std::size_t index, std::string_view role)
+	{
+		if (binding.data == nullptr)
+		{
+			const auto label = spec.name.empty() ? std::to_string(index) : std::format("{} ('{}')", index, spec.name);
+			throw std::runtime_error(std::format("CompiledModule {} {} has null data", role, label));
+		}
+		const auto shape = spec.type.StaticShape();
+		if (binding.type.dtype != spec.type.dtype || ShapeView{ binding.type.StaticShape() } != ShapeView{ shape })
+		{
+			const auto label = spec.name.empty() ? std::to_string(index) : std::format("{} ('{}')", index, spec.name);
+			throw std::runtime_error(std::format("CompiledModule {} {} mismatch: expected {}, got {}", role, label,
+			                                     Validation::FormatInfo(spec.type.dtype, shape),
+			                                     Validation::FormatInfo(binding.type.dtype, binding.type.StaticShape())));
+		}
+		if (!binding.name.empty() && !spec.name.empty() && binding.name != spec.name)
+		{
+			const auto label = std::format("{} ('{}')", index, spec.name);
+			throw std::runtime_error(std::format("CompiledModule {} {} name mismatch: got '{}'", role, label,
+			                                     binding.name));
+		}
+	}
+
+	template <Device D>
+	CompiledTensorBinding MakeBindingFromTensor(Tensor<D>& tensor, std::string name = {},
+	                                            std::optional<QuantizationParams> quantization = std::nullopt)
+	{
+		return { .data = tensor.RawData(),
+			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
+			     .name = std::move(name),
+			     .quantization = std::move(quantization) };
+	}
+
+	template <Device D>
+	CompiledTensorBinding MakeBindingFromTensor(const Tensor<D>& tensor, std::string name = {},
+	                                            std::optional<QuantizationParams> quantization = std::nullopt)
+	{
+		return { .data = const_cast<void*>(tensor.RawData()),
+			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
+			     .name = std::move(name),
+			     .quantization = std::move(quantization) };
+	}
+
 	std::size_t NormalizeThreadCount(std::size_t requested, std::size_t workCount)
 	{
 		if (workCount == 0)
@@ -6360,36 +6404,39 @@ std::vector<Tensor<CPU>> CompiledModule<CPU>::Run(std::span<const Tensor<CPU>> i
 	{
 		throw std::runtime_error("CompiledModule is empty");
 	}
-	if (inputs.size() != impl_->inputSpecs.size())
-	{
-		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
-		                                     impl_->inputSpecs.size(), inputs.size()));
-	}
-
-	llvm::SmallVector<void*, 8> inputPtrs;
-	inputPtrs.reserve(inputs.size());
-	for (std::size_t i = 0; i < inputs.size(); ++i)
-	{
-		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
-		inputPtrs.push_back(const_cast<void*>(inputs[i].RawData()));
-	}
-
 	std::vector<Tensor<CPU>> outputs;
 	outputs.reserve(impl_->outputSpecs.size());
-	llvm::SmallVector<void*, 8> outputPtrs;
-	outputPtrs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
-		outputPtrs.push_back(outputs.back().RawData());
 	}
-
-	ScopedCPUExternalRegions scopedRegions(impl_->ExternalConstantsData(), impl_->ExternalWeightsData());
-	impl_->entry(inputPtrs.data(), outputPtrs.data());
+	RunInto(inputs, outputs);
 	return outputs;
 }
 
 void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const
+{
+	llvm::SmallVector<CompiledTensorBinding, 8> inputBindings;
+	inputBindings.reserve(inputs.size());
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		const auto name = i < InputSpecs().size() ? InputSpecs()[i].name : std::string{};
+		inputBindings.push_back(MakeBindingFromTensor(inputs[i], name));
+	}
+
+	llvm::SmallVector<CompiledTensorBinding, 8> outputBindings;
+	outputBindings.reserve(outputs.size());
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		const auto name = i < OutputSpecs().size() ? OutputSpecs()[i].name : std::string{};
+		outputBindings.push_back(MakeBindingFromTensor(outputs[i], name));
+	}
+
+	RunIntoBindings(inputBindings, outputBindings);
+}
+
+void CompiledModule<CPU>::RunIntoBindings(std::span<const CompiledTensorBinding> inputs,
+                                          std::span<const CompiledTensorBinding> outputs) const
 {
 	if (!impl_ || !impl_->entry)
 	{
@@ -6410,16 +6457,16 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 	inputPtrs.reserve(inputs.size());
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{
-		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
-		inputPtrs.push_back(const_cast<void*>(inputs[i].RawData()));
+		ValidateBindingAgainstSpec(inputs[i], impl_->inputSpecs[i], i, "input");
+		inputPtrs.push_back(inputs[i].data);
 	}
 
 	llvm::SmallVector<void*, 8> outputPtrs;
 	outputPtrs.reserve(outputs.size());
 	for (std::size_t i = 0; i < outputs.size(); ++i)
 	{
-		ValidateOutputTensorAgainstSpec(outputs[i], impl_->outputSpecs[i], i);
-		outputPtrs.push_back(outputs[i].RawData());
+		ValidateBindingAgainstSpec(outputs[i], impl_->outputSpecs[i], i, "output");
+		outputPtrs.push_back(outputs[i].data);
 	}
 
 	ScopedCPUExternalRegions scopedRegions(impl_->ExternalConstantsData(), impl_->ExternalWeightsData());
@@ -6428,6 +6475,36 @@ void CompiledModule<CPU>::RunInto(std::span<const Tensor<CPU>> inputs, std::span
 
 void CompiledModule<CPU>::RunManyInto(std::span<const CompiledModuleInvocation> invocations,
                                       std::size_t threadCount) const
+{
+	std::vector<CompiledModuleBindingInvocation> bindingInvocations;
+	bindingInvocations.reserve(invocations.size());
+	std::vector<llvm::SmallVector<CompiledTensorBinding, 8>> inputBindings(invocations.size());
+	std::vector<llvm::SmallVector<CompiledTensorBinding, 8>> outputBindings(invocations.size());
+	for (std::size_t invocationIndex = 0; invocationIndex < invocations.size(); ++invocationIndex)
+	{
+		const auto& invocation = invocations[invocationIndex];
+		auto& inputs = inputBindings[invocationIndex];
+		inputs.reserve(invocation.inputs.size());
+		for (std::size_t i = 0; i < invocation.inputs.size(); ++i)
+		{
+			const auto name = i < InputSpecs().size() ? InputSpecs()[i].name : std::string{};
+			inputs.push_back(MakeBindingFromTensor(invocation.inputs[i], name));
+		}
+
+		auto& outputs = outputBindings[invocationIndex];
+		outputs.reserve(invocation.outputs.size());
+		for (std::size_t i = 0; i < invocation.outputs.size(); ++i)
+		{
+			const auto name = i < OutputSpecs().size() ? OutputSpecs()[i].name : std::string{};
+			outputs.push_back(MakeBindingFromTensor(invocation.outputs[i], name));
+		}
+		bindingInvocations.push_back({ .inputs = inputs, .outputs = outputs });
+	}
+	RunManyIntoBindings(bindingInvocations, threadCount);
+}
+
+void CompiledModule<CPU>::RunManyIntoBindings(std::span<const CompiledModuleBindingInvocation> invocations,
+                                              std::size_t threadCount) const
 {
 	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
 	if (workerCount == 0)
@@ -6438,7 +6515,7 @@ void CompiledModule<CPU>::RunManyInto(std::span<const CompiledModuleInvocation> 
 	{
 		for (const auto& invocation : invocations)
 		{
-			RunInto(invocation.inputs, invocation.outputs);
+			RunIntoBindings(invocation.inputs, invocation.outputs);
 		}
 		return;
 	}
@@ -6460,7 +6537,7 @@ void CompiledModule<CPU>::RunManyInto(std::span<const CompiledModuleInvocation> 
 			try
 			{
 				const auto& invocation = invocations[index];
-				RunInto(invocation.inputs, invocation.outputs);
+				RunIntoBindings(invocation.inputs, invocation.outputs);
 			}
 			catch (...)
 			{

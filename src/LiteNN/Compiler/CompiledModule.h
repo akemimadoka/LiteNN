@@ -164,6 +164,20 @@ namespace LiteNN
 		std::span<Tensor<CPU>> outputs;
 	};
 
+	struct CompiledTensorBinding
+	{
+		void* data{};
+		TensorType type;
+		std::string name;
+		std::optional<QuantizationParams> quantization;
+	};
+
+	struct CompiledModuleBindingInvocation
+	{
+		std::span<const CompiledTensorBinding> inputs;
+		std::span<const CompiledTensorBinding> outputs;
+	};
+
 	template <Device D>
 	class CompiledModule;
 
@@ -332,11 +346,17 @@ namespace LiteNN
 		/// Runs the compiled entry point into caller-provided output tensors.
 		void RunInto(std::span<const Tensor<CPU>> inputs, std::span<Tensor<CPU>> outputs) const;
 
+		/// Runs the compiled entry point with explicit typed input/output buffer bindings.
+		void RunIntoBindings(std::span<const CompiledTensorBinding> inputs,
+		                     std::span<const CompiledTensorBinding> outputs) const;
+
 		/// Runs independent invocations concurrently when threadCount > 1.
 		/// Concurrent Run/RunInto/RunManyInto calls are supported when each call uses
 		/// independent input/output buffers.
 		void RunManyInto(std::span<const CompiledModuleInvocation> invocations,
 		                 std::size_t threadCount = 0) const;
+		void RunManyIntoBindings(std::span<const CompiledModuleBindingInvocation> invocations,
+		                         std::size_t threadCount = 0) const;
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;
