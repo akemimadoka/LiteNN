@@ -1,7 +1,9 @@
 #ifndef LITENN_SERIALIZATION_MODELPACKAGEIO_H
 #define LITENN_SERIALIZATION_MODELPACKAGEIO_H
 
-#include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Graph.h>
+#include <LiteNN/Serialization/ExternalWeights.h>
 #include <LiteNN/VNextPackage.h>
 
 #include <filesystem>

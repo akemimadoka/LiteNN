@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNNImporters.h>
 
 #include <filesystem>
 #include <fstream>

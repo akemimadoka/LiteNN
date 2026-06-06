@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNNImporters.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/TorchManifest.h>
 

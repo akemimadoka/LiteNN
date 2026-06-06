@@ -355,6 +355,36 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_NE(torchToolCmake.find("COMPONENT LiteNNTools"), std::string::npos);
 }
 
+TEST(G14PublicApiGuard, UmbrellaHeadersExposeNarrowDeploymentSurfaces)
+{
+	const auto umbrella = ReadSourceFile("src/LiteNN.h");
+	EXPECT_NE(umbrella.find("#include <LiteNNCore.h>"), std::string::npos);
+	EXPECT_EQ(umbrella.find("#include <LiteNNImporters.h>"), std::string::npos);
+	EXPECT_EQ(umbrella.find("#include <LiteNN/Serialization/ModelIO.h>"), std::string::npos);
+	EXPECT_EQ(umbrella.find("#include <LiteNN/Serialization/ModelPackageIO.h>"), std::string::npos);
+	EXPECT_EQ(umbrella.find("#include <LiteNN/Serialization/Safetensors.h>"), std::string::npos);
+	EXPECT_EQ(umbrella.find("#include <LiteNN/Serialization/TorchManifest.h>"), std::string::npos);
+
+	const auto core = ReadSourceFile("src/LiteNNCore.h");
+	EXPECT_NE(core.find("#include <LiteNN/ExecutablePlan.h>"), std::string::npos);
+	EXPECT_NE(core.find("#include <LiteNN/Runtime/Scheduler.h>"), std::string::npos);
+	EXPECT_EQ(core.find("#include <LiteNN/Serialization/ModelIO.h>"), std::string::npos);
+	EXPECT_EQ(core.find("#include <LiteNN/Serialization/ModelPackageIO.h>"), std::string::npos);
+	EXPECT_EQ(core.find("#include <LiteNN/Serialization/Safetensors.h>"), std::string::npos);
+	EXPECT_EQ(core.find("#include <LiteNN/Serialization/TorchManifest.h>"), std::string::npos);
+
+	const auto importers = ReadSourceFile("src/LiteNNImporters.h");
+	EXPECT_NE(importers.find("#include <LiteNNCore.h>"), std::string::npos);
+	EXPECT_NE(importers.find("#include <LiteNN/Serialization/ModelPackageIO.h>"), std::string::npos);
+	EXPECT_NE(importers.find("#include <LiteNN/Serialization/Safetensors.h>"), std::string::npos);
+	EXPECT_NE(importers.find("#include <LiteNN/Serialization/TorchManifest.h>"), std::string::npos);
+	EXPECT_EQ(importers.find("#include <LiteNN/Serialization/ModelIO.h>"), std::string::npos);
+
+	const auto packageHeader = ReadSourceFile("src/LiteNN/Serialization/ModelPackageIO.h");
+	EXPECT_NE(packageHeader.find("#include <LiteNN/Serialization/ExternalWeights.h>"), std::string::npos);
+	EXPECT_EQ(packageHeader.find("#include <LiteNN/Serialization/ModelIO.h>"), std::string::npos);
+}
+
 TEST(G14PublicApiGuard, RawGraphMutationPassesAreInternalDetailScoped)
 {
 	const auto passHeader = ReadSourceFile("src/LiteNN/Pass.h");

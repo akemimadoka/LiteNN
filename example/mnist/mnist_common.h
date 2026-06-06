@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LiteNN.h>
+#include <LiteNNImporters.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Linear.h>
 #include <LiteNN/Optimizer/Loss.h>

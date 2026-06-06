@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Layer/BroadcastTo.h>
 #include <LiteNN/Layer/Gather.h>
 #include <LiteNN/Layer/Pad.h>

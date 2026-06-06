@@ -426,7 +426,10 @@ NodeOutput AddLayerNorm(Subgraph& sg, NodeOutput input, const LayerNormLayer& la
 
 ```
 src/
-├── LiteNN.h                      // 聚合 include 入口
+├── LiteNN.h                      // 默认核心聚合入口（等价于 LiteNNCore.h）
+├── LiteNNCore.h                  // core/runtime/model-building surface
+├── LiteNNRuntime.h               // core + interpreter/runtime helpers
+├── LiteNNImporters.h             // opt-in importer/package/safetensors/torch manifest surface
 ├── LiteNN.ixx                    // C++26 module 导出（TODO: 完善）
 └── LiteNN/
     ├── Misc.h                    // 工具：EnumDispatch, ShapeView, EnumToString

@@ -1729,13 +1729,19 @@ Break candidates that can still materially improve vNext:
   - Benefit: prevents the convenient all-in-one include from freezing importer/compiler/tool dependencies into the minimal
     runtime ABI.
   - Hidden need: examples can still use the full umbrella, but install/export components should advertise narrower headers.
-- [ ] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit internal include/target.
+  - [x] Added `LiteNNCore.h`, `LiteNNRuntime.h`, and `LiteNNImporters.h`; `LiteNN.h` now includes only `LiteNNCore.h`,
+    while importer/package users opt into `LiteNNImporters.h` or concrete serialization headers.
+  - [x] Added guard coverage so `LiteNN.h` / `LiteNNCore.h` cannot pull package IO, safetensors, torch manifest, or graph
+    archive headers back into the default runtime surface.
+- [x] Move graph-archive tooling out of the default public umbrella and keep it behind an explicit internal include/target.
   - Benefit: makes pre-vNext graph archives impossible to use accidentally in production code while preserving tests and
     one-off conversion tooling.
   - Hidden need: conversion tools should prefer vNext package input/output and require an explicit command name for graph
     archive conversion.
   - [x] Removed `Serialization::Migration::{SaveGraphArchive,LoadGraphArchive}`; remaining graph archive helpers are
     `Serialization::Detail` internals used by tests and explicit conversion tooling.
+  - [x] Split `ExternalWeightSaveOptions` into `Serialization/ExternalWeights.h`, allowing `ModelPackageIO.h` to stop
+    including `ModelIO.h`; tests and conversion tools that still use graph archives now include `ModelIO.h` explicitly.
 
 Recommendation: treat the first three items as the only remaining break-window candidates that can justify delaying vNext
 if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear

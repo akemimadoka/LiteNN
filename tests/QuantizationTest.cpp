@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 

@@ -1,5 +1,6 @@
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/Serialization/ExternalWeights.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <algorithm>
@@ -25,13 +26,6 @@
 
 namespace LiteNN::Serialization
 {
-	/// Controls when variable tensor payloads are written to a sibling external weight file.
-	struct ExternalWeightSaveOptions
-	{
-		std::uint64_t minVariableBytes{ 0 };
-		std::uint64_t alignment{ 64 };
-	};
-
 	namespace Detail
 	{
 		constexpr std::array<char, 8> kGraphArchiveMagic = { 'L', 'T', 'N', 'N', 'M', 'D', 'L', '\0' };

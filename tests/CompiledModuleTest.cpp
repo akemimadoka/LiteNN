@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>

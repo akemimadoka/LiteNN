@@ -1,4 +1,5 @@
 #include <LiteNN/Serialization/ModelPackageIO.h>
+#include <LiteNN/Validation/GraphValidator.h>
 
 #include <algorithm>
 #include <fstream>

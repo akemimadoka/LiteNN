@@ -1,4 +1,6 @@
 #include <LiteNN.h>
+#include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNNImporters.h>
 
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
