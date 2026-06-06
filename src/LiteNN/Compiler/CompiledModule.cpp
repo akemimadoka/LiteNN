@@ -5581,9 +5581,9 @@ namespace
 		void* outputPtr = CUDANativeDevicePointer(kernel.arguments[0], inputs, outputs, workspace, constants, "output");
 		void* lhsPtr = CUDANativeDevicePointer(kernel.arguments[1], inputs, outputs, workspace, constants, "lhs");
 		void* rhsPtr = CUDANativeDevicePointer(kernel.arguments[2], inputs, outputs, workspace, constants, "rhs");
-		Tensor<CUDA> outputView(outputPtr, { m, n }, *dtype, device);
-		Tensor<CUDA> lhsView(lhsPtr, { m, k }, *dtype, device);
-		Tensor<CUDA> rhsView(rhsPtr, { k, n }, *dtype, device);
+		auto outputView = Tensor<CUDA>::UnsafeBorrowed(outputPtr, { m, n }, *dtype, device);
+		auto lhsView = Tensor<CUDA>::UnsafeBorrowed(lhsPtr, { m, k }, *dtype, device);
+		auto rhsView = Tensor<CUDA>::UnsafeBorrowed(rhsPtr, { k, n }, *dtype, device);
 		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.UnsafeRawData(), lhsView.DType(), lhsView.Shape(),
 		                               lhsView.UnsafeRawData(), rhsView.DType(), rhsView.Shape(), rhsView.UnsafeRawData(),
 		                               ToCUDAExecutionOptions(options));
@@ -7090,7 +7090,8 @@ namespace
 			const auto shape = storage.type.StaticShape();
 			const auto* bytes = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset +
 			                    storage.storageOffsetBytes;
-			Tensor<CPU> hostView(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+			auto hostView =
+				Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
 			if (storage.quantization)
 			{
 				graph.AddVariable(Variable::CreateFrozenQuantized(hostView, *storage.quantization));

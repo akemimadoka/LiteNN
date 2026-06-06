@@ -123,13 +123,12 @@ namespace LiteNN
 		{
 		}
 
-		// dtype 必须显式给出，避免漏填
-		// allocatedNumElements_ 此时无意义
-		constexpr Tensor(void* externalData, ShapeView shape, DataType dtype, UsingDevice device = UsingDevice())
-		    : data_(externalData), allocatedNumElements_(), shape_(shape.Dims.begin(), shape.Dims.end()),
-		      strides_(ComputeContiguousStrides(shape)), dtype_(dtype), device_(std::move(device)), ownsData_(false)
+		// SAFETY: Creates a non-owning tensor view over caller-managed storage. The caller must keep
+		// `externalData` alive and correctly typed for the returned Tensor lifetime.
+		static constexpr Tensor UnsafeBorrowed(void* externalData, ShapeView shape, DataType dtype,
+		                                       UsingDevice device = UsingDevice())
 		{
-			ShapeSanCheck(Shape());
+			return Tensor(BorrowedStorageTag{}, externalData, shape, dtype, std::move(device));
 		}
 
 		constexpr ~Tensor()
@@ -346,7 +345,7 @@ namespace LiteNN
 				++dimIndex;
 			}
 			// TODO: 在 Tensor 视图中，Device 是否需要复制？
-			return Tensor(newData, newShape, dtype_, device_);
+			return Tensor::UnsafeBorrowed(newData, newShape, dtype_, device_);
 		}
 
 		constexpr Tensor operator-() const
@@ -658,6 +657,20 @@ namespace LiteNN
 		}
 
 	private:
+		struct BorrowedStorageTag
+		{
+		};
+
+		// dtype 必须显式给出，避免漏填
+		// allocatedNumElements_ 此时无意义
+		constexpr Tensor(BorrowedStorageTag, void* externalData, ShapeView shape, DataType dtype,
+		                 UsingDevice device = UsingDevice())
+		    : data_(externalData), allocatedNumElements_(), shape_(shape.Dims.begin(), shape.Dims.end()),
+		      strides_(ComputeContiguousStrides(shape)), dtype_(dtype), device_(std::move(device)), ownsData_(false)
+		{
+			ShapeSanCheck(Shape());
+		}
+
 		void* data_;
 		std::size_t allocatedNumElements_; // Reshape 后 numElements 将不会等同于 shape 的
 		                                   // numElements，此值用于释放存储时正确计算大小

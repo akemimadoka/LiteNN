@@ -1794,11 +1794,14 @@ Break candidates that can still materially improve vNext:
     construction storage.
   - Hidden need: GGUF/Torch/SDXL conversion tools need explicit internal access only while lowering or diagnostics still
     inspect raw graph details.
-- [ ] Replace the public borrowed-memory Tensor constructor with an explicit unsafe factory or `TensorView`.
+- [x] Replace the public borrowed-memory Tensor constructor with an explicit unsafe factory or `TensorView`.
   - Benefit: makes lifetime/aliasing hazards clear and avoids a raw `void*` constructor that looks like ordinary Tensor
     ownership.
   - Hidden need: compiled bindings, external buffers, and tests need a lightweight borrowed view path that cannot be
     mistaken for owning storage.
+  - Completed on 2026-06-07: public borrowed `Tensor(void*, ...)` construction was replaced by
+    `Tensor::UnsafeBorrowed(...)`; internal borrowed views now call the explicit factory and `G14PublicApiGuard` prevents
+    reintroducing the raw constructor.
 
 Recommendation: treat the first three items as the only remaining break-window candidates that can justify delaying vNext
 if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear

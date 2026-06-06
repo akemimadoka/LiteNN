@@ -266,7 +266,8 @@ namespace LiteNN::Runtime
 			    storage.type.memorySpace == TensorMemorySpace::External ||
 			    storage.type.memorySpace == TensorMemorySpace::Unified)
 			{
-				Tensor<CPU> hostView(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+				auto hostView =
+					Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
 				return hostView.CopyToDevice(device);
 			}
 

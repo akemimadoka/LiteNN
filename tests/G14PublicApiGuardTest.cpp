@@ -437,3 +437,12 @@ TEST(G14PublicApiGuard, TensorRawDataCompatibilityForwarderIsRemoved)
 	EXPECT_EQ(tensorHeader.find(".RawData()"), std::string::npos);
 	EXPECT_EQ(tensorHeader.find("->RawData()"), std::string::npos);
 }
+
+TEST(G14PublicApiGuard, BorrowedTensorStorageIsExplicitlyUnsafe)
+{
+	const auto tensorHeader = ReadSourceFile("src/LiteNN/Tensor.h");
+	EXPECT_NE(tensorHeader.find("UnsafeBorrowed(void* externalData"), std::string::npos);
+	EXPECT_NE(tensorHeader.find("BorrowedStorageTag"), std::string::npos);
+	EXPECT_EQ(tensorHeader.find("Tensor(void* externalData"), std::string::npos);
+	EXPECT_EQ(tensorHeader.find("Tensor(const void* externalData"), std::string::npos);
+}
