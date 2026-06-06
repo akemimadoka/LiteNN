@@ -1,11 +1,73 @@
 #include <LiteNN/Device.h>
 #include <concepts>
+#include <span>
+#include <type_traits>
 
 #ifndef LITENN_TENSOR_H
 #define LITENN_TENSOR_H
 
 namespace LiteNN
 {
+	namespace Detail
+	{
+		template <typename>
+		inline constexpr bool DependentFalse = false;
+
+		template <typename T>
+		consteval DataType TensorElementDataType()
+		{
+			using U = std::remove_cv_t<T>;
+			if constexpr (std::same_as<U, float>)
+			{
+				return DataType::Float32;
+			}
+			else if constexpr (std::same_as<U, double>)
+			{
+				return DataType::Float64;
+			}
+			else if constexpr (std::same_as<U, std::int32_t>)
+			{
+				return DataType::Int32;
+			}
+			else if constexpr (std::same_as<U, std::int64_t>)
+			{
+				return DataType::Int64;
+			}
+			else if constexpr (std::same_as<U, bool>)
+			{
+				return DataType::Bool;
+			}
+			else if constexpr (std::same_as<U, Float16>)
+			{
+				return DataType::Float16;
+			}
+			else if constexpr (std::same_as<U, BFloat16>)
+			{
+				return DataType::BFloat16;
+			}
+			else if constexpr (std::same_as<U, Float8E4M3>)
+			{
+				return DataType::Float8E4M3;
+			}
+			else if constexpr (std::same_as<U, Float8E5M2>)
+			{
+				return DataType::Float8E5M2;
+			}
+			else if constexpr (std::same_as<U, std::int8_t>)
+			{
+				return DataType::Int8;
+			}
+			else if constexpr (std::same_as<U, std::uint8_t>)
+			{
+				return DataType::UInt8;
+			}
+			else
+			{
+				static_assert(DependentFalse<U>, "Unsupported LiteNN tensor element type");
+			}
+		}
+	} // namespace Detail
+
 	struct UninitializedTag
 	{
 	};
@@ -218,14 +280,54 @@ namespace LiteNN
 			return dtype_;
 		}
 
-		constexpr void* RawData()
+		constexpr void* UnsafeRawData()
 		{
 			return data_;
 		}
 
-		constexpr const void* RawData() const
+		constexpr const void* UnsafeRawData() const
 		{
 			return data_;
+		}
+
+		constexpr void* RawData()
+		{
+			return UnsafeRawData();
+		}
+
+		constexpr const void* RawData() const
+		{
+			return UnsafeRawData();
+		}
+
+		template <typename T>
+		constexpr std::span<T> MutableData()
+		{
+			constexpr auto expectedType = Detail::TensorElementDataType<T>();
+			if (dtype_ != expectedType)
+			{
+				throw std::runtime_error("Tensor mutable data view dtype mismatch");
+			}
+			if (!IsContiguous())
+			{
+				throw std::runtime_error("Tensor mutable data view requires contiguous storage");
+			}
+			return { static_cast<T*>(data_), NumElements() };
+		}
+
+		template <typename T>
+		constexpr std::span<const T> Data() const
+		{
+			constexpr auto expectedType = Detail::TensorElementDataType<T>();
+			if (dtype_ != expectedType)
+			{
+				throw std::runtime_error("Tensor data view dtype mismatch");
+			}
+			if (!IsContiguous())
+			{
+				throw std::runtime_error("Tensor data view requires contiguous storage");
+			}
+			return { static_cast<const T*>(data_), NumElements() };
 		}
 
 		// SAFETY: 这个操作会返回一个新的 Tensor

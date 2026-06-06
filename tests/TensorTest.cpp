@@ -8,20 +8,20 @@ using namespace LiteNN;
 // 辅助函数: 读取 CPU Tensor 的第 i 个 float 元素
 static float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const float*>(t.RawData())[i];
+	return t.Data<float>()[i];
 }
 
 static bool ReadBool(const Tensor<CPU>& t, std::size_t i)
 {
-	return static_cast<const bool*>(t.RawData())[i];
+	return t.Data<bool>()[i];
 }
 
 static float ReadAsFloat(const Tensor<CPU>& t, std::size_t i)
 {
 	Tensor<CPU> converted(Uninitialized, t.Shape(), DataType::Float32);
 	CPU cpu;
-	DeviceTraits<CPU>::ConvertTo(cpu, t.DType(), t.RawData(), t.NumElements(), DataType::Float32,
-	                             converted.RawData());
+	DeviceTraits<CPU>::ConvertTo(cpu, t.DType(), t.UnsafeRawData(), t.NumElements(), DataType::Float32,
+	                             converted.UnsafeRawData());
 	return ReadFloat(converted, i);
 }
 
@@ -35,6 +35,19 @@ TEST(ShapeView, ComparesByDimensionValues)
 	EXPECT_EQ(ShapeView{ lhs }, ShapeView{ rhs });
 	EXPECT_NE(ShapeView{ lhs }, ShapeView{ differentDim });
 	EXPECT_NE(ShapeView{ lhs }, ShapeView{ differentRank });
+}
+
+TEST(Tensor, TypedDataViewsValidateDType)
+{
+	Tensor<CPU> tensor({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32);
+	auto data = tensor.MutableData<float>();
+	ASSERT_EQ(data.size(), 4u);
+	data[1] = 42.0F;
+
+	const auto& constTensor = tensor;
+	EXPECT_FLOAT_EQ(constTensor.Data<float>()[1], 42.0F);
+	EXPECT_THROW((void) constTensor.Data<double>(), std::runtime_error);
+	EXPECT_EQ(tensor.UnsafeRawData(), tensor.RawData());
 }
 
 TEST(DataType, LowPrecisionMetadata)

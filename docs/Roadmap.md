@@ -1718,10 +1718,12 @@ Break candidates that can still materially improve vNext:
   - [x] Added `CompiledTensorBinding` / `CompiledModuleBindingInvocation` and CPU `RunIntoBindings` /
     `RunManyIntoBindings`; existing `Tensor` span calls now adapt into typed bindings before dispatch, with name,
     shape, dtype, and null-buffer validation covered by `CompiledModuleTest`.
-- [ ] Hide or split untyped tensor memory access from the stable public API.
+- [x] Hide or split untyped tensor memory access from the stable public API.
   - Benefit: reduces accidental aliasing, dtype punning, and cross-device mutation bugs from public `RawData()` use.
   - Hidden need: provide typed span/read-write view helpers and an unsafe/internal namespace for low-level tests and
     custom kernels.
+  - [x] Added `Tensor::Data<T>()`, `Tensor::MutableData<T>()`, and explicit `Tensor::UnsafeRawData()`; `TensorTest`
+    now covers dtype-checked typed views while low-level conversion code uses the unsafe name deliberately.
 - [x] Make CUDA eager fallback explicit rather than hidden inside `DeviceTraits<CUDA>` operations.
   - Benefit: runtime schedules and profiles would report host fallback and transfers instead of silently paying CPU bridge
     costs.
