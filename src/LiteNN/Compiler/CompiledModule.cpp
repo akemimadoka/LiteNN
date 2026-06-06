@@ -541,6 +541,31 @@ namespace
 		module.setDataLayout(config.targetMachine->createDataLayout());
 	}
 
+	void ConfigureForJITObjectRelocations(llvm::Module& module)
+	{
+		const llvm::Triple targetTriple(module.getTargetTriple());
+		if (!targetTriple.isOSWindows() || targetTriple.getArch() != llvm::Triple::x86_64)
+		{
+			return;
+		}
+
+		// Windows x64 unwind tables introduce IMAGE_REL_AMD64_ADDR32NB relocations in
+		// COFF .pdata/.xdata. MCJIT/RuntimeDyld requires a linker-style ordered
+		// section layout for those relocations and can abort with a fatal LLVM error
+		// when loading in-memory AOT objects. LiteNN AOT kernels do not throw across
+		// the compiled boundary, so keep generated objects unwind-table free.
+		module.setUwtable(llvm::UWTableKind::None);
+		for (auto& function : module)
+		{
+			if (function.isDeclaration())
+			{
+				continue;
+			}
+			function.setDoesNotThrow();
+			function.setUWTableKind(llvm::UWTableKind::None);
+		}
+	}
+
 	llvm::OptimizationLevel ToLLVMOptimizationLevel(std::uint8_t level)
 	{
 		switch (std::min<std::uint8_t>(level, 3))
@@ -584,6 +609,7 @@ namespace
 	{
 		auto config = CreateNativeTargetMachine();
 		ConfigureForNativeObject(module, config);
+		ConfigureForJITObjectRelocations(module);
 
 		if (llvm::verifyModule(module, &llvm::errs()))
 		{
@@ -5689,6 +5715,7 @@ namespace
 			                     CompiledModuleCUDARunOptions{
 			                         .stream = captureStream.Get(),
 			                         .synchronize = true,
+			                         .enableCUBLASLt = false,
 			                     });
 
 			CheckCUDARuntime(cudaStreamBeginCapture(captureStream.Get(), cudaStreamCaptureModeThreadLocal),
@@ -5699,6 +5726,7 @@ namespace
 			                     CompiledModuleCUDARunOptions{
 			                         .stream = captureStream.Get(),
 			                         .synchronize = false,
+			                         .enableCUBLASLt = false,
 			                     });
 
 			capturing = false;

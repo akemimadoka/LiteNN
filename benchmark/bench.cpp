@@ -479,6 +479,11 @@ void BMCUDADeviceMatMul(benchmark::State& state, std::size_t batch, std::size_t 
 		state.SkipWithError("CUDA device does not support requested dtype storage");
 		return;
 	}
+	if (dtype != DataType::Float32 && dtype != DataType::Float64 && !CUDASupportsNativeMatMul(dtype))
+	{
+		state.SkipWithError("CUDA device does not support requested MatMul dtype");
+		return;
+	}
 
 	const auto lhsData = MakeCUDADeviceMatMulData(batch * width, dtype);
 	const auto rhsData = MakeCUDADeviceMatMulData(width * width, dtype);
