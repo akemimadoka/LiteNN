@@ -1789,11 +1789,14 @@ Break candidates that can still materially improve vNext:
     living as adapters rather than core runtime contracts.
   - Hidden need: benchmarks/examples need small helper wrappers so application code can still be ergonomic without
     freezing Tensor ownership into compiled execution.
-- [ ] Make importer results stop exposing raw `Graph` directly.
+- [x] Make importer results stop exposing raw `Graph` directly.
   - Benefit: importers become producers of `ImporterOwnedManifest`, `ModelGraph`, or vNext packages, rather than leaking
     construction storage.
   - Hidden need: GGUF/Torch/SDXL conversion tools need explicit internal access only while lowering or diagnostics still
     inspect raw graph details.
+  - Completed on 2026-06-07: GGUF and Torch manifest importers now return `ModelGraph model`; tools, examples, and tests
+    use explicit `model.UnsafeGraphView()` at lowering/diagnostic boundaries, and `G14PublicApiGuard` blocks raw
+    `Graph graph` importer result fields.
 - [x] Replace the public borrowed-memory Tensor constructor with an explicit unsafe factory or `TensorView`.
   - Benefit: makes lifetime/aliasing hazards clear and avoids a raw `void*` constructor that looks like ordinary Tensor
     ownership.

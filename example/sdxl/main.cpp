@@ -188,17 +188,17 @@ namespace
 			{
 				LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
 				externalOptions.minVariableBytes = externalWeightMinBytes;
-				LiteNN::Serialization::SaveVNextModelPackageExternalWeights(imported.graph, outputPath,
+				LiteNN::Serialization::SaveVNextModelPackageExternalWeights(imported.model.UnsafeGraphView(), outputPath,
 				                                                            *externalWeightsPath, externalOptions);
 			}
 			else
 			{
-				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.graph), outputPath);
+				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), outputPath);
 			}
 		}
 		std::cout << std::format("Wrote LiteNN graph {} with {} variable(s), {} input(s), {} output(s)\n",
-		                         outputPath.string(), imported.graph.VariableCount(),
-		                         imported.graph.InputSignature().size(), imported.graph.OutputSignature().size());
+		                         outputPath.string(), imported.model.UnsafeGraphView().VariableCount(),
+		                         imported.model.UnsafeGraphView().InputSignature().size(), imported.model.UnsafeGraphView().OutputSignature().size());
 		if (writeVNextPackage)
 		{
 			std::cout << "Wrote vNext model package manifest\n";

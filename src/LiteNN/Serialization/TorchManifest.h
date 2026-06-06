@@ -1,5 +1,5 @@
 #include <LiteNN/DType.h>
-#include <LiteNN/Graph.h>
+#include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Serialization/Safetensors.h>
 
 #include <filesystem>
@@ -39,7 +39,7 @@ namespace LiteNN::Serialization
 
 	struct TorchManifestImportResult
 	{
-		Graph graph;
+		ModelGraph model;
 		TorchManifestReport report;
 	};
 

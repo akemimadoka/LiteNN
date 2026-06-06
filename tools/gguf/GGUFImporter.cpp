@@ -670,7 +670,7 @@ namespace LiteNN::GGUF
 		graph.SetForward(graph.AddSubgraph(std::move(archive)));
 
 		return {
-			.graph = std::move(graph),
+			.model = ModelGraph(std::move(graph)),
 			.summary = {
 				.tensorCount = static_cast<std::size_t>(tensorCount),
 				.metadataCount = static_cast<std::size_t>(gguf_get_n_kv(loaded.gguf.get())),
@@ -682,7 +682,7 @@ namespace LiteNN::GGUF
 	                                const std::filesystem::path& outputPath)
 	{
 		auto result = ImportGGUFArchive(inputPath);
-		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(result.graph), outputPath);
+		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(result.model.UnsafeGraphView()), outputPath);
 		return result.summary;
 	}
 } // namespace LiteNN::GGUF

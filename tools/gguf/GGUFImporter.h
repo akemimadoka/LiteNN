@@ -46,7 +46,7 @@ namespace LiteNN::GGUF
 
 	struct ImportResult
 	{
-		Graph graph;
+		ModelGraph model;
 		ImportSummary summary;
 	};
 

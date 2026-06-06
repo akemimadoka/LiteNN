@@ -1999,7 +1999,7 @@ namespace LiteNN::Serialization
 		context.graph.SetOutputNames(std::move(outputNames));
 		Validation::ValidateGraph(context.graph);
 
-		return { std::move(context.graph), std::move(context.report) };
+		return { ModelGraph(std::move(context.graph)), std::move(context.report) };
 	}
 
 	TorchManifestImportResult LoadTorchManifest(const std::filesystem::path& manifestPath,

@@ -475,26 +475,26 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(imported.summary.tensorCount, 2u);
 	EXPECT_EQ(imported.summary.metadataCount, 5u);
 
-	ASSERT_EQ(imported.graph.VariableCount(), 2);
-	ASSERT_EQ(imported.graph.VariableNames().size(), 2);
-	EXPECT_EQ(imported.graph.VariableName(0), "token_embd.weight");
-	EXPECT_EQ(imported.graph.VariableName(1), "blk.0.attn_q.weight");
-	EXPECT_TRUE(imported.graph.InputSignature().empty());
-	EXPECT_TRUE(imported.graph.OutputSignature().empty());
+	ASSERT_EQ(imported.model.UnsafeGraphView().VariableCount(), 2);
+	ASSERT_EQ(imported.model.UnsafeGraphView().VariableNames().size(), 2);
+	EXPECT_EQ(imported.model.UnsafeGraphView().VariableName(0), "token_embd.weight");
+	EXPECT_EQ(imported.model.UnsafeGraphView().VariableName(1), "blk.0.attn_q.weight");
+	EXPECT_TRUE(imported.model.UnsafeGraphView().InputSignature().empty());
+	EXPECT_TRUE(imported.model.UnsafeGraphView().OutputSignature().empty());
 
-	const auto* architecture = imported.graph.FindMetadata("general.architecture");
+	const auto* architecture = imported.model.UnsafeGraphView().FindMetadata("general.architecture");
 	ASSERT_NE(architecture, nullptr);
 	EXPECT_EQ(std::get<std::string>(architecture->value), "llama");
 
-	const auto* contextLength = imported.graph.FindMetadata("llama.context_length");
+	const auto* contextLength = imported.model.UnsafeGraphView().FindMetadata("llama.context_length");
 	ASSERT_NE(contextLength, nullptr);
 	EXPECT_EQ(std::get<std::uint64_t>(contextLength->value), 4096u);
 
-	const auto* ropeBase = imported.graph.FindMetadata("llama.rope.freq_base");
+	const auto* ropeBase = imported.model.UnsafeGraphView().FindMetadata("llama.rope.freq_base");
 	ASSERT_NE(ropeBase, nullptr);
 	EXPECT_DOUBLE_EQ(std::get<double>(ropeBase->value), 500000.0);
 
-	const auto* tokens = imported.graph.FindMetadata("tokenizer.ggml.tokens");
+	const auto* tokens = imported.model.UnsafeGraphView().FindMetadata("tokenizer.ggml.tokens");
 	ASSERT_NE(tokens, nullptr);
 	const auto& tokenList = std::get<std::vector<std::string>>(tokens->value);
 	ASSERT_EQ(tokenList.size(), 3);
@@ -502,7 +502,7 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(tokenList[1], "hello");
 	EXPECT_EQ(tokenList[2], "world");
 
-	const auto* tokenTypes = imported.graph.FindMetadata("tokenizer.ggml.token_type");
+	const auto* tokenTypes = imported.model.UnsafeGraphView().FindMetadata("tokenizer.ggml.token_type");
 	ASSERT_NE(tokenTypes, nullptr);
 	const auto& tokenTypeList = std::get<std::vector<std::int64_t>>(tokenTypes->value);
 	ASSERT_EQ(tokenTypeList.size(), 3);
@@ -510,15 +510,15 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(tokenTypeList[1], 3);
 	EXPECT_EQ(tokenTypeList[2], 3);
 
-	ASSERT_EQ(imported.graph.GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 0), 1.0F);
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 1), 2.0F);
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 2), 3.0F);
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 3), 4.0F);
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 4), 5.0F);
-	EXPECT_FLOAT_EQ(ReadFloat(imported.graph.GetVariable(0)->Data(), 5), 6.0F);
+	ASSERT_EQ(imported.model.UnsafeGraphView().GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 0), 1.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 1), 2.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 2), 3.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 3), 4.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 4), 5.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 5), 6.0F);
 
-	const auto& quantized = *imported.graph.GetVariable(1);
+	const auto& quantized = *imported.model.UnsafeGraphView().GetVariable(1);
 	ASSERT_TRUE(quantized.IsQuantized());
 	EXPECT_EQ(quantized.Data().DType(), DataType::UInt8);
 	EXPECT_EQ(quantized.Data().NumElements(), 18u);

@@ -415,29 +415,29 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 	const auto archive = BuildLinearArchive();
 	auto result = Serialization::ImportTorchManifest(BuildLinearManifest(), archive);
 
-	ASSERT_EQ(result.graph.VariableCount(), 2u);
-	ASSERT_TRUE(result.graph.FindVariable("fc.weight").has_value());
-	ASSERT_TRUE(result.graph.FindVariable("fc.bias").has_value());
-	EXPECT_FALSE(result.graph.GetVariable(*result.graph.FindVariable("fc.weight"))->HasGradStorage());
-	EXPECT_FALSE(result.graph.GetVariable(*result.graph.FindVariable("fc.bias"))->HasGradStorage());
-	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.weight"))->Data().Shape().ToOwned(),
+	ASSERT_EQ(result.model.UnsafeGraphView().VariableCount(), 2u);
+	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.weight").has_value());
+	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.bias").has_value());
+	EXPECT_FALSE(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->HasGradStorage());
+	EXPECT_FALSE(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->HasGradStorage());
+	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->Data().Shape().ToOwned(),
 	          (std::vector<std::size_t>{ 3, 2 }));
-	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.bias"))->Data().Shape().ToOwned(),
+	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->Data().Shape().ToOwned(),
 	          (std::vector<std::size_t>{ 1, 2 }));
-	EXPECT_EQ(result.graph.InputSignature()[0].name, "x");
-	EXPECT_EQ(result.graph.OutputSignature()[0].name, "relu_linear");
+	EXPECT_EQ(result.model.UnsafeGraphView().InputSignature()[0].name, "x");
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].name, "relu_linear");
 	EXPECT_EQ(result.report.importedTensors.size(), 2u);
 	EXPECT_EQ(result.report.loweredOps.size(), 2u);
 	EXPECT_FALSE(result.report.foldedConstants.empty());
 
 	auto inputs = MakeInputs();
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(outputs[0]);
 
 #ifdef LITENN_ENABLE_MLIR
-	auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(result.graph));
+	auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()));
 	const auto compiledOutputs = module.Run(std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(compiledOutputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(compiledOutputs[0]);
@@ -451,9 +451,9 @@ TEST(TorchManifest, CanImportTrainableVariablesWhenRequested)
 	options.trainableVariables = true;
 	auto result = Serialization::ImportTorchManifest(BuildLinearManifest(), archive, options);
 
-	ASSERT_EQ(result.graph.VariableCount(), 2u);
-	ASSERT_TRUE(result.graph.GetVariable(0)->HasGradStorage());
-	ASSERT_TRUE(result.graph.GetVariable(1)->HasGradStorage());
+	ASSERT_EQ(result.model.UnsafeGraphView().VariableCount(), 2u);
+	ASSERT_TRUE(result.model.UnsafeGraphView().GetVariable(0)->HasGradStorage());
+	ASSERT_TRUE(result.model.UnsafeGraphView().GetVariable(1)->HasGradStorage());
 }
 
 TEST(TorchManifest, ReportsManifestTensorDiagnostics)
@@ -486,15 +486,15 @@ TEST(TorchManifest, ConvertsManifestTensorTargetDType)
 })";
 
 	auto result = Serialization::ImportTorchManifest(manifest, archive);
-	ASSERT_TRUE(result.graph.FindVariable("fc.weight").has_value());
-	ASSERT_TRUE(result.graph.FindVariable("fc.bias").has_value());
-	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.weight"))->Data().DType(), DataType::Float32);
-	EXPECT_EQ(result.graph.GetVariable(*result.graph.FindVariable("fc.bias"))->Data().DType(), DataType::Float32);
+	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.weight").has_value());
+	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.bias").has_value());
+	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->Data().DType(), DataType::Float32);
+	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->Data().DType(), DataType::Float32);
 	EXPECT_GE(result.report.foldedConstants.size(), 2u);
 
 	std::array<Tensor<CPU>, 1> inputs{ Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }, DataType::Float32) };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 4.25F, 1e-5F);
@@ -505,10 +505,10 @@ TEST(TorchManifest, ImportsDiffusionFoundationOps)
 	const auto archive = BuildDiffusionBlockArchive();
 	auto result = Serialization::ImportTorchManifest(BuildDiffusionBlockManifest(), archive);
 
-	ASSERT_EQ(result.graph.VariableCount(), 4u);
-	EXPECT_EQ(result.graph.OutputSignature().size(), 2u);
-	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1, 6, 6 }));
-	EXPECT_EQ(result.graph.OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 4 }));
+	ASSERT_EQ(result.model.UnsafeGraphView().VariableCount(), 4u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature().size(), 2u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1, 6, 6 }));
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 4 }));
 	EXPECT_EQ(result.report.loweredOps.size(), 6u);
 	EXPECT_GE(result.report.foldedConstants.size(), 2u);
 
@@ -517,7 +517,7 @@ TEST(TorchManifest, ImportsDiffusionFoundationOps)
 		Tensor<CPU>({ 10.0 }, { 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1, 6, 6 }));
 	EXPECT_EQ(outputs[1].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 4 }));
@@ -548,8 +548,8 @@ TEST(TorchManifest, ImportsConcatOp)
 })";
 
 	auto result = Serialization::ImportTorchManifest(manifest, archive);
-	ASSERT_EQ(result.graph.OutputSignature().size(), 1u);
-	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 3 }));
+	ASSERT_EQ(result.model.UnsafeGraphView().OutputSignature().size(), 1u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 3 }));
 	EXPECT_GE(result.report.loweredOps.size(), 1u);
 
 	std::array<Tensor<CPU>, 2> inputs = {
@@ -557,7 +557,7 @@ TEST(TorchManifest, ImportsConcatOp)
 		Tensor<CPU>({ 3.0 }, { 1, 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 3 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 1.0F, 1e-5F);
@@ -602,15 +602,15 @@ TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
 })";
 
 	auto result = Serialization::ImportTorchManifest(manifest, archive);
-	ASSERT_EQ(result.graph.OutputSignature().size(), 2u);
-	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1 }));
-	EXPECT_EQ(result.graph.OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 2 }));
+	ASSERT_EQ(result.model.UnsafeGraphView().OutputSignature().size(), 2u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1 }));
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 2 }));
 
 	std::array<Tensor<CPU>, 1> inputs = {
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	constexpr float pi = 3.14159265358979323846F;
@@ -723,15 +723,15 @@ TEST(TorchManifest, ImportsSpatialTransformer2DComposite)
 })";
 
 	auto result = Serialization::ImportTorchManifest(manifest, archive);
-	ASSERT_EQ(result.graph.OutputSignature().size(), 1u);
-	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 2, 1, 1 }));
+	ASSERT_EQ(result.model.UnsafeGraphView().OutputSignature().size(), 1u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 2, 1, 1 }));
 
 	std::array<Tensor<CPU>, 2> inputs = {
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2, 1, 1 }),
 		Tensor<CPU>({ 0.5, -0.5 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	EXPECT_NEAR(ReadFloat(outputs[0], 1), 3.0F, 1e-5F);
@@ -742,11 +742,11 @@ TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)
 	const auto archive = BuildCompositeDiffusionArchive();
 	auto result = Serialization::ImportTorchManifest(BuildCompositeDiffusionManifest(), archive);
 
-	ASSERT_EQ(result.graph.OutputSignature().size(), 4u);
-	EXPECT_EQ(result.graph.OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1, 2, 2 }));
-	EXPECT_EQ(result.graph.OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 2 }));
-	EXPECT_EQ(result.graph.OutputSignature()[2].shape, (std::vector<std::size_t>{ 2, 2 }));
-	EXPECT_EQ(result.graph.OutputSignature()[3].shape, (std::vector<std::size_t>{ 1, 1, 2, 4 }));
+	ASSERT_EQ(result.model.UnsafeGraphView().OutputSignature().size(), 4u);
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].shape, (std::vector<std::size_t>{ 1, 1, 2, 2 }));
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[1].shape, (std::vector<std::size_t>{ 1, 2 }));
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[2].shape, (std::vector<std::size_t>{ 2, 2 }));
+	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[3].shape, (std::vector<std::size_t>{ 1, 1, 2, 4 }));
 	EXPECT_GE(result.report.loweredOps.size(), 4u);
 
 	std::array<Tensor<CPU>, 4> inputs = {
@@ -756,7 +756,7 @@ TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 1, 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.graph), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 4u);
 
 	const std::array<float, 4> expectedResidual{ 1.0F, -2.0F, 3.0F, -4.0F };

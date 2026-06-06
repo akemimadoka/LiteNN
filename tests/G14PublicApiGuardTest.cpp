@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -445,4 +446,19 @@ TEST(G14PublicApiGuard, BorrowedTensorStorageIsExplicitlyUnsafe)
 	EXPECT_NE(tensorHeader.find("BorrowedStorageTag"), std::string::npos);
 	EXPECT_EQ(tensorHeader.find("Tensor(void* externalData"), std::string::npos);
 	EXPECT_EQ(tensorHeader.find("Tensor(const void* externalData"), std::string::npos);
+}
+
+TEST(G14PublicApiGuard, ImporterResultsDoNotExposeRawGraphFields)
+{
+	const std::array headers{
+		"tools/gguf/GGUFImporter.h",
+		"src/LiteNN/Serialization/TorchManifest.h",
+	};
+
+	for (const char* header : headers)
+	{
+		const auto text = ReadSourceFile(header);
+		EXPECT_NE(text.find("ModelGraph model"), std::string::npos) << header;
+		EXPECT_EQ(text.find("Graph graph"), std::string::npos) << header;
+	}
 }

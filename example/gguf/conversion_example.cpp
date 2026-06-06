@@ -161,11 +161,11 @@ int main(int argc, char** argv)
 		const auto decodePath = outputDir / "tiny_llama.decode.vnext.json";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.graph), archivePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), archivePath);
 
-		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, 2);
+		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), 2);
 		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered), loweredPath);
-		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, 1, 1, 1);
+		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, 1, 1);
 		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(decode), decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;

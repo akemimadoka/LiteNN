@@ -263,7 +263,7 @@ int main(int argc, char** argv)
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto positionOffset = argc == 6 ? ParseSize(argv[5], "position-offset", true) : 0uz;
-			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.graph, sequenceLength, positionOffset);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), sequenceLength, positionOffset);
 			LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered), argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
@@ -280,7 +280,7 @@ int main(int argc, char** argv)
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
 			const auto sequenceLength = ParseSize(argv[4], "sequence-length");
 			const auto pastLength = ParseSize(argv[5], "past-length", true);
-			auto lowered = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.graph, sequenceLength, pastLength, pastLength);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), sequenceLength, pastLength, pastLength);
 			LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered), argv[3]);
 			std::cout << "Lowered LLaMA decode graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
