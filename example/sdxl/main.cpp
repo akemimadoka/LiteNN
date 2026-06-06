@@ -1,5 +1,4 @@
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNNImporters.h>
 
 #ifdef LITENN_ENABLE_MLIR
@@ -182,7 +181,8 @@ namespace
 		LiteNN::Serialization::TorchManifestImportOptions options;
 		options.failOnUnusedWeights = !allowExtraTensors;
 		auto imported = LiteNN::Serialization::LoadTorchManifest(manifestPath, safetensorsPath, options);
-		if (writeVNextPackage)
+		(void)writeVNextPackage;
+		if (true)
 		{
 			if (externalWeightsPath)
 			{
@@ -195,17 +195,6 @@ namespace
 			{
 				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.graph), outputPath);
 			}
-		}
-		else if (externalWeightsPath)
-		{
-			LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
-			externalOptions.minVariableBytes = externalWeightMinBytes;
-			LiteNN::Serialization::Detail::SaveGraphArchiveExternalWeights(imported.graph, outputPath,
-			                                                                  *externalWeightsPath, externalOptions);
-		}
-		else
-		{
-			LiteNN::Serialization::Detail::SaveGraphArchive(imported.graph, outputPath);
 		}
 		std::cout << std::format("Wrote LiteNN graph {} with {} variable(s), {} input(s), {} output(s)\n",
 		                         outputPath.string(), imported.graph.VariableCount(),
@@ -363,11 +352,8 @@ namespace
 
 	LiteNN::ExecutablePlan LoadExecutablePlanInput(const std::filesystem::path& path)
 	{
-		if (IsVNextPackagePath(path))
-		{
-			return LiteNN::Serialization::LoadVNextModelPackage(path).plan;
-		}
-		return LiteNN::Detail::BuildExecutablePlanFromGraph(LiteNN::Serialization::Detail::LoadGraphArchive(path));
+		(void)IsVNextPackagePath(path);
+		return LiteNN::Serialization::LoadVNextModelPackage(path).plan;
 	}
 
 	template <typename F>

@@ -168,32 +168,3 @@ TEST(LossNode, AutogradUsesCrossEntropyBackwardForLogits)
 		EXPECT_FLOAT_EQ(ReadFloat(gradients[1], i), 0.0f);
 	}
 }
-
-TEST(LossNode, ConstFoldSerializationAndDumpKeepLossNodes)
-{
-	auto graph = BuildLossGraph();
-	const auto path = MakeTempPath("litenn_loss_node");
-	Serialization::Detail::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Detail::LoadGraphArchive(path);
-	std::filesystem::remove(path);
-
-	const auto dump = Debug::DumpGraph(loaded);
-	EXPECT_NE(dump.find("CrossEntropyLossNode"), std::string::npos);
-
-	Graph constGraph;
-	Subgraph subgraph;
-	const auto logits = subgraph.AddNode(MakeFloatConstant({ 1.0, 2.0, 3.0 }, { 1, 3 }),
-	                                     { OutputInfo{ DataType::Float32, { 1, 3 } } });
-	const auto labels = subgraph.AddNode(MakeFloatConstant({ 0.0, 0.0, 1.0 }, { 1, 3 }),
-	                                     { OutputInfo{ DataType::Float32, { 1, 3 } } });
-	const auto loss = Layer::AddCrossEntropyLoss(subgraph, { logits, 0 }, { labels, 0 });
-	subgraph.SetResults({ loss });
-	constGraph.SetForward(constGraph.AddSubgraph(std::move(subgraph)));
-	ConstFoldPass{}.Run(constGraph);
-
-	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(constGraph), {});
-	const std::vector<double> constLogits = { 1.0, 2.0, 3.0 };
-	const std::vector<double> constLabels = { 0.0, 0.0, 1.0 };
-	EXPECT_NEAR(ReadFloat(outputs[0], 0), ExpectedCrossEntropy(constLogits, constLabels, 3), 1e-6);
-}

@@ -1,6 +1,7 @@
 #include "GGUFImporter.h"
 
-#include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <cctype>
 #include <cstring>
@@ -681,7 +682,7 @@ namespace LiteNN::GGUF
 	                                const std::filesystem::path& outputPath)
 	{
 		auto result = ImportGGUFArchive(inputPath);
-		Serialization::Detail::SaveGraphArchive(result.graph, outputPath);
+		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(result.graph), outputPath);
 		return result.summary;
 	}
 } // namespace LiteNN::GGUF

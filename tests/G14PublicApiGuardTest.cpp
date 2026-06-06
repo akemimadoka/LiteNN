@@ -164,27 +164,20 @@ TEST(G14PublicApiGuard, PublicLayerBuildHelpersDoNotAcceptRawGraph)
 	                                  }();
 }
 
-TEST(G14PublicApiGuard, GraphArchiveApisStayInternalDetailScoped)
+TEST(G14PublicApiGuard, GraphArchiveApisAreRemoved)
 {
 	const auto text = ReadSourceFile("src/LiteNN/Serialization/ModelIO.h");
 	EXPECT_EQ(text.find("namespace Migration"), std::string::npos);
 	EXPECT_EQ(text.find("} // namespace Migration"), std::string::npos);
-
-	const auto graphArchiveBegin = text.find("inline void SaveGraphArchive(");
-	const auto graphArchiveEnd = text.find("} // namespace Detail", graphArchiveBegin);
-	ASSERT_NE(graphArchiveBegin, std::string::npos);
-	ASSERT_NE(graphArchiveEnd, std::string::npos);
-
 	for (const auto* pattern : {
-	         "inline void SaveGraphArchive(",
-	         "inline void SaveGraphArchiveExternalWeights(",
-	         "inline Graph LoadGraphArchive(",
+	         "SaveGraphArchive",
+	         "LoadGraphArchive",
+	         "kGraphArchiveMagic",
+	         "kGraphArchiveVersion",
+	         "GraphArchiveNodeKind",
 	     })
 	{
-		const auto position = text.find(pattern);
-		ASSERT_NE(position, std::string::npos) << pattern;
-		EXPECT_GE(position, graphArchiveBegin) << pattern;
-		EXPECT_LT(position, graphArchiveEnd) << pattern;
+		EXPECT_EQ(text.find(pattern), std::string::npos) << pattern;
 	}
 }
 

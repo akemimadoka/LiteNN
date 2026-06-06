@@ -285,31 +285,6 @@ TEST(ScanHotPathNode, ConstFoldHandlesG52G53Nodes)
 	ExpectTensorNear(outputs[5], { 2.0F, 2.0F, 4.0F, 1.5F });
 }
 
-TEST(ScanHotPathNode, SerializationRoundTripPreservesG52G53Nodes)
-{
-	auto graph = BuildAllNewNodeGraph();
-	Validation::ValidateGraph(graph);
-
-	const auto path = std::filesystem::path("litenn_g52_g53_nodes_roundtrip_test.ltnn");
-	std::filesystem::remove(path);
-	Serialization::Detail::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Detail::LoadGraphArchive(path);
-	std::filesystem::remove(path);
-
-	auto expected = RunGraph(graph, MakeAllNewNodeInputs());
-	auto actual = RunGraph(loaded, MakeAllNewNodeInputs());
-	ASSERT_EQ(actual.size(), expected.size());
-	for (std::size_t output = 0; output < actual.size(); ++output)
-	{
-		ASSERT_EQ(actual[output].NumElements(), expected[output].NumElements());
-		for (std::size_t index = 0; index < actual[output].NumElements(); ++index)
-		{
-			EXPECT_NEAR(ReadFloat(actual[output], index), ReadFloat(expected[output], index), 1e-5F)
-			    << "output=" << output << ", index=" << index;
-		}
-	}
-}
-
 TEST(ScanHotPathNode, DumpIncludesG52G53NodeKinds)
 {
 	auto graph = BuildAllNewNodeGraph();

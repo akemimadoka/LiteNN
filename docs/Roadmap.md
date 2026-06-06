@@ -1762,12 +1762,19 @@ Break candidates that can still materially improve vNext:
     ordinary CPU element access should prefer `Data<T>()` / `MutableData<T>()`.
   - [x] Removed the `RawData()` forwarding methods, migrated low-level call sites to `UnsafeRawData()`, and added
     guard coverage so the old method name cannot re-enter `Tensor.h`.
-- [ ] Delete graph-archive legacy format facilities rather than keeping them in `Serialization::Detail`.
+- [x] Delete graph-archive legacy format facilities rather than keeping them in `Serialization::Detail`.
   - Benefit: removes the last pre-vNext model file format, node-kind enum, and graph-shaped serialization path from the
     branch.
   - Hidden need: tools/examples/tests that still need persistence must use vNext packages, separated weights, or compiled
     artifacts; explicit conversion helpers can live outside the public runtime surface only if they do not preserve the
     old loader.
+  - [x] Removed `SaveGraphArchive` / `LoadGraphArchive` / `SaveGraphArchiveExternalWeights`,
+    `kGraphArchiveMagic`, `kGraphArchiveVersion`, `GraphArchiveNodeKind`, and the binary node payload serializer from
+    `ModelIO.h`; the header now intentionally exposes no legacy model file API.
+  - [x] Migrated GGUF/Torch/SDXL conversion and compile flows to vNext model packages, removed graph-archive-only
+    round-trip tests, and changed guard coverage to reject any reintroduced graph archive API.
+  - Note: earlier G14 entries that mention keeping graph archives as internal development tooling are superseded by this
+    final break-window deletion.
 - [ ] Move `Trainer` construction away from raw `Graph&`.
   - Benefit: keeps training aligned with `ModelGraph`, `ExecutablePlan`, and future `TrainStepPlan` contracts instead of
     mutating a construction graph directly.

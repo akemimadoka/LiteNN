@@ -97,31 +97,6 @@ TEST(OptimizerGraphOp, ExecutesSGDAndAdamWSteps)
 	ExpectTensorNear(outputs[5], { 0.00001F, 0.00004F });
 }
 
-TEST(OptimizerGraphOp, SerializationRoundTripPreservesOptimizerStepNodes)
-{
-	auto graph = BuildOptimizerStepGraph();
-	Validation::ValidateGraph(graph);
-
-	const auto path = std::filesystem::path("litenn_optimizer_step_nodes_roundtrip_test.ltnn");
-	std::filesystem::remove(path);
-	Serialization::Detail::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Detail::LoadGraphArchive(path);
-	std::filesystem::remove(path);
-
-	auto expected = RunGraph(graph, MakeOptimizerStepInputs());
-	auto actual = RunGraph(loaded, MakeOptimizerStepInputs());
-	ASSERT_EQ(actual.size(), expected.size());
-	for (auto output = 0uz; output < actual.size(); ++output)
-	{
-		ASSERT_EQ(actual[output].NumElements(), expected[output].NumElements());
-		for (auto index = 0uz; index < actual[output].NumElements(); ++index)
-		{
-			EXPECT_NEAR(ReadFloat(actual[output], index), ReadFloat(expected[output], index), 1e-5F)
-			    << "output=" << output << ", index=" << index;
-		}
-	}
-}
-
 TEST(OptimizerGraphOp, DumpIncludesOptimizerStepNodeKinds)
 {
 	auto graph = BuildOptimizerStepGraph();

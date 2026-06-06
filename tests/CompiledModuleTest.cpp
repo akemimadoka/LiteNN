@@ -2293,47 +2293,6 @@ TEST(CompiledModuleTest, CompileBudgetReportsExternalRegionPressure)
 	EXPECT_EQ(externalBudget.projectedExternalConstantBytes, 8u);
 }
 
-TEST(CompiledModuleTest, CPUMlirExternalWeightModelLoadsAndCompilesWithExternalRegions)
-{
-	auto graph = BuildGenericExternalRegionGraph();
-	const auto modelPath = std::filesystem::path("litenn_compiled_external_weight_model_test.ltnn");
-	const auto weightsPath = std::filesystem::path("litenn_compiled_external_weight_model_test.weights.bin");
-	std::filesystem::remove(modelPath);
-	std::filesystem::remove(weightsPath);
-	Serialization::ExternalWeightSaveOptions saveOptions;
-	saveOptions.minVariableBytes = 0;
-	Serialization::Detail::SaveGraphArchiveExternalWeights(graph, modelPath, weightsPath, saveOptions);
-
-	auto loaded = Serialization::Detail::LoadGraphArchive(modelPath);
-	std::filesystem::remove(modelPath);
-	std::filesystem::remove(weightsPath);
-
-	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
-	};
-	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(loaded), std::span<const Tensor<CPU>>(inputs));
-
-	CompilerOptions options;
-	options.enableCPUAOTExternalRegions = true;
-	options.cpuAOTExternalConstantMinBytes = 0;
-	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(loaded), options);
-	auto separated = artifact.SeparateRodata();
-	ASSERT_GT(separated.Weights().size(), 0u);
-	EXPECT_TRUE(std::ranges::any_of(separated.ExternalTensorInfos(), [](const auto& info) {
-		return info.name == "scale.weight" && info.region == "weights" && info.type.dtype == DataType::Float32 &&
-		       info.type.StaticShape() == std::vector<std::size_t>{ 2, 2 };
-	}));
-
-	auto module = artifact.Load();
-	const auto actual = module.Run(std::span<const Tensor<CPU>>(inputs));
-	ASSERT_EQ(actual.size(), expected.size());
-	for (std::size_t i = 0; i < actual.size(); ++i)
-	{
-		ExpectTensorNear(actual[i], expected[i], 1e-5f);
-	}
-}
-
 TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault)
 {
 	CompilerOptions options;

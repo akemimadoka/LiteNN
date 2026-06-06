@@ -6,7 +6,7 @@
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
-#include <LiteNN/Serialization/ModelIO.h>
+#include <LiteNN/Serialization/ModelPackageIO.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <algorithm>
@@ -559,33 +559,21 @@ TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 	std::filesystem::remove(outputPath);
 
 	const auto summary = GGUF::ConvertGGUFArchive(inputPath, outputPath);
-	auto loaded = Serialization::Detail::LoadGraphArchive(outputPath);
+	auto loaded = Serialization::LoadVNextModelPackage(outputPath);
 
 	std::filesystem::remove(inputPath);
 	std::filesystem::remove(outputPath);
 
 	EXPECT_EQ(summary.tensorCount, 2u);
 	EXPECT_EQ(summary.metadataCount, 5u);
-	ASSERT_EQ(loaded.VariableCount(), 2);
-	EXPECT_EQ(loaded.VariableName(0), "token_embd.weight");
-	EXPECT_EQ(loaded.VariableName(1), "blk.0.attn_q.weight");
-
-	const auto* architecture = loaded.FindMetadata("general.architecture");
-	ASSERT_NE(architecture, nullptr);
-	EXPECT_EQ(std::get<std::string>(architecture->value), "llama");
-
-	const auto* tokens = loaded.FindMetadata("tokenizer.ggml.tokens");
-	ASSERT_NE(tokens, nullptr);
-	const auto& tokenList = std::get<std::vector<std::string>>(tokens->value);
-	ASSERT_EQ(tokenList.size(), 3);
-	EXPECT_EQ(tokenList[0], "<s>");
-	EXPECT_EQ(tokenList[1], "hello");
-	EXPECT_EQ(tokenList[2], "world");
-
-	EXPECT_FLOAT_EQ(ReadFloat(loaded.GetVariable(0)->Data(), 0), 1.0F);
-	EXPECT_EQ(loaded.GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
-	EXPECT_TRUE(loaded.GetVariable(1)->IsQuantized());
-	EXPECT_EQ(loaded.GetVariable(1)->Quantization()->blockFormat, QuantizedBlockFormat::GGML_Q4_0);
+	ASSERT_EQ(loaded.plan.variables.size(), 2);
+	ASSERT_EQ(loaded.manifest.tensors.size(), 2);
+	EXPECT_EQ(loaded.manifest.tensors[0].name, "token_embd.weight");
+	EXPECT_EQ(loaded.manifest.tensors[1].name, "blk.0.attn_q.weight");
+	EXPECT_EQ(loaded.plan.variables[0].type.StaticShape(), std::vector<std::size_t>({ 3, 2 }));
+	EXPECT_EQ(loaded.plan.variables[0].type.dtype, DataType::Float32);
+	ASSERT_TRUE(loaded.plan.variables[1].quantization.has_value());
+	EXPECT_EQ(loaded.plan.variables[1].quantization->blockFormat, QuantizedBlockFormat::GGML_Q4_0);
 }
 
 TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)

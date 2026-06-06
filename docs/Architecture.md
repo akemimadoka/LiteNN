@@ -369,12 +369,12 @@ struct Pass {
 
 ## Model Serialization
 
-`LiteNN::Serialization::Detail::SaveGraphArchive/LoadGraphArchive` 保留 Graph + Variable 权重的内部图归档二进制保存/加载能力，仅用于回归测试、开发诊断和显式转换工具。vNext 中稳定模型保存/加载入口是 manifest + executable-plan package；`SaveModel/LoadModel` 名称不再指向 raw Graph archive。
+vNext 中稳定模型保存/加载入口是 manifest + executable-plan package；旧 raw Graph archive 二进制格式已删除，不再保留 `SaveGraphArchive` / `LoadGraphArchive` / `GraphArchiveNodeKind` 等内部兼容设施。
 
-- 文件包含 magic、format version、forward/backward 入口、公开 input/output 名称、Variable data、ActivationSlot/TapeSlot、所有 Subgraph 和节点 payload
-- Variable 只保存 `Data()`，加载时由 `Variable::Create` 重新初始化 `Grad()` 为同 shape/dtype/device 的零张量
-- 当前格式为内部 binary format，不承诺跨版本兼容；生产导出应使用 vNext package / compiled artifact
-- 加载后会调用 `ValidateGraph`，保证损坏或不兼容模型尽早失败
+- `LiteNN::Serialization::SaveVNextModelPackage` 保存 `ExecutableModule` 的 manifest、runtime schedule、buffer binding、op coverage 和 executable plan
+- `LiteNN::Serialization::SaveVNextModelPackageExternalWeights` 将大权重写入外部 payload，并在 package 中记录显式 buffer region 元数据
+- `LiteNN::Serialization::LoadVNextModelPackage` 只加载 vNext package，不尝试识别或迁移旧 graph archive
+- 转换工具、SDXL/GGUF 示例和 AOT 编译入口都以 vNext package 作为持久化中间产物；compiled artifact / separated rodata 是部署产物
 
 ---
 
@@ -469,7 +469,8 @@ src/
     ├── Validation/
     │   └── GraphValidator.h     // Graph 静态校验与诊断
     ├── Serialization/
-    │   └── ModelIO.h            // internal graph archive helpers + vNext package support
+    │   ├── ModelIO.h            // empty legacy include; raw Graph archive removed in vNext
+    │   └── ModelPackageIO.h     // vNext manifest + executable-plan package IO
     ├── Training/
     │   └── Trainer.h            // Trainer<CPU, OptimizerT> 训练 API
     └── Runtime/
@@ -501,7 +502,7 @@ tests/
 ├── ThreadSafetyTest.cpp         // 只读 Graph + 独立 Interpreter 并发 smoke 测试
 ├── MemorySafetyTest.cpp         // sanitizer/debug-heap 长循环覆盖 Tensor view、PolymorphicDevice、CompiledModule image 生命周期
 ├── TrainingTest.cpp             // Trainer、loss step、Variable::Grad 写回测试
-├── ModelIOTest.cpp              // SaveGraphArchive/LoadGraphArchive forward/backward/variable 回归测试
+├── ModelIOTest.cpp              // legacy raw graph archive target placeholder; vNext coverage lives in G14VNextTest
 ├── SignatureTest.cpp            // Graph 命名 input/output 签名测试
 ├── ForwardOnlyPassTest.cpp      // 从训练图提取 forward-only 推理图测试
 ├── InlinePassTest.cpp           // InlinePass 内联测试
@@ -539,7 +540,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 
 ### P1：用户可用性
 
-- [x] **模型保存/加载**：raw Graph archive 已降级为 `LiteNN::Serialization::Detail::SaveGraphArchive/LoadGraphArchive` 内部开发/测试工具，不承诺跨版本兼容；生产模型保存/加载走 vNext package / compiled artifact，并在加载后运行 manifest、plan 和 buffer binding 校验。
+- [x] **模型保存/加载**：raw Graph archive 已删除；生产模型保存/加载走 vNext package / compiled artifact，并在加载后运行 manifest、plan 和 buffer binding 校验。
 - [x] **输入输出命名与签名 API**：`Graph` 支持 `SetInputNames`/`SetOutputNames`、`InputSignature`/`OutputSignature`、`FindInput`/`FindOutput`；`CompiledModule<CPU>` rodata 保存命名 specs，并通过 `InputSpecs`/`OutputSpecs`/`FindInput`/`FindOutput` 查询。当前绑定执行仍按位置传参，命名 binding helper 可后续补。
 - [x] **训练 API**：新增 `LiteNN::Training::Trainer<CPU, OptimizerT>`，封装 forward、backward、loss gradient、`Variable::Grad()` 写回、梯度清零和 optimizer step；新增 `Optimizer::ZeroGradients`、`StoreVariableGradients`、`InferInputGradientCount` 等公共工具。参数组、学习率调度、epoch/batch loop 仍在后续 P1/P2 跟踪。
 - [x] **Batch 训练与推理**：新增 `SoftmaxCrossEntropyWithLogitsBatch` 和 `Trainer<CPU, OptimizerT>::StepSoftmaxCrossEntropyBatch`，支持 `[batch, classes]` logits 的平均 loss/gradient；Graph/Interpreter/CompiledModule 可通过 batch-shaped tensor 签名进行 batch 推理。吞吐优化和 MNIST mini-batch 示例仍留到 P2/示例扩展。

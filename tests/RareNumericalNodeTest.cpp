@@ -164,31 +164,6 @@ TEST(RareNumericalNode, ConstFoldFoldsRareNumericalNodes)
 	ExpectTensorNear(outputs[2], { 2.0F, 1.0F, 5.0F, 4.0F });
 }
 
-TEST(RareNumericalNode, SerializationRoundTripPreservesRareNumericalNodes)
-{
-	auto graph = BuildRareNumericalGraph();
-	Validation::ValidateGraph(graph);
-
-	const auto path = std::filesystem::path("litenn_rare_numerical_nodes_roundtrip_test.ltnn");
-	std::filesystem::remove(path);
-	Serialization::Detail::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Detail::LoadGraphArchive(path);
-	std::filesystem::remove(path);
-
-	auto expected = RunGraph(graph, MakeRareNumericalInputs());
-	auto actual = RunGraph(loaded, MakeRareNumericalInputs());
-	ASSERT_EQ(actual.size(), expected.size());
-	for (auto output = 0uz; output < actual.size(); ++output)
-	{
-		ASSERT_EQ(actual[output].NumElements(), expected[output].NumElements());
-		for (auto index = 0uz; index < actual[output].NumElements(); ++index)
-		{
-			EXPECT_NEAR(ReadFloat(actual[output], index), ReadFloat(expected[output], index), 1e-5F)
-			    << "output=" << output << ", index=" << index;
-		}
-	}
-}
-
 TEST(RareNumericalNode, DumpIncludesRareNumericalNodeKinds)
 {
 	auto graph = BuildRareNumericalGraph();

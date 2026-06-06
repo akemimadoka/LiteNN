@@ -245,35 +245,3 @@ TEST(ConvolutionPoolingNode, ConstFoldHandlesG54Nodes)
 	                               3.0F, 3.0F, 4.0F, 4.0F,
 	                               3.0F, 3.0F, 4.0F, 4.0F });
 }
-
-TEST(ConvolutionPoolingNode, SerializationRoundTripAndDumpPreserveG54Nodes)
-{
-	auto graph = BuildG54Graph();
-	Validation::ValidateGraph(graph);
-
-	const auto dump = Debug::DumpGraph(graph);
-	EXPECT_NE(dump.find("Im2ColNode"), std::string::npos);
-	EXPECT_NE(dump.find("Conv2DNode"), std::string::npos);
-	EXPECT_NE(dump.find("ConvTranspose2DNode"), std::string::npos);
-	EXPECT_NE(dump.find("Pool2DNode"), std::string::npos);
-	EXPECT_NE(dump.find("UpsampleNode"), std::string::npos);
-
-	const auto path = std::filesystem::path("litenn_g54_nodes_roundtrip_test.ltnn");
-	std::filesystem::remove(path);
-	Serialization::Detail::SaveGraphArchive(graph, path);
-	auto loaded = Serialization::Detail::LoadGraphArchive(path);
-	std::filesystem::remove(path);
-
-	auto expected = RunGraph(graph, MakeG54Inputs());
-	auto actual = RunGraph(loaded, MakeG54Inputs());
-	ASSERT_EQ(actual.size(), expected.size());
-	for (std::size_t output = 0; output < actual.size(); ++output)
-	{
-		ASSERT_EQ(actual[output].NumElements(), expected[output].NumElements());
-		for (std::size_t index = 0; index < actual[output].NumElements(); ++index)
-		{
-			EXPECT_NEAR(ReadFloat(actual[output], index), ReadFloat(expected[output], index), 1e-5F)
-			    << "output=" << output << ", index=" << index;
-		}
-	}
-}
