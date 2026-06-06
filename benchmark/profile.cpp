@@ -519,7 +519,7 @@ static std::vector<Tensor<CUDA>> AllocateCUDAProfileOutputs(const CompiledModule
 	outputs.reserve(module.OutputSpecs().size());
 	for (const auto& spec : module.OutputSpecs())
 	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
 	}
 	return outputs;
 }

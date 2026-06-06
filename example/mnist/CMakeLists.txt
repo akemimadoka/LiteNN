@@ -4,15 +4,24 @@ target_compile_features(litenn_mnist_common INTERFACE cxx_std_26)
 target_compile_definitions(litenn_mnist_common INTERFACE
     LITENN_MNIST_DEFAULT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
+target_link_libraries(litenn_mnist_common INTERFACE LiteNN)
+
+if(TARGET LiteNNCompiler)
+    target_link_libraries(litenn_mnist_common INTERFACE LiteNNCompiler)
+endif()
+
+if(TARGET LiteNNTrainingAOT)
+    target_link_libraries(litenn_mnist_common INTERFACE LiteNNTrainingAOT)
+endif()
 
 add_executable(litenn_mnist_interpreter interpreter.cpp)
-target_link_libraries(litenn_mnist_interpreter PRIVATE LiteNNCompiler litenn_mnist_common)
+target_link_libraries(litenn_mnist_interpreter PRIVATE litenn_mnist_common)
 
 set(LITENN_MNIST_TARGETS litenn_mnist_interpreter)
 
 if(TARGET LiteNNCompiler)
     add_executable(litenn_mnist_aot aot.cpp)
-    target_link_libraries(litenn_mnist_aot PRIVATE LiteNNCompiler litenn_mnist_common)
+    target_link_libraries(litenn_mnist_aot PRIVATE litenn_mnist_common)
     list(APPEND LITENN_MNIST_TARGETS litenn_mnist_aot)
 else()
     message(STATUS "LiteNNCompiler is not available; skipping litenn_mnist_aot")

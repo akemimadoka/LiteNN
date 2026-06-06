@@ -595,7 +595,7 @@ std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
 	std::vector<Tensor<CPU>> outputs;
 	outputs.reserve(module.OutputSpecs().size());
 	for (const auto& spec : module.OutputSpecs())
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CPU{});
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
 	return outputs;
 }
 
@@ -605,7 +605,7 @@ std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module
 	std::vector<Tensor<CUDA>> outputs;
 	outputs.reserve(module.OutputSpecs().size());
 	for (const auto& spec : module.OutputSpecs())
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.shape }, spec.dtype, CUDA{});
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
 	return outputs;
 }
 

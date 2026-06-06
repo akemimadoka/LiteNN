@@ -11,6 +11,12 @@ option(LITENN_ENABLE_SANITIZERS "Enable sanitizer instrumentation for LiteNN and
 option(LITENN_WITH_MODULES "Build LiteNN with C++20 modules support" OFF)
 set(LITENN_SANITIZERS "address,undefined" CACHE STRING "Comma-separated list of sanitizers to enable")
 
+# Internal tests, tools, examples, and benchmarks include LiteNN headers rather
+# than importing the generated C++ module.  Keep CMake's module scanner off by
+# default so Ninja does not create dyndep edges for ordinary translation units;
+# Windows MinGW builds can otherwise race and link stale or half-written objects.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 include(GNUInstallDirs)
@@ -280,6 +286,12 @@ if(LITENN_WITH_MODULES)
     target_sources(LiteNNCore PRIVATE
         src/LiteNN/Device.module.cpp
         src/LiteNN/Debug/Dump.module.cpp
+    )
+    set_source_files_properties(
+        ${LITENN_GENERATED_MODULE_INTERFACE}
+        src/LiteNN/Device.module.cpp
+        src/LiteNN/Debug/Dump.module.cpp
+        PROPERTIES CXX_SCAN_FOR_MODULES ON
     )
     target_sources(LiteNNCore PUBLIC
         FILE_SET litenn_modules TYPE CXX_MODULES
