@@ -219,6 +219,11 @@ namespace LiteNN::Training
 				}
 				compiledOptimizerUpdatesAvailable_ = compiledOptimizerUpdates_.size() == parameters_.Size();
 			}
+			else if constexpr (std::same_as<D, CPU> && std::same_as<OptimizerT, Optimizer::AdamW>)
+			{
+				optimizer_.EnsureState(parameters_);
+				compiledOptimizerUpdatesAvailable_ = parameters_.Size() > 0;
+			}
 		}
 
 		void EnsureCompiledTrainStepRunnerAvailable() const
@@ -307,28 +312,71 @@ namespace LiteNN::Training
 				return false;
 			}
 			Optimizer::Detail::ValidateBackwardResults(parameters_, backwardResults, inputGradientCount);
-			for (std::size_t parameterIndex = 0; parameterIndex < parameters_.Size(); ++parameterIndex)
+			if constexpr (std::same_as<D, CPU> && std::same_as<OptimizerT, Optimizer::SGD>)
 			{
-				auto& parameter = parameters_[parameterIndex].Parameter();
-				if (!parameter.CurDevice().template Is<CPU>())
+				for (std::size_t parameterIndex = 0; parameterIndex < parameters_.Size(); ++parameterIndex)
 				{
-					return false;
+					auto& parameter = parameters_[parameterIndex].Parameter();
+					if (!parameter.CurDevice().template Is<CPU>())
+					{
+						return false;
+					}
+					const auto parameterCPU = parameter.CopyToDevice(CPU{});
+					const auto& gradient =
+					    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
+					Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
+					std::array<Tensor<CPU>, 2> updateInputs = { parameterCPU, gradient };
+					auto updateOutputs = compiledOptimizerUpdates_[parameterIndex](updateInputs);
+					if (updateOutputs.empty())
+					{
+						throw std::runtime_error("Trainer AOT optimizer update runner returned no outputs");
+					}
+					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
+					                                             parameter.RawData(), updateOutputs[0].DType(),
+					                                             updateOutputs[0].RawData(),
+					                                             updateOutputs[0].NumElements());
 				}
-				const auto parameterCPU = parameter.CopyToDevice(CPU{});
-				const auto& gradient =
-				    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
-				Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
-				std::array<Tensor<CPU>, 2> updateInputs = { parameterCPU, gradient };
-				auto updateOutputs = compiledOptimizerUpdates_[parameterIndex](updateInputs);
-				if (updateOutputs.empty())
-				{
-					throw std::runtime_error("Trainer AOT optimizer update runner returned no outputs");
-				}
-				DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(), parameter.RawData(),
-				                                             updateOutputs[0].DType(), updateOutputs[0].RawData(),
-				                                             updateOutputs[0].NumElements());
+				return true;
 			}
-			return true;
+			else if constexpr (std::same_as<D, CPU> && std::same_as<OptimizerT, Optimizer::AdamW>)
+			{
+				optimizer_.EnsureState(parameters_);
+				const auto step = optimizer_.AdvanceStep();
+				for (std::size_t parameterIndex = 0; parameterIndex < parameters_.Size(); ++parameterIndex)
+				{
+					auto& parameter = parameters_[parameterIndex].Parameter();
+					if (!parameter.CurDevice().template Is<CPU>())
+					{
+						return false;
+					}
+					const auto parameterCPU = parameter.CopyToDevice(CPU{});
+					const auto& gradient =
+					    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
+					Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
+					std::array<Tensor<CPU>, 4> updateInputs = { parameterCPU, gradient,
+						                                    optimizer_.FirstMoment(parameterIndex),
+						                                    optimizer_.SecondMoment(parameterIndex) };
+					auto updateRunner =
+					    CreateCompiledAdamWUpdateRunner(parameters_[parameterIndex].type, optimizer_.Options(), step,
+					                                    device_);
+					auto updateOutputs = updateRunner(updateInputs);
+					if (updateOutputs.size() != 3)
+					{
+						throw std::runtime_error("Trainer AOT AdamW update runner returned an unexpected output count");
+					}
+					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
+					                                             parameter.RawData(), updateOutputs[0].DType(),
+					                                             updateOutputs[0].RawData(),
+					                                             updateOutputs[0].NumElements());
+					optimizer_.FirstMoment(parameterIndex) = std::move(updateOutputs[1]);
+					optimizer_.SecondMoment(parameterIndex) = std::move(updateOutputs[2]);
+				}
+				return true;
+			}
+			else
+			{
+				return false;
+			}
 		}
 
 		std::vector<Tensor<D>> RunBackward(std::span<const Tensor<D>> inputs)

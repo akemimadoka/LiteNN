@@ -1656,6 +1656,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         second-moment outputs.
       - [x] `Trainer` AOT CPU policy now executes momentum-free SGD parameter updates through compiled
         `SGDStepNode` artifact runners and exposes `UsesCompiledOptimizerUpdateEntries()` coverage.
+      - [x] Added `Optimizer::AdamW` and wired CPU AOT `Trainer` updates through compiled `AdamWStepNode` runners
+        that explicitly consume and update first/second-moment optimizer state tensors.
       - [ ] Move loss and optimizer update execution itself into named compiled artifact entries with mutable state
         bindings, eliminating the per-step runner refresh.
   - [x] Make checkpoint save/load share the same state binding contract.

@@ -80,6 +80,34 @@ namespace LiteNN::Training
 			ValidateExecutablePlan(BuildExecutablePlan(graph));
 			return graph;
 		}
+
+		Graph BuildAdamWUpdateGraph(const TensorType& parameterType, const Optimizer::AdamWOptions& options,
+		                            std::size_t step)
+		{
+			if (parameterType.dtype != DataType::Float32 || !parameterType.IsFullyStatic())
+			{
+				throw std::runtime_error("Trainer AOT AdamW update runner requires a static Float32 parameter type");
+			}
+			if (step == 0)
+			{
+				throw std::runtime_error("Trainer AOT AdamW update runner requires a positive step");
+			}
+
+			Graph graph;
+			Subgraph sg;
+			const auto parameter = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto gradient = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto firstMoment = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto secondMoment = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto outputs =
+			    Optimizer::AddAdamWStep(sg, { parameter, 0 }, { gradient, 0 }, { firstMoment, 0 },
+			                            { secondMoment, 0 }, options.learningRate, options.beta1,
+			                            options.beta2, options.epsilon, options.weightDecay, step);
+			sg.SetResults(outputs);
+			graph.SetForward(graph.AddSubgraph(std::move(sg)));
+			ValidateExecutablePlan(BuildExecutablePlan(graph));
+			return graph;
+		}
 	} // namespace
 
 	template <>
@@ -116,6 +144,21 @@ namespace LiteNN::Training
 		throw std::runtime_error("Trainer AOT SGD update runner requires LiteNNCompiler/MLIR support");
 #else
 		auto module = Compiler<CPU>::Compile(BuildExecutablePlan(BuildSGDUpdateGraph(parameterType, options)));
+		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
+			return module.Run(inputs);
+		};
+#endif
+	}
+
+	template <>
+	CompiledOptimizerUpdateRunner<CPU> CreateCompiledAdamWUpdateRunner(const TensorType& parameterType,
+	                                                                   Optimizer::AdamWOptions options,
+	                                                                   std::size_t step, CPU)
+	{
+#ifndef LITENN_ENABLE_MLIR
+		throw std::runtime_error("Trainer AOT AdamW update runner requires LiteNNCompiler/MLIR support");
+#else
+		auto module = Compiler<CPU>::Compile(BuildExecutablePlan(BuildAdamWUpdateGraph(parameterType, options, step)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
 			return module.Run(inputs);
 		};

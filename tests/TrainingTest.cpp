@@ -145,6 +145,51 @@ TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.2f);
 }
 
+TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
+{
+	Graph graph;
+	const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
+
+	Subgraph sg;
+	const auto x = sg.AddParam(DataType::Float32, { 1 });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Training::TrainerOptions options;
+	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Optimizer::AdamWOptions adamwOptions;
+	adamwOptions.learningRate = 0.1f;
+	adamwOptions.beta1 = 0.0f;
+	adamwOptions.beta2 = 0.0f;
+	adamwOptions.epsilon = 1.0e-8f;
+	adamwOptions.weightDecay = 0.0f;
+	Training::Trainer<CPU, Optimizer::AdamW> trainer(graph, Optimizer::AdamW(adamwOptions), options);
+	EXPECT_TRUE(trainer.UsesCompiledOptimizerUpdateEntries());
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+
+	auto firstStep = trainer.Step(inputs, outputGradients);
+	ASSERT_EQ(firstStep.outputs.size(), 1);
+	ASSERT_EQ(firstStep.backwardResults.size(), 2);
+	EXPECT_FLOAT_EQ(ReadFloat(firstStep.outputs[0], 0), 6.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(firstStep.backwardResults[1], 0), 4.0f);
+	EXPECT_NEAR(ReadVariableDataFloat(graph, weightIndex, 0), 2.9f, 1.0e-5f);
+	EXPECT_FLOAT_EQ(ReadFloat(trainer.Optimizer().FirstMoment(0), 0), 4.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(trainer.Optimizer().SecondMoment(0), 0), 16.0f);
+
+	auto secondStep = trainer.Step(inputs, outputGradients);
+	ASSERT_EQ(secondStep.outputs.size(), 1);
+	EXPECT_NEAR(ReadFloat(secondStep.outputs[0], 0), 5.8f, 1.0e-5f);
+	EXPECT_NEAR(ReadVariableDataFloat(graph, weightIndex, 0), 2.8f, 1.0e-5f);
+	EXPECT_EQ(trainer.Optimizer().StepIndex(), 2u);
+}
+
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 {
 	Graph graph;

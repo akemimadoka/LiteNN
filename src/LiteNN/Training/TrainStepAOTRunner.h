@@ -6,6 +6,7 @@
 #include <LiteNN/Device/CUDA.h>
 #endif
 #include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Optimizer/AdamW.h>
 #include <LiteNN/Optimizer/SGD.h>
 #include <LiteNN/Tensor.h>
 
@@ -48,6 +49,13 @@ namespace LiteNN::Training
 		throw std::runtime_error("Trainer AOT SGD update runner is not available for this device");
 	}
 
+	template <Device D>
+	CompiledOptimizerUpdateRunner<D> CreateCompiledAdamWUpdateRunner(const TensorType&, Optimizer::AdamWOptions,
+	                                                                 std::size_t, D)
+	{
+		throw std::runtime_error("Trainer AOT AdamW update runner is not available for this device");
+	}
+
 	template <>
 	CompiledForwardRunner<CPU> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CPU device);
 	template <>
@@ -55,6 +63,10 @@ namespace LiteNN::Training
 	template <>
 	CompiledOptimizerUpdateRunner<CPU> CreateCompiledSGDUpdateRunner(const TensorType& parameterType,
 	                                                                 Optimizer::SGDOptions options, CPU device);
+	template <>
+	CompiledOptimizerUpdateRunner<CPU> CreateCompiledAdamWUpdateRunner(const TensorType& parameterType,
+	                                                                   Optimizer::AdamWOptions options,
+	                                                                   std::size_t step, CPU device);
 
 #ifdef LITENN_ENABLE_CUDA
 	template <>
