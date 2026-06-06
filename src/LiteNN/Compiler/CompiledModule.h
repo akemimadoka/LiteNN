@@ -376,7 +376,7 @@ namespace LiteNN
 		void* stream{};
 		bool synchronize{ true };
 		bool enableGraphReplay{};
-		bool enableCUBLASLt{};
+		bool enableCUBLASLt{ true };
 	};
 
 	struct CompiledModuleCUDAInvocation

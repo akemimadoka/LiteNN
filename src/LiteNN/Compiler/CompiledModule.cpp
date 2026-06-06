@@ -3709,7 +3709,6 @@ namespace
 		case DataType::Float8E4M3:
 		case DataType::Float8E5M2:
 		case DataType::Int8:
-		case DataType::UInt8:
 			return true;
 		default:
 			return false;
@@ -3719,7 +3718,7 @@ namespace
 	bool IsSupportedCUDANativeMatMulBiasType(DataType dtype)
 	{
 		return dtype == DataType::Float32 || dtype == DataType::Float16 || dtype == DataType::BFloat16 ||
-		       dtype == DataType::Int8 || dtype == DataType::UInt8;
+		       dtype == DataType::Int8;
 	}
 
 	void AddCUDANativeMatMulFeatureFlag(CUDANativeInstructionPayload& payload, DataType dtype)

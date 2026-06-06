@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -234,17 +235,18 @@ namespace
 		return graph;
 	}
 
-	Graph BuildMatMulBiasGraph(bool relu, DataType dtype = DataType::Float32)
+	Graph BuildMatMulBiasGraph(bool relu, DataType dtype = DataType::Float32, std::size_t m = 2, std::size_t k = 3,
+	                           std::size_t n = 2)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto lhs = sg.AddParam(dtype, { 2, 3 });
-		const auto rhs = sg.AddParam(dtype, { 3, 2 });
-		const auto bias = sg.AddParam(dtype, { 1, 2 });
+		const auto lhs = sg.AddParam(dtype, { m, k });
+		const auto rhs = sg.AddParam(dtype, { k, n });
+		const auto bias = sg.AddParam(dtype, { 1, n });
 		const auto matmul =
-		    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
+		    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ dtype, { m, n } } });
 		const auto add =
-		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
+		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } }, { OutputInfo{ dtype, { m, n } } });
 		NodeId result = add;
 		if (relu)
 		{
@@ -252,7 +254,7 @@ namespace
 			const auto zero = sg.AddNode(ConstantNode{ zeroTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
 			                             { OutputInfo{ dtype, { 1 } } });
 			result =
-			    sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } }, { OutputInfo{ dtype, { 2, 2 } } });
+			    sg.AddNode(BinaryOpNode{ BinaryOp::Max, { add, 0 }, { zero, 0 } }, { OutputInfo{ dtype, { m, n } } });
 		}
 		sg.SetResults({ { result, 0 } });
 		graph.AddSubgraph(std::move(sg));
@@ -351,6 +353,17 @@ namespace
 			                    ShapeView{ spec.shape }, spec.dtype);
 		}
 		return inputs;
+	}
+
+	std::vector<double> RepeatingValues(std::size_t count, std::initializer_list<double> pattern)
+	{
+		std::vector<double> values;
+		values.reserve(count);
+		for (auto i = 0uz; i < count; ++i)
+		{
+			values.push_back(*(pattern.begin() + static_cast<std::ptrdiff_t>(i % pattern.size())));
+		}
+		return values;
 	}
 
 	std::vector<Tensor<CUDA>> MakeCUDAInputs(std::span<const TensorInputSpec> specs)
@@ -1207,6 +1220,9 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 	{
 		std::string name;
 		DataType dtype{ DataType::Float16 };
+		std::size_t m{ 2 };
+		std::size_t k{ 3 };
+		std::size_t n{ 2 };
 		std::vector<double> lhsValues;
 		std::vector<double> rhsValues;
 		float tolerance{ 1e-6f };
@@ -1220,12 +1236,18 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 		  .tolerance = 1e-3f },
 		{ .name = "matmul_i8",
 		  .dtype = DataType::Int8,
-		  .lhsValues = { 1.0, 2.0, -3.0, 4.0, -1.0, 2.0 },
-		  .rhsValues = { 2.0, -1.0, 1.0, 3.0, -2.0, 1.0 } },
+		  .m = 16,
+		  .k = 32,
+		  .n = 16,
+		  .lhsValues = RepeatingValues(16 * 32, { -1.0, 0.0, 1.0, 2.0 }),
+		  .rhsValues = RepeatingValues(32 * 16, { 1.0, -1.0, 0.0, 2.0 }) },
 		{ .name = "matmul_u8",
 		  .dtype = DataType::UInt8,
-		  .lhsValues = { 1.0, 2.0, 3.0, 4.0, 1.0, 2.0 },
-		  .rhsValues = { 2.0, 1.0, 1.0, 3.0, 2.0, 1.0 } },
+		  .m = 16,
+		  .k = 32,
+		  .n = 16,
+		  .lhsValues = RepeatingValues(16 * 32, { 0.0, 1.0, 2.0, 3.0 }),
+		  .rhsValues = RepeatingValues(32 * 16, { 1.0, 0.0, 2.0, 1.0 }) },
 	};
 
 	std::size_t executedCases = 0;
@@ -1237,14 +1259,15 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulPayloadsOnCUDA)
 		}
 
 		SCOPED_TRACE(testCase.name);
-		auto graph = BuildMatMulGraph(testCase.dtype, { 2, 3 }, { 3, 2 }, { 2, 2 }, testCase.name);
+		auto graph = BuildMatMulGraph(testCase.dtype, { testCase.m, testCase.k }, { testCase.k, testCase.n },
+		                              { testCase.m, testCase.n }, testCase.name);
 		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
 		std::vector<TensorInputSpec> inputSpecs = {
-			TensorInputSpec{ .values = testCase.lhsValues, .shape = { 2, 3 }, .dtype = testCase.dtype },
-			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.lhsValues, .shape = { testCase.m, testCase.k }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.rhsValues, .shape = { testCase.k, testCase.n }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
 		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);
@@ -1279,6 +1302,9 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 		std::string name;
 		DataType dtype{ DataType::Float16 };
 		bool relu{};
+		std::size_t m{ 2 };
+		std::size_t k{ 3 };
+		std::size_t n{ 2 };
 		std::vector<double> lhsValues;
 		std::vector<double> rhsValues;
 		std::vector<double> biasValues;
@@ -1296,15 +1322,21 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 		{ .name = "matmul_bias_i8",
 		  .dtype = DataType::Int8,
 		  .relu = false,
-		  .lhsValues = { 1.0, -2.0, 3.0, -1.0, 2.0, -3.0 },
-		  .rhsValues = { 1.0, 2.0, -1.0, 1.0, 2.0, -2.0 },
-		  .biasValues = { 1.0, -2.0 } },
+		  .m = 16,
+		  .k = 32,
+		  .n = 16,
+		  .lhsValues = RepeatingValues(16 * 32, { -1.0, 0.0, 1.0, 2.0 }),
+		  .rhsValues = RepeatingValues(32 * 16, { 1.0, -1.0, 0.0, 2.0 }),
+		  .biasValues = RepeatingValues(16, { 1.0, -2.0 }) },
 		{ .name = "matmul_bias_u8",
 		  .dtype = DataType::UInt8,
 		  .relu = true,
-		  .lhsValues = { 1.0, 2.0, 3.0, 1.0, 0.0, 2.0 },
-		  .rhsValues = { 1.0, 2.0, 1.0, 1.0, 2.0, 1.0 },
-		  .biasValues = { 1.0, 2.0 } },
+		  .m = 16,
+		  .k = 32,
+		  .n = 16,
+		  .lhsValues = RepeatingValues(16 * 32, { 0.0, 1.0, 2.0, 3.0 }),
+		  .rhsValues = RepeatingValues(32 * 16, { 1.0, 0.0, 2.0, 1.0 }),
+		  .biasValues = RepeatingValues(16, { 1.0, 2.0 }) },
 	};
 
 	std::size_t executedCases = 0;
@@ -1316,16 +1348,16 @@ TEST(CompiledModuleCUDATest, RunsNativeLowPrecisionMatMulBiasPayloadsOnCUDA)
 		}
 
 		SCOPED_TRACE(testCase.name);
-		auto graph = BuildMatMulBiasGraph(testCase.relu, testCase.dtype);
+		auto graph = BuildMatMulBiasGraph(testCase.relu, testCase.dtype, testCase.m, testCase.k, testCase.n);
 		FusionPass{}.Run(graph);
 		auto artifact = Compiler<CUDA>::CompileArtifact(BuildExecutablePlan(graph));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative) << Debug::DumpGraph(graph);
 
 		Runtime::Interpreter<CPU> interpreter;
 		std::vector<TensorInputSpec> inputSpecs = {
-			TensorInputSpec{ .values = testCase.lhsValues, .shape = { 2, 3 }, .dtype = testCase.dtype },
-			TensorInputSpec{ .values = testCase.rhsValues, .shape = { 3, 2 }, .dtype = testCase.dtype },
-			TensorInputSpec{ .values = testCase.biasValues, .shape = { 1, 2 }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.lhsValues, .shape = { testCase.m, testCase.k }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.rhsValues, .shape = { testCase.k, testCase.n }, .dtype = testCase.dtype },
+			TensorInputSpec{ .values = testCase.biasValues, .shape = { 1, testCase.n }, .dtype = testCase.dtype },
 		};
 		auto expectedInputs = MakeCPUInputs(inputSpecs);
 		const auto expected = interpreter.RunForward(BuildExecutablePlan(graph), expectedInputs);

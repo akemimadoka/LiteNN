@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -35,6 +36,17 @@ static std::vector<float> QuantizeAsFloat32(std::span<const float> values, DataT
 	CPU cpu;
 	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.RawData(), DataType::Float32, values.data(), values.size());
 	return ReadAsFloat32(quantized);
+}
+
+static std::vector<double> RepeatingValues(std::size_t count, std::initializer_list<double> pattern)
+{
+	std::vector<double> values;
+	values.reserve(count);
+	for (auto i = 0uz; i < count; ++i)
+	{
+		values.push_back(*(pattern.begin() + static_cast<std::ptrdiff_t>(i % pattern.size())));
+	}
+	return values;
 }
 
 static CUDA CUDAWithHostFallback()
@@ -139,11 +151,13 @@ TEST(CUDADevice, MatMulMatchesCPU)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	Tensor<CPU> cpuTensor({ 1, 2, 3, 4, 5, 6 }, { 2, 3 });
-	const auto cpuResult = cpuTensor.MatMul(cpuTensor.Transpose());
+	Tensor<CPU> lhs({ 1, 2, 3, 4, 5, 6 }, { 2, 3 });
+	Tensor<CPU> rhs({ 1, 4, 2, 5, 3, 6 }, { 3, 2 });
+	const auto cpuResult = lhs.MatMul(rhs);
 
-	auto cudaTensor = cpuTensor.CopyToDevice(CUDA{});
-	auto cudaResult = cudaTensor.MatMul(cudaTensor.Transpose()).CopyToDevice(CPU{});
+	auto cudaLhs = lhs.CopyToDevice(CUDA{});
+	auto cudaRhs = rhs.CopyToDevice(CUDA{});
+	auto cudaResult = cudaLhs.MatMul(cudaRhs).CopyToDevice(CPU{});
 
 	for (auto i = 0uz; i < cpuResult.NumElements(); ++i)
 	{
@@ -315,14 +329,16 @@ TEST(CUDADevice, Int8MatMulMatchesHighPrecisionQuantizedReference)
 		GTEST_SKIP() << "CUDA device is not available";
 	}
 
-	constexpr auto m = 2uz;
-	constexpr auto k = 3uz;
-	constexpr auto n = 2uz;
+	constexpr auto m = 16uz;
+	constexpr auto k = 32uz;
+	constexpr auto n = 16uz;
 	const std::array testCases{
-		std::pair{ DataType::Int8, std::pair{ std::vector<double>{ 1, 2, -3, 4, -1, 2 },
-		                                     std::vector<double>{ 2, -1, 1, 3, -2, 1 } } },
-		std::pair{ DataType::UInt8, std::pair{ std::vector<double>{ 1, 2, 3, 4, 1, 2 },
-		                                      std::vector<double>{ 2, 1, 1, 3, 2, 1 } } },
+		std::pair{ DataType::Int8,
+		           std::pair{ RepeatingValues(m * k, { -1.0, 0.0, 1.0, 2.0 }),
+		                      RepeatingValues(k * n, { 1.0, -1.0, 0.0, 2.0 }) } },
+		std::pair{ DataType::UInt8,
+		           std::pair{ RepeatingValues(m * k, { 0.0, 1.0, 2.0, 3.0 }),
+		                      RepeatingValues(k * n, { 1.0, 0.0, 2.0, 1.0 }) } },
 	};
 
 	std::size_t executedCases = 0;

@@ -79,7 +79,7 @@ namespace LiteNN
 	{
 		void* stream{};
 		bool synchronize{ true };
-		bool enableCUBLASLt{};
+		bool enableCUBLASLt{ true };
 		bool allowHostFallback{};
 	};
 

@@ -108,7 +108,7 @@ namespace LiteNN
 			return CUDAExecutionOptions{
 			    .stream = nullptr,
 			    .synchronize = true,
-			    .enableCUBLASLt = false,
+			    .enableCUBLASLt = true,
 			    .allowHostFallback = device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow,
 			};
 		}
@@ -905,9 +905,21 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				return nullptr;
 			}
 
-			void CacheAlgo(const AlgoKey& key, const cublasLtMatmulAlgo_t& algo)
+			std::uint64_t CachedAlgoWorkspaceSize(const AlgoKey& key) const
 			{
-				algoCache_.push_back(AlgoCacheEntry{ key, algo });
+				for (const auto& entry : algoCache_)
+				{
+					if (entry.key == key)
+					{
+						return entry.workspaceSize;
+					}
+				}
+				return 0;
+			}
+
+			void CacheAlgo(const AlgoKey& key, const cublasLtMatmulAlgo_t& algo, std::uint64_t workspaceSize)
+			{
+				algoCache_.push_back(AlgoCacheEntry{ key, algo, workspaceSize });
 			}
 
 		private:
@@ -915,6 +927,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			{
 				AlgoKey key;
 				cublasLtMatmulAlgo_t algo;
+				std::uint64_t workspaceSize{};
 			};
 
 			int deviceIndex_{};
@@ -971,11 +984,15 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		using CUBLASLtPreferenceOwner =
 		    CUBLASLtDescriptor<cublasLtMatmulPreference_t, cublasLtMatmulPreferenceDestroy>;
 
-		bool ShouldTryCUBLASLtMatMul(int m, int k, int n, CUDAExecutionOptions options)
+		bool ShouldTryCUBLASLtMatMul(DataType dtype, int m, int k, int n, CUDAExecutionOptions options)
 		{
 			if (!options.enableCUBLASLt)
 			{
 				return false;
+			}
+			if (dtype != DataType::Float32)
+			{
+				return true;
 			}
 			const std::uint64_t flops =
 			    static_cast<std::uint64_t>(m) * static_cast<std::uint64_t>(k) * static_cast<std::uint64_t>(n) * 2;
@@ -1002,7 +1019,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
 			const auto outputElements = static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
-			if (!ShouldTryCUBLASLtMatMul(m, k, n, options))
+			if (!ShouldTryCUBLASLtMatMul(type1, m, k, n, options))
 			{
 				return false;
 			}
@@ -1138,6 +1155,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 
 			CUBLASLtHandle::AlgoKey key{ .type = type1, .m = m, .k = k, .n = n };
 			const cublasLtMatmulAlgo_t* algo = handle.CachedAlgo(key);
+			std::uint64_t algoWorkspaceBytes = handle.CachedAlgoWorkspaceSize(key);
 			if (algo == nullptr)
 			{
 				cublasLtMatmulPreference_t preference{};
@@ -1146,7 +1164,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 					return false;
 				}
 				CUBLASLtPreferenceOwner preferenceOwner(preference);
-				std::uint64_t workspaceBytes = 0;
+				constexpr std::uint64_t workspaceBytes = 1ull << 22;
 				(void)cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
 				                                           &workspaceBytes, sizeof(workspaceBytes));
 				cublasLtMatmulHeuristicResult_t heuristic{};
@@ -1158,8 +1176,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				{
 					return false;
 				}
-				handle.CacheAlgo(key, heuristic.algo);
+				handle.CacheAlgo(key, heuristic.algo, heuristic.workspaceSize);
 				algo = handle.CachedAlgo(key);
+				algoWorkspaceBytes = heuristic.workspaceSize;
 			}
 
 			std::int32_t alphaI32 = 1;
@@ -1170,9 +1189,16 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			                                           : static_cast<const void*>(&alphaF32);
 			const void* beta = scaleType == CUDA_R_32I ? static_cast<const void*>(&betaI32)
 			                                          : static_cast<const void*>(&betaF32);
+			std::unique_ptr<CUDATemporaryBuffer> workspace;
+			void* workspacePtr = nullptr;
+			if (algoWorkspaceBytes > 0)
+			{
+				workspace = std::make_unique<CUDATemporaryBuffer>(device, DataType::UInt8, algoWorkspaceBytes);
+				workspacePtr = workspace->get();
+			}
 			const auto status = cublasLtMatmul(handle.get(), operation, alpha, src1, aLayout.get(), src2,
 			                                   bLayout.get(), beta, outputBuffer, cLayout.get(), outputBuffer,
-			                                   cLayout.get(), algo, nullptr, 0,
+			                                   cLayout.get(), algo, workspacePtr, algoWorkspaceBytes,
 			                                   reinterpret_cast<cudaStream_t>(options.stream));
 			if (status != CUBLAS_STATUS_SUCCESS)
 			{
@@ -1357,6 +1383,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto m = static_cast<int>(shape1[0]);
 			const auto k = static_cast<int>(shape1[1]);
 			const auto n = static_cast<int>(shape2[1]);
+			const auto outputElements = static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
 
 #ifdef LITENN_ENABLE_CUBLASLT
 			if (TryCUBLASLtMatMul(device, dst, type1, shape1, src1, type2, shape2, src2, options))
@@ -1409,6 +1436,26 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				}
 			}
 #endif
+			else if (type1 == DataType::Int8)
+			{
+				if (!CUDACanUseNativeConversion(DataType::Int32, type1, device.deviceIndex) || !options.synchronize)
+				{
+					return false;
+				}
+				CUDATemporaryBuffer outputScratch(device, DataType::Int32, outputElements);
+				const std::int32_t alpha = 1;
+				const std::int32_t beta = 0;
+				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
+				                                  CUDA_R_8I, n, src1, CUDA_R_8I, k, &beta, outputScratch.get(),
+				                                  CUDA_R_32I, n, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				if (status != CUBLAS_STATUS_SUCCESS)
+				{
+					return false;
+				}
+				LaunchNativeCUDAConvert(device, DataType::Int32, outputScratch.get(), outputElements, type1, dst,
+				                        options);
+				return true;
+			}
 			else
 			{
 				return false;
@@ -1516,10 +1563,13 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			return capabilities->supportsBFloat16MatMul;
 		case DataType::Float8E4M3:
 		case DataType::Float8E5M2:
-			return capabilities->supportsFloat8MatMul;
-			case DataType::Int8:
-			case DataType::UInt8:
-				return capabilities->hasCUBLASLt && capabilities->supportsInt8TensorCores;
+			return capabilities->supportsFloat8MatMul &&
+			       CUDACanUseNativeConversion(DataType::Float32, dtype, deviceIndex);
+		case DataType::Int8:
+			return capabilities->supportsInt8TensorCores &&
+			       CUDACanUseNativeConversion(DataType::Int32, dtype, deviceIndex);
+		case DataType::UInt8:
+			return false;
 		case DataType::Float32:
 		case DataType::Float64:
 		case DataType::Int32:
