@@ -1654,6 +1654,8 @@ model packages, AOT artifacts, CUDA lowering, and training APIs stabilize.
         compile as an AOT artifact and match interpreter results.
       - [x] CPU MLIR lowering now supports `AdamWStepNode` with explicit updated parameter, first-moment, and
         second-moment outputs.
+      - [x] `Trainer` AOT CPU policy now executes momentum-free SGD parameter updates through compiled
+        `SGDStepNode` artifact runners and exposes `UsesCompiledOptimizerUpdateEntries()` coverage.
       - [ ] Move loss and optimizer update execution itself into named compiled artifact entries with mutable state
         bindings, eliminating the per-step runner refresh.
   - [x] Make checkpoint save/load share the same state binding contract.

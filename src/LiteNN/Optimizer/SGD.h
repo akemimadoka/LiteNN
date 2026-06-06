@@ -85,6 +85,11 @@ namespace LiteNN::Optimizer
 			velocity_.clear();
 		}
 
+		const SGDOptions& Options() const noexcept
+		{
+			return options_;
+		}
+
 	private:
 		void ValidateOptions() const
 		{

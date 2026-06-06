@@ -6,6 +6,7 @@
 #include <LiteNN/Device/CUDA.h>
 #endif
 #include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Optimizer/SGD.h>
 #include <LiteNN/Tensor.h>
 
 #include <functional>
@@ -20,6 +21,9 @@ namespace LiteNN::Training
 
 	template <Device D>
 	using CompiledBackwardRunner = std::function<std::vector<Tensor<D>>(std::span<const Tensor<D>>)>;
+
+	template <Device D>
+	using CompiledOptimizerUpdateRunner = std::function<std::vector<Tensor<D>>(std::span<const Tensor<D>>)>;
 
 	/// Creates the compiled forward half of the vNext train-step contract.
 	template <Device D>
@@ -38,10 +42,19 @@ namespace LiteNN::Training
 		throw std::runtime_error("Trainer AOT backward runner is not available for this device");
 	}
 
+	template <Device D>
+	CompiledOptimizerUpdateRunner<D> CreateCompiledSGDUpdateRunner(const TensorType&, Optimizer::SGDOptions, D)
+	{
+		throw std::runtime_error("Trainer AOT SGD update runner is not available for this device");
+	}
+
 	template <>
 	CompiledForwardRunner<CPU> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CPU device);
 	template <>
 	CompiledBackwardRunner<CPU> CreateCompiledTrainBackwardRunner(const ExecutablePlan& plan, CPU device);
+	template <>
+	CompiledOptimizerUpdateRunner<CPU> CreateCompiledSGDUpdateRunner(const TensorType& parameterType,
+	                                                                 Optimizer::SGDOptions options, CPU device);
 
 #ifdef LITENN_ENABLE_CUDA
 	template <>

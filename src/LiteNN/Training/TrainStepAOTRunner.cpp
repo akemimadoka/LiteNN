@@ -3,6 +3,7 @@
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
+#include <LiteNN/Optimizer/GraphOps.h>
 
 #include <format>
 #include <utility>
@@ -55,6 +56,30 @@ namespace LiteNN::Training
 			ValidateExecutablePlan(backwardPlan);
 			return backwardPlan;
 		}
+
+		Graph BuildSGDUpdateGraph(const TensorType& parameterType, const Optimizer::SGDOptions& options)
+		{
+			if (parameterType.dtype != DataType::Float32 || !parameterType.IsFullyStatic())
+			{
+				throw std::runtime_error("Trainer AOT SGD update runner requires a static Float32 parameter type");
+			}
+			if (options.momentum != 0.0F)
+			{
+				throw std::runtime_error("Trainer AOT SGD update runner currently supports momentum-free SGD only");
+			}
+
+			Graph graph;
+			Subgraph sg;
+			const auto parameter = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto gradient = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
+			const auto outputs = Optimizer::AddSGDStep(sg, { parameter, 0 }, { gradient, 0 }, std::nullopt,
+			                                           options.learningRate, options.momentum,
+			                                           options.weightDecay, options.nesterov);
+			sg.SetResults(outputs);
+			graph.SetForward(graph.AddSubgraph(std::move(sg)));
+			ValidateExecutablePlan(BuildExecutablePlan(graph));
+			return graph;
+		}
 	} // namespace
 
 	template <>
@@ -77,6 +102,20 @@ namespace LiteNN::Training
 		throw std::runtime_error("Trainer AOT backward runner requires LiteNNCompiler/MLIR support");
 #else
 		auto module = Compiler<CPU>::Compile(BuildBackwardEntryPlan(plan));
+		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
+			return module.Run(inputs);
+		};
+#endif
+	}
+
+	template <>
+	CompiledOptimizerUpdateRunner<CPU> CreateCompiledSGDUpdateRunner(const TensorType& parameterType,
+	                                                                 Optimizer::SGDOptions options, CPU)
+	{
+#ifndef LITENN_ENABLE_MLIR
+		throw std::runtime_error("Trainer AOT SGD update runner requires LiteNNCompiler/MLIR support");
+#else
+		auto module = Compiler<CPU>::Compile(BuildExecutablePlan(BuildSGDUpdateGraph(parameterType, options)));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) {
 			return module.Run(inputs);
 		};

@@ -8,6 +8,8 @@
 #include <LiteNN/Training/TrainStepPlan.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
+#include <array>
+#include <concepts>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -65,6 +67,7 @@ namespace LiteNN::Training
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
 			{
 				InitializeCompiledForwardRunner();
+				InitializeCompiledOptimizerUpdateRunners();
 			}
 		}
 
@@ -176,6 +179,11 @@ namespace LiteNN::Training
 			return trainStepPlan_.policy;
 		}
 
+		bool UsesCompiledOptimizerUpdateEntries() const noexcept
+		{
+			return compiledOptimizerUpdatesAvailable_;
+		}
+
 		D& Device()
 		{
 			return device_;
@@ -191,6 +199,26 @@ namespace LiteNN::Training
 		{
 			compiledForward_ = CreateCompiledTrainForwardRunner(trainStepPlan_.module.plan, device_);
 			compiledBackward_ = CreateCompiledTrainBackwardRunner(trainStepPlan_.module.plan, device_);
+		}
+
+		void InitializeCompiledOptimizerUpdateRunners()
+		{
+			compiledOptimizerUpdates_.clear();
+			compiledOptimizerUpdatesAvailable_ = false;
+			if constexpr (std::same_as<D, CPU> && std::same_as<OptimizerT, Optimizer::SGD>)
+			{
+				if (optimizer_.Options().momentum != 0.0F)
+				{
+					return;
+				}
+				compiledOptimizerUpdates_.reserve(parameters_.Size());
+				for (const auto& parameter : parameters_.Entries())
+				{
+					compiledOptimizerUpdates_.push_back(
+					    CreateCompiledSGDUpdateRunner(parameter.type, optimizer_.Options(), device_));
+				}
+				compiledOptimizerUpdatesAvailable_ = compiledOptimizerUpdates_.size() == parameters_.Size();
+			}
 		}
 
 		void EnsureCompiledTrainStepRunnerAvailable() const
@@ -261,12 +289,46 @@ namespace LiteNN::Training
 			{
 				LiteNN::Optimizer::StoreVariableGradients(parameters_, cpuBackwardResults, inputGradientCount);
 			}
-			optimizer_.Step(parameters_, cpuBackwardResults, inputGradientCount);
+			if (!RunCompiledOptimizerUpdates(cpuBackwardResults, inputGradientCount))
+			{
+				optimizer_.Step(parameters_, cpuBackwardResults, inputGradientCount);
+			}
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
 			{
 				InitializeCompiledForwardRunner();
 			}
 			return backwardResults;
+		}
+
+		bool RunCompiledOptimizerUpdates(std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount)
+		{
+			if (!compiledOptimizerUpdatesAvailable_)
+			{
+				return false;
+			}
+			Optimizer::Detail::ValidateBackwardResults(parameters_, backwardResults, inputGradientCount);
+			for (std::size_t parameterIndex = 0; parameterIndex < parameters_.Size(); ++parameterIndex)
+			{
+				auto& parameter = parameters_[parameterIndex].Parameter();
+				if (!parameter.CurDevice().template Is<CPU>())
+				{
+					return false;
+				}
+				const auto parameterCPU = parameter.CopyToDevice(CPU{});
+				const auto& gradient =
+				    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
+				Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
+				std::array<Tensor<CPU>, 2> updateInputs = { parameterCPU, gradient };
+				auto updateOutputs = compiledOptimizerUpdates_[parameterIndex](updateInputs);
+				if (updateOutputs.empty())
+				{
+					throw std::runtime_error("Trainer AOT optimizer update runner returned no outputs");
+				}
+				DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(), parameter.RawData(),
+				                                             updateOutputs[0].DType(), updateOutputs[0].RawData(),
+				                                             updateOutputs[0].NumElements());
+			}
+			return true;
 		}
 
 		std::vector<Tensor<D>> RunBackward(std::span<const Tensor<D>> inputs)
@@ -291,6 +353,8 @@ namespace LiteNN::Training
 		TrainStepPlan trainStepPlan_;
 		CompiledForwardRunner<D> compiledForward_;
 		CompiledBackwardRunner<D> compiledBackward_;
+		std::vector<CompiledOptimizerUpdateRunner<CPU>> compiledOptimizerUpdates_;
+		bool compiledOptimizerUpdatesAvailable_{};
 	};
 } // namespace LiteNN::Training
 

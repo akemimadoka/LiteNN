@@ -117,6 +117,7 @@ TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
 	Training::Trainer<CPU, Optimizer::SGD> trainer(graph, Optimizer::SGD(0.1f), options);
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::AOT);
+	EXPECT_TRUE(trainer.UsesCompiledOptimizerUpdateEntries());
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
