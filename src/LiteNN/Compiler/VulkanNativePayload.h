@@ -1,0 +1,77 @@
+#ifndef LITENN_COMPILER_VULKAN_NATIVE_PAYLOAD_H
+#define LITENN_COMPILER_VULKAN_NATIVE_PAYLOAD_H
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace LiteNN
+{
+	enum class VulkanNativeArgumentKind : std::uint32_t
+	{
+		InputTensor = 1,
+		OutputTensor = 2,
+	};
+
+	enum class VulkanNativeFeature : std::uint32_t
+	{
+		StaticShape = 0,
+		SingleSubgraph = 1,
+		SameShapeElementwiseAddF32 = 2,
+	};
+
+	struct VulkanNativeFeatureSet
+	{
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 3) - 1;
+
+		std::uint64_t flags{};
+
+		constexpr void AddFeature(VulkanNativeFeature feature)
+		{
+			flags |= (1ull << static_cast<std::uint32_t>(feature));
+		}
+
+		constexpr bool CheckIsValid() const
+		{
+			return (flags & ~KnownFeatureMask) == 0;
+		}
+	};
+
+	struct VulkanNativeDispatchDim
+	{
+		std::uint32_t x{ 1 };
+		std::uint32_t y{ 1 };
+		std::uint32_t z{ 1 };
+	};
+
+	struct VulkanNativeArgumentSpec
+	{
+		VulkanNativeArgumentKind kind{ VulkanNativeArgumentKind::InputTensor };
+		std::uint32_t index{};
+		std::uint32_t binding{};
+		std::uint64_t byteOffset{};
+		std::uint64_t byteSize{};
+	};
+
+	struct VulkanNativeKernelSpec
+	{
+		std::string entryPoint{ "main" };
+		VulkanNativeDispatchDim groups;
+		std::vector<VulkanNativeArgumentSpec> arguments;
+	};
+
+	struct VulkanNativeInstructionPayload
+	{
+		VulkanNativeFeatureSet featureSet;
+		std::string target{ "vulkan1.1" };
+		std::vector<std::uint32_t> spirv;
+		std::vector<VulkanNativeKernelSpec> kernels;
+	};
+
+	std::vector<std::byte> SerializeVulkanNativeInstructionPayload(const VulkanNativeInstructionPayload& payload);
+	VulkanNativeInstructionPayload DeserializeVulkanNativeInstructionPayload(std::span<const std::byte> bytes);
+} // namespace LiteNN
+
+#endif

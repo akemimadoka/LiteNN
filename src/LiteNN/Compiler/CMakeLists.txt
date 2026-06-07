@@ -23,6 +23,9 @@ list(APPEND LITENN_COMPILER_SOURCES
 if(NOT LITENN_ENABLE_CUDA)
     list(FILTER LITENN_COMPILER_SOURCES EXCLUDE REGEX "CUDANativeCodegen\\.(cpp|h)$")
 endif()
+if(NOT LITENN_ENABLE_VULKAN)
+    list(FILTER LITENN_COMPILER_SOURCES EXCLUDE REGEX "VulkanNative(Payload|Codegen)\\.(cpp|h)$")
+endif()
 
 add_library(LiteNNCompiler
     ${LITENN_COMPILER_SOURCES}
@@ -93,6 +96,14 @@ if(LITENN_ENABLE_CUDA)
     )
 endif()
 
+if(LITENN_ENABLE_VULKAN)
+    list(APPEND LITENN_LLVM_COMPONENTS
+        spirvcodegen
+        spirvdesc
+        spirvinfo
+    )
+endif()
+
 llvm_map_components_to_libnames(LITENN_LLVM_NATIVE_LIBS ${LITENN_LLVM_COMPONENTS})
 
 set(LITENN_MLIR_LIBS
@@ -148,6 +159,23 @@ if(LITENN_ENABLE_CUDA)
         MLIRGPUToNVVMTransforms
         MLIRNVVMToLLVMIRTranslation
         MLIRNVVMDialect
+    )
+endif()
+
+if(LITENN_ENABLE_VULKAN)
+    list(APPEND LITENN_MLIR_LIBS
+        MLIRSPIRVDialect
+        MLIRSPIRVSerialization
+        MLIRSPIRVTransforms
+        MLIRSPIRVConversion
+        MLIRSPIRVTarget
+        MLIRArithToSPIRV
+        MLIRFuncToSPIRV
+        MLIRGPUToSPIRV
+        MLIRMemRefToSPIRV
+        MLIRSCFToSPIRV
+        MLIRTensorToSPIRV
+        MLIRVectorToSPIRV
     )
 endif()
 

@@ -60,10 +60,13 @@ namespace LiteNN
 	inline constexpr std::string_view BackendCPUAOT = "CPUAOT";
 	inline constexpr std::string_view BackendCUDANative = "CUDANative";
 	inline constexpr std::string_view BackendCUDABridge = "CUDABridge";
+	inline constexpr std::string_view BackendVulkanNative = "VulkanNative";
+	inline constexpr std::string_view BackendVulkanBridge = "VulkanBridge";
 	inline constexpr std::string_view BackendMobile = "Mobile";
 
-	inline constexpr std::array<std::string_view, 5> DefaultBackendNames{
-		BackendCPUInterpreter, BackendCPUAOT, BackendCUDANative, BackendCUDABridge, BackendMobile
+	inline constexpr std::array<std::string_view, 7> DefaultBackendNames{
+		BackendCPUInterpreter, BackendCPUAOT, BackendCUDANative, BackendCUDABridge,
+		BackendVulkanNative, BackendVulkanBridge, BackendMobile
 	};
 
 	struct BackendCapability
@@ -665,8 +668,8 @@ namespace LiteNN
 			                              .memoryEffect = schema.effect,
 			                              .lowering = "Runtime::Interpreter",
 			                              .relativeCost = 1.0 });
-			for (const auto backend :
-			     { BackendCPUAOT, BackendCUDANative, BackendCUDABridge, BackendMobile })
+			for (const auto backend : { BackendCPUAOT, BackendCUDANative, BackendCUDABridge, BackendVulkanNative,
+				                        BackendVulkanBridge, BackendMobile })
 			{
 				registry.RegisterCapability(schema.kind,
 				                            { .backend = std::string(backend),

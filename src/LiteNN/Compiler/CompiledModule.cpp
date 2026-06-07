@@ -8,6 +8,10 @@
 #include "Pass/LLVMCodegenPipeline.h"
 #include "Pass/LowerLiteNNPass.h"
 #include "Translation/GraphToMLIR.h"
+#ifdef LITENN_ENABLE_VULKAN
+#include "VulkanNativeCodegen.h"
+#include "VulkanNativePayload.h"
+#endif
 
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Validation/GraphValidator.h>
@@ -872,6 +876,8 @@ namespace
 			return CompiledModuleBackend::CPUNative;
 		case static_cast<std::uint32_t>(CompiledModuleBackend::CUDANative):
 			return CompiledModuleBackend::CUDANative;
+		case static_cast<std::uint32_t>(CompiledModuleBackend::VulkanNative):
+			return CompiledModuleBackend::VulkanNative;
 		default:
 			throw std::runtime_error("Compiled module rodata contains an invalid backend");
 		}
@@ -5775,6 +5781,175 @@ namespace
 	}
 #endif
 
+#ifdef LITENN_ENABLE_VULKAN
+	struct VulkanP0BinaryPlan
+	{
+		BinaryOp op{ BinaryOp::Add };
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t elementCount{};
+	};
+
+	struct VulkanP0ArtifactParts
+	{
+		std::vector<std::byte> rodata;
+		std::vector<std::byte> instructions;
+		std::vector<CompiledTensorSpec> inputSpecs;
+		std::vector<CompiledTensorSpec> outputSpecs;
+	};
+
+	std::optional<std::uint32_t> GetVulkanP0ParamIndex(const Subgraph& subgraph, NodeOutput output)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto* param = std::get_if<ParamRefNode>(&subgraph.GetNodeEntry(output.node).node);
+		if (!param || param->paramIndex >= subgraph.Params().size() ||
+		    param->paramIndex > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+		return static_cast<std::uint32_t>(param->paramIndex);
+	}
+
+	bool IsVulkanP0SingleForwardGraph(const Graph& graph)
+	{
+		return graph.SubgraphCount() == 1 && !graph.Backward().has_value() && graph.VariableCount() == 0 &&
+		       graph.ActivationSlotCount() == 0 && graph.TapeSlotCount() == 0;
+	}
+
+	std::optional<std::uint32_t> VulkanP0ShapeNumElementsU32(std::span<const std::size_t> shape)
+	{
+		std::uint64_t count = 1;
+		for (const auto dim : shape)
+		{
+			if (dim == 0)
+			{
+				return std::nullopt;
+			}
+			count *= static_cast<std::uint64_t>(dim);
+			if (count > std::numeric_limits<std::uint32_t>::max())
+			{
+				return std::nullopt;
+			}
+		}
+		return static_cast<std::uint32_t>(count);
+	}
+
+	std::optional<VulkanP0BinaryPlan> MatchVulkanP0SameShapeBinaryF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
+		if (!binary || !VulkanNativeSupportsSameShapeBinaryF32(binary->op))
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
+		const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->rhs);
+		if (!lhsInputIndex || !rhsInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || lhsParam.shape != output.shape || rhsParam.shape != output.shape)
+		{
+			return std::nullopt;
+		}
+
+		const auto elementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0BinaryPlan{
+			.op = binary->op,
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsInputIndex = *rhsInputIndex,
+			.elementCount = *elementCount,
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeBinaryF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0SameShapeBinaryF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseAddF32);
+		const auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op);
+		payload.spirv.assign(spirv.begin(), spirv.end());
+
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .entryPoint = "main",
+		    .groups = { .x = plan->elementCount, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 2,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+#endif
+
 	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
 	{
 		auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
@@ -7091,6 +7266,470 @@ void CompiledModule<CUDA>::WriteObjectFile(const std::filesystem::path& path, st
 }
 #endif
 
+#ifdef LITENN_ENABLE_VULKAN
+namespace
+{
+	void RequireVulkanCPUBridgeAllowed(const Vulkan& device, std::string_view operation)
+	{
+		if (device.hostFallbackPolicy != VulkanHostFallbackPolicy::Allow)
+		{
+			throw std::runtime_error(std::format(
+			    "CompiledModule<Vulkan> CPU bridge for {} is disabled; load with VulkanHostFallbackPolicy::Allow or lower the runtime schedule to a native Vulkan artifact with explicit fallback steps",
+			    operation));
+		}
+	}
+
+	std::uint32_t VulkanDescriptorCount(const VulkanNativeKernelSpec& kernel)
+	{
+		std::uint32_t count = 0;
+		for (const auto& argument : kernel.arguments)
+		{
+			if (argument.binding == std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("Vulkan native argument binding is invalid");
+			}
+			count = std::max(count, argument.binding + 1);
+		}
+		if (count == 0)
+		{
+			throw std::runtime_error("Vulkan native kernel has no descriptor bindings");
+		}
+		return count;
+	}
+
+	std::uint64_t VulkanTensorByteSize(DataType dtype, std::size_t elementCount)
+	{
+		if (elementCount > std::numeric_limits<std::uint64_t>::max() / ElementByteSize(dtype))
+		{
+			throw std::runtime_error("Vulkan native tensor byte size overflows uint64_t");
+		}
+		return static_cast<std::uint64_t>(elementCount) * ElementByteSize(dtype);
+	}
+
+	void ValidateVulkanArgumentRange(const VulkanNativeArgumentSpec& argument, DataType dtype,
+	                                 std::size_t elementCount, std::string_view label)
+	{
+		const auto byteSize = VulkanTensorByteSize(dtype, elementCount);
+		if (argument.byteOffset > byteSize || argument.byteSize > byteSize - argument.byteOffset)
+		{
+			throw std::runtime_error(std::format("Vulkan native {} argument byte range is out of bounds", label));
+		}
+		if (argument.byteOffset != 0)
+		{
+			throw std::runtime_error("Vulkan native P0 payload does not support tensor byte offsets");
+		}
+	}
+
+	void RunVulkanNativePayload(const VulkanNativeInstructionPayload& payload,
+	                            std::span<const VulkanComputeModule> modules,
+	                            std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
+	                            CompiledModuleVulkanRunOptions options)
+	{
+		if (modules.size() != payload.kernels.size())
+		{
+			throw std::runtime_error("Vulkan native module count does not match payload kernel count");
+		}
+		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
+		{
+			const auto& kernel = payload.kernels[kernelIndex];
+			std::vector<const void*> descriptors(VulkanDescriptorCount(kernel), nullptr);
+			for (const auto& argument : kernel.arguments)
+			{
+				if (argument.binding >= descriptors.size())
+				{
+					throw std::runtime_error("Vulkan native argument binding is out of bounds");
+				}
+				switch (argument.kind)
+				{
+				case VulkanNativeArgumentKind::InputTensor:
+					if (argument.index >= inputs.size())
+					{
+						throw std::runtime_error("Vulkan native input argument index is out of bounds");
+					}
+					ValidateVulkanArgumentRange(argument, inputs[argument.index].DType(),
+					                            inputs[argument.index].NumElements(), "input");
+					descriptors[argument.binding] = inputs[argument.index].UnsafeRawData();
+					break;
+				case VulkanNativeArgumentKind::OutputTensor:
+					if (argument.index >= outputs.size())
+					{
+						throw std::runtime_error("Vulkan native output argument index is out of bounds");
+					}
+					ValidateVulkanArgumentRange(argument, outputs[argument.index].DType(),
+					                            outputs[argument.index].NumElements(), "output");
+					descriptors[argument.binding] = outputs[argument.index].UnsafeRawData();
+					break;
+				}
+			}
+			if (std::ranges::any_of(descriptors, [](const void* ptr) { return ptr == nullptr; }))
+			{
+				throw std::runtime_error("Vulkan native kernel has an unbound descriptor");
+			}
+			modules[kernelIndex].Dispatch(descriptors,
+			                              {
+			                                  .x = kernel.groups.x,
+			                                  .y = kernel.groups.y,
+			                                  .z = kernel.groups.z,
+			                              },
+			                              VulkanExecutionOptions{ .synchronize = options.synchronize });
+		}
+	}
+}
+
+struct CompiledModule<Vulkan>::Impl
+{
+	std::vector<std::byte> rodata;
+	std::vector<std::byte> instructions;
+	std::vector<CompiledTensorSpec> inputSpecs;
+	std::vector<CompiledTensorSpec> outputSpecs;
+	CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
+	CompiledModule<CPU> cpuModule;
+	Vulkan device;
+	VulkanNativeInstructionPayload vulkanPayload;
+	std::vector<VulkanComputeModule> vulkanModules;
+};
+
+CompiledModule<Vulkan>::CompiledModule() = default;
+CompiledModule<Vulkan>::CompiledModule(const CompiledModule&) = default;
+CompiledModule<Vulkan>::CompiledModule(CompiledModule&&) noexcept = default;
+CompiledModule<Vulkan>& CompiledModule<Vulkan>::operator=(const CompiledModule&) = default;
+CompiledModule<Vulkan>& CompiledModule<Vulkan>::operator=(CompiledModule&&) noexcept = default;
+CompiledModule<Vulkan>::~CompiledModule() = default;
+
+CompiledModule<Vulkan>::CompiledModule(std::shared_ptr<Impl> impl) : impl_(std::move(impl))
+{
+}
+
+CompiledModule<Vulkan> CompiledModuleArtifact::Load(Vulkan device) const
+{
+	if (!constants_.empty() || !weights_.empty())
+	{
+		return SeparateRodata().Load(std::move(device));
+	}
+	return CompiledModule<Vulkan>::Load(Image(), std::move(device));
+}
+
+CompiledModule<Vulkan> CompiledModuleSeparatedArtifact::Load(Vulkan device) const
+{
+	return CompiledModule<Vulkan>::Load(Image(), std::move(device));
+}
+
+CompiledModule<Vulkan> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions(Vulkan device) const
+{
+	return CompiledModule<Vulkan>::LoadBorrowedExternalRegions(Image(), std::move(device));
+}
+
+CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleImage image, Vulkan device)
+{
+	auto impl = std::make_shared<Impl>();
+	impl->rodata = ToByteVector(image.rodata, image.rodataSize);
+	impl->instructions = ToByteVector(image.instructions, image.instructionSize);
+
+	auto metadata = DeserializeRodata(impl->rodata);
+	impl->backend = metadata.backend;
+	impl->inputSpecs = std::move(metadata.inputSpecs);
+	impl->outputSpecs = std::move(metadata.outputSpecs);
+	impl->device = std::move(device);
+
+	if (impl->backend == CompiledModuleBackend::CPUNative)
+	{
+		RequireVulkanCPUBridgeAllowed(impl->device, "CPU-native artifact");
+		impl->cpuModule = CompiledModule<CPU>::Load({
+		    .rodata = impl->rodata.data(),
+		    .rodataSize = impl->rodata.size(),
+		    .instructions = impl->instructions.data(),
+		    .instructionSize = impl->instructions.size(),
+		});
+	}
+	else if (impl->backend == CompiledModuleBackend::VulkanNative)
+	{
+		impl->vulkanPayload = DeserializeVulkanNativeInstructionPayload(impl->instructions);
+		impl->vulkanModules.reserve(impl->vulkanPayload.kernels.size());
+		for (const auto& kernel : impl->vulkanPayload.kernels)
+		{
+			impl->vulkanModules.emplace_back(impl->device, impl->vulkanPayload.spirv, kernel.entryPoint,
+			                                 VulkanDescriptorCount(kernel));
+		}
+	}
+	else
+	{
+		throw std::runtime_error("CompiledModule<Vulkan> received an unsupported backend");
+	}
+
+	return CompiledModule(std::move(impl));
+}
+
+CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleSeparatedImage image, Vulkan device)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	auto constants = RegionBytes(image.constants, kConstantsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
+	                                                           constants);
+	auto module = Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	}, std::move(device));
+	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
+	{
+		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
+	}
+	return module;
+}
+
+CompiledModule<Vulkan> CompiledModule<Vulkan>::LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image,
+                                                                           Vulkan device)
+{
+	auto metadata = ValidateSeparatedImage(image);
+	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
+	{
+		auto instructions =
+		    RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
+		                                           RegionBytes(image.instructions, kInstructionsRegionName),
+		                                           RegionBytes(image.constants, kConstantsRegionName));
+		auto module = Load({
+		    .rodata = metadata.legacyRodata.data(),
+		    .rodataSize = metadata.legacyRodata.size(),
+		    .instructions = instructions.data(),
+		    .instructionSize = instructions.size(),
+		}, std::move(device));
+		module.impl_->cpuModule = CompiledModule<CPU>::LoadBorrowedExternalRegions(image);
+		return module;
+	}
+	return Load(image, std::move(device));
+}
+
+std::vector<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const Tensor<Vulkan>> inputs) const
+{
+	return RunTensors(inputs, CompiledModuleVulkanRunOptions{});
+}
+
+std::vector<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const Tensor<Vulkan>> inputs,
+                                                               CompiledModuleVulkanRunOptions options) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	if (inputs.size() != impl_->inputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     impl_->inputSpecs.size(), inputs.size()));
+	}
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
+	}
+
+	std::vector<Tensor<Vulkan>> outputs;
+	outputs.reserve(impl_->outputSpecs.size());
+	for (const auto& spec : impl_->outputSpecs)
+	{
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, impl_->device);
+	}
+	RunTensorsInto(inputs, outputs, options);
+	return outputs;
+}
+
+void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inputs,
+                                            std::span<Tensor<Vulkan>> outputs) const
+{
+	RunTensorsInto(inputs, outputs, CompiledModuleVulkanRunOptions{});
+}
+
+void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inputs,
+                                            std::span<Tensor<Vulkan>> outputs,
+                                            CompiledModuleVulkanRunOptions options) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	if (inputs.size() != impl_->inputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     impl_->inputSpecs.size(), inputs.size()));
+	}
+	if (outputs.size() != impl_->outputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule output count mismatch: expected {}, got {}",
+		                                     impl_->outputSpecs.size(), outputs.size()));
+	}
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
+	}
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		ValidateOutputTensorAgainstSpec(outputs[i], impl_->outputSpecs[i], i);
+	}
+
+	if (impl_->backend == CompiledModuleBackend::VulkanNative)
+	{
+		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, outputs, options);
+		return;
+	}
+	if (!options.synchronize)
+	{
+		throw std::runtime_error("CompiledModule<Vulkan> CPU bridge does not support asynchronous execution");
+	}
+
+	std::vector<Tensor<CPU>> cpuInputs;
+	cpuInputs.reserve(inputs.size());
+	for (const auto& input : inputs)
+	{
+		Tensor<CPU> cpuInput(Uninitialized, input.Shape(), input.DType(), CPU{});
+		auto inputDevice = input.CurDevice();
+		DeviceTraits<Vulkan>::CopyToCPU(inputDevice, input.DType(), input.UnsafeRawData(), input.NumElements(),
+		                                cpuInput.DType(), cpuInput.UnsafeRawData());
+		cpuInputs.push_back(std::move(cpuInput));
+	}
+
+	std::vector<Tensor<CPU>> cpuOutputs;
+	cpuOutputs.reserve(impl_->outputSpecs.size());
+	for (const auto& spec : impl_->outputSpecs)
+	{
+		cpuOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
+	}
+	impl_->cpuModule.RunTensorsInto(cpuInputs, cpuOutputs);
+
+	for (std::size_t i = 0; i < outputs.size(); ++i)
+	{
+		DeviceTraits<Vulkan>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].UnsafeRawData(),
+		                                  cpuOutputs[i].DType(), cpuOutputs[i].UnsafeRawData(),
+		                                  cpuOutputs[i].NumElements());
+	}
+}
+
+void CompiledModule<Vulkan>::RunManyTensorsInto(std::span<const CompiledModuleVulkanTensorInvocation> invocations,
+                                                std::size_t threadCount) const
+{
+	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
+	if (workerCount == 0)
+	{
+		return;
+	}
+	if (workerCount == 1)
+	{
+		for (const auto& invocation : invocations)
+		{
+			RunTensorsInto(invocation.inputs, invocation.outputs, invocation.options);
+		}
+		return;
+	}
+
+	std::atomic<std::size_t> next{ 0 };
+	std::atomic_bool stop{ false };
+	std::exception_ptr firstError;
+	std::mutex errorMutex;
+
+	auto worker = [&] {
+		while (!stop.load(std::memory_order_relaxed))
+		{
+			const auto index = next.fetch_add(1, std::memory_order_relaxed);
+			if (index >= invocations.size())
+			{
+				break;
+			}
+			try
+			{
+				const auto& invocation = invocations[index];
+				RunTensorsInto(invocation.inputs, invocation.outputs, invocation.options);
+			}
+			catch (...)
+			{
+				{
+					std::lock_guard lock(errorMutex);
+					if (!firstError)
+					{
+						firstError = std::current_exception();
+					}
+				}
+				stop.store(true, std::memory_order_relaxed);
+				break;
+			}
+		}
+	};
+
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	for (std::size_t i = 0; i < workerCount; ++i)
+	{
+		workers.emplace_back(worker);
+	}
+	for (auto& thread : workers)
+	{
+		thread.join();
+	}
+	if (firstError)
+	{
+		std::rethrow_exception(firstError);
+	}
+}
+
+CompiledModuleImage CompiledModule<Vulkan>::Image() const
+{
+	return impl_ ? CompiledModuleImage{
+	                   .rodata = impl_->rodata.data(),
+	                   .rodataSize = impl_->rodata.size(),
+	                   .instructions = impl_->instructions.data(),
+	                   .instructionSize = impl_->instructions.size(),
+	               }
+	             : CompiledModuleImage{};
+}
+
+std::span<const std::byte> CompiledModule<Vulkan>::Rodata() const
+{
+	return impl_ ? std::span<const std::byte>{ impl_->rodata.data(), impl_->rodata.size() }
+	             : std::span<const std::byte>{};
+}
+
+std::span<const std::byte> CompiledModule<Vulkan>::Instructions() const
+{
+	return impl_ ? std::span<const std::byte>{ impl_->instructions.data(), impl_->instructions.size() }
+	             : std::span<const std::byte>{};
+}
+
+std::span<const CompiledTensorSpec> CompiledModule<Vulkan>::InputSpecs() const
+{
+	return impl_ ? std::span<const CompiledTensorSpec>{ impl_->inputSpecs.data(), impl_->inputSpecs.size() }
+	             : std::span<const CompiledTensorSpec>{};
+}
+
+std::span<const CompiledTensorSpec> CompiledModule<Vulkan>::OutputSpecs() const
+{
+	return impl_ ? std::span<const CompiledTensorSpec>{ impl_->outputSpecs.data(), impl_->outputSpecs.size() }
+	             : std::span<const CompiledTensorSpec>{};
+}
+
+CompiledModuleBackend CompiledModule<Vulkan>::Backend() const
+{
+	return impl_ ? impl_->backend : CompiledModuleBackend::CPUNative;
+}
+
+std::optional<std::size_t> CompiledModule<Vulkan>::FindInput(std::string_view name) const
+{
+	return impl_ ? FindSpecIndex(impl_->inputSpecs, name) : std::nullopt;
+}
+
+std::optional<std::size_t> CompiledModule<Vulkan>::FindOutput(std::string_view name) const
+{
+	return impl_ ? FindSpecIndex(impl_->outputSpecs, name) : std::nullopt;
+}
+
+void CompiledModule<Vulkan>::WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	const auto objectBytes = EmitCarrierObject(impl_->rodata, impl_->instructions, symbolPrefix);
+	WriteAllBytes(path, objectBytes);
+}
+#endif
+
 namespace
 {
 	Graph BuildCompilerGraphFromPlan(const ExecutablePlan& plan)
@@ -7325,6 +7964,22 @@ namespace
 		return CompileCPUArtifactPartsFromGraph(graph, options);
 	}
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+	CompiledArtifactParts CompileVulkanArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options)
+	{
+		Validation::ValidateGraph(graph);
+		if (options.enableVulkanNativeAOT)
+		{
+			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32P0(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::VulkanNative);
+			}
+		}
+		return CompileCPUArtifactPartsFromGraph(graph, options);
+	}
+#endif
 } // namespace
 
 CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan)
@@ -7377,6 +8032,38 @@ CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, const C
 }
 
 CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA device, const CompilerOptions& options)
+{
+	return CompileArtifact(plan, options).Load(std::move(device));
+}
+#endif
+
+#ifdef LITENN_ENABLE_VULKAN
+CompiledModuleArtifact Compiler<Vulkan>::CompileArtifact(const ExecutablePlan& plan)
+{
+	return CompileArtifact(plan, CompilerOptions::Defaults());
+}
+
+CompiledModuleArtifact Compiler<Vulkan>::CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	ValidateExecutablePlan(plan);
+	auto parts = CompileVulkanArtifactPartsFromGraph(BuildCompilerGraphFromPlan(plan), options);
+	return CompiledModuleArtifact(std::move(parts.rodata), std::move(parts.instructions), std::move(parts.inputSpecs),
+	                              std::move(parts.outputSpecs), parts.backend, std::move(parts.constants),
+	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
+}
+
+CompiledModule<Vulkan> Compiler<Vulkan>::Compile(const ExecutablePlan& plan, Vulkan device)
+{
+	return Compile(plan, std::move(device), CompilerOptions::Defaults());
+}
+
+CompiledModule<Vulkan> Compiler<Vulkan>::Compile(const ExecutablePlan& plan, const CompilerOptions& options)
+{
+	return Compile(plan, Vulkan{}, options);
+}
+
+CompiledModule<Vulkan> Compiler<Vulkan>::Compile(const ExecutablePlan& plan, Vulkan device,
+                                                  const CompilerOptions& options)
 {
 	return CompileArtifact(plan, options).Load(std::move(device));
 }

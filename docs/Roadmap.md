@@ -1814,6 +1814,66 @@ Recommendation: treat the first three items as the only remaining break-window c
 if the goal is a cleaner long-lived ABI. The other items are valuable but can be staged after vNext if guarded by clear
 namespaces, diagnostics, and package/component boundaries.
 
+### G15 Vulkan and Mobile GPU Backend
+
+Purpose: add a Vulkan-native backend as the portable mobile-GPU execution path while keeping compiler, runtime, artifact,
+and fallback behavior explicit enough for production deployment.
+
+#### G15.1 P0 Toolchain, Runtime ABI, and Minimal Execution
+
+Status: completed for the first Vulkan-native Add execution slice on 2026-06-07. The current SPIR-V module is an
+explicit P0 bootstrap blob; G15.2 tracks replacing it with MLIR SPIR-V builder/serialization.
+
+- [x] Add `LITENN_ENABLE_VULKAN` and a separate `LiteNNVulkanRuntime` target so minimal CPU/mobile builds do not link
+      Vulkan by default.
+- [x] Add `Vulkan` device identity, capability discovery, host-visible storage-buffer allocation, host/device transfer,
+      and explicit `VulkanHostFallbackPolicy`.
+- [x] Add `CompiledModuleBackend::VulkanNative`, `BackendVulkanNative`, and `BackendVulkanBridge` so capability,
+      placement, coverage, and artifacts can name Vulkan without pretending every op is supported.
+- [x] Define a `VulkanNativeInstructionPayload` containing SPIR-V words, entry point, descriptor bindings, dispatch
+      dimensions, and feature flags.
+- [x] Compile and load a same-shape static f32 `BinaryOp::Add` graph as a Vulkan-native SPIR-V payload, then run it
+      through `CompiledModule<Vulkan>`.
+- [x] Add tests and an example that skip cleanly when Vulkan is not enabled or no Vulkan compute device is available.
+
+#### G15.2 P1 MLIR/SPIR-V Generation Path
+
+- [x] Verify the installed LLVM/MLIR tree exposes `LLVMSPIRV*` and `MLIR*ToSPIRV` libraries through CMake, not only
+      command-line tools.
+- [ ] Replace P0 bootstrap SPIR-V blobs with builder-generated MLIR SPIR-V or LLVM SPIR-V codegen for the minimal add
+      kernel.
+- [ ] Keep external `spirv-as` / `glslangValidator` only as test/development fallback, never as a required library
+      runtime dependency.
+- [ ] Add generated MLIR/SPIR-V dumps for debugging and a validation path that rejects modules with non-Vulkan shader
+      interfaces or unsupported memory models.
+
+#### G15.3 P2 Mobile Packaging and Artifact Shape
+
+- [ ] Treat Vulkan instructions as SPIR-V module bytes/words, not desktop object files; keep separated metadata,
+      constants, and weights compatible with mobile packaging.
+- [ ] Document Android/mobile CMake build profiles, loader requirements, validation-layer assumptions, and unsupported
+      desktop-only features.
+- [ ] Add a mobile-oriented example using separated rodata/instructions/weights with Vulkan-native instructions.
+
+#### G15.4 P3 Coverage and Performance
+
+- [ ] Add Vulkan-native lowering for multiply, unary elementwise, cast, reductions, matmul/linear-chain, normalization,
+      softmax, and convolution in that order.
+- [ ] Add descriptor/pipeline cache, workgroup-size tuning, tiled kernels, memory planner integration, and async queue
+      synchronization.
+- [ ] Extend benchmark/profile tables with CPU AOT, CUDA AOT, Vulkan AOT, PyTorch, and ggml rows where available.
+
+Hidden requirements:
+
+- Vulkan support is not only "LLVM can emit SPIR-V"; shader interface, descriptor set layout, storage-buffer ABI,
+  memory model, workgroup dimensions, and device capabilities must all be validated.
+- Mobile GPUs vary in fp16/int8/subgroup support and storage-buffer alignment. The backend must report capabilities
+  rather than silently selecting kernels that only work on desktop drivers.
+- CPU fallback must be explicit for Vulkan, matching the CUDA vNext policy; otherwise benchmark and production behavior
+  become opaque.
+- Vulkan artifacts should not inherit CPU object-file assumptions. SPIR-V belongs in the instruction region, while
+  constants and weights remain separated package regions.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,

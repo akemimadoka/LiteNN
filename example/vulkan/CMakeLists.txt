@@ -1,0 +1,3 @@
+add_executable(litenn_vulkan_add_example main.cpp)
+target_compile_features(litenn_vulkan_add_example PRIVATE cxx_std_26)
+target_link_libraries(litenn_vulkan_add_example PRIVATE LiteNNCompiler)

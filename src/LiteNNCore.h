@@ -8,6 +8,9 @@
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+#include <LiteNN/Device/Vulkan.h>
+#endif
 #include <LiteNN/Debug/Dump.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Initializer/Initializer.h>

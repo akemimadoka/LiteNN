@@ -4,6 +4,7 @@ project(LiteNN VERSION 0.1.0 LANGUAGES C CXX)
 
 option(LITENN_ENABLE_MLIR "Enable MLIR-based AOT compiler backend" OFF)
 option(LITENN_ENABLE_CUDA "Enable CUDA runtime device backend" OFF)
+option(LITENN_ENABLE_VULKAN "Enable Vulkan runtime device backend" OFF)
 option(LITENN_BUILD_EXAMPLES "Build LiteNN example programs" OFF)
 option(LITENN_BUILD_BENCHMARKS "Build LiteNN benchmark programs" OFF)
 option(LITENN_BUILD_TOOLS "Build LiteNN standalone tool programs" OFF)
@@ -149,6 +150,7 @@ list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNNCompiler\\.h$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Compiler/|src/LiteNN/Training/TrainStepAOTRunner\\.cpp$|.*\\.module\\.cpp$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Serialization/(Safetensors|TorchManifest|ModelPackageIO)\\.(cpp|h)$")
 list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Device/CUDA\\.(cpp|h)$")
+list(FILTER LITENN_CORE_SOURCES EXCLUDE REGEX "src/LiteNN/Device/Vulkan\\.(cpp|h)$")
 
 set(LITENN_IMPORTER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Serialization/Safetensors.cpp
@@ -162,6 +164,10 @@ set(LITENN_IMPORTER_SOURCES
 set(LITENN_CUDA_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/CUDA.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/CUDA.h
+)
+set(LITENN_VULKAN_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/Vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Device/Vulkan.h
 )
 
 add_library(LiteNNCore ${LITENN_CORE_SOURCES})
@@ -245,9 +251,35 @@ if(LITENN_ENABLE_CUDA)
     endif()
 endif()
 
+if(LITENN_ENABLE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    add_library(LiteNNVulkanRuntime ${LITENN_VULKAN_RUNTIME_SOURCES})
+    add_library(LiteNN::LiteNNVulkanRuntime ALIAS LiteNNVulkanRuntime)
+    target_include_directories(LiteNNVulkanRuntime PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    target_compile_features(LiteNNVulkanRuntime PUBLIC cxx_std_26)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(LiteNNVulkanRuntime PUBLIC -freflection-latest)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(LiteNNVulkanRuntime PUBLIC -freflection)
+    endif()
+    if(using_msys2_mingw)
+        target_compile_options(LiteNNVulkanRuntime PUBLIC -Wa,-mbig-obj)
+    endif()
+    litenn_enable_sanitizers(LiteNNVulkanRuntime)
+    target_compile_definitions(LiteNNVulkanRuntime PUBLIC LITENN_ENABLE_VULKAN=1)
+    target_link_libraries(LiteNNVulkanRuntime PUBLIC LiteNNCore Vulkan::Vulkan)
+    target_link_libraries(LiteNN INTERFACE LiteNNVulkanRuntime)
+endif()
+
 set(LITENN_HEADERS ${LITENN_CORE_SOURCES} ${LITENN_IMPORTER_SOURCES})
 if(LITENN_ENABLE_CUDA)
     list(APPEND LITENN_HEADERS ${LITENN_CUDA_RUNTIME_SOURCES})
+endif()
+if(LITENN_ENABLE_VULKAN)
+    list(APPEND LITENN_HEADERS ${LITENN_VULKAN_RUNTIME_SOURCES})
 endif()
 list(FILTER LITENN_HEADERS EXCLUDE REGEX "src/.*\\.cpp$")
 set(LITENN_MODULE_HEADERS ${LITENN_HEADERS})
@@ -329,6 +361,14 @@ if(LITENN_ENABLE_CUDA)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
 endif()
+if(LITENN_ENABLE_VULKAN)
+    install(TARGETS LiteNNVulkanRuntime
+        EXPORT LiteNNRuntimeTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
 install(TARGETS LiteNN
     EXPORT LiteNNRuntimeTargets
 )
@@ -364,6 +404,9 @@ if(LITENN_BUILD_EXAMPLES)
     add_subdirectory(example/gguf)
     add_subdirectory(example/torch_manifest)
     add_subdirectory(example/sdxl)
+    if(LITENN_ENABLE_MLIR AND LITENN_ENABLE_VULKAN)
+        add_subdirectory(example/vulkan)
+    endif()
 endif()
 
 if(LITENN_BUILD_BENCHMARKS)
@@ -382,6 +425,12 @@ if(NOT LITENN_ENABLE_MLIR)
 endif()
 if(NOT LITENN_ENABLE_CUDA)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "(CUDADeviceTest|CompiledModuleCUDATest)\\.cpp$")
+endif()
+if(NOT LITENN_ENABLE_VULKAN)
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "(VulkanDeviceTest|CompiledModuleVulkanTest)\\.cpp$")
+endif()
+if(NOT (LITENN_ENABLE_MLIR AND LITENN_ENABLE_VULKAN))
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "CompiledModuleVulkanTest\\.cpp$")
 endif()
 if(NOT LITENN_BUILD_TOOLS)
     list(FILTER TEST_SOURCES EXCLUDE REGEX "GGUFImporterTest\\.cpp$")
@@ -402,6 +451,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     elseif(TEST_NAME STREQUAL "CompilerTest" OR TEST_NAME STREQUAL "LoweringPassTest"
        OR TEST_NAME STREQUAL "BufferizationPassTest" OR TEST_NAME STREQUAL "LLVMCodegenPassTest"
        OR TEST_NAME STREQUAL "CompiledModuleTest" OR TEST_NAME STREQUAL "CompiledModuleCUDATest"
+       OR TEST_NAME STREQUAL "CompiledModuleVulkanTest"
        OR TEST_NAME STREQUAL "CompilerDumpTest"
        OR (LITENN_ENABLE_MLIR AND (TEST_NAME STREQUAL "MemorySafetyTest"
                                    OR TEST_NAME STREQUAL "PyTorchGoldenTest"

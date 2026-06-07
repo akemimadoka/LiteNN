@@ -2,6 +2,9 @@
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Device/CUDA.h>
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+#include <LiteNN/Device/Vulkan.h>
+#endif
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Tensor.h>
@@ -25,6 +28,7 @@ namespace LiteNN
 	{
 		CPUNative = 1,
 		CUDANative = 2,
+		VulkanNative = 3,
 	};
 
 	struct CompiledTensorSpec
@@ -129,6 +133,8 @@ namespace LiteNN
 		bool enableCPUAOTExternalRegionFusion{ true };
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };
+		/// Prefer Vulkan native AOT kernels before falling back to CPU AOT bridge.
+		bool enableVulkanNativeAOT{ true };
 		/// LLVM optimization level for CPU AOT codegen. Values above 3 are clamped to 3.
 		std::uint8_t cpuAOTLLVMOptLevel{ 3 };
 		/// Print coarse compiler phase timing diagnostics to stderr.
@@ -212,6 +218,10 @@ namespace LiteNN
 		/// through the embedded CPU module and require this artifact to outlive runs.
 		CompiledModule<CUDA> LoadBorrowedExternalRegions(CUDA device) const;
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+		CompiledModule<Vulkan> Load(Vulkan device) const;
+		CompiledModule<Vulkan> LoadBorrowedExternalRegions(Vulkan device) const;
+#endif
 
 		CompiledModuleSeparatedArtifact WithReboundConstants(CompiledModuleRegion constants) const;
 		CompiledModuleSeparatedArtifact WithReboundWeights(CompiledModuleRegion weights) const;
@@ -276,6 +286,11 @@ namespace LiteNN
 		/// CUDA-native artifacts load their embedded CUDA instruction payload.
 		CompiledModule<CUDA> Load(CUDA device) const;
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+		/// Loads the artifact into a Vulkan module. CPU-native artifacts require explicit host fallback;
+		/// Vulkan-native artifacts load their embedded SPIR-V instruction payload.
+		CompiledModule<Vulkan> Load(Vulkan device) const;
+#endif
 
 		CompiledModuleImage Image() const;
 		std::span<const std::byte> Rodata() const;
@@ -299,6 +314,9 @@ namespace LiteNN
 		friend class Compiler<CPU>;
 #ifdef LITENN_ENABLE_CUDA
 		friend class Compiler<CUDA>;
+#endif
+#ifdef LITENN_ENABLE_VULKAN
+		friend class Compiler<Vulkan>;
 #endif
 
 		CompiledModuleArtifact(std::vector<std::byte> rodata,
@@ -460,6 +478,77 @@ namespace LiteNN
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device = CUDA{});
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
 		static CompiledModule<CUDA> Compile(const ExecutablePlan& plan, CUDA device, const CompilerOptions& options);
+	};
+#endif
+
+#ifdef LITENN_ENABLE_VULKAN
+	struct CompiledModuleVulkanRunOptions
+	{
+		bool synchronize{ true };
+	};
+
+	struct CompiledModuleVulkanTensorInvocation
+	{
+		std::span<const Tensor<Vulkan>> inputs;
+		std::span<Tensor<Vulkan>> outputs;
+		CompiledModuleVulkanRunOptions options;
+	};
+
+	template <>
+	class CompiledModule<Vulkan>
+	{
+	public:
+		CompiledModule();
+		CompiledModule(const CompiledModule&);
+		CompiledModule(CompiledModule&&) noexcept;
+		CompiledModule& operator=(const CompiledModule&);
+		CompiledModule& operator=(CompiledModule&&) noexcept;
+		~CompiledModule();
+
+		static CompiledModule Load(CompiledModuleImage image, Vulkan device = Vulkan{});
+		static CompiledModule Load(CompiledModuleSeparatedImage image, Vulkan device = Vulkan{});
+		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image,
+		                                                  Vulkan device = Vulkan{});
+
+		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs) const;
+		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
+		                                       CompiledModuleVulkanRunOptions options) const;
+		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs) const;
+		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
+		                    CompiledModuleVulkanRunOptions options) const;
+		void RunManyTensorsInto(std::span<const CompiledModuleVulkanTensorInvocation> invocations,
+		                        std::size_t threadCount = 0) const;
+
+		CompiledModuleImage Image() const;
+		std::span<const std::byte> Rodata() const;
+		std::span<const std::byte> Instructions() const;
+		std::span<const CompiledTensorSpec> InputSpecs() const;
+		std::span<const CompiledTensorSpec> OutputSpecs() const;
+		CompiledModuleBackend Backend() const;
+		std::optional<std::size_t> FindInput(std::string_view name) const;
+		std::optional<std::size_t> FindOutput(std::string_view name) const;
+
+		void WriteObjectFile(const std::filesystem::path& path,
+		                     std::string_view symbolPrefix = "litenn_module") const;
+
+	private:
+		struct Impl;
+
+		explicit CompiledModule(std::shared_ptr<Impl> impl);
+
+		std::shared_ptr<Impl> impl_;
+	};
+
+	template <>
+	class Compiler<Vulkan>
+	{
+	public:
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
+		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
+		static CompiledModule<Vulkan> Compile(const ExecutablePlan& plan, Vulkan device = Vulkan{});
+		static CompiledModule<Vulkan> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
+		static CompiledModule<Vulkan> Compile(const ExecutablePlan& plan, Vulkan device,
+		                                      const CompilerOptions& options);
 	};
 #endif
 } // namespace LiteNN
