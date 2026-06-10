@@ -1821,8 +1821,8 @@ and fallback behavior explicit enough for production deployment.
 
 #### G15.1 P0 Toolchain, Runtime ABI, and Minimal Execution
 
-Status: completed for the first Vulkan-native Add execution slice on 2026-06-07. The current SPIR-V module is an
-explicit P0 bootstrap blob; G15.2 tracks replacing it with MLIR SPIR-V builder/serialization.
+Status: completed for the first Vulkan-native Add execution slice on 2026-06-07. The initial bootstrap blob was
+removed on 2026-06-10; the current minimal Add kernel is generated through MLIR SPIR-V builder/serialization.
 
 - [x] Add `LITENN_ENABLE_VULKAN` and a separate `LiteNNVulkanRuntime` target so minimal CPU/mobile builds do not link
       Vulkan by default.
@@ -1838,14 +1838,18 @@ explicit P0 bootstrap blob; G15.2 tracks replacing it with MLIR SPIR-V builder/s
 
 #### G15.2 P1 MLIR/SPIR-V Generation Path
 
+Status: in progress. The minimal Add kernel now proves the direct MLIR SPIR-V builder -> serializer path and no
+longer depends on checked-in SPIR-V words.
+
 - [x] Verify the installed LLVM/MLIR tree exposes `LLVMSPIRV*` and `MLIR*ToSPIRV` libraries through CMake, not only
       command-line tools.
-- [ ] Replace P0 bootstrap SPIR-V blobs with builder-generated MLIR SPIR-V or LLVM SPIR-V codegen for the minimal add
+- [x] Replace P0 bootstrap SPIR-V blobs with builder-generated MLIR SPIR-V or LLVM SPIR-V codegen for the minimal add
       kernel.
-- [ ] Keep external `spirv-as` / `glslangValidator` only as test/development fallback, never as a required library
+- [x] Keep external `spirv-as` / `glslangValidator` only as test/development fallback, never as a required library
       runtime dependency.
-- [ ] Add generated MLIR/SPIR-V dumps for debugging and a validation path that rejects modules with non-Vulkan shader
-      interfaces or unsupported memory models.
+- [x] Add generated MLIR/SPIR-V dumps for debugging for the minimal Add generator.
+- [ ] Add a validation path that rejects modules with non-Vulkan shader interfaces or unsupported memory models before
+      serializing them into `VulkanNativeInstructionPayload`.
 
 #### G15.3 P2 Mobile Packaging and Artifact Shape
 

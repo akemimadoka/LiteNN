@@ -2,8 +2,11 @@
 
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
+#include <LiteNN/Compiler/VulkanNativeCodegen.h>
+#include <LiteNN/Compiler/VulkanNativePayload.h>
 
 #include <array>
+#include <string>
 
 using namespace LiteNN;
 
@@ -36,12 +39,25 @@ namespace
 	}
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesSimpleAddSPIRVFromMLIR)
+{
+	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add);
+	EXPECT_FALSE(generated.words.empty());
+	EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.FAdd"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 {
 	const auto graph = BuildSimpleAddGraph();
 	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add);
+	EXPECT_EQ(payload.spirv, generated.words);
 }
 
 TEST(CompiledModuleVulkanTest, RunsSimpleAdd)

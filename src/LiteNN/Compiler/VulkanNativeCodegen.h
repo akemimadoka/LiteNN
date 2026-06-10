@@ -4,12 +4,19 @@
 #include <LiteNN/Operators.h>
 
 #include <cstdint>
-#include <span>
+#include <string>
+#include <vector>
 
 namespace LiteNN
 {
+	struct VulkanNativeGeneratedSPIRV
+	{
+		std::vector<std::uint32_t> words;
+		std::string mlir;
+	};
+
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
-	std::span<const std::uint32_t> VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op);
 } // namespace LiteNN
 
 #endif

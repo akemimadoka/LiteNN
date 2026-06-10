@@ -5910,8 +5910,8 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseAddF32);
-		const auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op);
-		payload.spirv.assign(spirv.begin(), spirv.end());
+		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op);
+		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		payload.kernels.push_back({
