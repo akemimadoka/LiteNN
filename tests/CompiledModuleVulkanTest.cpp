@@ -6,6 +6,8 @@
 #include <LiteNN/Compiler/VulkanNativePayload.h>
 
 #include <array>
+#include <cmath>
+#include <stdexcept>
 #include <string>
 
 using namespace LiteNN;
@@ -28,6 +30,21 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSimpleUnaryGraph(UnaryOp op)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 4 });
+		const auto out =
+		    sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	std::array<float, 4> CopyToHost(const Tensor<Vulkan>& tensor)
 	{
 		Tensor<CPU> host(Uninitialized, tensor.Shape(), tensor.DType(), CPU{});
@@ -45,6 +62,14 @@ namespace
 		std::array<float, 4> expected;
 	};
 
+	struct UnaryCase
+	{
+		UnaryOp op;
+		std::string_view mlirOp;
+		std::array<double, 4> input;
+		float tolerance;
+	};
+
 	constexpr std::array kBinaryCases{
 		BinaryCase{ BinaryOp::Add, "spirv.FAdd", { 11.0f, 22.0f, 33.0f, 44.0f } },
 		BinaryCase{ BinaryOp::Subtract, "spirv.FSub", { -9.0f, -18.0f, -27.0f, -36.0f } },
@@ -53,6 +78,39 @@ namespace
 		BinaryCase{ BinaryOp::Max, "spirv.GL.FMax", { 10.0f, 20.0f, 30.0f, 40.0f } },
 		BinaryCase{ BinaryOp::Min, "spirv.GL.FMin", { 1.0f, 2.0f, 3.0f, 4.0f } },
 	};
+
+	constexpr std::array kUnaryCases{
+		UnaryCase{ UnaryOp::Negate, "spirv.FNegate", { -4.0f, -1.0f, 0.0f, 9.0f }, 0.0f },
+		UnaryCase{ UnaryOp::Abs, "spirv.GL.FAbs", { -4.0f, -1.0f, 0.0f, 9.0f }, 0.0f },
+		UnaryCase{ UnaryOp::Sqrt, "spirv.GL.Sqrt", { 4.0f, 1.0f, 0.25f, 9.0f }, 1e-5f },
+		UnaryCase{ UnaryOp::Exp, "spirv.GL.Exp", { -1.0f, 0.0f, 1.0f, 2.0f }, 1e-4f },
+		UnaryCase{ UnaryOp::Log, "spirv.GL.Log", { 0.25f, 1.0f, 2.0f, 4.0f }, 1e-4f },
+		UnaryCase{ UnaryOp::Sin, "spirv.GL.Sin", { -1.0f, 0.0f, 1.0f, 2.0f }, 1e-4f },
+		UnaryCase{ UnaryOp::Cos, "spirv.GL.Cos", { -1.0f, 0.0f, 1.0f, 2.0f }, 1e-4f },
+	};
+
+	float ExpectedUnaryValue(UnaryOp op, double value)
+	{
+		switch (op)
+		{
+		case UnaryOp::Negate:
+			return -value;
+		case UnaryOp::Abs:
+			return std::fabs(value);
+		case UnaryOp::Sqrt:
+			return std::sqrt(value);
+		case UnaryOp::Exp:
+			return std::exp(value);
+		case UnaryOp::Log:
+			return std::log(value);
+		case UnaryOp::Sin:
+			return std::sin(value);
+		case UnaryOp::Cos:
+			return std::cos(value);
+		default:
+			throw std::runtime_error("Unexpected unary test op");
+		}
+	}
 }
 
 TEST(CompiledModuleVulkanTest, GeneratesSimpleAddSPIRVFromMLIR)
@@ -60,6 +118,18 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleAddSPIRVFromMLIR)
 	for (const auto& item : kBinaryCases)
 	{
 		const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(item.op);
+		EXPECT_FALSE(generated.words.empty());
+		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, GeneratesSimpleUnarySPIRVFromMLIR)
+{
+	for (const auto& item : kUnaryCases)
+	{
+		const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(item.op);
 		EXPECT_FALSE(generated.words.empty());
 		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
 		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
@@ -76,6 +146,18 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
 	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add);
+	EXPECT_EQ(payload.spirv, generated.words);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
+{
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Sqrt);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp::Sqrt);
 	EXPECT_EQ(payload.spirv, generated.words);
 }
 
@@ -109,6 +191,34 @@ TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleUnaryArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	for (const auto& item : kUnaryCases)
+	{
+		const auto graph = BuildSimpleUnaryGraph(item.op);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		Vulkan device;
+		std::array inputs{
+			Tensor<Vulkan>(item.input, { 4 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHost(outputs[0]);
+		for (std::size_t i = 0; i < item.input.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i], ExpectedUnaryValue(item.op, item.input[i]), item.tolerance);
+		}
 	}
 }
 

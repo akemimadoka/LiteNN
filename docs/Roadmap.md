@@ -1838,7 +1838,8 @@ removed on 2026-06-10; the current minimal Add kernel is generated through MLIR 
 
 #### G15.2 P1 MLIR/SPIR-V Generation Path
 
-Status: in progress. The minimal Add kernel now proves the direct MLIR SPIR-V builder -> serializer path and no
+Status: completed for the current direct MLIR SPIR-V builder/serializer slice. The minimal Add kernel proves the
+direct MLIR SPIR-V builder -> serializer path and no
 longer depends on checked-in SPIR-V words.
 
 - [x] Verify the installed LLVM/MLIR tree exposes `LLVMSPIRV*` and `MLIR*ToSPIRV` libraries through CMake, not only
@@ -1862,8 +1863,9 @@ longer depends on checked-in SPIR-V words.
 #### G15.4 P3 Coverage and Performance
 
 - [x] Add Vulkan-native same-shape f32 binary arithmetic lowering for Add, Subtract, Multiply, Divide, Max, and Min.
-- [ ] Add Vulkan-native lowering for unary elementwise, cast, reductions, matmul/linear-chain, normalization, softmax,
-      and convolution in that order.
+- [x] Add Vulkan-native same-shape f32 unary elementwise lowering for Negate, Abs, Sqrt, Exp, Log, Sin, and Cos.
+- [ ] Add Vulkan-native lowering for cast, reductions, matmul/linear-chain, normalization, softmax, and convolution in
+      that order.
 - [ ] Add descriptor/pipeline cache, workgroup-size tuning, tiled kernels, memory planner integration, and async queue
       synchronization.
 - [ ] Extend benchmark/profile tables with CPU AOT, CUDA AOT, Vulkan AOT, PyTorch, and ggml rows where available.

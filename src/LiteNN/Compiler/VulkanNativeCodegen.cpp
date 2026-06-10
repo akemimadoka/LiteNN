@@ -83,6 +83,94 @@ namespace LiteNN
 			    .getComponentPtr();
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeUnaryF32SPIRVModule(UnaryOp op,
+		                                                                           mlir::MLIRContext& context)
+		{
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model",
+			                   builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                       mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple",
+			                   mlir::spirv::VerCapExtAttr::get(
+			                       mlir::spirv::Version::V_1_0,
+			                       llvm::ArrayRef<mlir::spirv::Capability>{ mlir::spirv::Capability::Shader },
+			                       llvm::ArrayRef<mlir::spirv::Extension>{}, &context));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto globalInvocationType =
+			    mlir::spirv::PointerType::get(mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()),
+			                                  mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId", mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, kEntryPointName, funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto index = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inputValue = moduleBuilder
+			                      .create<mlir::spirv::LoadOp>(
+			                          loc, moduleBuilder.getF32Type(),
+			                          EmitStorageBufferElementPointer(moduleBuilder, loc, input, index), nullptr, nullptr)
+			                      .getValue();
+
+			mlir::Value result;
+			switch (op)
+			{
+			case UnaryOp::Negate:
+				result = moduleBuilder.create<mlir::spirv::FNegateOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Abs:
+				result = moduleBuilder.create<mlir::spirv::GLFAbsOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Sqrt:
+				result = moduleBuilder.create<mlir::spirv::GLSqrtOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Exp:
+				result = moduleBuilder.create<mlir::spirv::GLExpOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Log:
+				result = moduleBuilder.create<mlir::spirv::GLLogOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Sin:
+				result = moduleBuilder.create<mlir::spirv::GLSinOp>(loc, inputValue).getResult();
+				break;
+			case UnaryOp::Cos:
+				result = moduleBuilder.create<mlir::spirv::GLCosOp>(loc, inputValue).getResult();
+				break;
+			default:
+				throw std::runtime_error("Unsupported Vulkan native MLIR same-shape f32 unary op");
+			}
+
+			moduleBuilder.create<mlir::spirv::StoreOp>(
+			    loc, EmitStorageBufferElementPointer(moduleBuilder, loc, out, index), result, nullptr, nullptr);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize, llvm::ArrayRef<int32_t>{ 1, 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeBinaryF32SPIRVModule(BinaryOp op,
 		                                                                            mlir::MLIRContext& context)
 		{
@@ -316,6 +404,33 @@ namespace LiteNN
 			}
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeSameShapeUnaryF32SPIRV(UnaryOp op)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildSameShapeUnaryF32SPIRVModule(op, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeSameShapeBinaryF32SPIRV(BinaryOp op)
 		{
 			mlir::MLIRContext context;
@@ -343,6 +458,32 @@ namespace LiteNN
 			};
 		}
 	} // namespace
+
+	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op)
+	{
+		switch (op)
+		{
+		case UnaryOp::Negate:
+		case UnaryOp::Abs:
+		case UnaryOp::Sqrt:
+		case UnaryOp::Exp:
+		case UnaryOp::Log:
+		case UnaryOp::Sin:
+		case UnaryOp::Cos:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op)
+	{
+		if (!VulkanNativeSupportsSameShapeUnaryF32(op))
+		{
+			throw std::runtime_error("Unsupported Vulkan native same-shape f32 unary op");
+		}
+		return SerializeSameShapeUnaryF32SPIRV(op);
+	}
 
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op)
 	{

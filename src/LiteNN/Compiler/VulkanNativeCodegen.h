@@ -15,6 +15,8 @@ namespace LiteNN
 		std::string mlir;
 	};
 
+	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op);
 } // namespace LiteNN
