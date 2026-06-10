@@ -1848,7 +1848,7 @@ longer depends on checked-in SPIR-V words.
 - [x] Keep external `spirv-as` / `glslangValidator` only as test/development fallback, never as a required library
       runtime dependency.
 - [x] Add generated MLIR/SPIR-V dumps for debugging for the minimal Add generator.
-- [ ] Add a validation path that rejects modules with non-Vulkan shader interfaces or unsupported memory models before
+- [x] Add a validation path that rejects modules with non-Vulkan shader interfaces or unsupported memory models before
       serializing them into `VulkanNativeInstructionPayload`.
 
 #### G15.3 P2 Mobile Packaging and Artifact Shape

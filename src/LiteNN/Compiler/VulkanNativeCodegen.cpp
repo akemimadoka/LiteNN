@@ -9,6 +9,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/SPIRV/Serialization.h"
@@ -167,12 +168,155 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		std::int32_t IntegerAttrToI32(mlir::Attribute attr)
+		{
+			auto integer = mlir::dyn_cast<mlir::IntegerAttr>(attr);
+			if (!integer)
+			{
+				throw std::runtime_error("Vulkan SPIR-V execution mode parameter must be an integer");
+			}
+			return static_cast<std::int32_t>(integer.getInt());
+		}
+
+		void ValidateVulkanStorageBufferGlobal(mlir::spirv::GlobalVariableOp global)
+		{
+			if (!global.getDescriptorSet() || !global.getBinding())
+			{
+				throw std::runtime_error("Vulkan SPIR-V storage buffer global requires descriptor set and binding");
+			}
+			if (*global.getDescriptorSet() != 0)
+			{
+				throw std::runtime_error("Vulkan SPIR-V storage buffer globals must use descriptor set 0");
+			}
+			auto pointerType = mlir::dyn_cast<mlir::spirv::PointerType>(global.getType());
+			if (!pointerType || !mlir::isa<mlir::spirv::StructType>(pointerType.getPointeeType()))
+			{
+				throw std::runtime_error("Vulkan SPIR-V storage buffer global must point at a block struct");
+			}
+		}
+
+		void ValidateVulkanInputGlobal(mlir::spirv::GlobalVariableOp global)
+		{
+			auto builtin = global->getAttrOfType<mlir::StringAttr>(
+			    mlir::spirv::SPIRVDialect::getAttributeName(mlir::spirv::Decoration::BuiltIn));
+			if (!builtin || builtin.getValue() != "GlobalInvocationId")
+			{
+				const auto actual = builtin ? builtin.getValue().str() : std::string("<none>");
+				throw std::runtime_error("Vulkan SPIR-V input globals must be known builtins, got " + actual);
+			}
+		}
+
+		void ValidateVulkanGlobal(mlir::spirv::GlobalVariableOp global)
+		{
+			switch (global.storageClass())
+			{
+			case mlir::spirv::StorageClass::StorageBuffer:
+				ValidateVulkanStorageBufferGlobal(global);
+				break;
+			case mlir::spirv::StorageClass::Input:
+				ValidateVulkanInputGlobal(global);
+				break;
+			default:
+				throw std::runtime_error("Vulkan SPIR-V module contains an unsupported global storage class");
+			}
+		}
+
+		void ValidateVulkanEntryPoint(mlir::spirv::ModuleOp module, mlir::spirv::EntryPointOp entryPoint)
+		{
+			if (entryPoint.getExecutionModel() != mlir::spirv::ExecutionModel::GLCompute)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must use a GLCompute entry point");
+			}
+			if (!module.lookupSymbol<mlir::spirv::FuncOp>(entryPoint.getFnAttr()))
+			{
+				throw std::runtime_error("Vulkan SPIR-V entry point references a missing function");
+			}
+			for (auto attr : entryPoint.getInterface())
+			{
+				auto symbol = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(attr);
+				if (!symbol)
+				{
+					throw std::runtime_error("Vulkan SPIR-V entry point interface must use symbol refs");
+				}
+				auto global = module.lookupSymbol<mlir::spirv::GlobalVariableOp>(symbol);
+				if (!global)
+				{
+					throw std::runtime_error("Vulkan SPIR-V entry point references a missing interface global");
+				}
+				ValidateVulkanGlobal(global);
+			}
+		}
+
+		void ValidateVulkanExecutionMode(mlir::spirv::ExecutionModeOp mode)
+		{
+			if (mode.getExecutionMode() != mlir::spirv::ExecutionMode::LocalSize)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module contains an unsupported execution mode");
+			}
+			auto values = mode.getValues();
+			if (values.size() != 3)
+			{
+				throw std::runtime_error("Vulkan SPIR-V LocalSize execution mode requires three dimensions");
+			}
+			for (auto value : values)
+			{
+				if (IntegerAttrToI32(value) <= 0)
+				{
+					throw std::runtime_error("Vulkan SPIR-V LocalSize dimensions must be positive");
+				}
+			}
+		}
+
+		void ValidateVulkanShaderModule(mlir::spirv::ModuleOp module)
+		{
+			if (module.getAddressingModel() != mlir::spirv::AddressingModel::Logical ||
+			    module.getMemoryModel() != mlir::spirv::MemoryModel::GLSL450)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must use Logical addressing and GLSL450 memory model");
+			}
+			auto vce = module.getVceTriple();
+			if (!vce)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must declare a version/capability/extension triple");
+			}
+			bool hasShaderCapability = false;
+			for (auto capability : vce->getCapabilities())
+			{
+				hasShaderCapability |= capability == mlir::spirv::Capability::Shader;
+			}
+			if (!hasShaderCapability)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must declare the Shader capability");
+			}
+
+			std::size_t entryPointCount = 0;
+			std::size_t executionModeCount = 0;
+			module.walk([&](mlir::spirv::GlobalVariableOp global) { ValidateVulkanGlobal(global); });
+			module.walk([&](mlir::spirv::EntryPointOp entryPoint) {
+				++entryPointCount;
+				ValidateVulkanEntryPoint(module, entryPoint);
+			});
+			module.walk([&](mlir::spirv::ExecutionModeOp mode) {
+				++executionModeCount;
+				ValidateVulkanExecutionMode(mode);
+			});
+			if (entryPointCount != 1)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must contain exactly one entry point");
+			}
+			if (executionModeCount != 1)
+			{
+				throw std::runtime_error("Vulkan SPIR-V module must contain exactly one execution mode");
+			}
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeSameShapeBinaryF32SPIRV(BinaryOp op)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
 			auto module = BuildSameShapeBinaryF32SPIRVModule(op, context);
+			ValidateVulkanShaderModule(module.get());
 
 			std::string mlirText;
 			llvm::raw_string_ostream mlirStream(mlirText);
