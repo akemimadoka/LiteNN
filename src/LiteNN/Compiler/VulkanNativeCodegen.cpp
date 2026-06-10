@@ -146,6 +146,12 @@ namespace LiteNN
 			case BinaryOp::Divide:
 				result = moduleBuilder.create<mlir::spirv::FDivOp>(loc, lhsValue, rhsValue).getResult();
 				break;
+			case BinaryOp::Max:
+				result = moduleBuilder.create<mlir::spirv::GLFMaxOp>(loc, lhsValue, rhsValue).getResult();
+				break;
+			case BinaryOp::Min:
+				result = moduleBuilder.create<mlir::spirv::GLFMinOp>(loc, lhsValue, rhsValue).getResult();
+				break;
 			default:
 				throw std::runtime_error("Unsupported Vulkan native MLIR same-shape f32 binary op");
 			}
@@ -346,6 +352,8 @@ namespace LiteNN
 		case BinaryOp::Subtract:
 		case BinaryOp::Multiply:
 		case BinaryOp::Divide:
+		case BinaryOp::Max:
+		case BinaryOp::Min:
 			return true;
 		default:
 			return false;

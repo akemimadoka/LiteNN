@@ -23,11 +23,13 @@ namespace LiteNN
 		SameShapeElementwiseSubtractF32 = 3,
 		SameShapeElementwiseMultiplyF32 = 4,
 		SameShapeElementwiseDivideF32 = 5,
+		SameShapeElementwiseMaxF32 = 6,
+		SameShapeElementwiseMinF32 = 7,
 	};
 
 	struct VulkanNativeFeatureSet
 	{
-		static constexpr std::uint64_t KnownFeatureMask = (1ull << 6) - 1;
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 8) - 1;
 
 		std::uint64_t flags{};
 

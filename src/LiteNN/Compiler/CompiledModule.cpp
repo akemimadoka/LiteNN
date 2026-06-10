@@ -5923,6 +5923,12 @@ namespace
 		case BinaryOp::Divide:
 			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseDivideF32);
 			break;
+		case BinaryOp::Max:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseMaxF32);
+			break;
+		case BinaryOp::Min:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseMinF32);
+			break;
 		default:
 			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
 		}
