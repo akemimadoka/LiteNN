@@ -1,0 +1,92 @@
+# LiteNN Vulkan Mobile Deployment
+
+This note defines the current mobile packaging contract for the Vulkan-native backend. It is intentionally narrower than
+desktop CPU/CUDA AOT: Vulkan instructions are SPIR-V words in the instruction region, not object files, and the runtime
+owns descriptor binding and dispatch.
+
+## Supported Build Shape
+
+Recommended Android profile:
+
+```powershell
+cmake -S . -B build-android-vulkan `
+  -DCMAKE_TOOLCHAIN_FILE=%ANDROID_NDK_HOME%\build\cmake\android.toolchain.cmake `
+  -DANDROID_ABI=arm64-v8a `
+  -DANDROID_PLATFORM=android-26 `
+  -DLITENN_ENABLE_VULKAN=ON `
+  -DLITENN_ENABLE_MLIR=OFF `
+  -DLITENN_BUILD_TESTS=OFF `
+  -DLITENN_BUILD_EXAMPLES=OFF
+cmake --build build-android-vulkan --parallel
+```
+
+The production mobile runtime should link `LiteNNCore` and `LiteNNVulkanRuntime`. Keep `LiteNNCompiler` out of the
+application package unless the app explicitly compiles graphs on device. The normal mobile flow is:
+
+1. Build/import/optimize the graph on a host machine.
+2. Compile a `CompiledModuleArtifact` for `CompiledModuleBackend::VulkanNative`.
+3. Store separated metadata/constants/weights/instructions in the app asset bundle or memory-mapped package.
+4. Load the separated image with `CompiledModule<Vulkan>::Load` or `LoadBorrowedExternalRegions`.
+
+## Loader Requirements
+
+- Android devices must provide a system Vulkan loader and at least one compute-capable queue family.
+- `LiteNNVulkanRuntime` creates its own `VkInstance` and logical device for the selected `Vulkan::deviceIndex`.
+- Runtime buffers currently require host-visible coherent storage-buffer memory. This is simple and portable for the
+  first backend slice, but it is not the final high-performance mobile memory model.
+- The current descriptor ABI uses descriptor set `0`, storage-buffer bindings matching `VulkanNativeArgumentSpec`, and
+  one compute entry point named `main` per payload kernel.
+- The instruction region stores serialized `VulkanNativeInstructionPayload`, including SPIR-V words, feature flags,
+  entry point, descriptor bindings, byte ranges, and dispatch dimensions.
+
+## Validation Layers
+
+Validation layers are a development aid, not a runtime dependency. Mobile release builds must not require
+`VK_LAYER_KHRONOS_validation`.
+
+Recommended debug policy:
+
+- Enable platform validation layers in the application or test harness, not inside LiteNN core.
+- Validate generated SPIR-V before packaging. LiteNN already rejects modules with unsupported addressing/memory models,
+  unsupported globals, missing compute entry points, or invalid `LocalSize`.
+- Treat validation-layer warnings as release blockers when they mention descriptor layout, storage-buffer alignment,
+  queue synchronization, or memory lifetime.
+
+## Artifact Layout
+
+The Vulkan backend uses the same separated package regions as CPU/CUDA AOT:
+
+- metadata: tensor signatures, backend tag, version, target information
+- constants: immutable scalar/table data when present
+- weights: external model tensors when present
+- instructions: Vulkan-native payload with SPIR-V words
+
+Do not package Vulkan instructions as PE/COFF/ELF/Mach-O objects. Static/shared-library embedding can still expose the
+four regions as symbols, but the instruction bytes remain SPIR-V payload bytes.
+
+`LoadBorrowedExternalRegions` is the preferred path for memory-mapped mobile assets. The caller owns the mapped package
+lifetime and must keep the regions alive while the module is loaded.
+
+## Unsupported Desktop Assumptions
+
+The mobile Vulkan runtime must not depend on:
+
+- JIT loading of CPU object files from the instruction region
+- CUDA driver APIs, CUDA graph replay, PTX, cubin, or fatbin payloads
+- desktop-only validation layer installation paths
+- mutable environment-variable configuration as the only policy surface
+- implicit CPU fallback when a Vulkan-native graph cannot be compiled
+
+Unsupported kernels must remain explicit: either fail compilation for `VulkanNative` or use a caller-selected bridge or
+fallback policy. Benchmarks should report the selected backend rather than silently mixing CPU and Vulkan execution.
+
+## Current Coverage
+
+The current native Vulkan slice supports static-shape, single-subgraph kernels for:
+
+- same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
+- same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
+- same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
+
+Low-precision casts, reductions, matmul/linear chains, normalization, softmax, convolution, device-local memory,
+pipeline cache tuning, and async queue integration remain roadmap work.
