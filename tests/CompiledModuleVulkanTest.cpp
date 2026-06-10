@@ -77,6 +77,39 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 	EXPECT_EQ(payload.spirv, generated.words);
 }
 
+TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	auto separated = artifact.SeparateRodata();
+	EXPECT_EQ(separated.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_GT(separated.Metadata().size(), 0u);
+	EXPECT_GT(separated.Instructions().size(), 0u);
+
+	auto module = separated.LoadBorrowedExternalRegions(Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 11.0f, 22.0f, 33.0f, 44.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, RunsSimpleBinaryArithmetic)
 {
 	if (!IsVulkanDeviceAvailable())

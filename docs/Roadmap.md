@@ -1853,11 +1853,11 @@ longer depends on checked-in SPIR-V words.
 
 #### G15.3 P2 Mobile Packaging and Artifact Shape
 
-- [ ] Treat Vulkan instructions as SPIR-V module bytes/words, not desktop object files; keep separated metadata,
+- [x] Treat Vulkan instructions as SPIR-V module bytes/words, not desktop object files; keep separated metadata,
       constants, and weights compatible with mobile packaging.
 - [ ] Document Android/mobile CMake build profiles, loader requirements, validation-layer assumptions, and unsupported
       desktop-only features.
-- [ ] Add a mobile-oriented example using separated rodata/instructions/weights with Vulkan-native instructions.
+- [x] Add a mobile-oriented example using separated rodata/instructions/weights with Vulkan-native instructions.
 
 #### G15.4 P3 Coverage and Performance
 
