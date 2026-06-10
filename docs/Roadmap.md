@@ -1861,7 +1861,8 @@ longer depends on checked-in SPIR-V words.
 
 #### G15.4 P3 Coverage and Performance
 
-- [ ] Add Vulkan-native lowering for multiply, unary elementwise, cast, reductions, matmul/linear-chain, normalization,
+- [x] Add Vulkan-native same-shape f32 binary arithmetic lowering for Add, Subtract, Multiply, and Divide.
+- [ ] Add Vulkan-native lowering for Max/Min, unary elementwise, cast, reductions, matmul/linear-chain, normalization,
       softmax, and convolution in that order.
 - [ ] Add descriptor/pipeline cache, workgroup-size tuning, tiled kernels, memory planner integration, and async queue
       synchronization.

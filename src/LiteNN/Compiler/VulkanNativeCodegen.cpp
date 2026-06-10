@@ -136,6 +136,15 @@ namespace LiteNN
 			case BinaryOp::Add:
 				result = moduleBuilder.create<mlir::spirv::FAddOp>(loc, lhsValue, rhsValue).getResult();
 				break;
+			case BinaryOp::Subtract:
+				result = moduleBuilder.create<mlir::spirv::FSubOp>(loc, lhsValue, rhsValue).getResult();
+				break;
+			case BinaryOp::Multiply:
+				result = moduleBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
+				break;
+			case BinaryOp::Divide:
+				result = moduleBuilder.create<mlir::spirv::FDivOp>(loc, lhsValue, rhsValue).getResult();
+				break;
 			default:
 				throw std::runtime_error("Unsupported Vulkan native MLIR same-shape f32 binary op");
 			}
@@ -187,7 +196,16 @@ namespace LiteNN
 
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op)
 	{
-		return op == BinaryOp::Add;
+		switch (op)
+		{
+		case BinaryOp::Add:
+		case BinaryOp::Subtract:
+		case BinaryOp::Multiply:
+		case BinaryOp::Divide:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op)

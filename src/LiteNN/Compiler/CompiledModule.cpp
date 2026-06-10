@@ -5909,7 +5909,23 @@ namespace
 		VulkanNativeInstructionPayload payload;
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
-		payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseAddF32);
+		switch (plan->op)
+		{
+		case BinaryOp::Add:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseAddF32);
+			break;
+		case BinaryOp::Subtract:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseSubtractF32);
+			break;
+		case BinaryOp::Multiply:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseMultiplyF32);
+			break;
+		case BinaryOp::Divide:
+			payload.featureSet.AddFeature(VulkanNativeFeature::SameShapeElementwiseDivideF32);
+			break;
+		default:
+			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
+		}
 		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op);
 		payload.spirv = std::move(spirv.words);
 
