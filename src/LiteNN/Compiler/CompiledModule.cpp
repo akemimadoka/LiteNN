@@ -5797,6 +5797,14 @@ namespace
 		std::uint32_t elementCount{};
 	};
 
+	struct VulkanP0CastPlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+		DataType srcType{ DataType::Float32 };
+		DataType dstType{ DataType::Int32 };
+	};
+
 	struct VulkanP0ArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -5962,6 +5970,65 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0CastPlan> MatchVulkanP0SameShapeCast(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* cast = std::get_if<CastNode>(&resultEntry.node);
+		if (!cast)
+		{
+			return std::nullopt;
+		}
+
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, cast->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (output.dtype != cast->targetType || input.shape != output.shape ||
+		    !VulkanNativeSupportsSameShapeCast(input.dtype, output.dtype))
+		{
+			return std::nullopt;
+		}
+
+		const auto elementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0CastPlan{
+			.inputIndex = *inputIndex,
+			.elementCount = *elementCount,
+			.srcType = input.dtype,
+			.dstType = output.dtype,
+		};
+	}
+
 	VulkanNativeFeature VulkanNativeUnaryF32FeatureFlag(UnaryOp op)
 	{
 		switch (op)
@@ -5983,6 +6050,19 @@ namespace
 		default:
 			throw std::runtime_error("Unsupported Vulkan native unary op");
 		}
+	}
+
+	VulkanNativeFeature VulkanNativeCastFeatureFlag(DataType srcType, DataType dstType)
+	{
+		if (srcType == DataType::Float32 && dstType == DataType::Int32)
+		{
+			return VulkanNativeFeature::SameShapeCastFloat32ToInt32;
+		}
+		if (srcType == DataType::Int32 && dstType == DataType::Float32)
+		{
+			return VulkanNativeFeature::SameShapeCastInt32ToFloat32;
+		}
+		throw std::runtime_error("Unsupported Vulkan native cast");
 	}
 
 	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeUnaryF32P0(const Graph& graph)
@@ -6015,6 +6095,51 @@ namespace
 		          .binding = 1,
 		          .byteOffset = 0,
 		          .byteSize = byteSize },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeCastP0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0SameShapeCast(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeCastFeatureFlag(plan->srcType, plan->dstType));
+		auto spirv = VulkanNativeSameShapeCastSPIRV(plan->srcType, plan->dstType);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = "main",
+		    .groups = { .x = plan->elementCount, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * ElementByteSize(plan->srcType) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * ElementByteSize(plan->dstType) },
 		    },
 		});
 
@@ -8126,6 +8251,12 @@ namespace
 		if (options.enableVulkanNativeAOT)
 		{
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryF32P0(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::VulkanNative);
+			}
+			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),

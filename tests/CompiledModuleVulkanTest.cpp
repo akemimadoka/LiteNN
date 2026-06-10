@@ -45,9 +45,33 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSimpleCastGraph(DataType srcType, DataType dstType)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(srcType, { 4 });
+		const auto out = sg.AddNode(CastNode{ { input, 0 }, dstType }, { OutputInfo{ dstType, { 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	std::array<float, 4> CopyToHost(const Tensor<Vulkan>& tensor)
 	{
 		Tensor<CPU> host(Uninitialized, tensor.Shape(), tensor.DType(), CPU{});
+		auto device = tensor.CurDevice();
+		DeviceTraits<Vulkan>::CopyToCPU(device, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(),
+		                                host.DType(), host.UnsafeRawData());
+		const auto* values = static_cast<const float*>(host.UnsafeRawData());
+		return { values[0], values[1], values[2], values[3] };
+	}
+
+	std::array<float, 4> CopyToHostAsFloat32(const Tensor<Vulkan>& tensor)
+	{
+		Tensor<CPU> host(Uninitialized, tensor.Shape(), DataType::Float32, CPU{});
 		auto device = tensor.CurDevice();
 		DeviceTraits<Vulkan>::CopyToCPU(device, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(),
 		                                host.DType(), host.UnsafeRawData());
@@ -70,6 +94,15 @@ namespace
 		float tolerance;
 	};
 
+	struct CastCase
+	{
+		DataType srcType;
+		DataType dstType;
+		std::string_view mlirOp;
+		std::array<double, 4> input;
+		std::array<float, 4> expected;
+	};
+
 	constexpr std::array kBinaryCases{
 		BinaryCase{ BinaryOp::Add, "spirv.FAdd", { 11.0f, 22.0f, 33.0f, 44.0f } },
 		BinaryCase{ BinaryOp::Subtract, "spirv.FSub", { -9.0f, -18.0f, -27.0f, -36.0f } },
@@ -87,6 +120,19 @@ namespace
 		UnaryCase{ UnaryOp::Log, "spirv.GL.Log", { 0.25f, 1.0f, 2.0f, 4.0f }, 1e-4f },
 		UnaryCase{ UnaryOp::Sin, "spirv.GL.Sin", { -1.0f, 0.0f, 1.0f, 2.0f }, 1e-4f },
 		UnaryCase{ UnaryOp::Cos, "spirv.GL.Cos", { -1.0f, 0.0f, 1.0f, 2.0f }, 1e-4f },
+	};
+
+	constexpr std::array kCastCases{
+		CastCase{ DataType::Float32,
+		          DataType::Int32,
+		          "spirv.ConvertFToS",
+		          { -3.5, -1.0, 0.75, 4.0 },
+		          { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{ DataType::Int32,
+		          DataType::Float32,
+		          "spirv.ConvertSToF",
+		          { -3.0, -1.0, 0.0, 4.0 },
+		          { -3.0f, -1.0f, 0.0f, 4.0f } },
 	};
 
 	float ExpectedUnaryValue(UnaryOp op, double value)
@@ -137,6 +183,18 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleUnarySPIRVFromMLIR)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesSimpleCastSPIRVFromMLIR)
+{
+	for (const auto& item : kCastCases)
+	{
+		const auto generated = VulkanNativeSameShapeCastSPIRV(item.srcType, item.dstType);
+		EXPECT_FALSE(generated.words.empty());
+		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
@@ -158,6 +216,18 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
 	const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp::Sqrt);
+	EXPECT_EQ(payload.spirv, generated.words);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
+{
+	const auto graph = BuildSimpleCastGraph(DataType::Float32, DataType::Int32);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Int32);
 	EXPECT_EQ(payload.spirv, generated.words);
 }
 
@@ -191,6 +261,35 @@ TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleCastArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	for (const auto& item : kCastCases)
+	{
+		const auto graph = BuildSimpleCastGraph(item.srcType, item.dstType);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		Vulkan device;
+		std::array inputs{
+			Tensor<Vulkan>(item.input, { 4 }, item.srcType, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+		EXPECT_EQ(outputs[0].DType(), item.dstType);
+
+		const auto actual = CopyToHostAsFloat32(outputs[0]);
+		for (std::size_t i = 0; i < item.expected.size(); ++i)
+		{
+			EXPECT_FLOAT_EQ(actual[i], item.expected[i]);
+		}
 	}
 }
 

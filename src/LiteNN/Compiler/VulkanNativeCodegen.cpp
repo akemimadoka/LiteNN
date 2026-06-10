@@ -35,12 +35,44 @@ namespace LiteNN
 			    .getResult();
 		}
 
-		mlir::spirv::StructType CreateF32StorageBufferStruct(mlir::OpBuilder& builder)
+		mlir::Type SPIRVScalarType(mlir::OpBuilder& builder, DataType dtype)
 		{
-			auto arrayType = mlir::spirv::RuntimeArrayType::get(builder.getF32Type(), sizeof(float));
+			switch (dtype)
+			{
+			case DataType::Float32:
+				return builder.getF32Type();
+			case DataType::Int32:
+				return builder.getI32Type();
+			default:
+				throw std::runtime_error("Unsupported Vulkan native SPIR-V scalar dtype");
+			}
+		}
+
+		std::uint32_t SPIRVScalarByteSize(DataType dtype)
+		{
+			switch (dtype)
+			{
+			case DataType::Float32:
+				return sizeof(float);
+			case DataType::Int32:
+				return sizeof(std::int32_t);
+			default:
+				throw std::runtime_error("Unsupported Vulkan native SPIR-V scalar dtype");
+			}
+		}
+
+		mlir::spirv::StructType CreateStorageBufferStruct(mlir::OpBuilder& builder, mlir::Type elementType,
+		                                                  std::uint32_t stride)
+		{
+			auto arrayType = mlir::spirv::RuntimeArrayType::get(elementType, stride);
 			llvm::SmallVector<mlir::Type, 1> members{ arrayType };
 			llvm::SmallVector<mlir::spirv::StructType::OffsetInfo, 1> offsets{ 0 };
 			return mlir::spirv::StructType::get(members, offsets);
+		}
+
+		mlir::spirv::StructType CreateF32StorageBufferStruct(mlir::OpBuilder& builder)
+		{
+			return CreateStorageBufferStruct(builder, builder.getF32Type(), sizeof(float));
 		}
 
 		mlir::spirv::GlobalVariableOp CreateStorageBuffer(mlir::OpBuilder& builder,
@@ -65,22 +97,31 @@ namespace LiteNN
 			                                                            mlir::ValueRange{ zero })
 			                        .getComponentPtr();
 			return builder.create<mlir::spirv::LoadOp>(loc, builder.getI32Type(), indexPointer, nullptr, nullptr)
-			    .getValue();
+		    .getValue();
 		}
 
 		mlir::Value EmitStorageBufferElementPointer(mlir::OpBuilder& builder,
 		                                            mlir::Location loc,
+		                                            mlir::Type elementType,
 		                                            mlir::spirv::GlobalVariableOp buffer,
 		                                            mlir::Value index)
 		{
 			auto zero = EmitI32Constant(builder, loc, 0);
 			auto pointer = builder.create<mlir::spirv::AddressOfOp>(loc, buffer).getPointer();
 			auto elementPointerType =
-			    mlir::spirv::PointerType::get(builder.getF32Type(), mlir::spirv::StorageClass::StorageBuffer);
+			    mlir::spirv::PointerType::get(elementType, mlir::spirv::StorageClass::StorageBuffer);
 			return builder
 			    .create<mlir::spirv::AccessChainOp>(loc, elementPointerType, pointer,
 			                                        mlir::ValueRange{ zero, index })
 			    .getComponentPtr();
+		}
+
+		mlir::Value EmitF32StorageBufferElementPointer(mlir::OpBuilder& builder,
+		                                               mlir::Location loc,
+		                                               mlir::spirv::GlobalVariableOp buffer,
+		                                               mlir::Value index)
+		{
+			return EmitStorageBufferElementPointer(builder, loc, builder.getF32Type(), buffer, index);
 		}
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeUnaryF32SPIRVModule(UnaryOp op,
@@ -122,7 +163,8 @@ namespace LiteNN
 			auto inputValue = moduleBuilder
 			                      .create<mlir::spirv::LoadOp>(
 			                          loc, moduleBuilder.getF32Type(),
-			                          EmitStorageBufferElementPointer(moduleBuilder, loc, input, index), nullptr, nullptr)
+			                          EmitF32StorageBufferElementPointer(moduleBuilder, loc, input, index), nullptr,
+			                          nullptr)
 			                      .getValue();
 
 			mlir::Value result;
@@ -154,7 +196,7 @@ namespace LiteNN
 			}
 
 			moduleBuilder.create<mlir::spirv::StoreOp>(
-			    loc, EmitStorageBufferElementPointer(moduleBuilder, loc, out, index), result, nullptr, nullptr);
+			    loc, EmitF32StorageBufferElementPointer(moduleBuilder, loc, out, index), result, nullptr, nullptr);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
 
 			moduleBuilder.setInsertionPointAfter(func);
@@ -211,12 +253,12 @@ namespace LiteNN
 			auto lhsValue = moduleBuilder
 			                    .create<mlir::spirv::LoadOp>(
 			                        loc, moduleBuilder.getF32Type(),
-			                        EmitStorageBufferElementPointer(moduleBuilder, loc, lhs, index), nullptr, nullptr)
+			                        EmitF32StorageBufferElementPointer(moduleBuilder, loc, lhs, index), nullptr, nullptr)
 			                    .getValue();
 			auto rhsValue = moduleBuilder
 			                    .create<mlir::spirv::LoadOp>(
 			                        loc, moduleBuilder.getF32Type(),
-			                        EmitStorageBufferElementPointer(moduleBuilder, loc, rhs, index), nullptr, nullptr)
+			                        EmitF32StorageBufferElementPointer(moduleBuilder, loc, rhs, index), nullptr, nullptr)
 			                    .getValue();
 
 			mlir::Value result;
@@ -245,7 +287,87 @@ namespace LiteNN
 			}
 
 			moduleBuilder.create<mlir::spirv::StoreOp>(
-			    loc, EmitStorageBufferElementPointer(moduleBuilder, loc, out, index), result, nullptr, nullptr);
+			    loc, EmitF32StorageBufferElementPointer(moduleBuilder, loc, out, index), result, nullptr, nullptr);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize, llvm::ArrayRef<int32_t>{ 1, 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeCastSPIRVModule(DataType srcType,
+		                                                                       DataType dstType,
+		                                                                       mlir::MLIRContext& context)
+		{
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model",
+			                   builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                       mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple",
+			                   mlir::spirv::VerCapExtAttr::get(
+			                       mlir::spirv::Version::V_1_0,
+			                       llvm::ArrayRef<mlir::spirv::Capability>{ mlir::spirv::Capability::Shader },
+			                       llvm::ArrayRef<mlir::spirv::Extension>{}, &context));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto srcElementType = SPIRVScalarType(moduleBuilder, srcType);
+			auto dstElementType = SPIRVScalarType(moduleBuilder, dstType);
+			auto inputStruct = CreateStorageBufferStruct(moduleBuilder, srcElementType, SPIRVScalarByteSize(srcType));
+			auto outStruct = CreateStorageBufferStruct(moduleBuilder, dstElementType, SPIRVScalarByteSize(dstType));
+			auto input = CreateStorageBuffer(moduleBuilder, loc, inputStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, outStruct, "out", 1);
+			auto globalInvocationType =
+			    mlir::spirv::PointerType::get(mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()),
+			                                  mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId", mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, kEntryPointName, funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto index = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inputValue = moduleBuilder
+			                      .create<mlir::spirv::LoadOp>(
+			                          loc, srcElementType,
+			                          EmitStorageBufferElementPointer(moduleBuilder, loc, srcElementType, input, index),
+			                          nullptr, nullptr)
+			                      .getValue();
+
+			mlir::Value result;
+			if (srcType == DataType::Float32 && dstType == DataType::Int32)
+			{
+				result = moduleBuilder.create<mlir::spirv::ConvertFToSOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else if (srcType == DataType::Int32 && dstType == DataType::Float32)
+			{
+				result = moduleBuilder.create<mlir::spirv::ConvertSToFOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else
+			{
+				throw std::runtime_error("Unsupported Vulkan native MLIR same-shape cast");
+			}
+
+			moduleBuilder.create<mlir::spirv::StoreOp>(
+			    loc, EmitStorageBufferElementPointer(moduleBuilder, loc, dstElementType, out, index), result, nullptr,
+			    nullptr);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
 
 			moduleBuilder.setInsertionPointAfter(func);
@@ -457,6 +579,33 @@ namespace LiteNN
 				.mlir = mlirStream.str(),
 			};
 		}
+
+		VulkanNativeGeneratedSPIRV SerializeSameShapeCastSPIRV(DataType srcType, DataType dstType)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildSameShapeCastSPIRVModule(srcType, dstType, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
 	} // namespace
 
 	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op)
@@ -508,5 +657,20 @@ namespace LiteNN
 			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
 		}
 		return SerializeSameShapeBinaryF32SPIRV(op);
+	}
+
+	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)
+	{
+		return (srcType == DataType::Float32 && dstType == DataType::Int32) ||
+		       (srcType == DataType::Int32 && dstType == DataType::Float32);
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType)
+	{
+		if (!VulkanNativeSupportsSameShapeCast(srcType, dstType))
+		{
+			throw std::runtime_error("Unsupported Vulkan native same-shape cast");
+		}
+		return SerializeSameShapeCastSPIRV(srcType, dstType);
 	}
 } // namespace LiteNN

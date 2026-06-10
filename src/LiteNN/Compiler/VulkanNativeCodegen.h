@@ -19,6 +19,8 @@ namespace LiteNN
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op);
+	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType);
 } // namespace LiteNN
 
 #endif
