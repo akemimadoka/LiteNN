@@ -148,6 +148,12 @@ namespace LiteNN
 				.queueFamilyIndex = queueFamilyIndex,
 			};
 			CheckVulkan(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool), "vkCreateCommandPool");
+
+			const VkPipelineCacheCreateInfo pipelineCacheInfo{
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+			};
+			CheckVulkan(vkCreatePipelineCache(device, &pipelineCacheInfo, nullptr, &pipelineCache),
+			            "vkCreatePipelineCache");
 		}
 
 		VulkanContext(const VulkanContext&) = delete;
@@ -161,6 +167,10 @@ namespace LiteNN
 				if (commandPool != VK_NULL_HANDLE)
 				{
 					vkDestroyCommandPool(device, commandPool, nullptr);
+				}
+				if (pipelineCache != VK_NULL_HANDLE)
+				{
+					vkDestroyPipelineCache(device, pipelineCache, nullptr);
 				}
 				vkDestroyDevice(device, nullptr);
 			}
@@ -177,6 +187,7 @@ namespace LiteNN
 		VkQueue queue{};
 		std::uint32_t queueFamilyIndex{};
 		VkCommandPool commandPool{};
+		VkPipelineCache pipelineCache{};
 		VkPhysicalDeviceProperties properties{};
 		std::mutex queueMutex;
 	};
@@ -544,6 +555,7 @@ namespace LiteNN
 		std::shared_ptr<VulkanContext> context;
 		VkShaderModule shaderModule{};
 		VkDescriptorSetLayout descriptorSetLayout{};
+		VkDescriptorPool descriptorPool{};
 		VkPipelineLayout pipelineLayout{};
 		VkPipeline pipeline{};
 		std::uint32_t descriptorCount{};
@@ -599,6 +611,18 @@ namespace LiteNN
 		CheckVulkan(vkCreateDescriptorSetLayout(impl_->context->device, &descriptorLayoutInfo, nullptr,
 		                                        &impl_->descriptorSetLayout),
 		            "vkCreateDescriptorSetLayout");
+		const VkDescriptorPoolSize poolSize{
+			.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+			.descriptorCount = descriptorCount,
+		};
+		const VkDescriptorPoolCreateInfo poolInfo{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+			.maxSets = 1,
+			.poolSizeCount = 1,
+			.pPoolSizes = &poolSize,
+		};
+		CheckVulkan(vkCreateDescriptorPool(impl_->context->device, &poolInfo, nullptr, &impl_->descriptorPool),
+		            "vkCreateDescriptorPool");
 
 		const VkPipelineLayoutCreateInfo pipelineLayoutInfo{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -621,7 +645,7 @@ namespace LiteNN
 			.stage = stageInfo,
 			.layout = impl_->pipelineLayout,
 		};
-		CheckVulkan(vkCreateComputePipelines(impl_->context->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+		CheckVulkan(vkCreateComputePipelines(impl_->context->device, impl_->context->pipelineCache, 1, &pipelineInfo, nullptr,
 		                                     &impl_->pipeline),
 		            "vkCreateComputePipelines");
 	}
@@ -642,6 +666,10 @@ namespace LiteNN
 		if (impl_->pipelineLayout != VK_NULL_HANDLE)
 		{
 			vkDestroyPipelineLayout(impl_->context->device, impl_->pipelineLayout, nullptr);
+		}
+		if (impl_->descriptorPool != VK_NULL_HANDLE)
+		{
+			vkDestroyDescriptorPool(impl_->context->device, impl_->descriptorPool, nullptr);
 		}
 		if (impl_->descriptorSetLayout != VK_NULL_HANDLE)
 		{
@@ -681,24 +709,13 @@ namespace LiteNN
 
 		std::lock_guard lock(impl_->context->queueMutex);
 
-		const VkDescriptorPoolSize poolSize{
-			.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-			.descriptorCount = impl_->descriptorCount,
-		};
-		const VkDescriptorPoolCreateInfo poolInfo{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-			.maxSets = 1,
-			.poolSizeCount = 1,
-			.pPoolSizes = &poolSize,
-		};
-		VkDescriptorPool descriptorPool{};
-		CheckVulkan(vkCreateDescriptorPool(impl_->context->device, &poolInfo, nullptr, &descriptorPool),
-		            "vkCreateDescriptorPool");
+		CheckVulkan(vkResetDescriptorPool(impl_->context->device, impl_->descriptorPool, 0),
+		            "vkResetDescriptorPool before dispatch");
 
 		VkDescriptorSet descriptorSet{};
 		const VkDescriptorSetAllocateInfo setInfo{
 			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-			.descriptorPool = descriptorPool,
+			.descriptorPool = impl_->descriptorPool,
 			.descriptorSetCount = 1,
 			.pSetLayouts = &impl_->descriptorSetLayout,
 		};
@@ -765,8 +782,9 @@ namespace LiteNN
 		}
 		vkDestroyFence(impl_->context->device, fence, nullptr);
 		vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &commandBuffer);
-		vkDestroyDescriptorPool(impl_->context->device, descriptorPool, nullptr);
+		const auto resetResult = vkResetDescriptorPool(impl_->context->device, impl_->descriptorPool, 0);
 		CheckVulkan(submitResult, "vkQueueSubmit");
+		CheckVulkan(resetResult, "vkResetDescriptorPool after dispatch");
 	}
 } // namespace LiteNN
 

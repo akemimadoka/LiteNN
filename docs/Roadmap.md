@@ -1869,8 +1869,9 @@ longer depends on checked-in SPIR-V words.
       storage types. Runtime selection remains gated on target device storage-buffer feature discovery.
 - [ ] Add Vulkan-native lowering for reductions, matmul/linear-chain, normalization, softmax, and convolution in that
       order.
-- [ ] Add descriptor/pipeline cache, workgroup-size tuning, tiled kernels, memory planner integration, and async queue
-      synchronization.
+- [x] Add initial descriptor/pipeline cache support: `VulkanContext` owns a `VkPipelineCache`, and
+      `VulkanComputeModule` reuses a descriptor pool across synchronous dispatches.
+- [ ] Add workgroup-size tuning, tiled kernels, memory planner integration, and async queue synchronization.
 - [ ] Extend benchmark/profile tables with CPU AOT, CUDA AOT, Vulkan AOT, PyTorch, and ggml rows where available.
 
 Hidden requirements:
