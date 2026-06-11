@@ -6062,6 +6062,10 @@ namespace
 		{
 			return VulkanNativeFeature::SameShapeCastInt32ToFloat32;
 		}
+		if (VulkanNativeSupportsSameShapeCast(srcType, dstType))
+		{
+			return VulkanNativeFeature::SameShapeCastLowPrecision;
+		}
 		throw std::runtime_error("Unsupported Vulkan native cast");
 	}
 

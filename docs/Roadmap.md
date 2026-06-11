@@ -1865,8 +1865,10 @@ longer depends on checked-in SPIR-V words.
 - [x] Add Vulkan-native same-shape f32 binary arithmetic lowering for Add, Subtract, Multiply, Divide, Max, and Min.
 - [x] Add Vulkan-native same-shape f32 unary elementwise lowering for Negate, Abs, Sqrt, Exp, Log, Sin, and Cos.
 - [x] Add Vulkan-native same-shape 32-bit cast lowering for Float32 -> Int32 and Int32 -> Float32.
-- [ ] Add Vulkan-native lowering for low-precision casts, reductions, matmul/linear-chain, normalization, softmax, and
-      convolution in that order.
+- [x] Add Vulkan-native SPIR-V generation for same-shape low-precision casts covering `Float16`, `Int8`, and `UInt8`
+      storage types. Runtime selection remains gated on target device storage-buffer feature discovery.
+- [ ] Add Vulkan-native lowering for reductions, matmul/linear-chain, normalization, softmax, and convolution in that
+      order.
 - [ ] Add descriptor/pipeline cache, workgroup-size tuning, tiled kernels, memory planner integration, and async queue
       synchronization.
 - [ ] Extend benchmark/profile tables with CPU AOT, CUDA AOT, Vulkan AOT, PyTorch, and ggml rows where available.

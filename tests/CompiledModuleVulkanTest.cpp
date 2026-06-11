@@ -133,6 +133,51 @@ namespace
 		          "spirv.ConvertSToF",
 		          { -3.0, -1.0, 0.0, 4.0 },
 		          { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{ DataType::Float32,
+		          DataType::Float16,
+		          "spirv.FConvert",
+		          { -3.5, -1.0, 0.75, 4.0 },
+		          { -3.5f, -1.0f, 0.75f, 4.0f } },
+		CastCase{ DataType::Float16,
+		          DataType::Float32,
+		          "spirv.FConvert",
+		          { -3.5, -1.0, 0.75, 4.0 },
+		          { -3.5f, -1.0f, 0.75f, 4.0f } },
+		CastCase{ DataType::Float32,
+		          DataType::Int8,
+		          "spirv.ConvertFToS",
+		          { -3.5, -1.0, 0.75, 4.0 },
+		          { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{ DataType::Int8,
+		          DataType::Float32,
+		          "spirv.ConvertSToF",
+		          { -3.0, -1.0, 0.0, 4.0 },
+		          { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{ DataType::Float32,
+		          DataType::UInt8,
+		          "spirv.ConvertFToU",
+		          { 0.0, 1.0, 2.75, 4.0 },
+		          { 0.0f, 1.0f, 2.0f, 4.0f } },
+		CastCase{ DataType::UInt8,
+		          DataType::Float32,
+		          "spirv.ConvertUToF",
+		          { 0.0, 1.0, 2.0, 4.0 },
+		          { 0.0f, 1.0f, 2.0f, 4.0f } },
+		CastCase{ DataType::Int32,
+		          DataType::Int8,
+		          "spirv.SConvert",
+		          { -3.0, -1.0, 0.0, 4.0 },
+		          { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{ DataType::UInt8,
+		          DataType::Int32,
+		          "spirv.UConvert",
+		          { 0.0, 1.0, 2.0, 4.0 },
+		          { 0.0f, 1.0f, 2.0f, 4.0f } },
+	};
+
+	constexpr std::array kRuntimeCastCases{
+		kCastCases[0],
+		kCastCases[1],
 	};
 
 	float ExpectedUnaryValue(UnaryOp op, double value)
@@ -231,6 +276,20 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
 	EXPECT_EQ(payload.spirv, generated.words);
 }
 
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
+{
+	const auto graph = BuildSimpleCastGraph(DataType::Float32, DataType::Float16);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Float16);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeCastLowPrecision)),
+	          0ull);
+}
+
 TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -271,7 +330,7 @@ TEST(CompiledModuleVulkanTest, RunsSimpleCastArithmetic)
 		GTEST_SKIP() << "No Vulkan compute device is available";
 	}
 
-	for (const auto& item : kCastCases)
+	for (const auto& item : kRuntimeCastCases)
 	{
 		const auto graph = BuildSimpleCastGraph(item.srcType, item.dstType);
 		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});

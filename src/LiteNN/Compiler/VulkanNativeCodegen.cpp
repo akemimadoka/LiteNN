@@ -11,12 +11,15 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
+#include "llvm/ADT/STLExtras.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/SPIRV/Serialization.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -41,8 +44,13 @@ namespace LiteNN
 			{
 			case DataType::Float32:
 				return builder.getF32Type();
+			case DataType::Float16:
+				return builder.getF16Type();
 			case DataType::Int32:
 				return builder.getI32Type();
+			case DataType::Int8:
+			case DataType::UInt8:
+				return builder.getIntegerType(8);
 			default:
 				throw std::runtime_error("Unsupported Vulkan native SPIR-V scalar dtype");
 			}
@@ -54,11 +62,84 @@ namespace LiteNN
 			{
 			case DataType::Float32:
 				return sizeof(float);
+			case DataType::Float16:
+				return sizeof(std::uint16_t);
 			case DataType::Int32:
 				return sizeof(std::int32_t);
+			case DataType::Int8:
+				return sizeof(std::int8_t);
+			case DataType::UInt8:
+				return sizeof(std::uint8_t);
 			default:
 				throw std::runtime_error("Unsupported Vulkan native SPIR-V scalar dtype");
 			}
+		}
+
+		bool VulkanSPIRVScalarUses8BitStorage(DataType dtype)
+		{
+			return dtype == DataType::Int8 || dtype == DataType::UInt8;
+		}
+
+		bool VulkanSPIRVScalarUses16BitStorage(DataType dtype)
+		{
+			return dtype == DataType::Float16;
+		}
+
+		bool VulkanSPIRVScalarIsFloat(DataType dtype)
+		{
+			return dtype == DataType::Float32 || dtype == DataType::Float16;
+		}
+
+		bool VulkanSPIRVScalarIsSignedInteger(DataType dtype)
+		{
+			return dtype == DataType::Int32 || dtype == DataType::Int8;
+		}
+
+		bool VulkanSPIRVScalarIsUnsignedInteger(DataType dtype)
+		{
+			return dtype == DataType::UInt8;
+		}
+
+		bool VulkanSPIRVScalarIsInteger(DataType dtype)
+		{
+			return VulkanSPIRVScalarIsSignedInteger(dtype) || VulkanSPIRVScalarIsUnsignedInteger(dtype);
+		}
+
+		mlir::spirv::VerCapExtAttr MakeVulkanShaderVCE(mlir::MLIRContext& context,
+		                                               std::span<const DataType> storageTypes)
+		{
+			llvm::SmallVector<mlir::spirv::Capability, 4> capabilities{ mlir::spirv::Capability::Shader };
+			llvm::SmallVector<mlir::spirv::Extension, 2> extensions;
+			const auto addCapability = [&](mlir::spirv::Capability capability) {
+				if (!llvm::is_contained(capabilities, capability))
+				{
+					capabilities.push_back(capability);
+				}
+			};
+			const auto addExtension = [&](mlir::spirv::Extension extension) {
+				if (!llvm::is_contained(extensions, extension))
+				{
+					extensions.push_back(extension);
+				}
+			};
+
+			for (const auto dtype : storageTypes)
+			{
+				if (VulkanSPIRVScalarUses8BitStorage(dtype))
+				{
+					addCapability(mlir::spirv::Capability::Int8);
+					addCapability(mlir::spirv::Capability::StorageBuffer8BitAccess);
+					addExtension(mlir::spirv::Extension::SPV_KHR_8bit_storage);
+				}
+				if (VulkanSPIRVScalarUses16BitStorage(dtype))
+				{
+					addCapability(mlir::spirv::Capability::Float16);
+					addCapability(mlir::spirv::Capability::StorageBuffer16BitAccess);
+					addExtension(mlir::spirv::Extension::SPV_KHR_16bit_storage);
+				}
+			}
+
+			return mlir::spirv::VerCapExtAttr::get(mlir::spirv::Version::V_1_0, capabilities, extensions, &context);
 		}
 
 		mlir::spirv::StructType CreateStorageBufferStruct(mlir::OpBuilder& builder, mlir::Type elementType,
@@ -136,11 +217,7 @@ namespace LiteNN
 			                       mlir::spirv::AddressingModel::Logical));
 			state.addAttribute("memory_model",
 			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
-			state.addAttribute("vce_triple",
-			                   mlir::spirv::VerCapExtAttr::get(
-			                       mlir::spirv::Version::V_1_0,
-			                       llvm::ArrayRef<mlir::spirv::Capability>{ mlir::spirv::Capability::Shader },
-			                       llvm::ArrayRef<mlir::spirv::Extension>{}, &context));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
 			mlir::spirv::ModuleOp::build(builder, state);
 			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
 
@@ -317,11 +394,8 @@ namespace LiteNN
 			                       mlir::spirv::AddressingModel::Logical));
 			state.addAttribute("memory_model",
 			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
-			state.addAttribute("vce_triple",
-			                   mlir::spirv::VerCapExtAttr::get(
-			                       mlir::spirv::Version::V_1_0,
-			                       llvm::ArrayRef<mlir::spirv::Capability>{ mlir::spirv::Capability::Shader },
-			                       llvm::ArrayRef<mlir::spirv::Extension>{}, &context));
+			const std::array storageTypes{ srcType, dstType };
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, storageTypes));
 			mlir::spirv::ModuleOp::build(builder, state);
 			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
 
@@ -352,13 +426,42 @@ namespace LiteNN
 			                      .getValue();
 
 			mlir::Value result;
-			if (srcType == DataType::Float32 && dstType == DataType::Int32)
+			if (VulkanSPIRVScalarIsFloat(srcType) && VulkanSPIRVScalarIsFloat(dstType))
+			{
+				result = srcElementType == dstElementType
+				             ? inputValue
+				             : moduleBuilder.create<mlir::spirv::FConvertOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else if (VulkanSPIRVScalarIsFloat(srcType) && VulkanSPIRVScalarIsSignedInteger(dstType))
 			{
 				result = moduleBuilder.create<mlir::spirv::ConvertFToSOp>(loc, dstElementType, inputValue).getResult();
 			}
-			else if (srcType == DataType::Int32 && dstType == DataType::Float32)
+			else if (VulkanSPIRVScalarIsFloat(srcType) && VulkanSPIRVScalarIsUnsignedInteger(dstType))
+			{
+				result = moduleBuilder.create<mlir::spirv::ConvertFToUOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else if (VulkanSPIRVScalarIsSignedInteger(srcType) && VulkanSPIRVScalarIsFloat(dstType))
 			{
 				result = moduleBuilder.create<mlir::spirv::ConvertSToFOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else if (VulkanSPIRVScalarIsUnsignedInteger(srcType) && VulkanSPIRVScalarIsFloat(dstType))
+			{
+				result = moduleBuilder.create<mlir::spirv::ConvertUToFOp>(loc, dstElementType, inputValue).getResult();
+			}
+			else if (VulkanSPIRVScalarIsInteger(srcType) && VulkanSPIRVScalarIsInteger(dstType))
+			{
+				if (srcElementType == dstElementType)
+				{
+					result = inputValue;
+				}
+				else if (VulkanSPIRVScalarIsUnsignedInteger(srcType) || VulkanSPIRVScalarIsUnsignedInteger(dstType))
+				{
+					result = moduleBuilder.create<mlir::spirv::UConvertOp>(loc, dstElementType, inputValue).getResult();
+				}
+				else
+				{
+					result = moduleBuilder.create<mlir::spirv::SConvertOp>(loc, dstElementType, inputValue).getResult();
+				}
 			}
 			else
 			{
@@ -661,8 +764,12 @@ namespace LiteNN
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)
 	{
-		return (srcType == DataType::Float32 && dstType == DataType::Int32) ||
-		       (srcType == DataType::Int32 && dstType == DataType::Float32);
+		if (srcType == dstType)
+		{
+			return false;
+		}
+		return (VulkanSPIRVScalarIsFloat(srcType) || VulkanSPIRVScalarIsInteger(srcType)) &&
+		       (VulkanSPIRVScalarIsFloat(dstType) || VulkanSPIRVScalarIsInteger(dstType));
 	}
 
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType)

@@ -34,11 +34,12 @@ namespace LiteNN
 		SameShapeElementwiseCosF32 = 14,
 		SameShapeCastFloat32ToInt32 = 15,
 		SameShapeCastInt32ToFloat32 = 16,
+		SameShapeCastLowPrecision = 17,
 	};
 
 	struct VulkanNativeFeatureSet
 	{
-		static constexpr std::uint64_t KnownFeatureMask = (1ull << 17) - 1;
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 18) - 1;
 
 		std::uint64_t flags{};
 

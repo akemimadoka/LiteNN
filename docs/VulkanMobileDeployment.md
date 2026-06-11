@@ -87,6 +87,9 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
+- same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
+  requires the target device to expose the matching 8-bit or 16-bit storage-buffer features before these kernels are
+  selected in production
 
 Low-precision casts, reductions, matmul/linear chains, normalization, softmax, convolution, device-local memory,
 pipeline cache tuning, and async queue integration remain roadmap work.
