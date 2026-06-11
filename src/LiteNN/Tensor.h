@@ -301,7 +301,7 @@ namespace LiteNN
 			{
 				throw std::runtime_error("Tensor mutable data view requires contiguous storage");
 			}
-			return { static_cast<T*>(data_), NumElements() };
+			return std::span<T>(static_cast<T*>(data_), NumElements());
 		}
 
 		template <typename T>
@@ -316,7 +316,7 @@ namespace LiteNN
 			{
 				throw std::runtime_error("Tensor data view requires contiguous storage");
 			}
-			return { static_cast<const T*>(data_), NumElements() };
+			return std::span<const T>(static_cast<const T*>(data_), NumElements());
 		}
 
 		// SAFETY: 这个操作会返回一个新的 Tensor
