@@ -14,14 +14,16 @@ using namespace LiteNN;
 
 namespace
 {
-	Graph BuildSimpleBinaryGraph(BinaryOp op)
+	constexpr std::uint32_t kElementCount = 4;
+
+	Graph BuildSimpleBinaryGraph(BinaryOp op, std::size_t elementCount = kElementCount)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto lhs = sg.AddParam(DataType::Float32, { 4 });
-		const auto rhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto lhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto rhs = sg.AddParam(DataType::Float32, { elementCount });
 		const auto out = sg.AddNode(BinaryOpNode{ op, { lhs, 0 }, { rhs, 0 } },
-		                            { OutputInfo{ DataType::Float32, { 4 } } });
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -35,8 +37,7 @@ namespace
 		Graph graph;
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { 4 });
-		const auto out =
-		    sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto out = sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -163,16 +164,10 @@ namespace
 		          "spirv.ConvertUToF",
 		          { 0.0, 1.0, 2.0, 4.0 },
 		          { 0.0f, 1.0f, 2.0f, 4.0f } },
-		CastCase{ DataType::Int32,
-		          DataType::Int8,
-		          "spirv.SConvert",
-		          { -3.0, -1.0, 0.0, 4.0 },
-		          { -3.0f, -1.0f, 0.0f, 4.0f } },
-		CastCase{ DataType::UInt8,
-		          DataType::Int32,
-		          "spirv.UConvert",
-		          { 0.0, 1.0, 2.0, 4.0 },
-		          { 0.0f, 1.0f, 2.0f, 4.0f } },
+		CastCase{
+		    DataType::Int32, DataType::Int8, "spirv.SConvert", { -3.0, -1.0, 0.0, 4.0 }, { -3.0f, -1.0f, 0.0f, 4.0f } },
+		CastCase{
+		    DataType::UInt8, DataType::Int32, "spirv.UConvert", { 0.0, 1.0, 2.0, 4.0 }, { 0.0f, 1.0f, 2.0f, 4.0f } },
 	};
 
 	constexpr std::array kRuntimeCastCases{
@@ -202,17 +197,21 @@ namespace
 			throw std::runtime_error("Unexpected unary test op");
 		}
 	}
-}
+} // namespace
 
 TEST(CompiledModuleVulkanTest, GeneratesSimpleAddSPIRVFromMLIR)
 {
 	for (const auto& item : kBinaryCases)
 	{
-		const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(item.op);
+		const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(item.op, kElementCount);
 		EXPECT_FALSE(generated.words.empty());
 		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
 		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.ULessThan"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.mlir.selection"), std::string::npos);
 		EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("LocalSize"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("64, 1, 1"), std::string::npos);
 	}
 }
 
@@ -220,11 +219,15 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleUnarySPIRVFromMLIR)
 {
 	for (const auto& item : kUnaryCases)
 	{
-		const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(item.op);
+		const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(item.op, kElementCount);
 		EXPECT_FALSE(generated.words.empty());
 		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
 		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.ULessThan"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.mlir.selection"), std::string::npos);
 		EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("LocalSize"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("64, 1, 1"), std::string::npos);
 	}
 }
 
@@ -232,11 +235,15 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleCastSPIRVFromMLIR)
 {
 	for (const auto& item : kCastCases)
 	{
-		const auto generated = VulkanNativeSameShapeCastSPIRV(item.srcType, item.dstType);
+		const auto generated = VulkanNativeSameShapeCastSPIRV(item.srcType, item.dstType, kElementCount);
 		EXPECT_FALSE(generated.words.empty());
 		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
 		EXPECT_NE(generated.mlir.find(item.mlirOp), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.ULessThan"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.mlir.selection"), std::string::npos);
 		EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("LocalSize"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("64, 1, 1"), std::string::npos);
 	}
 }
 
@@ -248,7 +255,23 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 	EXPECT_FALSE(artifact.Instructions().empty());
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add);
+	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add, kElementCount);
+	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+}
+
+TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
+{
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].groups.x, 2u);
+	const auto generated =
+	    VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
 	EXPECT_EQ(payload.spirv, generated.words);
 }
 
@@ -260,8 +283,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
 	EXPECT_FALSE(artifact.Instructions().empty());
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp::Sqrt);
+	const auto generated = VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp::Sqrt, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
@@ -272,8 +297,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
 	EXPECT_FALSE(artifact.Instructions().empty());
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Int32);
+	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Int32, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
@@ -284,9 +311,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
 	EXPECT_FALSE(artifact.Instructions().empty());
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Float16);
+	const auto generated = VulkanNativeSameShapeCastSPIRV(DataType::Float32, DataType::Float16, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
-	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeCastLowPrecision)),
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeCastLowPrecision)),
 	          0ull);
 }
 

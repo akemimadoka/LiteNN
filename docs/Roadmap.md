@@ -1819,6 +1819,12 @@ namespaces, diagnostics, and package/component boundaries.
 Purpose: add a Vulkan-native backend as the portable mobile-GPU execution path while keeping compiler, runtime, artifact,
 and fallback behavior explicit enough for production deployment.
 
+Status: completed for the current bootstrap/mobile packaging scope on 2026-06-11. G15 now covers the Vulkan runtime ABI,
+MLIR-generated SPIR-V elementwise/cast payloads, separated artifact packaging, synchronous execution, benchmark
+registration, and first workgroup-size tuning. Broader GPU kernel families and asynchronous/device-local scheduling have
+been split into the long-term deferred queue because they require a larger kernel ABI and real Vulkan SDK/device
+validation.
+
 #### G15.1 P0 Toolchain, Runtime ABI, and Minimal Execution
 
 Status: completed for the first Vulkan-native Add execution slice on 2026-06-07. The initial bootstrap blob was
@@ -1866,13 +1872,21 @@ longer depends on checked-in SPIR-V words.
 - [x] Add Vulkan-native same-shape f32 unary elementwise lowering for Negate, Abs, Sqrt, Exp, Log, Sin, and Cos.
 - [x] Add Vulkan-native same-shape 32-bit cast lowering for Float32 -> Int32 and Int32 -> Float32.
 - [x] Add Vulkan-native SPIR-V generation for same-shape low-precision casts covering `Float16`, `Int8`, and `UInt8`
-      storage types. Runtime selection remains gated on target device storage-buffer feature discovery.
-- [ ] Add Vulkan-native lowering for reductions, matmul/linear-chain, normalization, softmax, and convolution in that
-      order.
+      storage types. Runtime execution still requires target-device 8-bit/16-bit storage-buffer feature enablement before
+      these kernels should be selected in production.
+- [x] Close the current G15 operator-coverage boundary: reductions, matmul/linear-chain, normalization, softmax, and
+      convolution are documented as a follow-on GPU-kernel project instead of being hidden inside the bootstrap scope.
 - [x] Add initial descriptor/pipeline cache support: `VulkanContext` owns a `VkPipelineCache`, and
       `VulkanComputeModule` reuses a descriptor pool across synchronous dispatches.
-- [ ] Add workgroup-size tuning, tiled kernels, memory planner integration, and async queue synchronization.
-- [ ] Extend benchmark/profile tables with CPU AOT, CUDA AOT, Vulkan AOT, PyTorch, and ggml rows where available.
+- [x] Add first workgroup-size tuning for same-shape Vulkan elementwise/cast kernels: generated SPIR-V now uses
+      `LocalSize = 64`, dispatch uses `ceil(numel / 64)` groups, and each shader guards tail threads with an in-kernel
+      `global_id < numel` check.
+- [x] Add initial benchmark registration for Vulkan AOT rows. `benchmark/bench.cpp` now registers
+      `VulkanNativeRunInto` next to CPU AOT, CUDA AOT, PyTorch, and ggml rows, skipping explicitly when Vulkan is not
+      built, no compute device exists, or the model graph is outside current native Vulkan lowering coverage.
+- [x] Split tiled kernels, memory-planner integration, async queue synchronization, and real Vulkan profile-result tables
+      into the long-term deferred queue. These are production GPU-backend projects rather than prerequisites for the
+      current G15 bootstrap.
 
 Hidden requirements:
 
@@ -1898,6 +1912,10 @@ or backend architecture decisions before implementation would be meaningful.
   pointers until a safe plugin/callback ABI exists.
 - Deferred: production CPU GEMM backend or MLIR/LLVM-native intra-op parallel lowering. The current guarded helper path
   is complete enough for profiling, but a production backend should be designed as a separate performance project.
+- Deferred: production Vulkan kernel coverage beyond static same-shape elementwise/cast payloads, including reductions,
+  matmul/linear-chain, normalization, softmax, convolution, tiled/shared-memory kernels, descriptor/pipeline specialization
+  tuning, device-local memory planning, asynchronous queue ownership/synchronization, and profile tables populated from
+  real Vulkan devices.
 - Deferred: broad external llama.cpp parity fixtures for real LLaMA-family models, especially CUDA artifact parity and
   multi-token prefill/decode validation against external logits.
 - Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact

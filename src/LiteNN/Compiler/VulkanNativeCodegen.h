@@ -15,12 +15,15 @@ namespace LiteNN
 		std::string mlir;
 	};
 
+	constexpr std::uint32_t kVulkanNativeElementwiseWorkgroupSize = 64;
+
 	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op);
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType,
+	                                                          std::uint32_t elementCount);
 } // namespace LiteNN
 
 #endif

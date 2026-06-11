@@ -375,9 +375,8 @@ namespace
 	                                     std::uint64_t requestedThreadCount, bool relu)
 	{
 		const auto flops = m * k * n * 2;
-		const auto threadCount = std::min<std::uint64_t>(requestedThreadCount == 0 ? LiteNNCPUHardwareThreadCount()
-		                                                                           : requestedThreadCount,
-		                                                 m);
+		const auto threadCount = std::min<std::uint64_t>(
+		    requestedThreadCount == 0 ? LiteNNCPUHardwareThreadCount() : requestedThreadCount, m);
 		if (threadCount <= 1 || flops < (1ull << 20))
 		{
 			LiteNNCPUMatMulBiasReLURange(lhs, rhs, bias, out, 0, m, k, n, biasRows, relu);
@@ -762,7 +761,7 @@ namespace
 	}
 
 	CompiledModuleRegionInfo MakeRegionInfo(std::string_view name, std::span<const std::byte> bytes,
-	                                         std::uint64_t alignment = 1)
+	                                        std::uint64_t alignment = 1)
 	{
 		return {
 			.name = std::string(name),
@@ -897,7 +896,7 @@ namespace
 		AppendU32(rodata, static_cast<std::uint32_t>(inputs.size()));
 		AppendU32(rodata, static_cast<std::uint32_t>(outputs.size()));
 
-	const auto appendSpec = [&](const CompiledTensorSpec& spec) {
+		const auto appendSpec = [&](const CompiledTensorSpec& spec) {
 			const auto shape = spec.type.StaticShape();
 			AppendU32(rodata, static_cast<std::uint32_t>(spec.type.dtype));
 			AppendU32(rodata, static_cast<std::uint32_t>(shape.size()));
@@ -1070,7 +1069,8 @@ namespace
 		case static_cast<std::uint32_t>(CompiledModuleExternalTensorRebindPolicy::ExactChecksum):
 			return CompiledModuleExternalTensorRebindPolicy::ExactChecksum;
 		default:
-			throw std::runtime_error("Compiled module separated metadata contains an invalid external tensor rebind policy");
+			throw std::runtime_error(
+			    "Compiled module separated metadata contains an invalid external tensor rebind policy");
 		}
 	}
 
@@ -1101,7 +1101,8 @@ namespace
 		if (dtypeValue > static_cast<std::uint32_t>(LastDataType) ||
 		    !IsValidDataTypeValue(static_cast<DataType>(dtypeValue)))
 		{
-			throw std::runtime_error("Compiled module separated metadata contains an invalid external tensor data type");
+			throw std::runtime_error(
+			    "Compiled module separated metadata contains an invalid external tensor data type");
 		}
 		const auto dtype = static_cast<DataType>(dtypeValue);
 		const auto rank = ReadU32(bytes, offset);
@@ -1155,11 +1156,10 @@ namespace
 		};
 	}
 
-	std::vector<std::byte> SerializeSeparatedMetadata(std::span<const std::byte> legacyRodata,
-	                                                  std::span<const std::byte> constants,
-	                                                  std::span<const std::byte> weights,
-	                                                  std::span<const std::byte> instructions,
-	                                                  std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
+	std::vector<std::byte>
+	SerializeSeparatedMetadata(std::span<const std::byte> legacyRodata, std::span<const std::byte> constants,
+	                           std::span<const std::byte> weights, std::span<const std::byte> instructions,
+	                           std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
 	{
 		std::vector<std::byte> metadata;
 		metadata.insert(metadata.end(), kSeparatedMetadataMagic.begin(), kSeparatedMetadataMagic.end());
@@ -1211,8 +1211,7 @@ namespace
 			if (info.byteOffset > region.size || info.byteSize > region.size - info.byteOffset)
 			{
 				throw std::runtime_error(std::format(
-				    "Compiled module separated metadata external tensor '{}' byte range is out of bounds",
-				    info.name));
+				    "Compiled module separated metadata external tensor '{}' byte range is out of bounds", info.name));
 			}
 			if (info.byteOffset % info.alignment != 0)
 			{
@@ -1297,7 +1296,8 @@ namespace
 	{
 		if (region.size != 0 && region.data == nullptr)
 		{
-			throw std::runtime_error(std::format("Compiled module separated '{}' region has a null data pointer", name));
+			throw std::runtime_error(
+			    std::format("Compiled module separated '{}' region has a null data pointer", name));
 		}
 		return { static_cast<const std::byte*>(region.data), region.size };
 	}
@@ -1308,15 +1308,14 @@ namespace
 		if (bytes.size() != expected.size)
 		{
 			throw std::runtime_error(
-			    std::format("Compiled module separated '{}' region size mismatch: expected {}, got {}",
-			                expected.name, expected.size, bytes.size()));
+			    std::format("Compiled module separated '{}' region size mismatch: expected {}, got {}", expected.name,
+			                expected.size, bytes.size()));
 		}
 		if (expected.alignment > 1 && region.size != 0 &&
 		    reinterpret_cast<std::uintptr_t>(region.data) % expected.alignment != 0)
 		{
-			throw std::runtime_error(
-			    std::format("Compiled module separated '{}' region is not aligned to {} bytes",
-			                expected.name, expected.alignment));
+			throw std::runtime_error(std::format("Compiled module separated '{}' region is not aligned to {} bytes",
+			                                     expected.name, expected.alignment));
 		}
 		const auto checksum = ChecksumBytes(bytes);
 		if (checksum != expected.checksum)
@@ -1336,8 +1335,8 @@ namespace
 		{
 			return RegionBytes(image.weights, kWeightsRegionName);
 		}
-		throw std::runtime_error(std::format("Compiled module separated external tensor references invalid '{}' region",
-		                                     name));
+		throw std::runtime_error(
+		    std::format("Compiled module separated external tensor references invalid '{}' region", name));
 	}
 
 	void ValidateExternalTensorChecksums(std::span<const CompiledModuleExternalTensorInfo> infos,
@@ -1356,8 +1355,8 @@ namespace
 				                            static_cast<std::size_t>(info.byteSize) };
 			if (ChecksumBytes(tensorBytes) != info.checksum)
 			{
-				throw std::runtime_error(std::format(
-				    "Compiled module separated external tensor '{}' checksum mismatch", info.name));
+				throw std::runtime_error(
+				    std::format("Compiled module separated external tensor '{}' checksum mismatch", info.name));
 			}
 		}
 	}
@@ -1421,8 +1420,8 @@ namespace
 		for (std::size_t i = 0; i < signature.size(); ++i)
 		{
 			const auto output = subgraph.Results()[i];
-			specs.push_back(CompiledTensorSpec::FromType(
-			    signature[i].name, signature[i].type, InferOutputQuantization(graph, subgraph, output)));
+			specs.push_back(CompiledTensorSpec::FromType(signature[i].name, signature[i].type,
+			                                             InferOutputQuantization(graph, subgraph, output)));
 		}
 		return specs;
 	}
@@ -1439,11 +1438,12 @@ namespace
 		CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
 	};
 
-	CompiledArtifactParts MakeCompiledArtifactParts(
-	    std::vector<std::byte> rodata, std::vector<std::byte> instructions,
-	    std::vector<CompiledTensorSpec> inputSpecs, std::vector<CompiledTensorSpec> outputSpecs,
-	    CompiledModuleBackend backend, std::vector<std::byte> constants = {}, std::vector<std::byte> weights = {},
-	    std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {})
+	CompiledArtifactParts
+	MakeCompiledArtifactParts(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
+	                          std::vector<CompiledTensorSpec> inputSpecs, std::vector<CompiledTensorSpec> outputSpecs,
+	                          CompiledModuleBackend backend, std::vector<std::byte> constants = {},
+	                          std::vector<std::byte> weights = {},
+	                          std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {})
 	{
 		CompiledArtifactParts parts;
 		parts.rodata = std::move(rodata);
@@ -1570,8 +1570,7 @@ namespace
 		return offset;
 	}
 
-	std::uint64_t AppendExternalRegionBytes(std::vector<std::byte>& bytes,
-	                                        std::span<const std::byte> payload,
+	std::uint64_t AppendExternalRegionBytes(std::vector<std::byte>& bytes, std::span<const std::byte> payload,
 	                                        std::uint64_t alignment = 64)
 	{
 		const auto offset = AlignUpU64(static_cast<std::uint64_t>(bytes.size()), alignment);
@@ -1597,12 +1596,10 @@ namespace
 		return builder.CreateInBoundsGEP(i8Ty, base, builder.getInt64(offset));
 	}
 
-	CompiledModuleExternalTensorInfo MakeExternalF32TensorInfo(std::string name,
-	                                                           std::string_view regionName,
+	CompiledModuleExternalTensorInfo MakeExternalF32TensorInfo(std::string name, std::string_view regionName,
 	                                                           std::span<const std::byte> regionBytes,
 	                                                           std::span<const std::size_t> shape,
-	                                                           std::uint64_t byteOffset,
-	                                                           std::uint64_t byteSize,
+	                                                           std::uint64_t byteOffset, std::uint64_t byteSize,
 	                                                           std::uint64_t alignment)
 	{
 		const auto bytes = std::span<const std::byte>{
@@ -1621,13 +1618,10 @@ namespace
 		};
 	}
 
-	CompiledModuleExternalTensorInfo MakeExternalTensorInfo(std::string name,
-	                                                        std::string_view regionName,
-	                                                        DataType dtype,
-	                                                        std::span<const std::byte> regionBytes,
+	CompiledModuleExternalTensorInfo MakeExternalTensorInfo(std::string name, std::string_view regionName,
+	                                                        DataType dtype, std::span<const std::byte> regionBytes,
 	                                                        std::span<const std::size_t> shape,
-	                                                        std::uint64_t byteOffset,
-	                                                        std::uint64_t byteSize,
+	                                                        std::uint64_t byteOffset, std::uint64_t byteSize,
 	                                                        std::uint64_t alignment)
 	{
 		const auto bytes = std::span<const std::byte>{
@@ -1719,8 +1713,7 @@ namespace
 		return changed;
 	}
 
-	std::vector<std::size_t> UnionExternalIds(std::span<const std::size_t> lhs,
-	                                          std::span<const std::size_t> rhs)
+	std::vector<std::size_t> UnionExternalIds(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs)
 	{
 		std::vector<std::size_t> result(lhs.begin(), lhs.end());
 		AppendUniqueExternalIds(result, rhs);
@@ -1962,9 +1955,9 @@ namespace
 					if (inserted)
 					{
 						constexpr std::uint64_t kAlignment = 64;
-						const auto offset = AppendTensorPayloadBytes(result.weights,
-						                                             graph.GetVariable(variable->variableIndex)->Data(),
-						                                             output.dtype, output.shape, kAlignment);
+						const auto offset =
+						    AppendTensorPayloadBytes(result.weights, graph.GetVariable(variable->variableIndex)->Data(),
+						                             output.dtype, output.shape, kAlignment);
 						if (!offset)
 						{
 							return std::nullopt;
@@ -1999,17 +1992,17 @@ namespace
 					}
 
 					constexpr std::uint64_t kAlignment = 64;
-					const auto offset =
-					    AppendTensorPayloadBytes(result.constants, constant->value, output.dtype, output.shape, kAlignment);
+					const auto offset = AppendTensorPayloadBytes(result.constants, constant->value, output.dtype,
+					                                             output.shape, kAlignment);
 					if (!offset)
 					{
 						continue;
 					}
 					const auto externalId = result.externalTensorInfos.size();
 					const auto name = std::format("constant_{}_{}", subgraphId, nodeId);
-					result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-					    name, kConstantsRegionName, output.dtype, result.constants, output.shape, *offset, byteSize,
-					    kAlignment));
+					result.externalTensorInfos.push_back(
+					    MakeExternalTensorInfo(name, kConstantsRegionName, output.dtype, result.constants, output.shape,
+					                           *offset, byteSize, kAlignment));
 					directExternalByNode[subgraphId][nodeId] = externalId;
 					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], externalId);
 				}
@@ -2075,7 +2068,8 @@ namespace
 			{
 				if (const auto* whileNode = std::get_if<WhileNode>(&entry.node))
 				{
-					if (whileNode->condBranch >= graph.SubgraphCount() || whileNode->bodyBranch >= graph.SubgraphCount())
+					if (whileNode->condBranch >= graph.SubgraphCount() ||
+					    whileNode->bodyBranch >= graph.SubgraphCount())
 					{
 						return std::nullopt;
 					}
@@ -2334,8 +2328,8 @@ namespace
 					const auto offset = AppendExternalF32Region(externalWeights, *constantData);
 					ptr = AddExternalRegionPointer(*module, builder, "litenn_cpu_external_weights", offset);
 					externalTensorInfos.push_back(MakeExternalF32TensorInfo(
-					    graph.VariableName(variable->variableIndex), kWeightsRegionName, externalWeights, output.shape, offset,
-					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
+					    graph.VariableName(variable->variableIndex), kWeightsRegionName, externalWeights, output.shape,
+					    offset, static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
 				}
 				else
 				{
@@ -2363,8 +2357,8 @@ namespace
 					const auto offset = AppendExternalF32Region(externalConstants, *constantData);
 					ptr = AddExternalRegionPointer(*module, builder, "litenn_cpu_external_constants", offset);
 					externalTensorInfos.push_back(MakeExternalF32TensorInfo(
-					    std::format("constant_{}", nodeId), kConstantsRegionName, externalConstants, output.shape, offset,
-					    static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
+					    std::format("constant_{}", nodeId), kConstantsRegionName, externalConstants, output.shape,
+					    offset, static_cast<std::uint64_t>(constantData->size() * sizeof(float)), kAlignment));
 				}
 				else
 				{
@@ -2442,12 +2436,17 @@ namespace
 		OptimizeLLVMModule(*module, *config.targetMachine, options.cpuAOTLLVMOptLevel);
 		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*module);
-		return CompiledArtifactParts{ std::move(rodata), std::move(instructions), std::move(externalConstants), std::move(externalWeights),
-			                          std::move(externalTensorInfos), inputSpecs, outputSpecs };
+		return CompiledArtifactParts{ std::move(rodata),
+			                          std::move(instructions),
+			                          std::move(externalConstants),
+			                          std::move(externalWeights),
+			                          std::move(externalTensorInfos),
+			                          inputSpecs,
+			                          outputSpecs };
 	}
 
-	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(
-	    const Graph& graph, const CompilerOptions& options)
+	std::optional<CompiledArtifactParts>
+	TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(const Graph& graph, const CompilerOptions& options)
 	{
 		if (auto parts = TryCompileCPUParallelLinearChainF32(graph, options))
 		{
@@ -2719,8 +2718,7 @@ namespace
 	}
 
 	void AddUniformEntryWrapper(llvm::Module& module, std::string_view calleeName,
-	                            std::span<const CompiledTensorSpec> inputs,
-	                            std::span<const CompiledTensorSpec> outputs,
+	                            std::span<const CompiledTensorSpec> inputs, std::span<const CompiledTensorSpec> outputs,
 	                            std::span<const CompiledModuleExternalTensorInfo> externalInputs = {})
 	{
 		auto* callee = module.getFunction(calleeName);
@@ -2752,8 +2750,8 @@ namespace
 		}
 		for (const auto& external : externalInputs)
 		{
-			const auto symbol = external.region == kWeightsRegionName ? "litenn_cpu_external_weights"
-			                                                          : "litenn_cpu_external_constants";
+			const auto symbol =
+			    external.region == kWeightsRegionName ? "litenn_cpu_external_weights" : "litenn_cpu_external_constants";
 			auto* data = AddExternalRegionPointer(module, builder, symbol, external.byteOffset);
 			descriptors.push_back(BuildMemRefDescriptor(builder, data, ExternalTensorAsSpec(external)));
 		}
@@ -3010,10 +3008,9 @@ namespace
 		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*) (std::size_t)>(&std::malloc)));
 		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
 		RegisterJITRuntimeSymbol(
-		    "memcpy",
-		    reinterpret_cast<void*>(static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy)));
-		RegisterJITRuntimeSymbol("memset",
-		                         reinterpret_cast<void*>(static_cast<void* (*)(void*, int, std::size_t)>(&std::memset)));
+		    "memcpy", reinterpret_cast<void*>(static_cast<void* (*) (void*, const void*, std::size_t)>(&std::memcpy)));
+		RegisterJITRuntimeSymbol(
+		    "memset", reinterpret_cast<void*>(static_cast<void* (*) (void*, int, std::size_t)>(&std::memset)));
 		RegisterJITRuntimeSymbol("expf", reinterpret_cast<void*>(&LiteNNRuntimeExpF));
 		RegisterJITRuntimeSymbol("logf", reinterpret_cast<void*>(&LiteNNRuntimeLogF));
 		RegisterJITRuntimeSymbol("sqrtf", reinterpret_cast<void*>(&LiteNNRuntimeSqrtF));
@@ -3029,8 +3026,7 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_constants",
 		                         reinterpret_cast<void*>(&litenn_cpu_external_constants));
-		RegisterJITRuntimeSymbol("litenn_cpu_external_weights",
-		                         reinterpret_cast<void*>(&litenn_cpu_external_weights));
+		RegisterJITRuntimeSymbol("litenn_cpu_external_weights", reinterpret_cast<void*>(&litenn_cpu_external_weights));
 
 		LoadedJIT loaded;
 		loaded.context = std::make_unique<llvm::LLVMContext>();
@@ -3125,8 +3121,7 @@ namespace
 	}
 
 	std::vector<std::byte> EmitSingleRegionCarrierObject(std::span<const std::byte> region,
-	                                                     std::string_view symbolPrefix,
-	                                                     std::string_view regionName,
+	                                                     std::string_view symbolPrefix, std::string_view regionName,
 	                                                     std::string_view sectionName)
 	{
 		llvm::LLVMContext ctx;
@@ -3163,25 +3158,25 @@ namespace
 	void WriteAllBytes(const std::filesystem::path& path, std::span<const std::byte> bytes)
 	{
 		std::ofstream out(path, std::ios::binary);
-	if (!out)
-	{
-		throw std::runtime_error("Failed to open output object file");
-	}
-	constexpr std::size_t kChunkBytes = 64ull * 1024ull * 1024ull;
-	std::size_t offset = 0;
-	while (offset < bytes.size())
-	{
-		const auto remaining = bytes.size() - offset;
-		const auto chunk = std::min(remaining, kChunkBytes);
-		out.write(reinterpret_cast<const char*>(bytes.data() + static_cast<std::ptrdiff_t>(offset)),
-		          static_cast<std::streamsize>(chunk));
 		if (!out)
 		{
-			throw std::runtime_error("Failed to write output object file");
+			throw std::runtime_error("Failed to open output object file");
 		}
-		offset += chunk;
+		constexpr std::size_t kChunkBytes = 64ull * 1024ull * 1024ull;
+		std::size_t offset = 0;
+		while (offset < bytes.size())
+		{
+			const auto remaining = bytes.size() - offset;
+			const auto chunk = std::min(remaining, kChunkBytes);
+			out.write(reinterpret_cast<const char*>(bytes.data() + static_cast<std::ptrdiff_t>(offset)),
+			          static_cast<std::streamsize>(chunk));
+			if (!out)
+			{
+				throw std::runtime_error("Failed to write output object file");
+			}
+			offset += chunk;
+		}
 	}
-}
 
 	std::optional<std::size_t> FindSpecIndex(std::span<const CompiledTensorSpec> specs, std::string_view name)
 	{
@@ -3236,15 +3231,16 @@ namespace
 		if (binding.type.dtype != spec.type.dtype || ShapeView{ binding.type.StaticShape() } != ShapeView{ shape })
 		{
 			const auto label = spec.name.empty() ? std::to_string(index) : std::format("{} ('{}')", index, spec.name);
-			throw std::runtime_error(std::format("CompiledModule {} {} mismatch: expected {}, got {}", role, label,
-			                                     Validation::FormatInfo(spec.type.dtype, shape),
-			                                     Validation::FormatInfo(binding.type.dtype, binding.type.StaticShape())));
+			throw std::runtime_error(
+			    std::format("CompiledModule {} {} mismatch: expected {}, got {}", role, label,
+			                Validation::FormatInfo(spec.type.dtype, shape),
+			                Validation::FormatInfo(binding.type.dtype, binding.type.StaticShape())));
 		}
 		if (!binding.name.empty() && !spec.name.empty() && binding.name != spec.name)
 		{
 			const auto label = std::format("{} ('{}')", index, spec.name);
-			throw std::runtime_error(std::format("CompiledModule {} {} name mismatch: got '{}'", role, label,
-			                                     binding.name));
+			throw std::runtime_error(
+			    std::format("CompiledModule {} {} name mismatch: got '{}'", role, label, binding.name));
 		}
 	}
 
@@ -5616,9 +5612,9 @@ namespace
 		auto outputView = Tensor<CUDA>::UnsafeBorrowed(outputPtr, { m, n }, *dtype, device);
 		auto lhsView = Tensor<CUDA>::UnsafeBorrowed(lhsPtr, { m, k }, *dtype, device);
 		auto rhsView = Tensor<CUDA>::UnsafeBorrowed(rhsPtr, { k, n }, *dtype, device);
-		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.UnsafeRawData(), lhsView.DType(), lhsView.Shape(),
-		                               lhsView.UnsafeRawData(), rhsView.DType(), rhsView.Shape(), rhsView.UnsafeRawData(),
-		                               ToCUDAExecutionOptions(options));
+		DeviceTraits<CUDA>::DoBinaryOp(device, BinaryOp::MatMul, outputView.UnsafeRawData(), lhsView.DType(),
+		                               lhsView.Shape(), lhsView.UnsafeRawData(), rhsView.DType(), rhsView.Shape(),
+		                               rhsView.UnsafeRawData(), ToCUDAExecutionOptions(options));
 	}
 
 	void RunCUDANativePayload(CUDA& device, const CUDANativeInstructionPayload& payload, const CUDADriverModule& module,
@@ -5852,6 +5848,12 @@ namespace
 		return static_cast<std::uint32_t>(count);
 	}
 
+	std::uint32_t VulkanP0ElementwiseGroupCount(std::uint32_t elementCount)
+	{
+		return (elementCount / kVulkanNativeElementwiseWorkgroupSize) +
+		       (elementCount % kVulkanNativeElementwiseWorkgroupSize == 0 ? 0u : 1u);
+	}
+
 	std::optional<VulkanP0UnaryPlan> MatchVulkanP0SameShapeUnaryF32(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
@@ -6081,13 +6083,13 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeUnaryF32FeatureFlag(plan->op));
-		auto spirv = VulkanNativeSameShapeUnaryF32SPIRV(plan->op);
+		auto spirv = VulkanNativeSameShapeUnaryF32SPIRV(plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		payload.kernels.push_back({
 		    .entryPoint = "main",
-		    .groups = { .x = plan->elementCount, .y = 1, .z = 1 },
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
@@ -6127,12 +6129,12 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeCastFeatureFlag(plan->srcType, plan->dstType));
-		auto spirv = VulkanNativeSameShapeCastSPIRV(plan->srcType, plan->dstType);
+		auto spirv = VulkanNativeSameShapeCastSPIRV(plan->srcType, plan->dstType, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
 		payload.kernels.push_back({
 		    .entryPoint = "main",
-		    .groups = { .x = plan->elementCount, .y = 1, .z = 1 },
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
@@ -6194,13 +6196,13 @@ namespace
 		default:
 			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
 		}
-		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op);
+		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		payload.kernels.push_back({
 		    .entryPoint = "main",
-		    .groups = { .x = plan->elementCount, .y = 1, .z = 1 },
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->lhsInputIndex,
@@ -6318,8 +6320,9 @@ namespace
 			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
 			                       externalized->entryExternalTensorInfos);
 		});
-		TimedCompileDiagnostic(options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
-		                       [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
+		TimedCompileDiagnostic(
+		    options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
+		    [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
 
 		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
 			return SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
@@ -6386,8 +6389,7 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, 
 
 	for (const auto& variable : plan.variables)
 	{
-		const auto byteSize = static_cast<std::uint64_t>(
-		    variable.LogicalByteSize().value_or(variable.region.byteSize));
+		const auto byteSize = static_cast<std::uint64_t>(variable.LogicalByteSize().value_or(variable.region.byteSize));
 		estimate.variablePayloadBytes = SaturatedAddU64(estimate.variablePayloadBytes, byteSize);
 		if (options.enableCPUAOTExternalRegions)
 		{
@@ -6415,8 +6417,8 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, 
 				    else if constexpr (std::same_as<T, ConstantNode>)
 				    {
 					    ++estimate.constantNodeCount;
-					    const auto byteSize =
-					        static_cast<std::uint64_t>(node.value.NumElements()) * LiteNN::ElementByteSize(node.value.DType());
+					    const auto byteSize = static_cast<std::uint64_t>(node.value.NumElements()) *
+					                          LiteNN::ElementByteSize(node.value.DType());
 					    estimate.constantPayloadBytes = SaturatedAddU64(estimate.constantPayloadBytes, byteSize);
 					    const bool externalized = options.enableCPUAOTExternalRegions &&
 					                              CanExternalizeCPUTensorInMLIR(node.value.DType()) &&
@@ -6454,13 +6456,10 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const Graph& graph, const Co
 	return EstimateCompileBudget(Detail::BuildExecutablePlanFromGraph(graph), options);
 }
 
-CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
-                                                                 std::vector<std::byte> constants,
-                                                                 std::vector<std::byte> weights,
-                                                                 std::vector<std::byte> instructions,
-                                                                 std::vector<CompiledTensorSpec> inputSpecs,
-                                                                 std::vector<CompiledTensorSpec> outputSpecs,
-                                                                 CompiledModuleBackend backend)
+CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(
+    std::vector<std::byte> metadata, std::vector<std::byte> constants, std::vector<std::byte> weights,
+    std::vector<std::byte> instructions, std::vector<CompiledTensorSpec> inputSpecs,
+    std::vector<CompiledTensorSpec> outputSpecs, CompiledModuleBackend backend)
     : metadata_(std::move(metadata)), constants_(std::move(constants)), weights_(std::move(weights)),
       instructions_(std::move(instructions)), inputSpecs_(std::move(inputSpecs)), outputSpecs_(std::move(outputSpecs)),
       backend_(backend)
@@ -6471,12 +6470,9 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::CopyFromImage(C
 {
 	auto separatedMetadata = ValidateSeparatedImage(image);
 	return CompiledModuleSeparatedArtifact(
-	    ToByteVector(image.metadata, kMetadataRegionName),
-	    ToByteVector(image.constants, kConstantsRegionName),
-	    ToByteVector(image.weights, kWeightsRegionName),
-	    ToByteVector(image.instructions, kInstructionsRegionName),
-	    std::move(separatedMetadata.legacyMetadata.inputSpecs),
-	    std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	    ToByteVector(image.metadata, kMetadataRegionName), ToByteVector(image.constants, kConstantsRegionName),
+	    ToByteVector(image.weights, kWeightsRegionName), ToByteVector(image.instructions, kInstructionsRegionName),
+	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),
 	    separatedMetadata.legacyMetadata.backend);
 }
 
@@ -6491,15 +6487,14 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegion
 	    .weights = { .data = weights.data(), .size = weights.size() },
 	    .instructions = { .data = instructions.data(), .size = instructions.size() },
 	});
-	return CompiledModuleSeparatedArtifact(std::move(metadata), std::move(constants), std::move(weights),
-	                                       std::move(instructions),
-	                                       std::move(separatedMetadata.legacyMetadata.inputSpecs),
-	                                       std::move(separatedMetadata.legacyMetadata.outputSpecs),
-	                                       separatedMetadata.legacyMetadata.backend);
+	return CompiledModuleSeparatedArtifact(
+	    std::move(metadata), std::move(constants), std::move(weights), std::move(instructions),
+	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	    separatedMetadata.legacyMetadata.backend);
 }
 
-CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromExportedSymbols(
-    CompiledModuleSeparatedExportedSymbols symbols)
+CompiledModuleSeparatedArtifact
+CompiledModuleSeparatedArtifact::FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols)
 {
 	return CopyFromImage({
 	    .metadata = {
@@ -6543,13 +6538,13 @@ CompiledModule<CUDA> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegion
 }
 #endif
 
-CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundConstants(
-    CompiledModuleRegion constants) const
+CompiledModuleSeparatedArtifact
+CompiledModuleSeparatedArtifact::WithReboundConstants(CompiledModuleRegion constants) const
 {
 	auto metadata = DeserializeSeparatedMetadata(metadata_);
 	ValidateSeparatedRegion(constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
 	return CompiledModuleSeparatedArtifact(metadata_, ToByteVector(constants, kConstantsRegionName), weights_,
-	                                      instructions_, inputSpecs_, outputSpecs_, backend_);
+	                                       instructions_, inputSpecs_, outputSpecs_, backend_);
 }
 
 CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundWeights(CompiledModuleRegion weights) const
@@ -6557,7 +6552,7 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundWeig
 	auto metadata = DeserializeSeparatedMetadata(metadata_);
 	ValidateSeparatedRegion(weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
 	return CompiledModuleSeparatedArtifact(metadata_, constants_, ToByteVector(weights, kWeightsRegionName),
-	                                      instructions_, inputSpecs_, outputSpecs_, backend_);
+	                                       instructions_, inputSpecs_, outputSpecs_, backend_);
 }
 
 CompiledModuleSeparatedImage CompiledModuleSeparatedArtifact::Image() const
@@ -6658,9 +6653,9 @@ void CompiledModuleSeparatedArtifact::WriteObjectFiles(const std::filesystem::pa
 	              EmitSingleRegionCarrierObject(constants_, symbolPrefix, kConstantsRegionName, ".litenn_constants"));
 	WriteAllBytes(directory / (prefix + "_weights.o"),
 	              EmitSingleRegionCarrierObject(weights_, symbolPrefix, kWeightsRegionName, ".litenn_weights"));
-	WriteAllBytes(directory / (prefix + "_instructions.o"),
-	              EmitSingleRegionCarrierObject(instructions_, symbolPrefix, kInstructionsRegionName,
-	                                            ".litenn_instructions"));
+	WriteAllBytes(
+	    directory / (prefix + "_instructions.o"),
+	    EmitSingleRegionCarrierObject(instructions_, symbolPrefix, kInstructionsRegionName, ".litenn_instructions"));
 }
 
 void CompiledModuleSeparatedArtifact::WriteRegionFiles(const std::filesystem::path& directory,
@@ -6677,8 +6672,7 @@ void CompiledModuleSeparatedArtifact::WriteRegionFiles(const std::filesystem::pa
 CompiledModuleArtifact::CompiledModuleArtifact(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
                                                std::vector<CompiledTensorSpec> inputSpecs,
                                                std::vector<CompiledTensorSpec> outputSpecs,
-                                               CompiledModuleBackend backend,
-                                               std::vector<std::byte> constants,
+                                               CompiledModuleBackend backend, std::vector<std::byte> constants,
                                                std::vector<std::byte> weights,
                                                std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos)
     : rodata_(std::move(rodata)), instructions_(std::move(instructions)), constants_(std::move(constants)),
@@ -6852,9 +6846,8 @@ CompiledModule<CPU> CompiledModule<CPU>::Load(CompiledModuleSeparatedImage image
 	auto metadata = ValidateSeparatedImage(image);
 	auto constants = RegionBytes(image.constants, kConstantsRegionName);
 	auto weights = RegionBytes(image.weights, kWeightsRegionName);
-	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
-	                                                           constants);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName), constants);
 	auto module = Load({
 	    .rodata = metadata.legacyRodata.data(),
 	    .rodataSize = metadata.legacyRodata.size(),
@@ -6871,9 +6864,8 @@ CompiledModule<CPU> CompiledModule<CPU>::LoadBorrowedExternalRegions(CompiledMod
 	auto metadata = ValidateSeparatedImage(image);
 	auto constants = RegionBytes(image.constants, kConstantsRegionName);
 	auto weights = RegionBytes(image.weights, kWeightsRegionName);
-	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
-	                                                           constants);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName), constants);
 	auto module = Load({
 	    .rodata = metadata.legacyRodata.data(),
 	    .rodataSize = metadata.legacyRodata.size(),
@@ -6961,7 +6953,7 @@ void CompiledModule<CPU>::RunIntoBindings(std::span<const CompiledTensorBinding>
 }
 
 void CompiledModule<CPU>::RunManyTensorsInto(std::span<const CompiledModuleTensorInvocation> invocations,
-                                      std::size_t threadCount) const
+                                             std::size_t threadCount) const
 {
 	std::vector<CompiledModuleBindingInvocation> bindingInvocations;
 	bindingInvocations.reserve(invocations.size());
@@ -7149,11 +7141,12 @@ namespace
 		if (device.hostFallbackPolicy != CUDAHostFallbackPolicy::Allow)
 		{
 			throw std::runtime_error(std::format(
-			    "CompiledModule<CUDA> CPU bridge for {} is disabled; load with CUDAHostFallbackPolicy::Allow or lower the runtime schedule to a native CUDA artifact with explicit fallback steps",
+			    "CompiledModule<CUDA> CPU bridge for {} is disabled; load with CUDAHostFallbackPolicy::Allow or lower "
+			    "the runtime schedule to a native CUDA artifact with explicit fallback steps",
 			    operation));
 		}
 	}
-}
+} // namespace
 
 struct CompiledModule<CUDA>::Impl
 {
@@ -7244,15 +7237,16 @@ CompiledModule<CUDA> CompiledModule<CUDA>::Load(CompiledModuleSeparatedImage ima
 {
 	auto metadata = ValidateSeparatedImage(image);
 	auto constants = RegionBytes(image.constants, kConstantsRegionName);
-	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
-	                                                           constants);
-	auto module = Load({
-	    .rodata = metadata.legacyRodata.data(),
-	    .rodataSize = metadata.legacyRodata.size(),
-	    .instructions = instructions.data(),
-	    .instructionSize = instructions.size(),
-	}, std::move(device));
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName), constants);
+	auto module = Load(
+	    {
+	        .rodata = metadata.legacyRodata.data(),
+	        .rodataSize = metadata.legacyRodata.size(),
+	        .instructions = instructions.data(),
+	        .instructionSize = instructions.size(),
+	    },
+	    std::move(device));
 	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
 	{
 		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
@@ -7265,16 +7259,17 @@ CompiledModule<CUDA> CompiledModule<CUDA>::LoadBorrowedExternalRegions(CompiledM
 	auto metadata = ValidateSeparatedImage(image);
 	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
 	{
-		auto instructions =
-		    RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-		                                           RegionBytes(image.instructions, kInstructionsRegionName),
-		                                           RegionBytes(image.constants, kConstantsRegionName));
-		auto module = Load({
-		    .rodata = metadata.legacyRodata.data(),
-		    .rodataSize = metadata.legacyRodata.size(),
-		    .instructions = instructions.data(),
-		    .instructionSize = instructions.size(),
-		}, std::move(device));
+		auto instructions = RestoreLegacyInstructionsFromSeparated(
+		    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName),
+		    RegionBytes(image.constants, kConstantsRegionName));
+		auto module = Load(
+		    {
+		        .rodata = metadata.legacyRodata.data(),
+		        .rodataSize = metadata.legacyRodata.size(),
+		        .instructions = instructions.data(),
+		        .instructionSize = instructions.size(),
+		    },
+		    std::move(device));
 		module.impl_->cpuModule = CompiledModule<CPU>::LoadBorrowedExternalRegions(image);
 		return module;
 	}
@@ -7290,7 +7285,7 @@ std::vector<Tensor<CUDA>> CompiledModule<CUDA>::RunTensors(std::span<const Tenso
 }
 
 std::vector<Tensor<CUDA>> CompiledModule<CUDA>::RunTensors(std::span<const Tensor<CUDA>> inputs,
-                                                    CompiledModuleCUDARunOptions options) const
+                                                           CompiledModuleCUDARunOptions options) const
 {
 	if (!impl_)
 	{
@@ -7323,7 +7318,7 @@ void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, 
 }
 
 void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, std::span<Tensor<CUDA>> outputs,
-                                   CompiledModuleCUDARunOptions options) const
+                                          CompiledModuleCUDARunOptions options) const
 {
 	if (!impl_)
 	{
@@ -7395,11 +7390,10 @@ void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, 
 	{
 		Tensor<CPU> cpuInput(Uninitialized, inputs[i].Shape(), inputs[i].DType(), CPU{});
 		auto inputDevice = inputs[i].CurDevice();
-		DeviceTraits<CUDA>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].UnsafeRawData(), inputs[i].NumElements(),
-		                              cpuInput.DType(), cpuInput.UnsafeRawData(),
-		                              CUDAExecutionOptions{ .stream = options.stream,
-		                                                    .synchronize = true,
-		                                                    .allowHostFallback = true });
+		DeviceTraits<CUDA>::CopyToCPU(
+		    inputDevice, inputs[i].DType(), inputs[i].UnsafeRawData(), inputs[i].NumElements(), cpuInput.DType(),
+		    cpuInput.UnsafeRawData(),
+		    CUDAExecutionOptions{ .stream = options.stream, .synchronize = true, .allowHostFallback = true });
 		cpuInputs.push_back(std::move(cpuInput));
 	}
 
@@ -7413,16 +7407,15 @@ void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, 
 
 	for (std::size_t i = 0; i < outputs.size(); ++i)
 	{
-		DeviceTraits<CUDA>::CopyFromCPU(outputs[i].CurDevice(), outputs[i].DType(), outputs[i].UnsafeRawData(),
-		                                cpuOutputs[i].DType(), cpuOutputs[i].UnsafeRawData(), cpuOutputs[i].NumElements(),
-		                                CUDAExecutionOptions{ .stream = options.stream,
-		                                                      .synchronize = true,
-		                                                      .allowHostFallback = true });
+		DeviceTraits<CUDA>::CopyFromCPU(
+		    outputs[i].CurDevice(), outputs[i].DType(), outputs[i].UnsafeRawData(), cpuOutputs[i].DType(),
+		    cpuOutputs[i].UnsafeRawData(), cpuOutputs[i].NumElements(),
+		    CUDAExecutionOptions{ .stream = options.stream, .synchronize = true, .allowHostFallback = true });
 	}
 }
 
 void CompiledModule<CUDA>::RunManyTensorsInto(std::span<const CompiledModuleCUDATensorInvocation> invocations,
-                                       std::size_t threadCount) const
+                                              std::size_t threadCount) const
 {
 	const auto workerCount = NormalizeThreadCount(threadCount, invocations.size());
 	if (workerCount == 0)
@@ -7558,7 +7551,8 @@ namespace
 		if (device.hostFallbackPolicy != VulkanHostFallbackPolicy::Allow)
 		{
 			throw std::runtime_error(std::format(
-			    "CompiledModule<Vulkan> CPU bridge for {} is disabled; load with VulkanHostFallbackPolicy::Allow or lower the runtime schedule to a native Vulkan artifact with explicit fallback steps",
+			    "CompiledModule<Vulkan> CPU bridge for {} is disabled; load with VulkanHostFallbackPolicy::Allow or "
+			    "lower the runtime schedule to a native Vulkan artifact with explicit fallback steps",
 			    operation));
 		}
 	}
@@ -7590,8 +7584,8 @@ namespace
 		return static_cast<std::uint64_t>(elementCount) * ElementByteSize(dtype);
 	}
 
-	void ValidateVulkanArgumentRange(const VulkanNativeArgumentSpec& argument, DataType dtype,
-	                                 std::size_t elementCount, std::string_view label)
+	void ValidateVulkanArgumentRange(const VulkanNativeArgumentSpec& argument, DataType dtype, std::size_t elementCount,
+	                                 std::string_view label)
 	{
 		const auto byteSize = VulkanTensorByteSize(dtype, elementCount);
 		if (argument.byteOffset > byteSize || argument.byteSize > byteSize - argument.byteOffset)
@@ -7605,9 +7599,8 @@ namespace
 	}
 
 	void RunVulkanNativePayload(const VulkanNativeInstructionPayload& payload,
-	                            std::span<const VulkanComputeModule> modules,
-	                            std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
-	                            CompiledModuleVulkanRunOptions options)
+	                            std::span<const VulkanComputeModule> modules, std::span<const Tensor<Vulkan>> inputs,
+	                            std::span<Tensor<Vulkan>> outputs, CompiledModuleVulkanRunOptions options)
 	{
 		if (modules.size() != payload.kernels.size())
 		{
@@ -7658,7 +7651,7 @@ namespace
 			                              VulkanExecutionOptions{ .synchronize = options.synchronize });
 		}
 	}
-}
+} // namespace
 
 struct CompiledModule<Vulkan>::Impl
 {
@@ -7747,15 +7740,16 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleSeparatedImage
 {
 	auto metadata = ValidateSeparatedImage(image);
 	auto constants = RegionBytes(image.constants, kConstantsRegionName);
-	auto instructions = RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-	                                                           RegionBytes(image.instructions, kInstructionsRegionName),
-	                                                           constants);
-	auto module = Load({
-	    .rodata = metadata.legacyRodata.data(),
-	    .rodataSize = metadata.legacyRodata.size(),
-	    .instructions = instructions.data(),
-	    .instructionSize = instructions.size(),
-	}, std::move(device));
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName), constants);
+	auto module = Load(
+	    {
+	        .rodata = metadata.legacyRodata.data(),
+	        .rodataSize = metadata.legacyRodata.size(),
+	        .instructions = instructions.data(),
+	        .instructionSize = instructions.size(),
+	    },
+	    std::move(device));
 	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
 	{
 		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
@@ -7769,16 +7763,17 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::LoadBorrowedExternalRegions(Compi
 	auto metadata = ValidateSeparatedImage(image);
 	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
 	{
-		auto instructions =
-		    RestoreLegacyInstructionsFromSeparated(metadata.legacyMetadata.backend,
-		                                           RegionBytes(image.instructions, kInstructionsRegionName),
-		                                           RegionBytes(image.constants, kConstantsRegionName));
-		auto module = Load({
-		    .rodata = metadata.legacyRodata.data(),
-		    .rodataSize = metadata.legacyRodata.size(),
-		    .instructions = instructions.data(),
-		    .instructionSize = instructions.size(),
-		}, std::move(device));
+		auto instructions = RestoreLegacyInstructionsFromSeparated(
+		    metadata.legacyMetadata.backend, RegionBytes(image.instructions, kInstructionsRegionName),
+		    RegionBytes(image.constants, kConstantsRegionName));
+		auto module = Load(
+		    {
+		        .rodata = metadata.legacyRodata.data(),
+		        .rodataSize = metadata.legacyRodata.size(),
+		        .instructions = instructions.data(),
+		        .instructionSize = instructions.size(),
+		    },
+		    std::move(device));
 		module.impl_->cpuModule = CompiledModule<CPU>::LoadBorrowedExternalRegions(image);
 		return module;
 	}
@@ -7823,8 +7818,7 @@ void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inpu
 	RunTensorsInto(inputs, outputs, CompiledModuleVulkanRunOptions{});
 }
 
-void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inputs,
-                                            std::span<Tensor<Vulkan>> outputs,
+void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
                                             CompiledModuleVulkanRunOptions options) const
 {
 	if (!impl_)
@@ -8026,8 +8020,7 @@ namespace
 			const auto& storage = plan.variables[i];
 			if (!storage.type.IsFullyStatic())
 			{
-				throw std::runtime_error(
-				    std::format("Cannot compile plan variable {} with non-static tensor type", i));
+				throw std::runtime_error(std::format("Cannot compile plan variable {} with non-static tensor type", i));
 			}
 			if (!storage.region.data)
 			{
@@ -8041,8 +8034,8 @@ namespace
 			const auto shape = storage.type.StaticShape();
 			const auto* bytes = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset +
 			                    storage.storageOffsetBytes;
-			auto hostView =
-				Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+			auto hostView = Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape },
+			                                            storage.type.dtype, CPU{});
 			if (storage.quantization)
 			{
 				graph.AddVariable(Variable::CreateFrozenQuantized(hostView, *storage.quantization));
@@ -8138,19 +8131,19 @@ namespace
 		Validation::ValidateGraph(graph);
 		if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
 		{
-			return MakeCompiledArtifactParts(
-			    std::move(parallelParts->rodata), std::move(parallelParts->instructions),
-			    std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
-			    CompiledModuleBackend::CPUNative, std::move(parallelParts->constants), std::move(parallelParts->weights),
-			    std::move(parallelParts->externalTensorInfos));
+			return MakeCompiledArtifactParts(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
+			                                 std::move(parallelParts->inputSpecs),
+			                                 std::move(parallelParts->outputSpecs), CompiledModuleBackend::CPUNative,
+			                                 std::move(parallelParts->constants), std::move(parallelParts->weights),
+			                                 std::move(parallelParts->externalTensorInfos));
 		}
 		if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options))
 		{
-			return MakeCompiledArtifactParts(
-			    std::move(externalParts->rodata), std::move(externalParts->instructions),
-			    std::move(externalParts->inputSpecs), std::move(externalParts->outputSpecs),
-			    CompiledModuleBackend::CPUNative, std::move(externalParts->constants), std::move(externalParts->weights),
-			    std::move(externalParts->externalTensorInfos));
+			return MakeCompiledArtifactParts(std::move(externalParts->rodata), std::move(externalParts->instructions),
+			                                 std::move(externalParts->inputSpecs),
+			                                 std::move(externalParts->outputSpecs), CompiledModuleBackend::CPUNative,
+			                                 std::move(externalParts->constants), std::move(externalParts->weights),
+			                                 std::move(externalParts->externalTensorInfos));
 		}
 
 		mlir::MLIRContext ctx;
@@ -8187,61 +8180,71 @@ namespace
 			if (auto nativeParts = TryCompileCUDANativeCast(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeLinearChain(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeMatMulBias(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeMatMulLowPrecision(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeBinaryF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeConcatF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeSliceF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::CUDANative);
 			}
 		}
@@ -8257,19 +8260,22 @@ namespace
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryF32P0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::VulkanNative);
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::VulkanNative);
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32P0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs), std::move(nativeParts->outputSpecs),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::VulkanNative);
 			}
 		}
@@ -8359,7 +8365,7 @@ CompiledModule<Vulkan> Compiler<Vulkan>::Compile(const ExecutablePlan& plan, con
 }
 
 CompiledModule<Vulkan> Compiler<Vulkan>::Compile(const ExecutablePlan& plan, Vulkan device,
-                                                  const CompilerOptions& options)
+                                                 const CompilerOptions& options)
 {
 	return CompileArtifact(plan, options).Load(std::move(device));
 }
