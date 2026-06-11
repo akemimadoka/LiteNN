@@ -573,6 +573,19 @@ namespace LiteNN
 							const auto broadcastOp = [&](this auto&& self, ShapeView resultShape, void* dst,
 							                             ShapeView shape1, const void* src1, ShapeView shape2,
 							                             const void* src2, auto&& op) -> void {
+								if (shape1 == resultShape && shape2 == resultShape)
+								{
+									const auto* lhs = static_cast<const T1*>(src1);
+									const auto* rhs = static_cast<const T2*>(src2);
+									auto* out = static_cast<ResultType*>(dst);
+									const auto flatElements = resultShape.NumElements();
+									for (auto i = 0uz; i < flatElements; ++i)
+									{
+										out[i] = op(lhs[i], rhs[i]);
+									}
+									return;
+								}
+
 								// 模拟 numpy/pytorch 的广播机制
 								// 广播时，较小的维度如果是 1，或者不存在该维度，则在计算时重复使用该维度的值
 								if (resultShape.NumDim() == 1)
