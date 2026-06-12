@@ -9,6 +9,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace LiteNN;
 
@@ -94,6 +95,16 @@ namespace
 		                                host.DType(), host.UnsafeRawData());
 		const auto* values = static_cast<const float*>(host.UnsafeRawData());
 		return { values[0], values[1], values[2], values[3] };
+	}
+
+	std::vector<float> CopyToHostVector(const Tensor<Vulkan>& tensor)
+	{
+		Tensor<CPU> host(Uninitialized, tensor.Shape(), DataType::Float32, CPU{});
+		auto device = tensor.CurDevice();
+		DeviceTraits<Vulkan>::CopyToCPU(device, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(),
+		                                host.DType(), host.UnsafeRawData());
+		const auto* values = static_cast<const float*>(host.UnsafeRawData());
+		return std::vector<float>(values, values + host.NumElements());
 	}
 
 	struct BinaryCase
@@ -263,6 +274,20 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleCastSPIRVFromMLIR)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesSimpleMatMulSPIRVFromMLIR)
+{
+	const auto generated = VulkanNativeMatMulF32SPIRV(2, 3, 4);
+	EXPECT_FALSE(generated.words.empty());
+	EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.FMul"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.FAdd"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.UDiv"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.UMod"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.EntryPoint"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("LocalSize"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("64, 1, 1"), std::string::npos);
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
@@ -288,15 +313,14 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSimpleAdd)
 	EXPECT_TRUE(report.reason.empty());
 }
 
-TEST(CompiledModuleVulkanTest, ReportsNativeSupportGapForMatMul)
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMul)
 {
 	const auto graph = BuildSimpleMatMulGraph();
 	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
 
-	EXPECT_FALSE(report.supported);
-	EXPECT_TRUE(report.capability.empty());
-	EXPECT_NE(report.reason.find("MatMul"), std::string::npos);
-	EXPECT_NE(report.reason.find("same-shape f32 binary"), std::string::npos);
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 matmul"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
 }
 
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
@@ -339,6 +363,25 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleMatMul)
+{
+	const auto graph = BuildSimpleMatMulGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeMatMulF32SPIRV(2, 3, 4);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::MatMulF32)), 0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 2u * 3u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * 4u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 2u * 4u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
@@ -472,5 +515,34 @@ TEST(CompiledModuleVulkanTest, RunsSimpleBinaryArithmetic)
 		{
 			EXPECT_FLOAT_EQ(actual[i], item.expected[i]);
 		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleMatMulArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleMatMulGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 }, DataType::Float32,
+		               device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 38.0f, 44.0f, 50.0f, 56.0f, 83.0f, 98.0f, 113.0f, 128.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
 	}
 }

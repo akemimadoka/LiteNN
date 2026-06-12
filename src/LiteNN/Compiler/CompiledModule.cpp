@@ -5802,6 +5802,16 @@ namespace
 		DataType dstType{ DataType::Int32 };
 	};
 
+	struct VulkanP0MatMulPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t outputElementCount{};
+	};
+
 	struct VulkanP0ArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -5853,6 +5863,12 @@ namespace
 	{
 		return (elementCount / kVulkanNativeElementwiseWorkgroupSize) +
 		       (elementCount % kVulkanNativeElementwiseWorkgroupSize == 0 ? 0u : 1u);
+	}
+
+	std::uint32_t VulkanP0MatMulGroupCount(std::uint32_t elementCount)
+	{
+		return (elementCount / kVulkanNativeMatMulWorkgroupSize) +
+		       (elementCount % kVulkanNativeMatMulWorkgroupSize == 0 ? 0u : 1u);
 	}
 
 	VulkanNativeSupportReport VulkanNativeSupported(std::string capability)
@@ -6001,6 +6017,48 @@ namespace
 			{
 				return VulkanNativeUnsupported(
 				    "Vulkan native two-input slice currently supports only BinaryOpNode result nodes");
+			}
+			if (binary->op == BinaryOp::MatMul)
+			{
+				const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
+				const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->rhs);
+				if (!lhsInputIndex || !rhsInputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native MatMul inputs must be direct graph parameters");
+				}
+				const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+				const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+				if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+				    output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native MatMul requires Float32 lhs/rhs/output, got lhs={} rhs={} output={}",
+					    DataTypeName(lhsParam.dtype), DataTypeName(rhsParam.dtype), DataTypeName(output.dtype)));
+				}
+				if (lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 || output.shape.size() != 2)
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native MatMul requires rank-2 lhs/rhs/output, got lhs={} rhs={} output={}",
+					    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
+					    Validation::ShapeToString(output.shape)));
+				}
+				if (lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
+				    output.shape[1] != rhsParam.shape[1])
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native MatMul shape mismatch, expected [M,K] @ [K,N] -> [M,N], got lhs={} rhs={} "
+					    "output={}",
+					    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
+					    Validation::ShapeToString(output.shape)));
+				}
+				if (!VulkanP0ShapeNumElementsU32(lhsParam.shape) || !VulkanP0ShapeNumElementsU32(rhsParam.shape) ||
+				    !VulkanP0ShapeNumElementsU32(output.shape))
+				{
+					return VulkanNativeUnsupported(
+					    "Vulkan native MatMul shapes must be non-empty, non-zero, and contain at most uint32_t "
+					    "elements");
+				}
+				return VulkanNativeSupported("f32 matmul");
 			}
 			if (!VulkanNativeSupportsSameShapeBinaryF32(binary->op))
 			{
@@ -6159,6 +6217,91 @@ namespace
 			.lhsInputIndex = *lhsInputIndex,
 			.rhsInputIndex = *rhsInputIndex,
 			.elementCount = *elementCount,
+		};
+	}
+
+	std::optional<VulkanP0MatMulPlan> MatchVulkanP0MatMulF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
+		if (!binary || binary->op != BinaryOp::MatMul)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
+		const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->rhs);
+		if (!lhsInputIndex || !rhsInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 ||
+		    output.shape.size() != 2)
+		{
+			return std::nullopt;
+		}
+		if (lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
+		    output.shape[1] != rhsParam.shape[1])
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = VulkanP0ShapeNumElementsU32(lhsParam.shape);
+		const auto rhsElementCount = VulkanP0ShapeNumElementsU32(rhsParam.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!lhsElementCount || !rhsElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+		if (lhsParam.shape[0] > std::numeric_limits<std::uint32_t>::max() ||
+		    lhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		const auto m = static_cast<std::uint32_t>(lhsParam.shape[0]);
+		const auto k = static_cast<std::uint32_t>(lhsParam.shape[1]);
+		const auto n = static_cast<std::uint32_t>(rhsParam.shape[1]);
+		if (!VulkanNativeSupportsMatMulF32(m, k, n))
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0MatMulPlan{
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsInputIndex = *rhsInputIndex,
+			.m = m,
+			.k = k,
+			.n = n,
+			.outputElementCount = *outputElementCount,
 		};
 	}
 
@@ -6409,6 +6552,56 @@ namespace
 		          .binding = 2,
 		          .byteOffset = 0,
 		          .byteSize = byteSize },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeMatMulF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0MatMulF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::MatMulF32);
+		auto spirv = VulkanNativeMatMulF32SPIRV(plan->m, plan->k, plan->n);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = "main",
+		    .groups = { .x = VulkanP0MatMulGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->m) * plan->k * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->k) * plan->n * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 2,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
 		    },
 		});
 
@@ -8455,6 +8648,13 @@ namespace
 				                                 CompiledModuleBackend::VulkanNative);
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::VulkanNative);
+			}
+			if (auto nativeParts = TryCompileVulkanNativeMatMulF32P0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

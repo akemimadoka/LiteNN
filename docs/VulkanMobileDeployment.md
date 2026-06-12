@@ -90,15 +90,17 @@ slice can cover a plan and to surface the reason a graph would otherwise use CPU
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
 
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
+- rank-2 static `Float32` MatMul using one shader invocation per output element; this is a correctness and benchmark
+  baseline, not the final tiled/shared-memory production GEMM kernel
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
   requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access before these kernels are
   selected in production
-- `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto` rows only when a Vulkan compute device exists. These
-  rows cover the current same-shape elementwise native lowering slice; model-level Vulkan Native benchmark rows remain
-  deferred until matmul/linear lowering lands.
+- `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto` and `VulkanNativeMatMul/F32` rows only when a Vulkan
+  compute device exists. Model-level Vulkan Native benchmark rows remain deferred until bias/activation/linear-chain
+  lowering lands.
 
-Runtime low-precision feature gating, reductions, matmul/linear chains, normalization, softmax, convolution,
+Runtime low-precision feature gating, reductions, production matmul/linear chains, normalization, softmax, convolution,
 device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on production GPU-backend
 work rather than part of the current bootstrap.

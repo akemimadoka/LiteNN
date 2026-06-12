@@ -1899,6 +1899,9 @@ packaging slice to a useful production backend.
 
 - [x] Add a compiler-facing Vulkan native coverage query. `Compiler<Vulkan>::QueryNativeSupport` now reports whether an
       executable plan can use the current native Vulkan slice and returns a stable reason when it would fall back to CPU.
+- [x] Add the first f32 MatMul Vulkan-native slice: rank-2 static `Float32` `BinaryOp::MatMul` now lowers to generated
+      MLIR/SPIR-V, emits a `MatMulF32` payload feature bit, runs through `CompiledModule<Vulkan>`, and is registered in
+      benchmark as `VulkanNativeMatMul/F32`.
 - [ ] Add device capability gating for generated SPIR-V features: 8-bit/16-bit storage buffers, fp16 arithmetic,
       subgroup availability, max workgroup size, storage-buffer alignment, and mobile-driver limits must be checked before
       selecting kernels.
@@ -1910,7 +1913,8 @@ packaging slice to a useful production backend.
       host/device round trips.
 - [ ] Implement production operator families in priority order:
       1. reductions with static axes (`Sum`, `Mean`, `Max`, `Min`) and simple row/column reductions;
-      2. f32 matmul/linear, bias, and activation fusion, then tiled/shared-memory kernels;
+      2. complete f32 matmul/linear, bias, and activation fusion, then replace the current one-output-element-per-thread
+         MatMul with tiled/shared-memory kernels;
       3. softmax and normalization (`LayerNorm`, `RMSNorm`, group normalization);
       4. convolution/pooling and image/latent-processing kernels for mobile vision workloads;
       5. low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device capabilities.
