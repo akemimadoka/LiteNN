@@ -32,6 +32,22 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSimpleMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto rhs = sg.AddParam(DataType::Float32, { 3, 4 });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
+		                            { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleUnaryGraph(UnaryOp op)
 	{
 		Graph graph;
@@ -259,6 +275,28 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSimpleAdd)
+{
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("same-shape f32 binary"), std::string::npos);
+	EXPECT_NE(report.capability.find("Add"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportGapForMatMul)
+{
+	const auto graph = BuildSimpleMatMulGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_FALSE(report.supported);
+	EXPECT_TRUE(report.capability.empty());
+	EXPECT_NE(report.reason.find("MatMul"), std::string::npos);
+	EXPECT_NE(report.reason.find("same-shape f32 binary"), std::string::npos);
 }
 
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)

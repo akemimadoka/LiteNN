@@ -1892,6 +1892,40 @@ longer depends on checked-in SPIR-V words.
       into the long-term deferred queue. These are production GPU-backend projects rather than prerequisites for the
       current G15 bootstrap.
 
+#### G15.5 Active Vulkan Production Gap Closure
+
+Status: active as of 2026-06-12. This section tracks what is still missing for Vulkan to move from a bootstrap/mobile
+packaging slice to a useful production backend.
+
+- [x] Add a compiler-facing Vulkan native coverage query. `Compiler<Vulkan>::QueryNativeSupport` now reports whether an
+      executable plan can use the current native Vulkan slice and returns a stable reason when it would fall back to CPU.
+- [ ] Add device capability gating for generated SPIR-V features: 8-bit/16-bit storage buffers, fp16 arithmetic,
+      subgroup availability, max workgroup size, storage-buffer alignment, and mobile-driver limits must be checked before
+      selecting kernels.
+- [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
+      Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
+      in the schedule.
+- [ ] Add a Vulkan memory planner with device-local storage plus staging buffers. The current host-visible buffer path is
+      good for correctness and small tests, but production kernels need reusable device-local allocations and fewer
+      host/device round trips.
+- [ ] Implement production operator families in priority order:
+      1. reductions with static axes (`Sum`, `Mean`, `Max`, `Min`) and simple row/column reductions;
+      2. f32 matmul/linear, bias, and activation fusion, then tiled/shared-memory kernels;
+      3. softmax and normalization (`LayerNorm`, `RMSNorm`, group normalization);
+      4. convolution/pooling and image/latent-processing kernels for mobile vision workloads;
+      5. low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device capabilities.
+- [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
+      queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
+      wait.
+- [ ] Add Vulkan profiling support: timestamp queries around each kernel, pipeline creation timing, device transfer
+      timing, and benchmark/profile tables that compare CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
+- [ ] Expand artifact ABI metadata for Vulkan kernel requirements, including SPIR-V target environment, descriptor ABI
+      version, required feature bits, workgroup layout, and optional specialization constants.
+- [ ] Add mobile validation coverage: Android cross-build profile, loader/validation-layer smoke tests, at least one real
+      mobile GPU fixture, and clear skip/failure behavior when no Vulkan compute device is present.
+- [ ] Add end-to-end examples that are honest about backend selection: one native-only elementwise example, one
+      partitioned/fallback example, and one model-shaped benchmark once matmul/linear lowering exists.
+
 Hidden requirements:
 
 - Vulkan support is not only "LLVM can emit SPIR-V"; shader interface, descriptor set layout, storage-buffer ABI,
@@ -1916,10 +1950,9 @@ or backend architecture decisions before implementation would be meaningful.
   pointers until a safe plugin/callback ABI exists.
 - Deferred: production CPU GEMM backend or MLIR/LLVM-native intra-op parallel lowering. The current guarded helper path
   is complete enough for profiling, but a production backend should be designed as a separate performance project.
-- Deferred: production Vulkan kernel coverage beyond static same-shape elementwise/cast payloads, including reductions,
-  matmul/linear-chain, normalization, softmax, convolution, tiled/shared-memory kernels, descriptor/pipeline specialization
-  tuning, device-local memory planning, asynchronous queue ownership/synchronization, and profile tables populated from
-  real Vulkan devices.
+- Deferred: Vulkan production work that is not selected into the current G15.5 implementation slice, especially broad
+  real-device/mobile coverage matrices, large fused-kernel families, and profile tables populated from multiple Vulkan
+  devices.
 - Deferred: broad external llama.cpp parity fixtures for real LLaMA-family models, especially CUDA artifact parity and
   multi-token prefill/decode validation against external logits.
 - Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact

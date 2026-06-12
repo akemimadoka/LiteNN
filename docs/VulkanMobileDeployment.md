@@ -82,6 +82,8 @@ The mobile Vulkan runtime must not depend on:
 
 Unsupported kernels must remain explicit: either fail compilation for `VulkanNative` or use a caller-selected bridge or
 fallback policy. Benchmarks should report the selected backend rather than silently mixing CPU and Vulkan execution.
+Callers can use `Compiler<Vulkan>::QueryNativeSupport(plan)` before compiling to check whether the current native Vulkan
+slice can cover a plan and to surface the reason a graph would otherwise use CPU bridge fallback.
 
 ## Current Coverage
 

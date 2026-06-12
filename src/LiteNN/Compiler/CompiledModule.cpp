@@ -13,6 +13,7 @@
 #include "VulkanNativePayload.h"
 #endif
 
+#include <LiteNN/Misc.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -5854,6 +5855,195 @@ namespace
 		       (elementCount % kVulkanNativeElementwiseWorkgroupSize == 0 ? 0u : 1u);
 	}
 
+	VulkanNativeSupportReport VulkanNativeSupported(std::string capability)
+	{
+		return VulkanNativeSupportReport{ .supported = true, .capability = std::move(capability) };
+	}
+
+	VulkanNativeSupportReport VulkanNativeUnsupported(std::string reason)
+	{
+		return VulkanNativeSupportReport{ .supported = false, .reason = std::move(reason) };
+	}
+
+	std::string VulkanNativeOpName(UnaryOp op)
+	{
+		return std::string(EnumToString<EnumToStringStyle::Unqualified>(op));
+	}
+
+	std::string VulkanNativeOpName(BinaryOp op)
+	{
+		return std::string(EnumToString<EnumToStringStyle::Unqualified>(op));
+	}
+
+	VulkanNativeSupportReport DiagnoseVulkanP0SingleForwardShape(std::span<const std::size_t> shape,
+	                                                             std::string_view label)
+	{
+		const auto elementCount = VulkanP0ShapeNumElementsU32(shape);
+		if (!elementCount)
+		{
+			return VulkanNativeUnsupported(std::format(
+			    "{} shape {} must be non-empty, non-zero, and contain at most uint32_t elements for Vulkan native P0",
+			    label, Validation::ShapeToString(shape)));
+		}
+		return VulkanNativeSupported("");
+	}
+
+	VulkanNativeSupportReport DiagnoseVulkanNativeSupport(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return VulkanNativeUnsupported(std::format(
+			    "Vulkan native currently requires one forward-only subgraph with no variables, activations, or tape "
+			    "slots; got subgraphs={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
+			    graph.SubgraphCount(), graph.Backward().has_value(), graph.VariableCount(), graph.ActivationSlotCount(),
+			    graph.TapeSlotCount()));
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return VulkanNativeUnsupported(std::format(
+			    "Vulkan native currently supports exactly one graph result; got {}", subgraph.Results().size()));
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return VulkanNativeUnsupported("Vulkan native result must reference output port 0 of an existing node");
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return VulkanNativeUnsupported(std::format("Vulkan native result node must have exactly one output; got {}",
+			                                           resultEntry.outputInfos.size()));
+		}
+		const auto& output = resultEntry.outputInfos[0];
+
+		if (subgraph.Params().size() == 1 && subgraph.NodeCount() == 2)
+		{
+			if (const auto* unary = std::get_if<UnaryOpNode>(&resultEntry.node))
+			{
+				if (!VulkanNativeSupportsSameShapeUnaryF32(unary->op))
+				{
+					return VulkanNativeUnsupported(
+					    std::format("unsupported unary op {} for Vulkan native same-shape f32 unary slice",
+					                VulkanNativeOpName(unary->op)));
+				}
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, unary->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native unary input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native unary slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (input.shape != output.shape)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native unary slice requires identical input/output shapes, got {} -> {}",
+					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+				}
+				if (auto shapeReport = DiagnoseVulkanP0SingleForwardShape(output.shape, "unary output");
+				    !shapeReport.supported)
+				{
+					return shapeReport;
+				}
+				return VulkanNativeSupported(std::string("same-shape f32 unary ") + VulkanNativeOpName(unary->op));
+			}
+
+			if (const auto* cast = std::get_if<CastNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, cast->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native cast input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (output.dtype != cast->targetType)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native cast output dtype must match target type, got output={} target={}",
+					                DataTypeName(output.dtype), DataTypeName(cast->targetType)));
+				}
+				if (input.shape != output.shape)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native cast slice requires identical input/output shapes, got {} -> {}",
+					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+				}
+				if (!VulkanNativeSupportsSameShapeCast(input.dtype, output.dtype))
+				{
+					return VulkanNativeUnsupported(
+					    std::format("unsupported cast {} -> {} for Vulkan native same-shape cast slice",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (auto shapeReport = DiagnoseVulkanP0SingleForwardShape(output.shape, "cast output");
+				    !shapeReport.supported)
+				{
+					return shapeReport;
+				}
+				return VulkanNativeSupported(
+				    std::format("same-shape cast {} -> {}", DataTypeName(input.dtype), DataTypeName(output.dtype)));
+			}
+
+			return VulkanNativeUnsupported(
+			    "Vulkan native one-input slice currently supports only UnaryOpNode or CastNode result nodes");
+		}
+
+		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
+		{
+			const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
+			if (!binary)
+			{
+				return VulkanNativeUnsupported(
+				    "Vulkan native two-input slice currently supports only BinaryOpNode result nodes");
+			}
+			if (!VulkanNativeSupportsSameShapeBinaryF32(binary->op))
+			{
+				return VulkanNativeUnsupported(
+				    std::format("unsupported binary op {} for Vulkan native same-shape f32 binary slice",
+				                VulkanNativeOpName(binary->op)));
+			}
+			const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
+			const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->rhs);
+			if (!lhsInputIndex || !rhsInputIndex)
+			{
+				return VulkanNativeUnsupported("Vulkan native binary inputs must be direct graph parameters");
+			}
+			const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+			const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+			if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+			    output.dtype != DataType::Float32)
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native binary slice requires Float32 lhs/rhs/output, got lhs={} rhs={} output={}",
+				    DataTypeName(lhsParam.dtype), DataTypeName(rhsParam.dtype), DataTypeName(output.dtype)));
+			}
+			if (lhsParam.shape != output.shape || rhsParam.shape != output.shape)
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native binary slice requires identical lhs/rhs/output shapes, got lhs={} rhs={} output={}",
+				    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
+				    Validation::ShapeToString(output.shape)));
+			}
+			if (auto shapeReport = DiagnoseVulkanP0SingleForwardShape(output.shape, "binary output");
+			    !shapeReport.supported)
+			{
+				return shapeReport;
+			}
+			return VulkanNativeSupported(std::string("same-shape f32 binary ") + VulkanNativeOpName(binary->op));
+		}
+
+		return VulkanNativeUnsupported(std::format(
+		    "Vulkan native currently supports one-input unary/cast or two-input binary single-kernel graphs; got "
+		    "params={} nodes={}",
+		    subgraph.Params().size(), subgraph.NodeCount()));
+	}
+
 	std::optional<VulkanP0UnaryPlan> MatchVulkanP0SameShapeUnaryF32(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
@@ -8278,6 +8468,11 @@ namespace
 				                                 std::move(nativeParts->outputSpecs),
 				                                 CompiledModuleBackend::VulkanNative);
 			}
+			const auto report = DiagnoseVulkanNativeSupport(graph);
+			if (!report.supported)
+			{
+				LogCompileDiagnostic(options, "vulkan-native unsupported: " + report.reason);
+			}
 		}
 		return CompileCPUArtifactPartsFromGraph(graph, options);
 	}
@@ -8340,6 +8535,12 @@ CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA de
 #endif
 
 #ifdef LITENN_ENABLE_VULKAN
+VulkanNativeSupportReport Compiler<Vulkan>::QueryNativeSupport(const ExecutablePlan& plan)
+{
+	ValidateExecutablePlan(plan);
+	return DiagnoseVulkanNativeSupport(BuildCompilerGraphFromPlan(plan));
+}
+
 CompiledModuleArtifact Compiler<Vulkan>::CompileArtifact(const ExecutablePlan& plan)
 {
 	return CompileArtifact(plan, CompilerOptions::Defaults());

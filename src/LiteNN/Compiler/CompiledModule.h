@@ -482,6 +482,13 @@ namespace LiteNN
 #endif
 
 #ifdef LITENN_ENABLE_VULKAN
+	struct VulkanNativeSupportReport
+	{
+		bool supported{};
+		std::string capability;
+		std::string reason;
+	};
+
 	struct CompiledModuleVulkanRunOptions
 	{
 		bool synchronize{ true };
@@ -543,6 +550,7 @@ namespace LiteNN
 	class Compiler<Vulkan>
 	{
 	public:
+		static VulkanNativeSupportReport QueryNativeSupport(const ExecutablePlan& plan);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
 		static CompiledModule<Vulkan> Compile(const ExecutablePlan& plan, Vulkan device = Vulkan{});
