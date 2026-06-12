@@ -623,6 +623,8 @@ struct VulkanLaunchBreakdown
 	double firstMs{};
 	double meanMs{};
 	double lastDispatchMs{};
+	double lastGpuMs{};
+	bool gpuTimestampAvailable{};
 	double moduleCreationMs{};
 	std::string message;
 };
@@ -671,6 +673,27 @@ static double SumVulkanModuleCreationMs(std::span<const CompiledModuleVulkanProf
 		total += event.moduleCreationWallMs;
 	}
 	return total;
+}
+
+static double SumVulkanGpuMs(std::span<const CompiledModuleVulkanProfileEvent> events)
+{
+	double total = 0.0;
+	for (const auto& event : events)
+	{
+		if (!event.gpuTimestampAvailable)
+		{
+			return 0.0;
+		}
+		total += event.gpuElapsedMs;
+	}
+	return total;
+}
+
+static bool AllVulkanGpuTimestampsAvailable(std::span<const CompiledModuleVulkanProfileEvent> events)
+{
+	return !events.empty() && std::ranges::all_of(events, [](const CompiledModuleVulkanProfileEvent& event) {
+		       return event.gpuTimestampAvailable;
+	       });
 }
 
 static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
@@ -725,10 +748,14 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 
 		result.firstMs = TimedOnceMs(runInto);
 		result.lastDispatchMs = SumVulkanDispatchWallMs(events);
+		result.gpuTimestampAvailable = AllVulkanGpuTimestampsAvailable(events);
+		result.lastGpuMs = result.gpuTimestampAvailable ? SumVulkanGpuMs(events) : 0.0;
 		result.moduleCreationMs = SumVulkanModuleCreationMs(events);
 		const auto timing = TimedRepeated(runInto, result.batch, 300.0);
 		result.meanMs = timing.meanMs;
 		result.lastDispatchMs = SumVulkanDispatchWallMs(events);
+		result.gpuTimestampAvailable = AllVulkanGpuTimestampsAvailable(events);
+		result.lastGpuMs = result.gpuTimestampAvailable ? SumVulkanGpuMs(events) : 0.0;
 		result.moduleCreationMs = SumVulkanModuleCreationMs(events);
 		result.message = "ok";
 	}
@@ -904,21 +931,24 @@ int main(int argc, char** argv)
 	else
 	{
 		std::cout << std::format(
-		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>12} {:>11} {:>12} {}\n",
+		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {}\n",
 		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "FirstRun",
-		    "MeanRun", "LastDispatch", "Status");
+		    "MeanRun", "LastDispatch", "GPUTime", "Status");
 		std::cout << std::string(150, '-') << "\n";
 		for (const auto& c : cases)
 		{
 			const auto row = ProfileVulkanLaunches(c);
+			const std::string gpuTime = row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs)
+			                                                      : std::string("n/a");
 			std::cout << std::format(
-			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {}\n",
+			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {}\n",
 			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
 			    row.kernelCount, row.externalTensorCount, row.compileMs, row.loadMs, row.firstMs, row.meanMs,
-			    row.lastDispatchMs, row.message);
+			    row.lastDispatchMs, gpuTime, row.message);
 		}
 		std::cout << "FirstRun and MeanRun are synchronized RunInto wall times. LastDispatch is the sum of CPU-side\n";
-		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto, not GPU timestamp-query time.\n";
+		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto. GPUTime is the sum of\n";
+		std::cout << "Vulkan timestamp-query elapsed time for devices whose compute queue supports timestamps.\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_VULKAN.\n";

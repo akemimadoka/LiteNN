@@ -81,7 +81,13 @@ namespace LiteNN
 			return devices;
 		}
 
-		std::uint32_t FindComputeQueueFamily(VkPhysicalDevice physicalDevice)
+		struct ComputeQueueFamilySelection
+		{
+			std::uint32_t index{};
+			VkQueueFamilyProperties properties{};
+		};
+
+		ComputeQueueFamilySelection FindComputeQueueFamily(VkPhysicalDevice physicalDevice)
 		{
 			std::uint32_t count = 0;
 			vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, nullptr);
@@ -91,7 +97,7 @@ namespace LiteNN
 			{
 				if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0)
 				{
-					return i;
+					return { .index = i, .properties = families[i] };
 				}
 			}
 			throw std::runtime_error("Vulkan device has no compute queue family");
@@ -326,7 +332,12 @@ namespace LiteNN
 #endif
 			(void)enabledNext;
 
-			queueFamilyIndex = FindComputeQueueFamily(physicalDevice);
+			const auto computeQueue = FindComputeQueueFamily(physicalDevice);
+			queueFamilyIndex = computeQueue.index;
+			capabilities.timestampPeriodNanoseconds = properties.limits.timestampPeriod;
+			capabilities.computeQueueTimestampValidBits = computeQueue.properties.timestampValidBits;
+			capabilities.computeQueueTimestampsAvailable =
+			    computeQueue.properties.timestampValidBits != 0 && properties.limits.timestampPeriod > 0.0f;
 
 			const float queuePriority = 1.0f;
 			const VkDeviceQueueCreateInfo queueInfo{
@@ -775,6 +786,37 @@ namespace LiteNN
 		double creationWallTimeMs{};
 	};
 
+	struct VulkanQueryPoolGuard
+	{
+		VkDevice device{};
+		VkQueryPool queryPool{};
+
+		VulkanQueryPoolGuard() = default;
+		explicit VulkanQueryPoolGuard(VkDevice deviceHandle) : device(deviceHandle)
+		{
+		}
+		VulkanQueryPoolGuard(const VulkanQueryPoolGuard&) = delete;
+		VulkanQueryPoolGuard& operator=(const VulkanQueryPoolGuard&) = delete;
+
+		~VulkanQueryPoolGuard()
+		{
+			if (device != VK_NULL_HANDLE && queryPool != VK_NULL_HANDLE)
+			{
+				vkDestroyQueryPool(device, queryPool, nullptr);
+			}
+		}
+	};
+
+	std::uint64_t VulkanTimestampDelta(std::uint64_t begin, std::uint64_t end, std::uint32_t validBits)
+	{
+		if (validBits >= 64)
+		{
+			return end - begin;
+		}
+		const auto mask = (1ull << validBits) - 1;
+		return (end - begin) & mask;
+	}
+
 	VulkanComputeModule::VulkanComputeModule() = default;
 
 	VulkanComputeModule::VulkanComputeModule(Vulkan device, std::span<const std::uint32_t> spirv,
@@ -927,6 +969,10 @@ namespace LiteNN
 	void VulkanComputeModule::Dispatch(std::span<const void*> descriptorBuffers, VulkanDispatchDim groups,
 	                                   VulkanExecutionOptions options) const
 	{
+		if (options.timing != nullptr)
+		{
+			*options.timing = {};
+		}
 		if (Empty())
 		{
 			throw std::runtime_error("Vulkan compute module is empty");
@@ -954,6 +1000,8 @@ namespace LiteNN
 			    groups.x, groups.y, groups.z, capabilities.deviceName, capabilities.maxComputeWorkGroupCount[0],
 			    capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
 		}
+		const bool recordGpuTimestamp =
+		    options.timing != nullptr && capabilities.computeQueueTimestampsAvailable;
 
 		std::lock_guard lock(impl_->context->queueMutex);
 
@@ -1004,15 +1052,37 @@ namespace LiteNN
 		CheckVulkan(vkAllocateCommandBuffers(impl_->context->device, &commandInfo, &commandBuffer),
 		            "vkAllocateCommandBuffers");
 
+		VulkanQueryPoolGuard timestampPool(impl_->context->device);
+		if (recordGpuTimestamp)
+		{
+			const VkQueryPoolCreateInfo queryPoolInfo{
+				.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+				.queryType = VK_QUERY_TYPE_TIMESTAMP,
+				.queryCount = 2,
+			};
+			CheckVulkan(vkCreateQueryPool(impl_->context->device, &queryPoolInfo, nullptr,
+			                              &timestampPool.queryPool),
+			            "vkCreateQueryPool(timestamp)");
+		}
+
 		const VkCommandBufferBeginInfo beginInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 		};
 		CheckVulkan(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+		if (recordGpuTimestamp)
+		{
+			vkCmdResetQueryPool(commandBuffer, timestampPool.queryPool, 0, 2);
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool.queryPool, 0);
+		}
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipelineLayout, 0, 1,
 		                        &descriptorSet, 0, nullptr);
 		vkCmdDispatch(commandBuffer, groups.x, groups.y, groups.z);
+		if (recordGpuTimestamp)
+		{
+			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool.queryPool, 1);
+		}
 		CheckVulkan(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
 		VkFence fence{};
@@ -1027,6 +1097,25 @@ namespace LiteNN
 		if (submitResult == VK_SUCCESS)
 		{
 			CheckVulkan(vkWaitForFences(impl_->context->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+			if (recordGpuTimestamp)
+			{
+				std::array<std::uint64_t, 2> timestamps{};
+				const auto queryResult = vkGetQueryPoolResults(
+				    impl_->context->device, timestampPool.queryPool, 0, 2, sizeof(timestamps), timestamps.data(),
+				    sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+				if (queryResult == VK_SUCCESS)
+				{
+					const auto delta = VulkanTimestampDelta(timestamps[0], timestamps[1],
+					                                        capabilities.computeQueueTimestampValidBits);
+					options.timing->gpuTimestampAvailable = true;
+					options.timing->gpuElapsedMs =
+					    static_cast<double>(delta) * capabilities.timestampPeriodNanoseconds / 1'000'000.0;
+				}
+				else if (queryResult != VK_NOT_READY)
+				{
+					CheckVulkan(queryResult, "vkGetQueryPoolResults(timestamp)");
+				}
+			}
 		}
 		vkDestroyFence(impl_->context->device, fence, nullptr);
 		vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &commandBuffer);

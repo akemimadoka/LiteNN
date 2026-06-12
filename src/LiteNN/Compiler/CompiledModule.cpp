@@ -8706,9 +8706,14 @@ namespace
 				.y = kernel.groups.y,
 				.z = kernel.groups.z,
 			};
+			VulkanDispatchTiming gpuTiming;
 			const auto dispatchBegin = std::chrono::steady_clock::now();
-			modules[kernelIndex].Dispatch(descriptors, dispatchGroups,
-			                              VulkanExecutionOptions{ .synchronize = options.synchronize });
+			modules[kernelIndex].Dispatch(
+			    descriptors, dispatchGroups,
+			    VulkanExecutionOptions{
+			        .synchronize = options.synchronize,
+			        .timing = options.profileEvents == nullptr ? nullptr : &gpuTiming,
+			    });
 			const auto dispatchEnd = std::chrono::steady_clock::now();
 			if (options.profileEvents != nullptr)
 			{
@@ -8724,6 +8729,8 @@ namespace
 				    .descriptorCount = static_cast<std::uint32_t>(descriptors.size()),
 				    .moduleCreationWallMs = modules[kernelIndex].CreationWallTimeMs(),
 				    .dispatchWallMs = std::chrono::duration<double, std::milli>(dispatchEnd - dispatchBegin).count(),
+				    .gpuTimestampAvailable = gpuTiming.gpuTimestampAvailable,
+				    .gpuElapsedMs = gpuTiming.gpuElapsedMs,
 				});
 			}
 		}

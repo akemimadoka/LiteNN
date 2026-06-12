@@ -22,7 +22,7 @@ Add native support: yes (<capability>)
 Add artifact backend: vulkan_native
 Vulkan Add result: 11 22 33 44
 Vulkan Add separated result: 11 22 33 44
-Profile kernel[0] entry=main ...
+Profile kernel[0] entry=main ... gpu_ms=<value-or-n/a>
 Separated regions: metadata=<bytes> constants=0 weights=0 instructions=<bytes>
 TwoAdd native support: no (<reason>)
 TwoAdd artifact backend: cpu_native

@@ -498,6 +498,8 @@ namespace LiteNN
 		std::uint32_t descriptorCount{};
 		double moduleCreationWallMs{};
 		double dispatchWallMs{};
+		bool gpuTimestampAvailable{};
+		double gpuElapsedMs{};
 	};
 
 	struct CompiledModuleVulkanRunOptions

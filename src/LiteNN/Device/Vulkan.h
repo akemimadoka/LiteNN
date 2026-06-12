@@ -43,9 +43,16 @@ namespace LiteNN
 		std::uint32_t z{ 1 };
 	};
 
+	struct VulkanDispatchTiming
+	{
+		bool gpuTimestampAvailable{};
+		double gpuElapsedMs{};
+	};
+
 	struct VulkanExecutionOptions
 	{
 		bool synchronize{ true };
+		VulkanDispatchTiming* timing{};
 	};
 
 	struct VulkanDeviceCapabilities
@@ -61,6 +68,9 @@ namespace LiteNN
 		std::uint32_t maxPerStageDescriptorStorageBuffers{};
 		std::uint32_t maxDescriptorSetStorageBuffers{};
 		std::uint32_t maxBoundDescriptorSets{};
+		float timestampPeriodNanoseconds{};
+		std::uint32_t computeQueueTimestampValidBits{};
+		bool computeQueueTimestampsAvailable{};
 		std::uint32_t subgroupSize{};
 		bool subgroupComputeAvailable{};
 		bool subgroupBasicAvailable{};

@@ -128,7 +128,17 @@ namespace
 			          << ") local=(" << event.localSize.x << ',' << event.localSize.y << ',' << event.localSize.z
 			          << ") descriptors=" << event.descriptorCount
 			          << " module_ms=" << event.moduleCreationWallMs
-			          << " dispatch_ms=" << event.dispatchWallMs << '\n';
+			          << " dispatch_ms=" << event.dispatchWallMs
+			          << " gpu_ms=";
+			if (event.gpuTimestampAvailable)
+			{
+				std::cout << event.gpuElapsedMs;
+			}
+			else
+			{
+				std::cout << "n/a";
+			}
+			std::cout << '\n';
 		}
 	}
 }

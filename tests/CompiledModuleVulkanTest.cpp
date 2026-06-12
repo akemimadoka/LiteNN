@@ -655,6 +655,12 @@ TEST(CompiledModuleVulkanTest, ReportsDescriptorAndDispatchLimits)
 	EXPECT_GT(capabilities.maxPerStageDescriptorStorageBuffers, 0u);
 	EXPECT_GT(capabilities.maxDescriptorSetStorageBuffers, 0u);
 	EXPECT_GT(capabilities.maxBoundDescriptorSets, 0u);
+	EXPECT_GE(capabilities.timestampPeriodNanoseconds, 0.0f);
+	if (capabilities.computeQueueTimestampsAvailable)
+	{
+		EXPECT_GT(capabilities.computeQueueTimestampValidBits, 0u);
+		EXPECT_GT(capabilities.timestampPeriodNanoseconds, 0.0f);
+	}
 }
 
 TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDispatchGroupsExceedDeviceLimit)
@@ -822,6 +828,12 @@ TEST(CompiledModuleVulkanTest, RecordsVulkanNativeProfileEvents)
 	EXPECT_EQ(events[0].descriptorCount, 3u);
 	EXPECT_GE(events[0].moduleCreationWallMs, 0.0);
 	EXPECT_GE(events[0].dispatchWallMs, 0.0);
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	EXPECT_EQ(events[0].gpuTimestampAvailable, capabilities.computeQueueTimestampsAvailable);
+	if (events[0].gpuTimestampAvailable)
+	{
+		EXPECT_GE(events[0].gpuElapsedMs, 0.0);
+	}
 }
 
 TEST(CompiledModuleVulkanTest, RunsSimpleCastArithmetic)

@@ -101,11 +101,12 @@ slice can cover a plan and to surface the reason a graph would otherwise use CPU
 
 ## Profiling
 
-`CompiledModuleVulkanRunOptions::profileEvents` can point to a caller-owned vector to collect per-kernel CPU-side
-profile events during synchronized Vulkan-native execution. Events include kernel index, entry point, dispatch groups,
-local workgroup layout, descriptor count, module creation wall time, and dispatch wall time. This is intentionally not a
-GPU timestamp-query measurement yet; it is the current lightweight way to expose pipeline/setup and synchronized dispatch
-costs in `litenn_profile`.
+`CompiledModuleVulkanRunOptions::profileEvents` can point to a caller-owned vector to collect per-kernel profile events
+during synchronized Vulkan-native execution. Events include kernel index, entry point, dispatch groups, local workgroup
+layout, descriptor count, module creation wall time, CPU-side dispatch wall time, and optional GPU timestamp-query elapsed
+time. GPU timestamp fields are populated only when the selected compute queue reports timestamp support; otherwise the
+event keeps `gpuTimestampAvailable=false`. Device-transfer timing and persisted multi-backend Vulkan profile tables are
+still follow-on work.
 
 ## Current Coverage
 
