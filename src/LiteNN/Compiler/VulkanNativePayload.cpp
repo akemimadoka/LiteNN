@@ -14,7 +14,7 @@ namespace LiteNN
 			std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 			std::byte{ 'V' }, std::byte{ 'K' }, std::byte{ 'S' }, std::byte{ 'P' },
 		};
-		constexpr std::uint32_t kPayloadVersion = 1;
+		constexpr std::uint32_t kPayloadVersion = 2;
 
 		void AppendU32(std::vector<std::byte>& bytes, std::uint32_t value)
 		{
@@ -105,6 +105,11 @@ namespace LiteNN
 			}
 		}
 
+		bool IsPowerOfTwo(std::uint32_t value)
+		{
+			return value != 0 && (value & (value - 1)) == 0;
+		}
+
 		void ValidatePayload(const VulkanNativeInstructionPayload& payload)
 		{
 			if (!payload.featureSet.CheckIsValid())
@@ -130,6 +135,21 @@ namespace LiteNN
 					throw std::runtime_error("Vulkan native kernel entry point must not be empty");
 				}
 				ValidateDim(kernel.groups);
+				if (kernel.requirements.descriptorAbiVersion == 0)
+				{
+					throw std::runtime_error("Vulkan native kernel descriptor ABI version must not be zero");
+				}
+				ValidateDim(kernel.requirements.localSize);
+				if (!kernel.requirements.deviceRequirements.CheckIsValid())
+				{
+					throw std::runtime_error("Vulkan native kernel contains unknown device requirement flags");
+				}
+				if (kernel.requirements.requiredStorageBufferOffsetAlignment != 0 &&
+				    !IsPowerOfTwo(kernel.requirements.requiredStorageBufferOffsetAlignment))
+				{
+					throw std::runtime_error(
+					    "Vulkan native kernel storage-buffer offset alignment requirement must be a power of two");
+				}
 				for (const auto& argument : kernel.arguments)
 				{
 					if (argument.byteSize == 0)
@@ -176,6 +196,11 @@ namespace LiteNN
 		{
 			AppendString(bytes, kernel.entryPoint);
 			AppendDim(bytes, kernel.groups);
+			AppendU32(bytes, kernel.requirements.descriptorAbiVersion);
+			AppendDim(bytes, kernel.requirements.localSize);
+			AppendU64(bytes, kernel.requirements.deviceRequirements.flags);
+			AppendU32(bytes, kernel.requirements.requiredSubgroupSize);
+			AppendU32(bytes, kernel.requirements.requiredStorageBufferOffsetAlignment);
 			AppendU32(bytes, static_cast<std::uint32_t>(kernel.arguments.size()));
 			for (const auto& argument : kernel.arguments)
 			{
@@ -225,6 +250,14 @@ namespace LiteNN
 			VulkanNativeKernelSpec kernel;
 			kernel.entryPoint = ReadString(bytes, offset);
 			kernel.groups = ReadDim(bytes, offset);
+			if (version >= 2)
+			{
+				kernel.requirements.descriptorAbiVersion = ReadU32(bytes, offset);
+				kernel.requirements.localSize = ReadDim(bytes, offset);
+				kernel.requirements.deviceRequirements.flags = ReadU64(bytes, offset);
+				kernel.requirements.requiredSubgroupSize = ReadU32(bytes, offset);
+				kernel.requirements.requiredStorageBufferOffsetAlignment = ReadU32(bytes, offset);
+			}
 			const auto argumentCount = ReadU32(bytes, offset);
 			kernel.arguments.reserve(argumentCount);
 			for (std::uint32_t arg = 0; arg < argumentCount; ++arg)

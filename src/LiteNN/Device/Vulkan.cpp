@@ -163,7 +163,15 @@ namespace LiteNN
 				                                     deviceIndex, devices.size()));
 			}
 			physicalDevice = devices[deviceIndex];
-			vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+			VkPhysicalDeviceProperties2 properties2{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES)
+			VkPhysicalDeviceSubgroupProperties subgroupProperties{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
+			};
+			properties2.pNext = &subgroupProperties;
+#endif
+			vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
+			properties = properties2.properties;
 			capabilities.apiVersionMajor = VK_VERSION_MAJOR(properties.apiVersion);
 			capabilities.apiVersionMinor = VK_VERSION_MINOR(properties.apiVersion);
 			capabilities.apiVersionPatch = VK_VERSION_PATCH(properties.apiVersion);
@@ -174,7 +182,17 @@ namespace LiteNN
 				properties.limits.maxComputeWorkGroupSize[2],
 			};
 			capabilities.maxStorageBufferRange = properties.limits.maxStorageBufferRange;
+			capabilities.minStorageBufferOffsetAlignment = properties.limits.minStorageBufferOffsetAlignment;
 			capabilities.deviceName = properties.deviceName;
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES)
+			capabilities.subgroupSize = subgroupProperties.subgroupSize;
+			capabilities.subgroupComputeAvailable =
+			    (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+			capabilities.subgroupBasicAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
+			capabilities.subgroupArithmeticAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+#endif
 
 			auto deviceExtensions = EnumerateDeviceExtensions(physicalDevice);
 			const auto apiAtLeast11 = VulkanApiVersionAtLeast(properties.apiVersion, 1, 1);

@@ -41,13 +41,17 @@ application package unless the app explicitly compiles graphs on device. The nor
   one compute entry point named `main` per payload kernel.
 - The instruction region stores serialized `VulkanNativeInstructionPayload`, including SPIR-V words, feature flags,
   entry point, descriptor bindings, byte ranges, and dispatch dimensions.
+- Payload version 2 also stores per-kernel requirements: descriptor ABI version, local workgroup layout, required device
+  feature bits, optional subgroup-size requirement, and storage-buffer offset-alignment requirement. These requirements
+  are validated before creating shader modules or pipelines.
 - Static same-shape elementwise/cast kernels currently use `LocalSize = 64` and `ceil(numel / 64)` dispatch groups. The
   generated shader guards tail threads with `global_id < numel`, so tensor element counts do not need to be multiples of
   the workgroup size.
 - `CompiledModule<Vulkan>::Load` performs the first native payload/device compatibility gate before shader module or
-  pipeline creation. It checks the `vulkan1.1` target, API version, local workgroup limit, storage-buffer range, and the
-  currently generated low-precision cast feature requirements. The capability snapshot distinguishes physical feature
-  availability from LiteNN logical-device feature enablement.
+  pipeline creation. It checks the `vulkan1.1` target, API version, per-kernel local workgroup limit, descriptor ABI,
+  storage-buffer range/alignment, subgroup requirements, and the currently generated low-precision cast feature
+  requirements. The capability snapshot distinguishes physical feature availability from LiteNN logical-device
+  feature enablement.
 
 ## Validation Layers
 

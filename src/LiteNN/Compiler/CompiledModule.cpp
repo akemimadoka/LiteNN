@@ -6051,6 +6051,40 @@ namespace
 		       (elementCount % kVulkanNativeMatMulWorkgroupSize == 0 ? 0u : 1u);
 	}
 
+	VulkanNativeKernelRequirements VulkanP0KernelRequirements(std::uint32_t localSize)
+	{
+		return VulkanNativeKernelRequirements{
+			.descriptorAbiVersion = 1,
+			.localSize = { .x = localSize, .y = 1, .z = 1 },
+		};
+	}
+
+	void AddVulkanP0DTypeDeviceRequirements(VulkanNativeDeviceRequirementSet& requirements, DataType dtype)
+	{
+		switch (dtype)
+		{
+		case DataType::Float16:
+			requirements.AddRequirement(VulkanNativeDeviceRequirement::ShaderFloat16);
+			requirements.AddRequirement(VulkanNativeDeviceRequirement::StorageBuffer16BitAccess);
+			break;
+		case DataType::Int8:
+		case DataType::UInt8:
+			requirements.AddRequirement(VulkanNativeDeviceRequirement::ShaderInt8);
+			requirements.AddRequirement(VulkanNativeDeviceRequirement::StorageBuffer8BitAccess);
+			break;
+		default:
+			break;
+		}
+	}
+
+	VulkanNativeKernelRequirements VulkanP0CastKernelRequirements(DataType srcType, DataType dstType)
+	{
+		auto requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize);
+		AddVulkanP0DTypeDeviceRequirements(requirements.deviceRequirements, srcType);
+		AddVulkanP0DTypeDeviceRequirements(requirements.deviceRequirements, dstType);
+		return requirements;
+	}
+
 	VulkanNativeSupportReport VulkanNativeSupported(std::string capability)
 	{
 		return VulkanNativeSupportReport{ .supported = true, .capability = std::move(capability) };
@@ -6745,6 +6779,7 @@ namespace
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
@@ -6790,6 +6825,7 @@ namespace
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0CastKernelRequirements(plan->srcType, plan->dstType),
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
@@ -6858,6 +6894,7 @@ namespace
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->lhsInputIndex,
@@ -6908,6 +6945,7 @@ namespace
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0MatMulGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeMatMulWorkgroupSize),
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->lhsInputIndex,
@@ -6964,6 +7002,7 @@ namespace
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0MatMulGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeMatMulWorkgroupSize),
 		    .arguments = {
 		        { .kind = plan->lhs.argumentKind,
 		          .index = plan->lhs.argumentIndex,
@@ -8410,6 +8449,23 @@ namespace
 		    featureName, VulkanDeviceCapabilityName(capabilities), available, enabled));
 	}
 
+	void RequireVulkanNativeDeviceFeature(const VulkanNativeDeviceRequirementSet& requirements,
+	                                      VulkanNativeDeviceRequirement requirement, bool enabled, bool available,
+	                                      std::string_view featureName,
+	                                      const VulkanDeviceCapabilities& capabilities)
+	{
+		if (!requirements.HasRequirement(requirement))
+		{
+			return;
+		}
+		RequireVulkanNativeDeviceFeature(enabled, available, featureName, capabilities);
+	}
+
+	std::uint64_t VulkanDispatchDimProduct(VulkanNativeDispatchDim dim)
+	{
+		return static_cast<std::uint64_t>(dim.x) * dim.y * dim.z;
+	}
+
 	void ValidateVulkanNativeDeviceCapabilities(const VulkanNativeInstructionPayload& payload,
 	                                            std::span<const CompiledTensorSpec> inputSpecs,
 	                                            std::span<const CompiledTensorSpec> outputSpecs,
@@ -8427,24 +8483,67 @@ namespace
 			    VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor, capabilities.apiVersionMinor,
 			    capabilities.apiVersionPatch));
 		}
-		constexpr std::uint32_t requiredWorkgroupSize = kVulkanNativeElementwiseWorkgroupSize;
-		if (capabilities.maxComputeWorkGroupInvocations < requiredWorkgroupSize ||
-		    capabilities.maxComputeWorkGroupSize[0] < requiredWorkgroupSize)
-		{
-			throw std::runtime_error(std::format(
-			    "Vulkan native payload requires local workgroup size {}, but device '{}' supports at most {} "
-			    "invocations and x-size {}",
-			    requiredWorkgroupSize, VulkanDeviceCapabilityName(capabilities),
-			    capabilities.maxComputeWorkGroupInvocations, capabilities.maxComputeWorkGroupSize[0]));
-		}
 		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
 		{
 			const auto& kernel = payload.kernels[kernelIndex];
+			const auto& requirements = kernel.requirements;
+			if (requirements.descriptorAbiVersion != 1)
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires unsupported descriptor ABI version {}", kernelIndex,
+				    requirements.descriptorAbiVersion));
+			}
 			if (kernel.groups.x == 0 || kernel.groups.y == 0 || kernel.groups.z == 0)
 			{
 				throw std::runtime_error(std::format("Vulkan native kernel {} has zero dispatch dimension",
 				                                     kernelIndex));
 			}
+			const auto localInvocations = VulkanDispatchDimProduct(requirements.localSize);
+			if (localInvocations > capabilities.maxComputeWorkGroupInvocations ||
+			    requirements.localSize.x > capabilities.maxComputeWorkGroupSize[0] ||
+			    requirements.localSize.y > capabilities.maxComputeWorkGroupSize[1] ||
+			    requirements.localSize.z > capabilities.maxComputeWorkGroupSize[2])
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires local size {}x{}x{} ({} invocations), but device '{}' "
+				    "supports max size {}x{}x{} and {} invocations",
+				    kernelIndex, requirements.localSize.x, requirements.localSize.y, requirements.localSize.z,
+				    localInvocations, VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupSize[0],
+				    capabilities.maxComputeWorkGroupSize[1], capabilities.maxComputeWorkGroupSize[2],
+				    capabilities.maxComputeWorkGroupInvocations));
+			}
+			if (requirements.requiredSubgroupSize != 0 &&
+			    (!capabilities.subgroupComputeAvailable || !capabilities.subgroupBasicAvailable ||
+			     capabilities.subgroupSize != requirements.requiredSubgroupSize))
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires compute subgroup size {}, but device '{}' reports "
+				    "subgroupSize={}, compute={}, basic={}",
+				    kernelIndex, requirements.requiredSubgroupSize, VulkanDeviceCapabilityName(capabilities),
+				    capabilities.subgroupSize, capabilities.subgroupComputeAvailable,
+				    capabilities.subgroupBasicAvailable));
+			}
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::ShaderFloat16,
+			                                 capabilities.shaderFloat16Enabled,
+			                                 capabilities.shaderFloat16Available, "shaderFloat16", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::ShaderInt8,
+			                                 capabilities.shaderInt8Enabled, capabilities.shaderInt8Available,
+			                                 "shaderInt8", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::StorageBuffer16BitAccess,
+			                                 capabilities.storageBuffer16BitAccessEnabled,
+			                                 capabilities.storageBuffer16BitAccessAvailable,
+			                                 "storageBuffer16BitAccess", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::StorageBuffer8BitAccess,
+			                                 capabilities.storageBuffer8BitAccessEnabled,
+			                                 capabilities.storageBuffer8BitAccessAvailable,
+			                                 "storageBuffer8BitAccess", capabilities);
+			const auto requiredAlignment =
+			    std::max<std::uint64_t>(requirements.requiredStorageBufferOffsetAlignment,
+			                            capabilities.minStorageBufferOffsetAlignment);
 			for (const auto& argument : kernel.arguments)
 			{
 				if (argument.byteSize > capabilities.maxStorageBufferRange)
@@ -8454,6 +8553,12 @@ namespace
 					    "'{}' supports at most {} bytes",
 					    kernelIndex, argument.binding, argument.byteSize, VulkanDeviceCapabilityName(capabilities),
 					    capabilities.maxStorageBufferRange));
+				}
+				if (requiredAlignment != 0 && argument.byteOffset % requiredAlignment != 0)
+				{
+					throw std::runtime_error(std::format(
+					    "Vulkan native kernel {} binding {} byte offset {} is not aligned to {} bytes",
+					    kernelIndex, argument.binding, argument.byteOffset, requiredAlignment));
 				}
 			}
 		}

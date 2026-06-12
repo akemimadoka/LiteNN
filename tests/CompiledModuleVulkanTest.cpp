@@ -381,6 +381,50 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.descriptorAbiVersion, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.y, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.z, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.deviceRequirements.flags, 0ull);
+}
+
+TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
+{
+	VulkanNativeInstructionPayload payload;
+	payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+	payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+	payload.spirv = { 0x07230203u };
+	VulkanNativeKernelSpec kernel;
+	kernel.entryPoint = "main";
+	kernel.groups = { .x = 2, .y = 1, .z = 1 };
+	kernel.requirements.descriptorAbiVersion = 1;
+	kernel.requirements.localSize = { .x = kVulkanNativeElementwiseWorkgroupSize, .y = 1, .z = 1 };
+	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::ShaderInt8);
+	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::StorageBuffer8BitAccess);
+	kernel.requirements.requiredSubgroupSize = 32;
+	kernel.requirements.requiredStorageBufferOffsetAlignment = 16;
+	kernel.arguments.push_back({
+	    .kind = VulkanNativeArgumentKind::InputTensor,
+	    .index = 0,
+	    .binding = 0,
+	    .byteOffset = 0,
+	    .byteSize = 16,
+	});
+	payload.kernels.push_back(std::move(kernel));
+
+	const auto decoded = DeserializeVulkanNativeInstructionPayload(SerializeVulkanNativeInstructionPayload(payload));
+	ASSERT_EQ(decoded.kernels.size(), 1u);
+	const auto& decodedRequirements = decoded.kernels[0].requirements;
+	EXPECT_EQ(decodedRequirements.descriptorAbiVersion, 1u);
+	EXPECT_EQ(decodedRequirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
+	EXPECT_EQ(decodedRequirements.requiredSubgroupSize, 32u);
+	EXPECT_EQ(decodedRequirements.requiredStorageBufferOffsetAlignment, 16u);
+
+	payload.kernels[0].requirements.deviceRequirements.flags = 1ull << 63;
+	EXPECT_THROW((void)SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
 }
 
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSimpleAdd)
@@ -479,6 +523,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleMatMul)
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::MatMulF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeMatMulWorkgroupSize);
+	EXPECT_EQ(payload.kernels[0].requirements.deviceRequirements.flags, 0ull);
 	ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 2u * 3u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * 4u * sizeof(float));
@@ -540,6 +586,14 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
 	EXPECT_NE(payload.featureSet.flags &
 	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeCastLowPrecision)),
 	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::ShaderFloat16));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
+	EXPECT_FALSE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::ShaderInt8));
 }
 
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)

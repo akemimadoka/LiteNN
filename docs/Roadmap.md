@@ -1927,9 +1927,16 @@ packaging slice to a useful production backend.
       Validation on 2026-06-12: local Vulkan tests passed 25 and skipped the feature-dependent Float16 runtime test
       because the selected device did not enable the required Float16 storage path; f32 Vulkan-native benchmark rows
       continued to run.
-- [ ] Extend Vulkan device capability gating beyond the current P0 checks: subgroup availability, storage-buffer
-      alignment, descriptor indexing limits, and broader mobile-driver limits must be represented in artifact metadata
-      before selecting more advanced kernels.
+- [x] Expand the Vulkan-native payload ABI with per-kernel requirement metadata. Payload version 2 records descriptor ABI
+      version, local workgroup layout, required device feature bits, subgroup-size requirements, and storage-buffer
+      offset-alignment requirements. `CompiledModule<Vulkan>::Load` consumes this metadata before creating Vulkan
+      pipelines, while version-1 low-precision payloads still keep the old featureSet/spec safety fallback.
+      Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 26 tests and skipped the feature-dependent Float16
+      runtime case on the local device; `litenn_bench --benchmark_filter=VulkanNative --benchmark_min_time=0.001s`
+      continued to run the current f32 Vulkan-native rows.
+- [ ] Extend Vulkan device capability gating beyond the current kernel-requirement slice: descriptor indexing limits,
+      specialization-constant limits, advanced subgroup operation policies, and broader mobile-driver quirks must be
+      represented before selecting more advanced kernels.
 - [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
       Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
       in the schedule.
@@ -1948,8 +1955,11 @@ packaging slice to a useful production backend.
       wait.
 - [ ] Add Vulkan profiling support: timestamp queries around each kernel, pipeline creation timing, device transfer
       timing, and benchmark/profile tables that compare CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
-- [ ] Expand artifact ABI metadata for Vulkan kernel requirements, including SPIR-V target environment, descriptor ABI
-      version, required feature bits, workgroup layout, and optional specialization constants.
+- [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
+      `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
+      bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
+- [ ] Add optional specialization constants to Vulkan artifact metadata once generated kernels start using them for
+      tile sizes or runtime-shape constants.
 - [ ] Add mobile validation coverage: Android cross-build profile, loader/validation-layer smoke tests, at least one real
       mobile GPU fixture, and clear skip/failure behavior when no Vulkan compute device is present.
 - [ ] Add end-to-end examples that are honest about backend selection: one native-only elementwise example, one

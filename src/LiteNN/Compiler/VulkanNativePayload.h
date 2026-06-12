@@ -58,11 +58,50 @@ namespace LiteNN
 		}
 	};
 
+	enum class VulkanNativeDeviceRequirement : std::uint64_t
+	{
+		ShaderFloat16 = 1ull << 0,
+		ShaderInt8 = 1ull << 1,
+		StorageBuffer16BitAccess = 1ull << 2,
+		StorageBuffer8BitAccess = 1ull << 3,
+	};
+
+	struct VulkanNativeDeviceRequirementSet
+	{
+		static constexpr std::uint64_t KnownRequirementMask = (1ull << 4) - 1;
+
+		std::uint64_t flags{};
+
+		constexpr void AddRequirement(VulkanNativeDeviceRequirement requirement)
+		{
+			flags |= static_cast<std::uint64_t>(requirement);
+		}
+
+		constexpr bool HasRequirement(VulkanNativeDeviceRequirement requirement) const
+		{
+			return (flags & static_cast<std::uint64_t>(requirement)) != 0;
+		}
+
+		constexpr bool CheckIsValid() const
+		{
+			return (flags & ~KnownRequirementMask) == 0;
+		}
+	};
+
 	struct VulkanNativeDispatchDim
 	{
 		std::uint32_t x{ 1 };
 		std::uint32_t y{ 1 };
 		std::uint32_t z{ 1 };
+	};
+
+	struct VulkanNativeKernelRequirements
+	{
+		std::uint32_t descriptorAbiVersion{ 1 };
+		VulkanNativeDispatchDim localSize{ 1, 1, 1 };
+		VulkanNativeDeviceRequirementSet deviceRequirements;
+		std::uint32_t requiredSubgroupSize{};
+		std::uint32_t requiredStorageBufferOffsetAlignment{};
 	};
 
 	struct VulkanNativeArgumentSpec
@@ -78,6 +117,7 @@ namespace LiteNN
 	{
 		std::string entryPoint{ "main" };
 		VulkanNativeDispatchDim groups;
+		VulkanNativeKernelRequirements requirements;
 		std::vector<VulkanNativeArgumentSpec> arguments;
 	};
 

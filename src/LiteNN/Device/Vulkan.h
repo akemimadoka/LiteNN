@@ -56,6 +56,11 @@ namespace LiteNN
 		std::uint32_t maxComputeWorkGroupInvocations{};
 		std::array<std::uint32_t, 3> maxComputeWorkGroupSize{};
 		std::uint64_t maxStorageBufferRange{};
+		std::uint64_t minStorageBufferOffsetAlignment{};
+		std::uint32_t subgroupSize{};
+		bool subgroupComputeAvailable{};
+		bool subgroupBasicAvailable{};
+		bool subgroupArithmeticAvailable{};
 		bool shaderFloat16Available{};
 		bool shaderInt8Available{};
 		bool storageBuffer16BitAccessAvailable{};
