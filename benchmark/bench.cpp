@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <optional>
 #include <random>
@@ -488,6 +489,20 @@ namespace
 		return values;
 	}
 
+	bool SupportsCUDANativeMatMulBenchmarkDType(DataType dtype)
+	{
+		return dtype == DataType::Float32 || CUDASupportsNativeMatMul(dtype);
+	}
+
+	bool SupportsCUDADeviceMatMulBenchmarkDType(DataType dtype)
+	{
+		if (dtype != DataType::Float32 && dtype != DataType::Float64 && !CUDASupportsLowPrecisionStorage(dtype))
+		{
+			return false;
+		}
+		return dtype == DataType::Float32 || dtype == DataType::Float64 || CUDASupportsNativeMatMul(dtype);
+	}
+
 	void BMCUDADeviceMatMul(benchmark::State& state, std::size_t batch, std::size_t width, DataType dtype)
 	{
 		if (!IsCUDADeviceAvailable())
@@ -495,12 +510,7 @@ namespace
 			state.SkipWithError("CUDA device is not available");
 			return;
 		}
-		if (dtype != DataType::Float32 && dtype != DataType::Float64 && !CUDASupportsLowPrecisionStorage(dtype))
-		{
-			state.SkipWithError("CUDA device does not support requested dtype storage");
-			return;
-		}
-		if (dtype != DataType::Float32 && dtype != DataType::Float64 && !CUDASupportsNativeMatMul(dtype))
+		if (!SupportsCUDADeviceMatMulBenchmarkDType(dtype))
 		{
 			state.SkipWithError("CUDA device does not support requested MatMul dtype");
 			return;
@@ -733,7 +743,7 @@ namespace
 			state.SkipWithError("CUDA device is not available");
 			return;
 		}
-		if (dtype != DataType::Float32 && !CUDASupportsNativeMatMul(dtype))
+		if (!SupportsCUDANativeMatMulBenchmarkDType(dtype))
 		{
 			state.SkipWithError("CUDA device does not support requested native MatMul dtype");
 			return;
@@ -789,11 +799,46 @@ namespace
 #endif
 
 #ifdef LITENN_ENABLE_VULKAN
-	std::vector<Tensor<Vulkan>> MakeVulkanInputs(const std::vector<float>& data, std::size_t batch)
+	Graph BuildVulkanElementwiseAddGraph(std::size_t elementCount)
 	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto rhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
+	std::vector<float> MakeElementwiseInputData(std::size_t elementCount, unsigned int seed)
+	{
+		std::mt19937 rng(seed);
+		std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+		std::vector<float> data(elementCount);
+		for (float& value : data)
+		{
+			value = dist(rng);
+		}
+		return data;
+	}
+
+	std::vector<Tensor<Vulkan>> MakeVulkanElementwiseInputs(const std::vector<float>& lhsData,
+	                                                        const std::vector<float>& rhsData)
+	{
+		if (lhsData.size() != rhsData.size())
+		{
+			throw std::invalid_argument("Vulkan elementwise benchmark inputs must have identical element counts");
+		}
+
 		std::vector<Tensor<Vulkan>> inputs;
-		const auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth });
-		inputs.push_back(cpuInput.CopyToDevice(Vulkan{}));
+		const auto lhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(lhsData), { lhsData.size() });
+		const auto rhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(rhsData), { rhsData.size() });
+		inputs.push_back(lhsCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(rhsCpu.CopyToDevice(Vulkan{}));
 		return inputs;
 	}
 
@@ -808,27 +853,20 @@ namespace
 		return outputs;
 	}
 
-	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+	void BMVulkanNativeElementwiseAddRunTensorsInto(benchmark::State& state, std::size_t elementCount)
 	{
-		if (!IsVulkanDeviceAvailable())
-		{
-			state.SkipWithError("Vulkan compute device is not available");
-			return;
-		}
-
-		std::mt19937 rng(42);
-		auto graph = GetModelSpec(kind).build(batch, rng);
-		Optimize(graph);
+		auto graph = BuildVulkanElementwiseAddGraph(elementCount);
 		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
 		                                        LiteNNBenchCompilerOptionsFromEnvironment());
 		if (module.Backend() != CompiledModuleBackend::VulkanNative)
 		{
-			state.SkipWithError("expected Vulkan native backend for model benchmark");
+			state.SkipWithError("expected Vulkan native backend for elementwise Add benchmark");
 			return;
 		}
 
-		const auto inputData = MakeInputData(batch);
-		auto inputs = MakeVulkanInputs(inputData, batch);
+		const auto lhsData = MakeElementwiseInputData(elementCount, 0);
+		const auto rhsData = MakeElementwiseInputData(elementCount, 1);
+		auto inputs = MakeVulkanElementwiseInputs(lhsData, rhsData);
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -843,12 +881,9 @@ namespace
 			benchmark::ClobberMemory();
 		}
 
-		SetThroughputCounters(state, batch);
-	}
-#else
-	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind, std::size_t)
-	{
-		state.SkipWithError("LiteNN benchmark build has no Vulkan support");
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 #endif
 
@@ -977,6 +1012,9 @@ namespace
 
 	void RegisterBenchmarks()
 	{
+#ifdef LITENN_ENABLE_CUDA
+		const bool cudaDeviceAvailable = IsCUDADeviceAvailable();
+#endif
 		for (const auto kind : kModelKinds)
 		{
 			for (const auto batch : kBatchSizes)
@@ -1000,18 +1038,20 @@ namespace
 				                      [=](benchmark::State& state) { BMAOTRunIntoT1(state, kind, batch); });
 				RegisterBenchmarkCase("AOTRunIntoT16", kind, batch,
 				                      [=](benchmark::State& state) { BMAOTRunIntoT16(state, kind, batch); });
-				RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch, [=](benchmark::State& state) {
-					BMCUDACPUFallbackRunTensorsInto(state, kind, batch);
-				});
-				RegisterBenchmarkCase("CUDANativeRunInto", kind, batch, [=](benchmark::State& state) {
-					BMCUDANativeModelRunTensorsInto(state, kind, batch);
-				});
-				RegisterBenchmarkCase("CUDANativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
-					BMCUDANativeGraphModelRunTensorsInto(state, kind, batch);
-				});
-				RegisterBenchmarkCase("VulkanNativeRunInto", kind, batch, [=](benchmark::State& state) {
-					BMVulkanNativeModelRunTensorsInto(state, kind, batch);
-				});
+#ifdef LITENN_ENABLE_CUDA
+				if (cudaDeviceAvailable)
+				{
+					RegisterBenchmarkCase("CUDACPUFallbackRunInto", kind, batch, [=](benchmark::State& state) {
+						BMCUDACPUFallbackRunTensorsInto(state, kind, batch);
+					});
+					RegisterBenchmarkCase("CUDANativeRunInto", kind, batch, [=](benchmark::State& state) {
+						BMCUDANativeModelRunTensorsInto(state, kind, batch);
+					});
+					RegisterBenchmarkCase("CUDANativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
+						BMCUDANativeGraphModelRunTensorsInto(state, kind, batch);
+					});
+				}
+#endif
 #endif
 			}
 		}
@@ -1030,6 +1070,7 @@ namespace
 			egraphCase->UseRealTime()->Unit(benchmark::kMillisecond);
 		}
 
+#ifdef LITENN_ENABLE_CUDA
 		constexpr std::size_t nativeMatMulWidth = 128;
 		constexpr std::array nativeMatMulDTypes{
 			DataType::Float32,    DataType::Float16, DataType::BFloat16, DataType::Float8E4M3,
@@ -1039,6 +1080,10 @@ namespace
 		{
 			for (const auto dtype : nativeMatMulDTypes)
 			{
+				if (!cudaDeviceAvailable || !SupportsCUDANativeMatMulBenchmarkDType(dtype))
+				{
+					continue;
+				}
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("CUDANativeMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch, nativeMatMulWidth),
 				    [=](benchmark::State& state) {
@@ -1047,6 +1092,21 @@ namespace
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 			}
 		}
+#endif
+
+#ifdef LITENN_ENABLE_VULKAN
+		if (IsVulkanDeviceAvailable())
+		{
+			for (const auto batch : kBatchSizes)
+			{
+				const auto elementCount = batch * kInputWidth;
+				auto* benchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeElementwiseAddRunInto/F32/elements:{}", elementCount),
+				    [=](benchmark::State& state) { BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount); });
+				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+			}
+		}
+#endif
 #endif
 
 #ifdef LITENN_ENABLE_CUDA
@@ -1059,6 +1119,10 @@ namespace
 		{
 			for (const auto dtype : cudaDeviceMatMulDTypes)
 			{
+				if (!cudaDeviceAvailable || !SupportsCUDADeviceMatMulBenchmarkDType(dtype))
+				{
+					continue;
+				}
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("CUDADeviceMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch,
 				                cudaDeviceMatMulWidth),

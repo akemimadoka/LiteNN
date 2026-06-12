@@ -1881,9 +1881,13 @@ longer depends on checked-in SPIR-V words.
 - [x] Add first workgroup-size tuning for same-shape Vulkan elementwise/cast kernels: generated SPIR-V now uses
       `LocalSize = 64`, dispatch uses `ceil(numel / 64)` groups, and each shader guards tail threads with an in-kernel
       `global_id < numel` check.
-- [x] Add initial benchmark registration for Vulkan AOT rows. `benchmark/bench.cpp` now registers
-      `VulkanNativeRunInto` next to CPU AOT, CUDA AOT, PyTorch, and ggml rows, skipping explicitly when Vulkan is not
-      built, no compute device exists, or the model graph is outside current native Vulkan lowering coverage.
+- [x] Add initial benchmark registration for Vulkan AOT rows. `benchmark/bench.cpp` now registers supported
+      `VulkanNativeElementwiseAddRunInto` rows when a Vulkan compute device exists; model-level Vulkan Native rows stay
+      deferred until matmul/linear lowering is implemented, so benchmark execution no longer fails on an expected coverage
+      gap.
+- [x] Filter benchmark rows by device capabilities at registration time. CUDA rows are no longer registered when no CUDA
+      device exists, and CUDA MatMul dtype rows are emitted only for dtypes supported by the active device, keeping
+      `litenn_bench` output free of expected capability-miss errors.
 - [x] Split tiled kernels, memory-planner integration, async queue synchronization, and real Vulkan profile-result tables
       into the long-term deferred queue. These are production GPU-backend projects rather than prerequisites for the
       current G15 bootstrap.

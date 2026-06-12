@@ -93,9 +93,9 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
   requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access before these kernels are
   selected in production
-- `benchmark/bench.cpp` registers a `VulkanNativeRunInto` row next to CPU AOT, CUDA AOT, PyTorch, and ggml rows. The
-  benchmark skips explicitly when the build lacks Vulkan, no compute device is available, or the benchmark model is
-  outside the current native Vulkan lowering slice.
+- `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto` rows only when a Vulkan compute device exists. These
+  rows cover the current same-shape elementwise native lowering slice; model-level Vulkan Native benchmark rows remain
+  deferred until matmul/linear lowering lands.
 
 Runtime low-precision feature gating, reductions, matmul/linear chains, normalization, softmax, convolution,
 device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on production GPU-backend
