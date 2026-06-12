@@ -68,7 +68,10 @@ Do not package Vulkan instructions as PE/COFF/ELF/Mach-O objects. Static/shared-
 four regions as symbols, but the instruction bytes remain SPIR-V payload bytes.
 
 `LoadBorrowedExternalRegions` is the preferred path for memory-mapped mobile assets. The caller owns the mapped package
-lifetime and must keep the regions alive while the module is loaded.
+lifetime and must keep the regions alive while the module is loaded. For current Vulkan-native kernels, external
+constants/weights are validated from the separated metadata table and uploaded into runtime-owned Vulkan tensors during
+load; the mapped host region does not need to stay readable after that upload for native execution. CPU-bridge artifacts
+still follow the CPU borrowed-region lifetime contract.
 
 ## Unsupported Desktop Assumptions
 
@@ -94,15 +97,18 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same
   baseline one-output-element-per-invocation kernel shape
+- fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
+  separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
   requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access before these kernels are
   selected in production
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeMatMul/F32`, and
-  `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. Model-level Vulkan Native benchmark rows
-  remain deferred until variable/constant weight handling and multi-layer linear-chain lowering land.
+  `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. It also registers model-level
+  `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
+  remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.
 
-Runtime low-precision feature gating, reductions, production matmul/linear chains, normalization, softmax, convolution,
-device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on production GPU-backend
-work rather than part of the current bootstrap.
+Runtime low-precision feature gating, reductions, production tiled matmul/multi-layer linear chains, normalization,
+softmax, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on
+production GPU-backend work rather than part of the current bootstrap.

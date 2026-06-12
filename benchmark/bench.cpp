@@ -913,6 +913,19 @@ namespace
 		return inputs;
 	}
 
+	std::vector<Tensor<Vulkan>> MakeVulkanModelInputs(const std::vector<float>& data, std::size_t batch)
+	{
+		if (data.size() != batch * kInputWidth)
+		{
+			throw std::invalid_argument("Vulkan model benchmark inputs do not match the requested shape");
+		}
+
+		std::vector<Tensor<Vulkan>> inputs;
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
 	std::vector<Tensor<Vulkan>> AllocateVulkanOutputs(const CompiledModule<Vulkan>& module)
 	{
 		std::vector<Tensor<Vulkan>> outputs;
@@ -1022,6 +1035,38 @@ namespace
 		SetThroughputCounters(state, batch);
 		state.counters["flops"] = benchmark::Counter(static_cast<double>(2 * batch * width * width),
 		                                             benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+	{
+		std::mt19937 rng(42);
+		auto graph = GetModelSpec(kind).build(batch, rng);
+		Optimize(graph);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for model benchmark");
+			return;
+		}
+
+		const auto inputData = MakeInputData(batch);
+		auto inputs = MakeVulkanModelInputs(inputData, batch);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
 	}
 #endif
 
@@ -1153,6 +1198,9 @@ namespace
 #ifdef LITENN_ENABLE_CUDA
 		const bool cudaDeviceAvailable = IsCUDADeviceAvailable();
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+		const bool vulkanDeviceAvailable = IsVulkanDeviceAvailable();
+#endif
 		for (const auto kind : kModelKinds)
 		{
 			for (const auto batch : kBatchSizes)
@@ -1187,6 +1235,14 @@ namespace
 					});
 					RegisterBenchmarkCase("CUDANativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
 						BMCUDANativeGraphModelRunTensorsInto(state, kind, batch);
+					});
+				}
+#endif
+#ifdef LITENN_ENABLE_VULKAN
+				if (vulkanDeviceAvailable && kind == ModelKind::Linear)
+				{
+					RegisterBenchmarkCase("VulkanNativeRunInto", kind, batch, [=](benchmark::State& state) {
+						BMVulkanNativeModelRunTensorsInto(state, kind, batch);
 					});
 				}
 #endif
@@ -1233,7 +1289,7 @@ namespace
 #endif
 
 #ifdef LITENN_ENABLE_VULKAN
-		if (IsVulkanDeviceAvailable())
+		if (vulkanDeviceAvailable)
 		{
 			constexpr std::size_t vulkanNativeMatMulWidth = 128;
 			for (const auto batch : kBatchSizes)

@@ -1905,6 +1905,13 @@ packaging slice to a useful production backend.
 - [x] Add the first f32 MatMulBias Vulkan-native slice: fused `MatMulBiasAdd` / `MatMulBiasAddReLU` now lowers to a
       generated single-kernel SPIR-V baseline with broadcast row bias, and benchmark registers
       `VulkanNativeMatMulBiasAdd/F32`.
+- [x] Add Vulkan-native separated external tensor binding for the first model-shaped Linear slice: fused
+      `MatMulBiasAdd/ReLU` can now bind graph `VariableRefNode` / `ConstantNode` tensors from separated
+      constants/weights metadata, upload them to Vulkan device tensors at load time, and run with only public model
+      inputs. `benchmark/bench.cpp` registers `VulkanNativeRunInto/Linear(784->10)` rows when a Vulkan compute device
+      exists.
+      Validation on 2026-06-12: `CompiledModuleVulkanTest` passed 24/24; local `litenn_bench --benchmark_filter=VulkanNative`
+      reported `VulkanNativeRunInto/Linear(784->10)` at roughly 0.289/0.231/0.139/0.200 ms for batch 1/32/128/512.
 - [ ] Add device capability gating for generated SPIR-V features: 8-bit/16-bit storage buffers, fp16 arithmetic,
       subgroup availability, max workgroup size, storage-buffer alignment, and mobile-driver limits must be checked before
       selecting kernels.
@@ -1916,7 +1923,7 @@ packaging slice to a useful production backend.
       host/device round trips.
 - [ ] Implement production operator families in priority order:
       1. reductions with static axes (`Sum`, `Mean`, `Max`, `Min`) and simple row/column reductions;
-      2. complete f32 linear-chain lowering with variables/constants and multi-layer schedules, then replace the current
+      2. complete f32 multi-layer linear-chain lowering with workspace/multi-kernel schedules, then replace the current
          one-output-element-per-thread MatMul/MatMulBias kernels with tiled/shared-memory kernels;
       3. softmax and normalization (`LayerNorm`, `RMSNorm`, group normalization);
       4. convolution/pooling and image/latent-processing kernels for mobile vision workloads;
@@ -1931,7 +1938,8 @@ packaging slice to a useful production backend.
 - [ ] Add mobile validation coverage: Android cross-build profile, loader/validation-layer smoke tests, at least one real
       mobile GPU fixture, and clear skip/failure behavior when no Vulkan compute device is present.
 - [ ] Add end-to-end examples that are honest about backend selection: one native-only elementwise example, one
-      partitioned/fallback example, and one model-shaped benchmark once matmul/linear lowering exists.
+      partitioned/fallback example, and one model-shaped benchmark beyond the current single-Linear external-weight
+      slice.
 
 Hidden requirements:
 

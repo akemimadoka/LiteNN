@@ -5802,6 +5802,15 @@ namespace
 		DataType dstType{ DataType::Int32 };
 	};
 
+	struct VulkanP0TensorRef
+	{
+		VulkanNativeArgumentKind argumentKind{ VulkanNativeArgumentKind::InputTensor };
+		std::uint32_t argumentIndex{};
+		DataType dtype{ DataType::Float32 };
+		std::vector<std::size_t> shape;
+		std::uint32_t elementCount{};
+	};
+
 	struct VulkanP0MatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -5814,27 +5823,38 @@ namespace
 
 	struct VulkanP0MatMulBiasPlan
 	{
-		std::uint32_t lhsInputIndex{};
-		std::uint32_t rhsInputIndex{};
-		std::uint32_t biasInputIndex{};
+		VulkanP0TensorRef lhs;
+		VulkanP0TensorRef rhs;
+		VulkanP0TensorRef bias;
 		std::uint32_t m{};
 		std::uint32_t k{};
 		std::uint32_t n{};
 		std::uint32_t biasRows{};
-		std::uint32_t lhsElementCount{};
-		std::uint32_t rhsElementCount{};
-		std::uint32_t biasElementCount{};
 		std::uint32_t outputElementCount{};
 		bool relu{};
+	};
+
+	struct VulkanP0ExternalTensorBuilder
+	{
+		std::vector<std::byte> constants;
+		std::vector<std::byte> weights;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
+		std::unordered_map<std::size_t, std::uint32_t> variableExternalIds;
+		std::unordered_map<NodeId, std::uint32_t> constantExternalIds;
 	};
 
 	struct VulkanP0ArtifactParts
 	{
 		std::vector<std::byte> rodata;
 		std::vector<std::byte> instructions;
+		std::vector<std::byte> constants;
+		std::vector<std::byte> weights;
+		std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos;
 		std::vector<CompiledTensorSpec> inputSpecs;
 		std::vector<CompiledTensorSpec> outputSpecs;
 	};
+
+	std::optional<std::uint32_t> VulkanP0ShapeNumElementsU32(std::span<const std::size_t> shape);
 
 	std::optional<std::uint32_t> GetVulkanP0ParamIndex(const Subgraph& subgraph, NodeOutput output)
 	{
@@ -5851,9 +5871,153 @@ namespace
 		return static_cast<std::uint32_t>(param->paramIndex);
 	}
 
+	std::optional<std::uint32_t> AppendVulkanP0ExternalTensor(VulkanP0ExternalTensorBuilder& builder,
+	                                                         std::string name, std::string_view regionName,
+	                                                         const Tensor<PolymorphicDevice>& tensor,
+	                                                         const OutputInfo& output)
+	{
+		if (builder.externalTensorInfos.size() > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		constexpr std::uint64_t kAlignment = 64;
+		auto& regionBytes = regionName == kWeightsRegionName ? builder.weights : builder.constants;
+		const auto offset = AppendTensorPayloadBytes(regionBytes, tensor, output.dtype, output.shape, kAlignment);
+		if (!offset)
+		{
+			return std::nullopt;
+		}
+
+		const auto byteSize = TensorByteSizeForShape(output.dtype, output.shape);
+		builder.externalTensorInfos.push_back(MakeExternalTensorInfo(std::move(name), regionName, output.dtype,
+		                                                             regionBytes, output.shape, *offset, byteSize,
+		                                                             kAlignment));
+		return static_cast<std::uint32_t>(builder.externalTensorInfos.size() - 1);
+	}
+
+	bool VulkanP0ExternalTensorInfoMatches(const CompiledModuleExternalTensorInfo& info, const OutputInfo& output)
+	{
+		return info.type.dtype == output.dtype && info.type.StaticShape() == output.shape;
+	}
+
+	std::optional<VulkanP0TensorRef> GetVulkanP0TensorRef(const Graph& graph, const Subgraph& subgraph,
+	                                                      NodeOutput output, VulkanP0ExternalTensorBuilder* builder)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& entry = subgraph.GetNodeEntry(output.node);
+		if (entry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto& info = entry.outputInfos[0];
+		const auto elementCount = VulkanP0ShapeNumElementsU32(info.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		if (const auto* param = std::get_if<ParamRefNode>(&entry.node))
+		{
+			if (param->paramIndex >= subgraph.Params().size() ||
+			    param->paramIndex > std::numeric_limits<std::uint32_t>::max())
+			{
+				return std::nullopt;
+			}
+			return VulkanP0TensorRef{
+				.argumentKind = VulkanNativeArgumentKind::InputTensor,
+				.argumentIndex = static_cast<std::uint32_t>(param->paramIndex),
+				.dtype = info.dtype,
+				.shape = info.shape,
+				.elementCount = *elementCount,
+			};
+		}
+
+		if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
+		{
+			if (variable->variableIndex >= graph.VariableCount())
+			{
+				return std::nullopt;
+			}
+			std::uint32_t externalId = 0;
+			if (builder != nullptr)
+			{
+				auto [it, inserted] = builder->variableExternalIds.emplace(variable->variableIndex, 0);
+				if (inserted)
+				{
+					auto name = graph.VariableName(variable->variableIndex);
+					if (name.empty())
+					{
+						name = std::format("variable{}", variable->variableIndex);
+					}
+					const auto appended = AppendVulkanP0ExternalTensor(
+					    *builder, std::move(name), kWeightsRegionName,
+					    graph.GetVariable(variable->variableIndex)->Data(), info);
+					if (!appended)
+					{
+						builder->variableExternalIds.erase(it);
+						return std::nullopt;
+					}
+					it->second = *appended;
+				}
+				externalId = it->second;
+				if (!VulkanP0ExternalTensorInfoMatches(builder->externalTensorInfos[externalId], info))
+				{
+					return std::nullopt;
+				}
+			}
+			return VulkanP0TensorRef{
+				.argumentKind = VulkanNativeArgumentKind::ExternalTensor,
+				.argumentIndex = externalId,
+				.dtype = info.dtype,
+				.shape = info.shape,
+				.elementCount = *elementCount,
+			};
+		}
+
+		if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
+		{
+			std::uint32_t externalId = 0;
+			if (builder != nullptr)
+			{
+				auto [it, inserted] = builder->constantExternalIds.emplace(output.node, 0);
+				if (inserted)
+				{
+					const auto appended =
+					    AppendVulkanP0ExternalTensor(*builder, std::format("constant_{}", output.node),
+					                                 kConstantsRegionName, constant->value, info);
+					if (!appended)
+					{
+						builder->constantExternalIds.erase(it);
+						return std::nullopt;
+					}
+					it->second = *appended;
+				}
+				externalId = it->second;
+				if (!VulkanP0ExternalTensorInfoMatches(builder->externalTensorInfos[externalId], info))
+				{
+					return std::nullopt;
+				}
+			}
+			return VulkanP0TensorRef{
+				.argumentKind = VulkanNativeArgumentKind::ExternalTensor,
+				.argumentIndex = externalId,
+				.dtype = info.dtype,
+				.shape = info.shape,
+				.elementCount = *elementCount,
+			};
+		}
+
+		return std::nullopt;
+	}
+
 	bool IsVulkanP0SingleForwardGraph(const Graph& graph)
 	{
-		return graph.Forward() < graph.SubgraphCount() && !graph.Backward().has_value() && graph.VariableCount() == 0 &&
+		return graph.Forward() < graph.SubgraphCount() && !graph.Backward().has_value() &&
 		       graph.ActivationSlotCount() == 0 && graph.TapeSlotCount() == 0;
 	}
 
@@ -5925,7 +6089,7 @@ namespace
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
 			return VulkanNativeUnsupported(std::format(
-			    "Vulkan native currently requires a forward-only graph with no variables, activations, or tape slots; "
+			    "Vulkan native currently requires a forward-only graph with no activations or tape slots; "
 			    "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
 			    graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
 			    graph.ActivationSlotCount(), graph.TapeSlotCount()));
@@ -5951,61 +6115,49 @@ namespace
 		}
 		const auto& output = resultEntry.outputInfos[0];
 
-		if (subgraph.Params().size() == 3)
+		if (const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
+		    fused != nullptr &&
+		    (fused->pattern == FusionPattern::MatMulBiasAdd || fused->pattern == FusionPattern::MatMulBiasAddReLU))
 		{
-			const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
-			if (!fused ||
-			    (fused->pattern != FusionPattern::MatMulBiasAdd &&
-			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
-			    fused->args.size() < 3)
+			if (fused->args.size() < 3)
+			{
+				return VulkanNativeUnsupported("Vulkan native MatMulBias fused node must have at least three args");
+			}
+			const auto lhs = GetVulkanP0TensorRef(graph, subgraph, fused->args[0], nullptr);
+			const auto rhs = GetVulkanP0TensorRef(graph, subgraph, fused->args[1], nullptr);
+			const auto bias = GetVulkanP0TensorRef(graph, subgraph, fused->args[2], nullptr);
+			if (!lhs || !rhs || !bias)
 			{
 				return VulkanNativeUnsupported(
-				    "Vulkan native three-input slice currently supports only fused MatMulBiasAdd/ReLU result nodes");
+				    "Vulkan native MatMulBias inputs must be graph parameters, variables, or constants");
 			}
-			const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[0]);
-			const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[1]);
-			const auto biasInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[2]);
-			if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
-			{
-				return VulkanNativeUnsupported("Vulkan native MatMulBias inputs must be direct graph parameters");
-			}
-			const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
-			const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
-			const auto& biasParam = subgraph.Params()[*biasInputIndex];
-			if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
-			    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+			if (lhs->dtype != DataType::Float32 || rhs->dtype != DataType::Float32 ||
+			    bias->dtype != DataType::Float32 || output.dtype != DataType::Float32)
 			{
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native MatMulBias requires Float32 lhs/rhs/bias/output, got lhs={} rhs={} bias={} "
 				    "output={}",
-				    DataTypeName(lhsParam.dtype), DataTypeName(rhsParam.dtype), DataTypeName(biasParam.dtype),
+				    DataTypeName(lhs->dtype), DataTypeName(rhs->dtype), DataTypeName(bias->dtype),
 				    DataTypeName(output.dtype)));
 			}
-			if (lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 || biasParam.shape.size() != 2 ||
+			if (lhs->shape.size() != 2 || rhs->shape.size() != 2 || bias->shape.size() != 2 ||
 			    output.shape.size() != 2)
 			{
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native MatMulBias requires rank-2 lhs/rhs/bias/output, got lhs={} rhs={} bias={} "
 				    "output={}",
-				    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
-				    Validation::ShapeToString(biasParam.shape), Validation::ShapeToString(output.shape)));
+				    Validation::ShapeToString(lhs->shape), Validation::ShapeToString(rhs->shape),
+				    Validation::ShapeToString(bias->shape), Validation::ShapeToString(output.shape)));
 			}
-			if (lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
-			    output.shape[1] != rhsParam.shape[1] || biasParam.shape[1] != output.shape[1] ||
-			    (biasParam.shape[0] != 1 && biasParam.shape[0] != output.shape[0]))
+			if (lhs->shape[1] != rhs->shape[0] || output.shape[0] != lhs->shape[0] ||
+			    output.shape[1] != rhs->shape[1] || bias->shape[1] != output.shape[1] ||
+			    (bias->shape[0] != 1 && bias->shape[0] != output.shape[0]))
 			{
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native MatMulBias shape mismatch, expected [M,K] @ [K,N] + [1|M,N] -> [M,N], got "
 				    "lhs={} rhs={} bias={} output={}",
-				    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
-				    Validation::ShapeToString(biasParam.shape), Validation::ShapeToString(output.shape)));
-			}
-			if (!VulkanP0ShapeNumElementsU32(lhsParam.shape) || !VulkanP0ShapeNumElementsU32(rhsParam.shape) ||
-			    !VulkanP0ShapeNumElementsU32(biasParam.shape) || !VulkanP0ShapeNumElementsU32(output.shape))
-			{
-				return VulkanNativeUnsupported(
-				    "Vulkan native MatMulBias shapes must be non-empty, non-zero, and contain at most uint32_t "
-				    "elements");
+				    Validation::ShapeToString(lhs->shape), Validation::ShapeToString(rhs->shape),
+				    Validation::ShapeToString(bias->shape), Validation::ShapeToString(output.shape)));
 			}
 			return VulkanNativeSupported(fused->pattern == FusionPattern::MatMulBiasAddReLU ? "f32 matmul bias relu"
 			                                                                                : "f32 matmul bias add");
@@ -6381,65 +6533,57 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0MatMulBiasPlan>
-	MakeVulkanP0MatMulBiasF32Plan(const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
-	                              std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
+	std::optional<VulkanP0MatMulBiasPlan> MakeVulkanP0MatMulBiasF32Plan(VulkanP0TensorRef lhs,
+	                                                                    VulkanP0TensorRef rhs,
+	                                                                    VulkanP0TensorRef bias,
+	                                                                    const OutputInfo& output, bool relu)
 	{
-		const auto& lhsParam = subgraph.Params()[lhsInputIndex];
-		const auto& rhsParam = subgraph.Params()[rhsInputIndex];
-		const auto& biasParam = subgraph.Params()[biasInputIndex];
-		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
-		    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 ||
-		    rhsParam.shape.size() != 2 || biasParam.shape.size() != 2 || output.shape.size() != 2 ||
-		    lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
-		    output.shape[1] != rhsParam.shape[1] || biasParam.shape[1] != output.shape[1] ||
-		    (biasParam.shape[0] != 1 && biasParam.shape[0] != output.shape[0]))
+		if (lhs.dtype != DataType::Float32 || rhs.dtype != DataType::Float32 || bias.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || lhs.shape.size() != 2 || rhs.shape.size() != 2 ||
+		    bias.shape.size() != 2 || output.shape.size() != 2 || lhs.shape[1] != rhs.shape[0] ||
+		    output.shape[0] != lhs.shape[0] || output.shape[1] != rhs.shape[1] || bias.shape[1] != output.shape[1] ||
+		    (bias.shape[0] != 1 && bias.shape[0] != output.shape[0]))
 		{
 			return std::nullopt;
 		}
 
-		const auto lhsElementCount = VulkanP0ShapeNumElementsU32(lhsParam.shape);
-		const auto rhsElementCount = VulkanP0ShapeNumElementsU32(rhsParam.shape);
-		const auto biasElementCount = VulkanP0ShapeNumElementsU32(biasParam.shape);
 		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
-		if (!lhsElementCount || !rhsElementCount || !biasElementCount || !outputElementCount)
+		if (!outputElementCount)
 		{
 			return std::nullopt;
 		}
-		if (lhsParam.shape[0] > std::numeric_limits<std::uint32_t>::max() ||
-		    lhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
-		    rhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
-		    biasParam.shape[0] > std::numeric_limits<std::uint32_t>::max())
+		if (lhs.shape[0] > std::numeric_limits<std::uint32_t>::max() ||
+		    lhs.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
+		    rhs.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
+		    bias.shape[0] > std::numeric_limits<std::uint32_t>::max())
 		{
 			return std::nullopt;
 		}
 
-		const auto m = static_cast<std::uint32_t>(lhsParam.shape[0]);
-		const auto k = static_cast<std::uint32_t>(lhsParam.shape[1]);
-		const auto n = static_cast<std::uint32_t>(rhsParam.shape[1]);
-		const auto biasRows = static_cast<std::uint32_t>(biasParam.shape[0]);
+		const auto m = static_cast<std::uint32_t>(lhs.shape[0]);
+		const auto k = static_cast<std::uint32_t>(lhs.shape[1]);
+		const auto n = static_cast<std::uint32_t>(rhs.shape[1]);
+		const auto biasRows = static_cast<std::uint32_t>(bias.shape[0]);
 		if (!VulkanNativeSupportsMatMulBiasF32(m, k, n, biasRows))
 		{
 			return std::nullopt;
 		}
 
 		return VulkanP0MatMulBiasPlan{
-			.lhsInputIndex = lhsInputIndex,
-			.rhsInputIndex = rhsInputIndex,
-			.biasInputIndex = biasInputIndex,
+			.lhs = std::move(lhs),
+			.rhs = std::move(rhs),
+			.bias = std::move(bias),
 			.m = m,
 			.k = k,
 			.n = n,
 			.biasRows = biasRows,
-			.lhsElementCount = *lhsElementCount,
-			.rhsElementCount = *rhsElementCount,
-			.biasElementCount = *biasElementCount,
 			.outputElementCount = *outputElementCount,
 			.relu = relu,
 		};
 	}
 
-	std::optional<VulkanP0MatMulBiasPlan> MatchVulkanP0MatMulBiasF32(const Graph& graph)
+	std::optional<VulkanP0MatMulBiasPlan>
+	MatchVulkanP0MatMulBiasF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -6447,7 +6591,7 @@ namespace
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
-		if (subgraph.Params().size() != 3 || subgraph.Results().size() != 1)
+		if (subgraph.Results().size() != 1)
 		{
 			return std::nullopt;
 		}
@@ -6471,16 +6615,15 @@ namespace
 		{
 			return std::nullopt;
 		}
-		const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[0]);
-		const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[1]);
-		const auto biasInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[2]);
-		if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
+		auto lhs = GetVulkanP0TensorRef(graph, subgraph, fused->args[0], externalBuilder);
+		auto rhs = GetVulkanP0TensorRef(graph, subgraph, fused->args[1], externalBuilder);
+		auto bias = GetVulkanP0TensorRef(graph, subgraph, fused->args[2], externalBuilder);
+		if (!lhs || !rhs || !bias)
 		{
 			return std::nullopt;
 		}
 
-		return MakeVulkanP0MatMulBiasF32Plan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
-		                                     resultEntry.outputInfos[0],
+		return MakeVulkanP0MatMulBiasF32Plan(std::move(*lhs), std::move(*rhs), std::move(*bias), resultEntry.outputInfos[0],
 		                                     fused->pattern == FusionPattern::MatMulBiasAddReLU);
 	}
 
@@ -6799,7 +6942,8 @@ namespace
 
 	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeMatMulBiasF32P0(const Graph& graph)
 	{
-		const auto plan = MatchVulkanP0MatMulBiasF32(graph);
+		VulkanP0ExternalTensorBuilder externalBuilder;
+		const auto plan = MatchVulkanP0MatMulBiasF32(graph, &externalBuilder);
 		if (!plan)
 		{
 			return std::nullopt;
@@ -6813,26 +6957,26 @@ namespace
 		auto spirv = VulkanNativeMatMulBiasF32SPIRV(plan->m, plan->k, plan->n, plan->biasRows, plan->relu);
 		payload.spirv = std::move(spirv.words);
 
-		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
-		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
-		const auto biasByteSize = static_cast<std::uint64_t>(plan->biasElementCount) * sizeof(float);
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhs.elementCount) * sizeof(float);
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhs.elementCount) * sizeof(float);
+		const auto biasByteSize = static_cast<std::uint64_t>(plan->bias.elementCount) * sizeof(float);
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float);
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0MatMulGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
 		    .arguments = {
-		        { .kind = VulkanNativeArgumentKind::InputTensor,
-		          .index = plan->lhsInputIndex,
+		        { .kind = plan->lhs.argumentKind,
+		          .index = plan->lhs.argumentIndex,
 		          .binding = 0,
 		          .byteOffset = 0,
 		          .byteSize = lhsByteSize },
-		        { .kind = VulkanNativeArgumentKind::InputTensor,
-		          .index = plan->rhsInputIndex,
+		        { .kind = plan->rhs.argumentKind,
+		          .index = plan->rhs.argumentIndex,
 		          .binding = 1,
 		          .byteOffset = 0,
 		          .byteSize = rhsByteSize },
-		        { .kind = VulkanNativeArgumentKind::InputTensor,
-		          .index = plan->biasInputIndex,
+		        { .kind = plan->bias.argumentKind,
+		          .index = plan->bias.argumentIndex,
 		          .binding = 2,
 		          .byteOffset = 0,
 		          .byteSize = biasByteSize },
@@ -6852,9 +6996,20 @@ namespace
 		return VulkanP0ArtifactParts{
 			.rodata = std::move(rodata),
 			.instructions = std::move(instructions),
+			.constants = std::move(externalBuilder.constants),
+			.weights = std::move(externalBuilder.weights),
+			.externalTensorInfos = std::move(externalBuilder.externalTensorInfos),
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
+	}
+
+	CompiledArtifactParts MakeVulkanNativeCompiledArtifactParts(VulkanP0ArtifactParts parts)
+	{
+		return MakeCompiledArtifactParts(std::move(parts.rodata), std::move(parts.instructions),
+		                                 std::move(parts.inputSpecs), std::move(parts.outputSpecs),
+		                                 CompiledModuleBackend::VulkanNative, std::move(parts.constants),
+		                                 std::move(parts.weights), std::move(parts.externalTensorInfos));
 	}
 #endif
 
@@ -8220,9 +8375,39 @@ namespace
 		}
 	}
 
+	std::vector<Tensor<Vulkan>> LoadVulkanExternalTensors(const SeparatedMetadata& metadata,
+	                                                      CompiledModuleSeparatedImage image, Vulkan device)
+	{
+		std::vector<Tensor<Vulkan>> tensors;
+		tensors.reserve(metadata.externalTensorInfos.size());
+		for (const auto& info : metadata.externalTensorInfos)
+		{
+			const auto region = SeparatedImageRegionBytes(image, info.region);
+			if (info.byteOffset > region.size() || info.byteSize > region.size() - info.byteOffset)
+			{
+				throw std::runtime_error(
+				    std::format("Vulkan native external tensor '{}' byte range is out of bounds", info.name));
+			}
+			const auto shape = info.type.StaticShape();
+			const auto expectedByteSize = TensorByteSizeForShape(info.type.dtype, shape);
+			if (info.byteSize != expectedByteSize)
+			{
+				throw std::runtime_error(
+				    std::format("Vulkan native external tensor '{}' byte size does not match its type", info.name));
+			}
+
+			Tensor<CPU> host(Uninitialized, ShapeView{ shape }, info.type.dtype, CPU{});
+			std::memcpy(host.UnsafeRawData(), region.data() + static_cast<std::ptrdiff_t>(info.byteOffset),
+			            static_cast<std::size_t>(info.byteSize));
+			tensors.push_back(host.CopyToDevice(device));
+		}
+		return tensors;
+	}
+
 	void RunVulkanNativePayload(const VulkanNativeInstructionPayload& payload,
 	                            std::span<const VulkanComputeModule> modules, std::span<const Tensor<Vulkan>> inputs,
-	                            std::span<Tensor<Vulkan>> outputs, CompiledModuleVulkanRunOptions options)
+	                            std::span<const Tensor<Vulkan>> externalTensors, std::span<Tensor<Vulkan>> outputs,
+	                            CompiledModuleVulkanRunOptions options)
 	{
 		if (modules.size() != payload.kernels.size())
 		{
@@ -8248,6 +8433,15 @@ namespace
 					ValidateVulkanArgumentRange(argument, inputs[argument.index].DType(),
 					                            inputs[argument.index].NumElements(), "input");
 					descriptors[argument.binding] = inputs[argument.index].UnsafeRawData();
+					break;
+				case VulkanNativeArgumentKind::ExternalTensor:
+					if (argument.index >= externalTensors.size())
+					{
+						throw std::runtime_error("Vulkan native external tensor argument index is out of bounds");
+					}
+					ValidateVulkanArgumentRange(argument, externalTensors[argument.index].DType(),
+					                            externalTensors[argument.index].NumElements(), "external tensor");
+					descriptors[argument.binding] = externalTensors[argument.index].UnsafeRawData();
 					break;
 				case VulkanNativeArgumentKind::OutputTensor:
 					if (argument.index >= outputs.size())
@@ -8286,6 +8480,7 @@ struct CompiledModule<Vulkan>::Impl
 	Vulkan device;
 	VulkanNativeInstructionPayload vulkanPayload;
 	std::vector<VulkanComputeModule> vulkanModules;
+	std::vector<Tensor<Vulkan>> vulkanExternalTensors;
 };
 
 CompiledModule<Vulkan>::CompiledModule() = default;
@@ -8375,6 +8570,10 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleSeparatedImage
 	if (metadata.legacyMetadata.backend == CompiledModuleBackend::CPUNative)
 	{
 		module.impl_->cpuModule = CompiledModule<CPU>::Load(image);
+	}
+	else if (metadata.legacyMetadata.backend == CompiledModuleBackend::VulkanNative)
+	{
+		module.impl_->vulkanExternalTensors = LoadVulkanExternalTensors(metadata, image, module.impl_->device);
 	}
 	return module;
 }
@@ -8468,7 +8667,8 @@ void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inpu
 
 	if (impl_->backend == CompiledModuleBackend::VulkanNative)
 	{
-		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, outputs, options);
+		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
+		                       outputs, options);
 		return;
 	}
 	if (!options.synchronize)
@@ -8881,38 +9081,23 @@ namespace
 		{
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryF32P0(graph))
 			{
-				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs),
-				                                 std::move(nativeParts->outputSpecs),
-				                                 CompiledModuleBackend::VulkanNative);
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
 			{
-				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs),
-				                                 std::move(nativeParts->outputSpecs),
-				                                 CompiledModuleBackend::VulkanNative);
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeMatMulBiasF32P0(graph))
 			{
-				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs),
-				                                 std::move(nativeParts->outputSpecs),
-				                                 CompiledModuleBackend::VulkanNative);
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeMatMulF32P0(graph))
 			{
-				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs),
-				                                 std::move(nativeParts->outputSpecs),
-				                                 CompiledModuleBackend::VulkanNative);
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32P0(graph))
 			{
-				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
-				                                 std::move(nativeParts->inputSpecs),
-				                                 std::move(nativeParts->outputSpecs),
-				                                 CompiledModuleBackend::VulkanNative);
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			const auto report = DiagnoseVulkanNativeSupport(graph);
 			if (!report.supported)

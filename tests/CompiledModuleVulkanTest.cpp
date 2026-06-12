@@ -80,6 +80,43 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSimpleMatMulBiasVariableGraph(bool relu)
+	{
+		Graph graph;
+		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
+		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 }, DataType::Float32)));
+		const auto biasIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 }, DataType::Float32)));
+		graph.SetVariableName(weightIndex, "weight");
+		graph.SetVariableName(biasIndex, "bias");
+
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 3, 4 } } });
+		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { weight, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		NodeOutput result{ shifted, 0 };
+		if (relu)
+		{
+			Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
+			const auto zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+			                                 { OutputInfo{ DataType::Float32, { 1, 1 } } });
+			const auto reluOut = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted, 0 }, { zeroNode, 0 } },
+			                                { OutputInfo{ DataType::Float32, { 2, 4 } } });
+			result = { reluOut, 0 };
+		}
+		sg.SetResults({ result });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs" });
+		graph.SetOutputNames({ relu ? "relu" : "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	Graph BuildSimpleUnaryGraph(UnaryOp op)
 	{
 		Graph graph;
@@ -377,6 +414,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMulBiasReLU)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMulBiasExternalWeights)
+{
+	const auto graph = BuildSimpleMatMulBiasVariableGraph(true);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 matmul bias relu"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -458,6 +505,26 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleMatMulBiasReLU)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * 4u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 1u * 4u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 2u * 4u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForMatMulBiasExternalWeights)
+{
+	const auto graph = BuildSimpleMatMulBiasVariableGraph(true);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_EQ(artifact.InputSpecs().size(), 1u);
+	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
+	EXPECT_EQ(artifact.Constants().size(), 0u);
+	EXPECT_GT(artifact.Weights().size(), 0u);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].index, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].index, 1u);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
@@ -616,6 +683,36 @@ TEST(CompiledModuleVulkanTest, RunsSimpleMatMulArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 38.0f, 44.0f, 50.0f, 56.0f, 83.0f, 98.0f, 113.0f, 128.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsMatMulBiasExternalWeightsArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleMatMulBiasVariableGraph(true);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	ASSERT_GT(artifact.Weights().size(), 0u);
+	auto module = artifact.Load(Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 39.0f, 0.0f, 53.0f, 0.0f, 84.0f, 0.0f, 116.0f, 0.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{

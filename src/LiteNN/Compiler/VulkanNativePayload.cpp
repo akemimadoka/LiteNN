@@ -90,6 +90,8 @@ namespace LiteNN
 				return VulkanNativeArgumentKind::InputTensor;
 			case static_cast<std::uint32_t>(VulkanNativeArgumentKind::OutputTensor):
 				return VulkanNativeArgumentKind::OutputTensor;
+			case static_cast<std::uint32_t>(VulkanNativeArgumentKind::ExternalTensor):
+				return VulkanNativeArgumentKind::ExternalTensor;
 			default:
 				throw std::runtime_error("Vulkan native instruction payload contains an invalid argument kind");
 			}

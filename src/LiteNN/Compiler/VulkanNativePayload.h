@@ -13,6 +13,7 @@ namespace LiteNN
 	{
 		InputTensor = 1,
 		OutputTensor = 2,
+		ExternalTensor = 3,
 	};
 
 	enum class VulkanNativeFeature : std::uint32_t
