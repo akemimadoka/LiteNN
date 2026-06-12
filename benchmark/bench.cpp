@@ -861,6 +861,35 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanReduceGraph(ReduceOp op, std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, width });
+		const auto out = sg.AddNode(ReduceOpNode{ op, { input, 0 }, 1 },
+		                            { OutputInfo{ DataType::Float32, { batch } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
+	std::string_view ReduceOpBenchmarkName(ReduceOp op)
+	{
+		switch (op)
+		{
+		case ReduceOp::Sum:
+			return "SumAxis1";
+		case ReduceOp::Mean:
+			return "MeanAxis1";
+		case ReduceOp::Max:
+			return "MaxAxis1";
+		default:
+			return "Unknown";
+		}
+	}
+
 	bool SupportsVulkanNativeCastBenchmarkDType(DataType dstType)
 	{
 		if (!IsVulkanDeviceAvailable())
@@ -967,6 +996,20 @@ namespace
 
 		std::vector<Tensor<Vulkan>> inputs;
 		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { elementCount });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
+	std::vector<Tensor<Vulkan>> MakeVulkanReduceInputs(const std::vector<float>& data, std::size_t batch,
+	                                                   std::size_t width)
+	{
+		if (data.size() != batch * width)
+		{
+			throw std::invalid_argument("Vulkan reduce benchmark input does not match the requested shape");
+		}
+
+		std::vector<Tensor<Vulkan>> inputs;
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, width });
 		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
 		return inputs;
 	}
@@ -1124,6 +1167,39 @@ namespace
 		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
 		state.counters["elements_per_second"] =
 		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeReduceRunTensorsInto(benchmark::State& state, ReduceOp op, std::size_t batch,
+	                                        std::size_t width)
+	{
+		auto graph = BuildVulkanReduceGraph(op, batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Reduce benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(batch * width, 9);
+		auto inputs = MakeVulkanReduceInputs(inputData, batch, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["reduced_elements"] =
+		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
@@ -1405,8 +1481,20 @@ namespace
 					                elementCount),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativeCastRunTensorsInto(state, dstType, elementCount);
-					    });
+					});
 					castBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
+
+				constexpr std::array vulkanNativeReduceOps{ ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max };
+				for (const auto op : vulkanNativeReduceOps)
+				{
+					auto* reduceBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeReduce/F32/{}/batch:{}/width:{}",
+					                ReduceOpBenchmarkName(op), batch, vulkanNativeMatMulWidth),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeReduceRunTensorsInto(state, op, batch, vulkanNativeMatMulWidth);
+					    });
+					reduceBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(

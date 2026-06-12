@@ -1962,7 +1962,9 @@ packaging slice to a useful production backend.
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, and `ReduceOp::Max` now
             lower to Vulkan-native SPIR-V with one invocation per output element and a scalar loop over the reduced axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 39/40 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|MaxAxis1` rows and the local
+            `SumAxis1/batch:1/width:128` smoke row ran successfully.
       - [ ] Add `ReduceOp::Min` once the graph-level operator exists, then replace the scalar-loop baseline with
             workgroup/subgroup reductions for larger axes.
       - [ ] Complete f32 multi-layer linear-chain lowering with workspace/multi-kernel schedules, then replace the
