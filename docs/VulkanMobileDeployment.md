@@ -41,6 +41,10 @@ application package unless the app explicitly compiles graphs on device. The nor
 - Static same-shape elementwise/cast kernels currently use `LocalSize = 64` and `ceil(numel / 64)` dispatch groups. The
   generated shader guards tail threads with `global_id < numel`, so tensor element counts do not need to be multiples of
   the workgroup size.
+- `CompiledModule<Vulkan>::Load` performs the first native payload/device compatibility gate before shader module or
+  pipeline creation. It checks the `vulkan1.1` target, API version, local workgroup limit, storage-buffer range, and the
+  currently generated low-precision cast feature requirements. The capability snapshot distinguishes physical feature
+  availability from LiteNN logical-device feature enablement.
 
 ## Validation Layers
 
@@ -102,13 +106,14 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
-  requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access before these kernels are
-  selected in production
+  requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access. Current builds reject
+  these artifacts at load time with a capability diagnostic until the logical device enables the needed optional Vulkan
+  features.
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeMatMul/F32`, and
   `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
   remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.
 
-Runtime low-precision feature gating, reductions, production tiled matmul/multi-layer linear chains, normalization,
-softmax, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on
-production GPU-backend work rather than part of the current bootstrap.
+Low-precision logical-device feature enablement, reductions, production tiled matmul/multi-layer linear chains,
+normalization, softmax, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain
+follow-on production GPU-backend work rather than part of the current bootstrap.

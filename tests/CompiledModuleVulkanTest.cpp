@@ -542,6 +542,39 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
 	          0ull);
 }
 
+TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Float16 storage features are enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleCastGraph(DataType::Float32, DataType::Float16);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	try
+	{
+		(void)artifact.Load(device);
+		FAIL() << "Expected low-precision Vulkan artifact loading to require enabled device features";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_TRUE(message.find("shaderFloat16") != std::string::npos ||
+		            message.find("storageBuffer16BitAccess") != std::string::npos)
+		    << message;
+		EXPECT_NE(message.find("enabled=false"), std::string::npos);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 {
 	if (!IsVulkanDeviceAvailable())

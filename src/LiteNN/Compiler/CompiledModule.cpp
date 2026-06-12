@@ -8375,6 +8375,115 @@ namespace
 		}
 	}
 
+	bool VulkanNativeHasFeature(const VulkanNativeInstructionPayload& payload, VulkanNativeFeature feature)
+	{
+		return (payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(feature))) != 0;
+	}
+
+	bool VulkanApiVersionAtLeast(const VulkanDeviceCapabilities& capabilities, std::uint32_t major,
+	                             std::uint32_t minor)
+	{
+		return capabilities.apiVersionMajor > major ||
+		       (capabilities.apiVersionMajor == major && capabilities.apiVersionMinor >= minor);
+	}
+
+	bool VulkanNativeSpecUsesDType(std::span<const CompiledTensorSpec> specs, DataType dtype)
+	{
+		return std::ranges::any_of(specs, [&](const CompiledTensorSpec& spec) { return spec.type.dtype == dtype; });
+	}
+
+	std::string VulkanDeviceCapabilityName(const VulkanDeviceCapabilities& capabilities)
+	{
+		return capabilities.deviceName.empty() ? std::string("selected Vulkan device") : capabilities.deviceName;
+	}
+
+	void RequireVulkanNativeDeviceFeature(bool enabled, bool available, std::string_view featureName,
+	                                      const VulkanDeviceCapabilities& capabilities)
+	{
+		if (enabled)
+		{
+			return;
+		}
+		throw std::runtime_error(std::format(
+		    "Vulkan native payload requires {}, but device '{}' reports available={} and LiteNN logical-device "
+		    "enabled={}",
+		    featureName, VulkanDeviceCapabilityName(capabilities), available, enabled));
+	}
+
+	void ValidateVulkanNativeDeviceCapabilities(const VulkanNativeInstructionPayload& payload,
+	                                            std::span<const CompiledTensorSpec> inputSpecs,
+	                                            std::span<const CompiledTensorSpec> outputSpecs,
+	                                            const Vulkan& device)
+	{
+		const auto capabilities = QueryVulkanDeviceCapabilities(device);
+		if (payload.target != "vulkan1.1")
+		{
+			throw std::runtime_error(std::format("Unsupported Vulkan native target '{}'", payload.target));
+		}
+		if (!VulkanApiVersionAtLeast(capabilities, 1, 1))
+		{
+			throw std::runtime_error(std::format(
+			    "Vulkan native payload requires Vulkan 1.1 or newer; device '{}' reports {}.{}.{}",
+			    VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor, capabilities.apiVersionMinor,
+			    capabilities.apiVersionPatch));
+		}
+		constexpr std::uint32_t requiredWorkgroupSize = kVulkanNativeElementwiseWorkgroupSize;
+		if (capabilities.maxComputeWorkGroupInvocations < requiredWorkgroupSize ||
+		    capabilities.maxComputeWorkGroupSize[0] < requiredWorkgroupSize)
+		{
+			throw std::runtime_error(std::format(
+			    "Vulkan native payload requires local workgroup size {}, but device '{}' supports at most {} "
+			    "invocations and x-size {}",
+			    requiredWorkgroupSize, VulkanDeviceCapabilityName(capabilities),
+			    capabilities.maxComputeWorkGroupInvocations, capabilities.maxComputeWorkGroupSize[0]));
+		}
+		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
+		{
+			const auto& kernel = payload.kernels[kernelIndex];
+			if (kernel.groups.x == 0 || kernel.groups.y == 0 || kernel.groups.z == 0)
+			{
+				throw std::runtime_error(std::format("Vulkan native kernel {} has zero dispatch dimension",
+				                                     kernelIndex));
+			}
+			for (const auto& argument : kernel.arguments)
+			{
+				if (argument.byteSize > capabilities.maxStorageBufferRange)
+				{
+					throw std::runtime_error(std::format(
+					    "Vulkan native kernel {} binding {} requires storage-buffer range {} bytes, but device "
+					    "'{}' supports at most {} bytes",
+					    kernelIndex, argument.binding, argument.byteSize, VulkanDeviceCapabilityName(capabilities),
+					    capabilities.maxStorageBufferRange));
+				}
+			}
+		}
+
+		if (VulkanNativeHasFeature(payload, VulkanNativeFeature::SameShapeCastLowPrecision))
+		{
+			if (VulkanNativeSpecUsesDType(inputSpecs, DataType::Float16) ||
+			    VulkanNativeSpecUsesDType(outputSpecs, DataType::Float16))
+			{
+				RequireVulkanNativeDeviceFeature(capabilities.shaderFloat16Enabled,
+				                                 capabilities.shaderFloat16Available, "shaderFloat16",
+				                                 capabilities);
+				RequireVulkanNativeDeviceFeature(capabilities.storageBuffer16BitAccessEnabled,
+				                                 capabilities.storageBuffer16BitAccessAvailable,
+				                                 "storageBuffer16BitAccess", capabilities);
+			}
+			if (VulkanNativeSpecUsesDType(inputSpecs, DataType::Int8) ||
+			    VulkanNativeSpecUsesDType(outputSpecs, DataType::Int8) ||
+			    VulkanNativeSpecUsesDType(inputSpecs, DataType::UInt8) ||
+			    VulkanNativeSpecUsesDType(outputSpecs, DataType::UInt8))
+			{
+				RequireVulkanNativeDeviceFeature(capabilities.shaderInt8Enabled, capabilities.shaderInt8Available,
+				                                 "shaderInt8", capabilities);
+				RequireVulkanNativeDeviceFeature(capabilities.storageBuffer8BitAccessEnabled,
+				                                 capabilities.storageBuffer8BitAccessAvailable,
+				                                 "storageBuffer8BitAccess", capabilities);
+			}
+		}
+	}
+
 	std::vector<Tensor<Vulkan>> LoadVulkanExternalTensors(const SeparatedMetadata& metadata,
 	                                                      CompiledModuleSeparatedImage image, Vulkan device)
 	{
@@ -8538,6 +8647,8 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleImage image, V
 	else if (impl->backend == CompiledModuleBackend::VulkanNative)
 	{
 		impl->vulkanPayload = DeserializeVulkanNativeInstructionPayload(impl->instructions);
+		ValidateVulkanNativeDeviceCapabilities(impl->vulkanPayload, impl->inputSpecs, impl->outputSpecs,
+		                                       impl->device);
 		impl->vulkanModules.reserve(impl->vulkanPayload.kernels.size());
 		for (const auto& kernel : impl->vulkanPayload.kernels)
 		{

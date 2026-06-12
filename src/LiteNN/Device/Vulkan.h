@@ -3,6 +3,7 @@
 
 #include <LiteNN/Device.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -47,8 +48,28 @@ namespace LiteNN
 		bool synchronize{ true };
 	};
 
+	struct VulkanDeviceCapabilities
+	{
+		std::uint32_t apiVersionMajor{};
+		std::uint32_t apiVersionMinor{};
+		std::uint32_t apiVersionPatch{};
+		std::uint32_t maxComputeWorkGroupInvocations{};
+		std::array<std::uint32_t, 3> maxComputeWorkGroupSize{};
+		std::uint64_t maxStorageBufferRange{};
+		bool shaderFloat16Available{};
+		bool shaderInt8Available{};
+		bool storageBuffer16BitAccessAvailable{};
+		bool storageBuffer8BitAccessAvailable{};
+		bool shaderFloat16Enabled{};
+		bool shaderInt8Enabled{};
+		bool storageBuffer16BitAccessEnabled{};
+		bool storageBuffer8BitAccessEnabled{};
+		std::string deviceName;
+	};
+
 	std::uint32_t VulkanDeviceCount() noexcept;
 	bool IsVulkanDeviceAvailable(std::uint32_t deviceIndex = 0) noexcept;
+	VulkanDeviceCapabilities QueryVulkanDeviceCapabilities(const Vulkan& device);
 
 	class VulkanComputeModule
 	{

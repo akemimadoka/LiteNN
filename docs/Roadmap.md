@@ -1910,11 +1910,21 @@ packaging slice to a useful production backend.
       constants/weights metadata, upload them to Vulkan device tensors at load time, and run with only public model
       inputs. `benchmark/bench.cpp` registers `VulkanNativeRunInto/Linear(784->10)` rows when a Vulkan compute device
       exists.
-      Validation on 2026-06-12: `CompiledModuleVulkanTest` passed 24/24; local `litenn_bench --benchmark_filter=VulkanNative`
-      reported `VulkanNativeRunInto/Linear(784->10)` at roughly 0.289/0.231/0.139/0.200 ms for batch 1/32/128/512.
-- [ ] Add device capability gating for generated SPIR-V features: 8-bit/16-bit storage buffers, fp16 arithmetic,
-      subgroup availability, max workgroup size, storage-buffer alignment, and mobile-driver limits must be checked before
-      selecting kernels.
+      Validation on 2026-06-12: `CompiledModuleVulkanTest` passed 25/25 after adding load-time capability gating; local
+      `litenn_bench --benchmark_filter=VulkanNative --benchmark_min_time=0.001s` reported
+      `VulkanNativeRunInto/Linear(784->10)` at roughly 0.154/0.174/0.258/0.260 ms for batch 1/32/128/512.
+- [x] Add the first load-time device capability gate for generated Vulkan SPIR-V payloads: `CompiledModule<Vulkan>::Load`
+      now checks the payload target environment, Vulkan API version, fixed local workgroup size, storage-buffer range
+      limits, and low-precision cast requirements before creating shader modules/pipelines. The runtime reports whether
+      matching 8-bit/16-bit storage and fp16/int8 shader features are physically available versus actually enabled on
+      LiteNN's logical device.
+- [ ] Enable optional Vulkan logical-device feature chains for low-precision execution: wire supported
+      `VkPhysicalDevice16BitStorageFeatures`, `VkPhysicalDevice8BitStorageFeatures`, and
+      `VkPhysicalDeviceShaderFloat16Int8Features` into `vkCreateDevice`, then add runtime low-precision cast benchmarks
+      only when the enabled feature set satisfies the artifact requirements.
+- [ ] Extend Vulkan device capability gating beyond the current P0 checks: subgroup availability, storage-buffer
+      alignment, descriptor indexing limits, and broader mobile-driver limits must be represented in artifact metadata
+      before selecting more advanced kernels.
 - [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
       Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
       in the schedule.

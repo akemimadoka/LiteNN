@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -329,6 +330,65 @@ namespace LiteNN
 	bool IsVulkanDeviceAvailable(std::uint32_t deviceIndex) noexcept
 	{
 		return deviceIndex < VulkanDeviceCount();
+	}
+
+	VulkanDeviceCapabilities QueryVulkanDeviceCapabilities(const Vulkan& device)
+	{
+		const auto context = GetContext(device);
+
+		VkPhysicalDeviceFeatures2 features2{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		void** next = &features2.pNext;
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+		VkPhysicalDevice16BitStorageFeatures storage16{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+		};
+		*next = &storage16;
+		next = &storage16.pNext;
+#endif
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
+		VkPhysicalDevice8BitStorageFeatures storage8{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
+		};
+		*next = &storage8;
+		next = &storage8.pNext;
+#endif
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
+		VkPhysicalDeviceShaderFloat16Int8Features shaderFloat16Int8{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+		};
+		*next = &shaderFloat16Int8;
+		next = &shaderFloat16Int8.pNext;
+#endif
+
+		vkGetPhysicalDeviceFeatures2(context->physicalDevice, &features2);
+
+		VulkanDeviceCapabilities capabilities;
+		capabilities.apiVersionMajor = VK_VERSION_MAJOR(context->properties.apiVersion);
+		capabilities.apiVersionMinor = VK_VERSION_MINOR(context->properties.apiVersion);
+		capabilities.apiVersionPatch = VK_VERSION_PATCH(context->properties.apiVersion);
+		capabilities.maxComputeWorkGroupInvocations = context->properties.limits.maxComputeWorkGroupInvocations;
+		capabilities.maxComputeWorkGroupSize = {
+			context->properties.limits.maxComputeWorkGroupSize[0],
+			context->properties.limits.maxComputeWorkGroupSize[1],
+			context->properties.limits.maxComputeWorkGroupSize[2],
+		};
+		capabilities.maxStorageBufferRange = context->properties.limits.maxStorageBufferRange;
+		capabilities.deviceName = context->properties.deviceName;
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+		capabilities.storageBuffer16BitAccessAvailable = storage16.storageBuffer16BitAccess == VK_TRUE;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
+		capabilities.storageBuffer8BitAccessAvailable = storage8.storageBuffer8BitAccess == VK_TRUE;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
+		capabilities.shaderFloat16Available = shaderFloat16Int8.shaderFloat16 == VK_TRUE;
+		capabilities.shaderInt8Available = shaderFloat16Int8.shaderInt8 == VK_TRUE;
+#endif
+		return capabilities;
 	}
 
 	std::string_view DeviceTraits<Vulkan>::Name()
