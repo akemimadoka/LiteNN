@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -19,6 +20,8 @@
 
 namespace LiteNN
 {
+	namespace clk = std::chrono;
+
 	namespace
 	{
 		void CheckVulkan(VkResult result, std::string_view operation)
@@ -760,6 +763,7 @@ namespace LiteNN
 		VkPipelineLayout pipelineLayout{};
 		VkPipeline pipeline{};
 		std::uint32_t descriptorCount{};
+		double creationWallTimeMs{};
 	};
 
 	VulkanComputeModule::VulkanComputeModule() = default;
@@ -768,6 +772,7 @@ namespace LiteNN
 	                                         std::string_view entryPoint, std::uint32_t descriptorCount)
 	    : impl_(std::make_unique<Impl>())
 	{
+		const auto creationBegin = clk::steady_clock::now();
 		if (spirv.empty())
 		{
 			throw std::runtime_error("Vulkan compute module SPIR-V must not be empty");
@@ -849,6 +854,8 @@ namespace LiteNN
 		CheckVulkan(vkCreateComputePipelines(impl_->context->device, impl_->context->pipelineCache, 1, &pipelineInfo, nullptr,
 		                                     &impl_->pipeline),
 		            "vkCreateComputePipelines");
+		const auto creationEnd = clk::steady_clock::now();
+		impl_->creationWallTimeMs = clk::duration<double, std::milli>(creationEnd - creationBegin).count();
 	}
 
 	VulkanComputeModule::VulkanComputeModule(VulkanComputeModule&&) noexcept = default;
@@ -885,6 +892,11 @@ namespace LiteNN
 	bool VulkanComputeModule::Empty() const noexcept
 	{
 		return !impl_ || impl_->pipeline == VK_NULL_HANDLE;
+	}
+
+	double VulkanComputeModule::CreationWallTimeMs() const noexcept
+	{
+		return impl_ ? impl_->creationWallTimeMs : 0.0;
 	}
 
 	void VulkanComputeModule::Dispatch(std::span<const void*> descriptorBuffers, VulkanDispatchDim groups,

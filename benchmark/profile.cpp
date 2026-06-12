@@ -11,6 +11,9 @@
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Compiler/CUDANativePayload.h>
 #endif
+#ifdef LITENN_ENABLE_VULKAN
+#include <LiteNN/Compiler/VulkanNativePayload.h>
+#endif
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Optimizer/Loss.h>
@@ -605,6 +608,138 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 }
 #endif
 
+#ifdef LITENN_ENABLE_VULKAN
+struct VulkanLaunchBreakdown
+{
+	std::string name;
+	std::size_t batch{};
+	std::string backend;
+	std::string target;
+	std::uint64_t featureFlags{};
+	std::size_t kernelCount{};
+	std::size_t externalTensorCount{};
+	double compileMs{};
+	double loadMs{};
+	double firstMs{};
+	double meanMs{};
+	double lastDispatchMs{};
+	double moduleCreationMs{};
+	std::string message;
+};
+
+static std::vector<Tensor<Vulkan>> MakeVulkanProfileInputs(std::size_t batch)
+{
+	std::mt19937 rng(0);
+	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+	std::vector<float> data(batch * 784);
+	for (auto& value : data)
+	{
+		value = dist(rng);
+	}
+	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
+	std::vector<Tensor<Vulkan>> inputs;
+	inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{}));
+	return inputs;
+}
+
+static std::vector<Tensor<Vulkan>> AllocateVulkanProfileOutputs(const CompiledModule<Vulkan>& module)
+{
+	std::vector<Tensor<Vulkan>> outputs;
+	outputs.reserve(module.OutputSpecs().size());
+	for (const auto& spec : module.OutputSpecs())
+	{
+		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, Vulkan{});
+	}
+	return outputs;
+}
+
+static double SumVulkanDispatchWallMs(std::span<const CompiledModuleVulkanProfileEvent> events)
+{
+	double total = 0.0;
+	for (const auto& event : events)
+	{
+		total += event.dispatchWallMs;
+	}
+	return total;
+}
+
+static double SumVulkanModuleCreationMs(std::span<const CompiledModuleVulkanProfileEvent> events)
+{
+	double total = 0.0;
+	for (const auto& event : events)
+	{
+		total += event.moduleCreationWallMs;
+	}
+	return total;
+}
+
+static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
+{
+	VulkanLaunchBreakdown result{ .name = profileCase.name, .batch = profileCase.outShape[0] };
+	if (!IsVulkanDeviceAvailable())
+	{
+		result.message = "Vulkan compute device is not available";
+		return result;
+	}
+
+	try
+	{
+		std::mt19937 rng(0);
+		Graph graph = profileCase.build(result.batch, rng);
+		Optimize(graph);
+
+		CompiledModuleArtifact artifact;
+		{
+			auto begin = Clock::now();
+			artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph),
+			                                             LiteNNBenchCompilerOptionsFromEnvironment());
+			auto end = Clock::now();
+			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
+		}
+		result.backend = artifact.Backend() == CompiledModuleBackend::VulkanNative ? "vulkan_native" : "cpu_bridge";
+		if (artifact.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			result.message = "compiled artifact did not use Vulkan native backend";
+			return result;
+		}
+
+		const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+		result.target = payload.target;
+		result.featureFlags = payload.featureSet.flags;
+		result.kernelCount = payload.kernels.size();
+		result.externalTensorCount = artifact.ExternalTensorInfos().size();
+
+		auto loadBegin = Clock::now();
+		auto module = artifact.Load(Vulkan{});
+		auto loadEnd = Clock::now();
+		result.loadMs = clk::duration<double, std::milli>(loadEnd - loadBegin).count();
+
+		auto inputs = MakeVulkanProfileInputs(result.batch);
+		auto outputs = AllocateVulkanProfileOutputs(module);
+		std::vector<CompiledModuleVulkanProfileEvent> events;
+		const auto runInto = [&] {
+			events.clear();
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs),
+			                      CompiledModuleVulkanRunOptions{ .synchronize = true, .profileEvents = &events });
+		};
+
+		result.firstMs = TimedOnceMs(runInto);
+		result.lastDispatchMs = SumVulkanDispatchWallMs(events);
+		result.moduleCreationMs = SumVulkanModuleCreationMs(events);
+		const auto timing = TimedRepeated(runInto, result.batch, 300.0);
+		result.meanMs = timing.meanMs;
+		result.lastDispatchMs = SumVulkanDispatchWallMs(events);
+		result.moduleCreationMs = SumVulkanModuleCreationMs(events);
+		result.message = "ok";
+	}
+	catch (const std::exception& ex)
+	{
+		result.message = ex.what();
+	}
+	return result;
+}
+#endif
+
 int main(int argc, char** argv)
 {
 	const std::filesystem::path outDir = (argc >= 2)
@@ -754,6 +889,39 @@ int main(int argc, char** argv)
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";
+#endif
+
+	std::cout << "\nVulkan native breakdowns\n";
+#ifdef LITENN_ENABLE_VULKAN
+	if (EnvFlagEnabled("LITENN_PROFILE_SKIP_VULKAN"))
+	{
+		std::cout << "Skipped by LITENN_PROFILE_SKIP_VULKAN.\n";
+	}
+	else if (!IsVulkanDeviceAvailable())
+	{
+		std::cout << "Vulkan compute device is not available.\n";
+	}
+	else
+	{
+		std::cout << std::format(
+		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>12} {:>11} {:>12} {}\n",
+		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "FirstRun",
+		    "MeanRun", "LastDispatch", "Status");
+		std::cout << std::string(150, '-') << "\n";
+		for (const auto& c : cases)
+		{
+			const auto row = ProfileVulkanLaunches(c);
+			std::cout << std::format(
+			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {}\n",
+			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
+			    row.kernelCount, row.externalTensorCount, row.compileMs, row.loadMs, row.firstMs, row.meanMs,
+			    row.lastDispatchMs, row.message);
+		}
+		std::cout << "FirstRun and MeanRun are synchronized RunInto wall times. LastDispatch is the sum of CPU-side\n";
+		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto, not GPU timestamp-query time.\n";
+	}
+#else
+	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_VULKAN.\n";
 #endif
 	return 0;
 }

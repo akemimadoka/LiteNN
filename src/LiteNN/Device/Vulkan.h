@@ -89,6 +89,7 @@ namespace LiteNN
 		~VulkanComputeModule();
 
 		bool Empty() const noexcept;
+		double CreationWallTimeMs() const noexcept;
 		void Dispatch(std::span<const void*> descriptorBuffers, VulkanDispatchDim groups,
 		              VulkanExecutionOptions options = {}) const;
 

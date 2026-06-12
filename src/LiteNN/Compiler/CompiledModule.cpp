@@ -8672,13 +8672,31 @@ namespace
 			{
 				throw std::runtime_error("Vulkan native kernel has an unbound descriptor");
 			}
-			modules[kernelIndex].Dispatch(descriptors,
-			                              {
-			                                  .x = kernel.groups.x,
-			                                  .y = kernel.groups.y,
-			                                  .z = kernel.groups.z,
-			                              },
+			const VulkanDispatchDim dispatchGroups{
+				.x = kernel.groups.x,
+				.y = kernel.groups.y,
+				.z = kernel.groups.z,
+			};
+			const auto dispatchBegin = std::chrono::steady_clock::now();
+			modules[kernelIndex].Dispatch(descriptors, dispatchGroups,
 			                              VulkanExecutionOptions{ .synchronize = options.synchronize });
+			const auto dispatchEnd = std::chrono::steady_clock::now();
+			if (options.profileEvents != nullptr)
+			{
+				options.profileEvents->push_back({
+				    .kernelIndex = kernelIndex,
+				    .entryPoint = kernel.entryPoint,
+				    .groups = dispatchGroups,
+				    .localSize = {
+				        .x = kernel.requirements.localSize.x,
+				        .y = kernel.requirements.localSize.y,
+				        .z = kernel.requirements.localSize.z,
+				    },
+				    .descriptorCount = static_cast<std::uint32_t>(descriptors.size()),
+				    .moduleCreationWallMs = modules[kernelIndex].CreationWallTimeMs(),
+				    .dispatchWallMs = std::chrono::duration<double, std::milli>(dispatchEnd - dispatchBegin).count(),
+				});
+			}
 		}
 	}
 } // namespace
@@ -8926,6 +8944,12 @@ void CompiledModule<Vulkan>::RunManyTensorsInto(std::span<const CompiledModuleVu
 	if (workerCount == 0)
 	{
 		return;
+	}
+	if (workerCount > 1 && std::ranges::any_of(invocations, [](const CompiledModuleVulkanTensorInvocation& invocation) {
+		    return invocation.options.profileEvents != nullptr;
+	    }))
+	{
+		throw std::runtime_error("CompiledModule<Vulkan> profile event sinks are not thread-safe with RunManyTensorsInto");
 	}
 	if (workerCount == 1)
 	{

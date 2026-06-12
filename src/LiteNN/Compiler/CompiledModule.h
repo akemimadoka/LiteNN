@@ -489,9 +489,21 @@ namespace LiteNN
 		std::string reason;
 	};
 
+	struct CompiledModuleVulkanProfileEvent
+	{
+		std::size_t kernelIndex{};
+		std::string entryPoint;
+		VulkanDispatchDim groups;
+		VulkanDispatchDim localSize;
+		std::uint32_t descriptorCount{};
+		double moduleCreationWallMs{};
+		double dispatchWallMs{};
+	};
+
 	struct CompiledModuleVulkanRunOptions
 	{
 		bool synchronize{ true };
+		std::vector<CompiledModuleVulkanProfileEvent>* profileEvents{};
 	};
 
 	struct CompiledModuleVulkanTensorInvocation

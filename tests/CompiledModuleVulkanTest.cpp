@@ -695,6 +695,36 @@ TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, RecordsVulkanNativeProfileEvents)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+	};
+	std::vector<CompiledModuleVulkanProfileEvent> events;
+	auto outputs =
+	    module.RunTensors(std::span<const Tensor<Vulkan>>(inputs), { .synchronize = true, .profileEvents = &events });
+	ASSERT_EQ(outputs.size(), 1);
+	ASSERT_EQ(events.size(), 1u);
+	EXPECT_EQ(events[0].kernelIndex, 0u);
+	EXPECT_EQ(events[0].entryPoint, "main");
+	EXPECT_EQ(events[0].groups.x, 1u);
+	EXPECT_EQ(events[0].localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_EQ(events[0].descriptorCount, 3u);
+	EXPECT_GE(events[0].moduleCreationWallMs, 0.0);
+	EXPECT_GE(events[0].dispatchWallMs, 0.0);
+}
+
 TEST(CompiledModuleVulkanTest, RunsSimpleCastArithmetic)
 {
 	if (!IsVulkanDeviceAvailable())

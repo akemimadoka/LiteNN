@@ -1953,8 +1953,15 @@ packaging slice to a useful production backend.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.
-- [ ] Add Vulkan profiling support: timestamp queries around each kernel, pipeline creation timing, device transfer
-      timing, and benchmark/profile tables that compare CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
+- [x] Add the first Vulkan profiling tranche: `CompiledModuleVulkanRunOptions` accepts a profile-event sink, native
+      dispatch records now include kernel index, entry point, dispatch groups, local workgroup layout, descriptor count,
+      module creation wall time, and synchronized CPU-side dispatch wall time. `litenn_profile` prints a Vulkan native
+      breakdown table with compile/load/first-run/steady-run/dispatch timings and clearly shows unsupported model cases
+      as CPU bridge artifacts.
+      Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 27 tests and skipped the local Float16 runtime case;
+      `litenn_profile` smoke printed Vulkan native rows for Linear and explicit CPU-bridge rows for current MLP cases.
+- [ ] Add GPU timestamp-query profiling around each Vulkan kernel, device-transfer timing, persisted raw Vulkan profile
+      outputs, and full comparison tables across CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.

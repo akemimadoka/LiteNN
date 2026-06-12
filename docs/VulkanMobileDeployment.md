@@ -99,6 +99,14 @@ fallback policy. Benchmarks should report the selected backend rather than silen
 Callers can use `Compiler<Vulkan>::QueryNativeSupport(plan)` before compiling to check whether the current native Vulkan
 slice can cover a plan and to surface the reason a graph would otherwise use CPU bridge fallback.
 
+## Profiling
+
+`CompiledModuleVulkanRunOptions::profileEvents` can point to a caller-owned vector to collect per-kernel CPU-side
+profile events during synchronized Vulkan-native execution. Events include kernel index, entry point, dispatch groups,
+local workgroup layout, descriptor count, module creation wall time, and dispatch wall time. This is intentionally not a
+GPU timestamp-query measurement yet; it is the current lightweight way to expose pipeline/setup and synchronized dispatch
+costs in `litenn_profile`.
+
 ## Current Coverage
 
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
