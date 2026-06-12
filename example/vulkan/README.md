@@ -5,7 +5,9 @@ This example shows the current Vulkan AOT backend selection boundary:
 - `Add(lhs, rhs)` is supported by the Vulkan-native SPIR-V path. The example prints the native support report, loads the
   normal artifact, loads the separated metadata/instruction regions, runs both modules on `Tensor<Vulkan>` inputs, and
   prints CPU-side Vulkan profile events.
-- `Add(Add(lhs, rhs), tail)` intentionally exceeds the current single-kernel whole-graph matcher. The compiler emits a
+- `Add(Add(lhs, rhs), tail)` is supported by the first Vulkan-native same-op binary chain path and runs as two native
+  kernels.
+- `Multiply(Add(lhs, rhs), tail)` intentionally exceeds the current same-op chain matcher. The compiler emits a
   CPU-native bridge artifact, strict Vulkan loading rejects it, and the example only runs it after explicitly setting
   `VulkanHostFallbackPolicy::Allow`.
 
@@ -24,10 +26,13 @@ Vulkan Add result: 11 22 33 44
 Vulkan Add separated result: 11 22 33 44
 Profile kernel[0] entry=main ... gpu_ms=<value-or-n/a>
 Separated regions: metadata=<bytes> constants=0 weights=0 instructions=<bytes>
-TwoAdd native support: no (<reason>)
-TwoAdd artifact backend: cpu_native
+TwoAdd native support: yes (<capability>)
+TwoAdd artifact backend: vulkan_native
+Vulkan TwoAdd chain result: 111 222 333 444
+MixedChain native support: no (<reason>)
+MixedChain artifact backend: cpu_native
 Strict Vulkan load rejected CPU bridge: <reason>
-Explicit CPU bridge TwoAdd result: 111 222 333 444
+Explicit CPU bridge MixedChain result: 1100 4400 9900 17600
 ```
 
 The program exits successfully with a skip message when no Vulkan compute device is available.

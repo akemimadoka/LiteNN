@@ -1945,6 +1945,12 @@ packaging slice to a useful production backend.
 - [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
       Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
       in the schedule.
+- [x] Add the first multi-kernel Vulkan whole-graph slice before the full partitioner: same-shape Float32 chains composed
+      of the same supported `BinaryOp` now compile to multiple Vulkan-native kernels that reuse the final output buffer
+      as an accumulator between synchronized dispatches.
+      Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 34/35 Vulkan tests with only the local
+      feature-dependent Float16 runtime case skipped; `example/vulkan` showed `TwoAdd` selecting `vulkan_native` and a
+      mixed-op chain selecting explicit CPU bridge fallback.
 - [ ] Add a Vulkan memory planner with device-local storage plus staging buffers. The current host-visible buffer path is
       good for correctness and small tests, but production kernels need reusable device-local allocations and fewer
       host/device round trips.

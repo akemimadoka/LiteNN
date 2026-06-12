@@ -47,6 +47,25 @@ namespace
 		return graph;
 	}
 
+	Graph BuildMixedBinaryChainGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto rhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto tail = sg.AddParam(DataType::Float32, { 4 });
+		const auto first = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                              { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { tail, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { second, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs", "tail" });
+		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
 	std::string_view BackendName(CompiledModuleBackend backend)
 	{
 		switch (backend)
@@ -169,10 +188,17 @@ int main()
 	          << " weights=" << separated.Weights().size()
 	          << " instructions=" << separated.Instructions().size() << '\n';
 
-	auto fallbackGraph = BuildTwoAddGraph();
-	PrintNativeSupport("TwoAdd", fallbackGraph);
+	auto chainGraph = BuildTwoAddGraph();
+	PrintNativeSupport("TwoAdd", chainGraph);
+	auto chainArtifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(chainGraph));
+	std::cout << "TwoAdd artifact backend: " << BackendName(chainArtifact.Backend()) << '\n';
+	auto chainModule = chainArtifact.Load(device);
+	PrintResult("Vulkan TwoAdd chain result:", RunThreeInput(chainModule, device));
+
+	auto fallbackGraph = BuildMixedBinaryChainGraph();
+	PrintNativeSupport("MixedChain", fallbackGraph);
 	auto fallbackArtifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(fallbackGraph));
-	std::cout << "TwoAdd artifact backend: " << BackendName(fallbackArtifact.Backend()) << '\n';
+	std::cout << "MixedChain artifact backend: " << BackendName(fallbackArtifact.Backend()) << '\n';
 
 	if (fallbackArtifact.Backend() == CompiledModuleBackend::CPUNative)
 	{
@@ -194,12 +220,12 @@ int main()
 		Vulkan bridgeDevice;
 		bridgeDevice.hostFallbackPolicy = VulkanHostFallbackPolicy::Allow;
 		auto fallbackModule = fallbackArtifact.Load(bridgeDevice);
-		PrintResult("Explicit CPU bridge TwoAdd result:", RunThreeInput(fallbackModule, bridgeDevice));
+		PrintResult("Explicit CPU bridge MixedChain result:", RunThreeInput(fallbackModule, bridgeDevice));
 	}
 	else
 	{
 		auto nativeFallbackModule = fallbackArtifact.Load(device);
-		PrintResult("TwoAdd native result:", RunThreeInput(nativeFallbackModule, device));
+		PrintResult("MixedChain native result:", RunThreeInput(nativeFallbackModule, device));
 	}
 	return 0;
 }
