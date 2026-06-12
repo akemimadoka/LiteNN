@@ -64,11 +64,19 @@ namespace LiteNN
 		ShaderInt8 = 1ull << 1,
 		StorageBuffer16BitAccess = 1ull << 2,
 		StorageBuffer8BitAccess = 1ull << 3,
+		SubgroupArithmetic = 1ull << 4,
+		SubgroupBallot = 1ull << 5,
+		SubgroupShuffle = 1ull << 6,
+		ShaderStorageBufferArrayNonUniformIndexing = 1ull << 7,
+		DescriptorBindingStorageBufferUpdateAfterBind = 1ull << 8,
+		DescriptorBindingPartiallyBound = 1ull << 9,
+		DescriptorBindingVariableDescriptorCount = 1ull << 10,
+		RuntimeDescriptorArray = 1ull << 11,
 	};
 
 	struct VulkanNativeDeviceRequirementSet
 	{
-		static constexpr std::uint64_t KnownRequirementMask = (1ull << 4) - 1;
+		static constexpr std::uint64_t KnownRequirementMask = (1ull << 12) - 1;
 
 		std::uint64_t flags{};
 

@@ -453,6 +453,8 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	kernel.requirements.localSize = { .x = kVulkanNativeElementwiseWorkgroupSize, .y = 1, .z = 1 };
 	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::ShaderInt8);
 	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::StorageBuffer8BitAccess);
+	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::SubgroupArithmetic);
+	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::RuntimeDescriptorArray);
 	kernel.requirements.requiredSubgroupSize = 32;
 	kernel.requirements.requiredStorageBufferOffsetAlignment = 16;
 	kernel.arguments.push_back({
@@ -472,6 +474,10 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
 	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
+	EXPECT_TRUE(
+	    decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::SubgroupArithmetic));
+	EXPECT_TRUE(
+	    decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::RuntimeDescriptorArray));
 	EXPECT_EQ(decodedRequirements.requiredSubgroupSize, 32u);
 	EXPECT_EQ(decodedRequirements.requiredStorageBufferOffsetAlignment, 16u);
 
@@ -756,11 +762,103 @@ TEST(CompiledModuleVulkanTest, ReportsDescriptorAndDispatchLimits)
 	EXPECT_GT(capabilities.maxPerStageDescriptorStorageBuffers, 0u);
 	EXPECT_GT(capabilities.maxDescriptorSetStorageBuffers, 0u);
 	EXPECT_GT(capabilities.maxBoundDescriptorSets, 0u);
+	EXPECT_GT(capabilities.maxPerStageResources, 0u);
+	EXPECT_GT(capabilities.maxComputeSharedMemorySize, 0u);
+	EXPECT_GT(capabilities.maxPushConstantsSize, 0u);
 	EXPECT_GE(capabilities.timestampPeriodNanoseconds, 0.0f);
 	if (capabilities.computeQueueTimestampsAvailable)
 	{
 		EXPECT_GT(capabilities.computeQueueTimestampValidBits, 0u);
 		EXPECT_GT(capabilities.timestampPeriodNanoseconds, 0.0f);
+	}
+	if (capabilities.subgroupComputeAvailable)
+	{
+		EXPECT_GT(capabilities.subgroupSize, 0u);
+	}
+	EXPECT_FALSE(capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled &&
+	             !capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable);
+	EXPECT_FALSE(capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled &&
+	             !capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable);
+	EXPECT_FALSE(capabilities.descriptorBindingPartiallyBoundEnabled &&
+	             !capabilities.descriptorBindingPartiallyBoundAvailable);
+	EXPECT_FALSE(capabilities.descriptorBindingVariableDescriptorCountEnabled &&
+	             !capabilities.descriptorBindingVariableDescriptorCountAvailable);
+	EXPECT_FALSE(capabilities.runtimeDescriptorArrayEnabled && !capabilities.runtimeDescriptorArrayAvailable);
+}
+
+TEST(CompiledModuleVulkanTest, RejectsPayloadWhenAdvancedDeviceRequirementIsNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	struct RequirementCase
+	{
+		VulkanNativeDeviceRequirement requirement;
+		bool enabled;
+		const char* name;
+	};
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	const std::array cases{
+		RequirementCase{ VulkanNativeDeviceRequirement::SubgroupArithmetic,
+		                 capabilities.subgroupComputeAvailable && capabilities.subgroupArithmeticAvailable,
+		                 "subgroupArithmetic" },
+		RequirementCase{ VulkanNativeDeviceRequirement::SubgroupBallot,
+		                 capabilities.subgroupComputeAvailable && capabilities.subgroupBallotAvailable,
+		                 "subgroupBallot" },
+		RequirementCase{ VulkanNativeDeviceRequirement::SubgroupShuffle,
+		                 capabilities.subgroupComputeAvailable && capabilities.subgroupShuffleAvailable,
+		                 "subgroupShuffle" },
+		RequirementCase{ VulkanNativeDeviceRequirement::ShaderStorageBufferArrayNonUniformIndexing,
+		                 capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled,
+		                 "shaderStorageBufferArrayNonUniformIndexing" },
+		RequirementCase{ VulkanNativeDeviceRequirement::DescriptorBindingStorageBufferUpdateAfterBind,
+		                 capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled,
+		                 "descriptorBindingStorageBufferUpdateAfterBind" },
+		RequirementCase{ VulkanNativeDeviceRequirement::DescriptorBindingPartiallyBound,
+		                 capabilities.descriptorBindingPartiallyBoundEnabled,
+		                 "descriptorBindingPartiallyBound" },
+		RequirementCase{ VulkanNativeDeviceRequirement::DescriptorBindingVariableDescriptorCount,
+		                 capabilities.descriptorBindingVariableDescriptorCountEnabled,
+		                 "descriptorBindingVariableDescriptorCount" },
+		RequirementCase{ VulkanNativeDeviceRequirement::RuntimeDescriptorArray,
+		                 capabilities.runtimeDescriptorArrayEnabled,
+		                 "runtimeDescriptorArray" },
+	};
+	const RequirementCase* selected = nullptr;
+	for (const auto& item : cases)
+	{
+		if (!item.enabled)
+		{
+			selected = &item;
+			break;
+		}
+	}
+	if (selected == nullptr)
+	{
+		GTEST_SKIP() << "All advanced Vulkan requirement bits are enabled by the selected logical device";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_FALSE(payload.kernels.empty());
+	payload.kernels[0].requirements.deviceRequirements.AddRequirement(selected->requirement);
+	const auto badInstructions = SerializeVulkanNativeInstructionPayload(payload);
+
+	try
+	{
+		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		FAIL() << "Expected Vulkan payload loading to reject a disabled advanced device requirement";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find(selected->name), std::string::npos) << message;
+		EXPECT_NE(message.find("enabled=false"), std::string::npos) << message;
 	}
 }
 

@@ -173,12 +173,22 @@ namespace LiteNN
 			}
 			physicalDevice = devices[deviceIndex];
 			VkPhysicalDeviceProperties2 properties2{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+			void** propertiesNext = &properties2.pNext;
 #if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES)
 			VkPhysicalDeviceSubgroupProperties subgroupProperties{
 				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
 			};
-			properties2.pNext = &subgroupProperties;
+			*propertiesNext = &subgroupProperties;
+			propertiesNext = &subgroupProperties.pNext;
 #endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES)
+			VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES,
+			};
+			*propertiesNext = &descriptorIndexingProperties;
+			propertiesNext = &descriptorIndexingProperties.pNext;
+#endif
+			(void)propertiesNext;
 			vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
 			properties = properties2.properties;
 			capabilities.apiVersionMajor = VK_VERSION_MAJOR(properties.apiVersion);
@@ -197,6 +207,9 @@ namespace LiteNN
 			};
 			capabilities.maxStorageBufferRange = properties.limits.maxStorageBufferRange;
 			capabilities.minStorageBufferOffsetAlignment = properties.limits.minStorageBufferOffsetAlignment;
+			capabilities.maxPerStageResources = properties.limits.maxPerStageResources;
+			capabilities.maxComputeSharedMemorySize = properties.limits.maxComputeSharedMemorySize;
+			capabilities.maxPushConstantsSize = properties.limits.maxPushConstantsSize;
 			capabilities.maxPerStageDescriptorStorageBuffers =
 			    properties.limits.maxPerStageDescriptorStorageBuffers;
 			capabilities.maxDescriptorSetStorageBuffers = properties.limits.maxDescriptorSetStorageBuffers;
@@ -210,6 +223,28 @@ namespace LiteNN
 			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
 			capabilities.subgroupArithmeticAvailable =
 			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+			capabilities.subgroupVoteAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_VOTE_BIT) != 0;
+			capabilities.subgroupBallotAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BALLOT_BIT) != 0;
+			capabilities.subgroupShuffleAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT) != 0;
+			capabilities.subgroupShuffleRelativeAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT) != 0;
+			capabilities.subgroupClusteredAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_CLUSTERED_BIT) != 0;
+			capabilities.subgroupQuadAvailable =
+			    (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_QUAD_BIT) != 0;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES)
+			capabilities.maxUpdateAfterBindDescriptorsInAllPools =
+			    descriptorIndexingProperties.maxUpdateAfterBindDescriptorsInAllPools;
+			capabilities.maxPerStageDescriptorUpdateAfterBindStorageBuffers =
+			    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindStorageBuffers;
+			capabilities.maxDescriptorSetUpdateAfterBindStorageBuffers =
+			    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindStorageBuffers;
+			capabilities.maxDescriptorSetVariableDescriptorCount =
+			    descriptorIndexingProperties.maxDescriptorSetVariableDescriptorCount;
 #endif
 
 			auto deviceExtensions = EnumerateDeviceExtensions(physicalDevice);
@@ -238,6 +273,13 @@ namespace LiteNN
 			};
 			*availableNext = &availableShaderFloat16Int8;
 			availableNext = &availableShaderFloat16Int8.pNext;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES)
+			VkPhysicalDeviceDescriptorIndexingFeatures availableDescriptorIndexing{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+			};
+			*availableNext = &availableDescriptorIndexing;
+			availableNext = &availableDescriptorIndexing.pNext;
 #endif
 			(void)availableNext;
 			vkGetPhysicalDeviceFeatures2(physicalDevice, &availableFeatures);
@@ -328,6 +370,64 @@ namespace LiteNN
 				capabilities.shaderInt8Enabled = enabledShaderFloat16Int8.shaderInt8 == VK_TRUE;
 				*enabledNext = &enabledShaderFloat16Int8;
 				enabledNext = &enabledShaderFloat16Int8.pNext;
+			}
+#endif
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES)
+			capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable =
+			    availableDescriptorIndexing.shaderStorageBufferArrayNonUniformIndexing == VK_TRUE;
+			capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable =
+			    availableDescriptorIndexing.descriptorBindingStorageBufferUpdateAfterBind == VK_TRUE;
+			capabilities.descriptorBindingPartiallyBoundAvailable =
+			    availableDescriptorIndexing.descriptorBindingPartiallyBound == VK_TRUE;
+			capabilities.descriptorBindingVariableDescriptorCountAvailable =
+			    availableDescriptorIndexing.descriptorBindingVariableDescriptorCount == VK_TRUE;
+			capabilities.runtimeDescriptorArrayAvailable =
+			    availableDescriptorIndexing.runtimeDescriptorArray == VK_TRUE;
+			VkPhysicalDeviceDescriptorIndexingFeatures enabledDescriptorIndexing{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+			};
+			const bool canEnableDescriptorIndexing =
+			    (capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable ||
+			     capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable ||
+			     capabilities.descriptorBindingPartiallyBoundAvailable ||
+			     capabilities.descriptorBindingVariableDescriptorCountAvailable ||
+			     capabilities.runtimeDescriptorArrayAvailable) &&
+			    (apiAtLeast12
+#if defined(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
+			     || HasDeviceExtension(deviceExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
+#endif
+			    );
+			if (canEnableDescriptorIndexing)
+			{
+#if defined(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
+				if (!apiAtLeast12)
+				{
+					AppendUniqueExtension(enabledDeviceExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+				}
+#endif
+				enabledDescriptorIndexing.shaderStorageBufferArrayNonUniformIndexing =
+				    capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable ? VK_TRUE : VK_FALSE;
+				enabledDescriptorIndexing.descriptorBindingStorageBufferUpdateAfterBind =
+				    capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable ? VK_TRUE : VK_FALSE;
+				enabledDescriptorIndexing.descriptorBindingPartiallyBound =
+				    capabilities.descriptorBindingPartiallyBoundAvailable ? VK_TRUE : VK_FALSE;
+				enabledDescriptorIndexing.descriptorBindingVariableDescriptorCount =
+				    capabilities.descriptorBindingVariableDescriptorCountAvailable ? VK_TRUE : VK_FALSE;
+				enabledDescriptorIndexing.runtimeDescriptorArray =
+				    capabilities.runtimeDescriptorArrayAvailable ? VK_TRUE : VK_FALSE;
+				capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled =
+				    enabledDescriptorIndexing.shaderStorageBufferArrayNonUniformIndexing == VK_TRUE;
+				capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled =
+				    enabledDescriptorIndexing.descriptorBindingStorageBufferUpdateAfterBind == VK_TRUE;
+				capabilities.descriptorBindingPartiallyBoundEnabled =
+				    enabledDescriptorIndexing.descriptorBindingPartiallyBound == VK_TRUE;
+				capabilities.descriptorBindingVariableDescriptorCountEnabled =
+				    enabledDescriptorIndexing.descriptorBindingVariableDescriptorCount == VK_TRUE;
+				capabilities.runtimeDescriptorArrayEnabled =
+				    enabledDescriptorIndexing.runtimeDescriptorArray == VK_TRUE;
+				*enabledNext = &enabledDescriptorIndexing;
+				enabledNext = &enabledDescriptorIndexing.pNext;
 			}
 #endif
 			(void)enabledNext;

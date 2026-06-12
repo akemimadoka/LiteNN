@@ -1939,9 +1939,12 @@ packaging slice to a useful production backend.
       rejects kernels whose dispatch groups or storage-buffer descriptor count exceed the selected device.
       Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 30/31 Vulkan tests, with only the local
       feature-dependent Float16 runtime case skipped.
-- [ ] Extend Vulkan device capability gating for future advanced kernels: descriptor indexing limits,
-      specialization-constant limits, advanced subgroup operation policies, and broader mobile-driver quirks must be
-      represented before selecting those kernels.
+- [x] Extend Vulkan device capability gating for future advanced kernels: descriptor indexing limits, shared-memory and
+      push-constant limits, advanced subgroup operation policies, and descriptor-indexing/runtime-descriptor-array
+      feature requirements are represented before selecting those kernels.
+      Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 36/37 Vulkan tests with only the local
+      feature-dependent Float16 runtime case skipped; payload loading rejects disabled advanced device requirement bits
+      with the same available/enabled diagnostic style used by low-precision features.
 - [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
       Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
       in the schedule.

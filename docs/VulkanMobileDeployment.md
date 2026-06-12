@@ -37,8 +37,9 @@ application package unless the app explicitly compiles graphs on device. The nor
 - When the selected device reports and can legally enable optional low-precision features, `LiteNNVulkanRuntime` adds the
   matching feature structs and required KHR device extensions to `vkCreateDevice`. `QueryVulkanDeviceCapabilities`
   reports both physical availability and logical-device enablement.
-- The current descriptor ABI uses descriptor set `0`, storage-buffer bindings matching `VulkanNativeArgumentSpec`, and
-  one compute entry point named `main` per payload kernel.
+- The current descriptor ABI uses descriptor set `0` and storage-buffer bindings matching `VulkanNativeArgumentSpec`.
+  Payloads may contain one SPIR-V module with multiple compute entry points; each `VulkanNativeKernelSpec` names the
+  entry point it dispatches.
 - The instruction region stores serialized `VulkanNativeInstructionPayload`, including SPIR-V words, feature flags,
   entry point, descriptor bindings, byte ranges, and dispatch dimensions.
 - Payload version 2 also stores per-kernel requirements: descriptor ABI version, local workgroup layout, required device
@@ -50,8 +51,8 @@ application package unless the app explicitly compiles graphs on device. The nor
 - `CompiledModule<Vulkan>::Load` performs the first native payload/device compatibility gate before shader module or
   pipeline creation. It checks the `vulkan1.1` target, API version, per-kernel local workgroup and dispatch-group
   limits, descriptor ABI, storage-buffer descriptor count limits, storage-buffer range/alignment, subgroup requirements,
-  and the currently generated low-precision cast feature requirements. The capability snapshot distinguishes physical
-  feature availability from LiteNN logical-device feature enablement.
+  low-precision feature requirements, and future descriptor-indexing/runtime-descriptor-array requirement bits. The
+  capability snapshot distinguishes physical feature availability from LiteNN logical-device feature enablement.
 
 ## Validation Layers
 

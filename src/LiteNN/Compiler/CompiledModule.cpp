@@ -8782,6 +8782,24 @@ namespace
 				    capabilities.subgroupBasicAvailable));
 			}
 			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::SubgroupArithmetic,
+			                                 capabilities.subgroupComputeAvailable &&
+			                                     capabilities.subgroupArithmeticAvailable,
+			                                 capabilities.subgroupArithmeticAvailable, "subgroupArithmetic",
+			                                 capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::SubgroupBallot,
+			                                 capabilities.subgroupComputeAvailable &&
+			                                     capabilities.subgroupBallotAvailable,
+			                                 capabilities.subgroupBallotAvailable, "subgroupBallot",
+			                                 capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::SubgroupShuffle,
+			                                 capabilities.subgroupComputeAvailable &&
+			                                     capabilities.subgroupShuffleAvailable,
+			                                 capabilities.subgroupShuffleAvailable, "subgroupShuffle",
+			                                 capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
 			                                 VulkanNativeDeviceRequirement::ShaderFloat16,
 			                                 capabilities.shaderFloat16Enabled,
 			                                 capabilities.shaderFloat16Available, "shaderFloat16", capabilities);
@@ -8799,6 +8817,34 @@ namespace
 			                                 capabilities.storageBuffer8BitAccessEnabled,
 			                                 capabilities.storageBuffer8BitAccessAvailable,
 			                                 "storageBuffer8BitAccess", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements,
+			    VulkanNativeDeviceRequirement::ShaderStorageBufferArrayNonUniformIndexing,
+			    capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled,
+			    capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable,
+			    "shaderStorageBufferArrayNonUniformIndexing", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements,
+			    VulkanNativeDeviceRequirement::DescriptorBindingStorageBufferUpdateAfterBind,
+			    capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled,
+			    capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable,
+			    "descriptorBindingStorageBufferUpdateAfterBind", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::DescriptorBindingPartiallyBound,
+			                                 capabilities.descriptorBindingPartiallyBoundEnabled,
+			                                 capabilities.descriptorBindingPartiallyBoundAvailable,
+			                                 "descriptorBindingPartiallyBound", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements,
+			    VulkanNativeDeviceRequirement::DescriptorBindingVariableDescriptorCount,
+			    capabilities.descriptorBindingVariableDescriptorCountEnabled,
+			    capabilities.descriptorBindingVariableDescriptorCountAvailable,
+			    "descriptorBindingVariableDescriptorCount", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::RuntimeDescriptorArray,
+			                                 capabilities.runtimeDescriptorArrayEnabled,
+			                                 capabilities.runtimeDescriptorArrayAvailable,
+			                                 "runtimeDescriptorArray", capabilities);
 			const auto requiredAlignment =
 			    std::max<std::uint64_t>(requirements.requiredStorageBufferOffsetAlignment,
 			                            capabilities.minStorageBufferOffsetAlignment);
