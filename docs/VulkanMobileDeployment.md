@@ -105,8 +105,8 @@ slice can cover a plan and to surface the reason a graph would otherwise use CPU
 during synchronized Vulkan-native execution. Events include kernel index, entry point, dispatch groups, local workgroup
 layout, descriptor count, module creation wall time, CPU-side dispatch wall time, and optional GPU timestamp-query elapsed
 time. GPU timestamp fields are populated only when the selected compute queue reports timestamp support; otherwise the
-event keeps `gpuTimestampAvailable=false`. Device-transfer timing and persisted multi-backend Vulkan profile tables are
-still follow-on work.
+event keeps `gpuTimestampAvailable=false`. `litenn_profile` also reports one-shot input upload and output download time
+for Vulkan rows. Persisted multi-backend Vulkan profile tables are still follow-on work.
 
 ## Current Coverage
 

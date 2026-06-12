@@ -620,16 +620,24 @@ struct VulkanLaunchBreakdown
 	std::size_t externalTensorCount{};
 	double compileMs{};
 	double loadMs{};
+	double inputUploadMs{};
 	double firstMs{};
 	double meanMs{};
 	double lastDispatchMs{};
 	double lastGpuMs{};
 	bool gpuTimestampAvailable{};
+	double outputDownloadMs{};
 	double moduleCreationMs{};
 	std::string message;
 };
 
-static std::vector<Tensor<Vulkan>> MakeVulkanProfileInputs(std::size_t batch)
+struct VulkanProfileInputs
+{
+	std::vector<Tensor<Vulkan>> tensors;
+	double uploadMs{};
+};
+
+static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 {
 	std::mt19937 rng(0);
 	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
@@ -640,8 +648,10 @@ static std::vector<Tensor<Vulkan>> MakeVulkanProfileInputs(std::size_t batch)
 	}
 	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
 	std::vector<Tensor<Vulkan>> inputs;
-	inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{}));
-	return inputs;
+	const auto uploadMs = TimedOnceMs([&] {
+		inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{}));
+	});
+	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
 }
 
 static std::vector<Tensor<Vulkan>> AllocateVulkanProfileOutputs(const CompiledModule<Vulkan>& module)
@@ -653,6 +663,18 @@ static std::vector<Tensor<Vulkan>> AllocateVulkanProfileOutputs(const CompiledMo
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, Vulkan{});
 	}
 	return outputs;
+}
+
+static double MeasureVulkanOutputDownloadMs(std::span<const Tensor<Vulkan>> outputs)
+{
+	return TimedOnceMs([&] {
+		std::vector<Tensor<CPU>> hostOutputs;
+		hostOutputs.reserve(outputs.size());
+		for (const auto& output : outputs)
+		{
+			hostOutputs.push_back(output.CopyToDevice(CPU{}));
+		}
+	});
 }
 
 static double SumVulkanDispatchWallMs(std::span<const CompiledModuleVulkanProfileEvent> events)
@@ -737,7 +759,9 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 		auto loadEnd = Clock::now();
 		result.loadMs = clk::duration<double, std::milli>(loadEnd - loadBegin).count();
 
-		auto inputs = MakeVulkanProfileInputs(result.batch);
+		auto profileInputs = MakeVulkanProfileInputs(result.batch);
+		result.inputUploadMs = profileInputs.uploadMs;
+		auto& inputs = profileInputs.tensors;
 		auto outputs = AllocateVulkanProfileOutputs(module);
 		std::vector<CompiledModuleVulkanProfileEvent> events;
 		const auto runInto = [&] {
@@ -757,6 +781,7 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 		result.gpuTimestampAvailable = AllVulkanGpuTimestampsAvailable(events);
 		result.lastGpuMs = result.gpuTimestampAvailable ? SumVulkanGpuMs(events) : 0.0;
 		result.moduleCreationMs = SumVulkanModuleCreationMs(events);
+		result.outputDownloadMs = MeasureVulkanOutputDownloadMs(outputs);
 		result.message = "ok";
 	}
 	catch (const std::exception& ex)
@@ -931,24 +956,25 @@ int main(int argc, char** argv)
 	else
 	{
 		std::cout << std::format(
-		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {}\n",
-		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "FirstRun",
-		    "MeanRun", "LastDispatch", "GPUTime", "Status");
-		std::cout << std::string(150, '-') << "\n";
+		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
+		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "Upload",
+		    "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download", "Status");
+		std::cout << std::string(174, '-') << "\n";
 		for (const auto& c : cases)
 		{
 			const auto row = ProfileVulkanLaunches(c);
 			const std::string gpuTime = row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs)
 			                                                      : std::string("n/a");
 			std::cout << std::format(
-			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {}\n",
+			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
 			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
-			    row.kernelCount, row.externalTensorCount, row.compileMs, row.loadMs, row.firstMs, row.meanMs,
-			    row.lastDispatchMs, gpuTime, row.message);
+			    row.kernelCount, row.externalTensorCount, row.compileMs, row.loadMs, row.inputUploadMs, row.firstMs,
+			    row.meanMs, row.lastDispatchMs, gpuTime, row.outputDownloadMs, row.message);
 		}
 		std::cout << "FirstRun and MeanRun are synchronized RunInto wall times. LastDispatch is the sum of CPU-side\n";
 		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto. GPUTime is the sum of\n";
 		std::cout << "Vulkan timestamp-query elapsed time for devices whose compute queue supports timestamps.\n";
+		std::cout << "Upload and Download are one-shot host/device tensor copy measurements outside RunInto.\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_VULKAN.\n";

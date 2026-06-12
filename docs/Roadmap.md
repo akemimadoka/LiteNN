@@ -1970,8 +1970,11 @@ packaging slice to a useful production backend.
       time in milliseconds; `litenn_profile` prints this beside CPU-side dispatch wall time.
       Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 30/31 Vulkan tests, `example/vulkan` printed
       `gpu_ms`, and `litenn_profile` smoke printed Vulkan `GPUTime` with CUDA/objdump sections skipped.
-- [ ] Add Vulkan device-transfer timing, persisted raw Vulkan profile outputs, and full comparison tables across CPU AOT,
-      CUDA, Vulkan, ggml, and PyTorch for supported shapes.
+- [x] Add one-shot Vulkan host/device transfer timing to `litenn_profile`: the Vulkan table now reports input upload and
+      output download time separately from first-run, steady RunInto, CPU-side dispatch wall time, and GPU timestamp time.
+      Validation on 2026-06-13: `litenn_profile` smoke printed Upload/GPUTime/Download columns for Vulkan Linear rows.
+- [ ] Add persisted raw Vulkan profile outputs and full comparison tables across CPU AOT, CUDA, Vulkan, ggml, and PyTorch
+      for supported shapes.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
