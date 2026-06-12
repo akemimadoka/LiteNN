@@ -121,6 +121,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same
   baseline one-output-element-per-invocation kernel shape
+- static-axis `Float32` Reduce Sum/Mean/Max using one shader invocation per output element and a scalar loop over the
+  reduced axis; this is a correctness baseline before workgroup/subgroup reductions
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos

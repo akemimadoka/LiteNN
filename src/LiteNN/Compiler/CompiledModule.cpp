@@ -5821,6 +5821,17 @@ namespace
 		DataType dstType{ DataType::Int32 };
 	};
 
+	struct VulkanP0ReducePlan
+	{
+		ReduceOp op{ ReduceOp::Sum };
+		std::uint32_t inputIndex{};
+		std::uint32_t inputElementCount{};
+		std::uint32_t outputElementCount{};
+		std::size_t axis{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> outputShape;
+	};
+
 	struct VulkanP0TensorRef
 	{
 		VulkanNativeArgumentKind argumentKind{ VulkanNativeArgumentKind::InputTensor };
@@ -6122,6 +6133,29 @@ namespace
 	std::string VulkanNativeOpName(BinaryOp op)
 	{
 		return std::string(EnumToString<EnumToStringStyle::Unqualified>(op));
+	}
+
+	std::string VulkanNativeOpName(ReduceOp op)
+	{
+		return std::string(EnumToString<EnumToStringStyle::Unqualified>(op));
+	}
+
+	std::vector<std::size_t> VulkanP0ReduceOutputShape(std::span<const std::size_t> inputShape, std::size_t axis)
+	{
+		std::vector<std::size_t> outputShape;
+		if (axis >= inputShape.size())
+		{
+			return outputShape;
+		}
+		outputShape.reserve(inputShape.size() - 1);
+		for (std::size_t i = 0; i < inputShape.size(); ++i)
+		{
+			if (i != axis)
+			{
+				outputShape.push_back(inputShape[i]);
+			}
+		}
+		return outputShape;
 	}
 
 	VulkanNativeSupportReport DiagnoseVulkanP0SingleForwardShape(std::span<const std::size_t> shape,
@@ -6432,8 +6466,41 @@ namespace
 				    std::format("same-shape cast {} -> {}", DataTypeName(input.dtype), DataTypeName(output.dtype)));
 			}
 
+			if (const auto* reduce = std::get_if<ReduceOpNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, reduce->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native reduce input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native reduce slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				const auto expectedShape = VulkanP0ReduceOutputShape(input.shape, reduce->axis);
+				if (reduce->axis >= input.shape.size() || expectedShape != output.shape)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native reduce shape mismatch, got input={} axis={} output={}",
+					                Validation::ShapeToString(input.shape), reduce->axis,
+					                Validation::ShapeToString(output.shape)));
+				}
+				if (!VulkanNativeSupportsReduceF32(reduce->op, input.shape, reduce->axis))
+				{
+					return VulkanNativeUnsupported(
+					    std::format("unsupported reduce op {} or shape for Vulkan native f32 reduce slice",
+					                VulkanNativeOpName(reduce->op)));
+				}
+				return VulkanNativeSupported(
+				    std::format("f32 reduce {} axis={}", VulkanNativeOpName(reduce->op), reduce->axis));
+			}
+
 			return VulkanNativeUnsupported(
-			    "Vulkan native one-input slice currently supports only UnaryOpNode or CastNode result nodes");
+			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, or ReduceOpNode result "
+			    "nodes");
 		}
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
@@ -6884,6 +6951,75 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0ReducePlan> MatchVulkanP0ReduceF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* reduce = std::get_if<ReduceOpNode>(&resultEntry.node);
+		if (!reduce)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, reduce->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    reduce->axis >= input.shape.size())
+		{
+			return std::nullopt;
+		}
+		if (VulkanP0ReduceOutputShape(input.shape, reduce->axis) != output.shape)
+		{
+			return std::nullopt;
+		}
+		if (!VulkanNativeSupportsReduceF32(reduce->op, input.shape, reduce->axis))
+		{
+			return std::nullopt;
+		}
+		const auto inputElementCount = VulkanP0ShapeNumElementsU32(input.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!inputElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0ReducePlan{
+			.op = reduce->op,
+			.inputIndex = *inputIndex,
+			.inputElementCount = *inputElementCount,
+			.outputElementCount = *outputElementCount,
+			.axis = reduce->axis,
+			.inputShape = input.shape,
+			.outputShape = output.shape,
+		};
+	}
+
 	VulkanNativeFeature VulkanNativeUnaryF32FeatureFlag(UnaryOp op)
 	{
 		switch (op)
@@ -7022,6 +7158,52 @@ namespace
 		          .binding = 1,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * ElementByteSize(plan->dstType) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeReduceF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0ReduceF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::ReduceF32);
+		auto spirv = VulkanNativeReduceF32SPIRV(plan->op, plan->inputShape, plan->axis);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeReduceF32KernelName(plan->op)),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
 		    },
 		});
 
@@ -9635,6 +9817,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeReduceF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

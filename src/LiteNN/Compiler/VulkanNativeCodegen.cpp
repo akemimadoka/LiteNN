@@ -20,6 +20,7 @@
 
 #include <array>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -207,6 +208,79 @@ namespace LiteNN
 		{
 			auto bound = EmitI32Constant(builder, loc, elementCount);
 			return builder.create<mlir::spirv::ULessThanOp>(loc, index, bound).getResult();
+		}
+
+		std::optional<std::uint32_t> NumElementsU32(std::span<const std::size_t> shape)
+		{
+			std::uint64_t count = 1;
+			for (const auto dim : shape)
+			{
+				if (dim == 0)
+				{
+					return std::nullopt;
+				}
+				count *= static_cast<std::uint64_t>(dim);
+				if (count > std::numeric_limits<std::uint32_t>::max())
+				{
+					return std::nullopt;
+				}
+			}
+			return static_cast<std::uint32_t>(count);
+		}
+
+		std::vector<std::size_t> ReduceOutputShape(std::span<const std::size_t> inputShape, std::size_t axis)
+		{
+			if (axis >= inputShape.size())
+			{
+				throw std::runtime_error("Vulkan native reduce axis is out of range");
+			}
+			std::vector<std::size_t> outputShape;
+			outputShape.reserve(inputShape.size() - 1);
+			for (std::size_t i = 0; i < inputShape.size(); ++i)
+			{
+				if (i != axis)
+				{
+					outputShape.push_back(inputShape[i]);
+				}
+			}
+			return outputShape;
+		}
+
+		std::optional<std::uint32_t> AxisInnerSizeU32(std::span<const std::size_t> shape, std::size_t axis)
+		{
+			if (axis >= shape.size())
+			{
+				return std::nullopt;
+			}
+			std::uint64_t count = 1;
+			for (std::size_t i = axis + 1; i < shape.size(); ++i)
+			{
+				if (shape[i] == 0)
+				{
+					return std::nullopt;
+				}
+				count *= static_cast<std::uint64_t>(shape[i]);
+				if (count > std::numeric_limits<std::uint32_t>::max())
+				{
+					return std::nullopt;
+				}
+			}
+			return static_cast<std::uint32_t>(count);
+		}
+
+		std::string_view ReduceF32KernelName(ReduceOp op)
+		{
+			switch (op)
+			{
+			case ReduceOp::Sum:
+				return "reduce_sum";
+			case ReduceOp::Mean:
+				return "reduce_mean";
+			case ReduceOp::Max:
+				return "reduce_max";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
+			}
 		}
 
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
@@ -689,6 +763,139 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildReduceF32SPIRVModule(ReduceOp op,
+		                                                                   std::span<const std::size_t> inputShape,
+		                                                                   std::size_t axis,
+		                                                                   mlir::MLIRContext& context)
+		{
+			const auto outputShape = ReduceOutputShape(inputShape, axis);
+			const auto inputElementCount = NumElementsU32(inputShape);
+			const auto outputElementCount = NumElementsU32(outputShape);
+			const auto innerSize = AxisInnerSizeU32(inputShape, axis);
+			if (!inputElementCount || !outputElementCount || !innerSize ||
+			    inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("Vulkan native reduce shape is too large or empty");
+			}
+			const auto axisSize = static_cast<std::uint32_t>(inputShape[axis]);
+			if (axisSize == 0)
+			{
+				throw std::runtime_error("Vulkan native reduce axis size must not be zero");
+			}
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, ReduceF32KernelName(op), funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
+				    auto axisValue = EmitI32Constant(bodyBuilder, loc, axisSize);
+				    auto outerIndex = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult();
+				    auto innerIndex = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, inner).getResult();
+				    auto outerAxis =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(loc, outerIndex, axisValue).getResult();
+				    auto base = bodyBuilder
+				                    .create<mlir::spirv::IAddOp>(
+				                        loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(),
+				                        innerIndex)
+				                    .getResult();
+
+				    mlir::Value accumulator;
+				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+				    {
+					    auto offset = bodyBuilder
+					                      .create<mlir::spirv::IAddOp>(
+					                          loc, base,
+					                          bodyBuilder
+					                              .create<mlir::spirv::IMulOp>(
+					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
+					                              .getResult())
+					                      .getResult();
+					    auto value =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset), nullptr,
+					                nullptr)
+					            .getValue();
+					    if (reduceIndex == 0)
+					    {
+						    accumulator = value;
+						    continue;
+					    }
+					    switch (op)
+					    {
+					    case ReduceOp::Sum:
+					    case ReduceOp::Mean:
+						    accumulator = bodyBuilder.create<mlir::spirv::FAddOp>(loc, accumulator, value).getResult();
+						    break;
+					    case ReduceOp::Max:
+						    accumulator =
+						        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, accumulator, value).getResult();
+						    break;
+					    default:
+						    throw std::runtime_error("Unsupported Vulkan native MLIR f32 reduce op");
+					    }
+				    }
+				    if (op == ReduceOp::Mean)
+				    {
+					    accumulator =
+					        bodyBuilder
+					            .create<mlir::spirv::FMulOp>(
+					                loc, accumulator,
+					                EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
+					            .getResult();
+				    }
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Reduce module verification failed");
+			}
+			(void)inputElementCount;
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeCastSPIRVModule(DataType srcType, DataType dstType,
 		                                                                       std::uint32_t elementCount,
 		                                                                       mlir::MLIRContext& context)
@@ -1097,6 +1304,34 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeReduceF32SPIRV(ReduceOp op, std::span<const std::size_t> inputShape,
+		                                                   std::size_t axis)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildReduceF32SPIRVModule(op, inputShape, axis, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V Reduce module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 		                                                       std::uint32_t elementCount)
 		{
@@ -1258,6 +1493,46 @@ namespace LiteNN
 			    "Vulkan native MatMulBias requires non-empty dimensions and bias rows equal to 1 or M");
 		}
 		return SerializeMatMulBiasF32SPIRV(m, k, n, biasRows, relu);
+	}
+
+	std::string_view VulkanNativeReduceF32KernelName(ReduceOp op)
+	{
+		return ReduceF32KernelName(op);
+	}
+
+	bool VulkanNativeSupportsReduceF32(ReduceOp op, std::span<const std::size_t> inputShape, std::size_t axis)
+	{
+		switch (op)
+		{
+		case ReduceOp::Sum:
+		case ReduceOp::Mean:
+		case ReduceOp::Max:
+			break;
+		default:
+			return false;
+		}
+		if (axis >= inputShape.size())
+		{
+			return false;
+		}
+		if (inputShape[axis] == 0 || inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+		{
+			return false;
+		}
+		const auto outputShape = ReduceOutputShape(inputShape, axis);
+		return NumElementsU32(inputShape).has_value() && NumElementsU32(outputShape).has_value() &&
+		       AxisInnerSizeU32(inputShape, axis).has_value();
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeReduceF32SPIRV(ReduceOp op, std::span<const std::size_t> inputShape,
+	                                                      std::size_t axis)
+	{
+		if (!VulkanNativeSupportsReduceF32(op, inputShape, axis))
+		{
+			throw std::runtime_error("Vulkan native f32 reduce requires a supported op, static non-empty shape, and "
+			                         "an in-range axis");
+		}
+		return SerializeReduceF32SPIRV(op, inputShape, axis);
 	}
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)

@@ -75,6 +75,21 @@ namespace
 		return graph;
 	}
 
+	Graph BuildReduceGraph(ReduceOp op, std::size_t axis, std::vector<std::size_t> outputShape)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto out = sg.AddNode(ReduceOpNode{ op, { input, 0 }, axis },
+		                            { OutputInfo{ DataType::Float32, std::move(outputShape) } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -557,6 +572,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMulBiasExternalWeights)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForReduce)
+{
+	const auto graph = BuildReduceGraph(ReduceOp::Mean, 0, { 3 });
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 reduce Mean"), std::string::npos);
+	EXPECT_NE(report.capability.find("axis=0"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -713,6 +739,33 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
 	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
 	EXPECT_FALSE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::ShaderInt8));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForReduce)
+{
+	const auto graph = BuildReduceGraph(ReduceOp::Mean, 0, { 3 });
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeReduceF32SPIRV(ReduceOp::Mean, std::array<std::size_t, 2>{ 2, 3 }, 0);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_TRUE(payload.featureSet.CheckIsValid());
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ReduceF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeReduceF32KernelName(ReduceOp::Mean));
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].index, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].index, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
@@ -1149,6 +1202,58 @@ TEST(CompiledModuleVulkanTest, RunsBinaryChainArithmetic)
 	EXPECT_FLOAT_EQ(actual[1], 4400.0f);
 	EXPECT_FLOAT_EQ(actual[2], 9900.0f);
 	EXPECT_FLOAT_EQ(actual[3], 17600.0f);
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleReduceArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	struct ReduceRunCase
+	{
+		Graph graph;
+		std::vector<double> input;
+		std::vector<float> expected;
+	};
+
+	std::vector<ReduceRunCase> cases;
+	cases.push_back({
+	    .graph = BuildReduceGraph(ReduceOp::Sum, 1, { 2 }),
+	    .input = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f },
+	    .expected = { 6.0f, 15.0f },
+	});
+	cases.push_back({
+	    .graph = BuildReduceGraph(ReduceOp::Mean, 0, { 3 }),
+	    .input = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f },
+	    .expected = { 2.5f, 3.5f, 4.5f },
+	});
+	cases.push_back({
+	    .graph = BuildReduceGraph(ReduceOp::Max, 1, { 2 }),
+	    .input = { 1.0f, 7.0f, 3.0f, 4.0f, 5.0f, 6.0f },
+	    .expected = { 7.0f, 6.0f },
+	});
+
+	Vulkan device;
+	for (const auto& testCase : cases)
+	{
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(testCase.graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		std::array inputs{
+			Tensor<Vulkan>(testCase.input, { 2, 3 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHostVector(outputs[0]);
+		ASSERT_EQ(actual.size(), testCase.expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_FLOAT_EQ(actual[i], testCase.expected[i]);
+		}
+	}
 }
 
 TEST(CompiledModuleVulkanTest, RunsSimpleMatMulArithmetic)

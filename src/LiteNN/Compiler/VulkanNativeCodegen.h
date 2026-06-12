@@ -3,9 +3,11 @@
 
 #include <LiteNN/Operators.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace LiteNN
@@ -34,6 +36,10 @@ namespace LiteNN
 	bool VulkanNativeSupportsMatMulBiasF32(std::uint32_t m, std::uint32_t k, std::uint32_t n, std::uint32_t biasRows);
 	VulkanNativeGeneratedSPIRV VulkanNativeMatMulBiasF32SPIRV(std::uint32_t m, std::uint32_t k, std::uint32_t n,
 	                                                          std::uint32_t biasRows, bool relu);
+	std::string_view VulkanNativeReduceF32KernelName(ReduceOp op);
+	bool VulkanNativeSupportsReduceF32(ReduceOp op, std::span<const std::size_t> inputShape, std::size_t axis);
+	VulkanNativeGeneratedSPIRV VulkanNativeReduceF32SPIRV(ReduceOp op, std::span<const std::size_t> inputShape,
+	                                                      std::size_t axis);
 } // namespace LiteNN
 
 #endif
