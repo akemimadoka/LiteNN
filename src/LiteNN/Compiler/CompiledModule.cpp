@@ -5795,13 +5795,13 @@ namespace
 
 	struct VulkanP0BinaryChainKernelPlan
 	{
+		BinaryOp op{ BinaryOp::Add };
 		VulkanP0BinaryChainOperand lhs;
 		VulkanP0BinaryChainOperand rhs;
 	};
 
 	struct VulkanP0BinaryChainPlan
 	{
-		BinaryOp op{ BinaryOp::Add };
 		std::uint32_t elementCount{};
 		std::vector<VulkanP0BinaryChainKernelPlan> kernels;
 	};
@@ -6168,7 +6168,6 @@ namespace
 
 		std::vector<bool> visited(subgraph.NodeCount(), false);
 		VulkanP0BinaryChainPlan plan{ .elementCount = *elementCount };
-		bool opInitialized = false;
 
 		const auto isBinaryNodeOutput = [&](NodeOutput output) {
 			return output.port == 0 && output.node < subgraph.NodeCount() &&
@@ -6204,15 +6203,6 @@ namespace
 			{
 				return false;
 			}
-			if (!opInitialized)
-			{
-				plan.op = binary->op;
-				opInitialized = true;
-			}
-			else if (plan.op != binary->op)
-			{
-				return false;
-			}
 
 			const bool lhsIsAccumulator = isBinaryNodeOutput(binary->lhs);
 			const bool rhsIsAccumulator = isBinaryNodeOutput(binary->rhs);
@@ -6221,7 +6211,7 @@ namespace
 				return false;
 			}
 
-			VulkanP0BinaryChainKernelPlan kernel;
+			VulkanP0BinaryChainKernelPlan kernel{ .op = binary->op };
 			if (lhsIsAccumulator)
 			{
 				if (!self(self, binary->lhs))
@@ -6367,8 +6357,8 @@ namespace
 
 		if (const auto chain = MatchVulkanP0SameShapeBinaryF32Chain(graph))
 		{
-			return VulkanNativeSupported(std::format("same-shape f32 binary {} chain ({} kernels)",
-			                                         VulkanNativeOpName(chain->op), chain->kernels.size()));
+			return VulkanNativeSupported(std::format("same-shape f32 binary chain ({} kernels)",
+			                                         chain->kernels.size()));
 		}
 
 		if (subgraph.Params().size() == 1 && subgraph.NodeCount() == 2)
@@ -6533,7 +6523,7 @@ namespace
 		}
 
 		return VulkanNativeUnsupported(std::format(
-		    "Vulkan native currently supports one-input unary/cast, two-input binary single-kernel graphs, or same-op "
+		    "Vulkan native currently supports one-input unary/cast, two-input binary single-kernel graphs, or "
 		    "same-shape f32 binary chains; got params={} nodes={}",
 		    subgraph.Params().size(), subgraph.NodeCount()));
 	}
@@ -7124,15 +7114,21 @@ namespace
 		VulkanNativeInstructionPayload payload;
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
-		payload.featureSet.AddFeature(VulkanNativeBinaryF32FeatureFlag(plan->op));
-		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op, plan->elementCount);
+		std::vector<BinaryOp> kernelOps;
+		kernelOps.reserve(plan->kernels.size());
+		for (const auto& kernelPlan : plan->kernels)
+		{
+			payload.featureSet.AddFeature(VulkanNativeBinaryF32FeatureFlag(kernelPlan.op));
+			kernelOps.push_back(kernelPlan.op);
+		}
+		auto spirv = VulkanNativeSameShapeBinaryF32ChainSPIRV(kernelOps, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		for (const auto& kernelPlan : plan->kernels)
 		{
 			payload.kernels.push_back({
-			    .entryPoint = "main",
+			    .entryPoint = VulkanNativeSameShapeBinaryF32KernelName(kernelPlan.op),
 			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 			    .arguments = {

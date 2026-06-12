@@ -54,6 +54,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildBinaryDiamondGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto rhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto tail = sg.AddParam(DataType::Float32, { 4 });
+		const auto first = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                              { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { tail, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { first, 0 }, { second, 0 } },
+		                            { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs", "tail" });
+		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -475,14 +496,25 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSameOpBinaryChain)
 	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
 
 	EXPECT_TRUE(report.supported);
-	EXPECT_NE(report.capability.find("binary Add chain"), std::string::npos);
+	EXPECT_NE(report.capability.find("binary chain"), std::string::npos);
 	EXPECT_NE(report.capability.find("2 kernels"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
 
-TEST(CompiledModuleVulkanTest, RejectsMixedBinaryChainForNativeSupport)
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMixedBinaryChain)
 {
 	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Multiply);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("binary chain"), std::string::npos);
+	EXPECT_NE(report.capability.find("2 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, RejectsDiamondBinaryGraphForNativeSupport)
+{
+	const auto graph = BuildBinaryDiamondGraph();
 	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
 
 	EXPECT_FALSE(report.supported);
@@ -535,17 +567,19 @@ TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForBinaryChain)
 {
-	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Add);
+	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Multiply);
 	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add, kElementCount);
+	const std::array ops{ BinaryOp::Add, BinaryOp::Multiply };
+	const auto generated = VulkanNativeSameShapeBinaryF32ChainSPIRV(ops, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Add));
+	EXPECT_EQ(payload.kernels[1].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Multiply));
 	for (const auto& kernel : payload.kernels)
 	{
-		EXPECT_EQ(kernel.entryPoint, "main");
 		EXPECT_EQ(kernel.groups.x, 1u);
 		ASSERT_EQ(kernel.arguments.size(), 3u);
 		EXPECT_EQ(kernel.arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
@@ -996,7 +1030,7 @@ TEST(CompiledModuleVulkanTest, RunsBinaryChainArithmetic)
 		GTEST_SKIP() << "No Vulkan compute device is available";
 	}
 
-	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Add);
+	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Multiply);
 	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
 
@@ -1013,10 +1047,10 @@ TEST(CompiledModuleVulkanTest, RunsBinaryChainArithmetic)
 	ASSERT_EQ(events.size(), 2u);
 
 	const auto actual = CopyToHost(outputs[0]);
-	EXPECT_FLOAT_EQ(actual[0], 111.0f);
-	EXPECT_FLOAT_EQ(actual[1], 222.0f);
-	EXPECT_FLOAT_EQ(actual[2], 333.0f);
-	EXPECT_FLOAT_EQ(actual[3], 444.0f);
+	EXPECT_FLOAT_EQ(actual[0], 1100.0f);
+	EXPECT_FLOAT_EQ(actual[1], 4400.0f);
+	EXPECT_FLOAT_EQ(actual[2], 9900.0f);
+	EXPECT_FLOAT_EQ(actual[3], 17600.0f);
 }
 
 TEST(CompiledModuleVulkanTest, RunsSimpleMatMulArithmetic)

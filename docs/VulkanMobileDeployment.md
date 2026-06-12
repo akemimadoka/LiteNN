@@ -113,8 +113,9 @@ for Vulkan rows. Persisted multi-backend Vulkan profile tables are still follow-
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
 
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
-- same-shape `Float32` same-op binary chains, for example `Add(Add(lhs, rhs), tail)`, executed as multiple synchronized
-  Vulkan-native kernels that reuse the public output buffer as the chain accumulator
+- same-shape `Float32` binary chains composed of supported binary ops, for example
+  `Multiply(Add(lhs, rhs), tail)`, executed as multiple synchronized Vulkan-native kernels that reuse the public output
+  buffer as the chain accumulator
 - rank-2 static `Float32` MatMul using one shader invocation per output element; this is a correctness and benchmark
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same

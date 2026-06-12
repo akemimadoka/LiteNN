@@ -4,6 +4,7 @@
 #include <LiteNN/Operators.h>
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ namespace LiteNN
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount);
+	std::string VulkanNativeSameShapeBinaryF32KernelName(BinaryOp op);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32ChainSPIRV(std::span<const BinaryOp> ops,
+	                                                                    std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 	                                                          std::uint32_t elementCount);
