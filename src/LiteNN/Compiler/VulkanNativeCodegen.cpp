@@ -491,6 +491,115 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildMatMulBiasF32SPIRVModule(std::uint32_t m, std::uint32_t k,
+		                                                                       std::uint32_t n, std::uint32_t biasRows,
+		                                                                       bool relu, mlir::MLIRContext& context)
+		{
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+			const auto outputElementCount = m * n;
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto lhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "lhs", 0);
+			auto rhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "rhs", 1);
+			auto bias = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "bias", 2);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 3);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, kEntryPointName, funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto index = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, index, outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto nValue = EmitI32Constant(bodyBuilder, loc, n);
+				    auto row = bodyBuilder.create<mlir::spirv::UDivOp>(loc, index, nValue).getResult();
+				    auto col = bodyBuilder.create<mlir::spirv::UModOp>(loc, index, nValue).getResult();
+				    auto rowBase =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(loc, row, EmitI32Constant(bodyBuilder, loc, k))
+				            .getResult();
+				    mlir::Value biasIndex = col;
+				    if (biasRows != 1)
+				    {
+					    auto biasRowBase = bodyBuilder.create<mlir::spirv::IMulOp>(loc, row, nValue).getResult();
+					    biasIndex = bodyBuilder.create<mlir::spirv::IAddOp>(loc, biasRowBase, col).getResult();
+				    }
+				    auto sum =
+				        bodyBuilder
+				            .create<mlir::spirv::LoadOp>(
+				                loc, bodyBuilder.getF32Type(),
+				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, bias, biasIndex), nullptr, nullptr)
+				            .getValue();
+
+				    for (std::uint32_t kk = 0; kk < k; ++kk)
+				    {
+					    auto lhsIndex =
+					        bodyBuilder.create<mlir::spirv::IAddOp>(loc, rowBase, EmitI32Constant(bodyBuilder, loc, kk))
+					            .getResult();
+					    auto rhsIndex =
+					        bodyBuilder.create<mlir::spirv::IAddOp>(loc, EmitI32Constant(bodyBuilder, loc, kk * n), col)
+					            .getResult();
+					    auto lhsValue = bodyBuilder
+					                        .create<mlir::spirv::LoadOp>(
+					                            loc, bodyBuilder.getF32Type(),
+					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, lhs, lhsIndex),
+					                            nullptr, nullptr)
+					                        .getValue();
+					    auto rhsValue = bodyBuilder
+					                        .create<mlir::spirv::LoadOp>(
+					                            loc, bodyBuilder.getF32Type(),
+					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rhs, rhsIndex),
+					                            nullptr, nullptr)
+					                        .getValue();
+					    auto product = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
+					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, product).getResult();
+				    }
+				    if (relu)
+				    {
+					    sum =
+					        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, sum, EmitF32Constant(bodyBuilder, loc, 0.0f))
+					            .getResult();
+				    }
+
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, index), sum, nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeMatMulWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V MatMulBias module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeCastSPIRVModule(DataType srcType, DataType dstType,
 		                                                                       std::uint32_t elementCount,
 		                                                                       mlir::MLIRContext& context)
@@ -835,6 +944,34 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeMatMulBiasF32SPIRV(std::uint32_t m, std::uint32_t k, std::uint32_t n,
+		                                                       std::uint32_t biasRows, bool relu)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildMatMulBiasF32SPIRVModule(m, k, n, biasRows, relu, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V MatMulBias module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 		                                                       std::uint32_t elementCount)
 		{
@@ -941,6 +1078,31 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan native MatMul requires non-empty dimensions with uint32_t-sized buffers");
 		}
 		return SerializeMatMulF32SPIRV(m, k, n);
+	}
+
+	bool VulkanNativeSupportsMatMulBiasF32(std::uint32_t m, std::uint32_t k, std::uint32_t n, std::uint32_t biasRows)
+	{
+		if (biasRows != 1 && biasRows != m)
+		{
+			return false;
+		}
+		if (!VulkanNativeSupportsMatMulF32(m, k, n))
+		{
+			return false;
+		}
+		const auto max = static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+		return static_cast<std::uint64_t>(biasRows) * n <= max;
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeMatMulBiasF32SPIRV(std::uint32_t m, std::uint32_t k, std::uint32_t n,
+	                                                          std::uint32_t biasRows, bool relu)
+	{
+		if (!VulkanNativeSupportsMatMulBiasF32(m, k, n, biasRows))
+		{
+			throw std::runtime_error(
+			    "Vulkan native MatMulBias requires non-empty dimensions and bias rows equal to 1 or M");
+		}
+		return SerializeMatMulBiasF32SPIRV(m, k, n, biasRows, relu);
 	}
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)

@@ -36,11 +36,13 @@ namespace LiteNN
 		SameShapeCastInt32ToFloat32 = 16,
 		SameShapeCastLowPrecision = 17,
 		MatMulF32 = 18,
+		MatMulBiasAddF32 = 19,
+		MatMulBiasAddReLUF32 = 20,
 	};
 
 	struct VulkanNativeFeatureSet
 	{
-		static constexpr std::uint64_t KnownFeatureMask = (1ull << 19) - 1;
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 21) - 1;
 
 		std::uint64_t flags{};
 

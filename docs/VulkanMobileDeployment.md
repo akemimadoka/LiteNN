@@ -92,14 +92,16 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
 - rank-2 static `Float32` MatMul using one shader invocation per output element; this is a correctness and benchmark
   baseline, not the final tiled/shared-memory production GEMM kernel
+- fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same
+  baseline one-output-element-per-invocation kernel shape
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
   requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access before these kernels are
   selected in production
-- `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto` and `VulkanNativeMatMul/F32` rows only when a Vulkan
-  compute device exists. Model-level Vulkan Native benchmark rows remain deferred until bias/activation/linear-chain
-  lowering lands.
+- `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeMatMul/F32`, and
+  `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. Model-level Vulkan Native benchmark rows
+  remain deferred until variable/constant weight handling and multi-layer linear-chain lowering land.
 
 Runtime low-precision feature gating, reductions, production matmul/linear chains, normalization, softmax, convolution,
 device-local memory, tiled/shared-memory kernels, and async queue integration remain follow-on production GPU-backend

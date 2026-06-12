@@ -829,6 +829,25 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanMatMulBiasGraph(std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { batch, width });
+		const auto rhs = sg.AddParam(DataType::Float32, { width, width });
+		const auto bias = sg.AddParam(DataType::Float32, { 1, width });
+		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { lhs, 0 }, { rhs, 0 } },
+		                               { OutputInfo{ DataType::Float32, { batch, width } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+		                            { OutputInfo{ DataType::Float32, { batch, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "lhs", "rhs", "bias" });
+		graph.SetOutputNames({ "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	std::vector<float> MakeElementwiseInputData(std::size_t elementCount, unsigned int seed)
 	{
 		std::mt19937 rng(seed);
@@ -871,6 +890,26 @@ namespace
 		const auto rhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(rhsData), { width, width });
 		inputs.push_back(lhsCpu.CopyToDevice(Vulkan{}));
 		inputs.push_back(rhsCpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
+	std::vector<Tensor<Vulkan>> MakeVulkanMatMulBiasInputs(const std::vector<float>& lhsData,
+	                                                       const std::vector<float>& rhsData,
+	                                                       const std::vector<float>& biasData, std::size_t batch,
+	                                                       std::size_t width)
+	{
+		if (lhsData.size() != batch * width || rhsData.size() != width * width || biasData.size() != width)
+		{
+			throw std::invalid_argument("Vulkan MatMulBias benchmark inputs do not match the requested shape");
+		}
+
+		std::vector<Tensor<Vulkan>> inputs;
+		const auto lhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(lhsData), { batch, width });
+		const auto rhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(rhsData), { width, width });
+		const auto biasCpu = Optimizer::MakeFloatTensor(std::span<const float>(biasData), { 1, width });
+		inputs.push_back(lhsCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(rhsCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(biasCpu.CopyToDevice(Vulkan{}));
 		return inputs;
 	}
 
@@ -932,6 +971,40 @@ namespace
 		const auto lhsData = MakeElementwiseInputData(batch * width, 2);
 		const auto rhsData = MakeElementwiseInputData(width * width, 3);
 		auto inputs = MakeVulkanMatMulInputs(lhsData, rhsData, batch, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["flops"] = benchmark::Counter(static_cast<double>(2 * batch * width * width),
+		                                             benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeMatMulBiasAddRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t width)
+	{
+		auto graph = BuildVulkanMatMulBiasGraph(batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for MatMulBias benchmark");
+			return;
+		}
+
+		const auto lhsData = MakeElementwiseInputData(batch * width, 4);
+		const auto rhsData = MakeElementwiseInputData(width * width, 5);
+		const auto biasData = MakeElementwiseInputData(width, 6);
+		auto inputs = MakeVulkanMatMulBiasInputs(lhsData, rhsData, biasData, batch, width);
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -1177,6 +1250,13 @@ namespace
 					    BMVulkanNativeMatMulRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
 				    });
 				matMulBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* matMulBiasBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeMatMulBiasAdd/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeMatMulBiasAddRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
+				    });
+				matMulBiasBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 			}
 		}
 #endif

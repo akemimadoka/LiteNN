@@ -1902,6 +1902,9 @@ packaging slice to a useful production backend.
 - [x] Add the first f32 MatMul Vulkan-native slice: rank-2 static `Float32` `BinaryOp::MatMul` now lowers to generated
       MLIR/SPIR-V, emits a `MatMulF32` payload feature bit, runs through `CompiledModule<Vulkan>`, and is registered in
       benchmark as `VulkanNativeMatMul/F32`.
+- [x] Add the first f32 MatMulBias Vulkan-native slice: fused `MatMulBiasAdd` / `MatMulBiasAddReLU` now lowers to a
+      generated single-kernel SPIR-V baseline with broadcast row bias, and benchmark registers
+      `VulkanNativeMatMulBiasAdd/F32`.
 - [ ] Add device capability gating for generated SPIR-V features: 8-bit/16-bit storage buffers, fp16 arithmetic,
       subgroup availability, max workgroup size, storage-buffer alignment, and mobile-driver limits must be checked before
       selecting kernels.
@@ -1913,8 +1916,8 @@ packaging slice to a useful production backend.
       host/device round trips.
 - [ ] Implement production operator families in priority order:
       1. reductions with static axes (`Sum`, `Mean`, `Max`, `Min`) and simple row/column reductions;
-      2. complete f32 matmul/linear, bias, and activation fusion, then replace the current one-output-element-per-thread
-         MatMul with tiled/shared-memory kernels;
+      2. complete f32 linear-chain lowering with variables/constants and multi-layer schedules, then replace the current
+         one-output-element-per-thread MatMul/MatMulBias kernels with tiled/shared-memory kernels;
       3. softmax and normalization (`LayerNorm`, `RMSNorm`, group normalization);
       4. convolution/pooling and image/latent-processing kernels for mobile vision workloads;
       5. low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device capabilities.

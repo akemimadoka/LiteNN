@@ -5812,6 +5812,22 @@ namespace
 		std::uint32_t outputElementCount{};
 	};
 
+	struct VulkanP0MatMulBiasPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t biasInputIndex{};
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t biasRows{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		std::uint32_t biasElementCount{};
+		std::uint32_t outputElementCount{};
+		bool relu{};
+	};
+
 	struct VulkanP0ArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -5837,7 +5853,7 @@ namespace
 
 	bool IsVulkanP0SingleForwardGraph(const Graph& graph)
 	{
-		return graph.SubgraphCount() == 1 && !graph.Backward().has_value() && graph.VariableCount() == 0 &&
+		return graph.Forward() < graph.SubgraphCount() && !graph.Backward().has_value() && graph.VariableCount() == 0 &&
 		       graph.ActivationSlotCount() == 0 && graph.TapeSlotCount() == 0;
 	}
 
@@ -5909,10 +5925,10 @@ namespace
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
 			return VulkanNativeUnsupported(std::format(
-			    "Vulkan native currently requires one forward-only subgraph with no variables, activations, or tape "
-			    "slots; got subgraphs={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
-			    graph.SubgraphCount(), graph.Backward().has_value(), graph.VariableCount(), graph.ActivationSlotCount(),
-			    graph.TapeSlotCount()));
+			    "Vulkan native currently requires a forward-only graph with no variables, activations, or tape slots; "
+			    "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
+			    graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
+			    graph.ActivationSlotCount(), graph.TapeSlotCount()));
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
@@ -5934,6 +5950,66 @@ namespace
 			                                           resultEntry.outputInfos.size()));
 		}
 		const auto& output = resultEntry.outputInfos[0];
+
+		if (subgraph.Params().size() == 3)
+		{
+			const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
+			if (!fused ||
+			    (fused->pattern != FusionPattern::MatMulBiasAdd &&
+			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+			    fused->args.size() < 3)
+			{
+				return VulkanNativeUnsupported(
+				    "Vulkan native three-input slice currently supports only fused MatMulBiasAdd/ReLU result nodes");
+			}
+			const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[0]);
+			const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[1]);
+			const auto biasInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[2]);
+			if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
+			{
+				return VulkanNativeUnsupported("Vulkan native MatMulBias inputs must be direct graph parameters");
+			}
+			const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+			const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+			const auto& biasParam = subgraph.Params()[*biasInputIndex];
+			if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+			    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native MatMulBias requires Float32 lhs/rhs/bias/output, got lhs={} rhs={} bias={} "
+				    "output={}",
+				    DataTypeName(lhsParam.dtype), DataTypeName(rhsParam.dtype), DataTypeName(biasParam.dtype),
+				    DataTypeName(output.dtype)));
+			}
+			if (lhsParam.shape.size() != 2 || rhsParam.shape.size() != 2 || biasParam.shape.size() != 2 ||
+			    output.shape.size() != 2)
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native MatMulBias requires rank-2 lhs/rhs/bias/output, got lhs={} rhs={} bias={} "
+				    "output={}",
+				    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
+				    Validation::ShapeToString(biasParam.shape), Validation::ShapeToString(output.shape)));
+			}
+			if (lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
+			    output.shape[1] != rhsParam.shape[1] || biasParam.shape[1] != output.shape[1] ||
+			    (biasParam.shape[0] != 1 && biasParam.shape[0] != output.shape[0]))
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native MatMulBias shape mismatch, expected [M,K] @ [K,N] + [1|M,N] -> [M,N], got "
+				    "lhs={} rhs={} bias={} output={}",
+				    Validation::ShapeToString(lhsParam.shape), Validation::ShapeToString(rhsParam.shape),
+				    Validation::ShapeToString(biasParam.shape), Validation::ShapeToString(output.shape)));
+			}
+			if (!VulkanP0ShapeNumElementsU32(lhsParam.shape) || !VulkanP0ShapeNumElementsU32(rhsParam.shape) ||
+			    !VulkanP0ShapeNumElementsU32(biasParam.shape) || !VulkanP0ShapeNumElementsU32(output.shape))
+			{
+				return VulkanNativeUnsupported(
+				    "Vulkan native MatMulBias shapes must be non-empty, non-zero, and contain at most uint32_t "
+				    "elements");
+			}
+			return VulkanNativeSupported(fused->pattern == FusionPattern::MatMulBiasAddReLU ? "f32 matmul bias relu"
+			                                                                                : "f32 matmul bias add");
+		}
 
 		if (subgraph.Params().size() == 1 && subgraph.NodeCount() == 2)
 		{
@@ -6305,6 +6381,109 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0MatMulBiasPlan>
+	MakeVulkanP0MatMulBiasF32Plan(const Subgraph& subgraph, std::uint32_t lhsInputIndex, std::uint32_t rhsInputIndex,
+	                              std::uint32_t biasInputIndex, const OutputInfo& output, bool relu)
+	{
+		const auto& lhsParam = subgraph.Params()[lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[rhsInputIndex];
+		const auto& biasParam = subgraph.Params()[biasInputIndex];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    biasParam.dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 ||
+		    rhsParam.shape.size() != 2 || biasParam.shape.size() != 2 || output.shape.size() != 2 ||
+		    lhsParam.shape[1] != rhsParam.shape[0] || output.shape[0] != lhsParam.shape[0] ||
+		    output.shape[1] != rhsParam.shape[1] || biasParam.shape[1] != output.shape[1] ||
+		    (biasParam.shape[0] != 1 && biasParam.shape[0] != output.shape[0]))
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = VulkanP0ShapeNumElementsU32(lhsParam.shape);
+		const auto rhsElementCount = VulkanP0ShapeNumElementsU32(rhsParam.shape);
+		const auto biasElementCount = VulkanP0ShapeNumElementsU32(biasParam.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!lhsElementCount || !rhsElementCount || !biasElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+		if (lhsParam.shape[0] > std::numeric_limits<std::uint32_t>::max() ||
+		    lhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsParam.shape[1] > std::numeric_limits<std::uint32_t>::max() ||
+		    biasParam.shape[0] > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		const auto m = static_cast<std::uint32_t>(lhsParam.shape[0]);
+		const auto k = static_cast<std::uint32_t>(lhsParam.shape[1]);
+		const auto n = static_cast<std::uint32_t>(rhsParam.shape[1]);
+		const auto biasRows = static_cast<std::uint32_t>(biasParam.shape[0]);
+		if (!VulkanNativeSupportsMatMulBiasF32(m, k, n, biasRows))
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0MatMulBiasPlan{
+			.lhsInputIndex = lhsInputIndex,
+			.rhsInputIndex = rhsInputIndex,
+			.biasInputIndex = biasInputIndex,
+			.m = m,
+			.k = k,
+			.n = n,
+			.biasRows = biasRows,
+			.lhsElementCount = *lhsElementCount,
+			.rhsElementCount = *rhsElementCount,
+			.biasElementCount = *biasElementCount,
+			.outputElementCount = *outputElementCount,
+			.relu = relu,
+		};
+	}
+
+	std::optional<VulkanP0MatMulBiasPlan> MatchVulkanP0MatMulBiasF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 3 || subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
+		if (!fused ||
+		    (fused->pattern != FusionPattern::MatMulBiasAdd && fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+		    fused->args.size() < 3)
+		{
+			return std::nullopt;
+		}
+		const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[0]);
+		const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[1]);
+		const auto biasInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[2]);
+		if (!lhsInputIndex || !rhsInputIndex || !biasInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		return MakeVulkanP0MatMulBiasF32Plan(subgraph, *lhsInputIndex, *rhsInputIndex, *biasInputIndex,
+		                                     resultEntry.outputInfos[0],
+		                                     fused->pattern == FusionPattern::MatMulBiasAddReLU);
+	}
+
 	std::optional<VulkanP0CastPlan> MatchVulkanP0SameShapeCast(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
@@ -6602,6 +6781,66 @@ namespace
 		          .binding = 2,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeMatMulBiasF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0MatMulBiasF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(plan->relu ? VulkanNativeFeature::MatMulBiasAddReLUF32
+		                                         : VulkanNativeFeature::MatMulBiasAddF32);
+		auto spirv = VulkanNativeMatMulBiasF32SPIRV(plan->m, plan->k, plan->n, plan->biasRows, plan->relu);
+		payload.spirv = std::move(spirv.words);
+
+		const auto lhsByteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float);
+		const auto rhsByteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float);
+		const auto biasByteSize = static_cast<std::uint64_t>(plan->biasElementCount) * sizeof(float);
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .entryPoint = "main",
+		    .groups = { .x = VulkanP0MatMulGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = lhsByteSize },
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = rhsByteSize },
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->biasInputIndex,
+		          .binding = 2,
+		          .byteOffset = 0,
+		          .byteSize = biasByteSize },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 3,
+		          .byteOffset = 0,
+		          .byteSize = outputByteSize },
 		    },
 		});
 
@@ -8648,6 +8887,13 @@ namespace
 				                                 CompiledModuleBackend::VulkanNative);
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::VulkanNative);
+			}
+			if (auto nativeParts = TryCompileVulkanNativeMatMulBiasF32P0(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),
