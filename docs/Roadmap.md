@@ -1969,9 +1969,12 @@ packaging slice to a useful production backend.
       tile sizes or runtime-shape constants.
 - [ ] Add mobile validation coverage: Android cross-build profile, loader/validation-layer smoke tests, at least one real
       mobile GPU fixture, and clear skip/failure behavior when no Vulkan compute device is present.
-- [ ] Add end-to-end examples that are honest about backend selection: one native-only elementwise example, one
-      partitioned/fallback example, and one model-shaped benchmark beyond the current single-Linear external-weight
-      slice.
+- [x] Add an end-to-end Vulkan example that is honest about backend selection: `example/vulkan` now prints native support
+      for the Vulkan-native Add slice, runs both regular and separated-region native artifacts, records CPU-side Vulkan
+      profile events, and demonstrates that a CPU bridge artifact is rejected unless `VulkanHostFallbackPolicy::Allow`
+      is set explicitly.
+- [ ] Add a model-shaped Vulkan example/benchmark beyond the current single-Linear external-weight slice, after native
+      partitioning or a larger fused-kernel family can avoid presenting a whole model as a silent CPU bridge.
 
 Hidden requirements:
 
