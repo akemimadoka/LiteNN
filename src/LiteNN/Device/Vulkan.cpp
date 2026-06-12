@@ -184,8 +184,17 @@ namespace LiteNN
 				properties.limits.maxComputeWorkGroupSize[1],
 				properties.limits.maxComputeWorkGroupSize[2],
 			};
+			capabilities.maxComputeWorkGroupCount = {
+				properties.limits.maxComputeWorkGroupCount[0],
+				properties.limits.maxComputeWorkGroupCount[1],
+				properties.limits.maxComputeWorkGroupCount[2],
+			};
 			capabilities.maxStorageBufferRange = properties.limits.maxStorageBufferRange;
 			capabilities.minStorageBufferOffsetAlignment = properties.limits.minStorageBufferOffsetAlignment;
+			capabilities.maxPerStageDescriptorStorageBuffers =
+			    properties.limits.maxPerStageDescriptorStorageBuffers;
+			capabilities.maxDescriptorSetStorageBuffers = properties.limits.maxDescriptorSetStorageBuffers;
+			capabilities.maxBoundDescriptorSets = properties.limits.maxBoundDescriptorSets;
 			capabilities.deviceName = properties.deviceName;
 #if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES)
 			capabilities.subgroupSize = subgroupProperties.subgroupSize;
@@ -789,6 +798,22 @@ namespace LiteNN
 		impl_->deviceHandle = std::move(device);
 		impl_->context = GetContext(impl_->deviceHandle);
 		impl_->descriptorCount = descriptorCount;
+		const auto& capabilities = impl_->context->capabilities;
+		if (capabilities.maxBoundDescriptorSets < 1)
+		{
+			throw std::runtime_error(std::format(
+			    "Vulkan compute module requires one descriptor set, but device '{}' reports maxBoundDescriptorSets={}",
+			    capabilities.deviceName, capabilities.maxBoundDescriptorSets));
+		}
+		if (descriptorCount > capabilities.maxPerStageDescriptorStorageBuffers ||
+		    descriptorCount > capabilities.maxDescriptorSetStorageBuffers)
+		{
+			throw std::runtime_error(std::format(
+			    "Vulkan compute module requires {} storage-buffer descriptor(s), but device '{}' reports "
+			    "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
+			    descriptorCount, capabilities.deviceName, capabilities.maxPerStageDescriptorStorageBuffers,
+			    capabilities.maxDescriptorSetStorageBuffers));
+		}
 
 		const VkShaderModuleCreateInfo shaderInfo{
 			.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -918,6 +943,16 @@ namespace LiteNN
 		{
 			throw std::runtime_error(std::format("Vulkan descriptor count mismatch: expected {}, got {}",
 			                                     impl_->descriptorCount, descriptorBuffers.size()));
+		}
+		const auto& capabilities = impl_->context->capabilities;
+		if (groups.x > capabilities.maxComputeWorkGroupCount[0] ||
+		    groups.y > capabilities.maxComputeWorkGroupCount[1] ||
+		    groups.z > capabilities.maxComputeWorkGroupCount[2])
+		{
+			throw std::runtime_error(std::format(
+			    "Vulkan dispatch groups {}x{}x{} exceed device '{}' maxComputeWorkGroupCount {}x{}x{}",
+			    groups.x, groups.y, groups.z, capabilities.deviceName, capabilities.maxComputeWorkGroupCount[0],
+			    capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
 		}
 
 		std::lock_guard lock(impl_->context->queueMutex);

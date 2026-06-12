@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -173,6 +174,17 @@ namespace
 		                                host.DType(), host.UnsafeRawData());
 		const auto* values = static_cast<const float*>(host.UnsafeRawData());
 		return std::vector<float>(values, values + host.NumElements());
+	}
+
+	CompiledModuleImage ImageWithInstructions(const CompiledModuleArtifact& artifact,
+	                                          std::span<const std::byte> instructions)
+	{
+		return {
+			.rodata = artifact.Rodata().data(),
+			.rodataSize = artifact.Rodata().size(),
+			.instructions = instructions.data(),
+			.instructionSize = instructions.size(),
+		};
 	}
 
 	struct BinaryCase
@@ -626,6 +638,93 @@ TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEn
 		            message.find("storageBuffer16BitAccess") != std::string::npos)
 		    << message;
 		EXPECT_NE(message.find("enabled=false"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, ReportsDescriptorAndDispatchLimits)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto capabilities = QueryVulkanDeviceCapabilities(Vulkan{});
+	EXPECT_GT(capabilities.maxComputeWorkGroupCount[0], 0u);
+	EXPECT_GT(capabilities.maxComputeWorkGroupCount[1], 0u);
+	EXPECT_GT(capabilities.maxComputeWorkGroupCount[2], 0u);
+	EXPECT_GT(capabilities.maxPerStageDescriptorStorageBuffers, 0u);
+	EXPECT_GT(capabilities.maxDescriptorSetStorageBuffers, 0u);
+	EXPECT_GT(capabilities.maxBoundDescriptorSets, 0u);
+}
+
+TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDispatchGroupsExceedDeviceLimit)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.maxComputeWorkGroupCount[0] == std::numeric_limits<std::uint32_t>::max())
+	{
+		GTEST_SKIP() << "Cannot construct a larger x dispatch group without overflowing uint32_t";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_FALSE(payload.kernels.empty());
+	payload.kernels[0].groups.x = capabilities.maxComputeWorkGroupCount[0] + 1;
+	const auto badInstructions = SerializeVulkanNativeInstructionPayload(payload);
+
+	try
+	{
+		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		FAIL() << "Expected Vulkan payload loading to reject oversized dispatch groups";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("maxComputeWorkGroupCount"), std::string::npos) << message;
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDescriptorCountExceedsDeviceLimit)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	const auto descriptorLimit = capabilities.maxPerStageDescriptorStorageBuffers <
+	                                     capabilities.maxDescriptorSetStorageBuffers
+	                                 ? capabilities.maxPerStageDescriptorStorageBuffers
+	                                 : capabilities.maxDescriptorSetStorageBuffers;
+	if (descriptorLimit == 0 || descriptorLimit == std::numeric_limits<std::uint32_t>::max())
+	{
+		GTEST_SKIP() << "Cannot construct a larger descriptor binding for this device limit";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_FALSE(payload.kernels.empty());
+	ASSERT_FALSE(payload.kernels[0].arguments.empty());
+	payload.kernels[0].arguments[0].binding = descriptorLimit;
+	const auto badInstructions = SerializeVulkanNativeInstructionPayload(payload);
+
+	try
+	{
+		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		FAIL() << "Expected Vulkan payload loading to reject excessive descriptor bindings";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("storage-buffer descriptor"), std::string::npos) << message;
 	}
 }
 

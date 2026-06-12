@@ -8498,6 +8498,35 @@ namespace
 				throw std::runtime_error(std::format("Vulkan native kernel {} has zero dispatch dimension",
 				                                     kernelIndex));
 			}
+			if (kernel.groups.x > capabilities.maxComputeWorkGroupCount[0] ||
+			    kernel.groups.y > capabilities.maxComputeWorkGroupCount[1] ||
+			    kernel.groups.z > capabilities.maxComputeWorkGroupCount[2])
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires dispatch groups {}x{}x{}, but device '{}' supports "
+				    "maxComputeWorkGroupCount {}x{}x{}",
+				    kernelIndex, kernel.groups.x, kernel.groups.y, kernel.groups.z,
+				    VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupCount[0],
+				    capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
+			}
+			const auto descriptorCount = VulkanDescriptorCount(kernel);
+			if (capabilities.maxBoundDescriptorSets < 1)
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires one descriptor set, but device '{}' reports "
+				    "maxBoundDescriptorSets={}",
+				    kernelIndex, VulkanDeviceCapabilityName(capabilities), capabilities.maxBoundDescriptorSets));
+			}
+			if (descriptorCount > capabilities.maxPerStageDescriptorStorageBuffers ||
+			    descriptorCount > capabilities.maxDescriptorSetStorageBuffers)
+			{
+				throw std::runtime_error(std::format(
+				    "Vulkan native kernel {} requires {} storage-buffer descriptor(s), but device '{}' reports "
+				    "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
+				    kernelIndex, descriptorCount, VulkanDeviceCapabilityName(capabilities),
+				    capabilities.maxPerStageDescriptorStorageBuffers,
+				    capabilities.maxDescriptorSetStorageBuffers));
+			}
 			const auto localInvocations = VulkanDispatchDimProduct(requirements.localSize);
 			if (localInvocations > capabilities.maxComputeWorkGroupInvocations ||
 			    requirements.localSize.x > capabilities.maxComputeWorkGroupSize[0] ||

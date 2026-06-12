@@ -55,8 +55,12 @@ namespace LiteNN
 		std::uint32_t apiVersionPatch{};
 		std::uint32_t maxComputeWorkGroupInvocations{};
 		std::array<std::uint32_t, 3> maxComputeWorkGroupSize{};
+		std::array<std::uint32_t, 3> maxComputeWorkGroupCount{};
 		std::uint64_t maxStorageBufferRange{};
 		std::uint64_t minStorageBufferOffsetAlignment{};
+		std::uint32_t maxPerStageDescriptorStorageBuffers{};
+		std::uint32_t maxDescriptorSetStorageBuffers{};
+		std::uint32_t maxBoundDescriptorSets{};
 		std::uint32_t subgroupSize{};
 		bool subgroupComputeAvailable{};
 		bool subgroupBasicAvailable{};

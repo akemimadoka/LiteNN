@@ -1934,9 +1934,14 @@ packaging slice to a useful production backend.
       Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 26 tests and skipped the feature-dependent Float16
       runtime case on the local device; `litenn_bench --benchmark_filter=VulkanNative --benchmark_min_time=0.001s`
       continued to run the current f32 Vulkan-native rows.
-- [ ] Extend Vulkan device capability gating beyond the current kernel-requirement slice: descriptor indexing limits,
+- [x] Extend Vulkan device capability gating for current descriptor/storage dispatch limits: the runtime now reports
+      `maxComputeWorkGroupCount`, storage-buffer descriptor limits, and `maxBoundDescriptorSets`; native artifact load
+      rejects kernels whose dispatch groups or storage-buffer descriptor count exceed the selected device.
+      Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 30/31 Vulkan tests, with only the local
+      feature-dependent Float16 runtime case skipped.
+- [ ] Extend Vulkan device capability gating for future advanced kernels: descriptor indexing limits,
       specialization-constant limits, advanced subgroup operation policies, and broader mobile-driver quirks must be
-      represented before selecting more advanced kernels.
+      represented before selecting those kernels.
 - [ ] Replace the single-kernel whole-graph matcher with a graph partitioner: native-supported islands should run on
       Vulkan, unsupported islands should require an explicit bridge/fallback decision, and tensor movement must be visible
       in the schedule.
