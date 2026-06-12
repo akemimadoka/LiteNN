@@ -110,6 +110,44 @@ namespace LiteNN
 			}
 			throw std::runtime_error("Vulkan device has no host-visible coherent storage buffer memory type");
 		}
+
+		bool VulkanApiVersionAtLeast(std::uint32_t version, std::uint32_t major, std::uint32_t minor)
+		{
+			const auto actualMajor = VK_VERSION_MAJOR(version);
+			const auto actualMinor = VK_VERSION_MINOR(version);
+			return actualMajor > major || (actualMajor == major && actualMinor >= minor);
+		}
+
+		std::vector<VkExtensionProperties> EnumerateDeviceExtensions(VkPhysicalDevice physicalDevice)
+		{
+			std::uint32_t count = 0;
+			CheckVulkan(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr),
+			            "vkEnumerateDeviceExtensionProperties(count)");
+			std::vector<VkExtensionProperties> extensions(count);
+			if (count != 0)
+			{
+				CheckVulkan(vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, extensions.data()),
+				            "vkEnumerateDeviceExtensionProperties(list)");
+			}
+			return extensions;
+		}
+
+		bool HasDeviceExtension(std::span<const VkExtensionProperties> extensions, std::string_view name)
+		{
+			return std::ranges::any_of(extensions, [&](const VkExtensionProperties& extension) {
+				return std::string_view{ extension.extensionName } == name;
+			});
+		}
+
+		void AppendUniqueExtension(std::vector<const char*>& extensions, const char* name)
+		{
+			if (std::ranges::find_if(extensions, [&](const char* existing) {
+				    return std::string_view{ existing } == name;
+			    }) == extensions.end())
+			{
+				extensions.push_back(name);
+			}
+		}
 	} // namespace
 
 	class VulkanContext
@@ -126,6 +164,138 @@ namespace LiteNN
 			}
 			physicalDevice = devices[deviceIndex];
 			vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+			capabilities.apiVersionMajor = VK_VERSION_MAJOR(properties.apiVersion);
+			capabilities.apiVersionMinor = VK_VERSION_MINOR(properties.apiVersion);
+			capabilities.apiVersionPatch = VK_VERSION_PATCH(properties.apiVersion);
+			capabilities.maxComputeWorkGroupInvocations = properties.limits.maxComputeWorkGroupInvocations;
+			capabilities.maxComputeWorkGroupSize = {
+				properties.limits.maxComputeWorkGroupSize[0],
+				properties.limits.maxComputeWorkGroupSize[1],
+				properties.limits.maxComputeWorkGroupSize[2],
+			};
+			capabilities.maxStorageBufferRange = properties.limits.maxStorageBufferRange;
+			capabilities.deviceName = properties.deviceName;
+
+			auto deviceExtensions = EnumerateDeviceExtensions(physicalDevice);
+			const auto apiAtLeast11 = VulkanApiVersionAtLeast(properties.apiVersion, 1, 1);
+			const auto apiAtLeast12 = VulkanApiVersionAtLeast(properties.apiVersion, 1, 2);
+
+			VkPhysicalDeviceFeatures2 availableFeatures{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+			void** availableNext = &availableFeatures.pNext;
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+			VkPhysicalDevice16BitStorageFeatures availableStorage16{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+			};
+			*availableNext = &availableStorage16;
+			availableNext = &availableStorage16.pNext;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
+			VkPhysicalDevice8BitStorageFeatures availableStorage8{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
+			};
+			*availableNext = &availableStorage8;
+			availableNext = &availableStorage8.pNext;
+#endif
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
+			VkPhysicalDeviceShaderFloat16Int8Features availableShaderFloat16Int8{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+			};
+			*availableNext = &availableShaderFloat16Int8;
+			availableNext = &availableShaderFloat16Int8.pNext;
+#endif
+			(void)availableNext;
+			vkGetPhysicalDeviceFeatures2(physicalDevice, &availableFeatures);
+
+			VkPhysicalDeviceFeatures2 enabledFeatures{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+			void** enabledNext = &enabledFeatures.pNext;
+			std::vector<const char*> enabledDeviceExtensions;
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+			capabilities.storageBuffer16BitAccessAvailable = availableStorage16.storageBuffer16BitAccess == VK_TRUE;
+			VkPhysicalDevice16BitStorageFeatures enabledStorage16{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+			};
+			const bool canEnableStorage16 =
+			    capabilities.storageBuffer16BitAccessAvailable &&
+			    (apiAtLeast11
+#if defined(VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
+			     || HasDeviceExtension(deviceExtensions, VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
+#endif
+			    );
+			if (canEnableStorage16)
+			{
+#if defined(VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
+				if (!apiAtLeast11)
+				{
+					AppendUniqueExtension(enabledDeviceExtensions, VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+				}
+#endif
+				enabledStorage16.storageBuffer16BitAccess = VK_TRUE;
+				capabilities.storageBuffer16BitAccessEnabled = true;
+				*enabledNext = &enabledStorage16;
+				enabledNext = &enabledStorage16.pNext;
+			}
+#endif
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
+			capabilities.storageBuffer8BitAccessAvailable = availableStorage8.storageBuffer8BitAccess == VK_TRUE;
+			VkPhysicalDevice8BitStorageFeatures enabledStorage8{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
+			};
+			const bool canEnableStorage8 =
+			    capabilities.storageBuffer8BitAccessAvailable &&
+			    (apiAtLeast12
+#if defined(VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
+			     || HasDeviceExtension(deviceExtensions, VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
+#endif
+			    );
+			if (canEnableStorage8)
+			{
+#if defined(VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
+				if (!apiAtLeast12)
+				{
+					AppendUniqueExtension(enabledDeviceExtensions, VK_KHR_8BIT_STORAGE_EXTENSION_NAME);
+				}
+#endif
+				enabledStorage8.storageBuffer8BitAccess = VK_TRUE;
+				capabilities.storageBuffer8BitAccessEnabled = true;
+				*enabledNext = &enabledStorage8;
+				enabledNext = &enabledStorage8.pNext;
+			}
+#endif
+
+#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
+			capabilities.shaderFloat16Available = availableShaderFloat16Int8.shaderFloat16 == VK_TRUE;
+			capabilities.shaderInt8Available = availableShaderFloat16Int8.shaderInt8 == VK_TRUE;
+			VkPhysicalDeviceShaderFloat16Int8Features enabledShaderFloat16Int8{
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+			};
+			const bool canEnableShaderFloat16Int8 =
+			    (capabilities.shaderFloat16Available || capabilities.shaderInt8Available) &&
+			    (apiAtLeast12
+#if defined(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
+			     || HasDeviceExtension(deviceExtensions, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
+#endif
+			    );
+			if (canEnableShaderFloat16Int8)
+			{
+#if defined(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
+				if (!apiAtLeast12)
+				{
+					AppendUniqueExtension(enabledDeviceExtensions, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+				}
+#endif
+				enabledShaderFloat16Int8.shaderFloat16 =
+				    capabilities.shaderFloat16Available ? VK_TRUE : VK_FALSE;
+				enabledShaderFloat16Int8.shaderInt8 = capabilities.shaderInt8Available ? VK_TRUE : VK_FALSE;
+				capabilities.shaderFloat16Enabled = enabledShaderFloat16Int8.shaderFloat16 == VK_TRUE;
+				capabilities.shaderInt8Enabled = enabledShaderFloat16Int8.shaderInt8 == VK_TRUE;
+				*enabledNext = &enabledShaderFloat16Int8;
+				enabledNext = &enabledShaderFloat16Int8.pNext;
+			}
+#endif
+			(void)enabledNext;
+
 			queueFamilyIndex = FindComputeQueueFamily(physicalDevice);
 
 			const float queuePriority = 1.0f;
@@ -135,10 +305,15 @@ namespace LiteNN
 				.queueCount = 1,
 				.pQueuePriorities = &queuePriority,
 			};
+			const void* enabledFeatureChain = enabledFeatures.pNext == nullptr ? nullptr : &enabledFeatures;
 			const VkDeviceCreateInfo deviceInfo{
 				.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+				.pNext = enabledFeatureChain,
 				.queueCreateInfoCount = 1,
 				.pQueueCreateInfos = &queueInfo,
+				.enabledExtensionCount = static_cast<std::uint32_t>(enabledDeviceExtensions.size()),
+				.ppEnabledExtensionNames =
+				    enabledDeviceExtensions.empty() ? nullptr : enabledDeviceExtensions.data(),
 			};
 			CheckVulkan(vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &device), "vkCreateDevice");
 			vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
@@ -190,6 +365,7 @@ namespace LiteNN
 		VkCommandPool commandPool{};
 		VkPipelineCache pipelineCache{};
 		VkPhysicalDeviceProperties properties{};
+		VulkanDeviceCapabilities capabilities{};
 		std::mutex queueMutex;
 	};
 
@@ -335,60 +511,7 @@ namespace LiteNN
 	VulkanDeviceCapabilities QueryVulkanDeviceCapabilities(const Vulkan& device)
 	{
 		const auto context = GetContext(device);
-
-		VkPhysicalDeviceFeatures2 features2{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
-		void** next = &features2.pNext;
-
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
-		VkPhysicalDevice16BitStorageFeatures storage16{
-			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
-		};
-		*next = &storage16;
-		next = &storage16.pNext;
-#endif
-
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
-		VkPhysicalDevice8BitStorageFeatures storage8{
-			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
-		};
-		*next = &storage8;
-		next = &storage8.pNext;
-#endif
-
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
-		VkPhysicalDeviceShaderFloat16Int8Features shaderFloat16Int8{
-			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
-		};
-		*next = &shaderFloat16Int8;
-		next = &shaderFloat16Int8.pNext;
-#endif
-
-		vkGetPhysicalDeviceFeatures2(context->physicalDevice, &features2);
-
-		VulkanDeviceCapabilities capabilities;
-		capabilities.apiVersionMajor = VK_VERSION_MAJOR(context->properties.apiVersion);
-		capabilities.apiVersionMinor = VK_VERSION_MINOR(context->properties.apiVersion);
-		capabilities.apiVersionPatch = VK_VERSION_PATCH(context->properties.apiVersion);
-		capabilities.maxComputeWorkGroupInvocations = context->properties.limits.maxComputeWorkGroupInvocations;
-		capabilities.maxComputeWorkGroupSize = {
-			context->properties.limits.maxComputeWorkGroupSize[0],
-			context->properties.limits.maxComputeWorkGroupSize[1],
-			context->properties.limits.maxComputeWorkGroupSize[2],
-		};
-		capabilities.maxStorageBufferRange = context->properties.limits.maxStorageBufferRange;
-		capabilities.deviceName = context->properties.deviceName;
-
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
-		capabilities.storageBuffer16BitAccessAvailable = storage16.storageBuffer16BitAccess == VK_TRUE;
-#endif
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES)
-		capabilities.storageBuffer8BitAccessAvailable = storage8.storageBuffer8BitAccess == VK_TRUE;
-#endif
-#if defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
-		capabilities.shaderFloat16Available = shaderFloat16Int8.shaderFloat16 == VK_TRUE;
-		capabilities.shaderInt8Available = shaderFloat16Int8.shaderInt8 == VK_TRUE;
-#endif
-		return capabilities;
+		return context->capabilities;
 	}
 
 	std::string_view DeviceTraits<Vulkan>::Name()

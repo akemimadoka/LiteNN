@@ -34,6 +34,9 @@ application package unless the app explicitly compiles graphs on device. The nor
 - `LiteNNVulkanRuntime` creates its own `VkInstance` and logical device for the selected `Vulkan::deviceIndex`.
 - Runtime buffers currently require host-visible coherent storage-buffer memory. This is simple and portable for the
   first backend slice, but it is not the final high-performance mobile memory model.
+- When the selected device reports and can legally enable optional low-precision features, `LiteNNVulkanRuntime` adds the
+  matching feature structs and required KHR device extensions to `vkCreateDevice`. `QueryVulkanDeviceCapabilities`
+  reports both physical availability and logical-device enablement.
 - The current descriptor ABI uses descriptor set `0`, storage-buffer bindings matching `VulkanNativeArgumentSpec`, and
   one compute entry point named `main` per payload kernel.
 - The instruction region stores serialized `VulkanNativeInstructionPayload`, including SPIR-V words, feature flags,
@@ -106,14 +109,14 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
-  requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access. Current builds reject
-  these artifacts at load time with a capability diagnostic until the logical device enables the needed optional Vulkan
-  features.
+  requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access. Current builds enable the
+  optional feature chain when the selected device supports it, reject unsupported artifacts at load time with a capability
+  diagnostic, and register `VulkanNativeCastRunInto/F32ToFloat16|Int8|UInt8` benchmark rows only when execution is legal.
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeMatMul/F32`, and
   `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
   remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.
 
-Low-precision logical-device feature enablement, reductions, production tiled matmul/multi-layer linear chains,
+Low-precision arithmetic beyond simple casts, reductions, production tiled matmul/multi-layer linear chains,
 normalization, softmax, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain
 follow-on production GPU-backend work rather than part of the current bootstrap.

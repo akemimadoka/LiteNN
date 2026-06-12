@@ -1918,10 +1918,15 @@ packaging slice to a useful production backend.
       limits, and low-precision cast requirements before creating shader modules/pipelines. The runtime reports whether
       matching 8-bit/16-bit storage and fp16/int8 shader features are physically available versus actually enabled on
       LiteNN's logical device.
-- [ ] Enable optional Vulkan logical-device feature chains for low-precision execution: wire supported
-      `VkPhysicalDevice16BitStorageFeatures`, `VkPhysicalDevice8BitStorageFeatures`, and
-      `VkPhysicalDeviceShaderFloat16Int8Features` into `vkCreateDevice`, then add runtime low-precision cast benchmarks
-      only when the enabled feature set satisfies the artifact requirements.
+- [x] Enable optional Vulkan logical-device feature chains for low-precision execution: the runtime enumerates device
+      extensions, wires supported `VkPhysicalDevice16BitStorageFeatures`, `VkPhysicalDevice8BitStorageFeatures`, and
+      `VkPhysicalDeviceShaderFloat16Int8Features` into `vkCreateDevice`, and exposes both physical availability and
+      enabled-state through `QueryVulkanDeviceCapabilities`. `benchmark/bench.cpp` registers
+      `VulkanNativeCastRunInto/F32ToFloat16|Int8|UInt8` rows only when the enabled feature set satisfies the artifact
+      requirements.
+      Validation on 2026-06-12: local Vulkan tests passed 25 and skipped the feature-dependent Float16 runtime test
+      because the selected device did not enable the required Float16 storage path; f32 Vulkan-native benchmark rows
+      continued to run.
 - [ ] Extend Vulkan device capability gating beyond the current P0 checks: subgroup availability, storage-buffer
       alignment, descriptor indexing limits, and broader mobile-driver limits must be represented in artifact metadata
       before selecting more advanced kernels.

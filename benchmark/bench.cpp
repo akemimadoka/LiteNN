@@ -848,6 +848,38 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanCastGraph(DataType srcType, DataType dstType, std::size_t elementCount)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(srcType, { elementCount });
+		const auto out = sg.AddNode(CastNode{ { input, 0 }, dstType }, { OutputInfo{ dstType, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
+	bool SupportsVulkanNativeCastBenchmarkDType(DataType dstType)
+	{
+		if (!IsVulkanDeviceAvailable())
+		{
+			return false;
+		}
+		const auto capabilities = QueryVulkanDeviceCapabilities(Vulkan{});
+		switch (dstType)
+		{
+		case DataType::Float16:
+			return capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled;
+		case DataType::Int8:
+		case DataType::UInt8:
+			return capabilities.shaderInt8Enabled && capabilities.storageBuffer8BitAccessEnabled;
+		default:
+			return dstType == DataType::Float32 || dstType == DataType::Int32;
+		}
+	}
+
 	std::vector<float> MakeElementwiseInputData(std::size_t elementCount, unsigned int seed)
 	{
 		std::mt19937 rng(seed);
@@ -922,6 +954,19 @@ namespace
 
 		std::vector<Tensor<Vulkan>> inputs;
 		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
+	std::vector<Tensor<Vulkan>> MakeVulkanCastInputs(const std::vector<float>& data, std::size_t elementCount)
+	{
+		if (data.size() != elementCount)
+		{
+			throw std::invalid_argument("Vulkan cast benchmark input does not match the requested shape");
+		}
+
+		std::vector<Tensor<Vulkan>> inputs;
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { elementCount });
 		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
 		return inputs;
 	}
@@ -1035,6 +1080,50 @@ namespace
 		SetThroughputCounters(state, batch);
 		state.counters["flops"] = benchmark::Counter(static_cast<double>(2 * batch * width * width),
 		                                             benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeCastRunTensorsInto(benchmark::State& state, DataType dstType, std::size_t elementCount)
+	{
+		if (!SupportsVulkanNativeCastBenchmarkDType(dstType))
+		{
+			state.SkipWithError("Vulkan native cast benchmark dtype is not enabled on this device");
+			return;
+		}
+		auto graph = BuildVulkanCastGraph(DataType::Float32, dstType, elementCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for cast benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(elementCount, dstType == DataType::UInt8 ? 8u : 7u);
+		if (dstType == DataType::UInt8)
+		{
+			for (float& value : inputData)
+			{
+				value = std::abs(value) * 4.0f;
+			}
+		}
+		auto inputs = MakeVulkanCastInputs(inputData, elementCount);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
@@ -1292,6 +1381,11 @@ namespace
 		if (vulkanDeviceAvailable)
 		{
 			constexpr std::size_t vulkanNativeMatMulWidth = 128;
+			constexpr std::array vulkanNativeCastDTypes{
+				DataType::Float16,
+				DataType::Int8,
+				DataType::UInt8,
+			};
 			for (const auto batch : kBatchSizes)
 			{
 				const auto elementCount = batch * kInputWidth;
@@ -1299,6 +1393,21 @@ namespace
 				    std::format("VulkanNativeElementwiseAddRunInto/F32/elements:{}", elementCount),
 				    [=](benchmark::State& state) { BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount); });
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				for (const auto dstType : vulkanNativeCastDTypes)
+				{
+					if (!SupportsVulkanNativeCastBenchmarkDType(dstType))
+					{
+						continue;
+					}
+					auto* castBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeCastRunInto/F32To{}/elements:{}", DataTypeName(dstType),
+					                elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeCastRunTensorsInto(state, dstType, elementCount);
+					    });
+					castBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),

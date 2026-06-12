@@ -575,6 +575,39 @@ TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEn
 	}
 }
 
+TEST(CompiledModuleVulkanTest, RunsLowPrecisionCastArithmeticWhenDeviceFeaturesAreEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (!capabilities.shaderFloat16Enabled || !capabilities.storageBuffer16BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Float16 storage features are not enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleCastGraph(DataType::Float32, DataType::Float16);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ -3.5, -1.0, 0.75, 4.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].DType(), DataType::Float16);
+
+	const auto actual = CopyToHostAsFloat32(outputs[0]);
+	const std::array expected{ -3.5f, -1.0f, 0.75f, 4.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, LoadsSeparatedArtifactForSimpleAdd)
 {
 	if (!IsVulkanDeviceAvailable())
