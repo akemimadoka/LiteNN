@@ -1973,8 +1973,10 @@ packaging slice to a useful production backend.
 - [x] Add one-shot Vulkan host/device transfer timing to `litenn_profile`: the Vulkan table now reports input upload and
       output download time separately from first-run, steady RunInto, CPU-side dispatch wall time, and GPU timestamp time.
       Validation on 2026-06-13: `litenn_profile` smoke printed Upload/GPUTime/Download columns for Vulkan Linear rows.
-- [ ] Add persisted raw Vulkan profile outputs and full comparison tables across CPU AOT, CUDA, Vulkan, ggml, and PyTorch
-      for supported shapes.
+- [x] Persist raw Vulkan profile rows from `litenn_profile` as `vulkan_profile.csv` under the requested output directory.
+      Validation on 2026-06-13: smoke profile wrote `build-release/profile_vulkan_smoke/vulkan_profile.csv` with
+      Vulkan-native Linear rows and explicit CPU-bridge MLP rows.
+- [ ] Add full comparison tables across CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.

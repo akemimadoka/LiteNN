@@ -790,6 +790,58 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 	}
 	return result;
 }
+
+static std::string CsvEscape(std::string_view value)
+{
+	if (value.find_first_of(",\"\n\r") == std::string_view::npos)
+	{
+		return std::string(value);
+	}
+	std::string escaped;
+	escaped.reserve(value.size() + 2);
+	escaped.push_back('"');
+	for (const char ch : value)
+	{
+		if (ch == '"')
+		{
+			escaped.push_back('"');
+		}
+		escaped.push_back(ch);
+	}
+	escaped.push_back('"');
+	return escaped;
+}
+
+static void WriteVulkanProfileCsv(const std::filesystem::path& path,
+                                  std::span<const VulkanLaunchBreakdown> rows)
+{
+	std::ofstream out(path);
+	if (!out)
+	{
+		throw std::runtime_error(std::format("Failed to open Vulkan profile CSV '{}'", path.string()));
+	}
+	out << "case,batch,backend,target,kernels,external_tensors,compile_ms,load_ms,upload_ms,first_run_ms,"
+	       "mean_run_ms,last_dispatch_wall_ms,gpu_timestamp_available,gpu_time_ms,download_ms,status\n";
+	for (const auto& row : rows)
+	{
+		out << CsvEscape(row.name) << ','
+		    << row.batch << ','
+		    << CsvEscape(row.backend) << ','
+		    << CsvEscape(row.target) << ','
+		    << row.kernelCount << ','
+		    << row.externalTensorCount << ','
+		    << row.compileMs << ','
+		    << row.loadMs << ','
+		    << row.inputUploadMs << ','
+		    << row.firstMs << ','
+		    << row.meanMs << ','
+		    << row.lastDispatchMs << ','
+		    << (row.gpuTimestampAvailable ? "true" : "false") << ','
+		    << row.lastGpuMs << ','
+		    << row.outputDownloadMs << ','
+		    << CsvEscape(row.message) << '\n';
+	}
+}
 #endif
 
 int main(int argc, char** argv)
@@ -960,9 +1012,12 @@ int main(int argc, char** argv)
 		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "Upload",
 		    "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download", "Status");
 		std::cout << std::string(174, '-') << "\n";
+		std::vector<VulkanLaunchBreakdown> vulkanRows;
+		vulkanRows.reserve(cases.size());
 		for (const auto& c : cases)
 		{
 			const auto row = ProfileVulkanLaunches(c);
+			vulkanRows.push_back(row);
 			const std::string gpuTime = row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs)
 			                                                      : std::string("n/a");
 			std::cout << std::format(
@@ -975,6 +1030,9 @@ int main(int argc, char** argv)
 		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto. GPUTime is the sum of\n";
 		std::cout << "Vulkan timestamp-query elapsed time for devices whose compute queue supports timestamps.\n";
 		std::cout << "Upload and Download are one-shot host/device tensor copy measurements outside RunInto.\n";
+		const auto csvPath = outDir / "vulkan_profile.csv";
+		WriteVulkanProfileCsv(csvPath, vulkanRows);
+		std::cout << "Vulkan profile CSV written to: " << csvPath.string() << "\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_VULKAN.\n";
