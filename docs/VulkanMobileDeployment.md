@@ -148,8 +148,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1`,
   `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1`, `VulkanNativeGroupNorm/F32`,
   `VulkanNativeGroupNormAffine/F32`, `VulkanNativePool2D/F32/Max|Average`,
-  `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad`, `VulkanNativeMatMul/F32`, and
-  `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan
+  `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad`, `VulkanNativeConv2D/F32`,
+  `VulkanNativeMatMul/F32`, and `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan
   compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
   remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.

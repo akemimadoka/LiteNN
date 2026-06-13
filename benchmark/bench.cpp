@@ -990,6 +990,50 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanConv2DGraph(std::size_t batch, std::size_t channels, std::size_t outChannels,
+	                             std::size_t height, std::size_t width)
+	{
+		Graph graph;
+		std::vector<double> weights(outChannels * channels * 3 * 3);
+		std::vector<double> bias(outChannels);
+		for (std::size_t i = 0; i < weights.size(); ++i)
+		{
+			weights[i] = static_cast<double>(static_cast<int>(i % 11) - 5) * 0.01;
+		}
+		for (std::size_t i = 0; i < bias.size(); ++i)
+		{
+			bias[i] = static_cast<double>(static_cast<int>(i % 7) - 3) * 0.001;
+		}
+		const auto weightIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>(std::move(weights), { outChannels, channels, 3, 3 }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(bias), { outChannels }, DataType::Float32)));
+		graph.SetVariableName(weightIndex, "conv_weight");
+		graph.SetVariableName(biasIndex, "conv_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, channels, height, width });
+		const auto weight =
+		    sg.AddNode(VariableRefNode{ weightIndex },
+		               { OutputInfo{ DataType::Float32, { outChannels, channels, 3, 3 } } });
+		const auto biasNode =
+		    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { outChannels } } });
+		const auto out = sg.AddNode(Conv2DNode{ .input = { input, 0 },
+		                                        .weight = { weight, 0 },
+		                                        .bias = NodeOutput{ biasNode, 0 },
+		                                        .strides = { 1, 1 },
+		                                        .dilations = { 1, 1 },
+		                                        .lowPads = { 1, 1 },
+		                                        .highPads = { 1, 1 },
+		                                        .groupCount = 1 },
+		                            { OutputInfo{ DataType::Float32, { batch, outChannels, height, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildVulkanAffineGroupNormGraph(std::size_t elementCount, std::size_t groupCount)
 	{
 		Graph graph;
@@ -1598,6 +1642,41 @@ namespace
 		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeConv2DRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t channels,
+	                                        std::size_t outChannels, std::size_t height, std::size_t width)
+	{
+		auto graph = BuildVulkanConv2DGraph(batch, channels, outChannels, height, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Conv2D benchmark");
+			return;
+		}
+
+		const auto inputElementCount = batch * channels * height * width;
+		auto inputData = MakeElementwiseInputData(inputElementCount, 19u);
+		auto inputs = MakeVulkanPool2DInputs(inputData, batch, channels, height, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto outputElementCount = batch * outChannels * height * width;
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(outputElementCount));
+		state.counters["output_elements"] =
+		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1973,6 +2052,16 @@ namespace
 					                                       { 1, 1 }, { 1, 1 }, true);
 				    });
 				paddedAverageIncludePadBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* conv2DBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeConv2D/F32/batch:{}/channels:{}/outChannels:{}/spatial:{}",
+				                batch, vulkanNativePoolChannels, vulkanNativePoolChannels, vulkanNativePoolSpatial),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeConv2DRunTensorsInto(state, batch, vulkanNativePoolChannels,
+					                                       vulkanNativePoolChannels, vulkanNativePoolSpatial,
+					                                       vulkanNativePoolSpatial);
+				    });
+				conv2DBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
