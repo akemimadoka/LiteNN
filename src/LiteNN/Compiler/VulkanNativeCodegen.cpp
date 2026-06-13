@@ -283,6 +283,19 @@ namespace LiteNN
 			}
 		}
 
+		std::string_view NormalizationF32KernelName(NormalizationMode mode)
+		{
+			switch (mode)
+			{
+			case NormalizationMode::LayerNorm:
+				return "layer_norm";
+			case NormalizationMode::RMSNorm:
+				return "rms_norm";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
+			}
+		}
+
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			switch (op)
@@ -1038,6 +1051,165 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildNormalizationF32SPIRVModule(
+		    NormalizationMode mode, std::span<const std::size_t> inputShape, std::size_t axis, double epsilon,
+		    mlir::MLIRContext& context)
+		{
+			const auto elementCount = NumElementsU32(inputShape);
+			const auto innerSize = AxisInnerSizeU32(inputShape, axis);
+			if (!elementCount || !innerSize || axis >= inputShape.size() || inputShape[axis] == 0 ||
+			    inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("Vulkan native normalization shape is too large or empty");
+			}
+			const auto axisSize = static_cast<std::uint32_t>(inputShape[axis]);
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(
+			    loc, llvm::StringRef(NormalizationF32KernelName(mode).data(), NormalizationF32KernelName(mode).size()),
+			    funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *elementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
+				    auto axisValue = EmitI32Constant(bodyBuilder, loc, axisSize);
+				    auto axisIndex =
+				        bodyBuilder
+				            .create<mlir::spirv::UModOp>(
+				                loc, bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult(),
+				                axisValue)
+				            .getResult();
+				    auto base = bodyBuilder
+				                    .create<mlir::spirv::ISubOp>(
+				                        loc, outputIndex,
+				                        bodyBuilder.create<mlir::spirv::IMulOp>(loc, axisIndex, inner).getResult())
+				                    .getResult();
+
+				    auto mean = EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    if (mode == NormalizationMode::LayerNorm)
+				    {
+					    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+					    {
+						    auto offset = bodyBuilder
+						                      .create<mlir::spirv::IAddOp>(
+						                          loc, base,
+						                          bodyBuilder
+						                              .create<mlir::spirv::IMulOp>(
+						                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
+						                              .getResult())
+						                      .getResult();
+						    auto value =
+						        bodyBuilder
+						            .create<mlir::spirv::LoadOp>(
+						                loc, bodyBuilder.getF32Type(),
+						                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset), nullptr,
+						                nullptr)
+						            .getValue();
+						    mean = bodyBuilder.create<mlir::spirv::FAddOp>(loc, mean, value).getResult();
+					    }
+					    mean = bodyBuilder
+					               .create<mlir::spirv::FMulOp>(
+					                   loc, mean, EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
+					               .getResult();
+				    }
+
+				    auto variance = EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+				    {
+					    auto offset = bodyBuilder
+					                      .create<mlir::spirv::IAddOp>(
+					                          loc, base,
+					                          bodyBuilder
+					                              .create<mlir::spirv::IMulOp>(
+					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
+					                              .getResult())
+					                      .getResult();
+					    auto value =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset), nullptr,
+					                nullptr)
+					            .getValue();
+					    auto centered = mode == NormalizationMode::LayerNorm
+					                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult()
+					                        : value;
+					    auto squared = bodyBuilder.create<mlir::spirv::FMulOp>(loc, centered, centered).getResult();
+					    variance = bodyBuilder.create<mlir::spirv::FAddOp>(loc, variance, squared).getResult();
+				    }
+				    variance = bodyBuilder
+				                   .create<mlir::spirv::FMulOp>(
+				                       loc, variance,
+				                       EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
+				                   .getResult();
+				    auto denom = bodyBuilder
+				                     .create<mlir::spirv::GLSqrtOp>(
+				                         loc, bodyBuilder
+				                                  .create<mlir::spirv::FAddOp>(
+				                                      loc, variance,
+				                                      EmitF32Constant(bodyBuilder, loc, static_cast<float>(epsilon)))
+				                                  .getResult())
+				                     .getResult();
+				    auto current =
+				        bodyBuilder
+				            .create<mlir::spirv::LoadOp>(
+				                loc, bodyBuilder.getF32Type(),
+				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, outputIndex), nullptr,
+				                nullptr)
+				            .getValue();
+				    auto centered = mode == NormalizationMode::LayerNorm
+				                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult()
+				                        : current;
+				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), normalized,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Normalization module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeCastSPIRVModule(DataType srcType, DataType dstType,
 		                                                                       std::uint32_t elementCount,
 		                                                                       mlir::MLIRContext& context)
@@ -1501,6 +1673,35 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
+		                                                          std::span<const std::size_t> inputShape,
+		                                                          std::size_t axis, double epsilon)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V Normalization module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 		                                                       std::uint32_t elementCount)
 		{
@@ -1725,6 +1926,41 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan native f32 softmax requires a static non-empty shape and an in-range axis");
 		}
 		return SerializeSoftmaxF32SPIRV(inputShape, axis);
+	}
+
+	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)
+	{
+		return NormalizationF32KernelName(mode);
+	}
+
+	bool VulkanNativeSupportsNormalizationF32(NormalizationMode mode, std::span<const std::size_t> inputShape,
+	                                          std::size_t axis)
+	{
+		if (mode != NormalizationMode::LayerNorm && mode != NormalizationMode::RMSNorm)
+		{
+			return false;
+		}
+		if (axis >= inputShape.size())
+		{
+			return false;
+		}
+		if (inputShape[axis] == 0 || inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+		{
+			return false;
+		}
+		return NumElementsU32(inputShape).has_value() && AxisInnerSizeU32(inputShape, axis).has_value();
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeNormalizationF32SPIRV(NormalizationMode mode,
+	                                                             std::span<const std::size_t> inputShape,
+	                                                             std::size_t axis, double epsilon)
+	{
+		if (!VulkanNativeSupportsNormalizationF32(mode, inputShape, axis))
+		{
+			throw std::runtime_error(
+			    "Vulkan native f32 normalization requires LayerNorm/RMSNorm, static non-empty shape, and an in-range axis");
+		}
+		return SerializeNormalizationF32SPIRV(mode, inputShape, axis, epsilon);
 	}
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)

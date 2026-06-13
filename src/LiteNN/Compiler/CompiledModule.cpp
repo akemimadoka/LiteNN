@@ -5840,6 +5840,16 @@ namespace
 		std::vector<std::size_t> inputShape;
 	};
 
+	struct VulkanP0NormalizationPlan
+	{
+		NormalizationMode mode{ NormalizationMode::LayerNorm };
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+		std::size_t axis{};
+		double epsilon{ 1e-5 };
+		std::vector<std::size_t> inputShape;
+	};
+
 	struct VulkanP0TensorRef
 	{
 		VulkanNativeArgumentKind argumentKind{ VulkanNativeArgumentKind::InputTensor };
@@ -6146,6 +6156,11 @@ namespace
 	std::string VulkanNativeOpName(ReduceOp op)
 	{
 		return std::string(EnumToString<EnumToStringStyle::Unqualified>(op));
+	}
+
+	std::string VulkanNativeOpName(NormalizationMode mode)
+	{
+		return std::string(EnumToString<EnumToStringStyle::Unqualified>(mode));
 	}
 
 	std::vector<std::size_t> VulkanP0ReduceOutputShape(std::span<const std::size_t> inputShape, std::size_t axis)
@@ -6535,9 +6550,49 @@ namespace
 				return VulkanNativeSupported(std::format("f32 softmax axis={}", softmax->axis));
 			}
 
+			if (const auto* norm = std::get_if<NormalizationNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, norm->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native normalization input must be a direct graph parameter");
+				}
+				if (norm->scale || norm->bias)
+				{
+					return VulkanNativeUnsupported(
+					    "Vulkan native normalization bootstrap slice does not yet support affine scale/bias tensors");
+				}
+				if (norm->groupCount != 1)
+				{
+					return VulkanNativeUnsupported("Vulkan native normalization bootstrap slice requires groupCount=1");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native normalization slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (input.shape != output.shape)
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native normalization slice requires identical input/output shapes, got {} -> {}",
+					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+				}
+				if (!VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis))
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native normalization requires LayerNorm/RMSNorm static non-empty shape and in-range "
+					    "axis, got mode={} input={} axis={}",
+					    VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis));
+				}
+				return VulkanNativeSupported(
+				    std::format("f32 normalization {} axis={}", VulkanNativeOpName(norm->mode), norm->axis));
+			}
+
 			return VulkanNativeUnsupported(
-			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, ReduceOpNode, or "
-			    "SoftmaxNode result nodes");
+			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, ReduceOpNode, "
+			    "SoftmaxNode, or NormalizationNode result nodes");
 		}
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
@@ -7114,6 +7169,65 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0NormalizationPlan> MatchVulkanP0NormalizationF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* norm = std::get_if<NormalizationNode>(&resultEntry.node);
+		if (!norm || norm->scale || norm->bias || norm->groupCount != 1)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, norm->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    input.shape != output.shape || !VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis))
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0NormalizationPlan{
+			.mode = norm->mode,
+			.inputIndex = *inputIndex,
+			.elementCount = *elementCount,
+			.axis = norm->axis,
+			.epsilon = norm->epsilon,
+			.inputShape = input.shape,
+		};
+	}
+
 	VulkanNativeFeature VulkanNativeUnaryF32FeatureFlag(UnaryOp op)
 	{
 		switch (op)
@@ -7332,6 +7446,53 @@ namespace
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		payload.kernels.push_back({
 		    .entryPoint = "softmax",
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeNormalizationF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0NormalizationF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
+		auto spirv = VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon);
+		payload.spirv = std::move(spirv.words);
+
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeNormalizationF32KernelName(plan->mode)),
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 		    .arguments = {
@@ -9966,6 +10127,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSoftmaxF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeNormalizationF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

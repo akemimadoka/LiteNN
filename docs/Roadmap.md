@@ -1974,7 +1974,12 @@ packaging slice to a useful production backend.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeSoftmax/F32/Axis1` rows and the local `batch:1/width:128` smoke row ran successfully.
-      - [ ] Add normalization (`LayerNorm`, `RMSNorm`, group normalization).
+      - [x] Add the first static-axis f32 normalization slice: non-affine `LayerNorm` and `RMSNorm` now lower to
+            Vulkan-native SPIR-V with one invocation per output element and scalar loops over the normalized axis.
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 44/45 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped.
+      - [ ] Add affine `LayerNorm`/`RMSNorm`, `GroupNorm`, and workgroup/subgroup normalization kernels that avoid
+            recomputing the same axis statistics per output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

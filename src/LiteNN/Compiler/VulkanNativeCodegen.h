@@ -42,6 +42,12 @@ namespace LiteNN
 	                                                      std::size_t axis);
 	bool VulkanNativeSupportsSoftmaxF32(std::span<const std::size_t> inputShape, std::size_t axis);
 	VulkanNativeGeneratedSPIRV VulkanNativeSoftmaxF32SPIRV(std::span<const std::size_t> inputShape, std::size_t axis);
+	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode);
+	bool VulkanNativeSupportsNormalizationF32(NormalizationMode mode, std::span<const std::size_t> inputShape,
+	                                          std::size_t axis);
+	VulkanNativeGeneratedSPIRV VulkanNativeNormalizationF32SPIRV(NormalizationMode mode,
+	                                                             std::span<const std::size_t> inputShape,
+	                                                             std::size_t axis, double epsilon);
 } // namespace LiteNN
 
 #endif

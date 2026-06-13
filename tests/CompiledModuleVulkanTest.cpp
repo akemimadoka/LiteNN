@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -96,6 +97,27 @@ namespace
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
 		const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, axis },
+		                            { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
+	Graph BuildNormalizationGraph(NormalizationMode mode, std::size_t axis, double epsilon = 1e-5)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = std::nullopt,
+		                                               .bias = std::nullopt,
+		                                               .mode = mode,
+		                                               .axis = axis,
+		                                               .groupCount = 1,
+		                                               .epsilon = epsilon },
 		                            { OutputInfo{ DataType::Float32, { 2, 3 } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
@@ -609,6 +631,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSoftmax)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForNormalization)
+{
+	const auto graph = BuildNormalizationGraph(NormalizationMode::RMSNorm, 1);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 normalization RMSNorm"), std::string::npos);
+	EXPECT_NE(report.capability.find("axis=1"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -808,6 +841,32 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSoftmax)
 	          0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, "softmax");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 6u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNormalization)
+{
+	const auto graph = BuildNormalizationGraph(NormalizationMode::LayerNorm, 1);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::LayerNorm, std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_TRUE(payload.featureSet.CheckIsValid());
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "layer_norm");
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
 	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
 	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
@@ -1334,6 +1393,71 @@ TEST(CompiledModuleVulkanTest, RunsSimpleSoftmaxArithmetic)
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleNormalizationArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const std::array input{ 1.0f, 2.0f, 3.0f, 3.0f, 4.0f, 0.0f };
+	const auto expectedFor = [&](NormalizationMode mode) {
+		std::vector<float> expected;
+		expected.reserve(input.size());
+		for (std::size_t row = 0; row < 2; ++row)
+		{
+			float mean = 0.0f;
+			if (mode == NormalizationMode::LayerNorm)
+			{
+				for (std::size_t col = 0; col < 3; ++col)
+				{
+					mean += input[row * 3 + col];
+				}
+				mean /= 3.0f;
+			}
+
+			float variance = 0.0f;
+			for (std::size_t col = 0; col < 3; ++col)
+			{
+				const auto centered =
+				    mode == NormalizationMode::LayerNorm ? input[row * 3 + col] - mean : input[row * 3 + col];
+				variance += centered * centered;
+			}
+			variance /= 3.0f;
+			const auto denom = std::sqrt(variance + 1e-5f);
+			for (std::size_t col = 0; col < 3; ++col)
+			{
+				const auto centered =
+				    mode == NormalizationMode::LayerNorm ? input[row * 3 + col] - mean : input[row * 3 + col];
+				expected.push_back(centered / denom);
+			}
+		}
+		return expected;
+	};
+
+	Vulkan device;
+	for (const auto mode : { NormalizationMode::LayerNorm, NormalizationMode::RMSNorm })
+	{
+		const auto graph = BuildNormalizationGraph(mode, 1);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		std::array inputs{
+			Tensor<Vulkan>(std::vector<double>(input.begin(), input.end()), { 2, 3 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHostVector(outputs[0]);
+		const auto expected = expectedFor(mode);
+		ASSERT_EQ(actual.size(), expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+		}
 	}
 }
 

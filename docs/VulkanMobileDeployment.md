@@ -125,6 +125,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   reduced axis; this is a correctness baseline before workgroup/subgroup reductions
 - static-axis `Float32` Softmax using max-subtracted scalar loops along the softmax axis; this is a correctness baseline
   before workgroup/subgroup softmax reductions
+- static-axis non-affine `Float32` LayerNorm/RMSNorm using scalar loops along the normalized axis; affine scale/bias,
+  GroupNorm, and workgroup/subgroup normalization reductions remain follow-on work
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
@@ -139,6 +141,6 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   model once external weight binding is available. Multi-layer MLP rows remain deferred until Vulkan has workspace/
   multi-kernel linear-chain scheduling.
 
-Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/matmul/multi-layer linear chains,
-normalization, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain
-follow-on production GPU-backend work rather than part of the current bootstrap.
+Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
+linear chains, affine normalization, GroupNorm, convolution, device-local memory, tiled/shared-memory kernels, and async
+queue integration remain follow-on production GPU-backend work rather than part of the current bootstrap.
