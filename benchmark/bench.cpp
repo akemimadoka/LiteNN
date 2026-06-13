@@ -889,6 +889,26 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanNormalizationGraph(NormalizationMode mode, std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, width });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = std::nullopt,
+		                                               .bias = std::nullopt,
+		                                               .mode = mode,
+		                                               .axis = 1,
+		                                               .groupCount = 1,
+		                                               .epsilon = 1e-5 },
+		                            { OutputInfo{ DataType::Float32, { batch, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	std::string_view ReduceOpBenchmarkName(ReduceOp op)
 	{
 		switch (op)
@@ -899,6 +919,19 @@ namespace
 			return "MeanAxis1";
 		case ReduceOp::Max:
 			return "MaxAxis1";
+		default:
+			return "Unknown";
+		}
+	}
+
+	std::string_view NormalizationModeBenchmarkName(NormalizationMode mode)
+	{
+		switch (mode)
+		{
+		case NormalizationMode::LayerNorm:
+			return "LayerNormAxis1";
+		case NormalizationMode::RMSNorm:
+			return "RMSNormAxis1";
 		default:
 			return "Unknown";
 		}
@@ -1248,6 +1281,39 @@ namespace
 		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeNormalizationRunTensorsInto(benchmark::State& state, NormalizationMode mode, std::size_t batch,
+	                                               std::size_t width)
+	{
+		auto graph = BuildVulkanNormalizationGraph(mode, batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Normalization benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(batch * width, mode == NormalizationMode::LayerNorm ? 11u : 12u);
+		auto inputs = MakeVulkanReduceInputs(inputData, batch, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["normalized_elements"] =
+		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1549,6 +1615,19 @@ namespace
 					    BMVulkanNativeSoftmaxRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
 				    });
 				softmaxBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				constexpr std::array vulkanNativeNormalizationModes{ NormalizationMode::LayerNorm,
+					                                                 NormalizationMode::RMSNorm };
+				for (const auto mode : vulkanNativeNormalizationModes)
+				{
+					auto* normalizationBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeNormalization/F32/{}/batch:{}/width:{}",
+					                NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeNormalizationRunTensorsInto(state, mode, batch, vulkanNativeMatMulWidth);
+					    });
+					normalizationBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),

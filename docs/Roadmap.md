@@ -1977,7 +1977,9 @@ packaging slice to a useful production backend.
       - [x] Add the first static-axis f32 normalization slice: non-affine `LayerNorm` and `RMSNorm` now lower to
             Vulkan-native SPIR-V with one invocation per output element and scalar loops over the normalized axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 44/45 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1` rows and the local
+            `RMSNormAxis1/batch:1/width:128` smoke row ran successfully.
       - [ ] Add affine `LayerNorm`/`RMSNorm`, `GroupNorm`, and workgroup/subgroup normalization kernels that avoid
             recomputing the same axis statistics per output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
