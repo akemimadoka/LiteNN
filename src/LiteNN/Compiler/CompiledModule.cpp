@@ -5840,16 +5840,6 @@ namespace
 		std::vector<std::size_t> inputShape;
 	};
 
-	struct VulkanP0NormalizationPlan
-	{
-		NormalizationMode mode{ NormalizationMode::LayerNorm };
-		std::uint32_t inputIndex{};
-		std::uint32_t elementCount{};
-		std::size_t axis{};
-		double epsilon{ 1e-5 };
-		std::vector<std::size_t> inputShape;
-	};
-
 	struct VulkanP0TensorRef
 	{
 		VulkanNativeArgumentKind argumentKind{ VulkanNativeArgumentKind::InputTensor };
@@ -5857,6 +5847,18 @@ namespace
 		DataType dtype{ DataType::Float32 };
 		std::vector<std::size_t> shape;
 		std::uint32_t elementCount{};
+	};
+
+	struct VulkanP0NormalizationPlan
+	{
+		NormalizationMode mode{ NormalizationMode::LayerNorm };
+		std::uint32_t inputIndex{};
+		std::optional<VulkanP0TensorRef> scale;
+		std::optional<VulkanP0TensorRef> bias;
+		std::uint32_t elementCount{};
+		std::size_t axis{};
+		double epsilon{ 1e-5 };
+		std::vector<std::size_t> inputShape;
 	};
 
 	struct VulkanP0MatMulPlan
@@ -6179,6 +6181,18 @@ namespace
 			}
 		}
 		return outputShape;
+	}
+
+	bool VulkanP0SupportsNormalizationAffineShape(std::span<const std::size_t> inputShape, std::size_t axis,
+	                                              std::span<const std::size_t> affineShape)
+	{
+		if (axis >= inputShape.size())
+		{
+			return false;
+		}
+		const auto axisSize = inputShape[axis];
+		return (affineShape.size() == 1 && affineShape[0] == axisSize) ||
+		       (affineShape.size() == 2 && affineShape[0] == 1 && affineShape[1] == axisSize);
 	}
 
 	VulkanNativeSupportReport DiagnoseVulkanP0SingleForwardShape(std::span<const std::size_t> shape,
@@ -6557,11 +6571,6 @@ namespace
 				{
 					return VulkanNativeUnsupported("Vulkan native normalization input must be a direct graph parameter");
 				}
-				if (norm->scale || norm->bias)
-				{
-					return VulkanNativeUnsupported(
-					    "Vulkan native normalization bootstrap slice does not yet support affine scale/bias tensors");
-				}
 				if (norm->groupCount != 1)
 				{
 					return VulkanNativeUnsupported("Vulkan native normalization bootstrap slice requires groupCount=1");
@@ -6586,8 +6595,52 @@ namespace
 					    "axis, got mode={} input={} axis={}",
 					    VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis));
 				}
+				const auto checkAffine = [&](NodeOutput affine, std::string_view label) -> VulkanNativeSupportReport {
+					if (affine.port != 0 || affine.node >= subgraph.NodeCount())
+					{
+						return VulkanNativeUnsupported(
+						    std::format("Vulkan native normalization {} tensor reference is invalid", label));
+					}
+					const auto& affineEntry = subgraph.GetNodeEntry(affine.node);
+					if (affineEntry.outputInfos.size() != 1)
+					{
+						return VulkanNativeUnsupported(
+						    std::format("Vulkan native normalization {} tensor must have one output", label));
+					}
+					const auto& affineInfo = affineEntry.outputInfos[0];
+					if (affineInfo.dtype != DataType::Float32)
+					{
+						return VulkanNativeUnsupported(std::format(
+						    "Vulkan native normalization {} tensor must be Float32, got {}", label,
+						    DataTypeName(affineInfo.dtype)));
+					}
+					if (!VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, affineInfo.shape))
+					{
+						return VulkanNativeUnsupported(std::format(
+						    "Vulkan native normalization {} tensor must have shape [axis] or [1,axis], got input={} "
+						    "axis={} {}={}",
+						    label, Validation::ShapeToString(input.shape), norm->axis, label,
+						    Validation::ShapeToString(affineInfo.shape)));
+					}
+					return VulkanNativeSupported({});
+				};
+				if (norm->scale)
+				{
+					if (auto report = checkAffine(*norm->scale, "scale"); !report.supported)
+					{
+						return report;
+					}
+				}
+				if (norm->bias)
+				{
+					if (auto report = checkAffine(*norm->bias, "bias"); !report.supported)
+					{
+						return report;
+					}
+				}
 				return VulkanNativeSupported(
-				    std::format("f32 normalization {} axis={}", VulkanNativeOpName(norm->mode), norm->axis));
+				    std::format("f32 normalization {} axis={} affine={}/{}", VulkanNativeOpName(norm->mode),
+				                norm->axis, norm->scale.has_value(), norm->bias.has_value()));
 			}
 
 			return VulkanNativeUnsupported(
@@ -7169,7 +7222,8 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0NormalizationPlan> MatchVulkanP0NormalizationF32(const Graph& graph)
+	std::optional<VulkanP0NormalizationPlan>
+	MatchVulkanP0NormalizationF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -7177,7 +7231,7 @@ namespace
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
-		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		if (subgraph.Params().empty() || subgraph.Results().size() != 1)
 		{
 			return std::nullopt;
 		}
@@ -7195,7 +7249,7 @@ namespace
 		}
 
 		const auto* norm = std::get_if<NormalizationNode>(&resultEntry.node);
-		if (!norm || norm->scale || norm->bias || norm->groupCount != 1)
+		if (!norm || norm->groupCount != 1)
 		{
 			return std::nullopt;
 		}
@@ -7217,10 +7271,43 @@ namespace
 		{
 			return std::nullopt;
 		}
+		const auto getAffine = [&](const std::optional<NodeOutput>& output) -> std::optional<VulkanP0TensorRef> {
+			if (!output)
+			{
+				return VulkanP0TensorRef{};
+			}
+			auto ref = GetVulkanP0TensorRef(graph, subgraph, *output, externalBuilder);
+			if (!ref || ref->dtype != DataType::Float32 ||
+			    !VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, ref->shape))
+			{
+				return std::nullopt;
+			}
+			return ref;
+		};
+		std::optional<VulkanP0TensorRef> scale;
+		if (norm->scale)
+		{
+			scale = getAffine(norm->scale);
+			if (!scale)
+			{
+				return std::nullopt;
+			}
+		}
+		std::optional<VulkanP0TensorRef> bias;
+		if (norm->bias)
+		{
+			bias = getAffine(norm->bias);
+			if (!bias)
+			{
+				return std::nullopt;
+			}
+		}
 
 		return VulkanP0NormalizationPlan{
 			.mode = norm->mode,
 			.inputIndex = *inputIndex,
+			.scale = std::move(scale),
+			.bias = std::move(bias),
 			.elementCount = *elementCount,
 			.axis = norm->axis,
 			.epsilon = norm->epsilon,
@@ -7477,7 +7564,8 @@ namespace
 
 	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeNormalizationF32P0(const Graph& graph)
 	{
-		const auto plan = MatchVulkanP0NormalizationF32(graph);
+		VulkanP0ExternalTensorBuilder externalBuilder;
+		const auto plan = MatchVulkanP0NormalizationF32(graph, &externalBuilder);
 		if (!plan)
 		{
 			return std::nullopt;
@@ -7487,26 +7575,43 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
-		auto spirv = VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon);
+		auto spirv = VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
+		                                               plan->scale.has_value(), plan->bias.has_value());
 		payload.spirv = std::move(spirv.words);
 
-		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		std::vector<VulkanNativeArgumentSpec> arguments;
+		arguments.push_back({ .kind = VulkanNativeArgumentKind::InputTensor,
+		                      .index = plan->inputIndex,
+		                      .binding = 0,
+		                      .byteOffset = 0,
+		                      .byteSize = outputByteSize });
+		std::uint32_t nextBinding = 1;
+		const auto appendAffine = [&](const VulkanP0TensorRef& ref) {
+			arguments.push_back({ .kind = ref.argumentKind,
+			                      .index = ref.argumentIndex,
+			                      .binding = nextBinding++,
+			                      .byteOffset = 0,
+			                      .byteSize = static_cast<std::uint64_t>(ref.elementCount) * sizeof(float) });
+		};
+		if (plan->scale)
+		{
+			appendAffine(*plan->scale);
+		}
+		if (plan->bias)
+		{
+			appendAffine(*plan->bias);
+		}
+		arguments.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
+		                      .index = 0,
+		                      .binding = nextBinding,
+		                      .byteOffset = 0,
+		                      .byteSize = outputByteSize });
 		payload.kernels.push_back({
 		    .entryPoint = std::string(VulkanNativeNormalizationF32KernelName(plan->mode)),
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
-		    .arguments = {
-		        { .kind = VulkanNativeArgumentKind::InputTensor,
-		          .index = plan->inputIndex,
-		          .binding = 0,
-		          .byteOffset = 0,
-		          .byteSize = byteSize },
-		        { .kind = VulkanNativeArgumentKind::OutputTensor,
-		          .index = 0,
-		          .binding = 1,
-		          .byteOffset = 0,
-		          .byteSize = byteSize },
-		    },
+		    .arguments = std::move(arguments),
 		});
 
 		auto inputSpecs = BuildInputSpecs(graph);
@@ -7517,6 +7622,9 @@ namespace
 		return VulkanP0ArtifactParts{
 			.rodata = std::move(rodata),
 			.instructions = std::move(instructions),
+			.constants = std::move(externalBuilder.constants),
+			.weights = std::move(externalBuilder.weights),
+			.externalTensorInfos = std::move(externalBuilder.externalTensorInfos),
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};

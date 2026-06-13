@@ -1053,7 +1053,7 @@ namespace LiteNN
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildNormalizationF32SPIRVModule(
 		    NormalizationMode mode, std::span<const std::size_t> inputShape, std::size_t axis, double epsilon,
-		    mlir::MLIRContext& context)
+		    bool hasScale, bool hasBias, mlir::MLIRContext& context)
 		{
 			const auto elementCount = NumElementsU32(inputShape);
 			const auto innerSize = AxisInnerSizeU32(inputShape, axis);
@@ -1079,7 +1079,18 @@ namespace LiteNN
 			mlir::OpBuilder moduleBuilder(module.getRegion());
 			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
 			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
-			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			std::uint32_t nextBinding = 1;
+			std::optional<mlir::spirv::GlobalVariableOp> scale;
+			std::optional<mlir::spirv::GlobalVariableOp> bias;
+			if (hasScale)
+			{
+				scale = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "scale", nextBinding++);
+			}
+			if (hasBias)
+			{
+				bias = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "bias", nextBinding++);
+			}
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", nextBinding);
 			auto globalInvocationType = mlir::spirv::PointerType::get(
 			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
 			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
@@ -1188,6 +1199,28 @@ namespace LiteNN
 				                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult()
 				                        : current;
 				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
+				    if (scale)
+				    {
+					    auto scaleValue =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *scale, axisIndex), nullptr,
+					                nullptr)
+					            .getValue();
+					    normalized = bodyBuilder.create<mlir::spirv::FMulOp>(loc, normalized, scaleValue).getResult();
+				    }
+				    if (bias)
+				    {
+					    auto biasValue =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, axisIndex), nullptr,
+					                nullptr)
+					            .getValue();
+					    normalized = bodyBuilder.create<mlir::spirv::FAddOp>(loc, normalized, biasValue).getResult();
+				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), normalized,
 				        nullptr, nullptr);
@@ -1675,12 +1708,13 @@ namespace LiteNN
 
 		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
 		                                                          std::span<const std::size_t> inputShape,
-		                                                          std::size_t axis, double epsilon)
+		                                                          std::size_t axis, double epsilon, bool hasScale,
+		                                                          bool hasBias)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
-			auto module = BuildNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, context);
+			auto module = BuildNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, hasScale, hasBias, context);
 			ValidateVulkanShaderModule(module.get());
 
 			std::string mlirText;
@@ -1953,14 +1987,15 @@ namespace LiteNN
 
 	VulkanNativeGeneratedSPIRV VulkanNativeNormalizationF32SPIRV(NormalizationMode mode,
 	                                                             std::span<const std::size_t> inputShape,
-	                                                             std::size_t axis, double epsilon)
+	                                                             std::size_t axis, double epsilon,
+	                                                             bool hasScale, bool hasBias)
 	{
 		if (!VulkanNativeSupportsNormalizationF32(mode, inputShape, axis))
 		{
 			throw std::runtime_error(
 			    "Vulkan native f32 normalization requires LayerNorm/RMSNorm, static non-empty shape, and an in-range axis");
 		}
-		return SerializeNormalizationF32SPIRV(mode, inputShape, axis, epsilon);
+		return SerializeNormalizationF32SPIRV(mode, inputShape, axis, epsilon, hasScale, hasBias);
 	}
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)

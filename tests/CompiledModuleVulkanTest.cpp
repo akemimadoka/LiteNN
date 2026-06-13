@@ -127,6 +127,36 @@ namespace
 		return graph;
 	}
 
+	Graph BuildAffineNormalizationVariableGraph(NormalizationMode mode, std::size_t axis, double epsilon = 1e-5)
+	{
+		Graph graph;
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 2.0, 3.0, 4.0 }, { 3 }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5, -0.5, 1.0 }, { 3 }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "norm_scale");
+		graph.SetVariableName(biasIndex, "norm_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 3 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 3 } } });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = NodeOutput{ scale, 0 },
+		                                               .bias = NodeOutput{ bias, 0 },
+		                                               .mode = mode,
+		                                               .axis = axis,
+		                                               .groupCount = 1,
+		                                               .epsilon = epsilon },
+		                            { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -878,6 +908,35 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNormalization)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 6u * sizeof(float));
 }
 
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineNormalizationExternalWeights)
+{
+	const auto graph = BuildAffineNormalizationVariableGraph(NormalizationMode::LayerNorm, 1);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::LayerNorm, std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5,
+	                                      true, true);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 3u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 6u * sizeof(float));
+}
+
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -1458,6 +1517,59 @@ TEST(CompiledModuleVulkanTest, RunsSimpleNormalizationArithmetic)
 		{
 			EXPECT_NEAR(actual[i], expected[i], 1e-5f);
 		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsAffineNormalizationExternalWeightsArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const std::array input{ 1.0f, 2.0f, 3.0f, 3.0f, 4.0f, 0.0f };
+	const std::array scale{ 2.0f, 3.0f, 4.0f };
+	const std::array bias{ 0.5f, -0.5f, 1.0f };
+	std::vector<float> expected;
+	expected.reserve(input.size());
+	for (std::size_t row = 0; row < 2; ++row)
+	{
+		float mean = 0.0f;
+		for (std::size_t col = 0; col < 3; ++col)
+		{
+			mean += input[row * 3 + col];
+		}
+		mean /= 3.0f;
+		float variance = 0.0f;
+		for (std::size_t col = 0; col < 3; ++col)
+		{
+			const auto centered = input[row * 3 + col] - mean;
+			variance += centered * centered;
+		}
+		variance /= 3.0f;
+		const auto denom = std::sqrt(variance + 1e-5f);
+		for (std::size_t col = 0; col < 3; ++col)
+		{
+			expected.push_back(((input[row * 3 + col] - mean) / denom) * scale[col] + bias[col]);
+		}
+	}
+
+	const auto graph = BuildAffineNormalizationVariableGraph(NormalizationMode::LayerNorm, 1);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>(std::vector<double>(input.begin(), input.end()), { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
 	}
 }
 

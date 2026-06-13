@@ -47,7 +47,8 @@ namespace LiteNN
 	                                          std::size_t axis);
 	VulkanNativeGeneratedSPIRV VulkanNativeNormalizationF32SPIRV(NormalizationMode mode,
 	                                                             std::span<const std::size_t> inputShape,
-	                                                             std::size_t axis, double epsilon);
+	                                                             std::size_t axis, double epsilon,
+	                                                             bool hasScale = false, bool hasBias = false);
 } // namespace LiteNN
 
 #endif
