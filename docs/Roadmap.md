@@ -2010,7 +2010,12 @@ packaging slice to a useful production backend.
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad` rows and the local
             `AveragePaddedIncludePad/batch:1/channels:8/spatial:16` smoke row ran successfully.
-      - [ ] Add convolution and image/latent-processing kernels for mobile vision workloads.
+      - [x] Add baseline direct `Conv2DNode` coverage: native SPIR-V now supports static rank-4 NCHW f32 Conv2D with
+            stride, dilation, low/high padding, groups, and optional bias, including separated variable/constant
+            weight tensors.
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 60/61 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped.
+      - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,

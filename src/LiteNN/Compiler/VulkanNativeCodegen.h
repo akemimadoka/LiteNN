@@ -66,6 +66,24 @@ namespace LiteNN
 	                                                      std::span<const std::size_t> lowPads = {},
 	                                                      std::span<const std::size_t> highPads = {},
 	                                                      bool countIncludePad = false);
+	std::string_view VulkanNativeConv2DF32KernelName();
+	bool VulkanNativeSupportsConv2DF32(std::span<const std::size_t> inputShape,
+	                                   std::span<const std::size_t> weightShape,
+	                                   std::span<const std::size_t> outputShape,
+	                                   std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> dilations,
+	                                   std::span<const std::size_t> lowPads,
+	                                   std::span<const std::size_t> highPads,
+	                                   std::size_t groupCount);
+	VulkanNativeGeneratedSPIRV VulkanNativeConv2DF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                      std::span<const std::size_t> weightShape,
+	                                                      std::span<const std::size_t> outputShape,
+	                                                      std::span<const std::size_t> strides,
+	                                                      std::span<const std::size_t> dilations,
+	                                                      std::span<const std::size_t> lowPads,
+	                                                      std::span<const std::size_t> highPads,
+	                                                      std::size_t groupCount,
+	                                                      bool hasBias);
 } // namespace LiteNN
 
 #endif

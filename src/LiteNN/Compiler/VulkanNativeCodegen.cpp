@@ -311,6 +311,11 @@ namespace LiteNN
 			}
 		}
 
+		std::string_view Conv2DF32KernelName()
+		{
+			return "conv2d";
+		}
+
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			switch (op)
@@ -1165,6 +1170,282 @@ namespace LiteNN
 			{
 				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Pool2D module verification failed");
 			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildConv2DF32SPIRVModule(
+		    std::span<const std::size_t> inputShape, std::span<const std::size_t> weightShape,
+		    std::span<const std::size_t> outputShape, std::span<const std::size_t> strides,
+		    std::span<const std::size_t> dilations, std::span<const std::size_t> lowPads,
+		    std::size_t groupCount, bool hasBias, mlir::MLIRContext& context)
+		{
+			const auto inputElementCount = NumElementsU32(inputShape);
+			const auto weightElementCount = NumElementsU32(weightShape);
+			const auto outputElementCount = NumElementsU32(outputShape);
+			if (!inputElementCount || !weightElementCount || !outputElementCount || inputShape.size() != 4 ||
+			    weightShape.size() != 4 || outputShape.size() != 4 || strides.size() != 2 ||
+			    dilations.size() != 2 || lowPads.size() != 2 || groupCount == 0)
+			{
+				throw std::runtime_error("Vulkan native Conv2D requires static rank-4 tensors and rank-2 params");
+			}
+			for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], weightShape[0],
+				                      weightShape[1], weightShape[2], weightShape[3], outputShape[0], outputShape[1],
+				                      outputShape[2], outputShape[3], strides[0], strides[1], dilations[0],
+				                      dilations[1] })
+			{
+				if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native Conv2D shape or parameter is too large or empty");
+				}
+			}
+			for (const auto value : { lowPads[0], lowPads[1], groupCount })
+			{
+				if (value > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native Conv2D shape or parameter is too large");
+				}
+			}
+
+			const auto batchSize = static_cast<std::uint32_t>(inputShape[0]);
+			const auto inputChannels = static_cast<std::uint32_t>(inputShape[1]);
+			const auto inHeight = static_cast<std::uint32_t>(inputShape[2]);
+			const auto inWidth = static_cast<std::uint32_t>(inputShape[3]);
+			const auto outputChannels = static_cast<std::uint32_t>(outputShape[1]);
+			const auto outHeight = static_cast<std::uint32_t>(outputShape[2]);
+			const auto outWidth = static_cast<std::uint32_t>(outputShape[3]);
+			const auto inChannelsPerGroup = static_cast<std::uint32_t>(weightShape[1]);
+			const auto kernelH = static_cast<std::uint32_t>(weightShape[2]);
+			const auto kernelW = static_cast<std::uint32_t>(weightShape[3]);
+			const auto strideH = static_cast<std::uint32_t>(strides[0]);
+			const auto strideW = static_cast<std::uint32_t>(strides[1]);
+			const auto dilationH = static_cast<std::uint32_t>(dilations[0]);
+			const auto dilationW = static_cast<std::uint32_t>(dilations[1]);
+			const auto lowPadH = static_cast<std::uint32_t>(lowPads[0]);
+			const auto lowPadW = static_cast<std::uint32_t>(lowPads[1]);
+			const auto groups = static_cast<std::uint32_t>(groupCount);
+			const auto outChannelsPerGroup = outputChannels / groups;
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto weight = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "weight", 1);
+			std::optional<mlir::spirv::GlobalVariableOp> bias;
+			auto nextBinding = 2u;
+			if (hasBias)
+			{
+				bias = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "bias", nextBinding++);
+			}
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", nextBinding);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, Conv2DF32KernelName(), funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto outW = EmitI32Constant(bodyBuilder, loc, outWidth);
+				    auto outH = EmitI32Constant(bodyBuilder, loc, outHeight);
+				    auto outC = EmitI32Constant(bodyBuilder, loc, outputChannels);
+				    auto inC = EmitI32Constant(bodyBuilder, loc, inputChannels);
+				    auto inH = EmitI32Constant(bodyBuilder, loc, inHeight);
+				    auto inW = EmitI32Constant(bodyBuilder, loc, inWidth);
+				    auto zero = EmitI32Constant(bodyBuilder, loc, 0);
+				    auto zeroF32 = EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    auto lowPadHValue = EmitI32Constant(bodyBuilder, loc, lowPadH);
+				    auto lowPadWValue = EmitI32Constant(bodyBuilder, loc, lowPadW);
+				    auto paddedLimitH =
+				        EmitI32Constant(bodyBuilder, loc, static_cast<std::uint32_t>(lowPadH + inHeight));
+				    auto paddedLimitW =
+				        EmitI32Constant(bodyBuilder, loc, static_cast<std::uint32_t>(lowPadW + inWidth));
+
+				    auto ow = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, outW).getResult();
+				    auto tmp0 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, outW).getResult();
+				    auto oh = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp0, outH).getResult();
+				    auto tmp1 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp0, outH).getResult();
+				    auto oc = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp1, outC).getResult();
+				    auto batch = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp1, outC).getResult();
+
+				    auto inPlane = bodyBuilder.create<mlir::spirv::IMulOp>(loc, inH, inW).getResult();
+				    auto batchBase =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(
+				                       loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, batch, inC).getResult(),
+				                       inPlane)
+				            .getResult();
+				    auto group =
+				        bodyBuilder.create<mlir::spirv::UDivOp>(loc, oc, EmitI32Constant(bodyBuilder, loc, outChannelsPerGroup))
+				            .getResult();
+				    auto inputChannelBase =
+				        bodyBuilder
+				            .create<mlir::spirv::IMulOp>(loc, group, EmitI32Constant(bodyBuilder, loc, inChannelsPerGroup))
+				            .getResult();
+				    auto kernelPlane = EmitI32Constant(bodyBuilder, loc, kernelH * kernelW);
+				    auto weightOcBase =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(
+				                       loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, oc,
+				                                                                     EmitI32Constant(bodyBuilder, loc,
+				                                                                                     inChannelsPerGroup))
+				                                .getResult(),
+				                       kernelPlane)
+				            .getResult();
+				    auto startH =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(loc, oh, EmitI32Constant(bodyBuilder, loc, strideH))
+				            .getResult();
+				    auto startW =
+				        bodyBuilder.create<mlir::spirv::IMulOp>(loc, ow, EmitI32Constant(bodyBuilder, loc, strideW))
+				            .getResult();
+
+				    auto accumulator = zeroF32;
+				    if (bias)
+				    {
+					    accumulator =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, oc), nullptr, nullptr)
+					            .getValue();
+				    }
+				    for (std::uint32_t icg = 0; icg < inChannelsPerGroup; ++icg)
+				    {
+					    auto ic = bodyBuilder
+					                  .create<mlir::spirv::IAddOp>(loc, inputChannelBase,
+					                                                EmitI32Constant(bodyBuilder, loc, icg))
+					                  .getResult();
+					    auto inputChannelOffset =
+					        bodyBuilder.create<mlir::spirv::IAddOp>(
+					                       loc, batchBase, bodyBuilder.create<mlir::spirv::IMulOp>(loc, ic, inPlane).getResult())
+					            .getResult();
+					    auto weightChannelOffset =
+					        bodyBuilder
+					            .create<mlir::spirv::IAddOp>(
+					                loc, weightOcBase,
+					                bodyBuilder.create<mlir::spirv::IMulOp>(loc, EmitI32Constant(bodyBuilder, loc, icg),
+					                                                         kernelPlane)
+					                    .getResult())
+					            .getResult();
+					    for (std::uint32_t kh = 0; kh < kernelH; ++kh)
+					    {
+						    auto paddedH =
+						        bodyBuilder
+						            .create<mlir::spirv::IAddOp>(
+						                loc, startH, EmitI32Constant(bodyBuilder, loc, kh * dilationH))
+						            .getResult();
+						    auto validH = bodyBuilder
+						                      .create<mlir::spirv::LogicalAndOp>(
+						                          loc,
+						                          bodyBuilder
+						                              .create<mlir::spirv::UGreaterThanEqualOp>(loc, paddedH, lowPadHValue)
+						                              .getResult(),
+						                          bodyBuilder.create<mlir::spirv::ULessThanOp>(loc, paddedH, paddedLimitH)
+						                              .getResult())
+						                      .getResult();
+						    auto rawIh =
+						        bodyBuilder.create<mlir::spirv::ISubOp>(loc, paddedH, lowPadHValue).getResult();
+						    auto safeIh =
+						        bodyBuilder.create<mlir::spirv::SelectOp>(loc, validH, rawIh, zero).getResult();
+						    for (std::uint32_t kw = 0; kw < kernelW; ++kw)
+						    {
+							    auto paddedW =
+							        bodyBuilder
+							            .create<mlir::spirv::IAddOp>(
+							                loc, startW, EmitI32Constant(bodyBuilder, loc, kw * dilationW))
+							            .getResult();
+							    auto validW = bodyBuilder
+							                      .create<mlir::spirv::LogicalAndOp>(
+							                          loc,
+							                          bodyBuilder
+							                              .create<mlir::spirv::UGreaterThanEqualOp>(loc, paddedW, lowPadWValue)
+							                              .getResult(),
+							                          bodyBuilder
+							                              .create<mlir::spirv::ULessThanOp>(loc, paddedW, paddedLimitW)
+							                              .getResult())
+							                      .getResult();
+							    auto valid =
+							        bodyBuilder.create<mlir::spirv::LogicalAndOp>(loc, validH, validW).getResult();
+							    auto rawIw =
+							        bodyBuilder.create<mlir::spirv::ISubOp>(loc, paddedW, lowPadWValue).getResult();
+							    auto safeIw =
+							        bodyBuilder.create<mlir::spirv::SelectOp>(loc, validW, rawIw, zero).getResult();
+							    auto inputOffset =
+							        bodyBuilder
+							            .create<mlir::spirv::IAddOp>(
+							                loc, inputChannelOffset,
+							                bodyBuilder
+							                    .create<mlir::spirv::IAddOp>(
+							                        loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, safeIh, inW)
+							                                 .getResult(),
+							                        safeIw)
+							                    .getResult())
+							            .getResult();
+							    auto weightOffset =
+							        bodyBuilder
+							            .create<mlir::spirv::IAddOp>(
+							                loc, weightChannelOffset,
+							                EmitI32Constant(bodyBuilder, loc, kh * kernelW + kw))
+							            .getResult();
+							    auto inputValue =
+							        bodyBuilder
+							            .create<mlir::spirv::LoadOp>(
+							                loc, bodyBuilder.getF32Type(),
+							                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, inputOffset),
+							                nullptr, nullptr)
+							            .getValue();
+							    auto weightValue =
+							        bodyBuilder
+							            .create<mlir::spirv::LoadOp>(
+							                loc, bodyBuilder.getF32Type(),
+							                EmitF32StorageBufferElementPointer(bodyBuilder, loc, weight, weightOffset),
+							                nullptr, nullptr)
+							            .getValue();
+							    auto product =
+							        bodyBuilder.create<mlir::spirv::FMulOp>(loc, inputValue, weightValue).getResult();
+							    auto contribution =
+							        bodyBuilder.create<mlir::spirv::SelectOp>(loc, valid, product, zeroF32).getResult();
+							    accumulator =
+							        bodyBuilder.create<mlir::spirv::FAddOp>(loc, accumulator, contribution).getResult();
+						    }
+					    }
+				    }
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Conv2D module verification failed");
+			}
+			(void)batchSize;
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
@@ -2053,6 +2334,40 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeConv2DF32SPIRV(std::span<const std::size_t> inputShape,
+		                                                   std::span<const std::size_t> weightShape,
+		                                                   std::span<const std::size_t> outputShape,
+		                                                   std::span<const std::size_t> strides,
+		                                                   std::span<const std::size_t> dilations,
+		                                                   std::span<const std::size_t> lowPads,
+		                                                   std::size_t groupCount, bool hasBias)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildConv2DF32SPIRVModule(inputShape, weightShape, outputShape, strides, dilations,
+			                                        lowPads, groupCount, hasBias, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V Conv2D module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
 		                                                          std::span<const std::size_t> inputShape,
 		                                                          std::size_t axis, double epsilon, bool hasScale,
@@ -2385,6 +2700,88 @@ namespace LiteNN
 		}
 		return SerializePool2DF32SPIRV(mode, inputShape, outputShape, kernelShape, strides, effectiveLowPads,
 		                               countIncludePad);
+	}
+
+	std::string_view VulkanNativeConv2DF32KernelName()
+	{
+		return Conv2DF32KernelName();
+	}
+
+	bool VulkanNativeSupportsConv2DF32(std::span<const std::size_t> inputShape,
+	                                   std::span<const std::size_t> weightShape,
+	                                   std::span<const std::size_t> outputShape,
+	                                   std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> dilations,
+	                                   std::span<const std::size_t> lowPads,
+	                                   std::span<const std::size_t> highPads,
+	                                   std::size_t groupCount)
+	{
+		if (inputShape.size() != 4 || weightShape.size() != 4 || outputShape.size() != 4 ||
+		    strides.size() != 2 || dilations.size() != 2 || lowPads.size() != 2 || highPads.size() != 2 ||
+		    groupCount == 0 || groupCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return false;
+		}
+		if (!NumElementsU32(inputShape).has_value() || !NumElementsU32(weightShape).has_value() ||
+		    !NumElementsU32(outputShape).has_value())
+		{
+			return false;
+		}
+		for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], weightShape[0],
+			                      weightShape[1], weightShape[2], weightShape[3], outputShape[0], outputShape[1],
+			                      outputShape[2], outputShape[3], strides[0], strides[1], dilations[0],
+			                      dilations[1] })
+		{
+			if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+		}
+		for (const auto value : { lowPads[0], lowPads[1], highPads[0], highPads[1] })
+		{
+			if (value > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+		}
+		if (inputShape[0] != outputShape[0] || weightShape[0] != outputShape[1] ||
+		    inputShape[1] % groupCount != 0 || outputShape[1] % groupCount != 0 ||
+		    weightShape[1] != inputShape[1] / groupCount)
+		{
+			return false;
+		}
+		const auto effectiveKernelH = (static_cast<std::uint64_t>(weightShape[2]) - 1) * dilations[0] + 1;
+		const auto effectiveKernelW = (static_cast<std::uint64_t>(weightShape[3]) - 1) * dilations[1] + 1;
+		const auto paddedH = static_cast<std::uint64_t>(lowPads[0]) + inputShape[2] + highPads[0];
+		const auto paddedW = static_cast<std::uint64_t>(lowPads[1]) + inputShape[3] + highPads[1];
+		if (effectiveKernelH > paddedH || effectiveKernelW > paddedW ||
+		    paddedH > std::numeric_limits<std::uint32_t>::max() ||
+		    paddedW > std::numeric_limits<std::uint32_t>::max())
+		{
+			return false;
+		}
+		const auto expectedH = (paddedH - effectiveKernelH) / strides[0] + 1;
+		const auto expectedW = (paddedW - effectiveKernelW) / strides[1] + 1;
+		return outputShape[2] == expectedH && outputShape[3] == expectedW;
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeConv2DF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                      std::span<const std::size_t> weightShape,
+	                                                      std::span<const std::size_t> outputShape,
+	                                                      std::span<const std::size_t> strides,
+	                                                      std::span<const std::size_t> dilations,
+	                                                      std::span<const std::size_t> lowPads,
+	                                                      std::span<const std::size_t> highPads,
+	                                                      std::size_t groupCount,
+	                                                      bool hasBias)
+	{
+		if (!VulkanNativeSupportsConv2DF32(inputShape, weightShape, outputShape, strides, dilations, lowPads,
+		                                   highPads, groupCount))
+		{
+			throw std::runtime_error("Vulkan native f32 Conv2D requires static rank-4 shape and rank-2 params");
+		}
+		return SerializeConv2DF32SPIRV(inputShape, weightShape, outputShape, strides, dilations, lowPads,
+		                               groupCount, hasBias);
 	}
 
 	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)
