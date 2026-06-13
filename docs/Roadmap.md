@@ -2007,7 +2007,9 @@ packaging slice to a useful production backend.
       - [x] Add padded `Pool2DNode` coverage: native SPIR-V now supports low/high padding for Max/Average and
             `AveragePool` `countIncludePad` semantics.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 57/58 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad` rows and the local
+            `AveragePaddedIncludePad/batch:1/channels:8/spatial:16` smoke row ran successfully.
       - [ ] Add convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

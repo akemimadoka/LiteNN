@@ -966,20 +966,22 @@ namespace
 	}
 
 	Graph BuildVulkanPool2DGraph(PoolMode mode, std::size_t batch, std::size_t channels, std::size_t height,
-	                             std::size_t width)
+	                             std::size_t width, std::array<std::size_t, 2> lowPads = { 0, 0 },
+	                             std::array<std::size_t, 2> highPads = { 0, 0 },
+	                             bool countIncludePad = false)
 	{
 		Graph graph;
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { batch, channels, height, width });
-		const auto outHeight = height - 1;
-		const auto outWidth = width - 1;
+		const auto outHeight = lowPads[0] + height + highPads[0] - 1;
+		const auto outWidth = lowPads[1] + width + highPads[1] - 1;
 		const auto out = sg.AddNode(Pool2DNode{ .input = { input, 0 },
 		                                        .mode = mode,
 		                                        .kernelShape = { 2, 2 },
 		                                        .strides = { 1, 1 },
-		                                        .lowPads = { 0, 0 },
-		                                        .highPads = { 0, 0 },
-		                                        .countIncludePad = false },
+		                                        .lowPads = { lowPads[0], lowPads[1] },
+		                                        .highPads = { highPads[0], highPads[1] },
+		                                        .countIncludePad = countIncludePad },
 		                            { OutputInfo{ DataType::Float32, { batch, channels, outHeight, outWidth } } });
 		sg.SetResults({ { out, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -1558,9 +1560,12 @@ namespace
 	}
 
 	void BMVulkanNativePool2DRunTensorsInto(benchmark::State& state, PoolMode mode, std::size_t batch,
-	                                        std::size_t channels, std::size_t height, std::size_t width)
+	                                        std::size_t channels, std::size_t height, std::size_t width,
+	                                        std::array<std::size_t, 2> lowPads = { 0, 0 },
+	                                        std::array<std::size_t, 2> highPads = { 0, 0 },
+	                                        bool countIncludePad = false)
 	{
-		auto graph = BuildVulkanPool2DGraph(mode, batch, channels, height, width);
+		auto graph = BuildVulkanPool2DGraph(mode, batch, channels, height, width, lowPads, highPads, countIncludePad);
 		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
 		                                        LiteNNBenchCompilerOptionsFromEnvironment());
 		if (module.Backend() != CompiledModuleBackend::VulkanNative)
@@ -1586,7 +1591,8 @@ namespace
 			benchmark::ClobberMemory();
 		}
 
-		const auto outputElementCount = batch * channels * (height - 1) * (width - 1);
+		const auto outputElementCount =
+		    batch * channels * (lowPads[0] + height + highPads[0] - 1) * (lowPads[1] + width + highPads[1] - 1);
 		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(outputElementCount));
 		state.counters["output_elements"] =
 		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
@@ -1944,9 +1950,29 @@ namespace
 					    [=](benchmark::State& state) {
 						    BMVulkanNativePool2DRunTensorsInto(state, poolMode, batch, vulkanNativePoolChannels,
 						                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial);
-					    });
+					});
 					poolBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+					auto* paddedPoolBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativePool2D/F32/{}Padded/batch:{}/channels:{}/spatial:{}",
+					                PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
+					                vulkanNativePoolSpatial),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativePool2DRunTensorsInto(state, poolMode, batch, vulkanNativePoolChannels,
+						                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial,
+						                                       { 1, 1 }, { 1, 1 }, false);
+					    });
+					paddedPoolBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
+				auto* paddedAverageIncludePadBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativePool2D/F32/AveragePaddedIncludePad/batch:{}/channels:{}/spatial:{}",
+				                batch, vulkanNativePoolChannels, vulkanNativePoolSpatial),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativePool2DRunTensorsInto(state, PoolMode::Average, batch, vulkanNativePoolChannels,
+					                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial,
+					                                       { 1, 1 }, { 1, 1 }, true);
+				    });
+				paddedAverageIncludePadBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
