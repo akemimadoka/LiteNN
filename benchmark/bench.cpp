@@ -965,6 +965,44 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanAffineGroupNormGraph(std::size_t elementCount, std::size_t groupCount)
+	{
+		Graph graph;
+		std::vector<double> scale(elementCount);
+		std::vector<double> bias(elementCount);
+		for (std::size_t i = 0; i < elementCount; ++i)
+		{
+			scale[i] = 0.75 + 0.01 * static_cast<double>(i % 13);
+			bias[i] = -0.05 + 0.001 * static_cast<double>(i % 19);
+		}
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(scale), { elementCount }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(bias), { elementCount }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "group_norm_scale");
+		graph.SetVariableName(biasIndex, "group_norm_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { elementCount });
+		const auto scaleNode =
+		    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto biasNode =
+		    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = NodeOutput{ scaleNode, 0 },
+		                                               .bias = NodeOutput{ biasNode, 0 },
+		                                               .mode = NormalizationMode::GroupNorm,
+		                                               .axis = 0,
+		                                               .groupCount = groupCount,
+		                                               .epsilon = 1e-5 },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	std::string_view ReduceOpBenchmarkName(ReduceOp op)
 	{
 		switch (op)
@@ -1436,6 +1474,39 @@ namespace
 		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeAffineGroupNormRunTensorsInto(benchmark::State& state, std::size_t elementCount,
+	                                                 std::size_t groupCount)
+	{
+		auto graph = BuildVulkanAffineGroupNormGraph(elementCount, groupCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for affine GroupNorm benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(elementCount, 16u);
+		auto inputs = MakeVulkanCastInputs(inputData, elementCount);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["normalized_elements"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1768,6 +1839,14 @@ namespace
 					    BMVulkanNativeGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
 				    });
 				groupNormBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* affineGroupNormBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeGroupNormAffine/F32/groups:{}/elements:{}",
+				                vulkanNativeGroupNormGroups, elementCount),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeAffineGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
+				    });
+				affineGroupNormBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),

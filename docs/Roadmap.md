@@ -1994,7 +1994,8 @@ packaging slice to a useful production backend.
       - [x] Add affine `GroupNorm` for native/ggml layout: scale/bias tensors with shape `[groupedVolume]` or
             `[1,groupedVolume]` now bind as Vulkan input/external tensors, including separated variable weights.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 52/53 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeGroupNormAffine/F32` rows and the local `groups:8/elements:784` smoke row ran successfully.
       - [ ] Add workgroup/subgroup normalization kernels that avoid recomputing the same group or axis statistics per
             output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
