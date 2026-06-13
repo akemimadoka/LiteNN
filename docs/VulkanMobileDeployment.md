@@ -134,10 +134,10 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   optional feature chain when the selected device supports it, reject unsupported artifacts at load time with a capability
   diagnostic, and register `VulkanNativeCastRunInto/F32ToFloat16|Int8|UInt8` benchmark rows only when execution is legal.
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|
-  MaxAxis1`, `VulkanNativeMatMul/F32`, and `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device
-  exists. It also registers model-level `VulkanNativeRunInto` rows for the single-Linear model once external weight
-  binding is available. Multi-layer MLP rows remain deferred until Vulkan has workspace/multi-kernel linear-chain
-  scheduling.
+  MaxAxis1`, `VulkanNativeSoftmax/F32/Axis1`, `VulkanNativeMatMul/F32`, and `VulkanNativeMatMulBiasAdd/F32` rows only
+  when a Vulkan compute device exists. It also registers model-level `VulkanNativeRunInto` rows for the single-Linear
+  model once external weight binding is available. Multi-layer MLP rows remain deferred until Vulkan has workspace/
+  multi-kernel linear-chain scheduling.
 
 Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/matmul/multi-layer linear chains,
 normalization, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain

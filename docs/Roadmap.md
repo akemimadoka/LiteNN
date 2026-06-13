@@ -1972,7 +1972,8 @@ packaging slice to a useful production backend.
       - [x] Add the first static-axis f32 `SoftmaxNode` slice: Vulkan-native SPIR-V now computes numerically stable
             max-subtracted softmax with one invocation per output element and scalar loops over the softmax axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeSoftmax/F32/Axis1` rows and the local `batch:1/width:128` smoke row ran successfully.
       - [ ] Add normalization (`LayerNorm`, `RMSNorm`, group normalization).
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device

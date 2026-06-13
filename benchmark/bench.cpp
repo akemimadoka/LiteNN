@@ -875,6 +875,20 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanSoftmaxGraph(std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, width });
+		const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, 1 },
+		                            { OutputInfo{ DataType::Float32, { batch, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	std::string_view ReduceOpBenchmarkName(ReduceOp op)
 	{
 		switch (op)
@@ -1202,6 +1216,38 @@ namespace
 		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeSoftmaxRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t width)
+	{
+		auto graph = BuildVulkanSoftmaxGraph(batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Softmax benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(batch * width, 10);
+		auto inputs = MakeVulkanReduceInputs(inputData, batch, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["softmax_elements"] =
+		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1496,6 +1542,13 @@ namespace
 					    });
 					reduceBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
+
+				auto* softmaxBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeSoftmax/F32/Axis1/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeSoftmaxRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
+				    });
+				softmaxBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
