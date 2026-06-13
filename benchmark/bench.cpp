@@ -945,6 +945,26 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanGroupNormGraph(std::size_t elementCount, std::size_t groupCount)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { elementCount });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = std::nullopt,
+		                                               .bias = std::nullopt,
+		                                               .mode = NormalizationMode::GroupNorm,
+		                                               .axis = 0,
+		                                               .groupCount = groupCount,
+		                                               .epsilon = 1e-5 },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	std::string_view ReduceOpBenchmarkName(ReduceOp op)
 	{
 		switch (op)
@@ -1383,6 +1403,39 @@ namespace
 		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeGroupNormRunTensorsInto(benchmark::State& state, std::size_t elementCount,
+	                                           std::size_t groupCount)
+	{
+		auto graph = BuildVulkanGroupNormGraph(elementCount, groupCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for GroupNorm benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(elementCount, 15u);
+		auto inputs = MakeVulkanCastInputs(inputData, elementCount);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["normalized_elements"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1706,6 +1759,15 @@ namespace
 					    });
 					affineNormalizationBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
+
+				constexpr std::size_t vulkanNativeGroupNormGroups = 8;
+				auto* groupNormBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeGroupNorm/F32/groups:{}/elements:{}",
+				                vulkanNativeGroupNormGroups, elementCount),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
+				    });
+				groupNormBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),

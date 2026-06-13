@@ -1989,7 +1989,8 @@ packaging slice to a useful production backend.
       - [x] Add the first static-shape f32 `GroupNorm` slice: Vulkan-native SPIR-V now follows the existing ggml-style
             LiteNN semantics where rank-4 uses the last dimension as batch and rank<4 uses a single batch lane.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 50/51 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers `VulkanNativeGroupNorm/F32`
+            rows and the local `groups:8/elements:784` smoke row ran successfully.
       - [ ] Add affine `GroupNorm` and workgroup/subgroup normalization kernels that avoid recomputing the same group or
             axis statistics per output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
