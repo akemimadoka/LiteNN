@@ -6196,6 +6196,40 @@ namespace
 		       (affineShape.size() == 2 && affineShape[0] == 1 && affineShape[1] == axisSize);
 	}
 
+	std::optional<std::size_t> VulkanP0GroupNormGroupedVolume(std::span<const std::size_t> inputShape)
+	{
+		if (inputShape.empty() || inputShape.size() > 4)
+		{
+			return std::nullopt;
+		}
+		std::uint64_t groupedVolume = 1;
+		for (std::size_t dim = 0; dim < std::min<std::size_t>(inputShape.size(), 3); ++dim)
+		{
+			if (inputShape[dim] == 0)
+			{
+				return std::nullopt;
+			}
+			groupedVolume *= static_cast<std::uint64_t>(inputShape[dim]);
+			if (groupedVolume > std::numeric_limits<std::size_t>::max())
+			{
+				return std::nullopt;
+			}
+		}
+		return static_cast<std::size_t>(groupedVolume);
+	}
+
+	bool VulkanP0SupportsGroupNormAffineShape(std::span<const std::size_t> inputShape,
+	                                          std::span<const std::size_t> affineShape)
+	{
+		const auto groupedVolume = VulkanP0GroupNormGroupedVolume(inputShape);
+		if (!groupedVolume)
+		{
+			return false;
+		}
+		return (affineShape.size() == 1 && affineShape[0] == *groupedVolume) ||
+		       (affineShape.size() == 2 && affineShape[0] == 1 && affineShape[1] == *groupedVolume);
+	}
+
 	VulkanNativeSupportReport DiagnoseVulkanP0SingleForwardShape(std::span<const std::size_t> shape,
 	                                                             std::string_view label)
 	{
@@ -6593,11 +6627,6 @@ namespace
 					    VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis,
 					    norm->groupCount));
 				}
-				if (norm->mode == NormalizationMode::GroupNorm && (norm->scale || norm->bias))
-				{
-					return VulkanNativeUnsupported(
-					    "Vulkan native GroupNorm bootstrap slice does not yet support affine scale/bias tensors");
-				}
 				const auto checkAffine = [&](NodeOutput affine, std::string_view label) -> VulkanNativeSupportReport {
 					if (affine.port != 0 || affine.node >= subgraph.NodeCount())
 					{
@@ -6617,12 +6646,17 @@ namespace
 						    "Vulkan native normalization {} tensor must be Float32, got {}", label,
 						    DataTypeName(affineInfo.dtype)));
 					}
-					if (!VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, affineInfo.shape))
+					const auto affineShapeSupported =
+					    norm->mode == NormalizationMode::GroupNorm
+					        ? VulkanP0SupportsGroupNormAffineShape(input.shape, affineInfo.shape)
+					        : VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, affineInfo.shape);
+					if (!affineShapeSupported)
 					{
 						return VulkanNativeUnsupported(std::format(
-						    "Vulkan native normalization {} tensor must have shape [axis] or [1,axis], got input={} "
-						    "axis={} {}={}",
-						    label, Validation::ShapeToString(input.shape), norm->axis, label,
+						    "Vulkan native normalization {} tensor has unsupported affine shape, got mode={} input={} "
+						    "axis={} groupCount={} {}={}",
+						    label, VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis,
+						    norm->groupCount, label,
 						    Validation::ShapeToString(affineInfo.shape)));
 					}
 					return VulkanNativeSupported({});
@@ -7257,10 +7291,6 @@ namespace
 		{
 			return std::nullopt;
 		}
-		if (norm->mode == NormalizationMode::GroupNorm && (norm->scale || norm->bias))
-		{
-			return std::nullopt;
-		}
 		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, norm->input);
 		if (!inputIndex)
 		{
@@ -7286,8 +7316,15 @@ namespace
 				return VulkanP0TensorRef{};
 			}
 			auto ref = GetVulkanP0TensorRef(graph, subgraph, *output, externalBuilder);
-			if (!ref || ref->dtype != DataType::Float32 ||
-			    !VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, ref->shape))
+			if (!ref || ref->dtype != DataType::Float32)
+			{
+				return std::nullopt;
+			}
+			const auto affineShapeSupported =
+			    norm->mode == NormalizationMode::GroupNorm
+			        ? VulkanP0SupportsGroupNormAffineShape(input.shape, ref->shape)
+			        : VulkanP0SupportsNormalizationAffineShape(input.shape, norm->axis, ref->shape);
+			if (!affineShapeSupported)
 			{
 				return std::nullopt;
 			}

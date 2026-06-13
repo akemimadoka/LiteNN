@@ -178,6 +178,51 @@ namespace
 		return graph;
 	}
 
+	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
+	                                        double epsilon = 1e-6)
+	{
+		Graph graph;
+		auto groupedVolume = 1uz;
+		for (auto dim = 0uz; dim < std::min<std::size_t>(shape.size(), 3); ++dim)
+		{
+			groupedVolume *= shape[dim];
+		}
+		std::vector<double> scale(groupedVolume);
+		std::vector<double> bias(groupedVolume);
+		for (std::size_t i = 0; i < groupedVolume; ++i)
+		{
+			scale[i] = 1.0 + 0.25 * static_cast<double>((i % 3) + 1);
+			bias[i] = -0.25 + 0.125 * static_cast<double>(i % 5);
+		}
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(scale), { groupedVolume }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(bias), { groupedVolume }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "group_norm_scale");
+		graph.SetVariableName(biasIndex, "group_norm_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, shape);
+		const auto scaleNode =
+		    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { groupedVolume } } });
+		const auto biasNode =
+		    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { groupedVolume } } });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = NodeOutput{ scaleNode, 0 },
+		                                               .bias = NodeOutput{ biasNode, 0 },
+		                                               .mode = NormalizationMode::GroupNorm,
+		                                               .axis = 0,
+		                                               .groupCount = groupCount,
+		                                               .epsilon = epsilon },
+		                            { OutputInfo{ DataType::Float32, std::move(shape) } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -990,6 +1035,34 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForGroupNorm)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 8u * sizeof(float));
 }
 
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineGroupNormExternalWeights)
+{
+	const auto graph = BuildAffineGroupNormVariableGraph({ 8 }, 4);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm, std::array<std::size_t, 1>{ 8 }, 0, 1e-6,
+	                                      true, true, 4);
+	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "group_norm");
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 8u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 8u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 8u * sizeof(float));
+}
+
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -1673,6 +1746,56 @@ TEST(CompiledModuleVulkanTest, RunsGroupNormArithmetic)
 		{
 			EXPECT_NEAR(actual[i], testCase.expected[i], 1e-3f);
 		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsAffineGroupNormExternalWeightsArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const std::vector<double> input{ 1.0f, 3.0f, 2.0f, 4.0f, 5.0f, 7.0f, 6.0f, 8.0f };
+	std::vector<float> expected;
+	expected.reserve(input.size());
+	for (std::size_t group = 0; group < 4; ++group)
+	{
+		const auto base = group * 2;
+		const auto mean = static_cast<float>((input[base] + input[base + 1]) * 0.5);
+		float variance = 0.0f;
+		for (std::size_t member = 0; member < 2; ++member)
+		{
+			const auto centered = static_cast<float>(input[base + member]) - mean;
+			variance += centered * centered;
+		}
+		variance *= 0.5f;
+		const auto denom = std::sqrt(variance + 1e-6f);
+		for (std::size_t member = 0; member < 2; ++member)
+		{
+			const auto index = base + member;
+			const auto scale = static_cast<float>(1.0 + 0.25 * static_cast<double>((index % 3) + 1));
+			const auto bias = static_cast<float>(-0.25 + 0.125 * static_cast<double>(index % 5));
+			expected.push_back(((static_cast<float>(input[index]) - mean) / denom) * scale + bias);
+		}
+	}
+
+	const auto graph = BuildAffineGroupNormVariableGraph({ 8 }, 4);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>(input, { 8 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
 	}
 }
 
