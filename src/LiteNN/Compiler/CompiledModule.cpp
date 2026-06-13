@@ -5850,6 +5850,9 @@ namespace
 		std::vector<std::size_t> outputShape;
 		std::vector<std::size_t> kernelShape;
 		std::vector<std::size_t> strides;
+		std::vector<std::size_t> lowPads;
+		std::vector<std::size_t> highPads;
+		bool countIncludePad{};
 	};
 
 	struct VulkanP0TensorRef
@@ -6717,7 +6720,7 @@ namespace
 				                                  pool->countIncludePad))
 				{
 					return VulkanNativeUnsupported(std::format(
-					    "Vulkan native Pool2D requires static no-padding rank-4 f32 input/output, got input={} "
+					    "Vulkan native Pool2D requires static rank-4 f32 input/output, got input={} "
 					    "output={} kernel={} strides={} lowPads={} highPads={} countIncludePad={}",
 					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
 					    Validation::ShapeToString(pool->kernelShape), Validation::ShapeToString(pool->strides),
@@ -7366,6 +7369,9 @@ namespace
 			.outputShape = output.shape,
 			.kernelShape = pool->kernelShape,
 			.strides = pool->strides,
+			.lowPads = pool->lowPads,
+			.highPads = pool->highPads,
+			.countIncludePad = pool->countIncludePad,
 		};
 	}
 
@@ -7800,7 +7806,8 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::Pool2DF32);
 		auto spirv = VulkanNativePool2DF32SPIRV(plan->mode, plan->inputShape, plan->outputShape, plan->kernelShape,
-		                                        plan->strides);
+		                                        plan->strides, plan->lowPads, plan->highPads,
+		                                        plan->countIncludePad);
 		payload.spirv = std::move(spirv.words);
 
 		payload.kernels.push_back({

@@ -62,7 +62,10 @@ namespace LiteNN
 	                                                      std::span<const std::size_t> inputShape,
 	                                                      std::span<const std::size_t> outputShape,
 	                                                      std::span<const std::size_t> kernelShape,
-	                                                      std::span<const std::size_t> strides);
+	                                                      std::span<const std::size_t> strides,
+	                                                      std::span<const std::size_t> lowPads = {},
+	                                                      std::span<const std::size_t> highPads = {},
+	                                                      bool countIncludePad = false);
 } // namespace LiteNN
 
 #endif

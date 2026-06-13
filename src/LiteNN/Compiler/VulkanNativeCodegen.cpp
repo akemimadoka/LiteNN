@@ -927,19 +927,28 @@ namespace LiteNN
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildPool2DF32SPIRVModule(
 		    PoolMode mode, std::span<const std::size_t> inputShape, std::span<const std::size_t> outputShape,
 		    std::span<const std::size_t> kernelShape, std::span<const std::size_t> strides,
-		    mlir::MLIRContext& context)
+		    std::span<const std::size_t> lowPads, bool countIncludePad, mlir::MLIRContext& context)
 		{
 			const auto inputElementCount = NumElementsU32(inputShape);
 			const auto outputElementCount = NumElementsU32(outputShape);
 			if (!inputElementCount || !outputElementCount || inputShape.size() != 4 || outputShape.size() != 4 ||
-			    kernelShape.size() != 2 || strides.size() != 2)
+			    kernelShape.size() != 2 || strides.size() != 2 || lowPads.size() != 2)
 			{
 				throw std::runtime_error("Vulkan native Pool2D requires static rank-4 input/output and rank-2 params");
 			}
 			for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[2],
+				                      outputShape[3], kernelShape[0], kernelShape[1], strides[0], strides[1],
+				                      lowPads[0], lowPads[1] })
+			{
+				if (value > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native Pool2D shape or parameter is too large or empty");
+				}
+			}
+			for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[2],
 				                      outputShape[3], kernelShape[0], kernelShape[1], strides[0], strides[1] })
 			{
-				if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+				if (value == 0)
 				{
 					throw std::runtime_error("Vulkan native Pool2D shape or parameter is too large or empty");
 				}
@@ -953,6 +962,8 @@ namespace LiteNN
 			const auto kernelW = static_cast<std::uint32_t>(kernelShape[1]);
 			const auto strideH = static_cast<std::uint32_t>(strides[0]);
 			const auto strideW = static_cast<std::uint32_t>(strides[1]);
+			const auto lowPadH = static_cast<std::uint32_t>(lowPads[0]);
+			const auto lowPadW = static_cast<std::uint32_t>(lowPads[1]);
 
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -991,6 +1002,7 @@ namespace LiteNN
 				    auto channelCount = EmitI32Constant(bodyBuilder, loc, channels);
 				    auto inH = EmitI32Constant(bodyBuilder, loc, inHeight);
 				    auto inW = EmitI32Constant(bodyBuilder, loc, inWidth);
+				    auto zero = EmitI32Constant(bodyBuilder, loc, 0);
 
 				    auto ow = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, outW).getResult();
 				    auto tmp0 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, outW).getResult();
@@ -1021,25 +1033,62 @@ namespace LiteNN
 
 				    auto accumulator = mode == PoolMode::Max ? EmitF32Constant(bodyBuilder, loc, -3.402823466e38f)
 				                                             : EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    auto validCount = EmitI32Constant(bodyBuilder, loc, 0);
+				    auto one = EmitI32Constant(bodyBuilder, loc, 1);
+				    auto invalidMax = EmitF32Constant(bodyBuilder, loc, -3.402823466e38f);
+				    auto zeroF32 = EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    auto lowPadHValue = EmitI32Constant(bodyBuilder, loc, lowPadH);
+				    auto lowPadWValue = EmitI32Constant(bodyBuilder, loc, lowPadW);
+				    auto paddedLimitH =
+				        EmitI32Constant(bodyBuilder, loc, static_cast<std::uint32_t>(lowPadH + inHeight));
+				    auto paddedLimitW =
+				        EmitI32Constant(bodyBuilder, loc, static_cast<std::uint32_t>(lowPadW + inWidth));
 				    for (std::uint32_t kh = 0; kh < kernelH; ++kh)
 				    {
-					    auto ih = bodyBuilder
-					                  .create<mlir::spirv::IAddOp>(loc, startH, EmitI32Constant(bodyBuilder, loc, kh))
-					                  .getResult();
+					    auto paddedH = bodyBuilder
+					                       .create<mlir::spirv::IAddOp>(loc, startH, EmitI32Constant(bodyBuilder, loc, kh))
+					                       .getResult();
+					    auto validH = bodyBuilder
+					                      .create<mlir::spirv::LogicalAndOp>(
+					                          loc,
+					                          bodyBuilder
+					                              .create<mlir::spirv::UGreaterThanEqualOp>(loc, paddedH, lowPadHValue)
+					                              .getResult(),
+					                          bodyBuilder
+					                              .create<mlir::spirv::ULessThanOp>(loc, paddedH, paddedLimitH)
+					                              .getResult())
+					                      .getResult();
+					    auto rawIh = bodyBuilder.create<mlir::spirv::ISubOp>(loc, paddedH, lowPadHValue).getResult();
+					    auto safeIh =
+					        bodyBuilder.create<mlir::spirv::SelectOp>(loc, validH, rawIh, zero).getResult();
 					    for (std::uint32_t kw = 0; kw < kernelW; ++kw)
 					    {
-						    auto iw = bodyBuilder
-						                  .create<mlir::spirv::IAddOp>(loc, startW, EmitI32Constant(bodyBuilder, loc, kw))
-						                  .getResult();
+						    auto paddedW = bodyBuilder
+						                       .create<mlir::spirv::IAddOp>(loc, startW, EmitI32Constant(bodyBuilder, loc, kw))
+						                       .getResult();
+						    auto validW = bodyBuilder
+						                      .create<mlir::spirv::LogicalAndOp>(
+						                          loc,
+						                          bodyBuilder
+						                              .create<mlir::spirv::UGreaterThanEqualOp>(loc, paddedW, lowPadWValue)
+						                              .getResult(),
+						                          bodyBuilder
+						                              .create<mlir::spirv::ULessThanOp>(loc, paddedW, paddedLimitW)
+						                              .getResult())
+						                      .getResult();
+						    auto valid = bodyBuilder.create<mlir::spirv::LogicalAndOp>(loc, validH, validW).getResult();
+						    auto rawIw = bodyBuilder.create<mlir::spirv::ISubOp>(loc, paddedW, lowPadWValue).getResult();
+						    auto safeIw =
+						        bodyBuilder.create<mlir::spirv::SelectOp>(loc, validW, rawIw, zero).getResult();
 						    auto inputOffset = bodyBuilder
 						                           .create<mlir::spirv::IAddOp>(
 						                               loc, baseNC,
 						                               bodyBuilder
 						                                   .create<mlir::spirv::IAddOp>(
 						                                       loc,
-						                                       bodyBuilder.create<mlir::spirv::IMulOp>(loc, ih, inW)
+						                                       bodyBuilder.create<mlir::spirv::IMulOp>(loc, safeIh, inW)
 						                                           .getResult(),
-						                                       iw)
+						                                       safeIw)
 						                                   .getResult())
 						                           .getResult();
 						    auto value =
@@ -1051,25 +1100,51 @@ namespace LiteNN
 						            .getValue();
 						    if (mode == PoolMode::Max)
 						    {
+							    auto candidate =
+							        bodyBuilder.create<mlir::spirv::SelectOp>(loc, valid, value, invalidMax).getResult();
 							    accumulator =
-							        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, accumulator, value).getResult();
+							        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, accumulator, candidate).getResult();
+							    auto increment = bodyBuilder.create<mlir::spirv::SelectOp>(loc, valid, one, zero).getResult();
+							    validCount =
+							        bodyBuilder.create<mlir::spirv::IAddOp>(loc, validCount, increment).getResult();
 						    }
 						    else
 						    {
+							    auto contribution =
+							        bodyBuilder.create<mlir::spirv::SelectOp>(loc, valid, value, zeroF32).getResult();
 							    accumulator =
-							        bodyBuilder.create<mlir::spirv::FAddOp>(loc, accumulator, value).getResult();
+							        bodyBuilder.create<mlir::spirv::FAddOp>(loc, accumulator, contribution).getResult();
+							    if (countIncludePad)
+							    {
+								    validCount = bodyBuilder.create<mlir::spirv::IAddOp>(loc, validCount, one).getResult();
+							    }
+							    else
+							    {
+								    auto increment =
+								        bodyBuilder.create<mlir::spirv::SelectOp>(loc, valid, one, zero).getResult();
+								    validCount =
+								        bodyBuilder.create<mlir::spirv::IAddOp>(loc, validCount, increment).getResult();
+							    }
 						    }
 					    }
 				    }
+				    auto countIsZero = bodyBuilder.create<mlir::spirv::IEqualOp>(loc, validCount, zero).getResult();
 				    if (mode == PoolMode::Average)
 				    {
-					    accumulator =
-					        bodyBuilder
-					            .create<mlir::spirv::FMulOp>(
-					                loc, accumulator,
-					                EmitF32Constant(bodyBuilder, loc,
-					                                1.0f / static_cast<float>(kernelH * kernelW)))
+					    auto divisor =
+					        bodyBuilder.create<mlir::spirv::ConvertSToFOp>(loc, bodyBuilder.getF32Type(), validCount)
 					            .getResult();
+					    auto safeDivisor =
+					        bodyBuilder.create<mlir::spirv::SelectOp>(loc, countIsZero, EmitF32Constant(bodyBuilder, loc, 1.0f),
+					                                                   divisor)
+					            .getResult();
+					    auto average = bodyBuilder.create<mlir::spirv::FDivOp>(loc, accumulator, safeDivisor).getResult();
+					    accumulator = bodyBuilder.create<mlir::spirv::SelectOp>(loc, countIsZero, zeroF32, average).getResult();
+				    }
+				    else
+				    {
+					    accumulator =
+					        bodyBuilder.create<mlir::spirv::SelectOp>(loc, countIsZero, zeroF32, accumulator).getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
@@ -1947,12 +2022,16 @@ namespace LiteNN
 		VulkanNativeGeneratedSPIRV SerializePool2DF32SPIRV(PoolMode mode, std::span<const std::size_t> inputShape,
 		                                                   std::span<const std::size_t> outputShape,
 		                                                   std::span<const std::size_t> kernelShape,
-		                                                   std::span<const std::size_t> strides)
+		                                                   std::span<const std::size_t> strides,
+		                                                   std::span<const std::size_t> lowPads,
+		                                                   bool countIncludePad)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
-			auto module = BuildPool2DF32SPIRVModule(mode, inputShape, outputShape, kernelShape, strides, context);
+			auto module =
+			    BuildPool2DF32SPIRVModule(mode, inputShape, outputShape, kernelShape, strides, lowPads,
+			                              countIncludePad, context);
 			ValidateVulkanShaderModule(module.get());
 
 			std::string mlirText;
@@ -2253,14 +2332,6 @@ namespace LiteNN
 		{
 			return false;
 		}
-		if (lowPads[0] != 0 || lowPads[1] != 0 || highPads[0] != 0 || highPads[1] != 0)
-		{
-			return false;
-		}
-		if (countIncludePad)
-		{
-			return false;
-		}
 		if (!NumElementsU32(inputShape).has_value() || !NumElementsU32(outputShape).has_value())
 		{
 			return false;
@@ -2274,12 +2345,23 @@ namespace LiteNN
 				return false;
 			}
 		}
-		if (kernelShape[0] > inputShape[2] || kernelShape[1] > inputShape[3])
+		for (const auto value : { lowPads[0], lowPads[1], highPads[0], highPads[1] })
+		{
+			if (value > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+		}
+		const auto paddedH = static_cast<std::uint64_t>(lowPads[0]) + inputShape[2] + highPads[0];
+		const auto paddedW = static_cast<std::uint64_t>(lowPads[1]) + inputShape[3] + highPads[1];
+		if (paddedH > std::numeric_limits<std::uint32_t>::max() ||
+		    paddedW > std::numeric_limits<std::uint32_t>::max() ||
+		    kernelShape[0] > paddedH || kernelShape[1] > paddedW)
 		{
 			return false;
 		}
-		const auto expectedH = (inputShape[2] - kernelShape[0]) / strides[0] + 1;
-		const auto expectedW = (inputShape[3] - kernelShape[1]) / strides[1] + 1;
+		const auto expectedH = (paddedH - kernelShape[0]) / strides[0] + 1;
+		const auto expectedW = (paddedW - kernelShape[1]) / strides[1] + 1;
 		return inputShape[0] == outputShape[0] && inputShape[1] == outputShape[1] &&
 		       outputShape[2] == expectedH && outputShape[3] == expectedW;
 	}
@@ -2288,15 +2370,21 @@ namespace LiteNN
 	                                                      std::span<const std::size_t> inputShape,
 	                                                      std::span<const std::size_t> outputShape,
 	                                                      std::span<const std::size_t> kernelShape,
-	                                                      std::span<const std::size_t> strides)
+	                                                      std::span<const std::size_t> strides,
+	                                                      std::span<const std::size_t> lowPads,
+	                                                      std::span<const std::size_t> highPads,
+	                                                      bool countIncludePad)
 	{
 		constexpr std::array<std::size_t, 2> zeroPads{ 0, 0 };
-		if (!VulkanNativeSupportsPool2DF32(mode, inputShape, outputShape, kernelShape, strides, zeroPads, zeroPads,
-		                                   false))
+		const auto effectiveLowPads = lowPads.empty() ? std::span<const std::size_t>(zeroPads) : lowPads;
+		const auto effectiveHighPads = highPads.empty() ? std::span<const std::size_t>(zeroPads) : highPads;
+		if (!VulkanNativeSupportsPool2DF32(mode, inputShape, outputShape, kernelShape, strides, effectiveLowPads,
+		                                   effectiveHighPads, countIncludePad))
 		{
-			throw std::runtime_error("Vulkan native f32 Pool2D requires static rank-4 no-padding shape and rank-2 params");
+			throw std::runtime_error("Vulkan native f32 Pool2D requires static rank-4 shape and rank-2 params");
 		}
-		return SerializePool2DF32SPIRV(mode, inputShape, outputShape, kernelShape, strides);
+		return SerializePool2DF32SPIRV(mode, inputShape, outputShape, kernelShape, strides, effectiveLowPads,
+		                               countIncludePad);
 	}
 
 	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)

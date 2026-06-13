@@ -199,6 +199,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPaddedPool2DGraph(PoolMode mode, bool countIncludePad)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 1, 2, 2 });
+		const auto out = sg.AddNode(Pool2DNode{ .input = { input, 0 },
+		                                        .mode = mode,
+		                                        .kernelShape = { 2, 2 },
+		                                        .strides = { 1, 1 },
+		                                        .lowPads = { 1, 1 },
+		                                        .highPads = { 1, 1 },
+		                                        .countIncludePad = countIncludePad },
+		                            { OutputInfo{ DataType::Float32, { 1, 1, 3, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
 	                                        double epsilon = 1e-6)
 	{
@@ -1115,6 +1136,29 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPool2D)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 4u * sizeof(float));
 }
 
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPaddedPool2D)
+{
+	const auto graph = BuildPaddedPool2DGraph(PoolMode::Average, true);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativePool2DF32SPIRV(PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                               std::array<std::size_t, 4>{ 1, 1, 3, 3 },
+	                               std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 },
+	                               std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 1, 1 },
+	                               true);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Pool2DF32)), 0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "pool2d_average");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 4u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 9u * sizeof(float));
+}
+
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -1881,6 +1925,56 @@ TEST(CompiledModuleVulkanTest, RunsPool2DArithmetic)
 
 		std::array inputs{
 			Tensor<Vulkan>(input, { 1, 1, 3, 3 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHostVector(outputs[0]);
+		ASSERT_EQ(actual.size(), testCase.expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i], testCase.expected[i], 1e-5f);
+		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsPaddedPool2DArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	struct PoolRunCase
+	{
+		PoolMode mode{ PoolMode::Max };
+		bool countIncludePad{};
+		std::vector<float> expected;
+	};
+
+	const std::vector<double> input{ 1.0f, 2.0f,
+		                            3.0f, 4.0f };
+	const std::array cases{
+		PoolRunCase{ .mode = PoolMode::Max,
+		             .countIncludePad = false,
+		             .expected = { 1.0f, 2.0f, 2.0f, 3.0f, 4.0f, 4.0f, 3.0f, 4.0f, 4.0f } },
+		PoolRunCase{ .mode = PoolMode::Average,
+		             .countIncludePad = false,
+		             .expected = { 1.0f, 1.5f, 2.0f, 2.0f, 2.5f, 3.0f, 3.0f, 3.5f, 4.0f } },
+		PoolRunCase{ .mode = PoolMode::Average,
+		             .countIncludePad = true,
+		             .expected = { 0.25f, 0.75f, 0.5f, 1.0f, 2.5f, 1.5f, 0.75f, 1.75f, 1.0f } },
+	};
+
+	Vulkan device;
+	for (const auto& testCase : cases)
+	{
+		const auto graph = BuildPaddedPool2DGraph(testCase.mode, testCase.countIncludePad);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		std::array inputs{
+			Tensor<Vulkan>(input, { 1, 1, 2, 2 }, DataType::Float32, device),
 		};
 		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 		ASSERT_EQ(outputs.size(), 1);
