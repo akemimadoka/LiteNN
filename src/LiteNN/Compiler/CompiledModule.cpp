@@ -5857,6 +5857,7 @@ namespace
 		std::optional<VulkanP0TensorRef> bias;
 		std::uint32_t elementCount{};
 		std::size_t axis{};
+		std::size_t groupCount{ 1 };
 		double epsilon{ 1e-5 };
 		std::vector<std::size_t> inputShape;
 	};
@@ -6571,10 +6572,6 @@ namespace
 				{
 					return VulkanNativeUnsupported("Vulkan native normalization input must be a direct graph parameter");
 				}
-				if (norm->groupCount != 1)
-				{
-					return VulkanNativeUnsupported("Vulkan native normalization bootstrap slice requires groupCount=1");
-				}
 				const auto& input = subgraph.Params()[*inputIndex];
 				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
 				{
@@ -6588,12 +6585,18 @@ namespace
 					    "Vulkan native normalization slice requires identical input/output shapes, got {} -> {}",
 					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
 				}
-				if (!VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis))
+				if (!VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis, norm->groupCount))
 				{
 					return VulkanNativeUnsupported(std::format(
-					    "Vulkan native normalization requires LayerNorm/RMSNorm static non-empty shape and in-range "
-					    "axis, got mode={} input={} axis={}",
-					    VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis));
+					    "Vulkan native normalization requires supported static non-empty shape, got mode={} input={} "
+					    "axis={} groupCount={}",
+					    VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis,
+					    norm->groupCount));
+				}
+				if (norm->mode == NormalizationMode::GroupNorm && (norm->scale || norm->bias))
+				{
+					return VulkanNativeUnsupported(
+					    "Vulkan native GroupNorm bootstrap slice does not yet support affine scale/bias tensors");
 				}
 				const auto checkAffine = [&](NodeOutput affine, std::string_view label) -> VulkanNativeSupportReport {
 					if (affine.port != 0 || affine.node >= subgraph.NodeCount())
@@ -6639,8 +6642,9 @@ namespace
 					}
 				}
 				return VulkanNativeSupported(
-				    std::format("f32 normalization {} axis={} affine={}/{}", VulkanNativeOpName(norm->mode),
-				                norm->axis, norm->scale.has_value(), norm->bias.has_value()));
+				    std::format("f32 normalization {} axis={} groupCount={} affine={}/{}",
+				                VulkanNativeOpName(norm->mode), norm->axis, norm->groupCount, norm->scale.has_value(),
+				                norm->bias.has_value()));
 			}
 
 			return VulkanNativeUnsupported(
@@ -7249,7 +7253,11 @@ namespace
 		}
 
 		const auto* norm = std::get_if<NormalizationNode>(&resultEntry.node);
-		if (!norm || norm->groupCount != 1)
+		if (!norm)
+		{
+			return std::nullopt;
+		}
+		if (norm->mode == NormalizationMode::GroupNorm && (norm->scale || norm->bias))
 		{
 			return std::nullopt;
 		}
@@ -7262,7 +7270,8 @@ namespace
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
 		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-		    input.shape != output.shape || !VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis))
+		    input.shape != output.shape ||
+		    !VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis, norm->groupCount))
 		{
 			return std::nullopt;
 		}
@@ -7310,6 +7319,7 @@ namespace
 			.bias = std::move(bias),
 			.elementCount = *elementCount,
 			.axis = norm->axis,
+			.groupCount = norm->groupCount,
 			.epsilon = norm->epsilon,
 			.inputShape = input.shape,
 		};
@@ -7576,7 +7586,8 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
 		auto spirv = VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
-		                                               plan->scale.has_value(), plan->bias.has_value());
+		                                               plan->scale.has_value(), plan->bias.has_value(),
+		                                               plan->groupCount);
 		payload.spirv = std::move(spirv.words);
 
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);

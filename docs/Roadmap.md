@@ -1986,8 +1986,12 @@ packaging slice to a useful production backend.
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1` rows and the local
             `LayerNormAxis1/batch:1/width:128` smoke row ran successfully.
-      - [ ] Add `GroupNorm` and workgroup/subgroup normalization kernels that avoid recomputing the same axis
-            statistics per output element.
+      - [x] Add the first static-shape f32 `GroupNorm` slice: Vulkan-native SPIR-V now follows the existing ggml-style
+            LiteNN semantics where rank-4 uses the last dimension as batch and rank<4 uses a single batch lane.
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 50/51 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped.
+      - [ ] Add affine `GroupNorm` and workgroup/subgroup normalization kernels that avoid recomputing the same group or
+            axis statistics per output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

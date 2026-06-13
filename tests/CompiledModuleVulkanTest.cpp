@@ -157,6 +157,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGroupNormGraph(std::vector<std::size_t> shape, std::size_t groupCount, double epsilon = 1e-6)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, shape);
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = std::nullopt,
+		                                               .bias = std::nullopt,
+		                                               .mode = NormalizationMode::GroupNorm,
+		                                               .axis = 0,
+		                                               .groupCount = groupCount,
+		                                               .epsilon = epsilon },
+		                            { OutputInfo{ DataType::Float32, std::move(shape) } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -672,6 +693,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForNormalization)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForGroupNorm)
+{
+	const auto graph = BuildGroupNormGraph({ 8 }, 4);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 normalization GroupNorm"), std::string::npos);
+	EXPECT_NE(report.capability.find("groupCount=4"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -935,6 +967,27 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineNormalizationEx
 	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
 	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 6u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForGroupNorm)
+{
+	const auto graph = BuildGroupNormGraph({ 8 }, 4);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm, std::array<std::size_t, 1>{ 8 }, 0, 1e-6,
+	                                      false, false, 4);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "group_norm");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 8u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 8u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
@@ -1570,6 +1623,56 @@ TEST(CompiledModuleVulkanTest, RunsAffineNormalizationExternalWeightsArithmetic)
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsGroupNormArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	struct GroupNormRunCase
+	{
+		Graph graph;
+		std::vector<double> input;
+		std::vector<float> expected;
+		std::vector<std::size_t> shape;
+	};
+
+	std::vector<GroupNormRunCase> cases;
+	cases.push_back({
+	    .graph = BuildGroupNormGraph({ 8 }, 4),
+	    .input = { 1.0f, 3.0f, 2.0f, 4.0f, 5.0f, 7.0f, 6.0f, 8.0f },
+	    .expected = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f },
+	    .shape = { 8 },
+	});
+	cases.push_back({
+	    .graph = BuildGroupNormGraph({ 4, 1, 1, 2 }, 2),
+	    .input = { 1.0f, 10.0f, 3.0f, 30.0f, 2.0f, 20.0f, 4.0f, 40.0f },
+	    .expected = { -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f },
+	    .shape = { 4, 1, 1, 2 },
+	});
+
+	Vulkan device;
+	for (const auto& testCase : cases)
+	{
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(testCase.graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		std::array inputs{
+			Tensor<Vulkan>(testCase.input, testCase.shape, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHostVector(outputs[0]);
+		ASSERT_EQ(actual.size(), testCase.expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i], testCase.expected[i], 1e-3f);
+		}
 	}
 }
 

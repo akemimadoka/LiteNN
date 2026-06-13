@@ -291,6 +291,8 @@ namespace LiteNN
 				return "layer_norm";
 			case NormalizationMode::RMSNorm:
 				return "rms_norm";
+			case NormalizationMode::GroupNorm:
+				return "group_norm";
 			default:
 				throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
 			}
@@ -1053,16 +1055,59 @@ namespace LiteNN
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildNormalizationF32SPIRVModule(
 		    NormalizationMode mode, std::span<const std::size_t> inputShape, std::size_t axis, double epsilon,
-		    bool hasScale, bool hasBias, mlir::MLIRContext& context)
+		    bool hasScale, bool hasBias, std::size_t groupCount, mlir::MLIRContext& context)
 		{
 			const auto elementCount = NumElementsU32(inputShape);
-			const auto innerSize = AxisInnerSizeU32(inputShape, axis);
-			if (!elementCount || !innerSize || axis >= inputShape.size() || inputShape[axis] == 0 ||
-			    inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+			const auto isGroupNorm = mode == NormalizationMode::GroupNorm;
+			std::uint32_t reductionSize = 0;
+			std::uint32_t innerSizeValue = 1;
+			std::uint32_t batchSize = 1;
+			if (isGroupNorm)
+			{
+				if (!elementCount || inputShape.empty() || inputShape.size() > 4 || groupCount == 0 ||
+				    groupCount > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native GroupNorm shape or group count is invalid");
+				}
+				if (inputShape.size() == 4)
+				{
+					if (inputShape[3] == 0 || inputShape[3] > std::numeric_limits<std::uint32_t>::max())
+					{
+						throw std::runtime_error("Vulkan native GroupNorm batch dimension is invalid");
+					}
+					batchSize = static_cast<std::uint32_t>(inputShape[3]);
+				}
+				std::uint64_t groupedVolume = 1;
+				for (std::size_t dim = 0; dim < std::min<std::size_t>(inputShape.size(), 3); ++dim)
+				{
+					if (inputShape[dim] == 0)
+					{
+						throw std::runtime_error("Vulkan native GroupNorm shape is empty");
+					}
+					groupedVolume *= static_cast<std::uint64_t>(inputShape[dim]);
+				}
+				if (groupedVolume % groupCount != 0 ||
+				    groupedVolume / groupCount > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native GroupNorm grouped volume is invalid");
+				}
+				reductionSize = static_cast<std::uint32_t>(groupedVolume / groupCount);
+			}
+			else
+			{
+				const auto innerSize = AxisInnerSizeU32(inputShape, axis);
+				if (!elementCount || !innerSize || axis >= inputShape.size() || inputShape[axis] == 0 ||
+				    inputShape[axis] > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native normalization shape is too large or empty");
+				}
+				reductionSize = static_cast<std::uint32_t>(inputShape[axis]);
+				innerSizeValue = *innerSize;
+			}
+			if (reductionSize == 0)
 			{
 				throw std::runtime_error("Vulkan native normalization shape is too large or empty");
 			}
-			const auto axisSize = static_cast<std::uint32_t>(inputShape[axis]);
 
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -1109,67 +1154,78 @@ namespace LiteNN
 			mlir::spirv::SelectionOp::createIfThen(
 			    loc, inBounds,
 			    [&](mlir::OpBuilder& bodyBuilder) {
-				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
-				    auto axisValue = EmitI32Constant(bodyBuilder, loc, axisSize);
-				    auto axisIndex =
-				        bodyBuilder
-				            .create<mlir::spirv::UModOp>(
-				                loc, bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult(),
-				                axisValue)
-				            .getResult();
-				    auto base = bodyBuilder
-				                    .create<mlir::spirv::ISubOp>(
-				                        loc, outputIndex,
-				                        bodyBuilder.create<mlir::spirv::IMulOp>(loc, axisIndex, inner).getResult())
-				                    .getResult();
+				    const auto loadAtOffset = [&](mlir::OpBuilder& b, mlir::Value offset) {
+					    return b.create<mlir::spirv::LoadOp>(
+					                loc, b.getF32Type(), EmitF32StorageBufferElementPointer(b, loc, input, offset),
+					                nullptr, nullptr)
+					        .getValue();
+				    };
+				    auto inner = EmitI32Constant(bodyBuilder, loc, innerSizeValue);
+				    auto reductionValue = EmitI32Constant(bodyBuilder, loc, reductionSize);
+				    auto batchValue = EmitI32Constant(bodyBuilder, loc, batchSize);
+				    mlir::Value affineIndex;
+				    mlir::Value base;
+				    if (isGroupNorm)
+				    {
+					    auto batchIndex = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, batchValue).getResult();
+					    auto groupedIndex =
+					        bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, batchValue).getResult();
+					    auto groupIndex =
+					        bodyBuilder.create<mlir::spirv::UDivOp>(loc, groupedIndex, reductionValue).getResult();
+					    auto groupBase = bodyBuilder.create<mlir::spirv::IMulOp>(loc, groupIndex, reductionValue).getResult();
+					    affineIndex = groupedIndex;
+					    base = bodyBuilder
+					               .create<mlir::spirv::IAddOp>(
+					                   loc,
+					                   bodyBuilder.create<mlir::spirv::IMulOp>(loc, groupBase, batchValue).getResult(),
+					                   batchIndex)
+					               .getResult();
+				    }
+				    else
+				    {
+					    auto axisValue = reductionValue;
+					    auto axisIndex =
+					        bodyBuilder
+					            .create<mlir::spirv::UModOp>(
+					                loc, bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult(),
+					                axisValue)
+					            .getResult();
+					    affineIndex = axisIndex;
+					    base = bodyBuilder
+					               .create<mlir::spirv::ISubOp>(
+					                   loc, outputIndex,
+					                   bodyBuilder.create<mlir::spirv::IMulOp>(loc, axisIndex, inner).getResult())
+					               .getResult();
+				    }
+				    const auto memberOffset = [&](mlir::OpBuilder& b, std::uint32_t reduceIndex) {
+					    const auto step = isGroupNorm ? batchValue : inner;
+					    return b.create<mlir::spirv::IAddOp>(
+					                loc, base,
+					                b.create<mlir::spirv::IMulOp>(loc, EmitI32Constant(b, loc, reduceIndex), step)
+					                    .getResult())
+					        .getResult();
+				    };
 
 				    auto mean = EmitF32Constant(bodyBuilder, loc, 0.0f);
-				    if (mode == NormalizationMode::LayerNorm)
+				    if (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::GroupNorm)
 				    {
-					    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+					    for (std::uint32_t reduceIndex = 0; reduceIndex < reductionSize; ++reduceIndex)
 					    {
-						    auto offset = bodyBuilder
-						                      .create<mlir::spirv::IAddOp>(
-						                          loc, base,
-						                          bodyBuilder
-						                              .create<mlir::spirv::IMulOp>(
-						                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
-						                              .getResult())
-						                      .getResult();
-						    auto value =
-						        bodyBuilder
-						            .create<mlir::spirv::LoadOp>(
-						                loc, bodyBuilder.getF32Type(),
-						                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset), nullptr,
-						                nullptr)
-						            .getValue();
+						    auto value = loadAtOffset(bodyBuilder, memberOffset(bodyBuilder, reduceIndex));
 						    mean = bodyBuilder.create<mlir::spirv::FAddOp>(loc, mean, value).getResult();
 					    }
 					    mean = bodyBuilder
 					               .create<mlir::spirv::FMulOp>(
-					                   loc, mean, EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
+					                   loc, mean,
+					                   EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
 					               .getResult();
 				    }
 
 				    auto variance = EmitF32Constant(bodyBuilder, loc, 0.0f);
-				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+				    for (std::uint32_t reduceIndex = 0; reduceIndex < reductionSize; ++reduceIndex)
 				    {
-					    auto offset = bodyBuilder
-					                      .create<mlir::spirv::IAddOp>(
-					                          loc, base,
-					                          bodyBuilder
-					                              .create<mlir::spirv::IMulOp>(
-					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
-					                              .getResult())
-					                      .getResult();
-					    auto value =
-					        bodyBuilder
-					            .create<mlir::spirv::LoadOp>(
-					                loc, bodyBuilder.getF32Type(),
-					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset), nullptr,
-					                nullptr)
-					            .getValue();
-					    auto centered = mode == NormalizationMode::LayerNorm
+					    auto value = loadAtOffset(bodyBuilder, memberOffset(bodyBuilder, reduceIndex));
+					    auto centered = (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::GroupNorm)
 					                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult()
 					                        : value;
 					    auto squared = bodyBuilder.create<mlir::spirv::FMulOp>(loc, centered, centered).getResult();
@@ -1178,7 +1234,7 @@ namespace LiteNN
 				    variance = bodyBuilder
 				                   .create<mlir::spirv::FMulOp>(
 				                       loc, variance,
-				                       EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
+				                       EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
 				                   .getResult();
 				    auto denom = bodyBuilder
 				                     .create<mlir::spirv::GLSqrtOp>(
@@ -1195,7 +1251,7 @@ namespace LiteNN
 				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, outputIndex), nullptr,
 				                nullptr)
 				            .getValue();
-				    auto centered = mode == NormalizationMode::LayerNorm
+				    auto centered = (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::GroupNorm)
 				                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult()
 				                        : current;
 				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
@@ -1205,7 +1261,7 @@ namespace LiteNN
 					        bodyBuilder
 					            .create<mlir::spirv::LoadOp>(
 					                loc, bodyBuilder.getF32Type(),
-					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *scale, axisIndex), nullptr,
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *scale, affineIndex), nullptr,
 					                nullptr)
 					            .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FMulOp>(loc, normalized, scaleValue).getResult();
@@ -1216,7 +1272,7 @@ namespace LiteNN
 					        bodyBuilder
 					            .create<mlir::spirv::LoadOp>(
 					                loc, bodyBuilder.getF32Type(),
-					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, axisIndex), nullptr,
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, affineIndex), nullptr,
 					                nullptr)
 					            .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FAddOp>(loc, normalized, biasValue).getResult();
@@ -1709,12 +1765,13 @@ namespace LiteNN
 		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
 		                                                          std::span<const std::size_t> inputShape,
 		                                                          std::size_t axis, double epsilon, bool hasScale,
-		                                                          bool hasBias)
+		                                                          bool hasBias, std::size_t groupCount)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
-			auto module = BuildNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, hasScale, hasBias, context);
+			auto module =
+			    BuildNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, hasScale, hasBias, groupCount, context);
 			ValidateVulkanShaderModule(module.get());
 
 			std::string mlirText;
@@ -1968,11 +2025,40 @@ namespace LiteNN
 	}
 
 	bool VulkanNativeSupportsNormalizationF32(NormalizationMode mode, std::span<const std::size_t> inputShape,
-	                                          std::size_t axis)
+	                                          std::size_t axis, std::size_t groupCount)
 	{
-		if (mode != NormalizationMode::LayerNorm && mode != NormalizationMode::RMSNorm)
+		if (mode != NormalizationMode::LayerNorm && mode != NormalizationMode::RMSNorm &&
+		    mode != NormalizationMode::GroupNorm)
 		{
 			return false;
+		}
+		if (mode == NormalizationMode::GroupNorm)
+		{
+			if (inputShape.empty() || inputShape.size() > 4 || groupCount == 0 ||
+			    groupCount > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+			const auto elementCount = NumElementsU32(inputShape);
+			if (!elementCount)
+			{
+				return false;
+			}
+			if (inputShape.size() == 4 && inputShape[3] > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+			std::uint64_t groupedVolume = 1;
+			for (std::size_t dim = 0; dim < std::min<std::size_t>(inputShape.size(), 3); ++dim)
+			{
+				if (inputShape[dim] == 0)
+				{
+					return false;
+				}
+				groupedVolume *= static_cast<std::uint64_t>(inputShape[dim]);
+			}
+			return groupedVolume % groupCount == 0 &&
+			       groupedVolume / groupCount <= std::numeric_limits<std::uint32_t>::max();
 		}
 		if (axis >= inputShape.size())
 		{
@@ -1988,14 +2074,15 @@ namespace LiteNN
 	VulkanNativeGeneratedSPIRV VulkanNativeNormalizationF32SPIRV(NormalizationMode mode,
 	                                                             std::span<const std::size_t> inputShape,
 	                                                             std::size_t axis, double epsilon,
-	                                                             bool hasScale, bool hasBias)
+	                                                             bool hasScale, bool hasBias,
+	                                                             std::size_t groupCount)
 	{
-		if (!VulkanNativeSupportsNormalizationF32(mode, inputShape, axis))
+		if (!VulkanNativeSupportsNormalizationF32(mode, inputShape, axis, groupCount))
 		{
 			throw std::runtime_error(
 			    "Vulkan native f32 normalization requires LayerNorm/RMSNorm, static non-empty shape, and an in-range axis");
 		}
-		return SerializeNormalizationF32SPIRV(mode, inputShape, axis, epsilon, hasScale, hasBias);
+		return SerializeNormalizationF32SPIRV(mode, inputShape, axis, epsilon, hasScale, hasBias, groupCount);
 	}
 
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType)
