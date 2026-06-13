@@ -2001,7 +2001,9 @@ packaging slice to a useful production backend.
       - [x] Add the first f32 no-padding `Pool2DNode` slice: Vulkan-native SPIR-V now supports static rank-4 NCHW
             MaxPool/AveragePool with rank-2 kernel/stride parameters and zero low/high pads.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 55/56 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativePool2D/F32/Max|Average` rows and the local `Average/batch:1/channels:8/spatial:16` smoke row
+            ran successfully.
       - [ ] Add padded Pool2D, convolution, and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

@@ -965,6 +965,29 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanPool2DGraph(PoolMode mode, std::size_t batch, std::size_t channels, std::size_t height,
+	                             std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, channels, height, width });
+		const auto outHeight = height - 1;
+		const auto outWidth = width - 1;
+		const auto out = sg.AddNode(Pool2DNode{ .input = { input, 0 },
+		                                        .mode = mode,
+		                                        .kernelShape = { 2, 2 },
+		                                        .strides = { 1, 1 },
+		                                        .lowPads = { 0, 0 },
+		                                        .highPads = { 0, 0 },
+		                                        .countIncludePad = false },
+		                            { OutputInfo{ DataType::Float32, { batch, channels, outHeight, outWidth } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildVulkanAffineGroupNormGraph(std::size_t elementCount, std::size_t groupCount)
 	{
 		Graph graph;
@@ -1026,6 +1049,19 @@ namespace
 			return "LayerNormAxis1";
 		case NormalizationMode::RMSNorm:
 			return "RMSNormAxis1";
+		default:
+			return "Unknown";
+		}
+	}
+
+	std::string_view PoolModeBenchmarkName(PoolMode mode)
+	{
+		switch (mode)
+		{
+		case PoolMode::Max:
+			return "Max";
+		case PoolMode::Average:
+			return "Average";
 		default:
 			return "Unknown";
 		}
@@ -1151,6 +1187,20 @@ namespace
 
 		std::vector<Tensor<Vulkan>> inputs;
 		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, width });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
+	std::vector<Tensor<Vulkan>> MakeVulkanPool2DInputs(const std::vector<float>& data, std::size_t batch,
+	                                                   std::size_t channels, std::size_t height, std::size_t width)
+	{
+		if (data.size() != batch * channels * height * width)
+		{
+			throw std::invalid_argument("Vulkan Pool2D benchmark input does not match the requested shape");
+		}
+
+		std::vector<Tensor<Vulkan>> inputs;
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, channels, height, width });
 		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
 		return inputs;
 	}
@@ -1507,6 +1557,41 @@ namespace
 		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativePool2DRunTensorsInto(benchmark::State& state, PoolMode mode, std::size_t batch,
+	                                        std::size_t channels, std::size_t height, std::size_t width)
+	{
+		auto graph = BuildVulkanPool2DGraph(mode, batch, channels, height, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Pool2D benchmark");
+			return;
+		}
+
+		const auto inputElementCount = batch * channels * height * width;
+		auto inputData = MakeElementwiseInputData(inputElementCount, mode == PoolMode::Max ? 17u : 18u);
+		auto inputs = MakeVulkanPool2DInputs(inputData, batch, channels, height, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto outputElementCount = batch * channels * (height - 1) * (width - 1);
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(outputElementCount));
+		state.counters["output_elements"] =
+		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1847,6 +1932,21 @@ namespace
 					    BMVulkanNativeAffineGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
 				    });
 				affineGroupNormBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				constexpr std::size_t vulkanNativePoolChannels = 8;
+				constexpr std::size_t vulkanNativePoolSpatial = 16;
+				for (const auto poolMode : { PoolMode::Max, PoolMode::Average })
+				{
+					auto* poolBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativePool2D/F32/{}/batch:{}/channels:{}/spatial:{}",
+					                PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
+					                vulkanNativePoolSpatial),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativePool2DRunTensorsInto(state, poolMode, batch, vulkanNativePoolChannels,
+						                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial);
+					    });
+					poolBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),
