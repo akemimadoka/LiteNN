@@ -40,6 +40,8 @@ namespace LiteNN
 	bool VulkanNativeSupportsReduceF32(ReduceOp op, std::span<const std::size_t> inputShape, std::size_t axis);
 	VulkanNativeGeneratedSPIRV VulkanNativeReduceF32SPIRV(ReduceOp op, std::span<const std::size_t> inputShape,
 	                                                      std::size_t axis);
+	bool VulkanNativeSupportsSoftmaxF32(std::span<const std::size_t> inputShape, std::size_t axis);
+	VulkanNativeGeneratedSPIRV VulkanNativeSoftmaxF32SPIRV(std::span<const std::size_t> inputShape, std::size_t axis);
 } // namespace LiteNN
 
 #endif

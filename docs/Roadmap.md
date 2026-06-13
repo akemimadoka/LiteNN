@@ -1969,7 +1969,11 @@ packaging slice to a useful production backend.
             workgroup/subgroup reductions for larger axes.
       - [ ] Complete f32 multi-layer linear-chain lowering with workspace/multi-kernel schedules, then replace the
             current one-output-element-per-thread MatMul/MatMulBias kernels with tiled/shared-memory kernels.
-      - [ ] Add softmax and normalization (`LayerNorm`, `RMSNorm`, group normalization).
+      - [x] Add the first static-axis f32 `SoftmaxNode` slice: Vulkan-native SPIR-V now computes numerically stable
+            max-subtracted softmax with one invocation per output element and scalar loops over the softmax axis.
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped.
+      - [ ] Add normalization (`LayerNorm`, `RMSNorm`, group normalization).
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

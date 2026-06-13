@@ -5832,6 +5832,14 @@ namespace
 		std::vector<std::size_t> outputShape;
 	};
 
+	struct VulkanP0SoftmaxPlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+		std::size_t axis{};
+		std::vector<std::size_t> inputShape;
+	};
+
 	struct VulkanP0TensorRef
 	{
 		VulkanNativeArgumentKind argumentKind{ VulkanNativeArgumentKind::InputTensor };
@@ -6498,9 +6506,38 @@ namespace
 				    std::format("f32 reduce {} axis={}", VulkanNativeOpName(reduce->op), reduce->axis));
 			}
 
+			if (const auto* softmax = std::get_if<SoftmaxNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, softmax->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native softmax input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native softmax slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (input.shape != output.shape)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native softmax slice requires identical input/output shapes, got {} -> {}",
+					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+				}
+				if (!VulkanNativeSupportsSoftmaxF32(input.shape, softmax->axis))
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native softmax requires static non-empty shape and in-range axis, got input={} axis={}",
+					    Validation::ShapeToString(input.shape), softmax->axis));
+				}
+				return VulkanNativeSupported(std::format("f32 softmax axis={}", softmax->axis));
+			}
+
 			return VulkanNativeUnsupported(
-			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, or ReduceOpNode result "
-			    "nodes");
+			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, ReduceOpNode, or "
+			    "SoftmaxNode result nodes");
 		}
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
@@ -7020,6 +7057,63 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0SoftmaxPlan> MatchVulkanP0SoftmaxF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* softmax = std::get_if<SoftmaxNode>(&resultEntry.node);
+		if (!softmax)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, softmax->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    input.shape != output.shape || !VulkanNativeSupportsSoftmaxF32(input.shape, softmax->axis))
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0SoftmaxPlan{
+			.inputIndex = *inputIndex,
+			.elementCount = *elementCount,
+			.axis = softmax->axis,
+			.inputShape = input.shape,
+		};
+	}
+
 	VulkanNativeFeature VulkanNativeUnaryF32FeatureFlag(UnaryOp op)
 	{
 		switch (op)
@@ -7204,6 +7298,53 @@ namespace
 		          .binding = 1,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSoftmaxF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0SoftmaxF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SoftmaxF32);
+		auto spirv = VulkanNativeSoftmaxF32SPIRV(plan->inputShape, plan->axis);
+		payload.spirv = std::move(spirv.words);
+
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		payload.kernels.push_back({
+		    .entryPoint = "softmax",
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
 		    },
 		});
 
@@ -9821,6 +9962,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeReduceF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeSoftmaxF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

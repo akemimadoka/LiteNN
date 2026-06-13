@@ -90,6 +90,21 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSoftmaxGraph(std::size_t axis)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, axis },
+		                            { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleMatMulGraph()
 	{
 		Graph graph;
@@ -583,6 +598,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForReduce)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSoftmax)
+{
+	const auto graph = BuildSoftmaxGraph(1);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 softmax"), std::string::npos);
+	EXPECT_NE(report.capability.find("axis=1"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -766,6 +792,31 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForReduce)
 	EXPECT_EQ(payload.kernels[0].arguments[1].index, 0u);
 	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSoftmax)
+{
+	const auto graph = BuildSoftmaxGraph(1);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSoftmaxF32SPIRV(std::array<std::size_t, 2>{ 2, 3 }, 1);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_TRUE(payload.featureSet.CheckIsValid());
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SoftmaxF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "softmax");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 6u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
@@ -1253,6 +1304,36 @@ TEST(CompiledModuleVulkanTest, RunsSimpleReduceArithmetic)
 		{
 			EXPECT_FLOAT_EQ(actual[i], testCase.expected[i]);
 		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleSoftmaxArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSoftmaxGraph(1);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1000.0, 999.0, 998.0, -1.0, 0.0, 1.0 }, { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{
+		0.66524096f, 0.24472847f, 0.09003057f,
+		0.09003057f, 0.24472847f, 0.66524096f,
+	};
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
 	}
 }
 
