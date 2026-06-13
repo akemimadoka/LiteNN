@@ -909,6 +909,42 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanAffineNormalizationGraph(NormalizationMode mode, std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		std::vector<double> scale(width);
+		std::vector<double> bias(width);
+		for (std::size_t i = 0; i < width; ++i)
+		{
+			scale[i] = 0.75 + 0.01 * static_cast<double>(i % 17);
+			bias[i] = -0.05 + 0.001 * static_cast<double>(i % 23);
+		}
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(scale), { width }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(bias), { width }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "norm_scale");
+		graph.SetVariableName(biasIndex, "norm_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, width });
+		const auto scaleNode = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { width } } });
+		const auto biasNode = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { width } } });
+		const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                               .scale = NodeOutput{ scaleNode, 0 },
+		                                               .bias = NodeOutput{ biasNode, 0 },
+		                                               .mode = mode,
+		                                               .axis = 1,
+		                                               .groupCount = 1,
+		                                               .epsilon = 1e-5 },
+		                            { OutputInfo{ DataType::Float32, { batch, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	std::string_view ReduceOpBenchmarkName(ReduceOp op)
 	{
 		switch (op)
@@ -1314,6 +1350,39 @@ namespace
 		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeAffineNormalizationRunTensorsInto(benchmark::State& state, NormalizationMode mode,
+	                                                     std::size_t batch, std::size_t width)
+	{
+		auto graph = BuildVulkanAffineNormalizationGraph(mode, batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for affine Normalization benchmark");
+			return;
+		}
+
+		auto inputData = MakeElementwiseInputData(batch * width, mode == NormalizationMode::LayerNorm ? 13u : 14u);
+		auto inputs = MakeVulkanReduceInputs(inputData, batch, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["normalized_elements"] =
+		    benchmark::Counter(static_cast<double>(batch * width), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -1627,6 +1696,15 @@ namespace
 						    BMVulkanNativeNormalizationRunTensorsInto(state, mode, batch, vulkanNativeMatMulWidth);
 					    });
 					normalizationBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+					auto* affineNormalizationBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeNormalizationAffine/F32/{}/batch:{}/width:{}",
+					                NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeAffineNormalizationRunTensorsInto(state, mode, batch,
+						                                                    vulkanNativeMatMulWidth);
+					    });
+					affineNormalizationBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(

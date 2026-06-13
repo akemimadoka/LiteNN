@@ -138,7 +138,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   diagnostic, and register `VulkanNativeCastRunInto/F32ToFloat16|Int8|UInt8` benchmark rows only when execution is legal.
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|
   MaxAxis1`, `VulkanNativeSoftmax/F32/Axis1`,
-  `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1`, `VulkanNativeMatMul/F32`, and
+  `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1`,
+  `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1`, `VulkanNativeMatMul/F32`, and
   `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
   remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.

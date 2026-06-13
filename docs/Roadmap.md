@@ -1983,7 +1983,9 @@ packaging slice to a useful production backend.
       - [x] Add affine `LayerNorm`/`RMSNorm` for the common rank-2 axis-1 layout: scale/bias tensors with shape
             `[axis]` or `[1,axis]` now bind as Vulkan input/external tensors, including separated variable weights.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 47/48 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1` rows and the local
+            `LayerNormAxis1/batch:1/width:128` smoke row ran successfully.
       - [ ] Add `GroupNorm` and workgroup/subgroup normalization kernels that avoid recomputing the same axis
             statistics per output element.
       - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
