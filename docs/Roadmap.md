@@ -2013,7 +2013,7 @@ packaging slice to a useful production backend.
       - [x] Add baseline direct `Conv2DNode` coverage: native SPIR-V now supports static rank-4 NCHW f32 Conv2D with
             stride, dilation, low/high padding, groups, and optional bias, including separated variable/constant
             weight tensors.
-            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 60/61 Vulkan tests with only the local
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 61/62 Vulkan tests with only the local
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeConv2D/F32` rows and the local `batch:1/channels:8/outChannels:8/spatial:16` smoke row ran
             successfully.

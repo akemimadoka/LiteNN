@@ -380,6 +380,40 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGroupedConv2DVariableGraph()
+	{
+		Graph graph;
+		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
+		    { 1.0, 0.0, 0.0, 1.0,
+		      1.0, 1.0, 1.0, 1.0 },
+		    { 2, 1, 2, 2 }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5, 1.0 }, { 2 }, DataType::Float32)));
+		graph.SetVariableName(weightIndex, "grouped_conv_weight");
+		graph.SetVariableName(biasIndex, "grouped_conv_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 2, 3, 3 });
+		const auto weight =
+		    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 2, 1, 2, 2 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto out = sg.AddNode(Conv2DNode{ .input = { input, 0 },
+		                                        .weight = { weight, 0 },
+		                                        .bias = NodeOutput{ bias, 0 },
+		                                        .strides = { 1, 1 },
+		                                        .dilations = { 1, 1 },
+		                                        .lowPads = { 0, 0 },
+		                                        .highPads = { 0, 0 },
+		                                        .groupCount = 2 },
+		                            { OutputInfo{ DataType::Float32, { 1, 2, 2, 2 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleUnaryGraph(UnaryOp op)
 	{
 		Graph graph;
@@ -2088,6 +2122,39 @@ TEST(CompiledModuleVulkanTest, RunsSimpleConv2DArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 6.5f, 8.5f, 12.5f, 14.5f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsGroupedConv2DArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildGroupedConv2DVariableGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0,
+		                 4.0, 5.0, 6.0,
+		                 7.0, 8.0, 9.0,
+		                 10.0, 11.0, 12.0,
+		                 13.0, 14.0, 15.0,
+		                 16.0, 17.0, 18.0 },
+		               { 1, 2, 3, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 6.5f, 8.5f, 12.5f, 14.5f, 49.0f, 53.0f, 61.0f, 65.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{
