@@ -131,6 +131,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   last dimension as batch and rank<4 uses a single batch lane; affine scale/bias is supported for `[groupedVolume]` or
   `[1,groupedVolume]` tensors, including separated external variable weights. Workgroup/subgroup normalization reductions
   remain follow-on work
+- static rank-4 NCHW `Float32` Pool2D Max/Average for no-padding kernels; padded pooling and convolution remain follow-on
+  vision workload coverage
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
@@ -149,5 +151,5 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   linear-chain scheduling.
 
 Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
-linear chains, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration remain
-follow-on production GPU-backend work rather than part of the current bootstrap.
+linear chains, padded pooling, convolution, device-local memory, tiled/shared-memory kernels, and async queue integration
+remain follow-on production GPU-backend work rather than part of the current bootstrap.

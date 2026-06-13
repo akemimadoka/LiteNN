@@ -298,6 +298,19 @@ namespace LiteNN
 			}
 		}
 
+		std::string_view Pool2DF32KernelName(PoolMode mode)
+		{
+			switch (mode)
+			{
+			case PoolMode::Max:
+				return "pool2d_max";
+			case PoolMode::Average:
+				return "pool2d_average";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 Pool2D mode");
+			}
+		}
+
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			switch (op)
@@ -908,6 +921,175 @@ namespace LiteNN
 				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Reduce module verification failed");
 			}
 			(void)inputElementCount;
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildPool2DF32SPIRVModule(
+		    PoolMode mode, std::span<const std::size_t> inputShape, std::span<const std::size_t> outputShape,
+		    std::span<const std::size_t> kernelShape, std::span<const std::size_t> strides,
+		    mlir::MLIRContext& context)
+		{
+			const auto inputElementCount = NumElementsU32(inputShape);
+			const auto outputElementCount = NumElementsU32(outputShape);
+			if (!inputElementCount || !outputElementCount || inputShape.size() != 4 || outputShape.size() != 4 ||
+			    kernelShape.size() != 2 || strides.size() != 2)
+			{
+				throw std::runtime_error("Vulkan native Pool2D requires static rank-4 input/output and rank-2 params");
+			}
+			for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[2],
+				                      outputShape[3], kernelShape[0], kernelShape[1], strides[0], strides[1] })
+			{
+				if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native Pool2D shape or parameter is too large or empty");
+				}
+			}
+			const auto channels = static_cast<std::uint32_t>(inputShape[1]);
+			const auto inHeight = static_cast<std::uint32_t>(inputShape[2]);
+			const auto inWidth = static_cast<std::uint32_t>(inputShape[3]);
+			const auto outHeight = static_cast<std::uint32_t>(outputShape[2]);
+			const auto outWidth = static_cast<std::uint32_t>(outputShape[3]);
+			const auto kernelH = static_cast<std::uint32_t>(kernelShape[0]);
+			const auto kernelW = static_cast<std::uint32_t>(kernelShape[1]);
+			const auto strideH = static_cast<std::uint32_t>(strides[0]);
+			const auto strideW = static_cast<std::uint32_t>(strides[1]);
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, Pool2DF32KernelName(mode), funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto outW = EmitI32Constant(bodyBuilder, loc, outWidth);
+				    auto outH = EmitI32Constant(bodyBuilder, loc, outHeight);
+				    auto channelCount = EmitI32Constant(bodyBuilder, loc, channels);
+				    auto inH = EmitI32Constant(bodyBuilder, loc, inHeight);
+				    auto inW = EmitI32Constant(bodyBuilder, loc, inWidth);
+
+				    auto ow = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, outW).getResult();
+				    auto tmp0 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, outW).getResult();
+				    auto oh = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp0, outH).getResult();
+				    auto tmp1 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp0, outH).getResult();
+				    auto channel = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp1, channelCount).getResult();
+				    auto batch = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp1, channelCount).getResult();
+
+				    auto inPlane = bodyBuilder.create<mlir::spirv::IMulOp>(loc, inH, inW).getResult();
+				    auto baseNC = bodyBuilder
+				                      .create<mlir::spirv::IMulOp>(
+				                          loc,
+				                          bodyBuilder
+				                              .create<mlir::spirv::IAddOp>(
+				                                  loc,
+				                                  bodyBuilder.create<mlir::spirv::IMulOp>(loc, batch, channelCount)
+				                                      .getResult(),
+				                                  channel)
+				                              .getResult(),
+				                          inPlane)
+				                      .getResult();
+				    auto startH = bodyBuilder
+				                      .create<mlir::spirv::IMulOp>(loc, oh, EmitI32Constant(bodyBuilder, loc, strideH))
+				                      .getResult();
+				    auto startW = bodyBuilder
+				                      .create<mlir::spirv::IMulOp>(loc, ow, EmitI32Constant(bodyBuilder, loc, strideW))
+				                      .getResult();
+
+				    auto accumulator = mode == PoolMode::Max ? EmitF32Constant(bodyBuilder, loc, -3.402823466e38f)
+				                                             : EmitF32Constant(bodyBuilder, loc, 0.0f);
+				    for (std::uint32_t kh = 0; kh < kernelH; ++kh)
+				    {
+					    auto ih = bodyBuilder
+					                  .create<mlir::spirv::IAddOp>(loc, startH, EmitI32Constant(bodyBuilder, loc, kh))
+					                  .getResult();
+					    for (std::uint32_t kw = 0; kw < kernelW; ++kw)
+					    {
+						    auto iw = bodyBuilder
+						                  .create<mlir::spirv::IAddOp>(loc, startW, EmitI32Constant(bodyBuilder, loc, kw))
+						                  .getResult();
+						    auto inputOffset = bodyBuilder
+						                           .create<mlir::spirv::IAddOp>(
+						                               loc, baseNC,
+						                               bodyBuilder
+						                                   .create<mlir::spirv::IAddOp>(
+						                                       loc,
+						                                       bodyBuilder.create<mlir::spirv::IMulOp>(loc, ih, inW)
+						                                           .getResult(),
+						                                       iw)
+						                                   .getResult())
+						                           .getResult();
+						    auto value =
+						        bodyBuilder
+						            .create<mlir::spirv::LoadOp>(
+						                loc, bodyBuilder.getF32Type(),
+						                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, inputOffset),
+						                nullptr, nullptr)
+						            .getValue();
+						    if (mode == PoolMode::Max)
+						    {
+							    accumulator =
+							        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, accumulator, value).getResult();
+						    }
+						    else
+						    {
+							    accumulator =
+							        bodyBuilder.create<mlir::spirv::FAddOp>(loc, accumulator, value).getResult();
+						    }
+					    }
+				    }
+				    if (mode == PoolMode::Average)
+				    {
+					    accumulator =
+					        bodyBuilder
+					            .create<mlir::spirv::FMulOp>(
+					                loc, accumulator,
+					                EmitF32Constant(bodyBuilder, loc,
+					                                1.0f / static_cast<float>(kernelH * kernelW)))
+					            .getResult();
+				    }
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Pool2D module verification failed");
+			}
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
@@ -1762,6 +1944,36 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializePool2DF32SPIRV(PoolMode mode, std::span<const std::size_t> inputShape,
+		                                                   std::span<const std::size_t> outputShape,
+		                                                   std::span<const std::size_t> kernelShape,
+		                                                   std::span<const std::size_t> strides)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildPool2DF32SPIRVModule(mode, inputShape, outputShape, kernelShape, strides, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V Pool2D module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
 		                                                          std::span<const std::size_t> inputShape,
 		                                                          std::size_t axis, double epsilon, bool hasScale,
@@ -2017,6 +2229,74 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan native f32 softmax requires a static non-empty shape and an in-range axis");
 		}
 		return SerializeSoftmaxF32SPIRV(inputShape, axis);
+	}
+
+	std::string_view VulkanNativePool2DF32KernelName(PoolMode mode)
+	{
+		return Pool2DF32KernelName(mode);
+	}
+
+	bool VulkanNativeSupportsPool2DF32(PoolMode mode, std::span<const std::size_t> inputShape,
+	                                   std::span<const std::size_t> outputShape,
+	                                   std::span<const std::size_t> kernelShape,
+	                                   std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> lowPads,
+	                                   std::span<const std::size_t> highPads,
+	                                   bool countIncludePad)
+	{
+		if (mode != PoolMode::Max && mode != PoolMode::Average)
+		{
+			return false;
+		}
+		if (inputShape.size() != 4 || outputShape.size() != 4 || kernelShape.size() != 2 || strides.size() != 2 ||
+		    lowPads.size() != 2 || highPads.size() != 2)
+		{
+			return false;
+		}
+		if (lowPads[0] != 0 || lowPads[1] != 0 || highPads[0] != 0 || highPads[1] != 0)
+		{
+			return false;
+		}
+		if (countIncludePad)
+		{
+			return false;
+		}
+		if (!NumElementsU32(inputShape).has_value() || !NumElementsU32(outputShape).has_value())
+		{
+			return false;
+		}
+		for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[0],
+			                      outputShape[1], outputShape[2], outputShape[3], kernelShape[0], kernelShape[1],
+			                      strides[0], strides[1] })
+		{
+			if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+		}
+		if (kernelShape[0] > inputShape[2] || kernelShape[1] > inputShape[3])
+		{
+			return false;
+		}
+		const auto expectedH = (inputShape[2] - kernelShape[0]) / strides[0] + 1;
+		const auto expectedW = (inputShape[3] - kernelShape[1]) / strides[1] + 1;
+		return inputShape[0] == outputShape[0] && inputShape[1] == outputShape[1] &&
+		       outputShape[2] == expectedH && outputShape[3] == expectedW;
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativePool2DF32SPIRV(PoolMode mode,
+	                                                      std::span<const std::size_t> inputShape,
+	                                                      std::span<const std::size_t> outputShape,
+	                                                      std::span<const std::size_t> kernelShape,
+	                                                      std::span<const std::size_t> strides)
+	{
+		constexpr std::array<std::size_t, 2> zeroPads{ 0, 0 };
+		if (!VulkanNativeSupportsPool2DF32(mode, inputShape, outputShape, kernelShape, strides, zeroPads, zeroPads,
+		                                   false))
+		{
+			throw std::runtime_error("Vulkan native f32 Pool2D requires static rank-4 no-padding shape and rank-2 params");
+		}
+		return SerializePool2DF32SPIRV(mode, inputShape, outputShape, kernelShape, strides);
 	}
 
 	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)

@@ -50,6 +50,19 @@ namespace LiteNN
 	                                                             std::size_t axis, double epsilon,
 	                                                             bool hasScale = false, bool hasBias = false,
 	                                                             std::size_t groupCount = 1);
+	std::string_view VulkanNativePool2DF32KernelName(PoolMode mode);
+	bool VulkanNativeSupportsPool2DF32(PoolMode mode, std::span<const std::size_t> inputShape,
+	                                   std::span<const std::size_t> outputShape,
+	                                   std::span<const std::size_t> kernelShape,
+	                                   std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> lowPads,
+	                                   std::span<const std::size_t> highPads,
+	                                   bool countIncludePad);
+	VulkanNativeGeneratedSPIRV VulkanNativePool2DF32SPIRV(PoolMode mode,
+	                                                      std::span<const std::size_t> inputShape,
+	                                                      std::span<const std::size_t> outputShape,
+	                                                      std::span<const std::size_t> kernelShape,
+	                                                      std::span<const std::size_t> strides);
 } // namespace LiteNN
 
 #endif

@@ -178,6 +178,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPool2DGraph(PoolMode mode)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 1, 3, 3 });
+		const auto out = sg.AddNode(Pool2DNode{ .input = { input, 0 },
+		                                        .mode = mode,
+		                                        .kernelShape = { 2, 2 },
+		                                        .strides = { 1, 1 },
+		                                        .lowPads = { 0, 0 },
+		                                        .highPads = { 0, 0 },
+		                                        .countIncludePad = false },
+		                            { OutputInfo{ DataType::Float32, { 1, 1, 2, 2 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
 	                                        double epsilon = 1e-6)
 	{
@@ -749,6 +770,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForGroupNorm)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForPool2D)
+{
+	const auto graph = BuildPool2DGraph(PoolMode::Max);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 Pool2D Max"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -1061,6 +1092,27 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineGroupNormExtern
 	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
 	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 8u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPool2D)
+{
+	const auto graph = BuildPool2DGraph(PoolMode::Average);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativePool2DF32SPIRV(PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 3, 3 },
+	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                               std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 });
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Pool2DF32)), 0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "pool2d_average");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 9u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 4u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEnabled)
@@ -1796,6 +1848,49 @@ TEST(CompiledModuleVulkanTest, RunsAffineGroupNormExternalWeightsArithmetic)
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsPool2DArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	struct PoolRunCase
+	{
+		PoolMode mode{ PoolMode::Max };
+		std::vector<float> expected;
+	};
+
+	const std::vector<double> input{ 1.0f, 2.0f, 3.0f,
+		                            4.0f, 5.0f, 6.0f,
+		                            7.0f, 8.0f, 9.0f };
+	const std::array cases{
+		PoolRunCase{ .mode = PoolMode::Max, .expected = { 5.0f, 6.0f, 8.0f, 9.0f } },
+		PoolRunCase{ .mode = PoolMode::Average, .expected = { 3.0f, 4.0f, 6.0f, 7.0f } },
+	};
+
+	Vulkan device;
+	for (const auto& testCase : cases)
+	{
+		const auto graph = BuildPool2DGraph(testCase.mode);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+		ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+		std::array inputs{
+			Tensor<Vulkan>(input, { 1, 1, 3, 3 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		ASSERT_EQ(outputs.size(), 1);
+
+		const auto actual = CopyToHostVector(outputs[0]);
+		ASSERT_EQ(actual.size(), testCase.expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i], testCase.expected[i], 1e-5f);
+		}
 	}
 }
 

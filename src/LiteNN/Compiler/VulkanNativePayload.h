@@ -42,11 +42,12 @@ namespace LiteNN
 		ReduceF32 = 21,
 		SoftmaxF32 = 22,
 		NormalizationF32 = 23,
+		Pool2DF32 = 24,
 	};
 
 	struct VulkanNativeFeatureSet
 	{
-		static constexpr std::uint64_t KnownFeatureMask = (1ull << 24) - 1;
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 25) - 1;
 
 		std::uint64_t flags{};
 

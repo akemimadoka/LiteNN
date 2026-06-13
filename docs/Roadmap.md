@@ -1998,7 +1998,11 @@ packaging slice to a useful production backend.
             `VulkanNativeGroupNormAffine/F32` rows and the local `groups:8/elements:784` smoke row ran successfully.
       - [ ] Add workgroup/subgroup normalization kernels that avoid recomputing the same group or axis statistics per
             output element.
-      - [ ] Add convolution/pooling and image/latent-processing kernels for mobile vision workloads.
+      - [x] Add the first f32 no-padding `Pool2DNode` slice: Vulkan-native SPIR-V now supports static rank-4 NCHW
+            MaxPool/AveragePool with rank-2 kernel/stride parameters and zero low/high pads.
+            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 55/56 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped.
+      - [ ] Add padded Pool2D, convolution, and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
