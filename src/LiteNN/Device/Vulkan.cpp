@@ -117,7 +117,19 @@ namespace LiteNN
 					return i;
 				}
 			}
-			throw std::runtime_error("Vulkan device has no host-visible coherent storage buffer memory type");
+			throw std::runtime_error("Vulkan device has no compatible storage buffer memory type");
+		}
+
+		VkMemoryPropertyFlags BufferMemoryProperties(VulkanBufferResidency residency)
+		{
+			switch (residency)
+			{
+			case VulkanBufferResidency::HostVisibleCoherent:
+				return VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+			case VulkanBufferResidency::DeviceLocal:
+				return VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+			}
+			throw std::runtime_error("Invalid Vulkan buffer residency");
 		}
 
 		bool VulkanApiVersionAtLeast(std::uint32_t version, std::uint32_t major, std::uint32_t minor)
@@ -538,13 +550,16 @@ namespace LiteNN
 			VkBuffer buffer{};
 			VkDeviceMemory memory{};
 			VkDeviceSize byteSize{};
+			VulkanBufferResidency residency{ VulkanBufferResidency::HostVisibleCoherent };
 
-			VulkanBuffer(std::shared_ptr<VulkanContext> ctx, VkDeviceSize size) : context(std::move(ctx)), byteSize(size)
+			VulkanBuffer(std::shared_ptr<VulkanContext> ctx, VkDeviceSize size, VulkanBufferResidency residency)
+			    : context(std::move(ctx)), byteSize(size), residency(residency)
 			{
 				const VkBufferCreateInfo bufferInfo{
 					.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 					.size = std::max<VkDeviceSize>(1, byteSize),
-					.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+					.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+					          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
 				};
 				CheckVulkan(vkCreateBuffer(context->device, &bufferInfo, nullptr, &buffer), "vkCreateBuffer");
@@ -552,8 +567,7 @@ namespace LiteNN
 				VkMemoryRequirements requirements{};
 				vkGetBufferMemoryRequirements(context->device, buffer, &requirements);
 				const auto memoryType = FindMemoryType(context->physicalDevice, requirements.memoryTypeBits,
-				                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-				                                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+				                                       BufferMemoryProperties(residency));
 				const VkMemoryAllocateInfo allocateInfo{
 					.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 					.allocationSize = requirements.size,
@@ -602,6 +616,10 @@ namespace LiteNN
 
 		void* MapBuffer(VulkanBuffer& buffer)
 		{
+			if (buffer.residency != VulkanBufferResidency::HostVisibleCoherent)
+			{
+				throw std::runtime_error("Vulkan buffer is device-local and cannot be host-mapped yet");
+			}
 			void* mapped = nullptr;
 			CheckVulkan(vkMapMemory(buffer.context->device, buffer.memory, 0, buffer.byteSize, 0, &mapped),
 			            "vkMapMemory");
@@ -610,6 +628,10 @@ namespace LiteNN
 
 		const void* MapBufferForRead(const VulkanBuffer& buffer)
 		{
+			if (buffer.residency != VulkanBufferResidency::HostVisibleCoherent)
+			{
+				throw std::runtime_error("Vulkan buffer is device-local and cannot be host-mapped yet");
+			}
 			void* mapped = nullptr;
 			CheckVulkan(vkMapMemory(buffer.context->device, buffer.memory, 0, buffer.byteSize, 0, &mapped),
 			            "vkMapMemory");
@@ -677,7 +699,7 @@ namespace LiteNN
 
 	void* DeviceTraits<Vulkan>::Allocate(Vulkan& device, DataType type, std::size_t size)
 	{
-		return new VulkanBuffer(GetContext(device), CheckedByteSize(type, size));
+		return new VulkanBuffer(GetContext(device), CheckedByteSize(type, size), device.bufferResidency);
 	}
 
 	void DeviceTraits<Vulkan>::Deallocate(Vulkan& device, void* ptr, DataType type, std::size_t size)

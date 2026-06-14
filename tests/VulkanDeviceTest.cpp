@@ -36,3 +36,20 @@ TEST(VulkanDeviceTest, CopiesHostVisibleTensorData)
 		EXPECT_FLOAT_EQ(values[i], expected[i]);
 	}
 }
+
+TEST(VulkanDeviceTest, DeviceLocalTensorRejectsHostMapUntilStagingIsImplemented)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	device.bufferResidency = VulkanBufferResidency::DeviceLocal;
+	Tensor<Vulkan> tensor(Uninitialized, { 4 }, DataType::Float32, device);
+	Tensor<CPU> cpu(Uninitialized, { 4 }, DataType::Float32, CPU{});
+
+	EXPECT_THROW(DeviceTraits<Vulkan>::CopyToCPU(tensor.CurDevice(), tensor.DType(), tensor.UnsafeRawData(),
+	                                             tensor.NumElements(), cpu.DType(), cpu.UnsafeRawData()),
+	             std::runtime_error);
+}

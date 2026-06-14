@@ -1958,6 +1958,12 @@ packaging slice to a useful production backend.
 - [ ] Add a Vulkan memory planner with device-local storage plus staging buffers. The current host-visible buffer path is
       good for correctness and small tests, but production kernels need reusable device-local allocations and fewer
       host/device round trips.
+      - [x] Add explicit Vulkan buffer residency policy to the public device configuration and allocator, with
+            `HostVisibleCoherent` preserving today's default behavior and `DeviceLocal` allocating transfer-capable
+            device-local storage buffers.
+      - [ ] Add staging upload/download helpers for device-local tensors.
+      - [ ] Switch compiled-module intermediate/output allocation to the planner once staging copies and lifetime reuse
+            are available.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now

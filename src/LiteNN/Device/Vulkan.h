@@ -23,16 +23,24 @@ namespace LiteNN
 		Allow
 	};
 
+	enum class VulkanBufferResidency
+	{
+		HostVisibleCoherent,
+		DeviceLocal
+	};
+
 	struct Vulkan
 	{
 		std::uint32_t deviceIndex = 0;
 		VulkanHostFallbackPolicy hostFallbackPolicy{ VulkanHostFallbackPolicy::Reject };
+		VulkanBufferResidency bufferResidency{ VulkanBufferResidency::HostVisibleCoherent };
 		mutable std::string infoCache;
 		mutable std::shared_ptr<VulkanContext> context;
 
 		bool operator==(const Vulkan& other) const
 		{
-			return deviceIndex == other.deviceIndex;
+			return deviceIndex == other.deviceIndex && hostFallbackPolicy == other.hostFallbackPolicy &&
+			       bufferResidency == other.bufferResidency;
 		}
 	};
 
