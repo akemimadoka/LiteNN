@@ -2027,7 +2027,9 @@ packaging slice to a useful production backend.
             transposed convolution with stride, dilation, low/high padding, output padding, groups, optional bias, and
             separated variable/constant weight tensors.
             Validation on 2026-06-14: `CompiledModuleVulkanTest` passed 67/68 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeConvTranspose2D/F32` rows and the local `batch:1/channels:8/outChannels:8/spatial:16x31`
+            smoke row ran successfully.
       - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.
