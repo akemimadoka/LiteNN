@@ -2035,6 +2035,11 @@ packaging slice to a useful production backend.
             Validation on 2026-06-14: `CompiledModuleVulkanTest` passed 70/71 Vulkan tests with only the local
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers `VulkanNativeSlice/F32` rows
             and the local `batch:1/channels:8to4/spatial:16` smoke row ran successfully.
+      - [x] Add baseline `ConcatNode` coverage: native SPIR-V now supports two direct graph-parameter f32 inputs with
+            compatible static non-empty shapes and an arbitrary concat axis.
+            Validation on 2026-06-14: `CompiledModuleVulkanTest` passed 73/74 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers `VulkanNativeConcat/F32` rows
+            and the local `batch:1/channels:4plus4/spatial:16` smoke row ran successfully.
       - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

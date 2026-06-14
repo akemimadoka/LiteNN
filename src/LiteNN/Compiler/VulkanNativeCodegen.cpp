@@ -331,6 +331,11 @@ namespace LiteNN
 			return "slice";
 		}
 
+		std::string_view ConcatF32KernelName()
+		{
+			return "concat";
+		}
+
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			switch (op)
@@ -2018,6 +2023,176 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildConcatF32SPIRVModule(std::span<const std::size_t> lhsShape,
+		                                                                   std::span<const std::size_t> rhsShape,
+		                                                                   std::span<const std::size_t> outputShape,
+		                                                                   std::size_t axis, mlir::MLIRContext& context)
+		{
+			const auto lhsElementCount = NumElementsU32(lhsShape);
+			const auto rhsElementCount = NumElementsU32(rhsShape);
+			const auto outputElementCount = NumElementsU32(outputShape);
+			const auto innerSize = AxisInnerSizeU32(outputShape, axis);
+			if (!lhsElementCount || !rhsElementCount || !outputElementCount || !innerSize || lhsShape.empty() ||
+			    lhsShape.size() != rhsShape.size() || lhsShape.size() != outputShape.size() || axis >= lhsShape.size())
+			{
+				throw std::runtime_error("Vulkan native Concat requires compatible static non-empty tensors");
+			}
+			for (std::size_t i = 0; i < lhsShape.size(); ++i)
+			{
+				if (lhsShape[i] == 0 || rhsShape[i] == 0 || outputShape[i] == 0 ||
+				    lhsShape[i] > std::numeric_limits<std::uint32_t>::max() ||
+				    rhsShape[i] > std::numeric_limits<std::uint32_t>::max() ||
+				    outputShape[i] > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native Concat shape is too large or empty");
+				}
+				const auto expected = i == axis ? lhsShape[i] + rhsShape[i] : lhsShape[i];
+				if ((i != axis && lhsShape[i] != rhsShape[i]) || outputShape[i] != expected)
+				{
+					throw std::runtime_error("Vulkan native Concat output shape does not match inputs");
+				}
+			}
+			if (lhsShape[axis] + rhsShape[axis] > std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("Vulkan native Concat axis extent is too large");
+			}
+
+			const auto lhsAxisSize = static_cast<std::uint32_t>(lhsShape[axis]);
+			const auto rhsAxisSize = static_cast<std::uint32_t>(rhsShape[axis]);
+			const auto outputAxisSize = static_cast<std::uint32_t>(outputShape[axis]);
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto lhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "lhs", 0);
+			auto rhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "rhs", 1);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 2);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, ConcatF32KernelName(), funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
+				    auto lhsAxisExtent = EmitI32Constant(bodyBuilder, loc, lhsAxisSize);
+				    auto rhsAxisExtent = EmitI32Constant(bodyBuilder, loc, rhsAxisSize);
+				    auto outputAxisExtent = EmitI32Constant(bodyBuilder, loc, outputAxisSize);
+
+				    auto innerIndex = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, inner).getResult();
+				    auto tmp = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult();
+				    auto axisIndex = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp, outputAxisExtent).getResult();
+				    auto outerIndex = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp, outputAxisExtent).getResult();
+				    auto isLhs =
+				        bodyBuilder.create<mlir::spirv::ULessThanOp>(loc, axisIndex, lhsAxisExtent).getResult();
+				    mlir::spirv::SelectionOp::createIfThen(
+				        loc, isLhs,
+				        [&](mlir::OpBuilder& lhsBuilder) {
+					        auto lhsIndex =
+					            lhsBuilder
+					                .create<mlir::spirv::IAddOp>(
+					                    loc,
+					                    lhsBuilder
+					                        .create<mlir::spirv::IMulOp>(
+					                            loc,
+					                            lhsBuilder
+					                                .create<mlir::spirv::IAddOp>(
+					                                    loc,
+					                                    lhsBuilder
+					                                        .create<mlir::spirv::IMulOp>(loc, outerIndex, lhsAxisExtent)
+					                                        .getResult(),
+					                                    axisIndex)
+					                                .getResult(),
+					                            inner)
+					                        .getResult(),
+					                    innerIndex)
+					                .getResult();
+					        auto value = lhsBuilder
+					                         .create<mlir::spirv::LoadOp>(
+					                             loc, lhsBuilder.getF32Type(),
+					                             EmitF32StorageBufferElementPointer(lhsBuilder, loc, lhs, lhsIndex),
+					                             nullptr, nullptr)
+					                         .getValue();
+					        lhsBuilder.create<mlir::spirv::StoreOp>(
+					            loc, EmitF32StorageBufferElementPointer(lhsBuilder, loc, out, outputIndex), value,
+					            nullptr, nullptr);
+				        },
+				        bodyBuilder);
+				    auto isRhs = bodyBuilder.create<mlir::spirv::LogicalNotOp>(loc, isLhs).getResult();
+				    mlir::spirv::SelectionOp::createIfThen(
+				        loc, isRhs,
+				        [&](mlir::OpBuilder& rhsBuilder) {
+					        auto rhsAxisIndex =
+					            rhsBuilder.create<mlir::spirv::ISubOp>(loc, axisIndex, lhsAxisExtent).getResult();
+					        auto rhsIndex =
+					            rhsBuilder
+					                .create<mlir::spirv::IAddOp>(
+					                    loc,
+					                    rhsBuilder
+					                        .create<mlir::spirv::IMulOp>(
+					                            loc,
+					                            rhsBuilder
+					                                .create<mlir::spirv::IAddOp>(
+					                                    loc,
+					                                    rhsBuilder
+					                                        .create<mlir::spirv::IMulOp>(loc, outerIndex, rhsAxisExtent)
+					                                        .getResult(),
+					                                    rhsAxisIndex)
+					                                .getResult(),
+					                            inner)
+					                        .getResult(),
+					                    innerIndex)
+					                .getResult();
+					        auto value = rhsBuilder
+					                         .create<mlir::spirv::LoadOp>(
+					                             loc, rhsBuilder.getF32Type(),
+					                             EmitF32StorageBufferElementPointer(rhsBuilder, loc, rhs, rhsIndex),
+					                             nullptr, nullptr)
+					                         .getValue();
+					        rhsBuilder.create<mlir::spirv::StoreOp>(
+					            loc, EmitF32StorageBufferElementPointer(rhsBuilder, loc, out, outputIndex), value,
+					            nullptr, nullptr);
+				        },
+				        bodyBuilder);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V Concat module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSoftmaxF32SPIRVModule(std::span<const std::size_t> inputShape,
 		                                                                    std::size_t axis,
 		                                                                    mlir::MLIRContext& context)
@@ -2991,6 +3166,35 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeConcatF32SPIRV(std::span<const std::size_t> lhsShape,
+		                                                   std::span<const std::size_t> rhsShape,
+		                                                   std::span<const std::size_t> outputShape, std::size_t axis)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildConcatF32SPIRVModule(lhsShape, rhsShape, outputShape, axis, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V Concat module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeConvTranspose2DF32SPIRV(std::span<const std::size_t> inputShape,
 		                                                            std::span<const std::size_t> weightShape,
 		                                                            std::span<const std::size_t> outputShape,
@@ -3590,6 +3794,57 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan native f32 Slice requires compatible static non-empty input/output");
 		}
 		return SerializeSliceF32SPIRV(inputShape, outputShape, axis, start, length);
+	}
+
+	std::string_view VulkanNativeConcatF32KernelName()
+	{
+		return ConcatF32KernelName();
+	}
+
+	bool VulkanNativeSupportsConcatF32(std::span<const std::size_t> lhsShape, std::span<const std::size_t> rhsShape,
+	                                   std::span<const std::size_t> outputShape, std::size_t axis)
+	{
+		if (lhsShape.empty() || lhsShape.size() != rhsShape.size() || lhsShape.size() != outputShape.size() ||
+		    axis >= lhsShape.size())
+		{
+			return false;
+		}
+		if (!NumElementsU32(lhsShape).has_value() || !NumElementsU32(rhsShape).has_value() ||
+		    !NumElementsU32(outputShape).has_value() || !AxisInnerSizeU32(outputShape, axis).has_value())
+		{
+			return false;
+		}
+		for (std::size_t i = 0; i < lhsShape.size(); ++i)
+		{
+			if (lhsShape[i] == 0 || rhsShape[i] == 0 || outputShape[i] == 0 ||
+			    lhsShape[i] > std::numeric_limits<std::uint32_t>::max() ||
+			    rhsShape[i] > std::numeric_limits<std::uint32_t>::max() ||
+			    outputShape[i] > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+			if (i != axis && lhsShape[i] != rhsShape[i])
+			{
+				return false;
+			}
+			const auto expected = i == axis ? lhsShape[i] + rhsShape[i] : lhsShape[i];
+			if (expected > std::numeric_limits<std::uint32_t>::max() || outputShape[i] != expected)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeConcatF32SPIRV(std::span<const std::size_t> lhsShape,
+	                                                      std::span<const std::size_t> rhsShape,
+	                                                      std::span<const std::size_t> outputShape, std::size_t axis)
+	{
+		if (!VulkanNativeSupportsConcatF32(lhsShape, rhsShape, outputShape, axis))
+		{
+			throw std::runtime_error("Vulkan native f32 Concat requires compatible static non-empty tensors");
+		}
+		return SerializeConcatF32SPIRV(lhsShape, rhsShape, outputShape, axis);
 	}
 
 	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)

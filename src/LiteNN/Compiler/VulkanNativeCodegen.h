@@ -97,6 +97,12 @@ namespace LiteNN
 	VulkanNativeGeneratedSPIRV VulkanNativeSliceF32SPIRV(std::span<const std::size_t> inputShape,
 	                                                     std::span<const std::size_t> outputShape, std::size_t axis,
 	                                                     std::size_t start, std::size_t length);
+	std::string_view VulkanNativeConcatF32KernelName();
+	bool VulkanNativeSupportsConcatF32(std::span<const std::size_t> lhsShape, std::span<const std::size_t> rhsShape,
+	                                   std::span<const std::size_t> outputShape, std::size_t axis);
+	VulkanNativeGeneratedSPIRV VulkanNativeConcatF32SPIRV(std::span<const std::size_t> lhsShape,
+	                                                      std::span<const std::size_t> rhsShape,
+	                                                      std::span<const std::size_t> outputShape, std::size_t axis);
 } // namespace LiteNN
 
 #endif

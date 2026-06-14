@@ -1068,6 +1068,23 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanConcatGraph(std::size_t batch, std::size_t lhsChannels, std::size_t rhsChannels,
+	                             std::size_t height, std::size_t width)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { batch, lhsChannels, height, width });
+		const auto rhs = sg.AddParam(DataType::Float32, { batch, rhsChannels, height, width });
+		const auto out =
+		    sg.AddNode(ConcatNode{ { { lhs, 0 }, { rhs, 0 } }, 1 },
+		               { OutputInfo{ DataType::Float32, { batch, lhsChannels + rhsChannels, height, width } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildVulkanConvTranspose2DGraph(std::size_t batch, std::size_t channels, std::size_t outChannels,
 	                                      std::size_t height, std::size_t width)
 	{
@@ -1827,6 +1844,50 @@ namespace
 		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeConcatRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t lhsChannels,
+	                                        std::size_t rhsChannels, std::size_t height, std::size_t width)
+	{
+		auto graph = BuildVulkanConcatGraph(batch, lhsChannels, rhsChannels, height, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for Concat benchmark");
+			return;
+		}
+
+		const auto lhsElementCount = batch * lhsChannels * height * width;
+		const auto rhsElementCount = batch * rhsChannels * height * width;
+		auto lhsData = MakeElementwiseInputData(lhsElementCount, 23u);
+		auto rhsData = MakeElementwiseInputData(rhsElementCount, 24u);
+		std::vector<Tensor<Vulkan>> inputs;
+		inputs.reserve(2);
+		const auto lhsCpu =
+		    Optimizer::MakeFloatTensor(std::span<const float>(lhsData), { batch, lhsChannels, height, width });
+		const auto rhsCpu =
+		    Optimizer::MakeFloatTensor(std::span<const float>(rhsData), { batch, rhsChannels, height, width });
+		inputs.push_back(lhsCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(rhsCpu.CopyToDevice(Vulkan{}));
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto outputElementCount = batch * (lhsChannels + rhsChannels) * height * width;
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(outputElementCount));
+		state.counters["output_elements"] =
+		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeConvTranspose2DRunTensorsInto(benchmark::State& state, std::size_t batch, std::size_t channels,
 	                                                 std::size_t outChannels, std::size_t height, std::size_t width)
 	{
@@ -2265,6 +2326,16 @@ namespace
 					                                      vulkanNativePoolSpatial, vulkanNativePoolSpatial);
 				    });
 				sliceBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* concatBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeConcat/F32/batch:{}/channels:{}plus{}/spatial:{}", batch,
+				                vulkanNativePoolChannels / 2, vulkanNativePoolChannels / 2, vulkanNativePoolSpatial),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeConcatRunTensorsInto(state, batch, vulkanNativePoolChannels / 2,
+					                                       vulkanNativePoolChannels / 2, vulkanNativePoolSpatial,
+					                                       vulkanNativePoolSpatial);
+				    });
+				concatBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* convTranspose2DBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeConvTranspose2D/F32/batch:{}/channels:{}/outChannels:{}/spatial:{}x{}",

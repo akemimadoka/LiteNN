@@ -251,6 +251,22 @@ namespace
 		return graph;
 	}
 
+	Graph BuildConcatGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto rhs = sg.AddParam(DataType::Float32, { 2, 1 });
+		const auto out =
+		    sg.AddNode(ConcatNode{ { { lhs, 0 }, { rhs, 0 } }, 1 }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
 	                                        double epsilon = 1e-6)
 	{
@@ -946,6 +962,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSlice)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForConcat)
+{
+	const auto graph = BuildConcatGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 Concat"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForConv2D)
 {
 	const auto graph = BuildSimpleConv2DVariableGraph();
@@ -1361,6 +1387,32 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSlice)
 	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 4u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConcat)
+{
+	const auto graph = BuildConcatGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeConcatF32SPIRV(
+	    std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 2, 1 }, std::array<std::size_t, 2>{ 2, 3 }, 1);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ConcatF32)), 0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "concat");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 4u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 2u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 6u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
@@ -2379,6 +2431,34 @@ TEST(CompiledModuleVulkanTest, RunsSliceArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 2.0f, 3.0f, 5.0f, 6.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsConcatArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildConcatGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 4.0, 5.0 }, { 2, 2 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 3.0, 6.0 }, { 2, 1 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{

@@ -5918,6 +5918,19 @@ namespace
 		std::size_t length{};
 	};
 
+	struct VulkanP0ConcatPlan
+	{
+		std::uint32_t lhsIndex{};
+		std::uint32_t rhsIndex{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> lhsShape;
+		std::vector<std::size_t> rhsShape;
+		std::vector<std::size_t> outputShape;
+		std::size_t axis{};
+	};
+
 	struct VulkanP0NormalizationPlan
 	{
 		NormalizationMode mode{ NormalizationMode::LayerNorm };
@@ -6955,11 +6968,44 @@ namespace
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
 		{
+			if (const auto* concat = std::get_if<ConcatNode>(&resultEntry.node))
+			{
+				if (concat->inputs.size() != 2)
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native Concat currently supports exactly 2 inputs, got {}", concat->inputs.size()));
+				}
+				const auto lhsIndex = GetVulkanP0ParamIndex(subgraph, concat->inputs[0]);
+				const auto rhsIndex = GetVulkanP0ParamIndex(subgraph, concat->inputs[1]);
+				if (!lhsIndex || !rhsIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native Concat inputs must be direct graph parameters");
+				}
+				const auto& lhs = subgraph.Params()[*lhsIndex];
+				const auto& rhs = subgraph.Params()[*rhsIndex];
+				if (lhs.dtype != DataType::Float32 || rhs.dtype != DataType::Float32 ||
+				    output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native Concat requires Float32 inputs/output, got lhs={} rhs={} output={}",
+					                DataTypeName(lhs.dtype), DataTypeName(rhs.dtype), DataTypeName(output.dtype)));
+				}
+				if (!VulkanNativeSupportsConcatF32(lhs.shape, rhs.shape, output.shape, concat->axis))
+				{
+					return VulkanNativeUnsupported(std::format("Vulkan native Concat requires compatible static f32 "
+					                                           "shapes, got lhs={} rhs={} output={} axis={}",
+					                                           Validation::ShapeToString(lhs.shape),
+					                                           Validation::ShapeToString(rhs.shape),
+					                                           Validation::ShapeToString(output.shape), concat->axis));
+				}
+				return VulkanNativeSupported(std::format("f32 Concat axis={}", concat->axis));
+			}
+
 			const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
 			if (!binary)
 			{
 				return VulkanNativeUnsupported(
-				    "Vulkan native two-input slice currently supports only BinaryOpNode result nodes");
+				    "Vulkan native two-input slice currently supports only BinaryOpNode or ConcatNode result nodes");
 			}
 			if (binary->op == BinaryOp::MatMul)
 			{
@@ -7804,6 +7850,72 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0ConcatPlan> MatchVulkanP0ConcatF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* concat = std::get_if<ConcatNode>(&resultEntry.node);
+		if (!concat || concat->inputs.size() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto lhsIndex = GetVulkanP0ParamIndex(subgraph, concat->inputs[0]);
+		const auto rhsIndex = GetVulkanP0ParamIndex(subgraph, concat->inputs[1]);
+		if (!lhsIndex || !rhsIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhs = subgraph.Params()[*lhsIndex];
+		const auto& rhs = subgraph.Params()[*rhsIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhs.dtype != DataType::Float32 || rhs.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    !VulkanNativeSupportsConcatF32(lhs.shape, rhs.shape, output.shape, concat->axis))
+		{
+			return std::nullopt;
+		}
+		const auto lhsElementCount = VulkanP0ShapeNumElementsU32(lhs.shape);
+		const auto rhsElementCount = VulkanP0ShapeNumElementsU32(rhs.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!lhsElementCount || !rhsElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0ConcatPlan{
+			.lhsIndex = *lhsIndex,
+			.rhsIndex = *rhsIndex,
+			.lhsElementCount = *lhsElementCount,
+			.rhsElementCount = *rhsElementCount,
+			.outputElementCount = *outputElementCount,
+			.lhsShape = lhs.shape,
+			.rhsShape = rhs.shape,
+			.outputShape = output.shape,
+			.axis = concat->axis,
+		};
+	}
+
 	std::optional<VulkanP0ConvTranspose2DPlan>
 	MatchVulkanP0ConvTranspose2DF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
@@ -8616,6 +8728,57 @@ namespace
 		        { .kind = VulkanNativeArgumentKind::OutputTensor,
 		          .index = 0,
 		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeConcatF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0ConcatF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::ConcatF32);
+		auto spirv = VulkanNativeConcatF32SPIRV(plan->lhsShape, plan->rhsShape, plan->outputShape, plan->axis);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeConcatF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->lhsIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->rhsIndex,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 2,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
 		    },
@@ -11178,6 +11341,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSliceF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeConcatF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
