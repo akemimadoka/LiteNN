@@ -2076,8 +2076,14 @@ packaging slice to a useful production backend.
       for the Vulkan-native Add slice, runs both regular and separated-region native artifacts, records CPU-side Vulkan
       profile events, and demonstrates that a CPU bridge artifact is rejected unless `VulkanHostFallbackPolicy::Allow`
       is set explicitly.
-- [ ] Add a model-shaped Vulkan example/benchmark beyond the current single-Linear external-weight slice, after native
-      partitioning or a larger fused-kernel family can avoid presenting a whole model as a silent CPU bridge.
+- [x] Add a model-shaped Vulkan benchmark beyond the current single-Linear external-weight slice without pretending
+      whole-graph partitioning is complete: `benchmark/bench.cpp` now registers
+      `VulkanNativeManualPipeline/MLP(784->128->10)` rows that explicitly run two Vulkan-native Linear artifacts with a
+      Vulkan-resident hidden tensor between them. Automatic graph partitioning and fused multi-layer schedules remain
+      tracked separately above.
+      Validation on 2026-06-14: a local
+      `litenn_bench --benchmark_filter=VulkanNativeManualPipeline.*batch:1 --benchmark_min_time=0.01s` smoke run
+      reported roughly 0.283 ms for batch 1 and 0.280 ms for batch 128.
 
 Hidden requirements:
 
