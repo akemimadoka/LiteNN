@@ -5906,6 +5906,18 @@ namespace
 		std::vector<std::size_t> outputShape;
 	};
 
+	struct VulkanP0SlicePlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t inputElementCount{};
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> outputShape;
+		std::size_t axis{};
+		std::size_t start{};
+		std::size_t length{};
+	};
+
 	struct VulkanP0NormalizationPlan
 	{
 		NormalizationMode mode{ NormalizationMode::LayerNorm };
@@ -5979,10 +5991,10 @@ namespace
 		return static_cast<std::uint32_t>(param->paramIndex);
 	}
 
-	std::optional<std::uint32_t> AppendVulkanP0ExternalTensor(VulkanP0ExternalTensorBuilder& builder,
-	                                                         std::string name, std::string_view regionName,
-	                                                         const Tensor<PolymorphicDevice>& tensor,
-	                                                         const OutputInfo& output)
+	std::optional<std::uint32_t> AppendVulkanP0ExternalTensor(VulkanP0ExternalTensorBuilder& builder, std::string name,
+	                                                          std::string_view regionName,
+	                                                          const Tensor<PolymorphicDevice>& tensor,
+	                                                          const OutputInfo& output)
 	{
 		if (builder.externalTensorInfos.size() > std::numeric_limits<std::uint32_t>::max())
 		{
@@ -5998,9 +6010,8 @@ namespace
 		}
 
 		const auto byteSize = TensorByteSizeForShape(output.dtype, output.shape);
-		builder.externalTensorInfos.push_back(MakeExternalTensorInfo(std::move(name), regionName, output.dtype,
-		                                                             regionBytes, output.shape, *offset, byteSize,
-		                                                             kAlignment));
+		builder.externalTensorInfos.push_back(MakeExternalTensorInfo(
+		    std::move(name), regionName, output.dtype, regionBytes, output.shape, *offset, byteSize, kAlignment));
 		return static_cast<std::uint32_t>(builder.externalTensorInfos.size() - 1);
 	}
 
@@ -6062,9 +6073,9 @@ namespace
 					{
 						name = std::format("variable{}", variable->variableIndex);
 					}
-					const auto appended = AppendVulkanP0ExternalTensor(
-					    *builder, std::move(name), kWeightsRegionName,
-					    graph.GetVariable(variable->variableIndex)->Data(), info);
+					const auto appended =
+					    AppendVulkanP0ExternalTensor(*builder, std::move(name), kWeightsRegionName,
+					                                 graph.GetVariable(variable->variableIndex)->Data(), info);
 					if (!appended)
 					{
 						builder->variableExternalIds.erase(it);
@@ -6095,9 +6106,8 @@ namespace
 				auto [it, inserted] = builder->constantExternalIds.emplace(output.node, 0);
 				if (inserted)
 				{
-					const auto appended =
-					    AppendVulkanP0ExternalTensor(*builder, std::format("constant_{}", output.node),
-					                                 kConstantsRegionName, constant->value, info);
+					const auto appended = AppendVulkanP0ExternalTensor(
+					    *builder, std::format("constant_{}", output.node), kConstantsRegionName, constant->value, info);
 					if (!appended)
 					{
 						builder->constantExternalIds.erase(it);
@@ -6448,11 +6458,11 @@ namespace
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
-			return VulkanNativeUnsupported(std::format(
-			    "Vulkan native currently requires a forward-only graph with no activations or tape slots; "
-			    "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
-			    graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
-			    graph.ActivationSlotCount(), graph.TapeSlotCount()));
+			return VulkanNativeUnsupported(
+			    std::format("Vulkan native currently requires a forward-only graph with no activations or tape slots; "
+			                "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
+			                graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
+			                graph.ActivationSlotCount(), graph.TapeSlotCount()));
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
@@ -6500,8 +6510,7 @@ namespace
 				    DataTypeName(lhs->dtype), DataTypeName(rhs->dtype), DataTypeName(bias->dtype),
 				    DataTypeName(output.dtype)));
 			}
-			if (lhs->shape.size() != 2 || rhs->shape.size() != 2 || bias->shape.size() != 2 ||
-			    output.shape.size() != 2)
+			if (lhs->shape.size() != 2 || rhs->shape.size() != 2 || bias->shape.size() != 2 || output.shape.size() != 2)
 			{
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native MatMulBias requires rank-2 lhs/rhs/bias/output, got lhs={} rhs={} bias={} "
@@ -6525,8 +6534,8 @@ namespace
 
 		if (const auto chain = MatchVulkanP0SameShapeBinaryF32Chain(graph))
 		{
-			return VulkanNativeSupported(std::format("same-shape f32 binary chain ({} kernels)",
-			                                         chain->kernels.size()));
+			return VulkanNativeSupported(
+			    std::format("same-shape f32 binary chain ({} kernels)", chain->kernels.size()));
 		}
 
 		if (const auto* conv = std::get_if<Conv2DNode>(&resultEntry.node))
@@ -6552,18 +6561,17 @@ namespace
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native Conv2D requires Float32 input/weight/bias/output, got input={} weight={} "
 				    "bias={} output={}",
-				    DataTypeName(input->dtype), DataTypeName(weight->dtype),
-				    bias ? DataTypeName(bias->dtype) : "none", DataTypeName(output.dtype)));
+				    DataTypeName(input->dtype), DataTypeName(weight->dtype), bias ? DataTypeName(bias->dtype) : "none",
+				    DataTypeName(output.dtype)));
 			}
 			if (bias && !(bias->shape.size() == 1 || bias->shape.size() == 4))
 			{
 				return VulkanNativeUnsupported(std::format("Vulkan native Conv2D bias shape is unsupported: {}",
-				                                          Validation::ShapeToString(bias->shape)));
+				                                           Validation::ShapeToString(bias->shape)));
 			}
 			if (bias && ((bias->shape.size() == 1 && bias->shape[0] != output.shape[1]) ||
-			             (bias->shape.size() == 4 &&
-			              (bias->shape[0] != 1 || bias->shape[1] != output.shape[1] ||
-			               bias->shape[2] != 1 || bias->shape[3] != 1))))
+			             (bias->shape.size() == 4 && (bias->shape[0] != 1 || bias->shape[1] != output.shape[1] ||
+			                                          bias->shape[2] != 1 || bias->shape[3] != 1))))
 			{
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native Conv2D bias must be [outChannels] or [1,outChannels,1,1], got bias={} output={}",
@@ -6580,8 +6588,8 @@ namespace
 				    Validation::ShapeToString(conv->dilations), Validation::ShapeToString(conv->lowPads),
 				    Validation::ShapeToString(conv->highPads), conv->groupCount));
 			}
-			return VulkanNativeSupported(std::format("f32 Conv2D groupCount={} bias={}", conv->groupCount,
-			                                         bias.has_value()));
+			return VulkanNativeSupported(
+			    std::format("f32 Conv2D groupCount={} bias={}", conv->groupCount, bias.has_value()));
 		}
 
 		if (const auto* convT = std::get_if<ConvTranspose2DNode>(&resultEntry.node))
@@ -6609,15 +6617,14 @@ namespace
 				return VulkanNativeUnsupported(std::format(
 				    "Vulkan native ConvTranspose2D requires Float32 input/weight/bias/output, got input={} weight={} "
 				    "bias={} output={}",
-				    DataTypeName(input->dtype), DataTypeName(weight->dtype),
-				    bias ? DataTypeName(bias->dtype) : "none", DataTypeName(output.dtype)));
+				    DataTypeName(input->dtype), DataTypeName(weight->dtype), bias ? DataTypeName(bias->dtype) : "none",
+				    DataTypeName(output.dtype)));
 			}
 			if (bias)
 			{
-				const auto biasOk =
-				    (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
-				    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
-				     bias->shape[2] == 1 && bias->shape[3] == 1);
+				const auto biasOk = (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
+				                    (bias->shape.size() == 4 && bias->shape[0] == 1 &&
+				                     bias->shape[1] == output.shape[1] && bias->shape[2] == 1 && bias->shape[3] == 1);
 				if (!biasOk)
 				{
 					return VulkanNativeUnsupported(std::format(
@@ -6630,17 +6637,18 @@ namespace
 			                                            convT->dilations, convT->lowPads, convT->highPads,
 			                                            convT->outputPads, convT->groupCount))
 			{
-				return VulkanNativeUnsupported(std::format(
-				    "Vulkan native ConvTranspose2D requires static rank-4 f32 tensors, got input={} weight={} output={} "
-				    "strides={} dilations={} lowPads={} highPads={} outputPads={} groupCount={}",
-				    Validation::ShapeToString(input->shape), Validation::ShapeToString(weight->shape),
-				    Validation::ShapeToString(output.shape), Validation::ShapeToString(convT->strides),
-				    Validation::ShapeToString(convT->dilations), Validation::ShapeToString(convT->lowPads),
-				    Validation::ShapeToString(convT->highPads), Validation::ShapeToString(convT->outputPads),
-				    convT->groupCount));
+				return VulkanNativeUnsupported(
+				    std::format("Vulkan native ConvTranspose2D requires static rank-4 f32 tensors, got input={} "
+				                "weight={} output={} "
+				                "strides={} dilations={} lowPads={} highPads={} outputPads={} groupCount={}",
+				                Validation::ShapeToString(input->shape), Validation::ShapeToString(weight->shape),
+				                Validation::ShapeToString(output.shape), Validation::ShapeToString(convT->strides),
+				                Validation::ShapeToString(convT->dilations), Validation::ShapeToString(convT->lowPads),
+				                Validation::ShapeToString(convT->highPads),
+				                Validation::ShapeToString(convT->outputPads), convT->groupCount));
 			}
-			return VulkanNativeSupported(std::format("f32 ConvTranspose2D groupCount={} bias={}", convT->groupCount,
-			                                         bias.has_value()));
+			return VulkanNativeSupported(
+			    std::format("f32 ConvTranspose2D groupCount={} bias={}", convT->groupCount, bias.has_value()));
 		}
 
 		if (subgraph.Params().size() == 1 && subgraph.NodeCount() == 2)
@@ -6731,10 +6739,9 @@ namespace
 				const auto expectedShape = VulkanP0ReduceOutputShape(input.shape, reduce->axis);
 				if (reduce->axis >= input.shape.size() || expectedShape != output.shape)
 				{
-					return VulkanNativeUnsupported(
-					    std::format("Vulkan native reduce shape mismatch, got input={} axis={} output={}",
-					                Validation::ShapeToString(input.shape), reduce->axis,
-					                Validation::ShapeToString(output.shape)));
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native reduce shape mismatch, got input={} axis={} output={}",
+					    Validation::ShapeToString(input.shape), reduce->axis, Validation::ShapeToString(output.shape)));
 				}
 				if (!VulkanNativeSupportsReduceF32(reduce->op, input.shape, reduce->axis))
 				{
@@ -6780,7 +6787,8 @@ namespace
 				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, norm->input);
 				if (!inputIndex)
 				{
-					return VulkanNativeUnsupported("Vulkan native normalization input must be a direct graph parameter");
+					return VulkanNativeUnsupported(
+					    "Vulkan native normalization input must be a direct graph parameter");
 				}
 				const auto& input = subgraph.Params()[*inputIndex];
 				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
@@ -6818,9 +6826,9 @@ namespace
 					const auto& affineInfo = affineEntry.outputInfos[0];
 					if (affineInfo.dtype != DataType::Float32)
 					{
-						return VulkanNativeUnsupported(std::format(
-						    "Vulkan native normalization {} tensor must be Float32, got {}", label,
-						    DataTypeName(affineInfo.dtype)));
+						return VulkanNativeUnsupported(
+						    std::format("Vulkan native normalization {} tensor must be Float32, got {}", label,
+						                DataTypeName(affineInfo.dtype)));
 					}
 					const auto affineShapeSupported =
 					    norm->mode == NormalizationMode::GroupNorm
@@ -6832,8 +6840,7 @@ namespace
 						    "Vulkan native normalization {} tensor has unsupported affine shape, got mode={} input={} "
 						    "axis={} groupCount={} {}={}",
 						    label, VulkanNativeOpName(norm->mode), Validation::ShapeToString(input.shape), norm->axis,
-						    norm->groupCount, label,
-						    Validation::ShapeToString(affineInfo.shape)));
+						    norm->groupCount, label, Validation::ShapeToString(affineInfo.shape)));
 					}
 					return VulkanNativeSupported({});
 				};
@@ -6851,10 +6858,9 @@ namespace
 						return report;
 					}
 				}
-				return VulkanNativeSupported(
-				    std::format("f32 normalization {} axis={} groupCount={} affine={}/{}",
-				                VulkanNativeOpName(norm->mode), norm->axis, norm->groupCount, norm->scale.has_value(),
-				                norm->bias.has_value()));
+				return VulkanNativeSupported(std::format("f32 normalization {} axis={} groupCount={} affine={}/{}",
+				                                         VulkanNativeOpName(norm->mode), norm->axis, norm->groupCount,
+				                                         norm->scale.has_value(), norm->bias.has_value()));
 			}
 
 			if (const auto* pool = std::get_if<Pool2DNode>(&resultEntry.node))
@@ -6872,16 +6878,15 @@ namespace
 					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (!VulkanNativeSupportsPool2DF32(pool->mode, input.shape, output.shape, pool->kernelShape,
-				                                  pool->strides, pool->lowPads, pool->highPads,
-				                                  pool->countIncludePad))
+				                                   pool->strides, pool->lowPads, pool->highPads, pool->countIncludePad))
 				{
-					return VulkanNativeUnsupported(std::format(
-					    "Vulkan native Pool2D requires static rank-4 f32 input/output, got input={} "
-					    "output={} kernel={} strides={} lowPads={} highPads={} countIncludePad={}",
-					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
-					    Validation::ShapeToString(pool->kernelShape), Validation::ShapeToString(pool->strides),
-					    Validation::ShapeToString(pool->lowPads), Validation::ShapeToString(pool->highPads),
-					    pool->countIncludePad));
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native Pool2D requires static rank-4 f32 input/output, got input={} "
+					                "output={} kernel={} strides={} lowPads={} highPads={} countIncludePad={}",
+					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
+					                Validation::ShapeToString(pool->kernelShape),
+					                Validation::ShapeToString(pool->strides), Validation::ShapeToString(pool->lowPads),
+					                Validation::ShapeToString(pool->highPads), pool->countIncludePad));
 				}
 				return VulkanNativeSupported(std::format("f32 Pool2D {}", VulkanNativeOpName(pool->mode)));
 			}
@@ -6891,7 +6896,8 @@ namespace
 				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, upsample->input);
 				if (!inputIndex)
 				{
-					return VulkanNativeUnsupported("Vulkan native nearest Upsample input must be a direct graph parameter");
+					return VulkanNativeUnsupported(
+					    "Vulkan native nearest Upsample input must be a direct graph parameter");
 				}
 				const auto& input = subgraph.Params()[*inputIndex];
 				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
@@ -6906,18 +6912,45 @@ namespace
 				}
 				if (!VulkanNativeSupportsUpsampleNearestF32(input.shape, output.shape, upsample->alignCorners))
 				{
-					return VulkanNativeUnsupported(std::format(
-					    "Vulkan native nearest Upsample requires static rank-4 f32 input/output and alignCorners=false, "
-					    "got input={} output={} alignCorners={}",
-					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
-					    upsample->alignCorners));
+					return VulkanNativeUnsupported(std::format("Vulkan native nearest Upsample requires static rank-4 "
+					                                           "f32 input/output and alignCorners=false, "
+					                                           "got input={} output={} alignCorners={}",
+					                                           Validation::ShapeToString(input.shape),
+					                                           Validation::ShapeToString(output.shape),
+					                                           upsample->alignCorners));
 				}
 				return VulkanNativeSupported("f32 nearest Upsample");
 			}
 
+			if (const auto* slice = std::get_if<SliceNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, slice->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native Slice input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native Slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (!VulkanNativeSupportsSliceF32(input.shape, output.shape, slice->axis, slice->start, slice->length))
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native Slice requires compatible static f32 input/output, got input={} output={} "
+					    "axis={} start={} length={}",
+					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape), slice->axis,
+					    slice->start, slice->length));
+				}
+				return VulkanNativeSupported(
+				    std::format("f32 Slice axis={} start={} length={}", slice->axis, slice->start, slice->length));
+			}
+
 			return VulkanNativeUnsupported(
 			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, ReduceOpNode, "
-			    "SoftmaxNode, NormalizationNode, Pool2DNode, or UpsampleNode result nodes");
+			    "SoftmaxNode, NormalizationNode, Pool2DNode, UpsampleNode, or SliceNode result nodes");
 		}
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
@@ -7215,8 +7248,7 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0MatMulBiasPlan> MakeVulkanP0MatMulBiasF32Plan(VulkanP0TensorRef lhs,
-	                                                                    VulkanP0TensorRef rhs,
+	std::optional<VulkanP0MatMulBiasPlan> MakeVulkanP0MatMulBiasF32Plan(VulkanP0TensorRef lhs, VulkanP0TensorRef rhs,
 	                                                                    VulkanP0TensorRef bias,
 	                                                                    const OutputInfo& output, bool relu)
 	{
@@ -7305,7 +7337,8 @@ namespace
 			return std::nullopt;
 		}
 
-		return MakeVulkanP0MatMulBiasF32Plan(std::move(*lhs), std::move(*rhs), std::move(*bias), resultEntry.outputInfos[0],
+		return MakeVulkanP0MatMulBiasF32Plan(std::move(*lhs), std::move(*rhs), std::move(*bias),
+		                                     resultEntry.outputInfos[0],
 		                                     fused->pattern == FusionPattern::MatMulBiasAddReLU);
 	}
 
@@ -7406,8 +7439,7 @@ namespace
 
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-		    reduce->axis >= input.shape.size())
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || reduce->axis >= input.shape.size())
 		{
 			return std::nullopt;
 		}
@@ -7475,8 +7507,8 @@ namespace
 
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-		    input.shape != output.shape || !VulkanNativeSupportsSoftmaxF32(input.shape, softmax->axis))
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape ||
+		    !VulkanNativeSupportsSoftmaxF32(input.shape, softmax->axis))
 		{
 			return std::nullopt;
 		}
@@ -7534,7 +7566,7 @@ namespace
 		const auto& output = resultEntry.outputInfos[0];
 		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
 		    !VulkanNativeSupportsPool2DF32(pool->mode, input.shape, output.shape, pool->kernelShape, pool->strides,
-		                                  pool->lowPads, pool->highPads, pool->countIncludePad))
+		                                   pool->lowPads, pool->highPads, pool->countIncludePad))
 		{
 			return std::nullopt;
 		}
@@ -7560,8 +7592,8 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0Conv2DPlan>
-	MatchVulkanP0Conv2DF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
+	std::optional<VulkanP0Conv2DPlan> MatchVulkanP0Conv2DF32(const Graph& graph,
+	                                                         VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -7611,17 +7643,16 @@ namespace
 		const auto& output = resultEntry.outputInfos[0];
 		if (input->dtype != DataType::Float32 || weight->dtype != DataType::Float32 ||
 		    output.dtype != DataType::Float32 || (bias && bias->dtype != DataType::Float32) ||
-		    !VulkanNativeSupportsConv2DF32(input->shape, weight->shape, output.shape, conv->strides,
-		                                   conv->dilations, conv->lowPads, conv->highPads, conv->groupCount))
+		    !VulkanNativeSupportsConv2DF32(input->shape, weight->shape, output.shape, conv->strides, conv->dilations,
+		                                   conv->lowPads, conv->highPads, conv->groupCount))
 		{
 			return std::nullopt;
 		}
 		if (bias)
 		{
-			const auto biasOk =
-			    (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
-			    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
-			     bias->shape[2] == 1 && bias->shape[3] == 1);
+			const auto biasOk = (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
+			                    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
+			                     bias->shape[2] == 1 && bias->shape[3] == 1);
 			if (!biasOk)
 			{
 				return std::nullopt;
@@ -7711,6 +7742,68 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0SlicePlan> MatchVulkanP0SliceF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* slice = std::get_if<SliceNode>(&resultEntry.node);
+		if (!slice)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, slice->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    !VulkanNativeSupportsSliceF32(input.shape, output.shape, slice->axis, slice->start, slice->length))
+		{
+			return std::nullopt;
+		}
+		const auto inputElementCount = VulkanP0ShapeNumElementsU32(input.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!inputElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0SlicePlan{
+			.inputIndex = *inputIndex,
+			.inputElementCount = *inputElementCount,
+			.outputElementCount = *outputElementCount,
+			.inputShape = input.shape,
+			.outputShape = output.shape,
+			.axis = slice->axis,
+			.start = slice->start,
+			.length = slice->length,
+		};
+	}
+
 	std::optional<VulkanP0ConvTranspose2DPlan>
 	MatchVulkanP0ConvTranspose2DF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
@@ -7770,10 +7863,9 @@ namespace
 		}
 		if (bias)
 		{
-			const auto biasOk =
-			    (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
-			    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
-			     bias->shape[2] == 1 && bias->shape[3] == 1);
+			const auto biasOk = (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
+			                    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
+			                     bias->shape[2] == 1 && bias->shape[3] == 1);
 			if (!biasOk)
 			{
 				return std::nullopt;
@@ -7844,8 +7936,7 @@ namespace
 
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
-		    input.shape != output.shape ||
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape ||
 		    !VulkanNativeSupportsNormalizationF32(norm->mode, input.shape, norm->axis, norm->groupCount))
 		{
 			return std::nullopt;
@@ -8167,9 +8258,9 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
-		auto spirv = VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
-		                                               plan->scale.has_value(), plan->bias.has_value(),
-		                                               plan->groupCount);
+		auto spirv =
+		    VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
+		                                      plan->scale.has_value(), plan->bias.has_value(), plan->groupCount);
 		payload.spirv = std::move(spirv.words);
 
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
@@ -8236,8 +8327,7 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::Pool2DF32);
 		auto spirv = VulkanNativePool2DF32SPIRV(plan->mode, plan->inputShape, plan->outputShape, plan->kernelShape,
-		                                        plan->strides, plan->lowPads, plan->highPads,
-		                                        plan->countIncludePad);
+		                                        plan->strides, plan->lowPads, plan->highPads, plan->countIncludePad);
 		payload.spirv = std::move(spirv.words);
 
 		payload.kernels.push_back({
@@ -8323,12 +8413,12 @@ namespace
 		};
 	}
 
-	VulkanNativeArgumentSpec VulkanP0BinaryChainArgument(VulkanP0BinaryChainOperand operand,
-	                                                     std::uint32_t binding, std::uint64_t byteSize)
+	VulkanNativeArgumentSpec VulkanP0BinaryChainArgument(VulkanP0BinaryChainOperand operand, std::uint32_t binding,
+	                                                     std::uint64_t byteSize)
 	{
 		return VulkanNativeArgumentSpec{
-			.kind = operand.accumulator ? VulkanNativeArgumentKind::OutputTensor
-			                            : VulkanNativeArgumentKind::InputTensor,
+			.kind =
+			    operand.accumulator ? VulkanNativeArgumentKind::OutputTensor : VulkanNativeArgumentKind::InputTensor,
 			.index = operand.accumulator ? 0u : operand.inputIndex,
 			.binding = binding,
 			.byteOffset = 0,
@@ -8402,9 +8492,9 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::Conv2DF32);
-		auto spirv = VulkanNativeConv2DF32SPIRV(plan->inputShape, plan->weightShape, plan->outputShape,
-		                                        plan->strides, plan->dilations, plan->lowPads, plan->highPads,
-		                                        plan->groupCount, plan->bias.has_value());
+		auto spirv = VulkanNativeConv2DF32SPIRV(plan->inputShape, plan->weightShape, plan->outputShape, plan->strides,
+		                                        plan->dilations, plan->lowPads, plan->highPads, plan->groupCount,
+		                                        plan->bias.has_value());
 		payload.spirv = std::move(spirv.words);
 
 		std::vector<VulkanNativeArgumentSpec> arguments;
@@ -8497,6 +8587,53 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSliceF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0SliceF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SliceF32);
+		auto spirv =
+		    VulkanNativeSliceF32SPIRV(plan->inputShape, plan->outputShape, plan->axis, plan->start, plan->length);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeSliceF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
 	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeConvTranspose2DF32P0(const Graph& graph)
 	{
 		VulkanP0ExternalTensorBuilder externalBuilder;
@@ -8510,9 +8647,9 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::ConvTranspose2DF32);
-		auto spirv = VulkanNativeConvTranspose2DF32SPIRV(
-		    plan->inputShape, plan->weightShape, plan->outputShape, plan->strides, plan->dilations,
-		    plan->lowPads, plan->highPads, plan->outputPads, plan->groupCount, plan->bias.has_value());
+		auto spirv = VulkanNativeConvTranspose2DF32SPIRV(plan->inputShape, plan->weightShape, plan->outputShape,
+		                                                 plan->strides, plan->dilations, plan->lowPads, plan->highPads,
+		                                                 plan->outputPads, plan->groupCount, plan->bias.has_value());
 		payload.spirv = std::move(spirv.words);
 
 		std::vector<VulkanNativeArgumentSpec> arguments;
@@ -10051,8 +10188,7 @@ namespace
 		return (payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(feature))) != 0;
 	}
 
-	bool VulkanApiVersionAtLeast(const VulkanDeviceCapabilities& capabilities, std::uint32_t major,
-	                             std::uint32_t minor)
+	bool VulkanApiVersionAtLeast(const VulkanDeviceCapabilities& capabilities, std::uint32_t major, std::uint32_t minor)
 	{
 		return capabilities.apiVersionMajor > major ||
 		       (capabilities.apiVersionMajor == major && capabilities.apiVersionMinor >= minor);
@@ -10083,8 +10219,7 @@ namespace
 
 	void RequireVulkanNativeDeviceFeature(const VulkanNativeDeviceRequirementSet& requirements,
 	                                      VulkanNativeDeviceRequirement requirement, bool enabled, bool available,
-	                                      std::string_view featureName,
-	                                      const VulkanDeviceCapabilities& capabilities)
+	                                      std::string_view featureName, const VulkanDeviceCapabilities& capabilities)
 	{
 		if (!requirements.HasRequirement(requirement))
 		{
@@ -10100,8 +10235,7 @@ namespace
 
 	void ValidateVulkanNativeDeviceCapabilities(const VulkanNativeInstructionPayload& payload,
 	                                            std::span<const CompiledTensorSpec> inputSpecs,
-	                                            std::span<const CompiledTensorSpec> outputSpecs,
-	                                            const Vulkan& device)
+	                                            std::span<const CompiledTensorSpec> outputSpecs, const Vulkan& device)
 	{
 		const auto capabilities = QueryVulkanDeviceCapabilities(device);
 		if (payload.target != "vulkan1.1")
@@ -10110,10 +10244,10 @@ namespace
 		}
 		if (!VulkanApiVersionAtLeast(capabilities, 1, 1))
 		{
-			throw std::runtime_error(std::format(
-			    "Vulkan native payload requires Vulkan 1.1 or newer; device '{}' reports {}.{}.{}",
-			    VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor, capabilities.apiVersionMinor,
-			    capabilities.apiVersionPatch));
+			throw std::runtime_error(
+			    std::format("Vulkan native payload requires Vulkan 1.1 or newer; device '{}' reports {}.{}.{}",
+			                VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor,
+			                capabilities.apiVersionMinor, capabilities.apiVersionPatch));
 		}
 		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
 		{
@@ -10121,25 +10255,25 @@ namespace
 			const auto& requirements = kernel.requirements;
 			if (requirements.descriptorAbiVersion != 1)
 			{
-				throw std::runtime_error(std::format(
-				    "Vulkan native kernel {} requires unsupported descriptor ABI version {}", kernelIndex,
-				    requirements.descriptorAbiVersion));
+				throw std::runtime_error(
+				    std::format("Vulkan native kernel {} requires unsupported descriptor ABI version {}", kernelIndex,
+				                requirements.descriptorAbiVersion));
 			}
 			if (kernel.groups.x == 0 || kernel.groups.y == 0 || kernel.groups.z == 0)
 			{
-				throw std::runtime_error(std::format("Vulkan native kernel {} has zero dispatch dimension",
-				                                     kernelIndex));
+				throw std::runtime_error(
+				    std::format("Vulkan native kernel {} has zero dispatch dimension", kernelIndex));
 			}
 			if (kernel.groups.x > capabilities.maxComputeWorkGroupCount[0] ||
 			    kernel.groups.y > capabilities.maxComputeWorkGroupCount[1] ||
 			    kernel.groups.z > capabilities.maxComputeWorkGroupCount[2])
 			{
-				throw std::runtime_error(std::format(
-				    "Vulkan native kernel {} requires dispatch groups {}x{}x{}, but device '{}' supports "
-				    "maxComputeWorkGroupCount {}x{}x{}",
-				    kernelIndex, kernel.groups.x, kernel.groups.y, kernel.groups.z,
-				    VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupCount[0],
-				    capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
+				throw std::runtime_error(
+				    std::format("Vulkan native kernel {} requires dispatch groups {}x{}x{}, but device '{}' supports "
+				                "maxComputeWorkGroupCount {}x{}x{}",
+				                kernelIndex, kernel.groups.x, kernel.groups.y, kernel.groups.z,
+				                VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupCount[0],
+				                capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
 			}
 			const auto descriptorCount = VulkanDescriptorCount(kernel);
 			if (capabilities.maxBoundDescriptorSets < 1)
@@ -10156,8 +10290,7 @@ namespace
 				    "Vulkan native kernel {} requires {} storage-buffer descriptor(s), but device '{}' reports "
 				    "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
 				    kernelIndex, descriptorCount, VulkanDeviceCapabilityName(capabilities),
-				    capabilities.maxPerStageDescriptorStorageBuffers,
-				    capabilities.maxDescriptorSetStorageBuffers));
+				    capabilities.maxPerStageDescriptorStorageBuffers, capabilities.maxDescriptorSetStorageBuffers));
 			}
 			const auto localInvocations = VulkanDispatchDimProduct(requirements.localSize);
 			if (localInvocations > capabilities.maxComputeWorkGroupInvocations ||
@@ -10177,80 +10310,65 @@ namespace
 			    (!capabilities.subgroupComputeAvailable || !capabilities.subgroupBasicAvailable ||
 			     capabilities.subgroupSize != requirements.requiredSubgroupSize))
 			{
-				throw std::runtime_error(std::format(
-				    "Vulkan native kernel {} requires compute subgroup size {}, but device '{}' reports "
-				    "subgroupSize={}, compute={}, basic={}",
-				    kernelIndex, requirements.requiredSubgroupSize, VulkanDeviceCapabilityName(capabilities),
-				    capabilities.subgroupSize, capabilities.subgroupComputeAvailable,
-				    capabilities.subgroupBasicAvailable));
+				throw std::runtime_error(
+				    std::format("Vulkan native kernel {} requires compute subgroup size {}, but device '{}' reports "
+				                "subgroupSize={}, compute={}, basic={}",
+				                kernelIndex, requirements.requiredSubgroupSize,
+				                VulkanDeviceCapabilityName(capabilities), capabilities.subgroupSize,
+				                capabilities.subgroupComputeAvailable, capabilities.subgroupBasicAvailable));
 			}
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::SubgroupArithmetic,
-			                                 capabilities.subgroupComputeAvailable &&
-			                                     capabilities.subgroupArithmeticAvailable,
-			                                 capabilities.subgroupArithmeticAvailable, "subgroupArithmetic",
-			                                 capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::SubgroupBallot,
-			                                 capabilities.subgroupComputeAvailable &&
-			                                     capabilities.subgroupBallotAvailable,
-			                                 capabilities.subgroupBallotAvailable, "subgroupBallot",
-			                                 capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::SubgroupShuffle,
-			                                 capabilities.subgroupComputeAvailable &&
-			                                     capabilities.subgroupShuffleAvailable,
-			                                 capabilities.subgroupShuffleAvailable, "subgroupShuffle",
-			                                 capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::ShaderFloat16,
-			                                 capabilities.shaderFloat16Enabled,
-			                                 capabilities.shaderFloat16Available, "shaderFloat16", capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::ShaderInt8,
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::SubgroupArithmetic,
+			    capabilities.subgroupComputeAvailable && capabilities.subgroupArithmeticAvailable,
+			    capabilities.subgroupArithmeticAvailable, "subgroupArithmetic", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::SubgroupBallot,
+			    capabilities.subgroupComputeAvailable && capabilities.subgroupBallotAvailable,
+			    capabilities.subgroupBallotAvailable, "subgroupBallot", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::SubgroupShuffle,
+			    capabilities.subgroupComputeAvailable && capabilities.subgroupShuffleAvailable,
+			    capabilities.subgroupShuffleAvailable, "subgroupShuffle", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::ShaderFloat16,
+			    capabilities.shaderFloat16Enabled, capabilities.shaderFloat16Available, "shaderFloat16", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements, VulkanNativeDeviceRequirement::ShaderInt8,
 			                                 capabilities.shaderInt8Enabled, capabilities.shaderInt8Available,
 			                                 "shaderInt8", capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::StorageBuffer16BitAccess,
-			                                 capabilities.storageBuffer16BitAccessEnabled,
-			                                 capabilities.storageBuffer16BitAccessAvailable,
-			                                 "storageBuffer16BitAccess", capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::StorageBuffer8BitAccess,
-			                                 capabilities.storageBuffer8BitAccessEnabled,
-			                                 capabilities.storageBuffer8BitAccessAvailable,
-			                                 "storageBuffer8BitAccess", capabilities);
 			RequireVulkanNativeDeviceFeature(
-			    requirements.deviceRequirements,
-			    VulkanNativeDeviceRequirement::ShaderStorageBufferArrayNonUniformIndexing,
-			    capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled,
-			    capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable,
-			    "shaderStorageBufferArrayNonUniformIndexing", capabilities);
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::StorageBuffer16BitAccess,
+			    capabilities.storageBuffer16BitAccessEnabled, capabilities.storageBuffer16BitAccessAvailable,
+			    "storageBuffer16BitAccess", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::StorageBuffer8BitAccess,
+			    capabilities.storageBuffer8BitAccessEnabled, capabilities.storageBuffer8BitAccessAvailable,
+			    "storageBuffer8BitAccess", capabilities);
+			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
+			                                 VulkanNativeDeviceRequirement::ShaderStorageBufferArrayNonUniformIndexing,
+			                                 capabilities.shaderStorageBufferArrayNonUniformIndexingEnabled,
+			                                 capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable,
+			                                 "shaderStorageBufferArrayNonUniformIndexing", capabilities);
 			RequireVulkanNativeDeviceFeature(
 			    requirements.deviceRequirements,
 			    VulkanNativeDeviceRequirement::DescriptorBindingStorageBufferUpdateAfterBind,
 			    capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled,
 			    capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable,
 			    "descriptorBindingStorageBufferUpdateAfterBind", capabilities);
-			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::DescriptorBindingPartiallyBound,
-			                                 capabilities.descriptorBindingPartiallyBoundEnabled,
-			                                 capabilities.descriptorBindingPartiallyBoundAvailable,
-			                                 "descriptorBindingPartiallyBound", capabilities);
 			RequireVulkanNativeDeviceFeature(
-			    requirements.deviceRequirements,
-			    VulkanNativeDeviceRequirement::DescriptorBindingVariableDescriptorCount,
-			    capabilities.descriptorBindingVariableDescriptorCountEnabled,
-			    capabilities.descriptorBindingVariableDescriptorCountAvailable,
-			    "descriptorBindingVariableDescriptorCount", capabilities);
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::DescriptorBindingPartiallyBound,
+			    capabilities.descriptorBindingPartiallyBoundEnabled,
+			    capabilities.descriptorBindingPartiallyBoundAvailable, "descriptorBindingPartiallyBound", capabilities);
 			RequireVulkanNativeDeviceFeature(requirements.deviceRequirements,
-			                                 VulkanNativeDeviceRequirement::RuntimeDescriptorArray,
-			                                 capabilities.runtimeDescriptorArrayEnabled,
-			                                 capabilities.runtimeDescriptorArrayAvailable,
-			                                 "runtimeDescriptorArray", capabilities);
-			const auto requiredAlignment =
-			    std::max<std::uint64_t>(requirements.requiredStorageBufferOffsetAlignment,
-			                            capabilities.minStorageBufferOffsetAlignment);
+			                                 VulkanNativeDeviceRequirement::DescriptorBindingVariableDescriptorCount,
+			                                 capabilities.descriptorBindingVariableDescriptorCountEnabled,
+			                                 capabilities.descriptorBindingVariableDescriptorCountAvailable,
+			                                 "descriptorBindingVariableDescriptorCount", capabilities);
+			RequireVulkanNativeDeviceFeature(
+			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::RuntimeDescriptorArray,
+			    capabilities.runtimeDescriptorArrayEnabled, capabilities.runtimeDescriptorArrayAvailable,
+			    "runtimeDescriptorArray", capabilities);
+			const auto requiredAlignment = std::max<std::uint64_t>(requirements.requiredStorageBufferOffsetAlignment,
+			                                                       capabilities.minStorageBufferOffsetAlignment);
 			for (const auto& argument : kernel.arguments)
 			{
 				if (argument.byteSize > capabilities.maxStorageBufferRange)
@@ -10263,9 +10381,9 @@ namespace
 				}
 				if (requiredAlignment != 0 && argument.byteOffset % requiredAlignment != 0)
 				{
-					throw std::runtime_error(std::format(
-					    "Vulkan native kernel {} binding {} byte offset {} is not aligned to {} bytes",
-					    kernelIndex, argument.binding, argument.byteOffset, requiredAlignment));
+					throw std::runtime_error(
+					    std::format("Vulkan native kernel {} binding {} byte offset {} is not aligned to {} bytes",
+					                kernelIndex, argument.binding, argument.byteOffset, requiredAlignment));
 				}
 			}
 		}
@@ -10275,9 +10393,8 @@ namespace
 			if (VulkanNativeSpecUsesDType(inputSpecs, DataType::Float16) ||
 			    VulkanNativeSpecUsesDType(outputSpecs, DataType::Float16))
 			{
-				RequireVulkanNativeDeviceFeature(capabilities.shaderFloat16Enabled,
-				                                 capabilities.shaderFloat16Available, "shaderFloat16",
-				                                 capabilities);
+				RequireVulkanNativeDeviceFeature(capabilities.shaderFloat16Enabled, capabilities.shaderFloat16Available,
+				                                 "shaderFloat16", capabilities);
 				RequireVulkanNativeDeviceFeature(capabilities.storageBuffer16BitAccessEnabled,
 				                                 capabilities.storageBuffer16BitAccessAvailable,
 				                                 "storageBuffer16BitAccess", capabilities);
@@ -10386,12 +10503,11 @@ namespace
 			};
 			VulkanDispatchTiming gpuTiming;
 			const auto dispatchBegin = std::chrono::steady_clock::now();
-			modules[kernelIndex].Dispatch(
-			    descriptors, dispatchGroups,
-			    VulkanExecutionOptions{
-			        .synchronize = options.synchronize,
-			        .timing = options.profileEvents == nullptr ? nullptr : &gpuTiming,
-			    });
+			modules[kernelIndex].Dispatch(descriptors, dispatchGroups,
+			                              VulkanExecutionOptions{
+			                                  .synchronize = options.synchronize,
+			                                  .timing = options.profileEvents == nullptr ? nullptr : &gpuTiming,
+			                              });
 			const auto dispatchEnd = std::chrono::steady_clock::now();
 			if (options.profileEvents != nullptr)
 			{
@@ -10484,8 +10600,7 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleImage image, V
 	else if (impl->backend == CompiledModuleBackend::VulkanNative)
 	{
 		impl->vulkanPayload = DeserializeVulkanNativeInstructionPayload(impl->instructions);
-		ValidateVulkanNativeDeviceCapabilities(impl->vulkanPayload, impl->inputSpecs, impl->outputSpecs,
-		                                       impl->device);
+		ValidateVulkanNativeDeviceCapabilities(impl->vulkanPayload, impl->inputSpecs, impl->outputSpecs, impl->device);
 		impl->vulkanModules.reserve(impl->vulkanPayload.kernels.size());
 		for (const auto& kernel : impl->vulkanPayload.kernels)
 		{
@@ -10663,7 +10778,8 @@ void CompiledModule<Vulkan>::RunManyTensorsInto(std::span<const CompiledModuleVu
 		    return invocation.options.profileEvents != nullptr;
 	    }))
 	{
-		throw std::runtime_error("CompiledModule<Vulkan> profile event sinks are not thread-safe with RunManyTensorsInto");
+		throw std::runtime_error(
+		    "CompiledModule<Vulkan> profile event sinks are not thread-safe with RunManyTensorsInto");
 	}
 	if (workerCount == 1)
 	{
@@ -11058,6 +11174,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeUpsampleNearestF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeSliceF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

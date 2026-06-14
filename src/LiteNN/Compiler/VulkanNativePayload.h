@@ -46,11 +46,12 @@ namespace LiteNN
 		Conv2DF32 = 25,
 		UpsampleNearestF32 = 26,
 		ConvTranspose2DF32 = 27,
+		SliceF32 = 28,
 	};
 
 	struct VulkanNativeFeatureSet
 	{
-		static constexpr std::uint64_t KnownFeatureMask = (1ull << 28) - 1;
+		static constexpr std::uint64_t KnownFeatureMask = (1ull << 29) - 1;
 
 		std::uint64_t flags{};
 

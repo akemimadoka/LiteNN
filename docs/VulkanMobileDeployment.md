@@ -138,6 +138,7 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - baseline direct static rank-4 NCHW `Float32` ConvTranspose2D with stride, dilation, low/high padding, output padding,
   groups, optional bias, and separated variable/constant weight tensors
 - static rank-4 NCHW `Float32` nearest Upsample with `alignCorners=false`
+- static arbitrary-rank non-empty `Float32` Slice with in-range `axis/start/length` and direct graph-parameter input
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
@@ -152,7 +153,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1`, `VulkanNativeGroupNorm/F32`,
   `VulkanNativeGroupNormAffine/F32`, `VulkanNativePool2D/F32/Max|Average`,
   `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad`, `VulkanNativeConv2D/F32`,
-  `VulkanNativeConvTranspose2D/F32`, `VulkanNativeUpsampleNearest/F32`, `VulkanNativeMatMul/F32`, and
+  `VulkanNativeConvTranspose2D/F32`, `VulkanNativeUpsampleNearest/F32`, `VulkanNativeSlice/F32`,
+  `VulkanNativeMatMul/F32`, and
   `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan
   compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows

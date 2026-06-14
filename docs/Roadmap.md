@@ -2030,6 +2030,11 @@ packaging slice to a useful production backend.
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeConvTranspose2D/F32` rows and the local `batch:1/channels:8/outChannels:8/spatial:16x31`
             smoke row ran successfully.
+      - [x] Add baseline `SliceNode` coverage: native SPIR-V now supports static non-empty f32 tensors with arbitrary
+            rank, in-range `axis/start/length`, and direct graph-parameter input.
+            Validation on 2026-06-14: `CompiledModuleVulkanTest` passed 70/71 Vulkan tests with only the local
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers `VulkanNativeSlice/F32` rows
+            and the local `batch:1/channels:8to4/spatial:16` smoke row ran successfully.
       - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.

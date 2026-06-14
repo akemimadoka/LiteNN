@@ -43,10 +43,10 @@ namespace
 		const auto lhs = sg.AddParam(DataType::Float32, { 4 });
 		const auto rhs = sg.AddParam(DataType::Float32, { 4 });
 		const auto tail = sg.AddParam(DataType::Float32, { 4 });
-		const auto first = sg.AddNode(BinaryOpNode{ firstOp, { lhs, 0 }, { rhs, 0 } },
-		                              { OutputInfo{ DataType::Float32, { 4 } } });
-		const auto second = sg.AddNode(BinaryOpNode{ secondOp, { first, 0 }, { tail, 0 } },
-		                               { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto first =
+		    sg.AddNode(BinaryOpNode{ firstOp, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto second =
+		    sg.AddNode(BinaryOpNode{ secondOp, { first, 0 }, { tail, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
 		sg.SetResults({ { second, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -96,8 +96,7 @@ namespace
 		Graph graph;
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
-		const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, axis },
-		                            { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, axis }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -238,6 +237,20 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSliceGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto out = sg.AddNode(SliceNode{ { input, 0 }, 1, 1, 2 }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
 	                                        double epsilon = 1e-6)
 	{
@@ -334,8 +347,8 @@ namespace
 		Graph graph;
 		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
 		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 }, DataType::Float32)));
-		const auto biasIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "weight");
 		graph.SetVariableName(biasIndex, "bias");
 
@@ -369,10 +382,9 @@ namespace
 	Graph BuildSimpleConv2DVariableGraph()
 	{
 		Graph graph;
-		const auto weightIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0 }, { 1, 1, 2, 2 }, DataType::Float32)));
-		const auto biasIndex =
-		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5 }, { 1 }, DataType::Float32)));
+		const auto weightIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0 }, { 1, 1, 2, 2 }, DataType::Float32)));
+		const auto biasIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5 }, { 1 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "conv_weight");
 		graph.SetVariableName(biasIndex, "conv_bias");
 
@@ -401,12 +413,9 @@ namespace
 	Graph BuildGroupedConv2DVariableGraph()
 	{
 		Graph graph;
-		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
-		    { 1.0, 0.0, 0.0, 1.0,
-		      1.0, 1.0, 1.0, 1.0 },
-		    { 2, 1, 2, 2 }, DataType::Float32)));
-		const auto biasIndex =
-		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5, 1.0 }, { 2 }, DataType::Float32)));
+		const auto weightIndex = graph.AddVariable(Variable::Create(
+		    Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0 }, { 2, 1, 2, 2 }, DataType::Float32)));
+		const auto biasIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5, 1.0 }, { 2 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "grouped_conv_weight");
 		graph.SetVariableName(biasIndex, "grouped_conv_bias");
 
@@ -435,10 +444,9 @@ namespace
 	Graph BuildSimpleConvTranspose2DVariableGraph()
 	{
 		Graph graph;
-		const auto weightIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.0, 1.0, 1.0, 1.0 }, { 1, 1, 2, 2 }, DataType::Float32)));
-		const auto biasIndex =
-		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5 }, { 1 }, DataType::Float32)));
+		const auto weightIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 1.0, 1.0, 1.0 }, { 1, 1, 2, 2 }, DataType::Float32)));
+		const auto biasIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5 }, { 1 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "conv_transpose_weight");
 		graph.SetVariableName(biasIndex, "conv_transpose_bias");
 
@@ -779,8 +787,8 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	EXPECT_EQ(decodedRequirements.descriptorAbiVersion, 1u);
 	EXPECT_EQ(decodedRequirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
 	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
-	EXPECT_TRUE(decodedRequirements.deviceRequirements.HasRequirement(
-	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
+	EXPECT_TRUE(
+	    decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
 	EXPECT_TRUE(
 	    decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::SubgroupArithmetic));
 	EXPECT_TRUE(
@@ -789,7 +797,7 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	EXPECT_EQ(decodedRequirements.requiredStorageBufferOffsetAlignment, 16u);
 
 	payload.kernels[0].requirements.deviceRequirements.flags = 1ull << 63;
-	EXPECT_THROW((void)SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
+	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
 }
 
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSimpleAdd)
@@ -925,6 +933,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForNearestUpsample)
 
 	EXPECT_TRUE(report.supported);
 	EXPECT_NE(report.capability.find("f32 nearest Upsample"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForSlice)
+{
+	const auto graph = BuildSliceGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 Slice"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
 
@@ -1102,8 +1120,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForLowPrecisionCast)
 	    VulkanNativeDeviceRequirement::ShaderFloat16));
 	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
-	EXPECT_FALSE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
-	    VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_FALSE(
+	    payload.kernels[0].requirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForReduce)
@@ -1116,8 +1134,7 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForReduce)
 	const auto generated = VulkanNativeReduceF32SPIRV(ReduceOp::Mean, std::array<std::size_t, 2>{ 2, 3 }, 0);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_TRUE(payload.featureSet.CheckIsValid());
-	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ReduceF32)),
-	          0ull);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ReduceF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeReduceF32KernelName(ReduceOp::Mean));
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
@@ -1143,8 +1160,7 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSoftmax)
 	const auto generated = VulkanNativeSoftmaxF32SPIRV(std::array<std::size_t, 2>{ 2, 3 }, 1);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_TRUE(payload.featureSet.CheckIsValid());
-	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SoftmaxF32)),
-	          0ull);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SoftmaxF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, "softmax");
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
@@ -1192,9 +1208,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineNormalizationEx
 	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::LayerNorm, std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5,
-	                                      true, true);
+	const auto generated = VulkanNativeNormalizationF32SPIRV(NormalizationMode::LayerNorm,
+	                                                         std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5, true, true);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
 	          0ull);
@@ -1220,9 +1235,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForGroupNorm)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm, std::array<std::size_t, 1>{ 8 }, 0, 1e-6,
-	                                      false, false, 4);
+	const auto generated = VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm,
+	                                                         std::array<std::size_t, 1>{ 8 }, 0, 1e-6, false, false, 4);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
 	          0ull);
@@ -1242,9 +1256,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineGroupNormExtern
 	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm, std::array<std::size_t, 1>{ 8 }, 0, 1e-6,
-	                                      true, true, 4);
+	const auto generated = VulkanNativeNormalizationF32SPIRV(NormalizationMode::GroupNorm,
+	                                                         std::array<std::size_t, 1>{ 8 }, 0, 1e-6, true, true, 4);
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, "group_norm");
@@ -1269,10 +1282,9 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPool2D)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativePool2DF32SPIRV(PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 3, 3 },
-	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                               std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 });
+	const auto generated = VulkanNativePool2DF32SPIRV(
+	    PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 3, 3 }, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	    std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 });
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Pool2DF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
@@ -1290,12 +1302,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPaddedPool2D)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativePool2DF32SPIRV(PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                               std::array<std::size_t, 4>{ 1, 1, 3, 3 },
-	                               std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 },
-	                               std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 1, 1 },
-	                               true);
+	const auto generated = VulkanNativePool2DF32SPIRV(
+	    PoolMode::Average, std::array<std::size_t, 4>{ 1, 1, 2, 2 }, std::array<std::size_t, 4>{ 1, 1, 3, 3 },
+	    std::array<std::size_t, 2>{ 2, 2 }, std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 1, 1 },
+	    std::array<std::size_t, 2>{ 1, 1 }, true);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Pool2DF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
@@ -1313,12 +1323,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNearestUpsample)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeUpsampleNearestF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                                        std::array<std::size_t, 4>{ 1, 1, 4, 4 }, false);
+	const auto generated = VulkanNativeUpsampleNearestF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                                                           std::array<std::size_t, 4>{ 1, 1, 4, 4 }, false);
 	EXPECT_EQ(payload.spirv, generated.words);
-	EXPECT_NE(payload.featureSet.flags &
-	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::UpsampleNearestF32)),
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::UpsampleNearestF32)),
 	          0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, "upsample_nearest");
@@ -1332,6 +1340,29 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNearestUpsample)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 16u * sizeof(float));
 }
 
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSlice)
+{
+	const auto graph = BuildSliceGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeSliceF32SPIRV(std::array<std::size_t, 2>{ 2, 3 }, std::array<std::size_t, 2>{ 2, 2 }, 1, 1, 2);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SliceF32)), 0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "slice");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 4u * sizeof(float));
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
 {
 	const auto graph = BuildSimpleConv2DVariableGraph();
@@ -1340,12 +1371,10 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
 	const auto generated =
-	    VulkanNativeConv2DF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 3, 3 },
-	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                               std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 1, 1 },
-	                               std::array<std::size_t, 2>{ 0, 0 }, std::array<std::size_t, 2>{ 0, 0 },
-	                               1, true);
+	    VulkanNativeConv2DF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 3, 3 }, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 }, std::array<std::size_t, 2>{ 1, 1 },
+	                               std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 0, 0 },
+	                               std::array<std::size_t, 2>{ 0, 0 }, 1, true);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Conv2DF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
@@ -1374,19 +1403,13 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConvTranspose2D)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeConvTranspose2DF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                                        std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                                        std::array<std::size_t, 4>{ 1, 1, 3, 3 },
-	                                        std::array<std::size_t, 2>{ 1, 1 },
-	                                        std::array<std::size_t, 2>{ 1, 1 },
-	                                        std::array<std::size_t, 2>{ 0, 0 },
-	                                        std::array<std::size_t, 2>{ 0, 0 },
-	                                        std::array<std::size_t, 2>{ 0, 0 },
-	                                        1, true);
+	const auto generated = VulkanNativeConvTranspose2DF32SPIRV(
+	    std::array<std::size_t, 4>{ 1, 1, 2, 2 }, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	    std::array<std::size_t, 4>{ 1, 1, 3, 3 }, std::array<std::size_t, 2>{ 1, 1 },
+	    std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 0, 0 }, std::array<std::size_t, 2>{ 0, 0 },
+	    std::array<std::size_t, 2>{ 0, 0 }, 1, true);
 	EXPECT_EQ(payload.spirv, generated.words);
-	EXPECT_NE(payload.featureSet.flags &
-	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ConvTranspose2DF32)),
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ConvTranspose2DF32)),
 	          0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, "conv_transpose2d");
@@ -1422,7 +1445,7 @@ TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEn
 
 	try
 	{
-		(void)artifact.Load(device);
+		(void) artifact.Load(device);
 		FAIL() << "Expected low-precision Vulkan artifact loading to require enabled device features";
 	}
 	catch (const std::runtime_error& ex)
@@ -1506,14 +1529,12 @@ TEST(CompiledModuleVulkanTest, RejectsPayloadWhenAdvancedDeviceRequirementIsNotE
 		                 capabilities.descriptorBindingStorageBufferUpdateAfterBindEnabled,
 		                 "descriptorBindingStorageBufferUpdateAfterBind" },
 		RequirementCase{ VulkanNativeDeviceRequirement::DescriptorBindingPartiallyBound,
-		                 capabilities.descriptorBindingPartiallyBoundEnabled,
-		                 "descriptorBindingPartiallyBound" },
+		                 capabilities.descriptorBindingPartiallyBoundEnabled, "descriptorBindingPartiallyBound" },
 		RequirementCase{ VulkanNativeDeviceRequirement::DescriptorBindingVariableDescriptorCount,
 		                 capabilities.descriptorBindingVariableDescriptorCountEnabled,
 		                 "descriptorBindingVariableDescriptorCount" },
 		RequirementCase{ VulkanNativeDeviceRequirement::RuntimeDescriptorArray,
-		                 capabilities.runtimeDescriptorArrayEnabled,
-		                 "runtimeDescriptorArray" },
+		                 capabilities.runtimeDescriptorArrayEnabled, "runtimeDescriptorArray" },
 	};
 	const RequirementCase* selected = nullptr;
 	for (const auto& item : cases)
@@ -1538,7 +1559,7 @@ TEST(CompiledModuleVulkanTest, RejectsPayloadWhenAdvancedDeviceRequirementIsNotE
 
 	try
 	{
-		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		(void) CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
 		FAIL() << "Expected Vulkan payload loading to reject a disabled advanced device requirement";
 	}
 	catch (const std::runtime_error& ex)
@@ -1572,7 +1593,7 @@ TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDispatchGroupsExceedDeviceLimit
 
 	try
 	{
-		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		(void) CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
 		FAIL() << "Expected Vulkan payload loading to reject oversized dispatch groups";
 	}
 	catch (const std::runtime_error& ex)
@@ -1591,10 +1612,10 @@ TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDescriptorCountExceedsDeviceLim
 
 	Vulkan device;
 	const auto capabilities = QueryVulkanDeviceCapabilities(device);
-	const auto descriptorLimit = capabilities.maxPerStageDescriptorStorageBuffers <
-	                                     capabilities.maxDescriptorSetStorageBuffers
-	                                 ? capabilities.maxPerStageDescriptorStorageBuffers
-	                                 : capabilities.maxDescriptorSetStorageBuffers;
+	const auto descriptorLimit =
+	    capabilities.maxPerStageDescriptorStorageBuffers < capabilities.maxDescriptorSetStorageBuffers
+	        ? capabilities.maxPerStageDescriptorStorageBuffers
+	        : capabilities.maxDescriptorSetStorageBuffers;
 	if (descriptorLimit == 0 || descriptorLimit == std::numeric_limits<std::uint32_t>::max())
 	{
 		GTEST_SKIP() << "Cannot construct a larger descriptor binding for this device limit";
@@ -1610,7 +1631,7 @@ TEST(CompiledModuleVulkanTest, RejectsPayloadWhenDescriptorCountExceedsDeviceLim
 
 	try
 	{
-		(void)CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
+		(void) CompiledModule<Vulkan>::Load(ImageWithInstructions(artifact, badInstructions), device);
 		FAIL() << "Expected Vulkan payload loading to reject excessive descriptor bindings";
 	}
 	catch (const std::runtime_error& ex)
@@ -1910,8 +1931,7 @@ TEST(CompiledModuleVulkanTest, RunsSimpleSoftmaxArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{
-		0.66524096f, 0.24472847f, 0.09003057f,
-		0.09003057f, 0.24472847f, 0.66524096f,
+		0.66524096f, 0.24472847f, 0.09003057f, 0.09003057f, 0.24472847f, 0.66524096f,
 	};
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
@@ -2151,9 +2171,7 @@ TEST(CompiledModuleVulkanTest, RunsPool2DArithmetic)
 		std::vector<float> expected;
 	};
 
-	const std::vector<double> input{ 1.0f, 2.0f, 3.0f,
-		                            4.0f, 5.0f, 6.0f,
-		                            7.0f, 8.0f, 9.0f };
+	const std::vector<double> input{ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f };
 	const std::array cases{
 		PoolRunCase{ .mode = PoolMode::Max, .expected = { 5.0f, 6.0f, 8.0f, 9.0f } },
 		PoolRunCase{ .mode = PoolMode::Average, .expected = { 3.0f, 4.0f, 6.0f, 7.0f } },
@@ -2195,8 +2213,7 @@ TEST(CompiledModuleVulkanTest, RunsPaddedPool2DArithmetic)
 		std::vector<float> expected;
 	};
 
-	const std::vector<double> input{ 1.0f, 2.0f,
-		                            3.0f, 4.0f };
+	const std::vector<double> input{ 1.0f, 2.0f, 3.0f, 4.0f };
 	const std::array cases{
 		PoolRunCase{ .mode = PoolMode::Max,
 		             .countIncludePad = false,
@@ -2244,18 +2261,14 @@ TEST(CompiledModuleVulkanTest, RunsNearestUpsampleArithmetic)
 
 	Vulkan device;
 	std::array inputs{
-		Tensor<Vulkan>({ 1.0, 2.0,
-		                 3.0, 4.0 },
-		               { 1, 1, 2, 2 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 1, 1, 2, 2 }, DataType::Float32, device),
 	};
 	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 	ASSERT_EQ(outputs.size(), 1);
 
 	const auto actual = CopyToHostVector(outputs[0]);
-	const std::array expected{ 1.0f, 1.0f, 2.0f, 2.0f,
-		                       1.0f, 1.0f, 2.0f, 2.0f,
-		                       3.0f, 3.0f, 4.0f, 4.0f,
-		                       3.0f, 3.0f, 4.0f, 4.0f };
+	const std::array expected{ 1.0f, 1.0f, 2.0f, 2.0f, 1.0f, 1.0f, 2.0f, 2.0f,
+		                       3.0f, 3.0f, 4.0f, 4.0f, 3.0f, 3.0f, 4.0f, 4.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{
@@ -2276,10 +2289,7 @@ TEST(CompiledModuleVulkanTest, RunsSimpleConv2DArithmetic)
 
 	Vulkan device;
 	std::array inputs{
-		Tensor<Vulkan>({ 1.0, 2.0, 3.0,
-		                 4.0, 5.0, 6.0,
-		                 7.0, 8.0, 9.0 },
-		               { 1, 1, 3, 3 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 }, { 1, 1, 3, 3 }, DataType::Float32, device),
 	};
 	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 	ASSERT_EQ(outputs.size(), 1);
@@ -2306,13 +2316,9 @@ TEST(CompiledModuleVulkanTest, RunsGroupedConv2DArithmetic)
 
 	Vulkan device;
 	std::array inputs{
-		Tensor<Vulkan>({ 1.0, 2.0, 3.0,
-		                 4.0, 5.0, 6.0,
-		                 7.0, 8.0, 9.0,
-		                 10.0, 11.0, 12.0,
-		                 13.0, 14.0, 15.0,
-		                 16.0, 17.0, 18.0 },
-		               { 1, 2, 3, 3 }, DataType::Float32, device),
+		Tensor<Vulkan>(
+		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0 },
+		    { 1, 2, 3, 3 }, DataType::Float32, device),
 	};
 	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 	ASSERT_EQ(outputs.size(), 1);
@@ -2339,17 +2345,40 @@ TEST(CompiledModuleVulkanTest, RunsSimpleConvTranspose2DArithmetic)
 
 	Vulkan device;
 	std::array inputs{
-		Tensor<Vulkan>({ 1.0, 2.0,
-		                 3.0, 4.0 },
-		               { 1, 1, 2, 2 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 1, 1, 2, 2 }, DataType::Float32, device),
 	};
 	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 	ASSERT_EQ(outputs.size(), 1);
 
 	const auto actual = CopyToHostVector(outputs[0]);
-	const std::array expected{ 1.5f, 3.5f, 2.5f,
-		                       4.5f, 10.5f, 6.5f,
-		                       3.5f, 7.5f, 4.5f };
+	const std::array expected{ 1.5f, 3.5f, 2.5f, 4.5f, 10.5f, 6.5f, 3.5f, 7.5f, 4.5f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSliceArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSliceGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 2.0f, 3.0f, 5.0f, 6.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{

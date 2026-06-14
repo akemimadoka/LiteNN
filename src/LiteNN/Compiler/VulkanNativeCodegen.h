@@ -53,64 +53,50 @@ namespace LiteNN
 	std::string_view VulkanNativePool2DF32KernelName(PoolMode mode);
 	bool VulkanNativeSupportsPool2DF32(PoolMode mode, std::span<const std::size_t> inputShape,
 	                                   std::span<const std::size_t> outputShape,
-	                                   std::span<const std::size_t> kernelShape,
-	                                   std::span<const std::size_t> strides,
-	                                   std::span<const std::size_t> lowPads,
-	                                   std::span<const std::size_t> highPads,
+	                                   std::span<const std::size_t> kernelShape, std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
 	                                   bool countIncludePad);
-	VulkanNativeGeneratedSPIRV VulkanNativePool2DF32SPIRV(PoolMode mode,
-	                                                      std::span<const std::size_t> inputShape,
-	                                                      std::span<const std::size_t> outputShape,
-	                                                      std::span<const std::size_t> kernelShape,
-	                                                      std::span<const std::size_t> strides,
-	                                                      std::span<const std::size_t> lowPads = {},
-	                                                      std::span<const std::size_t> highPads = {},
-	                                                      bool countIncludePad = false);
+	VulkanNativeGeneratedSPIRV
+	VulkanNativePool2DF32SPIRV(PoolMode mode, std::span<const std::size_t> inputShape,
+	                           std::span<const std::size_t> outputShape, std::span<const std::size_t> kernelShape,
+	                           std::span<const std::size_t> strides, std::span<const std::size_t> lowPads = {},
+	                           std::span<const std::size_t> highPads = {}, bool countIncludePad = false);
 	std::string_view VulkanNativeConv2DF32KernelName();
 	bool VulkanNativeSupportsConv2DF32(std::span<const std::size_t> inputShape,
 	                                   std::span<const std::size_t> weightShape,
-	                                   std::span<const std::size_t> outputShape,
-	                                   std::span<const std::size_t> strides,
-	                                   std::span<const std::size_t> dilations,
-	                                   std::span<const std::size_t> lowPads,
-	                                   std::span<const std::size_t> highPads,
-	                                   std::size_t groupCount);
-	VulkanNativeGeneratedSPIRV VulkanNativeConv2DF32SPIRV(std::span<const std::size_t> inputShape,
-	                                                      std::span<const std::size_t> weightShape,
-	                                                      std::span<const std::size_t> outputShape,
-	                                                      std::span<const std::size_t> strides,
-	                                                      std::span<const std::size_t> dilations,
-	                                                      std::span<const std::size_t> lowPads,
-	                                                      std::span<const std::size_t> highPads,
-	                                                      std::size_t groupCount,
-	                                                      bool hasBias);
+	                                   std::span<const std::size_t> outputShape, std::span<const std::size_t> strides,
+	                                   std::span<const std::size_t> dilations, std::span<const std::size_t> lowPads,
+	                                   std::span<const std::size_t> highPads, std::size_t groupCount);
+	VulkanNativeGeneratedSPIRV
+	VulkanNativeConv2DF32SPIRV(std::span<const std::size_t> inputShape, std::span<const std::size_t> weightShape,
+	                           std::span<const std::size_t> outputShape, std::span<const std::size_t> strides,
+	                           std::span<const std::size_t> dilations, std::span<const std::size_t> lowPads,
+	                           std::span<const std::size_t> highPads, std::size_t groupCount, bool hasBias);
 	std::string_view VulkanNativeConvTranspose2DF32KernelName();
-	bool VulkanNativeSupportsConvTranspose2DF32(std::span<const std::size_t> inputShape,
-	                                            std::span<const std::size_t> weightShape,
-	                                            std::span<const std::size_t> outputShape,
-	                                            std::span<const std::size_t> strides,
-	                                            std::span<const std::size_t> dilations,
-	                                            std::span<const std::size_t> lowPads,
-	                                            std::span<const std::size_t> highPads,
-	                                            std::span<const std::size_t> outputPads,
-	                                            std::size_t groupCount);
-	VulkanNativeGeneratedSPIRV VulkanNativeConvTranspose2DF32SPIRV(std::span<const std::size_t> inputShape,
-	                                                               std::span<const std::size_t> weightShape,
-	                                                               std::span<const std::size_t> outputShape,
-	                                                               std::span<const std::size_t> strides,
-	                                                               std::span<const std::size_t> dilations,
-	                                                               std::span<const std::size_t> lowPads,
-	                                                               std::span<const std::size_t> highPads,
-	                                                               std::span<const std::size_t> outputPads,
-	                                                               std::size_t groupCount,
-	                                                               bool hasBias);
+	bool VulkanNativeSupportsConvTranspose2DF32(
+	    std::span<const std::size_t> inputShape, std::span<const std::size_t> weightShape,
+	    std::span<const std::size_t> outputShape, std::span<const std::size_t> strides,
+	    std::span<const std::size_t> dilations, std::span<const std::size_t> lowPads,
+	    std::span<const std::size_t> highPads, std::span<const std::size_t> outputPads, std::size_t groupCount);
+	VulkanNativeGeneratedSPIRV
+	VulkanNativeConvTranspose2DF32SPIRV(std::span<const std::size_t> inputShape,
+	                                    std::span<const std::size_t> weightShape,
+	                                    std::span<const std::size_t> outputShape, std::span<const std::size_t> strides,
+	                                    std::span<const std::size_t> dilations, std::span<const std::size_t> lowPads,
+	                                    std::span<const std::size_t> highPads, std::span<const std::size_t> outputPads,
+	                                    std::size_t groupCount, bool hasBias);
 	std::string_view VulkanNativeUpsampleNearestF32KernelName();
 	bool VulkanNativeSupportsUpsampleNearestF32(std::span<const std::size_t> inputShape,
-	                                           std::span<const std::size_t> outputShape,
-	                                           bool alignCorners);
+	                                            std::span<const std::size_t> outputShape, bool alignCorners);
 	VulkanNativeGeneratedSPIRV VulkanNativeUpsampleNearestF32SPIRV(std::span<const std::size_t> inputShape,
 	                                                               std::span<const std::size_t> outputShape,
 	                                                               bool alignCorners);
+	std::string_view VulkanNativeSliceF32KernelName();
+	bool VulkanNativeSupportsSliceF32(std::span<const std::size_t> inputShape, std::span<const std::size_t> outputShape,
+	                                  std::size_t axis, std::size_t start, std::size_t length);
+	VulkanNativeGeneratedSPIRV VulkanNativeSliceF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                     std::span<const std::size_t> outputShape, std::size_t axis,
+	                                                     std::size_t start, std::size_t length);
 } // namespace LiteNN
 
 #endif
