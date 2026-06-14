@@ -84,6 +84,13 @@ namespace LiteNN
 	                                                      std::span<const std::size_t> highPads,
 	                                                      std::size_t groupCount,
 	                                                      bool hasBias);
+	std::string_view VulkanNativeUpsampleNearestF32KernelName();
+	bool VulkanNativeSupportsUpsampleNearestF32(std::span<const std::size_t> inputShape,
+	                                           std::span<const std::size_t> outputShape,
+	                                           bool alignCorners);
+	VulkanNativeGeneratedSPIRV VulkanNativeUpsampleNearestF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                               std::span<const std::size_t> outputShape,
+	                                                               bool alignCorners);
 } // namespace LiteNN
 
 #endif

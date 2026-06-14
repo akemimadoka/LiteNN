@@ -220,6 +220,24 @@ namespace
 		return graph;
 	}
 
+	Graph BuildNearestUpsampleGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 1, 2, 2 });
+		const auto out = sg.AddNode(UpsampleNode{ .input = { input, 0 },
+		                                          .mode = UpsampleMode::Nearest,
+		                                          .outputSpatialShape = { 4, 4 },
+		                                          .alignCorners = false },
+		                            { OutputInfo{ DataType::Float32, { 1, 1, 4, 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildAffineGroupNormVariableGraph(std::vector<std::size_t> shape, std::size_t groupCount,
 	                                        double epsilon = 1e-6)
 	{
@@ -867,6 +885,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForPool2D)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForNearestUpsample)
+{
+	const auto graph = BuildNearestUpsampleGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 nearest Upsample"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForConv2D)
 {
 	const auto graph = BuildSimpleConv2DVariableGraph();
@@ -1233,6 +1261,32 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForPaddedPool2D)
 	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 4u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 9u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNearestUpsample)
+{
+	const auto graph = BuildNearestUpsampleGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeUpsampleNearestF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                                        std::array<std::size_t, 4>{ 1, 1, 4, 4 }, false);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::UpsampleNearestF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "upsample_nearest");
+	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 4u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 16u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
@@ -2096,6 +2150,38 @@ TEST(CompiledModuleVulkanTest, RunsPaddedPool2DArithmetic)
 		{
 			EXPECT_NEAR(actual[i], testCase.expected[i], 1e-5f);
 		}
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsNearestUpsampleArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildNearestUpsampleGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0,
+		                 3.0, 4.0 },
+		               { 1, 1, 2, 2 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 1.0f, 1.0f, 2.0f, 2.0f,
+		                       1.0f, 1.0f, 2.0f, 2.0f,
+		                       3.0f, 3.0f, 4.0f, 4.0f,
+		                       3.0f, 3.0f, 4.0f, 4.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
 	}
 }
 

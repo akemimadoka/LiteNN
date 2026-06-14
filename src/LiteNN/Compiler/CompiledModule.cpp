@@ -5880,6 +5880,15 @@ namespace
 		std::size_t groupCount{ 1 };
 	};
 
+	struct VulkanP0UpsamplePlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t inputElementCount{};
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> outputShape;
+	};
+
 	struct VulkanP0NormalizationPlan
 	{
 		NormalizationMode mode{ NormalizationMode::LayerNorm };
@@ -6801,9 +6810,38 @@ namespace
 				return VulkanNativeSupported(std::format("f32 Pool2D {}", VulkanNativeOpName(pool->mode)));
 			}
 
+			if (const auto* upsample = std::get_if<UpsampleNode>(&resultEntry.node))
+			{
+				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, upsample->input);
+				if (!inputIndex)
+				{
+					return VulkanNativeUnsupported("Vulkan native nearest Upsample input must be a direct graph parameter");
+				}
+				const auto& input = subgraph.Params()[*inputIndex];
+				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				{
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native nearest Upsample slice requires Float32 input/output, got {} -> {}",
+					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (upsample->mode != UpsampleMode::Nearest)
+				{
+					return VulkanNativeUnsupported("Vulkan native Upsample currently supports nearest mode only");
+				}
+				if (!VulkanNativeSupportsUpsampleNearestF32(input.shape, output.shape, upsample->alignCorners))
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native nearest Upsample requires static rank-4 f32 input/output and alignCorners=false, "
+					    "got input={} output={} alignCorners={}",
+					    Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
+					    upsample->alignCorners));
+				}
+				return VulkanNativeSupported("f32 nearest Upsample");
+			}
+
 			return VulkanNativeUnsupported(
 			    "Vulkan native one-input slice currently supports only UnaryOpNode, CastNode, ReduceOpNode, "
-			    "SoftmaxNode, NormalizationNode, or Pool2DNode result nodes");
+			    "SoftmaxNode, NormalizationNode, Pool2DNode, or UpsampleNode result nodes");
 		}
 
 		if (subgraph.Params().size() == 2 && subgraph.NodeCount() == 3)
@@ -7538,6 +7576,65 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0UpsamplePlan> MatchVulkanP0UpsampleNearestF32(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* upsample = std::get_if<UpsampleNode>(&resultEntry.node);
+		if (!upsample || upsample->mode != UpsampleMode::Nearest)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetVulkanP0ParamIndex(subgraph, upsample->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 ||
+		    !VulkanNativeSupportsUpsampleNearestF32(input.shape, output.shape, upsample->alignCorners))
+		{
+			return std::nullopt;
+		}
+		const auto inputElementCount = VulkanP0ShapeNumElementsU32(input.shape);
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!inputElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return VulkanP0UpsamplePlan{
+			.inputIndex = *inputIndex,
+			.inputElementCount = *inputElementCount,
+			.outputElementCount = *outputElementCount,
+			.inputShape = input.shape,
+			.outputShape = output.shape,
+		};
+	}
+
 	std::optional<VulkanP0NormalizationPlan>
 	MatchVulkanP0NormalizationF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
@@ -8179,6 +8276,52 @@ namespace
 			.constants = std::move(externalBuilder.constants),
 			.weights = std::move(externalBuilder.weights),
 			.externalTensorInfos = std::move(externalBuilder.externalTensorInfos),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeUpsampleNearestF32P0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0UpsampleNearestF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::UpsampleNearestF32);
+		auto spirv = VulkanNativeUpsampleNearestF32SPIRV(plan->inputShape, plan->outputShape, false);
+		payload.spirv = std::move(spirv.words);
+
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeUpsampleNearestF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = VulkanNativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .binding = 1,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
@@ -10679,6 +10822,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativePool2DF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeUpsampleNearestF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

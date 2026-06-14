@@ -316,6 +316,11 @@ namespace LiteNN
 			return "conv2d";
 		}
 
+		std::string_view UpsampleNearestF32KernelName()
+		{
+			return "upsample_nearest";
+		}
+
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			switch (op)
@@ -1449,6 +1454,137 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildUpsampleNearestF32SPIRVModule(
+		    std::span<const std::size_t> inputShape, std::span<const std::size_t> outputShape,
+		    mlir::MLIRContext& context)
+		{
+			const auto inputElementCount = NumElementsU32(inputShape);
+			const auto outputElementCount = NumElementsU32(outputShape);
+			if (!inputElementCount || !outputElementCount || inputShape.size() != 4 || outputShape.size() != 4)
+			{
+				throw std::runtime_error("Vulkan native nearest Upsample requires static rank-4 input/output");
+			}
+			for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[0],
+				                      outputShape[1], outputShape[2], outputShape[3] })
+			{
+				if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+				{
+					throw std::runtime_error("Vulkan native nearest Upsample shape is too large or empty");
+				}
+			}
+
+			const auto channels = static_cast<std::uint32_t>(inputShape[1]);
+			const auto inHeight = static_cast<std::uint32_t>(inputShape[2]);
+			const auto inWidth = static_cast<std::uint32_t>(inputShape[3]);
+			const auto outHeight = static_cast<std::uint32_t>(outputShape[2]);
+			const auto outWidth = static_cast<std::uint32_t>(outputShape[3]);
+
+			mlir::OpBuilder builder(&context);
+			const auto loc = mlir::UnknownLoc::get(&context);
+
+			mlir::OperationState state(loc, mlir::spirv::ModuleOp::getOperationName());
+			state.addAttribute("addressing_model", builder.getAttr<mlir::spirv::AddressingModelAttr>(
+			                                           mlir::spirv::AddressingModel::Logical));
+			state.addAttribute("memory_model",
+			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>{}));
+			mlir::spirv::ModuleOp::build(builder, state);
+			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
+
+			mlir::OpBuilder moduleBuilder(module.getRegion());
+			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto globalInvocationType = mlir::spirv::PointerType::get(
+			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
+			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
+			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
+			    mlir::spirv::BuiltIn::GlobalInvocationId);
+
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, UpsampleNearestF32KernelName(), funcType);
+			auto* entry = moduleBuilder.createBlock(&func.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *outputElementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto outW = EmitI32Constant(bodyBuilder, loc, outWidth);
+				    auto outH = EmitI32Constant(bodyBuilder, loc, outHeight);
+				    auto channelCount = EmitI32Constant(bodyBuilder, loc, channels);
+				    auto inH = EmitI32Constant(bodyBuilder, loc, inHeight);
+				    auto inW = EmitI32Constant(bodyBuilder, loc, inWidth);
+
+				    auto ow = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, outW).getResult();
+				    auto tmp0 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, outW).getResult();
+				    auto oh = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp0, outH).getResult();
+				    auto tmp1 = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp0, outH).getResult();
+				    auto channel = bodyBuilder.create<mlir::spirv::UModOp>(loc, tmp1, channelCount).getResult();
+				    auto batch = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp1, channelCount).getResult();
+
+				    auto iy =
+				        bodyBuilder
+				            .create<mlir::spirv::UDivOp>(
+				                loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, oh, inH).getResult(), outH)
+				            .getResult();
+				    auto ix =
+				        bodyBuilder
+				            .create<mlir::spirv::UDivOp>(
+				                loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, ow, inW).getResult(), outW)
+				            .getResult();
+				    auto inPlane = bodyBuilder.create<mlir::spirv::IMulOp>(loc, inH, inW).getResult();
+				    auto inputOffset =
+				        bodyBuilder
+				            .create<mlir::spirv::IAddOp>(
+				                loc,
+				                bodyBuilder
+				                    .create<mlir::spirv::IMulOp>(
+				                        loc,
+				                        bodyBuilder
+				                            .create<mlir::spirv::IAddOp>(
+				                                loc,
+				                                bodyBuilder.create<mlir::spirv::IMulOp>(loc, batch, channelCount)
+				                                    .getResult(),
+				                                channel)
+				                            .getResult(),
+				                        inPlane)
+				                    .getResult(),
+				                bodyBuilder
+				                    .create<mlir::spirv::IAddOp>(
+				                        loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, iy, inW).getResult(), ix)
+				                    .getResult())
+				            .getResult();
+				    auto value =
+				        bodyBuilder
+				            .create<mlir::spirv::LoadOp>(
+				                loc, bodyBuilder.getF32Type(),
+				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, inputOffset), nullptr,
+				                nullptr)
+				            .getValue();
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), value, nullptr,
+				        nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+
+			moduleBuilder.setInsertionPointAfter(func);
+			moduleBuilder.create<mlir::spirv::EntryPointOp>(
+			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+
+			if (mlir::failed(mlir::verify(module)))
+			{
+				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V nearest Upsample module verification failed");
+			}
+			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSoftmaxF32SPIRVModule(std::span<const std::size_t> inputShape,
 		                                                                    std::size_t axis,
 		                                                                    mlir::MLIRContext& context)
@@ -2368,6 +2504,34 @@ namespace LiteNN
 			};
 		}
 
+		VulkanNativeGeneratedSPIRV SerializeUpsampleNearestF32SPIRV(std::span<const std::size_t> inputShape,
+		                                                            std::span<const std::size_t> outputShape)
+		{
+			mlir::MLIRContext context;
+			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
+
+			auto module = BuildUpsampleNearestF32SPIRVModule(inputShape, outputShape, context);
+			ValidateVulkanShaderModule(module.get());
+
+			std::string mlirText;
+			llvm::raw_string_ostream mlirStream(mlirText);
+			module.get().print(mlirStream);
+
+			llvm::SmallVector<std::uint32_t, 0> binary;
+			mlir::spirv::SerializationOptions options;
+			options.emitSymbolName = false;
+			options.emitDebugInfo = false;
+			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
+			{
+				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V nearest Upsample module");
+			}
+
+			return VulkanNativeGeneratedSPIRV{
+				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
+				.mlir = mlirStream.str(),
+			};
+		}
+
 		VulkanNativeGeneratedSPIRV SerializeNormalizationF32SPIRV(NormalizationMode mode,
 		                                                          std::span<const std::size_t> inputShape,
 		                                                          std::size_t axis, double epsilon, bool hasScale,
@@ -2782,6 +2946,46 @@ namespace LiteNN
 		}
 		return SerializeConv2DF32SPIRV(inputShape, weightShape, outputShape, strides, dilations, lowPads,
 		                               groupCount, hasBias);
+	}
+
+	std::string_view VulkanNativeUpsampleNearestF32KernelName()
+	{
+		return UpsampleNearestF32KernelName();
+	}
+
+	bool VulkanNativeSupportsUpsampleNearestF32(std::span<const std::size_t> inputShape,
+	                                           std::span<const std::size_t> outputShape,
+	                                           bool alignCorners)
+	{
+		if (alignCorners || inputShape.size() != 4 || outputShape.size() != 4)
+		{
+			return false;
+		}
+		if (!NumElementsU32(inputShape).has_value() || !NumElementsU32(outputShape).has_value())
+		{
+			return false;
+		}
+		for (const auto value : { inputShape[0], inputShape[1], inputShape[2], inputShape[3], outputShape[0],
+			                      outputShape[1], outputShape[2], outputShape[3] })
+		{
+			if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+			{
+				return false;
+			}
+		}
+		return inputShape[0] == outputShape[0] && inputShape[1] == outputShape[1];
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeUpsampleNearestF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                               std::span<const std::size_t> outputShape,
+	                                                               bool alignCorners)
+	{
+		if (!VulkanNativeSupportsUpsampleNearestF32(inputShape, outputShape, alignCorners))
+		{
+			throw std::runtime_error(
+			    "Vulkan native f32 nearest Upsample requires static rank-4 shape and alignCorners=false");
+		}
+		return SerializeUpsampleNearestF32SPIRV(inputShape, outputShape);
 	}
 
 	std::string_view VulkanNativeNormalizationF32KernelName(NormalizationMode mode)
