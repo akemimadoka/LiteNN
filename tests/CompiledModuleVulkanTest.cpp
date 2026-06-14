@@ -432,6 +432,39 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSimpleConvTranspose2DVariableGraph()
+	{
+		Graph graph;
+		const auto weightIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 1.0, 1.0, 1.0, 1.0 }, { 1, 1, 2, 2 }, DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5 }, { 1 }, DataType::Float32)));
+		graph.SetVariableName(weightIndex, "conv_transpose_weight");
+		graph.SetVariableName(biasIndex, "conv_transpose_bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 1, 2, 2 });
+		const auto weight =
+		    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1, 1, 2, 2 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+		const auto out = sg.AddNode(ConvTranspose2DNode{ .input = { input, 0 },
+		                                                 .weight = { weight, 0 },
+		                                                 .bias = NodeOutput{ bias, 0 },
+		                                                 .strides = { 1, 1 },
+		                                                 .dilations = { 1, 1 },
+		                                                 .lowPads = { 0, 0 },
+		                                                 .highPads = { 0, 0 },
+		                                                 .outputPads = { 0, 0 },
+		                                                 .groupCount = 1 },
+		                            { OutputInfo{ DataType::Float32, { 1, 1, 3, 3 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildSimpleUnaryGraph(UnaryOp op)
 	{
 		Graph graph;
@@ -905,6 +938,16 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForConv2D)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForConvTranspose2D)
+{
+	const auto graph = BuildSimpleConvTranspose2DVariableGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 ConvTranspose2D"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, UsesTunedWorkgroupDispatchForElementwisePayload)
 {
 	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kVulkanNativeElementwiseWorkgroupSize + 1);
@@ -1321,6 +1364,41 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
 	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
 	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 4u * sizeof(float));
+	ASSERT_EQ(artifact.ExternalTensorInfos().size(), 2u);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConvTranspose2D)
+{
+	const auto graph = BuildSimpleConvTranspose2DVariableGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated =
+	    VulkanNativeConvTranspose2DF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                                        std::array<std::size_t, 4>{ 1, 1, 2, 2 },
+	                                        std::array<std::size_t, 4>{ 1, 1, 3, 3 },
+	                                        std::array<std::size_t, 2>{ 1, 1 },
+	                                        std::array<std::size_t, 2>{ 1, 1 },
+	                                        std::array<std::size_t, 2>{ 0, 0 },
+	                                        std::array<std::size_t, 2>{ 0, 0 },
+	                                        std::array<std::size_t, 2>{ 0, 0 },
+	                                        1, true);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::ConvTranspose2DF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "conv_transpose2d");
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
 	ASSERT_EQ(artifact.ExternalTensorInfos().size(), 2u);
 }
 
@@ -2241,6 +2319,37 @@ TEST(CompiledModuleVulkanTest, RunsGroupedConv2DArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 6.5f, 8.5f, 12.5f, 14.5f, 49.0f, 53.0f, 61.0f, 65.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-5f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsSimpleConvTranspose2DArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleConvTranspose2DVariableGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0,
+		                 3.0, 4.0 },
+		               { 1, 1, 2, 2 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 1.5f, 3.5f, 2.5f,
+		                       4.5f, 10.5f, 6.5f,
+		                       3.5f, 7.5f, 4.5f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{

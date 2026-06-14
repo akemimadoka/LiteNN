@@ -5880,6 +5880,23 @@ namespace
 		std::size_t groupCount{ 1 };
 	};
 
+	struct VulkanP0ConvTranspose2DPlan
+	{
+		VulkanP0TensorRef input;
+		VulkanP0TensorRef weight;
+		std::optional<VulkanP0TensorRef> bias;
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> inputShape;
+		std::vector<std::size_t> weightShape;
+		std::vector<std::size_t> outputShape;
+		std::vector<std::size_t> strides;
+		std::vector<std::size_t> dilations;
+		std::vector<std::size_t> lowPads;
+		std::vector<std::size_t> highPads;
+		std::vector<std::size_t> outputPads;
+		std::size_t groupCount{ 1 };
+	};
+
 	struct VulkanP0UpsamplePlan
 	{
 		std::uint32_t inputIndex{};
@@ -6564,6 +6581,65 @@ namespace
 				    Validation::ShapeToString(conv->highPads), conv->groupCount));
 			}
 			return VulkanNativeSupported(std::format("f32 Conv2D groupCount={} bias={}", conv->groupCount,
+			                                         bias.has_value()));
+		}
+
+		if (const auto* convT = std::get_if<ConvTranspose2DNode>(&resultEntry.node))
+		{
+			const auto input = GetVulkanP0TensorRef(graph, subgraph, convT->input, nullptr);
+			const auto weight = GetVulkanP0TensorRef(graph, subgraph, convT->weight, nullptr);
+			std::optional<VulkanP0TensorRef> bias;
+			if (convT->bias)
+			{
+				bias = GetVulkanP0TensorRef(graph, subgraph, *convT->bias, nullptr);
+				if (!bias)
+				{
+					return VulkanNativeUnsupported(
+					    "Vulkan native ConvTranspose2D bias tensor is not a supported tensor ref");
+				}
+			}
+			if (!input || !weight)
+			{
+				return VulkanNativeUnsupported(
+				    "Vulkan native ConvTranspose2D input/weight must be supported tensor refs");
+			}
+			if (input->dtype != DataType::Float32 || weight->dtype != DataType::Float32 ||
+			    output.dtype != DataType::Float32 || (bias && bias->dtype != DataType::Float32))
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native ConvTranspose2D requires Float32 input/weight/bias/output, got input={} weight={} "
+				    "bias={} output={}",
+				    DataTypeName(input->dtype), DataTypeName(weight->dtype),
+				    bias ? DataTypeName(bias->dtype) : "none", DataTypeName(output.dtype)));
+			}
+			if (bias)
+			{
+				const auto biasOk =
+				    (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
+				    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
+				     bias->shape[2] == 1 && bias->shape[3] == 1);
+				if (!biasOk)
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native ConvTranspose2D bias must be [outChannels] or [1,outChannels,1,1], got "
+					    "bias={} output={}",
+					    Validation::ShapeToString(bias->shape), Validation::ShapeToString(output.shape)));
+				}
+			}
+			if (!VulkanNativeSupportsConvTranspose2DF32(input->shape, weight->shape, output.shape, convT->strides,
+			                                            convT->dilations, convT->lowPads, convT->highPads,
+			                                            convT->outputPads, convT->groupCount))
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native ConvTranspose2D requires static rank-4 f32 tensors, got input={} weight={} output={} "
+				    "strides={} dilations={} lowPads={} highPads={} outputPads={} groupCount={}",
+				    Validation::ShapeToString(input->shape), Validation::ShapeToString(weight->shape),
+				    Validation::ShapeToString(output.shape), Validation::ShapeToString(convT->strides),
+				    Validation::ShapeToString(convT->dilations), Validation::ShapeToString(convT->lowPads),
+				    Validation::ShapeToString(convT->highPads), Validation::ShapeToString(convT->outputPads),
+				    convT->groupCount));
+			}
+			return VulkanNativeSupported(std::format("f32 ConvTranspose2D groupCount={} bias={}", convT->groupCount,
 			                                         bias.has_value()));
 		}
 
@@ -7635,6 +7711,100 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0ConvTranspose2DPlan>
+	MatchVulkanP0ConvTranspose2DF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().empty() || subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto* convT = std::get_if<ConvTranspose2DNode>(&resultEntry.node);
+		if (!convT)
+		{
+			return std::nullopt;
+		}
+
+		auto input = GetVulkanP0TensorRef(graph, subgraph, convT->input, externalBuilder);
+		auto weight = GetVulkanP0TensorRef(graph, subgraph, convT->weight, externalBuilder);
+		if (!input || !weight)
+		{
+			return std::nullopt;
+		}
+		std::optional<VulkanP0TensorRef> bias;
+		if (convT->bias)
+		{
+			bias = GetVulkanP0TensorRef(graph, subgraph, *convT->bias, externalBuilder);
+			if (!bias)
+			{
+				return std::nullopt;
+			}
+		}
+
+		const auto& output = resultEntry.outputInfos[0];
+		if (input->dtype != DataType::Float32 || weight->dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || (bias && bias->dtype != DataType::Float32) ||
+		    !VulkanNativeSupportsConvTranspose2DF32(input->shape, weight->shape, output.shape, convT->strides,
+		                                            convT->dilations, convT->lowPads, convT->highPads,
+		                                            convT->outputPads, convT->groupCount))
+		{
+			return std::nullopt;
+		}
+		if (bias)
+		{
+			const auto biasOk =
+			    (bias->shape.size() == 1 && bias->shape[0] == output.shape[1]) ||
+			    (bias->shape.size() == 4 && bias->shape[0] == 1 && bias->shape[1] == output.shape[1] &&
+			     bias->shape[2] == 1 && bias->shape[3] == 1);
+			if (!biasOk)
+			{
+				return std::nullopt;
+			}
+		}
+
+		const auto outputElementCount = VulkanP0ShapeNumElementsU32(output.shape);
+		if (!outputElementCount)
+		{
+			return std::nullopt;
+		}
+		auto inputShape = input->shape;
+		auto weightShape = weight->shape;
+
+		return VulkanP0ConvTranspose2DPlan{
+			.input = std::move(*input),
+			.weight = std::move(*weight),
+			.bias = std::move(bias),
+			.outputElementCount = *outputElementCount,
+			.inputShape = std::move(inputShape),
+			.weightShape = std::move(weightShape),
+			.outputShape = output.shape,
+			.strides = convT->strides,
+			.dilations = convT->dilations,
+			.lowPads = convT->lowPads,
+			.highPads = convT->highPads,
+			.outputPads = convT->outputPads,
+			.groupCount = convT->groupCount,
+		};
+	}
+
 	std::optional<VulkanP0NormalizationPlan>
 	MatchVulkanP0NormalizationF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
@@ -8322,6 +8492,68 @@ namespace
 		return VulkanP0ArtifactParts{
 			.rodata = std::move(rodata),
 			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeConvTranspose2DF32P0(const Graph& graph)
+	{
+		VulkanP0ExternalTensorBuilder externalBuilder;
+		const auto plan = MatchVulkanP0ConvTranspose2DF32(graph, &externalBuilder);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		payload.featureSet.AddFeature(VulkanNativeFeature::ConvTranspose2DF32);
+		auto spirv = VulkanNativeConvTranspose2DF32SPIRV(
+		    plan->inputShape, plan->weightShape, plan->outputShape, plan->strides, plan->dilations,
+		    plan->lowPads, plan->highPads, plan->outputPads, plan->groupCount, plan->bias.has_value());
+		payload.spirv = std::move(spirv.words);
+
+		std::vector<VulkanNativeArgumentSpec> arguments;
+		std::uint32_t nextBinding = 0;
+		const auto appendTensor = [&](const VulkanP0TensorRef& ref) {
+			arguments.push_back({ .kind = ref.argumentKind,
+			                      .index = ref.argumentIndex,
+			                      .binding = nextBinding++,
+			                      .byteOffset = 0,
+			                      .byteSize = static_cast<std::uint64_t>(ref.elementCount) * sizeof(float) });
+		};
+		appendTensor(plan->input);
+		appendTensor(plan->weight);
+		if (plan->bias)
+		{
+			appendTensor(*plan->bias);
+		}
+		arguments.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
+		                      .index = 0,
+		                      .binding = nextBinding,
+		                      .byteOffset = 0,
+		                      .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) });
+
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeConvTranspose2DF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->outputElementCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = std::move(arguments),
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.constants = std::move(externalBuilder.constants),
+			.weights = std::move(externalBuilder.weights),
+			.externalTensorInfos = std::move(externalBuilder.externalTensorInfos),
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
@@ -10830,6 +11062,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeConv2DF32P0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeConvTranspose2DF32P0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

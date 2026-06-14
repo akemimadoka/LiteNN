@@ -135,6 +135,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   semantics
 - baseline direct static rank-4 NCHW `Float32` Conv2D with stride, dilation, low/high padding, groups, optional bias,
   and separated variable/constant weight tensors; tiled/shared-memory convolution remains follow-on performance work
+- baseline direct static rank-4 NCHW `Float32` ConvTranspose2D with stride, dilation, low/high padding, output padding,
+  groups, optional bias, and separated variable/constant weight tensors
 - static rank-4 NCHW `Float32` nearest Upsample with `alignCorners=false`
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`

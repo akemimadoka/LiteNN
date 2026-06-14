@@ -84,6 +84,26 @@ namespace LiteNN
 	                                                      std::span<const std::size_t> highPads,
 	                                                      std::size_t groupCount,
 	                                                      bool hasBias);
+	std::string_view VulkanNativeConvTranspose2DF32KernelName();
+	bool VulkanNativeSupportsConvTranspose2DF32(std::span<const std::size_t> inputShape,
+	                                            std::span<const std::size_t> weightShape,
+	                                            std::span<const std::size_t> outputShape,
+	                                            std::span<const std::size_t> strides,
+	                                            std::span<const std::size_t> dilations,
+	                                            std::span<const std::size_t> lowPads,
+	                                            std::span<const std::size_t> highPads,
+	                                            std::span<const std::size_t> outputPads,
+	                                            std::size_t groupCount);
+	VulkanNativeGeneratedSPIRV VulkanNativeConvTranspose2DF32SPIRV(std::span<const std::size_t> inputShape,
+	                                                               std::span<const std::size_t> weightShape,
+	                                                               std::span<const std::size_t> outputShape,
+	                                                               std::span<const std::size_t> strides,
+	                                                               std::span<const std::size_t> dilations,
+	                                                               std::span<const std::size_t> lowPads,
+	                                                               std::span<const std::size_t> highPads,
+	                                                               std::span<const std::size_t> outputPads,
+	                                                               std::size_t groupCount,
+	                                                               bool hasBias);
 	std::string_view VulkanNativeUpsampleNearestF32KernelName();
 	bool VulkanNativeSupportsUpsampleNearestF32(std::span<const std::size_t> inputShape,
 	                                           std::span<const std::size_t> outputShape,
