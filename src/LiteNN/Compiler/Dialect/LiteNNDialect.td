@@ -59,7 +59,8 @@ def LiteNN_BinaryOpKind : I32EnumAttr<"BinaryOpKind", "litenn binary operation",
 def LiteNN_ReduceOpKind : I32EnumAttr<"ReduceOpKind", "litenn reduce operation", [
   I32EnumAttrCase<"Sum",  0>,
   I32EnumAttrCase<"Mean", 1>,
-  I32EnumAttrCase<"Max",  2>
+  I32EnumAttrCase<"Max",  2>,
+  I32EnumAttrCase<"Min",  3>
 ]> {
   let cppNamespace = "::litenn";
 }

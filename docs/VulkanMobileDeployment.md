@@ -121,7 +121,7 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same
   baseline one-output-element-per-invocation kernel shape
-- static-axis `Float32` Reduce Sum/Mean/Max using one shader invocation per output element and a scalar loop over the
+- static-axis `Float32` Reduce Sum/Mean/Max/Min using one shader invocation per output element and a scalar loop over the
   reduced axis; this is a correctness baseline before workgroup/subgroup reductions
 - static-axis `Float32` Softmax using max-subtracted scalar loops along the softmax axis; this is a correctness baseline
   before workgroup/subgroup softmax reductions
@@ -149,7 +149,7 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   optional feature chain when the selected device supports it, reject unsupported artifacts at load time with a capability
   diagnostic, and register `VulkanNativeCastRunInto/F32ToFloat16|Int8|UInt8` benchmark rows only when execution is legal.
 - `benchmark/bench.cpp` registers `VulkanNativeElementwiseAddRunInto`, `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|
-  MaxAxis1`, `VulkanNativeSoftmax/F32/Axis1`,
+  MaxAxis1|MinAxis1`, `VulkanNativeSoftmax/F32/Axis1`,
   `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1`,
   `VulkanNativeNormalizationAffine/F32/LayerNormAxis1|RMSNormAxis1`, `VulkanNativeGroupNorm/F32`,
   `VulkanNativeGroupNormAffine/F32`, `VulkanNativePool2D/F32/Max|Average`,

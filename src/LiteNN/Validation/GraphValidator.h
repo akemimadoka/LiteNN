@@ -91,6 +91,7 @@ namespace LiteNN::Validation
 		case ReduceOp::Sum:
 		case ReduceOp::Mean:
 		case ReduceOp::Max:
+		case ReduceOp::Min:
 			return true;
 		}
 		return false;

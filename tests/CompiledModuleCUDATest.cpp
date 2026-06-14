@@ -1486,6 +1486,11 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 7.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } } },
 	});
 	cases.push_back(Case{
+	    .name = "reduce_min_axis1",
+	    .graph = BuildReduceGraph(ReduceOp::Min, 1, { 2 }, "min_axis1"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 7.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } } },
+	});
+	cases.push_back(Case{
 	    .name = "concat_axis0",
 	    .graph = BuildConcatGraph({ 1, 3 }, { 2, 3 }, { 3, 3 }, 0, "concat_axis0"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0 }, .shape = { 1, 3 } },

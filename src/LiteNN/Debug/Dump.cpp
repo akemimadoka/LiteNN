@@ -163,7 +163,9 @@ namespace
 			return "ReduceOp::Mean";
 		case ReduceOp::Max:
 			return "ReduceOp::Max";
-		}
+		case ReduceOp::Min:
+			return "ReduceOp::Min";
+	}
 		return std::format("ReduceOp::<invalid:{}>", static_cast<int>(op));
 	}
 

@@ -1959,13 +1959,14 @@ packaging slice to a useful production backend.
       good for correctness and small tests, but production kernels need reusable device-local allocations and fewer
       host/device round trips.
 - [ ] Implement production operator families in priority order:
-      - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, and `ReduceOp::Max` now
+      - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
+            `ReduceOp::Min` now
             lower to Vulkan-native SPIR-V with one invocation per output element and a scalar loop over the reduced axis.
-            Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 39/40 Vulkan tests with only the local
+            Validation on 2026-06-14: `CompiledModuleVulkanTest` passed 73/74 Vulkan tests with only the local
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
-            `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|MaxAxis1` rows and the local
-            `SumAxis1/batch:1/width:128` smoke row ran successfully.
-      - [ ] Add `ReduceOp::Min` once the graph-level operator exists, then replace the scalar-loop baseline with
+            `VulkanNativeReduce/F32/SumAxis1|MeanAxis1|MaxAxis1|MinAxis1` rows and the local
+            `MinAxis1/batch:1/width:128` smoke row ran successfully at roughly 0.101 ms.
+      - [ ] Replace the static-axis reduce scalar-loop baseline with
             workgroup/subgroup reductions for larger axes.
       - [ ] Complete f32 multi-layer linear-chain lowering with workspace/multi-kernel schedules, then replace the
             current one-output-element-per-thread MatMul/MatMulBias kernels with tiled/shared-memory kernels.

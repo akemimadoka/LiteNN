@@ -1941,6 +1941,11 @@ TEST(CompiledModuleVulkanTest, RunsSimpleReduceArithmetic)
 	    .input = { 1.0f, 7.0f, 3.0f, 4.0f, 5.0f, 6.0f },
 	    .expected = { 7.0f, 6.0f },
 	});
+	cases.push_back({
+	    .graph = BuildReduceGraph(ReduceOp::Min, 1, { 2 }),
+	    .input = { 1.0f, 7.0f, 3.0f, 4.0f, 5.0f, 6.0f },
+	    .expected = { 1.0f, 4.0f },
+	});
 
 	Vulkan device;
 	for (const auto& testCase : cases)

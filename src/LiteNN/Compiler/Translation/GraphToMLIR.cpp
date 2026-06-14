@@ -403,20 +403,24 @@ private:
 		auto elemType = resultType.getElementType();
 
 		Value initValue;
-		if (opKind == LiteNN::ReduceOp::Max)
+		if (opKind == LiteNN::ReduceOp::Max || opKind == LiteNN::ReduceOp::Min)
 		{
 			if (auto floatType = dyn_cast<FloatType>(elemType))
 			{
 				initValue =
 				    builder_.create<arith::ConstantFloatOp>(loc, floatType,
 				                                            llvm::APFloat::getInf(floatType.getFloatSemantics(),
-				                                                                    /*negative=*/true));
+				                                                                    /*negative=*/
+				                                                                    opKind == LiteNN::ReduceOp::Max));
 			}
 			else
 			{
 				auto intType = cast<IntegerType>(elemType);
+				const auto initInt = opKind == LiteNN::ReduceOp::Max
+				                         ? llvm::APInt::getSignedMinValue(intType.getWidth()).getSExtValue()
+				                         : llvm::APInt::getSignedMaxValue(intType.getWidth()).getSExtValue();
 				initValue = builder_.create<arith::ConstantIntOp>(
-				    loc, elemType, llvm::APInt::getSignedMinValue(intType.getWidth()).getSExtValue());
+				    loc, elemType, initInt);
 			}
 		}
 		else
@@ -439,6 +443,11 @@ private:
 			    {
 				    result = isa<FloatType>(elemType) ? b.create<arith::MaximumFOp>(l, args[1], args[0]).getResult()
 				                                      : b.create<arith::MaxSIOp>(l, args[1], args[0]).getResult();
+			    }
+			    else if (opKind == LiteNN::ReduceOp::Min)
+			    {
+				    result = isa<FloatType>(elemType) ? b.create<arith::MinimumFOp>(l, args[1], args[0]).getResult()
+				                                      : b.create<arith::MinSIOp>(l, args[1], args[0]).getResult();
 			    }
 			    else
 			    {

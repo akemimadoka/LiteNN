@@ -278,6 +278,8 @@ namespace LiteNN
 				return "reduce_mean";
 			case ReduceOp::Max:
 				return "reduce_max";
+			case ReduceOp::Min:
+				return "reduce_min";
 			default:
 				throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
 			}
@@ -909,6 +911,10 @@ namespace LiteNN
 					    case ReduceOp::Max:
 						    accumulator =
 						        bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, accumulator, value).getResult();
+						    break;
+					    case ReduceOp::Min:
+						    accumulator =
+						        bodyBuilder.create<mlir::spirv::GLFMinOp>(loc, accumulator, value).getResult();
 						    break;
 					    default:
 						    throw std::runtime_error("Unsupported Vulkan native MLIR f32 reduce op");
@@ -3437,6 +3443,7 @@ namespace LiteNN
 		case ReduceOp::Sum:
 		case ReduceOp::Mean:
 		case ReduceOp::Max:
+		case ReduceOp::Min:
 			break;
 		default:
 			return false;

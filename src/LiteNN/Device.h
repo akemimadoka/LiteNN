@@ -767,6 +767,13 @@ namespace LiteNN
 											acc = val;
 										}
 									}
+									else if constexpr (OpValue == ReduceOp::Min)
+									{
+										if (val < acc)
+										{
+											acc = val;
+										}
+									}
 								}
 								if constexpr (OpValue == ReduceOp::Mean)
 								{

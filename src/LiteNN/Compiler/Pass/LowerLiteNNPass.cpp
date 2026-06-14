@@ -479,21 +479,23 @@ namespace
 			const int64_t axis = static_cast<int64_t>(op.getAxis());
 			const auto kind = op.getOp();
 
-			// Init value: 0 for sum/mean, -inf for max
+			// Init value: 0 for sum/mean, -inf for max, +inf for min.
 			Value initVal;
-			if (kind == ReduceOpKind::Max)
+			if (kind == ReduceOpKind::Max || kind == ReduceOpKind::Min)
 			{
 				if (auto ft = dyn_cast<FloatType>(elemType))
 				{
-					APFloat negInf = APFloat::getInf(ft.getFloatSemantics(), /*negative=*/true);
-					initVal = rewriter.create<arith::ConstantFloatOp>(loc, ft, negInf);
+					APFloat init = APFloat::getInf(ft.getFloatSemantics(), /*negative=*/kind == ReduceOpKind::Max);
+					initVal = rewriter.create<arith::ConstantFloatOp>(loc, ft, init);
 				}
 				else
 				{
-					// Integer max: use minimum int value
 					auto intTy = cast<IntegerType>(elemType);
+					const auto initInt = kind == ReduceOpKind::Max
+					                         ? APInt::getSignedMinValue(intTy.getWidth()).getSExtValue()
+					                         : APInt::getSignedMaxValue(intTy.getWidth()).getSExtValue();
 					initVal = rewriter.create<arith::ConstantIntOp>(
-					    loc, elemType, APInt::getSignedMinValue(intTy.getWidth()).getSExtValue());
+					    loc, elemType, initInt);
 				}
 			}
 			else
@@ -516,10 +518,15 @@ namespace
 					    result = isa<FloatType>(elemType) ? b.create<arith::AddFOp>(l, acc, cur).getResult()
 					                                      : b.create<arith::AddIOp>(l, acc, cur).getResult();
 				    }
-				    else // Max
+				    else if (kind == ReduceOpKind::Max)
 				    {
 					    result = isa<FloatType>(elemType) ? b.create<arith::MaximumFOp>(l, acc, cur).getResult()
 					                                      : b.create<arith::MaxSIOp>(l, acc, cur).getResult();
+				    }
+				    else
+				    {
+					    result = isa<FloatType>(elemType) ? b.create<arith::MinimumFOp>(l, acc, cur).getResult()
+					                                      : b.create<arith::MinSIOp>(l, acc, cur).getResult();
 				    }
 				    b.create<linalg::YieldOp>(l, result);
 			    });

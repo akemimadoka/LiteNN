@@ -1228,6 +1228,8 @@ namespace
 			return "MeanAxis1";
 		case ReduceOp::Max:
 			return "MaxAxis1";
+		case ReduceOp::Min:
+			return "MinAxis1";
 		default:
 			return "Unknown";
 		}
@@ -2303,7 +2305,8 @@ namespace
 					castBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
-				constexpr std::array vulkanNativeReduceOps{ ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max };
+				constexpr std::array vulkanNativeReduceOps{ ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max,
+				                                             ReduceOp::Min };
 				for (const auto op : vulkanNativeReduceOps)
 				{
 					auto* reduceBenchmarkCase = benchmark::RegisterBenchmark(

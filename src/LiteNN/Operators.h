@@ -239,6 +239,7 @@ namespace LiteNN
 		Sum,
 		Mean,
 		Max,
+		Min,
 	};
 
 	template <ReduceOp Op>

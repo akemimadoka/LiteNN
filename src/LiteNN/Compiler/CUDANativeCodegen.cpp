@@ -563,6 +563,9 @@ namespace
 				case ReduceOp::Max:
 					accumulator = EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ accumulator, value });
 					break;
+				case ReduceOp::Min:
+					accumulator = EmitF32Intrinsic("llvm.nvvm.fmin.ftz.f", mlir::ValueRange{ accumulator, value });
+					break;
 				}
 			}
 			if (spec.op == ReduceOp::Mean)
@@ -1494,6 +1497,8 @@ std::string_view CUDANativeReduceF32KernelName(ReduceOp op)
 		return "litenn_reduce_mean_f32";
 	case ReduceOp::Max:
 		return "litenn_reduce_max_f32";
+	case ReduceOp::Min:
+		return "litenn_reduce_min_f32";
 	}
 	throw std::runtime_error("Unsupported CUDA native reduce op");
 }

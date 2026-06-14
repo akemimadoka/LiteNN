@@ -520,6 +520,33 @@ TEST(Interpreter, ReduceMax)
 	EXPECT_FLOAT_EQ(ReadFloat(results[0], 2), 6);
 }
 
+TEST(Interpreter, ReduceMin)
+{
+	Graph graph;
+	Subgraph sg;
+
+	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
+
+	const auto minAxis0 =
+	    sg.AddNode(ReduceOpNode{ ReduceOp::Min, { x, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 3 } } });
+
+	sg.SetResults({ { minAxis0, 0 } });
+
+	const auto fwdId = graph.AddSubgraph(std::move(sg));
+	graph.SetForward(fwdId);
+
+	Tensor<CPU> tensorX({ 1, 5, 3, 4, 2, 6 }, { 2, 3 });
+	std::array<Tensor<CPU>, 1> inputs = { std::move(tensorX) };
+
+	Runtime::Interpreter<CPU> interp;
+	auto results = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+
+	ASSERT_EQ(results.size(), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(results[0], 0), 1);
+	EXPECT_FLOAT_EQ(ReadFloat(results[0], 1), 2);
+	EXPECT_FLOAT_EQ(ReadFloat(results[0], 2), 3);
+}
+
 // 测试 12: Reshape
 TEST(Interpreter, Reshape)
 {
