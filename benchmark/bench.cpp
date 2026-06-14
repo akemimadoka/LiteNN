@@ -1034,6 +1034,26 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanNearestUpsampleGraph(std::size_t batch, std::size_t channels, std::size_t height,
+	                                      std::size_t width, std::size_t scale)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, channels, height, width });
+		const auto outHeight = height * scale;
+		const auto outWidth = width * scale;
+		const auto out = sg.AddNode(UpsampleNode{ .input = { input, 0 },
+		                                          .mode = UpsampleMode::Nearest,
+		                                          .outputSpatialShape = { outHeight, outWidth },
+		                                          .alignCorners = false },
+		                            { OutputInfo{ DataType::Float32, { batch, channels, outHeight, outWidth } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildVulkanAffineGroupNormGraph(std::size_t elementCount, std::size_t groupCount)
 	{
 		Graph graph;
@@ -1677,6 +1697,42 @@ namespace
 		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeNearestUpsampleRunTensorsInto(benchmark::State& state, std::size_t batch,
+	                                                 std::size_t channels, std::size_t height, std::size_t width,
+	                                                 std::size_t scale)
+	{
+		auto graph = BuildVulkanNearestUpsampleGraph(batch, channels, height, width, scale);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for nearest Upsample benchmark");
+			return;
+		}
+
+		const auto inputElementCount = batch * channels * height * width;
+		auto inputData = MakeElementwiseInputData(inputElementCount, 20u);
+		auto inputs = MakeVulkanPool2DInputs(inputData, batch, channels, height, width);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto outputElementCount = batch * channels * height * scale * width * scale;
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(outputElementCount));
+		state.counters["output_elements"] =
+		    benchmark::Counter(static_cast<double>(outputElementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeModelRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		std::mt19937 rng(42);
@@ -2062,6 +2118,17 @@ namespace
 					                                       vulkanNativePoolSpatial);
 				    });
 				conv2DBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* nearestUpsampleBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeUpsampleNearest/F32/batch:{}/channels:{}/spatial:{}x{}",
+				                batch, vulkanNativePoolChannels, vulkanNativePoolSpatial,
+				                vulkanNativePoolSpatial * 2),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeNearestUpsampleRunTensorsInto(state, batch, vulkanNativePoolChannels,
+					                                                vulkanNativePoolSpatial, vulkanNativePoolSpatial,
+					                                                2);
+				    });
+				nearestUpsampleBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* matMulBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeMatMul/F32/batch:{}/width:{}", batch, vulkanNativeMatMulWidth),

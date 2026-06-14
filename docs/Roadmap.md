@@ -2020,7 +2020,9 @@ packaging slice to a useful production backend.
       - [x] Add baseline nearest `UpsampleNode` coverage: native SPIR-V now supports static rank-4 NCHW f32 nearest
             upsampling with `alignCorners=false`, matching the CPU reference integer source-index mapping.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 64/65 Vulkan tests with only the local
-            feature-dependent Float16 runtime case skipped.
+            feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
+            `VulkanNativeUpsampleNearest/F32` rows and the local `batch:1/channels:8/spatial:16x32` smoke row ran
+            successfully.
       - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.
