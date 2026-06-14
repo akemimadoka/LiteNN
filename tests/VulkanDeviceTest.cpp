@@ -37,7 +37,7 @@ TEST(VulkanDeviceTest, CopiesHostVisibleTensorData)
 	}
 }
 
-TEST(VulkanDeviceTest, DeviceLocalTensorRejectsHostMapUntilStagingIsImplemented)
+TEST(VulkanDeviceTest, CopiesDeviceLocalTensorDataThroughStaging)
 {
 	if (!IsVulkanDeviceAvailable())
 	{
@@ -46,10 +46,16 @@ TEST(VulkanDeviceTest, DeviceLocalTensorRejectsHostMapUntilStagingIsImplemented)
 
 	Vulkan device;
 	device.bufferResidency = VulkanBufferResidency::DeviceLocal;
-	Tensor<Vulkan> tensor(Uninitialized, { 4 }, DataType::Float32, device);
+	Tensor<Vulkan> tensor({ 1.0, 2.5, -3.0, 4.0 }, { 4 }, DataType::Float32, device);
 	Tensor<CPU> cpu(Uninitialized, { 4 }, DataType::Float32, CPU{});
 
-	EXPECT_THROW(DeviceTraits<Vulkan>::CopyToCPU(tensor.CurDevice(), tensor.DType(), tensor.UnsafeRawData(),
-	                                             tensor.NumElements(), cpu.DType(), cpu.UnsafeRawData()),
-	             std::runtime_error);
+	DeviceTraits<Vulkan>::CopyToCPU(tensor.CurDevice(), tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(),
+	                                cpu.DType(), cpu.UnsafeRawData());
+
+	const auto* values = static_cast<const float*>(cpu.UnsafeRawData());
+	const std::array expected{ 1.0f, 2.5f, -3.0f, 4.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(values[i], expected[i]);
+	}
 }

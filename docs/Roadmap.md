@@ -1961,7 +1961,8 @@ packaging slice to a useful production backend.
       - [x] Add explicit Vulkan buffer residency policy to the public device configuration and allocator, with
             `HostVisibleCoherent` preserving today's default behavior and `DeviceLocal` allocating transfer-capable
             device-local storage buffers.
-      - [ ] Add staging upload/download helpers for device-local tensors.
+      - [x] Add staging upload/download helpers for device-local tensors so `CopyFromCPU`, `CopyToCPU`, `ZeroFill`, and
+            same-dtype device copies can move through transfer-capable buffers without host-mapping device-local memory.
       - [ ] Switch compiled-module intermediate/output allocation to the planner once staging copies and lifetime reuse
             are available.
 - [ ] Implement production operator families in priority order:

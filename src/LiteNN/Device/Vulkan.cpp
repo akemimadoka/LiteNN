@@ -643,6 +643,63 @@ namespace LiteNN
 			vkUnmapMemory(buffer.context->device, buffer.memory);
 		}
 
+		template <typename Record>
+		void SubmitImmediate(std::shared_ptr<VulkanContext> context, Record&& record)
+		{
+			std::lock_guard lock(context->queueMutex);
+			VkCommandBuffer commandBuffer{};
+			const VkCommandBufferAllocateInfo commandInfo{
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+				.commandPool = context->commandPool,
+				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+				.commandBufferCount = 1,
+			};
+			CheckVulkan(vkAllocateCommandBuffers(context->device, &commandInfo, &commandBuffer),
+			            "vkAllocateCommandBuffers(immediate)");
+
+			const VkCommandBufferBeginInfo beginInfo{
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+				.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+			};
+			CheckVulkan(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer(immediate)");
+			record(commandBuffer);
+			CheckVulkan(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(immediate)");
+
+			VkFence fence{};
+			const VkFenceCreateInfo fenceInfo{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+			CheckVulkan(vkCreateFence(context->device, &fenceInfo, nullptr, &fence), "vkCreateFence(immediate)");
+			const VkSubmitInfo submitInfo{
+				.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &commandBuffer,
+			};
+			const auto submitResult = vkQueueSubmit(context->queue, 1, &submitInfo, fence);
+			if (submitResult == VK_SUCCESS)
+			{
+				CheckVulkan(vkWaitForFences(context->device, 1, &fence, VK_TRUE, UINT64_MAX),
+				            "vkWaitForFences(immediate)");
+			}
+			vkDestroyFence(context->device, fence, nullptr);
+			vkFreeCommandBuffers(context->device, context->commandPool, 1, &commandBuffer);
+			CheckVulkan(submitResult, "vkQueueSubmit(immediate)");
+		}
+
+		void CopyBuffer(VulkanBuffer& src, VulkanBuffer& dst, VkDeviceSize bytes)
+		{
+			if (bytes > src.byteSize || bytes > dst.byteSize)
+			{
+				throw std::runtime_error("Vulkan buffer copy byte size exceeds buffer allocation");
+			}
+			if (src.context.get() != dst.context.get())
+			{
+				throw std::runtime_error("Vulkan buffer copy requires buffers from the same device context");
+			}
+			const VkBufferCopy region{ .srcOffset = 0, .dstOffset = 0, .size = bytes };
+			SubmitImmediate(src.context, [&](VkCommandBuffer commandBuffer) {
+				vkCmdCopyBuffer(commandBuffer, src.buffer, dst.buffer, 1, &region);
+			});
+		}
+
 		std::string UnsupportedVulkanEagerOp(std::string_view op)
 		{
 			return std::format(
@@ -719,6 +776,15 @@ namespace LiteNN
 		{
 			throw std::runtime_error("Vulkan ZeroFill byte size exceeds buffer allocation");
 		}
+		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
+		{
+			VulkanBuffer staging(buffer.context, bytes, VulkanBufferResidency::HostVisibleCoherent);
+			auto* mapped = static_cast<std::byte*>(MapBuffer(staging));
+			std::fill(mapped, mapped + static_cast<std::ptrdiff_t>(bytes), std::byte{ 0 });
+			UnmapBuffer(staging);
+			CopyBuffer(staging, buffer, bytes);
+			return;
+		}
 		auto* mapped = static_cast<std::byte*>(MapBuffer(buffer));
 		std::fill(mapped, mapped + static_cast<std::ptrdiff_t>(bytes), std::byte{ 0 });
 		UnmapBuffer(buffer);
@@ -735,7 +801,16 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan CopyToCPU byte size exceeds buffer allocation");
 		}
 
-		const auto* mapped = static_cast<const std::byte*>(MapBufferForRead(buffer));
+		std::unique_ptr<VulkanBuffer> staging;
+		const VulkanBuffer* readable = &buffer;
+		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
+		{
+			staging = std::make_unique<VulkanBuffer>(buffer.context, srcBytes, VulkanBufferResidency::HostVisibleCoherent);
+			CopyBuffer(const_cast<VulkanBuffer&>(buffer), *staging, srcBytes);
+			readable = staging.get();
+		}
+
+		const auto* mapped = static_cast<const std::byte*>(MapBufferForRead(*readable));
 		if (srcType == dstType)
 		{
 			std::memcpy(dst, mapped, static_cast<std::size_t>(srcBytes));
@@ -745,7 +820,7 @@ namespace LiteNN
 			CPU cpu;
 			DeviceTraits<CPU>::ConvertTo(cpu, srcType, mapped, size, dstType, dst);
 		}
-		UnmapBuffer(buffer);
+		UnmapBuffer(*readable);
 	}
 
 	void DeviceTraits<Vulkan>::CopyFromCPU(Vulkan& device, DataType dstType, void* dst, DataType srcType,
@@ -759,7 +834,15 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan CopyFromCPU byte size exceeds buffer allocation");
 		}
 
-		auto* mapped = static_cast<std::byte*>(MapBuffer(buffer));
+		std::unique_ptr<VulkanBuffer> staging;
+		VulkanBuffer* writable = &buffer;
+		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
+		{
+			staging = std::make_unique<VulkanBuffer>(buffer.context, dstBytes, VulkanBufferResidency::HostVisibleCoherent);
+			writable = staging.get();
+		}
+
+		auto* mapped = static_cast<std::byte*>(MapBuffer(*writable));
 		if (srcType == dstType)
 		{
 			std::memcpy(mapped, src, static_cast<std::size_t>(dstBytes));
@@ -769,7 +852,11 @@ namespace LiteNN
 			CPU cpu;
 			DeviceTraits<CPU>::ConvertTo(cpu, srcType, src, size, dstType, mapped);
 		}
-		UnmapBuffer(buffer);
+		UnmapBuffer(*writable);
+		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
+		{
+			CopyBuffer(*staging, buffer, dstBytes);
+		}
 	}
 
 	void DeviceTraits<Vulkan>::ConvertTo(Vulkan& device, DataType srcType, const void* src, std::size_t size,
@@ -785,19 +872,18 @@ namespace LiteNN
 			throw std::runtime_error("Vulkan ConvertTo byte size exceeds buffer allocation");
 		}
 
-		const auto* srcMapped = static_cast<const std::byte*>(MapBufferForRead(srcBuffer));
-		auto* dstMapped = static_cast<std::byte*>(MapBuffer(dstBuffer));
 		if (srcType == dstType)
 		{
-			std::memcpy(dstMapped, srcMapped, static_cast<std::size_t>(srcBytes));
+			CopyBuffer(const_cast<VulkanBuffer&>(srcBuffer), dstBuffer, srcBytes);
+			return;
 		}
-		else
-		{
-			CPU cpu;
-			DeviceTraits<CPU>::ConvertTo(cpu, srcType, srcMapped, size, dstType, dstMapped);
-		}
-		UnmapBuffer(dstBuffer);
-		UnmapBuffer(srcBuffer);
+
+		std::vector<std::byte> hostSrc(static_cast<std::size_t>(srcBytes));
+		std::vector<std::byte> hostDst(static_cast<std::size_t>(dstBytes));
+		CopyToCPU(device, srcType, src, size, srcType, hostSrc.data());
+		CPU cpu;
+		DeviceTraits<CPU>::ConvertTo(cpu, srcType, hostSrc.data(), size, dstType, hostDst.data());
+		CopyFromCPU(device, dstType, dst, dstType, hostDst.data(), size);
 	}
 
 	void DeviceTraits<Vulkan>::DoUnaryOp(Vulkan& device, UnaryOp unaryOp, void* dst, DataType type, ShapeView shape,

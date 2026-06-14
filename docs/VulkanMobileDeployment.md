@@ -113,8 +113,7 @@ for Vulkan rows. Persisted multi-backend Vulkan profile tables are still follow-
 
 Vulkan tensors default to host-visible coherent storage buffers so examples and correctness tests can upload and download
 without a staging path. `Vulkan::bufferResidency = VulkanBufferResidency::DeviceLocal` now allocates transfer-capable
-device-local storage buffers as the first memory-planner building block; host mapping of those buffers intentionally
-fails until staging upload/download helpers are wired in.
+device-local storage buffers and routes CPU upload/download plus same-dtype device copies through staging buffers.
 
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
 
