@@ -1976,6 +1976,8 @@ packaging slice to a useful production backend.
             public output tensor as the accumulator between kernels.
       - [x] Introduce a reusable Vulkan P0 workspace planner helper and validate one-slot reuse across longer
             same-shape binary chains.
+      - [x] Expose Vulkan workspace tensor count and total bytes in `litenn_profile` console/CSV output so workspace
+            planning changes are visible in performance reports.
       - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to
             `WorkspaceTensor` buffers and emits kernels that read/write those planned slots.
 - [ ] Implement production operator families in priority order:

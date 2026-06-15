@@ -618,6 +618,8 @@ struct VulkanLaunchBreakdown
 	std::uint64_t featureFlags{};
 	std::size_t kernelCount{};
 	std::size_t externalTensorCount{};
+	std::size_t workspaceTensorCount{};
+	std::size_t workspaceBytes{};
 	double compileMs{};
 	double loadMs{};
 	double inputUploadMs{};
@@ -712,6 +714,20 @@ static bool AllVulkanGpuTimestampsAvailable(std::span<const CompiledModuleVulkan
 	       });
 }
 
+static std::size_t SumVulkanWorkspaceBytes(const VulkanNativeInstructionPayload& payload)
+{
+	std::size_t total = 0;
+	for (const auto& workspace : payload.workspaceTensors)
+	{
+		if (workspace.byteSize > std::numeric_limits<std::size_t>::max() - total)
+		{
+			throw std::runtime_error("Vulkan native workspace byte total overflows size_t");
+		}
+		total += static_cast<std::size_t>(workspace.byteSize);
+	}
+	return total;
+}
+
 static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 {
 	VulkanLaunchBreakdown result{ .name = profileCase.name, .batch = profileCase.outShape[0] };
@@ -747,6 +763,8 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 		result.featureFlags = payload.featureSet.flags;
 		result.kernelCount = payload.kernels.size();
 		result.externalTensorCount = artifact.ExternalTensorInfos().size();
+		result.workspaceTensorCount = payload.workspaceTensors.size();
+		result.workspaceBytes = SumVulkanWorkspaceBytes(payload);
 
 		auto loadBegin = Clock::now();
 		auto module = artifact.Load(Vulkan{});
@@ -814,7 +832,7 @@ static void WriteVulkanProfileCsv(const std::filesystem::path& path,
 	{
 		throw std::runtime_error(std::format("Failed to open Vulkan profile CSV '{}'", path.string()));
 	}
-	out << "case,batch,backend,target,kernels,external_tensors,compile_ms,load_ms,upload_ms,first_run_ms,"
+	out << "case,batch,backend,target,kernels,external_tensors,workspace_tensors,workspace_bytes,compile_ms,load_ms,upload_ms,first_run_ms,"
 	       "mean_run_ms,last_dispatch_wall_ms,gpu_timestamp_available,gpu_time_ms,download_ms,status\n";
 	for (const auto& row : rows)
 	{
@@ -824,6 +842,8 @@ static void WriteVulkanProfileCsv(const std::filesystem::path& path,
 		    << CsvEscape(row.target) << ','
 		    << row.kernelCount << ','
 		    << row.externalTensorCount << ','
+		    << row.workspaceTensorCount << ','
+		    << row.workspaceBytes << ','
 		    << row.compileMs << ','
 		    << row.loadMs << ','
 		    << row.inputUploadMs << ','
@@ -1002,10 +1022,10 @@ int main(int argc, char** argv)
 	else
 	{
 		std::cout << std::format(
-		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
-		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "Compile", "Load", "Upload",
+		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
+		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "WS", "WSBytes", "Compile", "Load", "Upload",
 		    "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download", "Status");
-		std::cout << std::string(174, '-') << "\n";
+		std::cout << std::string(198, '-') << "\n";
 		std::vector<VulkanLaunchBreakdown> vulkanRows;
 		vulkanRows.reserve(cases.size());
 		for (const auto& c : cases)
@@ -1015,10 +1035,11 @@ int main(int argc, char** argv)
 			const std::string gpuTime = row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs)
 			                                                      : std::string("n/a");
 			std::cout << std::format(
-			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>8.2f}ms {:>8.2f}ms {:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
+			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms {:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
 			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
-			    row.kernelCount, row.externalTensorCount, row.compileMs, row.loadMs, row.inputUploadMs, row.firstMs,
-			    row.meanMs, row.lastDispatchMs, gpuTime, row.outputDownloadMs, row.message);
+			    row.kernelCount, row.externalTensorCount, row.workspaceTensorCount, row.workspaceBytes, row.compileMs,
+			    row.loadMs, row.inputUploadMs, row.firstMs, row.meanMs, row.lastDispatchMs, gpuTime,
+			    row.outputDownloadMs, row.message);
 		}
 		std::cout << "FirstRun and MeanRun are synchronized RunInto wall times. LastDispatch is the sum of CPU-side\n";
 		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto. GPUTime is the sum of\n";
