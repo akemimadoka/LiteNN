@@ -55,6 +55,28 @@ namespace
 		return graph;
 	}
 
+	Graph BuildThreeStageBinaryChainGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto a = sg.AddParam(DataType::Float32, { 4 });
+		const auto b = sg.AddParam(DataType::Float32, { 4 });
+		const auto c = sg.AddParam(DataType::Float32, { 4 });
+		const auto d = sg.AddParam(DataType::Float32, { 4 });
+		const auto first =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { c, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto third = sg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { second, 0 }, { d, 0 } },
+		                              { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { third, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "a", "b", "c", "d" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildBinaryDiamondGraph()
 	{
 		Graph graph;
@@ -1079,6 +1101,34 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForBinaryChain)
 	EXPECT_EQ(payload.kernels[1].arguments[1].index, 2u);
 	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[1].arguments[2].index, 0u);
+}
+
+TEST(CompiledModuleVulkanTest, ReusesOneWorkspaceForLongBinaryChain)
+{
+	const auto graph = BuildThreeStageBinaryChainGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.workspaceTensors.size(), 1u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, kElementCount * sizeof(float));
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+	for (const auto& kernel : payload.kernels)
+	{
+		ASSERT_EQ(kernel.arguments.size(), 3u);
+		for (const auto& argument : kernel.arguments)
+		{
+			if (argument.kind == VulkanNativeArgumentKind::WorkspaceTensor)
+			{
+				EXPECT_EQ(argument.index, 0u);
+			}
+		}
+	}
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
@@ -2142,6 +2192,35 @@ TEST(CompiledModuleVulkanTest, RunsBinaryChainArithmetic)
 	EXPECT_FLOAT_EQ(actual[1], 4400.0f);
 	EXPECT_FLOAT_EQ(actual[2], 9900.0f);
 	EXPECT_FLOAT_EQ(actual[3], 17600.0f);
+}
+
+TEST(CompiledModuleVulkanTest, RunsLongBinaryChainWithWorkspaceReuse)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildThreeStageBinaryChainGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 2.0, 3.0, 4.0, 5.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 21.0f, 64.0f, 129.0f, 216.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
 }
 
 TEST(CompiledModuleVulkanTest, RunsSimpleReduceArithmetic)

@@ -1974,6 +1974,8 @@ packaging slice to a useful production backend.
             kernels can bind workspace descriptors, and `CompiledModule<Vulkan>` allocates the buffers at load time.
       - [x] Route the existing same-shape binary-chain schedule through `WorkspaceTensor` buffers instead of using the
             public output tensor as the accumulator between kernels.
+      - [x] Introduce a reusable Vulkan P0 workspace planner helper and validate one-slot reuse across longer
+            same-shape binary chains.
       - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to
             `WorkspaceTensor` buffers and emits kernels that read/write those planned slots.
 - [ ] Implement production operator families in priority order:

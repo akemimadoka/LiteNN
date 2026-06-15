@@ -5807,6 +5807,55 @@ namespace
 		std::vector<VulkanP0BinaryChainKernelPlan> kernels;
 	};
 
+	class VulkanP0WorkspacePlanner
+	{
+	public:
+		std::uint32_t AllocateReusable(std::uint64_t byteSize, std::uint64_t alignment)
+		{
+			for (std::uint32_t i = 0; i < workspaceTensors_.size(); ++i)
+			{
+				const auto& spec = workspaceTensors_[i];
+				if (spec.byteSize >= byteSize && spec.alignment >= alignment)
+				{
+					return i;
+				}
+			}
+			if (workspaceTensors_.size() >= std::numeric_limits<std::uint32_t>::max())
+			{
+				throw std::runtime_error("Vulkan native workspace tensor count overflows uint32_t");
+			}
+			const auto index = static_cast<std::uint32_t>(workspaceTensors_.size());
+			workspaceTensors_.push_back({
+			    .byteSize = byteSize,
+			    .alignment = alignment,
+			});
+			return index;
+		}
+
+		VulkanNativeArgumentSpec Argument(std::uint32_t index, std::uint32_t binding, std::uint64_t byteSize) const
+		{
+			if (index >= workspaceTensors_.size())
+			{
+				throw std::runtime_error("Vulkan native workspace planner argument index is out of bounds");
+			}
+			return VulkanNativeArgumentSpec{
+				.kind = VulkanNativeArgumentKind::WorkspaceTensor,
+				.index = index,
+				.binding = binding,
+				.byteOffset = 0,
+				.byteSize = byteSize,
+			};
+		}
+
+		std::vector<VulkanNativeWorkspaceSpec> TakeWorkspaceTensors()
+		{
+			return std::move(workspaceTensors_);
+		}
+
+	private:
+		std::vector<VulkanNativeWorkspaceSpec> workspaceTensors_;
+	};
+
 	struct VulkanP0UnaryPlan
 	{
 		UnaryOp op{ UnaryOp::Negate };
@@ -8527,12 +8576,21 @@ namespace
 	}
 
 	VulkanNativeArgumentSpec VulkanP0BinaryChainArgument(VulkanP0BinaryChainOperand operand, std::uint32_t binding,
-	                                                     std::uint64_t byteSize)
+	                                                     std::uint64_t byteSize, std::uint32_t workspaceIndex)
 	{
+		if (operand.accumulator)
+		{
+			return VulkanNativeArgumentSpec{
+				.kind = VulkanNativeArgumentKind::WorkspaceTensor,
+				.index = workspaceIndex,
+				.binding = binding,
+				.byteOffset = 0,
+				.byteSize = byteSize,
+			};
+		}
 		return VulkanNativeArgumentSpec{
-			.kind =
-			    operand.accumulator ? VulkanNativeArgumentKind::WorkspaceTensor : VulkanNativeArgumentKind::InputTensor,
-			.index = operand.accumulator ? 0u : operand.inputIndex,
+			.kind = VulkanNativeArgumentKind::InputTensor,
+			.index = operand.inputIndex,
 			.binding = binding,
 			.byteOffset = 0,
 			.byteSize = byteSize,
@@ -8561,10 +8619,8 @@ namespace
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		payload.workspaceTensors.push_back({
-		    .byteSize = byteSize,
-		    .alignment = alignof(float),
-		});
+		VulkanP0WorkspacePlanner workspacePlanner;
+		const auto accumulatorWorkspace = workspacePlanner.AllocateReusable(byteSize, alignof(float));
 		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
 			const auto& kernelPlan = plan->kernels[kernelIndex];
@@ -8574,17 +8630,18 @@ namespace
 			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 			    .arguments = {
-			        VulkanP0BinaryChainArgument(kernelPlan.lhs, 0, byteSize),
-			        VulkanP0BinaryChainArgument(kernelPlan.rhs, 1, byteSize),
-			        { .kind = isFinalKernel ? VulkanNativeArgumentKind::OutputTensor
-			                                : VulkanNativeArgumentKind::WorkspaceTensor,
-			          .index = 0,
-			          .binding = 2,
-			          .byteOffset = 0,
-			          .byteSize = byteSize },
+			        VulkanP0BinaryChainArgument(kernelPlan.lhs, 0, byteSize, accumulatorWorkspace),
+			        VulkanP0BinaryChainArgument(kernelPlan.rhs, 1, byteSize, accumulatorWorkspace),
+			        isFinalKernel ? VulkanNativeArgumentSpec{ .kind = VulkanNativeArgumentKind::OutputTensor,
+			                                                 .index = 0,
+			                                                 .binding = 2,
+			                                                 .byteOffset = 0,
+			                                                 .byteSize = byteSize }
+			                      : workspacePlanner.Argument(accumulatorWorkspace, 2, byteSize),
 			    },
 			});
 		}
+		payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
