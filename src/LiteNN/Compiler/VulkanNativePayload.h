@@ -14,6 +14,7 @@ namespace LiteNN
 		InputTensor = 1,
 		OutputTensor = 2,
 		ExternalTensor = 3,
+		WorkspaceTensor = 4,
 	};
 
 	enum class VulkanNativeFeature : std::uint32_t
@@ -130,6 +131,12 @@ namespace LiteNN
 		std::uint64_t byteSize{};
 	};
 
+	struct VulkanNativeWorkspaceSpec
+	{
+		std::uint64_t byteSize{};
+		std::uint64_t alignment{ 1 };
+	};
+
 	struct VulkanNativeKernelSpec
 	{
 		std::string entryPoint{ "main" };
@@ -143,6 +150,7 @@ namespace LiteNN
 		VulkanNativeFeatureSet featureSet;
 		std::string target{ "vulkan1.1" };
 		std::vector<std::uint32_t> spirv;
+		std::vector<VulkanNativeWorkspaceSpec> workspaceTensors;
 		std::vector<VulkanNativeKernelSpec> kernels;
 	};
 

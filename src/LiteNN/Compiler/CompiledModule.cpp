@@ -10347,6 +10347,19 @@ namespace
 		}
 	}
 
+	void ValidateVulkanWorkspaceArgumentRange(const VulkanNativeArgumentSpec& argument,
+	                                          const VulkanNativeWorkspaceSpec& workspace)
+	{
+		if (argument.byteOffset > workspace.byteSize || argument.byteSize > workspace.byteSize - argument.byteOffset)
+		{
+			throw std::runtime_error("Vulkan native workspace argument byte range is out of bounds");
+		}
+		if (argument.byteOffset != 0)
+		{
+			throw std::runtime_error("Vulkan native P0 payload does not support workspace byte offsets");
+		}
+	}
+
 	bool VulkanNativeHasFeature(const VulkanNativeInstructionPayload& payload, VulkanNativeFeature feature)
 	{
 		return (payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(feature))) != 0;
@@ -10606,9 +10619,27 @@ namespace
 		return tensors;
 	}
 
+	std::vector<Tensor<Vulkan>> AllocateVulkanWorkspaceTensors(const VulkanNativeInstructionPayload& payload,
+	                                                           Vulkan device)
+	{
+		std::vector<Tensor<Vulkan>> tensors;
+		tensors.reserve(payload.workspaceTensors.size());
+		for (const auto& workspace : payload.workspaceTensors)
+		{
+			if (workspace.byteSize > std::numeric_limits<std::size_t>::max())
+			{
+				throw std::runtime_error("Vulkan native workspace tensor is too large for this host");
+			}
+			const std::array<std::size_t, 1> shape{ static_cast<std::size_t>(workspace.byteSize) };
+			tensors.emplace_back(Uninitialized, ShapeView{ shape }, DataType::UInt8, device);
+		}
+		return tensors;
+	}
+
 	void RunVulkanNativePayload(const VulkanNativeInstructionPayload& payload,
 	                            std::span<const VulkanComputeModule> modules, std::span<const Tensor<Vulkan>> inputs,
-	                            std::span<const Tensor<Vulkan>> externalTensors, std::span<Tensor<Vulkan>> outputs,
+	                            std::span<const Tensor<Vulkan>> externalTensors,
+	                            std::span<Tensor<Vulkan>> workspaceTensors, std::span<Tensor<Vulkan>> outputs,
 	                            CompiledModuleVulkanRunOptions options)
 	{
 		if (modules.size() != payload.kernels.size())
@@ -10644,6 +10675,14 @@ namespace
 					ValidateVulkanArgumentRange(argument, externalTensors[argument.index].DType(),
 					                            externalTensors[argument.index].NumElements(), "external tensor");
 					descriptors[argument.binding] = externalTensors[argument.index].UnsafeRawData();
+					break;
+				case VulkanNativeArgumentKind::WorkspaceTensor:
+					if (argument.index >= workspaceTensors.size() || argument.index >= payload.workspaceTensors.size())
+					{
+						throw std::runtime_error("Vulkan native workspace argument index is out of bounds");
+					}
+					ValidateVulkanWorkspaceArgumentRange(argument, payload.workspaceTensors[argument.index]);
+					descriptors[argument.binding] = workspaceTensors[argument.index].UnsafeRawData();
 					break;
 				case VulkanNativeArgumentKind::OutputTensor:
 					if (argument.index >= outputs.size())
@@ -10707,6 +10746,7 @@ struct CompiledModule<Vulkan>::Impl
 	VulkanNativeInstructionPayload vulkanPayload;
 	std::vector<VulkanComputeModule> vulkanModules;
 	std::vector<Tensor<Vulkan>> vulkanExternalTensors;
+	std::vector<Tensor<Vulkan>> vulkanWorkspaceTensors;
 };
 
 CompiledModule<Vulkan>::CompiledModule() = default;
@@ -10765,6 +10805,7 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleImage image, V
 	{
 		impl->vulkanPayload = DeserializeVulkanNativeInstructionPayload(impl->instructions);
 		ValidateVulkanNativeDeviceCapabilities(impl->vulkanPayload, impl->inputSpecs, impl->outputSpecs, impl->device);
+		impl->vulkanWorkspaceTensors = AllocateVulkanWorkspaceTensors(impl->vulkanPayload, impl->device);
 		impl->vulkanModules.reserve(impl->vulkanPayload.kernels.size());
 		for (const auto& kernel : impl->vulkanPayload.kernels)
 		{
@@ -10934,7 +10975,7 @@ std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
 	if (impl_->backend == CompiledModuleBackend::VulkanNative)
 	{
 		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
-		                       workspace.outputs_, options);
+		                       impl_->vulkanWorkspaceTensors, workspace.outputs_, options);
 		return workspace.Outputs();
 	}
 	if (!options.synchronize)
@@ -11003,7 +11044,7 @@ void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inpu
 	if (impl_->backend == CompiledModuleBackend::VulkanNative)
 	{
 		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
-		                       outputs, options);
+		                       impl_->vulkanWorkspaceTensors, outputs, options);
 		return;
 	}
 	if (!options.synchronize)

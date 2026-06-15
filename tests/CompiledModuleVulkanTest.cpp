@@ -762,6 +762,7 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleAdd)
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
 	const auto generated = VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp::Add, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_TRUE(payload.workspaceTensors.empty());
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
 	EXPECT_EQ(payload.kernels[0].requirements.descriptorAbiVersion, 1u);
@@ -813,6 +814,46 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	EXPECT_EQ(decodedRequirements.requiredStorageBufferOffsetAlignment, 16u);
 
 	payload.kernels[0].requirements.deviceRequirements.flags = 1ull << 63;
+	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
+}
+
+TEST(CompiledModuleVulkanTest, SerializesWorkspaceTensorMetadata)
+{
+	VulkanNativeInstructionPayload payload;
+	payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+	payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+	payload.spirv = { 0x07230203u };
+	payload.workspaceTensors.push_back({
+	    .byteSize = 256,
+	    .alignment = 16,
+	});
+	VulkanNativeKernelSpec kernel;
+	kernel.entryPoint = "main";
+	kernel.groups = { .x = 1, .y = 1, .z = 1 };
+	kernel.requirements.descriptorAbiVersion = 1;
+	kernel.requirements.localSize = { .x = 1, .y = 1, .z = 1 };
+	kernel.arguments.push_back({
+	    .kind = VulkanNativeArgumentKind::WorkspaceTensor,
+	    .index = 0,
+	    .binding = 0,
+	    .byteOffset = 0,
+	    .byteSize = 256,
+	});
+	payload.kernels.push_back(std::move(kernel));
+
+	const auto decoded = DeserializeVulkanNativeInstructionPayload(SerializeVulkanNativeInstructionPayload(payload));
+	ASSERT_EQ(decoded.workspaceTensors.size(), 1u);
+	EXPECT_EQ(decoded.workspaceTensors[0].byteSize, 256u);
+	EXPECT_EQ(decoded.workspaceTensors[0].alignment, 16u);
+	ASSERT_EQ(decoded.kernels.size(), 1u);
+	ASSERT_EQ(decoded.kernels[0].arguments.size(), 1u);
+	EXPECT_EQ(decoded.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(decoded.kernels[0].arguments[0].index, 0u);
+
+	payload.workspaceTensors[0].alignment = 24;
+	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
+	payload.workspaceTensors[0].alignment = 16;
+	payload.kernels[0].arguments[0].index = 1;
 	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
 }
 
@@ -1934,6 +1975,53 @@ TEST(CompiledModuleVulkanTest, AllocatesDeviceLocalOutputsFromModulePolicy)
 	EXPECT_EQ(outputs[0].CurDevice().bufferResidency, VulkanBufferResidency::DeviceLocal);
 
 	module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 11.0f, 22.0f, 33.0f, 44.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsPayloadWithUnusedWorkspaceTensorBinding)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	payload.workspaceTensors.push_back({
+	    .byteSize = 64,
+	    .alignment = 16,
+	});
+	payload.kernels[0].arguments.push_back({
+	    .kind = VulkanNativeArgumentKind::WorkspaceTensor,
+	    .index = 0,
+	    .binding = 3,
+	    .byteOffset = 0,
+	    .byteSize = 64,
+	});
+	auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+	auto patchedArtifact = CompiledModuleArtifact::CopyFromImage({
+	    .rodata = artifact.Rodata().data(),
+	    .rodataSize = artifact.Rodata().size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	});
+	auto module = patchedArtifact.Load(Vulkan{});
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
 
 	const auto actual = CopyToHost(outputs[0]);
 	const std::array expected{ 11.0f, 22.0f, 33.0f, 44.0f };

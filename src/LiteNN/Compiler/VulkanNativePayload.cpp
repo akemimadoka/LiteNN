@@ -14,7 +14,7 @@ namespace LiteNN
 			std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 			std::byte{ 'V' }, std::byte{ 'K' }, std::byte{ 'S' }, std::byte{ 'P' },
 		};
-		constexpr std::uint32_t kPayloadVersion = 2;
+		constexpr std::uint32_t kPayloadVersion = 3;
 
 		void AppendU32(std::vector<std::byte>& bytes, std::uint32_t value)
 		{
@@ -92,6 +92,8 @@ namespace LiteNN
 				return VulkanNativeArgumentKind::OutputTensor;
 			case static_cast<std::uint32_t>(VulkanNativeArgumentKind::ExternalTensor):
 				return VulkanNativeArgumentKind::ExternalTensor;
+			case static_cast<std::uint32_t>(VulkanNativeArgumentKind::WorkspaceTensor):
+				return VulkanNativeArgumentKind::WorkspaceTensor;
 			default:
 				throw std::runtime_error("Vulkan native instruction payload contains an invalid argument kind");
 			}
@@ -106,6 +108,11 @@ namespace LiteNN
 		}
 
 		bool IsPowerOfTwo(std::uint32_t value)
+		{
+			return value != 0 && (value & (value - 1)) == 0;
+		}
+
+		bool IsPowerOfTwo(std::uint64_t value)
 		{
 			return value != 0 && (value & (value - 1)) == 0;
 		}
@@ -127,6 +134,17 @@ namespace LiteNN
 			if (payload.kernels.empty())
 			{
 				throw std::runtime_error("Vulkan native instruction payload must contain at least one kernel");
+			}
+			for (const auto& workspace : payload.workspaceTensors)
+			{
+				if (workspace.byteSize == 0)
+				{
+					throw std::runtime_error("Vulkan native workspace tensor byte size must not be zero");
+				}
+				if (!IsPowerOfTwo(workspace.alignment))
+				{
+					throw std::runtime_error("Vulkan native workspace tensor alignment must be a power of two");
+				}
 			}
 			for (const auto& kernel : payload.kernels)
 			{
@@ -155,6 +173,11 @@ namespace LiteNN
 					if (argument.byteSize == 0)
 					{
 						throw std::runtime_error("Vulkan native argument byte size must not be zero");
+					}
+					if (argument.kind == VulkanNativeArgumentKind::WorkspaceTensor &&
+					    argument.index >= payload.workspaceTensors.size())
+					{
+						throw std::runtime_error("Vulkan native workspace argument index is out of bounds");
 					}
 				}
 			}
@@ -190,6 +213,12 @@ namespace LiteNN
 		for (const auto word : payload.spirv)
 		{
 			AppendU32(bytes, word);
+		}
+		AppendU32(bytes, static_cast<std::uint32_t>(payload.workspaceTensors.size()));
+		for (const auto& workspace : payload.workspaceTensors)
+		{
+			AppendU64(bytes, workspace.byteSize);
+			AppendU64(bytes, workspace.alignment);
 		}
 		AppendU32(bytes, static_cast<std::uint32_t>(payload.kernels.size()));
 		for (const auto& kernel : payload.kernels)
@@ -241,6 +270,19 @@ namespace LiteNN
 		for (std::uint64_t i = 0; i < wordCount; ++i)
 		{
 			payload.spirv.push_back(ReadU32(bytes, offset));
+		}
+
+		if (version >= 3)
+		{
+			const auto workspaceCount = ReadU32(bytes, offset);
+			payload.workspaceTensors.reserve(workspaceCount);
+			for (std::uint32_t i = 0; i < workspaceCount; ++i)
+			{
+				payload.workspaceTensors.push_back({
+				    .byteSize = ReadU64(bytes, offset),
+				    .alignment = ReadU64(bytes, offset),
+				});
+			}
 		}
 
 		const auto kernelCount = ReadU32(bytes, offset);

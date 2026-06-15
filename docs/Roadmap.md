@@ -1970,8 +1970,10 @@ packaging slice to a useful production backend.
             profiling tools reuse output lifetimes while preserving the module's selected Vulkan residency policy.
       - [x] Add `CompiledModuleVulkanRunWorkspace` so repeated Vulkan runs can reuse module-policy output tensors and
             CPU-bridge host scratch tensors without changing the existing `RunTensorsInto` ownership model.
-      - [ ] Add native `WorkspaceTensor` payload arguments and schedule-level lifetime planning for true intermediate
-            buffer pooling across multi-kernel Vulkan graphs.
+      - [x] Add native `WorkspaceTensor` payload/runtime ABI: payload v3 records reusable workspace buffer specs,
+            kernels can bind workspace descriptors, and `CompiledModule<Vulkan>` allocates the buffers at load time.
+      - [ ] Add schedule-level lifetime planning that assigns multi-kernel intermediate values to `WorkspaceTensor`
+            buffers and emits kernels that read/write those planned slots.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now
