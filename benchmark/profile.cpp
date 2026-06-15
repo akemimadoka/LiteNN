@@ -94,6 +94,29 @@ static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 	return builder.UnsafeTakeGraph();
 }
 
+static Graph BuildBinaryChainProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto a = sg.AddParam(DataType::Float32, shape);
+	const auto b = sg.AddParam(DataType::Float32, shape);
+	const auto c = sg.AddParam(DataType::Float32, shape);
+	const auto d = sg.AddParam(DataType::Float32, shape);
+	const auto first =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { c, 0 } },
+	                               { OutputInfo{ DataType::Float32, shape } });
+	const auto third = sg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { second, 0 }, { d, 0 } },
+	                              { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { third, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "a", "b", "c", "d" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
 static void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
@@ -639,6 +662,15 @@ struct VulkanProfileInputs
 	double uploadMs{};
 };
 
+struct VulkanProfileCase
+{
+	std::string name;
+	Graph (*build)(std::size_t, std::mt19937&);
+	std::size_t batch{};
+	VulkanProfileInputs (*makeInputs)(std::size_t);
+	bool optimize{ true };
+};
+
 static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 {
 	std::mt19937 rng(0);
@@ -652,6 +684,33 @@ static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 	std::vector<Tensor<Vulkan>> inputs;
 	const auto uploadMs = TimedOnceMs([&] {
 		inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{}));
+	});
+	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
+}
+
+static VulkanProfileInputs MakeVulkanBinaryChainProfileInputs(std::size_t batch)
+{
+	std::mt19937 rng(0);
+	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+	std::vector<Tensor<CPU>> cpuInputs;
+	cpuInputs.reserve(4);
+	for (std::size_t inputIndex = 0; inputIndex < 4; ++inputIndex)
+	{
+		std::vector<float> data(batch * 784);
+		for (auto& value : data)
+		{
+			value = dist(rng);
+		}
+		cpuInputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
+	}
+
+	std::vector<Tensor<Vulkan>> inputs;
+	inputs.reserve(cpuInputs.size());
+	const auto uploadMs = TimedOnceMs([&] {
+		for (const auto& input : cpuInputs)
+		{
+			inputs.emplace_back(input.CopyToDevice(Vulkan{}));
+		}
 	});
 	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
 }
@@ -728,9 +787,9 @@ static std::size_t SumVulkanWorkspaceBytes(const VulkanNativeInstructionPayload&
 	return total;
 }
 
-static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
+static VulkanLaunchBreakdown ProfileVulkanLaunches(const VulkanProfileCase& profileCase)
 {
-	VulkanLaunchBreakdown result{ .name = profileCase.name, .batch = profileCase.outShape[0] };
+	VulkanLaunchBreakdown result{ .name = profileCase.name, .batch = profileCase.batch };
 	if (!IsVulkanDeviceAvailable())
 	{
 		result.message = "Vulkan compute device is not available";
@@ -741,7 +800,10 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 	{
 		std::mt19937 rng(0);
 		Graph graph = profileCase.build(result.batch, rng);
-		Optimize(graph);
+		if (profileCase.optimize)
+		{
+			Optimize(graph);
+		}
 
 		CompiledModuleArtifact artifact;
 		{
@@ -771,7 +833,7 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 		auto loadEnd = Clock::now();
 		result.loadMs = clk::duration<double, std::milli>(loadEnd - loadBegin).count();
 
-		auto profileInputs = MakeVulkanProfileInputs(result.batch);
+		auto profileInputs = profileCase.makeInputs(result.batch);
 		result.inputUploadMs = profileInputs.uploadMs;
 		auto& inputs = profileInputs.tensors;
 		auto outputs = AllocateVulkanProfileOutputs(module);
@@ -801,6 +863,16 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 		result.message = ex.what();
 	}
 	return result;
+}
+
+static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
+{
+	return ProfileVulkanLaunches(
+	    VulkanProfileCase{ .name = profileCase.name,
+	                       .build = profileCase.build,
+	                       .batch = profileCase.outShape[0],
+	                       .makeInputs = MakeVulkanProfileInputs,
+	                       .optimize = true });
 }
 
 static std::string CsvEscape(std::string_view value)
@@ -1021,25 +1093,56 @@ int main(int argc, char** argv)
 	}
 	else
 	{
+		std::vector<VulkanProfileCase> vulkanOnlyCases = {
+			{ .name = "binary_chain_b1",
+			  .build = BuildBinaryChainProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
+			  .optimize = false },
+			{ .name = "binary_chain_b32",
+			  .build = BuildBinaryChainProfileGraph,
+			  .batch = 32,
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
+			  .optimize = false },
+			{ .name = "binary_chain_b128",
+			  .build = BuildBinaryChainProfileGraph,
+			  .batch = 128,
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
+			  .optimize = false },
+			{ .name = "binary_chain_b512",
+			  .build = BuildBinaryChainProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
+			  .optimize = false },
+		};
 		std::cout << std::format(
 		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
 		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "WS", "WSBytes", "Compile", "Load", "Upload",
 		    "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download", "Status");
 		std::cout << std::string(198, '-') << "\n";
 		std::vector<VulkanLaunchBreakdown> vulkanRows;
-		vulkanRows.reserve(cases.size());
-		for (const auto& c : cases)
-		{
-			const auto row = ProfileVulkanLaunches(c);
-			vulkanRows.push_back(row);
-			const std::string gpuTime = row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs)
-			                                                      : std::string("n/a");
+		vulkanRows.reserve(cases.size() + vulkanOnlyCases.size());
+		const auto printVulkanRow = [](const VulkanLaunchBreakdown& row) {
+			const std::string gpuTime =
+			    row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs) : std::string("n/a");
 			std::cout << std::format(
 			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms {:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
 			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
 			    row.kernelCount, row.externalTensorCount, row.workspaceTensorCount, row.workspaceBytes, row.compileMs,
 			    row.loadMs, row.inputUploadMs, row.firstMs, row.meanMs, row.lastDispatchMs, gpuTime,
 			    row.outputDownloadMs, row.message);
+		};
+		for (const auto& c : cases)
+		{
+			const auto row = ProfileVulkanLaunches(c);
+			vulkanRows.push_back(row);
+			printVulkanRow(row);
+		}
+		for (const auto& c : vulkanOnlyCases)
+		{
+			const auto row = ProfileVulkanLaunches(c);
+			vulkanRows.push_back(row);
+			printVulkanRow(row);
 		}
 		std::cout << "FirstRun and MeanRun are synchronized RunInto wall times. LastDispatch is the sum of CPU-side\n";
 		std::cout << "Vulkan dispatch wall times captured from the last profiled RunInto. GPUTime is the sum of\n";
