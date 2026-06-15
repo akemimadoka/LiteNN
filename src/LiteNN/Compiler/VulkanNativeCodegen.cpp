@@ -281,23 +281,30 @@ namespace LiteNN
 
 		std::string_view NormalizationF32KernelName(NormalizationMode mode)
 		{
-			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(mode);
-			if (name)
+			switch (mode)
 			{
-				return *name;
+			case NormalizationMode::LayerNorm:
+				return "layer_norm";
+			case NormalizationMode::RMSNorm:
+				return "rms_norm";
+			case NormalizationMode::GroupNorm:
+				return "group_norm";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
 			}
-			throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
 		}
 
-		std::string Pool2DF32KernelName(PoolMode mode)
+		std::string_view Pool2DF32KernelName(PoolMode mode)
 		{
-			using namespace std::string_literals;
-			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(mode);
-			if (name)
+			switch (mode)
 			{
-				return "Pool2d"s + *name;
+			case PoolMode::Max:
+				return "pool2d_max";
+			case PoolMode::Average:
+				return "pool2d_average";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 Pool2D mode");
 			}
-			throw std::runtime_error("Unsupported Vulkan native f32 Pool2D mode");
 		}
 
 		std::string_view Conv2DF32KernelName()

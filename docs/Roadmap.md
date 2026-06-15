@@ -1963,8 +1963,10 @@ packaging slice to a useful production backend.
             device-local storage buffers.
       - [x] Add staging upload/download helpers for device-local tensors so `CopyFromCPU`, `CopyToCPU`, `ZeroFill`, and
             same-dtype device copies can move through transfer-capable buffers without host-mapping device-local memory.
-      - [ ] Switch compiled-module intermediate/output allocation to the planner once staging copies and lifetime reuse
-            are available.
+      - [x] Route `CompiledModule<Vulkan>::RunTensors` output tensors and separated external tensors through the selected
+            Vulkan device residency policy; device-local module inputs/outputs now run through staging at host
+            boundaries.
+      - [ ] Add lifetime reuse/workspace pooling for compiled-module intermediate/output allocation.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now
