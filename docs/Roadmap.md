@@ -1984,8 +1984,11 @@ packaging slice to a useful production backend.
             those workspace metrics to `vulkan_profile.csv`.
       - [x] Lower `FusedOpNode(ElementWiseChain)` bodies that still form same-shape f32 binary chains through the
             existing Vulkan workspace-chain planner, so normal graph optimization no longer blocks this native path.
-      - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to
-            `WorkspaceTensor` buffers and emits kernels that read/write those planned slots.
+      - [x] Add the first schedule-level lifetime planner slice for same-shape f32 binary DAGs: independent
+            intermediate values now receive separate `WorkspaceTensor` slots when lifetimes overlap, covering the
+            diamond graph shape.
+      - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
+            can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now

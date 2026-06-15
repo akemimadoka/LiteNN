@@ -912,13 +912,15 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMixedBinaryChain)
 	EXPECT_TRUE(report.reason.empty());
 }
 
-TEST(CompiledModuleVulkanTest, RejectsDiamondBinaryGraphForNativeSupport)
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForDiamondBinaryDAG)
 {
 	const auto graph = BuildBinaryDiamondGraph();
 	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
 
-	EXPECT_FALSE(report.supported);
-	EXPECT_FALSE(report.reason.empty());
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("binary DAG"), std::string::npos);
+	EXPECT_NE(report.capability.find("3 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
 }
 
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMul)
@@ -1155,6 +1157,25 @@ TEST(CompiledModuleVulkanTest, LowersFusedElementWiseChainToVulkanWorkspaceChain
 	EXPECT_EQ(payload.kernels[0].arguments[1].index, 1u);
 	EXPECT_EQ(payload.kernels[1].arguments[1].index, 2u);
 	EXPECT_EQ(payload.kernels[2].arguments[1].index, 3u);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+}
+
+TEST(CompiledModuleVulkanTest, PlansWorkspaceForDiamondBinaryDAG)
+{
+	const auto graph = BuildBinaryDiamondGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, kElementCount * sizeof(float));
+	EXPECT_EQ(payload.workspaceTensors[1].byteSize, kElementCount * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_NE(payload.kernels[0].arguments[2].index, payload.kernels[1].arguments[2].index);
+	EXPECT_EQ(payload.kernels[2].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 }
 
@@ -2244,6 +2265,34 @@ TEST(CompiledModuleVulkanTest, RunsLongBinaryChainWithWorkspaceReuse)
 
 	const auto actual = CopyToHost(outputs[0]);
 	const std::array expected{ 21.0f, 64.0f, 129.0f, 216.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsDiamondBinaryDAGWithWorkspace)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildBinaryDiamondGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 100.0, 200.0, 300.0, 400.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 112.0f, 224.0f, 336.0f, 448.0f };
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);

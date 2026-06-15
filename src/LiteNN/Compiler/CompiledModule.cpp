@@ -5807,6 +5807,32 @@ namespace
 		std::vector<VulkanP0BinaryChainKernelPlan> kernels;
 	};
 
+	enum class VulkanP0BinaryDAGOperandKind
+	{
+		Input,
+		Intermediate,
+	};
+
+	struct VulkanP0BinaryDAGOperand
+	{
+		VulkanP0BinaryDAGOperandKind kind{ VulkanP0BinaryDAGOperandKind::Input };
+		std::uint32_t index{};
+	};
+
+	struct VulkanP0BinaryDAGKernelPlan
+	{
+		BinaryOp op{ BinaryOp::Add };
+		VulkanP0BinaryDAGOperand lhs;
+		VulkanP0BinaryDAGOperand rhs;
+	};
+
+	struct VulkanP0BinaryDAGPlan
+	{
+		std::uint32_t elementCount{};
+		std::vector<VulkanP0BinaryDAGKernelPlan> kernels;
+		std::uint32_t outputKernelIndex{};
+	};
+
 	class VulkanP0WorkspacePlanner
 	{
 	public:
@@ -6612,6 +6638,111 @@ namespace
 		                                                      resolveParentParam);
 	}
 
+	std::optional<VulkanP0BinaryDAGPlan> MatchVulkanP0SameShapeBinaryF32DAG(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1 || resultEntry.outputInfos[0].dtype != DataType::Float32)
+		{
+			return std::nullopt;
+		}
+		const auto& shape = resultEntry.outputInfos[0].shape;
+		const auto elementCount = VulkanP0ShapeNumElementsU32(shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		VulkanP0BinaryDAGPlan plan{ .elementCount = *elementCount };
+		std::vector<bool> visited(subgraph.NodeCount(), false);
+		std::unordered_map<NodeId, std::uint32_t> kernelIndexByNode;
+
+		const auto collect = [&](auto&& self, NodeOutput output) -> std::optional<VulkanP0BinaryDAGOperand> {
+			const auto inputIndex = GetVulkanP0ParamIndex(subgraph, output);
+			if (inputIndex)
+			{
+				const auto& param = subgraph.Params()[*inputIndex];
+				if (param.dtype != DataType::Float32 || param.shape != shape)
+				{
+					return std::nullopt;
+				}
+				return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Input, .index = *inputIndex };
+			}
+			if (output.port != 0 || output.node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+			if (const auto found = kernelIndexByNode.find(output.node); found != kernelIndexByNode.end())
+			{
+				return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
+					                             .index = found->second };
+			}
+
+			const auto& entry = subgraph.GetNodeEntry(output.node);
+			if (entry.outputInfos.size() != 1 || entry.outputInfos[0].dtype != DataType::Float32 ||
+			    entry.outputInfos[0].shape != shape)
+			{
+				return std::nullopt;
+			}
+			const auto* binary = std::get_if<BinaryOpNode>(&entry.node);
+			if (!binary || !VulkanNativeSupportsSameShapeBinaryF32(binary->op))
+			{
+				return std::nullopt;
+			}
+			const auto lhs = self(self, binary->lhs);
+			const auto rhs = self(self, binary->rhs);
+			if (!lhs || !rhs)
+			{
+				return std::nullopt;
+			}
+			if (plan.kernels.size() > std::numeric_limits<std::uint32_t>::max())
+			{
+				return std::nullopt;
+			}
+			const auto kernelIndex = static_cast<std::uint32_t>(plan.kernels.size());
+			visited[output.node] = true;
+			kernelIndexByNode.emplace(output.node, kernelIndex);
+			plan.kernels.push_back(VulkanP0BinaryDAGKernelPlan{ .op = binary->op, .lhs = *lhs, .rhs = *rhs });
+			return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
+				                             .index = kernelIndex };
+		};
+
+		const auto outputOperand = collect(collect, result);
+		if (!outputOperand || outputOperand->kind != VulkanP0BinaryDAGOperandKind::Intermediate ||
+		    plan.kernels.size() < 2)
+		{
+			return std::nullopt;
+		}
+		plan.outputKernelIndex = outputOperand->index;
+		for (std::size_t nodeIndex = 0; nodeIndex < subgraph.NodeCount(); ++nodeIndex)
+		{
+			const auto& entry = subgraph.GetNodeEntry(nodeIndex);
+			if (std::holds_alternative<ParamRefNode>(entry.node))
+			{
+				continue;
+			}
+			if (!visited[nodeIndex])
+			{
+				return std::nullopt;
+			}
+		}
+		return plan;
+	}
+
 	VulkanNativeSupportReport DiagnoseVulkanNativeSupport(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
@@ -6694,6 +6825,11 @@ namespace
 		{
 			return VulkanNativeSupported(
 			    std::format("same-shape f32 binary chain ({} kernels)", chain->kernels.size()));
+		}
+		if (const auto dag = MatchVulkanP0SameShapeBinaryF32DAG(graph))
+		{
+			return VulkanNativeSupported(
+			    std::format("same-shape f32 binary DAG ({} kernels)", dag->kernels.size()));
 		}
 
 		if (const auto* conv = std::get_if<Conv2DNode>(&resultEntry.node))
@@ -8692,6 +8828,33 @@ namespace
 		};
 	}
 
+	VulkanNativeArgumentSpec VulkanP0BinaryDAGArgument(VulkanP0BinaryDAGOperand operand, std::uint32_t binding,
+	                                                   std::uint64_t byteSize,
+	                                                   std::span<const std::uint32_t> workspaceByKernel)
+	{
+		if (operand.kind == VulkanP0BinaryDAGOperandKind::Intermediate)
+		{
+			if (operand.index >= workspaceByKernel.size())
+			{
+				throw std::runtime_error("Vulkan native binary DAG workspace operand index is out of bounds");
+			}
+			return VulkanNativeArgumentSpec{
+				.kind = VulkanNativeArgumentKind::WorkspaceTensor,
+				.index = workspaceByKernel[operand.index],
+				.binding = binding,
+				.byteOffset = 0,
+				.byteSize = byteSize,
+			};
+		}
+		return VulkanNativeArgumentSpec{
+			.kind = VulkanNativeArgumentKind::InputTensor,
+			.index = operand.index,
+			.binding = binding,
+			.byteOffset = 0,
+			.byteSize = byteSize,
+		};
+	}
+
 	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeBinaryF32ChainP0(const Graph& graph)
 	{
 		const auto plan = MatchVulkanP0SameShapeBinaryF32Chain(graph);
@@ -8734,6 +8897,93 @@ namespace
 			                                                 .byteOffset = 0,
 			                                                 .byteSize = byteSize }
 			                      : workspacePlanner.Argument(accumulatorWorkspace, 2, byteSize),
+			    },
+			});
+		}
+		payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::VulkanNative);
+		auto instructions = SerializeVulkanNativeInstructionPayload(payload);
+		return VulkanP0ArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+	}
+
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeBinaryF32DAGP0(const Graph& graph)
+	{
+		const auto plan = MatchVulkanP0SameShapeBinaryF32DAG(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+
+		VulkanNativeInstructionPayload payload;
+		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
+		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
+		std::vector<BinaryOp> kernelOps;
+		kernelOps.reserve(plan->kernels.size());
+		for (const auto& kernelPlan : plan->kernels)
+		{
+			payload.featureSet.AddFeature(VulkanNativeBinaryF32FeatureFlag(kernelPlan.op));
+			kernelOps.push_back(kernelPlan.op);
+		}
+		auto spirv = VulkanNativeSameShapeBinaryF32ChainSPIRV(kernelOps, plan->elementCount);
+		payload.spirv = std::move(spirv.words);
+
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		std::vector<std::size_t> lastUse(plan->kernels.size(), 0);
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
+		{
+			lastUse[kernelIndex] = kernelIndex;
+			const auto markUse = [&](VulkanP0BinaryDAGOperand operand) {
+				if (operand.kind == VulkanP0BinaryDAGOperandKind::Intermediate)
+				{
+					if (operand.index >= lastUse.size())
+					{
+						throw std::runtime_error("Vulkan native binary DAG intermediate operand index is out of bounds");
+					}
+					lastUse[operand.index] = std::max(lastUse[operand.index], kernelIndex);
+				}
+			};
+			markUse(plan->kernels[kernelIndex].lhs);
+			markUse(plan->kernels[kernelIndex].rhs);
+		}
+
+		VulkanP0WorkspacePlanner workspacePlanner;
+		std::vector<std::uint32_t> workspaceByKernel(plan->kernels.size(), 0);
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
+		{
+			if (kernelIndex == plan->outputKernelIndex)
+			{
+				continue;
+			}
+			workspaceByKernel[kernelIndex] =
+			    workspacePlanner.Allocate(byteSize, alignof(float), kernelIndex, lastUse[kernelIndex]);
+		}
+
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
+		{
+			const auto& kernelPlan = plan->kernels[kernelIndex];
+			const auto writesOutput = kernelIndex == plan->outputKernelIndex;
+			payload.kernels.push_back({
+			    .entryPoint = VulkanNativeSameShapeBinaryF32KernelName(kernelPlan.op),
+			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+			    .arguments = {
+			        VulkanP0BinaryDAGArgument(kernelPlan.lhs, 0, byteSize, workspaceByKernel),
+			        VulkanP0BinaryDAGArgument(kernelPlan.rhs, 1, byteSize, workspaceByKernel),
+			        writesOutput ? VulkanNativeArgumentSpec{ .kind = VulkanNativeArgumentKind::OutputTensor,
+			                                                 .index = 0,
+			                                                 .binding = 2,
+			                                                 .byteOffset = 0,
+			                                                 .byteSize = byteSize }
+			                     : workspacePlanner.Argument(workspaceByKernel[kernelIndex], 2, byteSize),
 			    },
 			});
 		}
@@ -11675,6 +11925,10 @@ namespace
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
 			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32ChainP0(graph))
+			{
+				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
+			}
+			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32DAGP0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
