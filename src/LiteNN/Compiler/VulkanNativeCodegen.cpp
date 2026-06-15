@@ -268,49 +268,36 @@ namespace LiteNN
 			return static_cast<std::uint32_t>(count);
 		}
 
-		std::string_view ReduceF32KernelName(ReduceOp op)
+		std::string ReduceF32KernelName(ReduceOp op)
 		{
-			switch (op)
+			using namespace std::string_literals;
+			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(op);
+			if (name)
 			{
-			case ReduceOp::Sum:
-				return "reduce_sum";
-			case ReduceOp::Mean:
-				return "reduce_mean";
-			case ReduceOp::Max:
-				return "reduce_max";
-			case ReduceOp::Min:
-				return "reduce_min";
-			default:
-				throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
+				return "Reduce"s + *name;
 			}
+			throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
 		}
 
 		std::string_view NormalizationF32KernelName(NormalizationMode mode)
 		{
-			switch (mode)
+			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(mode);
+			if (name)
 			{
-			case NormalizationMode::LayerNorm:
-				return "layer_norm";
-			case NormalizationMode::RMSNorm:
-				return "rms_norm";
-			case NormalizationMode::GroupNorm:
-				return "group_norm";
-			default:
-				throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
+				return *name;
 			}
+			throw std::runtime_error("Unsupported Vulkan native f32 normalization mode");
 		}
 
-		std::string_view Pool2DF32KernelName(PoolMode mode)
+		std::string Pool2DF32KernelName(PoolMode mode)
 		{
-			switch (mode)
+			using namespace std::string_literals;
+			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(mode);
+			if (name)
 			{
-			case PoolMode::Max:
-				return "pool2d_max";
-			case PoolMode::Average:
-				return "pool2d_average";
-			default:
-				throw std::runtime_error("Unsupported Vulkan native f32 Pool2D mode");
+				return "Pool2d"s + *name;
 			}
+			throw std::runtime_error("Unsupported Vulkan native f32 Pool2D mode");
 		}
 
 		std::string_view Conv2DF32KernelName()
@@ -340,23 +327,13 @@ namespace LiteNN
 
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
-			switch (op)
+			using namespace std::string_literals;
+			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(op);
+			if (name)
 			{
-			case BinaryOp::Add:
-				return "binary_add";
-			case BinaryOp::Subtract:
-				return "binary_subtract";
-			case BinaryOp::Multiply:
-				return "binary_multiply";
-			case BinaryOp::Divide:
-				return "binary_divide";
-			case BinaryOp::Max:
-				return "binary_max";
-			case BinaryOp::Min:
-				return "binary_min";
-			default:
-				throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
+				return "Binary"s + *name;
 			}
+			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
 		}
 
 		mlir::spirv::FuncOp EmitSameShapeBinaryF32Function(
