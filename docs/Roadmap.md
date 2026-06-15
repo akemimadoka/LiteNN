@@ -1976,6 +1976,8 @@ packaging slice to a useful production backend.
             public output tensor as the accumulator between kernels.
       - [x] Introduce a reusable Vulkan P0 workspace planner helper and validate one-slot reuse across longer
             same-shape binary chains.
+      - [x] Make the Vulkan P0 workspace planner interval-aware so future non-linear multi-kernel schedules can reuse
+            buffers only when lifetimes do not overlap.
       - [x] Expose Vulkan workspace tensor count and total bytes in `litenn_profile` console/CSV output so workspace
             planning changes are visible in performance reports.
       - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to

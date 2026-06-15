@@ -5810,31 +5810,43 @@ namespace
 	class VulkanP0WorkspacePlanner
 	{
 	public:
-		std::uint32_t AllocateReusable(std::uint64_t byteSize, std::uint64_t alignment)
+		std::uint32_t Allocate(std::uint64_t byteSize, std::uint64_t alignment, std::size_t firstKernel,
+		                       std::size_t lastKernel)
 		{
-			for (std::uint32_t i = 0; i < workspaceTensors_.size(); ++i)
+			if (firstKernel > lastKernel)
 			{
-				const auto& spec = workspaceTensors_[i];
-				if (spec.byteSize >= byteSize && spec.alignment >= alignment)
+				throw std::runtime_error("Vulkan native workspace lifetime is invalid");
+			}
+			for (std::uint32_t i = 0; i < slots_.size(); ++i)
+			{
+				auto& slot = slots_[i];
+				if (slot.spec.byteSize >= byteSize && slot.spec.alignment >= alignment &&
+				    !Overlaps(slot.firstKernel, slot.lastKernel, firstKernel, lastKernel))
 				{
+					slot.firstKernel = std::min(slot.firstKernel, firstKernel);
+					slot.lastKernel = std::max(slot.lastKernel, lastKernel);
 					return i;
 				}
 			}
-			if (workspaceTensors_.size() >= std::numeric_limits<std::uint32_t>::max())
+			if (slots_.size() >= std::numeric_limits<std::uint32_t>::max())
 			{
 				throw std::runtime_error("Vulkan native workspace tensor count overflows uint32_t");
 			}
-			const auto index = static_cast<std::uint32_t>(workspaceTensors_.size());
-			workspaceTensors_.push_back({
-			    .byteSize = byteSize,
-			    .alignment = alignment,
+			const auto index = static_cast<std::uint32_t>(slots_.size());
+			slots_.push_back({
+			    .spec = {
+			        .byteSize = byteSize,
+			        .alignment = alignment,
+			    },
+			    .firstKernel = firstKernel,
+			    .lastKernel = lastKernel,
 			});
 			return index;
 		}
 
 		VulkanNativeArgumentSpec Argument(std::uint32_t index, std::uint32_t binding, std::uint64_t byteSize) const
 		{
-			if (index >= workspaceTensors_.size())
+			if (index >= slots_.size())
 			{
 				throw std::runtime_error("Vulkan native workspace planner argument index is out of bounds");
 			}
@@ -5849,11 +5861,29 @@ namespace
 
 		std::vector<VulkanNativeWorkspaceSpec> TakeWorkspaceTensors()
 		{
-			return std::move(workspaceTensors_);
+			std::vector<VulkanNativeWorkspaceSpec> specs;
+			specs.reserve(slots_.size());
+			for (const auto& slot : slots_)
+			{
+				specs.push_back(slot.spec);
+			}
+			return specs;
 		}
 
 	private:
-		std::vector<VulkanNativeWorkspaceSpec> workspaceTensors_;
+		struct Slot
+		{
+			VulkanNativeWorkspaceSpec spec;
+			std::size_t firstKernel{};
+			std::size_t lastKernel{};
+		};
+
+		static bool Overlaps(std::size_t lhsFirst, std::size_t lhsLast, std::size_t rhsFirst, std::size_t rhsLast)
+		{
+			return lhsFirst <= rhsLast && rhsFirst <= lhsLast;
+		}
+
+		std::vector<Slot> slots_;
 	};
 
 	struct VulkanP0UnaryPlan
@@ -8620,7 +8650,8 @@ namespace
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		VulkanP0WorkspacePlanner workspacePlanner;
-		const auto accumulatorWorkspace = workspacePlanner.AllocateReusable(byteSize, alignof(float));
+		const auto accumulatorWorkspace = workspacePlanner.Allocate(byteSize, alignof(float), 0,
+		                                                            plan->kernels.size() - 1);
 		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
 			const auto& kernelPlan = plan->kernels[kernelIndex];
