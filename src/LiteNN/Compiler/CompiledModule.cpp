@@ -10871,6 +10871,103 @@ std::vector<Tensor<Vulkan>> CompiledModule<Vulkan>::AllocateOutputTensors() cons
 	return outputs;
 }
 
+CompiledModuleVulkanRunWorkspace CompiledModule<Vulkan>::CreateRunWorkspace() const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+
+	CompiledModuleVulkanRunWorkspace workspace;
+	workspace.outputs_ = AllocateOutputTensors();
+	if (impl_->backend == CompiledModuleBackend::CPUNative)
+	{
+		workspace.cpuInputs_.reserve(impl_->inputSpecs.size());
+		for (const auto& spec : impl_->inputSpecs)
+		{
+			workspace.cpuInputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() },
+			                                  spec.type.dtype, CPU{});
+		}
+		workspace.cpuOutputs_.reserve(impl_->outputSpecs.size());
+		for (const auto& spec : impl_->outputSpecs)
+		{
+			workspace.cpuOutputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() },
+			                                   spec.type.dtype, CPU{});
+		}
+	}
+	return workspace;
+}
+
+std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
+    std::span<const Tensor<Vulkan>> inputs, CompiledModuleVulkanRunWorkspace& workspace) const
+{
+	return RunTensors(inputs, workspace, CompiledModuleVulkanRunOptions{});
+}
+
+std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
+    std::span<const Tensor<Vulkan>> inputs, CompiledModuleVulkanRunWorkspace& workspace,
+    CompiledModuleVulkanRunOptions options) const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+	if (inputs.size() != impl_->inputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule input count mismatch: expected {}, got {}",
+		                                     impl_->inputSpecs.size(), inputs.size()));
+	}
+	if (workspace.outputs_.size() != impl_->outputSpecs.size())
+	{
+		throw std::runtime_error(std::format("CompiledModule Vulkan workspace output count mismatch: expected {}, got {}",
+		                                     impl_->outputSpecs.size(), workspace.outputs_.size()));
+	}
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
+	}
+	for (std::size_t i = 0; i < workspace.outputs_.size(); ++i)
+	{
+		ValidateOutputTensorAgainstSpec(workspace.outputs_[i], impl_->outputSpecs[i], i);
+	}
+
+	if (impl_->backend == CompiledModuleBackend::VulkanNative)
+	{
+		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
+		                       workspace.outputs_, options);
+		return workspace.Outputs();
+	}
+	if (!options.synchronize)
+	{
+		throw std::runtime_error("CompiledModule<Vulkan> CPU bridge does not support asynchronous execution");
+	}
+	if (workspace.cpuInputs_.size() != impl_->inputSpecs.size() ||
+	    workspace.cpuOutputs_.size() != impl_->outputSpecs.size())
+	{
+		throw std::runtime_error("CompiledModule Vulkan workspace is not initialized for CPU bridge execution");
+	}
+
+	for (std::size_t i = 0; i < inputs.size(); ++i)
+	{
+		ValidateOutputTensorAgainstSpec(workspace.cpuInputs_[i], impl_->inputSpecs[i], i);
+		auto inputDevice = inputs[i].CurDevice();
+		DeviceTraits<Vulkan>::CopyToCPU(inputDevice, inputs[i].DType(), inputs[i].UnsafeRawData(),
+		                                inputs[i].NumElements(), workspace.cpuInputs_[i].DType(),
+		                                workspace.cpuInputs_[i].UnsafeRawData());
+	}
+
+	impl_->cpuModule.RunTensorsInto(workspace.cpuInputs_, workspace.cpuOutputs_);
+
+	for (std::size_t i = 0; i < workspace.outputs_.size(); ++i)
+	{
+		DeviceTraits<Vulkan>::CopyFromCPU(workspace.outputs_[i].CurDevice(), workspace.outputs_[i].DType(),
+		                                  workspace.outputs_[i].UnsafeRawData(), workspace.cpuOutputs_[i].DType(),
+		                                  workspace.cpuOutputs_[i].UnsafeRawData(),
+		                                  workspace.cpuOutputs_[i].NumElements());
+	}
+	return workspace.Outputs();
+}
+
 void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inputs,
                                             std::span<Tensor<Vulkan>> outputs) const
 {

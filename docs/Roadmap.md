@@ -1968,7 +1968,10 @@ packaging slice to a useful production backend.
             boundaries.
       - [x] Add `CompiledModule<Vulkan>::AllocateOutputTensors()` so repeated `RunTensorsInto` callers, benchmarks, and
             profiling tools reuse output lifetimes while preserving the module's selected Vulkan residency policy.
-      - [ ] Add lifetime reuse/workspace pooling for compiled-module intermediate/output allocation.
+      - [x] Add `CompiledModuleVulkanRunWorkspace` so repeated Vulkan runs can reuse module-policy output tensors and
+            CPU-bridge host scratch tensors without changing the existing `RunTensorsInto` ownership model.
+      - [ ] Add native `WorkspaceTensor` payload arguments and schedule-level lifetime planning for true intermediate
+            buffer pooling across multi-kernel Vulkan graphs.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now

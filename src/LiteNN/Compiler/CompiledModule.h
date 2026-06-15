@@ -515,6 +515,27 @@ namespace LiteNN
 		CompiledModuleVulkanRunOptions options;
 	};
 
+	class CompiledModuleVulkanRunWorkspace
+	{
+	public:
+		std::span<Tensor<Vulkan>> Outputs()
+		{
+			return outputs_;
+		}
+
+		std::span<const Tensor<Vulkan>> Outputs() const
+		{
+			return outputs_;
+		}
+
+	private:
+		std::vector<Tensor<Vulkan>> outputs_;
+		std::vector<Tensor<CPU>> cpuInputs_;
+		std::vector<Tensor<CPU>> cpuOutputs_;
+
+		friend class CompiledModule<Vulkan>;
+	};
+
 	template <>
 	class CompiledModule<Vulkan>
 	{
@@ -535,6 +556,12 @@ namespace LiteNN
 		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
 		                                       CompiledModuleVulkanRunOptions options) const;
 		std::vector<Tensor<Vulkan>> AllocateOutputTensors() const;
+		CompiledModuleVulkanRunWorkspace CreateRunWorkspace() const;
+		std::span<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
+		                                     CompiledModuleVulkanRunWorkspace& workspace) const;
+		std::span<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
+		                                     CompiledModuleVulkanRunWorkspace& workspace,
+		                                     CompiledModuleVulkanRunOptions options) const;
 		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs) const;
 		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
 		                    CompiledModuleVulkanRunOptions options) const;
