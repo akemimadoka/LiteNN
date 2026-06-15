@@ -2560,6 +2560,39 @@ TEST(CompiledModuleVulkanTest, RunsMatMulBiasExternalWeightsArithmetic)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, RunsSeparatedExternalWeightsWithDeviceLocalTensors)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleMatMulBiasVariableGraph(true);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	ASSERT_GT(artifact.Weights().size(), 0u);
+
+	Vulkan device;
+	device.bufferResidency = VulkanBufferResidency::DeviceLocal;
+	auto module = artifact.SeparateRodata().Load(device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].CurDevice().bufferResidency, VulkanBufferResidency::DeviceLocal);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 39.0f, 0.0f, 53.0f, 0.0f, 84.0f, 0.0f, 116.0f, 0.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, RunsSimpleMatMulBiasReLUArithmetic)
 {
 	if (!IsVulkanDeviceAvailable())
