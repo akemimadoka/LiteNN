@@ -1057,6 +1057,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForBinaryChain)
 	const std::array ops{ BinaryOp::Add, BinaryOp::Multiply };
 	const auto generated = VulkanNativeSameShapeBinaryF32ChainSPIRV(ops, kElementCount);
 	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.workspaceTensors.size(), 1u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, kElementCount * sizeof(float));
 	ASSERT_EQ(payload.kernels.size(), 2u);
 	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Add));
 	EXPECT_EQ(payload.kernels[1].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Multiply));
@@ -1064,17 +1066,19 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForBinaryChain)
 	{
 		EXPECT_EQ(kernel.groups.x, 1u);
 		ASSERT_EQ(kernel.arguments.size(), 3u);
-		EXPECT_EQ(kernel.arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 		EXPECT_EQ(kernel.arguments[2].index, 0u);
 	}
 	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[0].index, 0u);
 	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::InputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[1].index, 1u);
-	EXPECT_EQ(payload.kernels[1].arguments[0].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[1].arguments[0].index, 0u);
 	EXPECT_EQ(payload.kernels[1].arguments[1].kind, VulkanNativeArgumentKind::InputTensor);
 	EXPECT_EQ(payload.kernels[1].arguments[1].index, 2u);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].index, 0u);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)

@@ -8531,7 +8531,7 @@ namespace
 	{
 		return VulkanNativeArgumentSpec{
 			.kind =
-			    operand.accumulator ? VulkanNativeArgumentKind::OutputTensor : VulkanNativeArgumentKind::InputTensor,
+			    operand.accumulator ? VulkanNativeArgumentKind::WorkspaceTensor : VulkanNativeArgumentKind::InputTensor,
 			.index = operand.accumulator ? 0u : operand.inputIndex,
 			.binding = binding,
 			.byteOffset = 0,
@@ -8561,8 +8561,14 @@ namespace
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		for (const auto& kernelPlan : plan->kernels)
+		payload.workspaceTensors.push_back({
+		    .byteSize = byteSize,
+		    .alignment = alignof(float),
+		});
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
+			const auto& kernelPlan = plan->kernels[kernelIndex];
+			const auto isFinalKernel = kernelIndex + 1 == plan->kernels.size();
 			payload.kernels.push_back({
 			    .entryPoint = VulkanNativeSameShapeBinaryF32KernelName(kernelPlan.op),
 			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
@@ -8570,7 +8576,8 @@ namespace
 			    .arguments = {
 			        VulkanP0BinaryChainArgument(kernelPlan.lhs, 0, byteSize),
 			        VulkanP0BinaryChainArgument(kernelPlan.rhs, 1, byteSize),
-			        { .kind = VulkanNativeArgumentKind::OutputTensor,
+			        { .kind = isFinalKernel ? VulkanNativeArgumentKind::OutputTensor
+			                                : VulkanNativeArgumentKind::WorkspaceTensor,
 			          .index = 0,
 			          .binding = 2,
 			          .byteOffset = 0,

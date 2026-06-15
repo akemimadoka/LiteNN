@@ -1972,8 +1972,10 @@ packaging slice to a useful production backend.
             CPU-bridge host scratch tensors without changing the existing `RunTensorsInto` ownership model.
       - [x] Add native `WorkspaceTensor` payload/runtime ABI: payload v3 records reusable workspace buffer specs,
             kernels can bind workspace descriptors, and `CompiledModule<Vulkan>` allocates the buffers at load time.
-      - [ ] Add schedule-level lifetime planning that assigns multi-kernel intermediate values to `WorkspaceTensor`
-            buffers and emits kernels that read/write those planned slots.
+      - [x] Route the existing same-shape binary-chain schedule through `WorkspaceTensor` buffers instead of using the
+            public output tensor as the accumulator between kernels.
+      - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to
+            `WorkspaceTensor` buffers and emits kernels that read/write those planned slots.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now
