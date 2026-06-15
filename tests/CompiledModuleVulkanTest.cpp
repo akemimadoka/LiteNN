@@ -1911,6 +1911,38 @@ TEST(CompiledModuleVulkanTest, RunsSimpleBinaryArithmeticWithDeviceLocalTensors)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, AllocatesDeviceLocalOutputsFromModulePolicy)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	device.bufferResidency = VulkanBufferResidency::DeviceLocal;
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.AllocateOutputTensors();
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].CurDevice().bufferResidency, VulkanBufferResidency::DeviceLocal);
+
+	module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 11.0f, 22.0f, 33.0f, 44.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, RunsBinaryChainArithmetic)
 {
 	if (!IsVulkanDeviceAvailable())

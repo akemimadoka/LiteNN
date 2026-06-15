@@ -10850,13 +10850,24 @@ std::vector<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const T
 		ValidateTensorAgainstSpec(inputs[i], impl_->inputSpecs[i], i);
 	}
 
+	auto outputs = AllocateOutputTensors();
+	RunTensorsInto(inputs, outputs, options);
+	return outputs;
+}
+
+std::vector<Tensor<Vulkan>> CompiledModule<Vulkan>::AllocateOutputTensors() const
+{
+	if (!impl_)
+	{
+		throw std::runtime_error("CompiledModule is empty");
+	}
+
 	std::vector<Tensor<Vulkan>> outputs;
 	outputs.reserve(impl_->outputSpecs.size());
 	for (const auto& spec : impl_->outputSpecs)
 	{
 		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, impl_->device);
 	}
-	RunTensorsInto(inputs, outputs, options);
 	return outputs;
 }
 

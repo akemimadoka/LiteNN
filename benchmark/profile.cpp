@@ -656,13 +656,7 @@ static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 
 static std::vector<Tensor<Vulkan>> AllocateVulkanProfileOutputs(const CompiledModule<Vulkan>& module)
 {
-	std::vector<Tensor<Vulkan>> outputs;
-	outputs.reserve(module.OutputSpecs().size());
-	for (const auto& spec : module.OutputSpecs())
-	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, Vulkan{});
-	}
-	return outputs;
+	return module.AllocateOutputTensors();
 }
 
 static double MeasureVulkanOutputDownloadMs(std::span<const Tensor<Vulkan>> outputs)

@@ -1402,13 +1402,7 @@ namespace
 
 	std::vector<Tensor<Vulkan>> AllocateVulkanOutputs(const CompiledModule<Vulkan>& module)
 	{
-		std::vector<Tensor<Vulkan>> outputs;
-		outputs.reserve(module.OutputSpecs().size());
-		for (const auto& spec : module.OutputSpecs())
-		{
-			outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, Vulkan{});
-		}
-		return outputs;
+		return module.AllocateOutputTensors();
 	}
 
 	void BMVulkanNativeElementwiseAddRunTensorsInto(benchmark::State& state, std::size_t elementCount)

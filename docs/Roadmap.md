@@ -1966,6 +1966,8 @@ packaging slice to a useful production backend.
       - [x] Route `CompiledModule<Vulkan>::RunTensors` output tensors and separated external tensors through the selected
             Vulkan device residency policy; device-local module inputs/outputs now run through staging at host
             boundaries.
+      - [x] Add `CompiledModule<Vulkan>::AllocateOutputTensors()` so repeated `RunTensorsInto` callers, benchmarks, and
+            profiling tools reuse output lifetimes while preserving the module's selected Vulkan residency policy.
       - [ ] Add lifetime reuse/workspace pooling for compiled-module intermediate/output allocation.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and

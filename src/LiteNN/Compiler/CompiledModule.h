@@ -534,6 +534,7 @@ namespace LiteNN
 		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs) const;
 		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
 		                                       CompiledModuleVulkanRunOptions options) const;
+		std::vector<Tensor<Vulkan>> AllocateOutputTensors() const;
 		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs) const;
 		void RunTensorsInto(std::span<const Tensor<Vulkan>> inputs, std::span<Tensor<Vulkan>> outputs,
 		                    CompiledModuleVulkanRunOptions options) const;
