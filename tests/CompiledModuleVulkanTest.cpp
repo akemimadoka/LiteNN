@@ -1131,6 +1131,33 @@ TEST(CompiledModuleVulkanTest, ReusesOneWorkspaceForLongBinaryChain)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, LowersFusedElementWiseChainToVulkanWorkspaceChain)
+{
+	auto graph = BuildThreeStageBinaryChainGraph();
+	FusionPass{}.Run(graph);
+	const auto& forward = graph.GetSubgraph(graph.Forward());
+	ASSERT_EQ(forward.Results().size(), 1u);
+	const auto& fusedEntry = forward.GetNodeEntry(forward.Results()[0].node);
+	const auto* fused = std::get_if<FusedOpNode>(&fusedEntry.node);
+	ASSERT_NE(fused, nullptr);
+	EXPECT_EQ(fused->pattern, FusionPattern::ElementWiseChain);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_TRUE(report.supported) << report.reason;
+
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.workspaceTensors.size(), 1u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, kElementCount * sizeof(float));
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].index, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].index, 1u);
+	EXPECT_EQ(payload.kernels[1].arguments[1].index, 2u);
+	EXPECT_EQ(payload.kernels[2].arguments[1].index, 3u);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
 {
 	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Sqrt);

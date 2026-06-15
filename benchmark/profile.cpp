@@ -668,7 +668,6 @@ struct VulkanProfileCase
 	Graph (*build)(std::size_t, std::mt19937&);
 	std::size_t batch{};
 	VulkanProfileInputs (*makeInputs)(std::size_t);
-	bool optimize{ true };
 };
 
 static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
@@ -800,10 +799,7 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const VulkanProfileCase& prof
 	{
 		std::mt19937 rng(0);
 		Graph graph = profileCase.build(result.batch, rng);
-		if (profileCase.optimize)
-		{
-			Optimize(graph);
-		}
+		Optimize(graph);
 
 		CompiledModuleArtifact artifact;
 		{
@@ -871,8 +867,7 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 	    VulkanProfileCase{ .name = profileCase.name,
 	                       .build = profileCase.build,
 	                       .batch = profileCase.outShape[0],
-	                       .makeInputs = MakeVulkanProfileInputs,
-	                       .optimize = true });
+	                       .makeInputs = MakeVulkanProfileInputs });
 }
 
 static std::string CsvEscape(std::string_view value)
@@ -1097,23 +1092,19 @@ int main(int argc, char** argv)
 			{ .name = "binary_chain_b1",
 			  .build = BuildBinaryChainProfileGraph,
 			  .batch = 1,
-			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
-			  .optimize = false },
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs },
 			{ .name = "binary_chain_b32",
 			  .build = BuildBinaryChainProfileGraph,
 			  .batch = 32,
-			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
-			  .optimize = false },
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs },
 			{ .name = "binary_chain_b128",
 			  .build = BuildBinaryChainProfileGraph,
 			  .batch = 128,
-			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
-			  .optimize = false },
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs },
 			{ .name = "binary_chain_b512",
 			  .build = BuildBinaryChainProfileGraph,
 			  .batch = 512,
-			  .makeInputs = MakeVulkanBinaryChainProfileInputs,
-			  .optimize = false },
+			  .makeInputs = MakeVulkanBinaryChainProfileInputs },
 		};
 		std::cout << std::format(
 		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",

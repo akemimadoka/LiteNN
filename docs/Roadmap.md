@@ -1981,8 +1981,9 @@ packaging slice to a useful production backend.
       - [x] Expose Vulkan workspace tensor count and total bytes in `litenn_profile` console/CSV output so workspace
             planning changes are visible in performance reports.
       - [x] Add Vulkan-only binary-chain profile rows that exercise non-zero `WorkspaceTensor` allocations and persist
-            those workspace metrics to `vulkan_profile.csv`; these rows intentionally keep the binary chain unfused
-            until Vulkan-native `FusedOpNode(ElementWiseChain)` lowering is added.
+            those workspace metrics to `vulkan_profile.csv`.
+      - [x] Lower `FusedOpNode(ElementWiseChain)` bodies that still form same-shape f32 binary chains through the
+            existing Vulkan workspace-chain planner, so normal graph optimization no longer blocks this native path.
       - [ ] Add general schedule-level lifetime planning that assigns arbitrary multi-kernel intermediate values to
             `WorkspaceTensor` buffers and emits kernels that read/write those planned slots.
 - [ ] Implement production operator families in priority order:

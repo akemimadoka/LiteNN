@@ -6408,19 +6408,13 @@ namespace
 		return VulkanNativeSupported("");
 	}
 
-	std::optional<VulkanP0BinaryChainPlan> MatchVulkanP0SameShapeBinaryF32Chain(const Graph& graph)
+	template <typename ResolveParamOperand>
+	std::optional<VulkanP0BinaryChainPlan>
+	MatchVulkanP0SameShapeBinaryF32ChainInSubgraph(const Subgraph& subgraph, NodeOutput result,
+	                                               std::span<const std::size_t> chainShape,
+	                                               std::uint32_t elementCount,
+	                                               ResolveParamOperand&& resolveParamOperand)
 	{
-		if (!IsVulkanP0SingleForwardGraph(graph))
-		{
-			return std::nullopt;
-		}
-
-		const auto& subgraph = graph.GetSubgraph(graph.Forward());
-		if (subgraph.Results().size() != 1)
-		{
-			return std::nullopt;
-		}
-		const auto result = subgraph.Results()[0];
 		if (result.port != 0 || result.node >= subgraph.NodeCount())
 		{
 			return std::nullopt;
@@ -6430,32 +6424,17 @@ namespace
 		{
 			return std::nullopt;
 		}
-		const auto& chainShape = resultEntry.outputInfos[0].shape;
-		const auto elementCount = VulkanP0ShapeNumElementsU32(chainShape);
-		if (!elementCount)
+		if (!std::ranges::equal(resultEntry.outputInfos[0].shape, chainShape))
 		{
 			return std::nullopt;
 		}
 
 		std::vector<bool> visited(subgraph.NodeCount(), false);
-		VulkanP0BinaryChainPlan plan{ .elementCount = *elementCount };
+		VulkanP0BinaryChainPlan plan{ .elementCount = elementCount };
 
 		const auto isBinaryNodeOutput = [&](NodeOutput output) {
 			return output.port == 0 && output.node < subgraph.NodeCount() &&
 			       std::holds_alternative<BinaryOpNode>(subgraph.GetNodeEntry(output.node).node);
-		};
-		const auto tryParamOperand = [&](NodeOutput output) -> std::optional<VulkanP0BinaryChainOperand> {
-			const auto inputIndex = GetVulkanP0ParamIndex(subgraph, output);
-			if (!inputIndex)
-			{
-				return std::nullopt;
-			}
-			const auto& param = subgraph.Params()[*inputIndex];
-			if (param.dtype != DataType::Float32 || param.shape != chainShape)
-			{
-				return std::nullopt;
-			}
-			return VulkanP0BinaryChainOperand{ .inputIndex = *inputIndex };
 		};
 
 		const auto collect = [&](auto&& self, NodeOutput output) -> bool {
@@ -6465,7 +6444,7 @@ namespace
 			}
 			const auto& entry = subgraph.GetNodeEntry(output.node);
 			if (entry.outputInfos.size() != 1 || entry.outputInfos[0].dtype != DataType::Float32 ||
-			    entry.outputInfos[0].shape != chainShape)
+			    !std::ranges::equal(entry.outputInfos[0].shape, chainShape))
 			{
 				return false;
 			}
@@ -6489,7 +6468,7 @@ namespace
 				{
 					return false;
 				}
-				const auto rhs = tryParamOperand(binary->rhs);
+				const auto rhs = resolveParamOperand(binary->rhs);
 				if (!rhs)
 				{
 					return false;
@@ -6503,7 +6482,7 @@ namespace
 				{
 					return false;
 				}
-				const auto lhs = tryParamOperand(binary->lhs);
+				const auto lhs = resolveParamOperand(binary->lhs);
 				if (!lhs)
 				{
 					return false;
@@ -6513,8 +6492,8 @@ namespace
 			}
 			else
 			{
-				const auto lhs = tryParamOperand(binary->lhs);
-				const auto rhs = tryParamOperand(binary->rhs);
+				const auto lhs = resolveParamOperand(binary->lhs);
+				const auto rhs = resolveParamOperand(binary->rhs);
 				if (!lhs || !rhs)
 				{
 					return false;
@@ -6545,6 +6524,92 @@ namespace
 			}
 		}
 		return plan;
+	}
+
+	std::optional<VulkanP0BinaryChainPlan> MatchVulkanP0SameShapeBinaryF32Chain(const Graph& graph)
+	{
+		if (!IsVulkanP0SingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1 || resultEntry.outputInfos[0].dtype != DataType::Float32)
+		{
+			return std::nullopt;
+		}
+		const auto& chainShape = resultEntry.outputInfos[0].shape;
+		const auto elementCount = VulkanP0ShapeNumElementsU32(chainShape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		if (const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
+		    fused && fused->pattern == FusionPattern::ElementWiseChain)
+		{
+			if (fused->body >= graph.SubgraphCount())
+			{
+				return std::nullopt;
+			}
+			const auto& body = graph.GetSubgraph(fused->body);
+			if (body.Results().size() != 1 || body.Params().size() != fused->args.size())
+			{
+				return std::nullopt;
+			}
+
+			const auto resolveFusedBodyParam = [&](NodeOutput output) -> std::optional<VulkanP0BinaryChainOperand> {
+				const auto bodyParamIndex = GetVulkanP0ParamIndex(body, output);
+				if (!bodyParamIndex || *bodyParamIndex >= body.Params().size() || *bodyParamIndex >= fused->args.size())
+				{
+					return std::nullopt;
+				}
+				const auto& bodyParam = body.Params()[*bodyParamIndex];
+				if (bodyParam.dtype != DataType::Float32 || !std::ranges::equal(bodyParam.shape, chainShape))
+				{
+					return std::nullopt;
+				}
+				const auto parentInputIndex = GetVulkanP0ParamIndex(subgraph, fused->args[*bodyParamIndex]);
+				if (!parentInputIndex)
+				{
+					return std::nullopt;
+				}
+				const auto& parentParam = subgraph.Params()[*parentInputIndex];
+				if (parentParam.dtype != DataType::Float32 || !std::ranges::equal(parentParam.shape, chainShape))
+				{
+					return std::nullopt;
+				}
+				return VulkanP0BinaryChainOperand{ .inputIndex = *parentInputIndex };
+			};
+			return MatchVulkanP0SameShapeBinaryF32ChainInSubgraph(body, body.Results()[0], chainShape, *elementCount,
+			                                                      resolveFusedBodyParam);
+		}
+
+		const auto resolveParentParam = [&](NodeOutput output) -> std::optional<VulkanP0BinaryChainOperand> {
+			const auto inputIndex = GetVulkanP0ParamIndex(subgraph, output);
+			if (!inputIndex)
+			{
+				return std::nullopt;
+			}
+			const auto& param = subgraph.Params()[*inputIndex];
+			if (param.dtype != DataType::Float32 || !std::ranges::equal(param.shape, chainShape))
+			{
+				return std::nullopt;
+			}
+			return VulkanP0BinaryChainOperand{ .inputIndex = *inputIndex };
+		};
+		return MatchVulkanP0SameShapeBinaryF32ChainInSubgraph(subgraph, result, chainShape, *elementCount,
+		                                                      resolveParentParam);
 	}
 
 	VulkanNativeSupportReport DiagnoseVulkanNativeSupport(const Graph& graph)
