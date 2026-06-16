@@ -1989,6 +1989,8 @@ packaging slice to a useful production backend.
             diamond graph shape.
       - [x] Add `litenn_profile` Vulkan binary-DAG rows so the overlapping-lifetime workspace plan is visible as
             `WS=2` / non-zero `WSBytes` in console and CSV output.
+      - [x] Register `litenn_bench` Vulkan binary-chain and binary-DAG rows so workspace-backed native schedules are
+            directly visible in the normal backend benchmark matrix.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:

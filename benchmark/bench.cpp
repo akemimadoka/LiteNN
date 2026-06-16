@@ -814,6 +814,49 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanBinaryChainGraph(std::size_t elementCount)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto a = sg.AddParam(DataType::Float32, { elementCount });
+		const auto b = sg.AddParam(DataType::Float32, { elementCount });
+		const auto c = sg.AddParam(DataType::Float32, { elementCount });
+		const auto d = sg.AddParam(DataType::Float32, { elementCount });
+		const auto first = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } },
+		                              { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { c, 0 } },
+		                               { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { second, 0 }, { d, 0 } },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "a", "b", "c", "d" });
+		graph.SetOutputNames({ "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
+	Graph BuildVulkanBinaryDAGGraph(std::size_t elementCount)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto rhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto tail = sg.AddParam(DataType::Float32, { elementCount });
+		const auto first = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                              { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto second = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { tail, 0 } },
+		                               { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { first, 0 }, { second, 0 } },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "lhs", "rhs", "tail" });
+		graph.SetOutputNames({ "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	Graph BuildVulkanMatMulGraph(std::size_t batch, std::size_t width)
 	{
 		Graph graph;
@@ -1308,6 +1351,27 @@ namespace
 		return inputs;
 	}
 
+	std::vector<Tensor<Vulkan>> MakeVulkanSameShapeInputs(std::span<const std::vector<float>> inputData)
+	{
+		if (inputData.empty())
+		{
+			throw std::invalid_argument("Vulkan same-shape benchmark requires at least one input");
+		}
+		const auto elementCount = inputData.front().size();
+		std::vector<Tensor<Vulkan>> inputs;
+		inputs.reserve(inputData.size());
+		for (const auto& data : inputData)
+		{
+			if (data.size() != elementCount)
+			{
+				throw std::invalid_argument("Vulkan same-shape benchmark inputs must have identical element counts");
+			}
+			const auto cpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { elementCount });
+			inputs.push_back(cpu.CopyToDevice(Vulkan{}));
+		}
+		return inputs;
+	}
+
 	std::vector<Tensor<Vulkan>> MakeVulkanMatMulInputs(const std::vector<float>& lhsData,
 	                                                   const std::vector<float>& rhsData, std::size_t batch,
 	                                                   std::size_t width)
@@ -1419,6 +1483,79 @@ namespace
 		const auto lhsData = MakeElementwiseInputData(elementCount, 0);
 		const auto rhsData = MakeElementwiseInputData(elementCount, 1);
 		auto inputs = MakeVulkanElementwiseInputs(lhsData, rhsData);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeBinaryChainRunTensorsInto(benchmark::State& state, std::size_t elementCount)
+	{
+		auto graph = BuildVulkanBinaryChainGraph(elementCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for binary chain benchmark");
+			return;
+		}
+
+		std::array inputData{
+			MakeElementwiseInputData(elementCount, 25u),
+			MakeElementwiseInputData(elementCount, 26u),
+			MakeElementwiseInputData(elementCount, 27u),
+			MakeElementwiseInputData(elementCount, 28u),
+		};
+		auto inputs = MakeVulkanSameShapeInputs(std::span<const std::vector<float>>(inputData));
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeBinaryDAGRunTensorsInto(benchmark::State& state, std::size_t elementCount)
+	{
+		auto graph = BuildVulkanBinaryDAGGraph(elementCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for binary DAG benchmark");
+			return;
+		}
+
+		std::array inputData{
+			MakeElementwiseInputData(elementCount, 29u),
+			MakeElementwiseInputData(elementCount, 30u),
+			MakeElementwiseInputData(elementCount, 31u),
+		};
+		auto inputs = MakeVulkanSameShapeInputs(std::span<const std::vector<float>>(inputData));
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -2284,6 +2421,16 @@ namespace
 				    std::format("VulkanNativeElementwiseAddRunInto/F32/elements:{}", elementCount),
 				    [=](benchmark::State& state) { BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount); });
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* binaryChainBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeBinaryChainRunInto/F32/elements:{}", elementCount),
+				    [=](benchmark::State& state) { BMVulkanNativeBinaryChainRunTensorsInto(state, elementCount); });
+				binaryChainBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* binaryDAGBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeBinaryDAGRunInto/F32/elements:{}", elementCount),
+				    [=](benchmark::State& state) { BMVulkanNativeBinaryDAGRunTensorsInto(state, elementCount); });
+				binaryDAGBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				for (const auto dstType : vulkanNativeCastDTypes)
 				{
