@@ -117,6 +117,28 @@ static Graph BuildBinaryChainProfileGraph(std::size_t batch, std::mt19937&)
 	return graph;
 }
 
+static Graph BuildBinaryDAGProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto lhs = sg.AddParam(DataType::Float32, shape);
+	const auto rhs = sg.AddParam(DataType::Float32, shape);
+	const auto tail = sg.AddParam(DataType::Float32, shape);
+	const auto first =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto second =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { tail, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { first, 0 }, { second, 0 } },
+	                            { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "lhs", "rhs", "tail" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
 static void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
@@ -714,6 +736,33 @@ static VulkanProfileInputs MakeVulkanBinaryChainProfileInputs(std::size_t batch)
 	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
 }
 
+static VulkanProfileInputs MakeVulkanBinaryDAGProfileInputs(std::size_t batch)
+{
+	std::mt19937 rng(0);
+	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+	std::vector<Tensor<CPU>> cpuInputs;
+	cpuInputs.reserve(3);
+	for (std::size_t inputIndex = 0; inputIndex < 3; ++inputIndex)
+	{
+		std::vector<float> data(batch * 784);
+		for (auto& value : data)
+		{
+			value = dist(rng);
+		}
+		cpuInputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
+	}
+
+	std::vector<Tensor<Vulkan>> inputs;
+	inputs.reserve(cpuInputs.size());
+	const auto uploadMs = TimedOnceMs([&] {
+		for (const auto& input : cpuInputs)
+		{
+			inputs.emplace_back(input.CopyToDevice(Vulkan{}));
+		}
+	});
+	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
+}
+
 static std::vector<Tensor<Vulkan>> AllocateVulkanProfileOutputs(const CompiledModule<Vulkan>& module)
 {
 	return module.AllocateOutputTensors();
@@ -1105,6 +1154,22 @@ int main(int argc, char** argv)
 			  .build = BuildBinaryChainProfileGraph,
 			  .batch = 512,
 			  .makeInputs = MakeVulkanBinaryChainProfileInputs },
+			{ .name = "binary_dag_b1",
+			  .build = BuildBinaryDAGProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
+			{ .name = "binary_dag_b32",
+			  .build = BuildBinaryDAGProfileGraph,
+			  .batch = 32,
+			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
+			{ .name = "binary_dag_b128",
+			  .build = BuildBinaryDAGProfileGraph,
+			  .batch = 128,
+			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
+			{ .name = "binary_dag_b512",
+			  .build = BuildBinaryDAGProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
 		};
 		std::cout << std::format(
 		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",

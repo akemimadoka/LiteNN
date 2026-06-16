@@ -1987,6 +1987,8 @@ packaging slice to a useful production backend.
       - [x] Add the first schedule-level lifetime planner slice for same-shape f32 binary DAGs: independent
             intermediate values now receive separate `WorkspaceTensor` slots when lifetimes overlap, covering the
             diamond graph shape.
+      - [x] Add `litenn_profile` Vulkan binary-DAG rows so the overlapping-lifetime workspace plan is visible as
+            `WS=2` / non-zero `WSBytes` in console and CSV output.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:

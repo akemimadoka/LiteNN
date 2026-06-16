@@ -6698,6 +6698,97 @@ namespace
 			{
 				return std::nullopt;
 			}
+			if (const auto* fused = std::get_if<FusedOpNode>(&entry.node);
+			    fused && fused->pattern == FusionPattern::ElementWiseChain)
+			{
+				if (fused->body >= graph.SubgraphCount())
+				{
+					return std::nullopt;
+				}
+				const auto& body = graph.GetSubgraph(fused->body);
+				if (body.Results().size() != 1 || body.Params().size() != fused->args.size())
+				{
+					return std::nullopt;
+				}
+
+				std::vector<bool> bodyVisited(body.NodeCount(), false);
+				std::unordered_map<NodeId, std::uint32_t> bodyKernelIndexByNode;
+				const auto collectBody = [&](auto&& bodySelf,
+				                             NodeOutput bodyOutput) -> std::optional<VulkanP0BinaryDAGOperand> {
+					const auto bodyParamIndex = GetVulkanP0ParamIndex(body, bodyOutput);
+					if (bodyParamIndex)
+					{
+						if (*bodyParamIndex >= body.Params().size() || *bodyParamIndex >= fused->args.size())
+						{
+							return std::nullopt;
+						}
+						const auto& bodyParam = body.Params()[*bodyParamIndex];
+						if (bodyParam.dtype != DataType::Float32 || bodyParam.shape != shape)
+						{
+							return std::nullopt;
+						}
+						return self(self, fused->args[*bodyParamIndex]);
+					}
+					if (bodyOutput.port != 0 || bodyOutput.node >= body.NodeCount())
+					{
+						return std::nullopt;
+					}
+					if (const auto found = bodyKernelIndexByNode.find(bodyOutput.node);
+					    found != bodyKernelIndexByNode.end())
+					{
+						return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
+							                             .index = found->second };
+					}
+					const auto& bodyEntry = body.GetNodeEntry(bodyOutput.node);
+					if (bodyEntry.outputInfos.size() != 1 || bodyEntry.outputInfos[0].dtype != DataType::Float32 ||
+					    bodyEntry.outputInfos[0].shape != shape)
+					{
+						return std::nullopt;
+					}
+					const auto* bodyBinary = std::get_if<BinaryOpNode>(&bodyEntry.node);
+					if (!bodyBinary || !VulkanNativeSupportsSameShapeBinaryF32(bodyBinary->op))
+					{
+						return std::nullopt;
+					}
+					const auto lhs = bodySelf(bodySelf, bodyBinary->lhs);
+					const auto rhs = bodySelf(bodySelf, bodyBinary->rhs);
+					if (!lhs || !rhs)
+					{
+						return std::nullopt;
+					}
+					if (plan.kernels.size() > std::numeric_limits<std::uint32_t>::max())
+					{
+						return std::nullopt;
+					}
+					const auto kernelIndex = static_cast<std::uint32_t>(plan.kernels.size());
+					bodyVisited[bodyOutput.node] = true;
+					bodyKernelIndexByNode.emplace(bodyOutput.node, kernelIndex);
+					plan.kernels.push_back(VulkanP0BinaryDAGKernelPlan{ .op = bodyBinary->op, .lhs = *lhs, .rhs = *rhs });
+					return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
+						                             .index = kernelIndex };
+				};
+
+				const auto fusedOperand = collectBody(collectBody, body.Results()[0]);
+				if (!fusedOperand || fusedOperand->kind != VulkanP0BinaryDAGOperandKind::Intermediate)
+				{
+					return std::nullopt;
+				}
+				for (std::size_t bodyNodeIndex = 0; bodyNodeIndex < body.NodeCount(); ++bodyNodeIndex)
+				{
+					const auto& bodyEntry = body.GetNodeEntry(bodyNodeIndex);
+					if (std::holds_alternative<ParamRefNode>(bodyEntry.node))
+					{
+						continue;
+					}
+					if (!bodyVisited[bodyNodeIndex])
+					{
+						return std::nullopt;
+					}
+				}
+				visited[output.node] = true;
+				kernelIndexByNode.emplace(output.node, fusedOperand->index);
+				return fusedOperand;
+			}
 			const auto* binary = std::get_if<BinaryOpNode>(&entry.node);
 			if (!binary || !VulkanNativeSupportsSameShapeBinaryF32(binary->op))
 			{

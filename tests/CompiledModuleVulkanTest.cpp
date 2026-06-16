@@ -1179,6 +1179,25 @@ TEST(CompiledModuleVulkanTest, PlansWorkspaceForDiamondBinaryDAG)
 	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 }
 
+TEST(CompiledModuleVulkanTest, PlansWorkspaceForFusedDiamondBinaryDAG)
+{
+	auto graph = BuildBinaryDiamondGraph();
+	FusionPass{}.Run(graph);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_TRUE(report.supported) << report.reason;
+	EXPECT_NE(report.capability.find("binary DAG"), std::string::npos);
+
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	EXPECT_EQ(payload.kernels[2].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+}
+
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
 {
 	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Sqrt);
