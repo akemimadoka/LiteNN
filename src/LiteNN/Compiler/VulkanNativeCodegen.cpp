@@ -343,10 +343,11 @@ namespace LiteNN
 			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
 		}
 
-		mlir::spirv::FuncOp EmitSameShapeBinaryF32Function(
-		    mlir::OpBuilder& moduleBuilder, mlir::Location loc, BinaryOp op, llvm::StringRef entryPoint,
-		    std::uint32_t elementCount, mlir::spirv::GlobalVariableOp lhs, mlir::spirv::GlobalVariableOp rhs,
-		    mlir::spirv::GlobalVariableOp out, mlir::spirv::GlobalVariableOp globalInvocationId)
+		mlir::spirv::FuncOp EmitSameShapeBinaryFunction(
+		    mlir::OpBuilder& moduleBuilder, mlir::Location loc, DataType dtype, BinaryOp op,
+		    llvm::StringRef entryPoint, std::uint32_t elementCount, mlir::spirv::GlobalVariableOp lhs,
+		    mlir::spirv::GlobalVariableOp rhs, mlir::spirv::GlobalVariableOp out,
+		    mlir::spirv::GlobalVariableOp globalInvocationId)
 		{
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
 			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, entryPoint, funcType);
@@ -358,17 +359,18 @@ namespace LiteNN
 			mlir::spirv::SelectionOp::createIfThen(
 			    loc, inBounds,
 			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto valueType = SPIRVScalarType(bodyBuilder, dtype);
 				    auto lhsValue =
 				        bodyBuilder
 				            .create<mlir::spirv::LoadOp>(
-				                loc, bodyBuilder.getF32Type(),
-				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, lhs, index), nullptr, nullptr)
+				                loc, valueType, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, lhs, index),
+				                nullptr, nullptr)
 				            .getValue();
 				    auto rhsValue =
 				        bodyBuilder
 				            .create<mlir::spirv::LoadOp>(
-				                loc, bodyBuilder.getF32Type(),
-				                EmitF32StorageBufferElementPointer(bodyBuilder, loc, rhs, index), nullptr, nullptr)
+				                loc, valueType, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, rhs, index),
+				                nullptr, nullptr)
 				            .getValue();
 
 				    mlir::Value result;
@@ -397,7 +399,7 @@ namespace LiteNN
 				    }
 
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
-				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, index), result, nullptr,
+				        loc, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, out, index), result, nullptr,
 				        nullptr);
 			    },
 			    moduleBuilder);
@@ -498,7 +500,8 @@ namespace LiteNN
 		}
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp>
-		BuildSameShapeBinaryF32SPIRVModule(BinaryOp op, std::uint32_t elementCount, mlir::MLIRContext& context)
+		BuildSameShapeBinarySPIRVModule(DataType dtype, BinaryOp op, std::uint32_t elementCount,
+		                                mlir::MLIRContext& context)
 		{
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -508,16 +511,13 @@ namespace LiteNN
 			                                           mlir::spirv::AddressingModel::Logical));
 			state.addAttribute("memory_model",
 			                   builder.getAttr<mlir::spirv::MemoryModelAttr>(mlir::spirv::MemoryModel::GLSL450));
-			state.addAttribute("vce_triple",
-			                   mlir::spirv::VerCapExtAttr::get(
-			                       mlir::spirv::Version::V_1_0,
-			                       llvm::ArrayRef<mlir::spirv::Capability>{ mlir::spirv::Capability::Shader },
-			                       llvm::ArrayRef<mlir::spirv::Extension>{}, &context));
+			state.addAttribute("vce_triple", MakeVulkanShaderVCE(context, std::span<const DataType>(&dtype, 1)));
 			mlir::spirv::ModuleOp::build(builder, state);
 			auto module = mlir::cast<mlir::spirv::ModuleOp>(mlir::Operation::create(state));
 
 			mlir::OpBuilder moduleBuilder(module.getRegion());
-			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
+			auto valueType = SPIRVScalarType(moduleBuilder, dtype);
+			auto bufferStruct = CreateStorageBufferStruct(moduleBuilder, valueType, SPIRVScalarByteSize(dtype));
 			auto lhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "lhs", 0);
 			auto rhs = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "rhs", 1);
 			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 2);
@@ -527,8 +527,8 @@ namespace LiteNN
 			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
 			    mlir::spirv::BuiltIn::GlobalInvocationId);
 
-			auto func = EmitSameShapeBinaryF32Function(moduleBuilder, loc, op, kEntryPointName, elementCount, lhs, rhs,
-			                                           out, globalInvocationId);
+			auto func = EmitSameShapeBinaryFunction(moduleBuilder, loc, dtype, op, kEntryPointName, elementCount, lhs,
+			                                        rhs, out, globalInvocationId);
 			moduleBuilder.setInsertionPointAfter(func);
 			moduleBuilder.create<mlir::spirv::EntryPointOp>(
 			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
@@ -542,6 +542,12 @@ namespace LiteNN
 				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V module verification failed");
 			}
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
+		}
+
+		mlir::OwningOpRef<mlir::spirv::ModuleOp>
+		BuildSameShapeBinaryF32SPIRVModule(BinaryOp op, std::uint32_t elementCount, mlir::MLIRContext& context)
+		{
+			return BuildSameShapeBinarySPIRVModule(DataType::Float32, op, elementCount, context);
 		}
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeBinaryF32ChainSPIRVModule(std::span<const BinaryOp> ops,
@@ -584,8 +590,8 @@ namespace LiteNN
 					continue;
 				}
 				auto entryName = SameShapeBinaryF32KernelName(op);
-				auto func = EmitSameShapeBinaryF32Function(moduleBuilder, loc, op, entryName, elementCount, lhs, rhs,
-				                                           out, globalInvocationId);
+				auto func = EmitSameShapeBinaryFunction(moduleBuilder, loc, DataType::Float32, op, entryName,
+				                                        elementCount, lhs, rhs, out, globalInvocationId);
 				moduleBuilder.setInsertionPointAfter(func);
 				moduleBuilder.create<mlir::spirv::EntryPointOp>(
 				    loc, mlir::spirv::ExecutionModel::GLCompute, func,
@@ -2861,12 +2867,13 @@ namespace LiteNN
 			};
 		}
 
-		VulkanNativeGeneratedSPIRV SerializeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount)
+		VulkanNativeGeneratedSPIRV SerializeSameShapeBinarySPIRV(DataType dtype, BinaryOp op,
+		                                                         std::uint32_t elementCount)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
-			auto module = BuildSameShapeBinaryF32SPIRVModule(op, elementCount, context);
+			auto module = BuildSameShapeBinarySPIRVModule(dtype, op, elementCount, context);
 			ValidateVulkanShaderModule(module.get());
 
 			std::string mlirText;
@@ -2886,6 +2893,11 @@ namespace LiteNN
 				.words = std::vector<std::uint32_t>(binary.begin(), binary.end()),
 				.mlir = mlirStream.str(),
 			};
+		}
+
+		VulkanNativeGeneratedSPIRV SerializeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount)
+		{
+			return SerializeSameShapeBinarySPIRV(DataType::Float32, op, elementCount);
 		}
 
 		VulkanNativeGeneratedSPIRV SerializeSameShapeBinaryF32ChainSPIRV(std::span<const BinaryOp> ops,
@@ -3327,24 +3339,48 @@ namespace LiteNN
 		}
 	}
 
+	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op)
+	{
+		if (dtype != DataType::Float32 && dtype != DataType::Float16)
+		{
+			return false;
+		}
+		return VulkanNativeSupportsSameShapeBinaryF32(op);
+	}
+
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount)
 	{
-		if (!VulkanNativeSupportsSameShapeBinaryF32(op))
+		return VulkanNativeSameShapeBinarySPIRV(DataType::Float32, op, elementCount);
+	}
+
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinarySPIRV(DataType dtype, BinaryOp op,
+	                                                            std::uint32_t elementCount)
+	{
+		if (!VulkanNativeSupportsSameShapeBinary(dtype, op))
 		{
-			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
+			throw std::runtime_error("Unsupported Vulkan native same-shape binary op");
 		}
 		if (elementCount == 0)
 		{
 			throw std::runtime_error("Vulkan native same-shape binary requires a non-empty static shape");
 		}
-		return SerializeSameShapeBinaryF32SPIRV(op, elementCount);
+		return SerializeSameShapeBinarySPIRV(dtype, op, elementCount);
 	}
 
 	std::string VulkanNativeSameShapeBinaryF32KernelName(BinaryOp op)
 	{
+		return VulkanNativeSameShapeBinaryKernelName(DataType::Float32, op);
+	}
+
+	std::string VulkanNativeSameShapeBinaryKernelName(DataType dtype, BinaryOp op)
+	{
 		if (!VulkanNativeSupportsSameShapeBinaryF32(op))
 		{
-			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
+			throw std::runtime_error("Unsupported Vulkan native same-shape binary op");
+		}
+		if (dtype != DataType::Float32 && dtype != DataType::Float16)
+		{
+			throw std::runtime_error("Unsupported Vulkan native same-shape binary dtype");
 		}
 		return SameShapeBinaryF32KernelName(op);
 	}

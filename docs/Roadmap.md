@@ -2083,6 +2083,10 @@ packaging slice to a useful production backend.
       - [ ] Add tiled/shared-memory convolution and image/latent-processing kernels for mobile vision workloads.
       - [ ] Add low-precision arithmetic kernels beyond casts, including fp16/bf16/int8 paths guarded by device
             capabilities.
+            - [x] Add the first fp16 arithmetic slice for Vulkan native same-shape binary kernels: simple Float16
+                  Add/Subtract/Multiply/Divide/Min/Max graphs now compile through dtype-aware SPIR-V generation with
+                  shaderFloat16/storageBuffer16BitAccess requirements, support diagnostics, tests, and optional
+                  `litenn_bench` F16 Add rows when the selected device enables the required features.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.

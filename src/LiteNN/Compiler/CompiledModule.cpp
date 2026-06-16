@@ -5785,6 +5785,7 @@ namespace
 		BinaryOp op{ BinaryOp::Add };
 		std::uint32_t lhsInputIndex{};
 		std::uint32_t rhsInputIndex{};
+		DataType dtype{ DataType::Float32 };
 		std::uint32_t elementCount{};
 	};
 
@@ -7424,7 +7425,7 @@ namespace
 			if (!VulkanNativeSupportsSameShapeBinaryF32(binary->op))
 			{
 				return VulkanNativeUnsupported(
-				    std::format("unsupported binary op {} for Vulkan native same-shape f32 binary slice",
+				    std::format("unsupported binary op {} for Vulkan native same-shape binary slice",
 				                VulkanNativeOpName(binary->op)));
 			}
 			const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
@@ -7435,12 +7436,17 @@ namespace
 			}
 			const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
 			const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
-			if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
-			    output.dtype != DataType::Float32)
+			if (lhsParam.dtype != rhsParam.dtype || lhsParam.dtype != output.dtype)
 			{
 				return VulkanNativeUnsupported(std::format(
-				    "Vulkan native binary slice requires Float32 lhs/rhs/output, got lhs={} rhs={} output={}",
+				    "Vulkan native binary slice requires matching lhs/rhs/output dtypes, got lhs={} rhs={} output={}",
 				    DataTypeName(lhsParam.dtype), DataTypeName(rhsParam.dtype), DataTypeName(output.dtype)));
+			}
+			if (!VulkanNativeSupportsSameShapeBinary(lhsParam.dtype, binary->op))
+			{
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native binary slice requires Float32 or Float16 lhs/rhs/output, got {}",
+				    DataTypeName(lhsParam.dtype)));
 			}
 			if (lhsParam.shape != output.shape || rhsParam.shape != output.shape)
 			{
@@ -7454,7 +7460,9 @@ namespace
 			{
 				return shapeReport;
 			}
-			return VulkanNativeSupported(std::string("same-shape f32 binary ") + VulkanNativeOpName(binary->op));
+			return VulkanNativeSupported(std::format("same-shape {} binary {}",
+			                                         output.dtype == DataType::Float16 ? "f16" : "f32",
+			                                         VulkanNativeOpName(binary->op)));
 		}
 
 		return VulkanNativeUnsupported(std::format(
@@ -7520,7 +7528,7 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0BinaryPlan> MatchVulkanP0SameShapeBinaryF32(const Graph& graph)
+	std::optional<VulkanP0BinaryPlan> MatchVulkanP0SameShapeBinary(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -7546,7 +7554,7 @@ namespace
 		}
 
 		const auto* binary = std::get_if<BinaryOpNode>(&resultEntry.node);
-		if (!binary || !VulkanNativeSupportsSameShapeBinaryF32(binary->op))
+		if (!binary)
 		{
 			return std::nullopt;
 		}
@@ -7561,8 +7569,9 @@ namespace
 		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
 		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
-		    output.dtype != DataType::Float32 || lhsParam.shape != output.shape || rhsParam.shape != output.shape)
+		if (lhsParam.dtype != rhsParam.dtype || lhsParam.dtype != output.dtype ||
+		    !VulkanNativeSupportsSameShapeBinary(lhsParam.dtype, binary->op) || lhsParam.shape != output.shape ||
+		    rhsParam.shape != output.shape)
 		{
 			return std::nullopt;
 		}
@@ -7577,6 +7586,7 @@ namespace
 			.op = binary->op,
 			.lhsInputIndex = *lhsInputIndex,
 			.rhsInputIndex = *rhsInputIndex,
+			.dtype = output.dtype,
 			.elementCount = *elementCount,
 		};
 	}
@@ -8845,9 +8855,9 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeBinaryF32P0(const Graph& graph)
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeBinaryP0(const Graph& graph)
 	{
-		const auto plan = MatchVulkanP0SameShapeBinaryF32(graph);
+		const auto plan = MatchVulkanP0SameShapeBinary(graph);
 		if (!plan)
 		{
 			return std::nullopt;
@@ -8856,15 +8866,19 @@ namespace
 		VulkanNativeInstructionPayload payload;
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
-		payload.featureSet.AddFeature(VulkanNativeBinaryF32FeatureFlag(plan->op));
-		auto spirv = VulkanNativeSameShapeBinaryF32SPIRV(plan->op, plan->elementCount);
+		payload.featureSet.AddFeature(plan->dtype == DataType::Float32
+		                                  ? VulkanNativeBinaryF32FeatureFlag(plan->op)
+		                                  : VulkanNativeFeature::SameShapeElementwiseBinaryLowPrecision);
+		auto spirv = VulkanNativeSameShapeBinarySPIRV(plan->dtype, plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
-		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * ElementByteSize(plan->dtype);
+		auto requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize);
+		AddVulkanP0DTypeDeviceRequirements(requirements.deviceRequirements, plan->dtype);
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
-		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .requirements = requirements,
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->lhsInputIndex,
@@ -12023,7 +12037,7 @@ namespace
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32P0(graph))
+			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryP0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

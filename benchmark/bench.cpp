@@ -799,14 +799,14 @@ namespace
 #endif
 
 #ifdef LITENN_ENABLE_VULKAN
-	Graph BuildVulkanElementwiseAddGraph(std::size_t elementCount)
+	Graph BuildVulkanElementwiseAddGraph(std::size_t elementCount, DataType dtype = DataType::Float32)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto lhs = sg.AddParam(DataType::Float32, { elementCount });
-		const auto rhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto lhs = sg.AddParam(dtype, { elementCount });
+		const auto rhs = sg.AddParam(dtype, { elementCount });
 		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
-		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		                            { OutputInfo{ dtype, { elementCount } } });
 		sg.SetResults({ { out, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "lhs", "rhs" });
@@ -1350,6 +1350,24 @@ namespace
 		}
 	}
 
+	bool SupportsVulkanNativeElementwiseBenchmarkDType(DataType dtype)
+	{
+		if (!IsVulkanDeviceAvailable())
+		{
+			return false;
+		}
+		const auto capabilities = QueryVulkanDeviceCapabilities(Vulkan{});
+		switch (dtype)
+		{
+		case DataType::Float32:
+			return true;
+		case DataType::Float16:
+			return capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled;
+		default:
+			return false;
+		}
+	}
+
 	std::vector<float> MakeElementwiseInputData(std::size_t elementCount, unsigned int seed)
 	{
 		std::mt19937 rng(seed);
@@ -1363,7 +1381,8 @@ namespace
 	}
 
 	std::vector<Tensor<Vulkan>> MakeVulkanElementwiseInputs(const std::vector<float>& lhsData,
-	                                                        const std::vector<float>& rhsData)
+	                                                        const std::vector<float>& rhsData,
+	                                                        DataType dtype = DataType::Float32)
 	{
 		if (lhsData.size() != rhsData.size())
 		{
@@ -1371,8 +1390,10 @@ namespace
 		}
 
 		std::vector<Tensor<Vulkan>> inputs;
-		const auto lhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(lhsData), { lhsData.size() });
-		const auto rhsCpu = Optimizer::MakeFloatTensor(std::span<const float>(rhsData), { rhsData.size() });
+		const std::vector<double> lhsValues(lhsData.begin(), lhsData.end());
+		const std::vector<double> rhsValues(rhsData.begin(), rhsData.end());
+		const Tensor<CPU> lhsCpu(std::span<const double>(lhsValues), { lhsData.size() }, dtype);
+		const Tensor<CPU> rhsCpu(std::span<const double>(rhsValues), { rhsData.size() }, dtype);
 		inputs.push_back(lhsCpu.CopyToDevice(Vulkan{}));
 		inputs.push_back(rhsCpu.CopyToDevice(Vulkan{}));
 		return inputs;
@@ -1496,9 +1517,10 @@ namespace
 		return module.AllocateOutputTensors();
 	}
 
-	void BMVulkanNativeElementwiseAddRunTensorsInto(benchmark::State& state, std::size_t elementCount)
+	void BMVulkanNativeElementwiseAddRunTensorsInto(benchmark::State& state, std::size_t elementCount,
+	                                                DataType dtype = DataType::Float32)
 	{
-		auto graph = BuildVulkanElementwiseAddGraph(elementCount);
+		auto graph = BuildVulkanElementwiseAddGraph(elementCount, dtype);
 		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
 		                                        LiteNNBenchCompilerOptionsFromEnvironment());
 		if (module.Backend() != CompiledModuleBackend::VulkanNative)
@@ -1509,7 +1531,7 @@ namespace
 
 		const auto lhsData = MakeElementwiseInputData(elementCount, 0);
 		const auto rhsData = MakeElementwiseInputData(elementCount, 1);
-		auto inputs = MakeVulkanElementwiseInputs(lhsData, rhsData);
+		auto inputs = MakeVulkanElementwiseInputs(lhsData, rhsData, dtype);
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -2486,6 +2508,16 @@ namespace
 				    std::format("VulkanNativeElementwiseAddRunInto/F32/elements:{}", elementCount),
 				    [=](benchmark::State& state) { BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount); });
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				if (SupportsVulkanNativeElementwiseBenchmarkDType(DataType::Float16))
+				{
+					auto* fp16BenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeElementwiseAddRunInto/F16/elements:{}", elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount, DataType::Float16);
+					    });
+					fp16BenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
 
 				auto* binaryChainBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeBinaryChainRunInto/F32/elements:{}", elementCount),

@@ -24,8 +24,12 @@ namespace LiteNN
 	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
+	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinarySPIRV(DataType dtype, BinaryOp op,
+	                                                            std::uint32_t elementCount);
 	std::string VulkanNativeSameShapeBinaryF32KernelName(BinaryOp op);
+	std::string VulkanNativeSameShapeBinaryKernelName(DataType dtype, BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32ChainSPIRV(std::span<const BinaryOp> ops,
 	                                                                    std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
