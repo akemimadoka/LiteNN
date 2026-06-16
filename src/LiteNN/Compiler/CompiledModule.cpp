@@ -5917,6 +5917,7 @@ namespace
 	{
 		UnaryOp op{ UnaryOp::Negate };
 		std::uint32_t inputIndex{};
+		DataType dtype{ DataType::Float32 };
 		std::uint32_t elementCount{};
 	};
 
@@ -7044,7 +7045,7 @@ namespace
 				if (!VulkanNativeSupportsSameShapeUnaryF32(unary->op))
 				{
 					return VulkanNativeUnsupported(
-					    std::format("unsupported unary op {} for Vulkan native same-shape f32 unary slice",
+					    std::format("unsupported unary op {} for Vulkan native same-shape unary slice",
 					                VulkanNativeOpName(unary->op)));
 				}
 				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, unary->input);
@@ -7053,11 +7054,17 @@ namespace
 					return VulkanNativeUnsupported("Vulkan native unary input must be a direct graph parameter");
 				}
 				const auto& input = subgraph.Params()[*inputIndex];
-				if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32)
+				if (input.dtype != output.dtype)
 				{
 					return VulkanNativeUnsupported(
-					    std::format("Vulkan native unary slice requires Float32 input/output, got {} -> {}",
+					    std::format("Vulkan native unary slice requires matching input/output dtypes, got {} -> {}",
 					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+				}
+				if (!VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op))
+				{
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native unary slice requires Float32 or Float16 input/output, got {}",
+					    DataTypeName(input.dtype)));
 				}
 				if (input.shape != output.shape)
 				{
@@ -7070,7 +7077,9 @@ namespace
 				{
 					return shapeReport;
 				}
-				return VulkanNativeSupported(std::string("same-shape f32 unary ") + VulkanNativeOpName(unary->op));
+				return VulkanNativeSupported(std::format("same-shape {} unary {}",
+				                                         output.dtype == DataType::Float16 ? "f16" : "f32",
+				                                         VulkanNativeOpName(unary->op)));
 			}
 
 			if (const auto* cast = std::get_if<CastNode>(&resultEntry.node))
@@ -7471,7 +7480,7 @@ namespace
 		    subgraph.Params().size(), subgraph.NodeCount()));
 	}
 
-	std::optional<VulkanP0UnaryPlan> MatchVulkanP0SameShapeUnaryF32(const Graph& graph)
+	std::optional<VulkanP0UnaryPlan> MatchVulkanP0SameShapeUnary(const Graph& graph)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -7497,7 +7506,7 @@ namespace
 		}
 
 		const auto* unary = std::get_if<UnaryOpNode>(&resultEntry.node);
-		if (!unary || !VulkanNativeSupportsSameShapeUnaryF32(unary->op))
+		if (!unary)
 		{
 			return std::nullopt;
 		}
@@ -7510,7 +7519,8 @@ namespace
 
 		const auto& input = subgraph.Params()[*inputIndex];
 		const auto& output = resultEntry.outputInfos[0];
-		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape)
+		if (input.dtype != output.dtype || !VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op) ||
+		    input.shape != output.shape)
 		{
 			return std::nullopt;
 		}
@@ -7524,6 +7534,7 @@ namespace
 		return VulkanP0UnaryPlan{
 			.op = unary->op,
 			.inputIndex = *inputIndex,
+			.dtype = output.dtype,
 			.elementCount = *elementCount,
 		};
 	}
@@ -8553,9 +8564,9 @@ namespace
 		}
 	}
 
-	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeUnaryF32P0(const Graph& graph)
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeSameShapeUnaryP0(const Graph& graph)
 	{
-		const auto plan = MatchVulkanP0SameShapeUnaryF32(graph);
+		const auto plan = MatchVulkanP0SameShapeUnary(graph);
 		if (!plan)
 		{
 			return std::nullopt;
@@ -8564,15 +8575,19 @@ namespace
 		VulkanNativeInstructionPayload payload;
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
-		payload.featureSet.AddFeature(VulkanNativeUnaryF32FeatureFlag(plan->op));
-		auto spirv = VulkanNativeSameShapeUnaryF32SPIRV(plan->op, plan->elementCount);
+		payload.featureSet.AddFeature(plan->dtype == DataType::Float32
+		                                  ? VulkanNativeUnaryF32FeatureFlag(plan->op)
+		                                  : VulkanNativeFeature::SameShapeElementwiseUnaryLowPrecision);
+		auto spirv = VulkanNativeSameShapeUnarySPIRV(plan->dtype, plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
-		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * ElementByteSize(plan->dtype);
+		auto requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize);
+		AddVulkanP0DTypeDeviceRequirements(requirements.deviceRequirements, plan->dtype);
 		payload.kernels.push_back({
 		    .entryPoint = "main",
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
-		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .requirements = requirements,
 		    .arguments = {
 		        { .kind = VulkanNativeArgumentKind::InputTensor,
 		          .index = plan->inputIndex,
@@ -11977,7 +11992,7 @@ namespace
 		Validation::ValidateGraph(graph);
 		if (options.enableVulkanNativeAOT)
 		{
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryF32P0(graph))
+			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryP0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}

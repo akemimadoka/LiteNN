@@ -22,7 +22,10 @@ namespace LiteNN
 	constexpr std::uint32_t kVulkanNativeMatMulWorkgroupSize = 64;
 
 	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op);
+	bool VulkanNativeSupportsSameShapeUnary(DataType dtype, UnaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op,
+	                                                           std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount);

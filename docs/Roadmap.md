@@ -2087,6 +2087,9 @@ packaging slice to a useful production backend.
                   Add/Subtract/Multiply/Divide/Min/Max graphs now compile through dtype-aware SPIR-V generation with
                   shaderFloat16/storageBuffer16BitAccess requirements, support diagnostics, tests, and optional
                   `litenn_bench` F16 Add rows when the selected device enables the required features.
+            - [x] Add the matching fp16 same-shape unary slice for Vulkan native Negate/Abs/Sqrt/Exp/Log/Sin/Cos,
+                  including dtype-aware SPIR-V generation, payload feature bits, device requirements, support
+                  diagnostics, and feature-gated runtime coverage.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.

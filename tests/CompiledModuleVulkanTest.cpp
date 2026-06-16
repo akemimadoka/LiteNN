@@ -539,12 +539,12 @@ namespace
 		return graph;
 	}
 
-	Graph BuildSimpleUnaryGraph(UnaryOp op)
+	Graph BuildSimpleUnaryGraph(UnaryOp op, DataType dtype = DataType::Float32)
 	{
 		Graph graph;
 		Subgraph sg;
-		const auto input = sg.AddParam(DataType::Float32, { 4 });
-		const auto out = sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto input = sg.AddParam(dtype, { 4 });
+		const auto out = sg.AddNode(UnaryOpNode{ op, { input, 0 } }, { OutputInfo{ dtype, { 4 } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -770,6 +770,17 @@ TEST(CompiledModuleVulkanTest, GeneratesSimpleUnarySPIRVFromMLIR)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesFloat16UnarySPIRVFromMLIR)
+{
+	const auto generated = VulkanNativeSameShapeUnarySPIRV(DataType::Float16, UnaryOp::Abs, kElementCount);
+	EXPECT_FALSE(generated.words.empty());
+	EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.GL.FAbs"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("f16"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("StorageBuffer16BitAccess"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("SPV_KHR_16bit_storage"), std::string::npos);
+}
+
 TEST(CompiledModuleVulkanTest, GeneratesSimpleCastSPIRVFromMLIR)
 {
 	for (const auto& item : kCastCases)
@@ -960,6 +971,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForFloat16Add)
 	EXPECT_TRUE(report.supported);
 	EXPECT_NE(report.capability.find("same-shape f16 binary"), std::string::npos);
 	EXPECT_NE(report.capability.find("Add"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForFloat16Unary)
+{
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Float16);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("same-shape f16 unary"), std::string::npos);
+	EXPECT_NE(report.capability.find("Abs"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
 
@@ -1318,6 +1340,28 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
 	EXPECT_EQ(payload.spirv, generated.words);
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForFloat16Unary)
+{
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Float16);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeUnarySPIRV(DataType::Float16, UnaryOp::Abs, kElementCount);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeElementwiseUnaryLowPrecision)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, kElementCount * ElementByteSize(DataType::Float16));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, kElementCount * ElementByteSize(DataType::Float16));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::ShaderFloat16));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
@@ -2024,6 +2068,39 @@ TEST(CompiledModuleVulkanTest, RunsFloat16BinaryArithmeticWhenDeviceFeaturesAreE
 
 	const auto actual = CopyToHostAsFloat32(outputs[0]);
 	const std::array expected{ 1.5f, 3.0f, 4.5f, 6.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsFloat16UnaryArithmeticWhenDeviceFeaturesAreEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (!capabilities.shaderFloat16Enabled || !capabilities.storageBuffer16BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Float16 storage features are not enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Float16);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ -1.5, -2.0, 3.0, -4.0 }, { 4 }, DataType::Float16, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].DType(), DataType::Float16);
+
+	const auto actual = CopyToHostAsFloat32(outputs[0]);
+	const std::array expected{ 1.5f, 2.0f, 3.0f, 4.0f };
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
