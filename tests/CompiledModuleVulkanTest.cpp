@@ -98,6 +98,33 @@ namespace
 		return graph;
 	}
 
+	Graph BuildBranchedBinaryDAGWithTailGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto a = sg.AddParam(DataType::Float32, { 4 });
+		const auto b = sg.AddParam(DataType::Float32, { 4 });
+		const auto c = sg.AddParam(DataType::Float32, { 4 });
+		const auto d = sg.AddParam(DataType::Float32, { 4 });
+		const auto e = sg.AddParam(DataType::Float32, { 4 });
+		const auto first =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto second =
+		    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { c, 0 }, { d, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto merged = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { second, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto tail = sg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { first, 0 }, { e, 0 } },
+		                             { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { merged, 0 }, { tail, 0 } },
+		                            { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "a", "b", "c", "d", "e" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildReduceGraph(ReduceOp op, std::size_t axis, std::vector<std::size_t> outputShape)
 	{
 		Graph graph;
@@ -923,6 +950,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForDiamondBinaryDAG)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForBranchedBinaryDAGWithTail)
+{
+	const auto graph = BuildBranchedBinaryDAGWithTailGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("binary DAG"), std::string::npos);
+	EXPECT_NE(report.capability.find("5 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMul)
 {
 	const auto graph = BuildSimpleMatMulGraph();
@@ -1196,6 +1234,30 @@ TEST(CompiledModuleVulkanTest, PlansWorkspaceForFusedDiamondBinaryDAG)
 	EXPECT_EQ(payload.kernels[2].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[2].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+}
+
+TEST(CompiledModuleVulkanTest, PlansWorkspaceForBranchedBinaryDAGWithTail)
+{
+	const auto graph = BuildBranchedBinaryDAGWithTailGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.kernels.size(), 5u);
+	ASSERT_EQ(payload.workspaceTensors.size(), 3u);
+	for (const auto& workspace : payload.workspaceTensors)
+	{
+		EXPECT_EQ(workspace.byteSize, kElementCount * sizeof(float));
+	}
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[3].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[4].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[4].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[4].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[3].arguments[0].index, payload.kernels[0].arguments[2].index);
+	EXPECT_EQ(payload.kernels[3].arguments[2].index, payload.kernels[1].arguments[2].index);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleUnary)
@@ -2312,6 +2374,36 @@ TEST(CompiledModuleVulkanTest, RunsDiamondBinaryDAGWithWorkspace)
 
 	const auto actual = CopyToHost(outputs[0]);
 	const std::array expected{ 112.0f, 224.0f, 336.0f, 448.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsBranchedBinaryDAGWithTailWorkspace)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildBranchedBinaryDAGWithTailGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 2.0, 3.0, 4.0, 5.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 1.0, 1.0, 1.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 5.0, 6.0, 7.0, 8.0 }, { 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 39.0f, 104.0f, 191.0f, 300.0f };
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);

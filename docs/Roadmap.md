@@ -1991,6 +1991,8 @@ packaging slice to a useful production backend.
             `WS=2` / non-zero `WSBytes` in console and CSV output.
       - [x] Register `litenn_bench` Vulkan binary-chain and binary-DAG rows so workspace-backed native schedules are
             directly visible in the normal backend benchmark matrix.
+      - [x] Add support/payload/runtime coverage for branched same-shape f32 binary DAGs with tail reuse, proving the
+            current last-use planner handles non-diamond multi-kernel schedules and workspace slot reuse.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:
