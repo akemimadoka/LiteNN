@@ -1019,11 +1019,101 @@ static void WriteVulkanProfileCsv(const std::filesystem::path& path,
 }
 #endif
 
+namespace {
+
+struct ProfileCLIOptions
+{
+	std::filesystem::path outDir = std::filesystem::current_path() / "profile_out";
+	bool showHelp = false;
+};
+
+static bool HasPrefix(std::string_view value, std::string_view prefix)
+{
+	return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+static void PrintProfileUsage(std::ostream& os)
+{
+	os << "Usage: litenn_profile [--out-dir <dir>] [out_dir]\n"
+	   << "\n"
+	   << "Options:\n"
+	   << "  --out-dir <dir>   Directory for raw object files, assembly, and CSV profile output.\n"
+	   << "  --out-dir=<dir>   Same as --out-dir <dir>.\n"
+	   << "  -h, --help        Show this help text.\n"
+	   << "\n"
+	   << "The positional out_dir form is retained for existing scripts.\n";
+}
+
+static ProfileCLIOptions ParseProfileCLIOptions(int argc, char** argv)
+{
+	ProfileCLIOptions options;
+	bool outDirSet = false;
+
+	for (int i = 1; i < argc; ++i)
+	{
+		const std::string_view arg(argv[i] ? argv[i] : "");
+		if (arg == "-h" || arg == "--help")
+		{
+			options.showHelp = true;
+			continue;
+		}
+
+		if (arg == "--out-dir")
+		{
+			if (outDirSet)
+				throw std::runtime_error("--out-dir was specified more than once");
+			if (i + 1 >= argc || std::string_view(argv[i + 1] ? argv[i + 1] : "").empty())
+				throw std::runtime_error("--out-dir requires a non-empty path");
+			options.outDir = std::filesystem::path(argv[++i]);
+			outDirSet = true;
+			continue;
+		}
+
+		constexpr std::string_view kOutDirPrefix = "--out-dir=";
+		if (HasPrefix(arg, kOutDirPrefix))
+		{
+			if (outDirSet)
+				throw std::runtime_error("--out-dir was specified more than once");
+			const auto value = arg.substr(kOutDirPrefix.size());
+			if (value.empty())
+				throw std::runtime_error("--out-dir requires a non-empty path");
+			options.outDir = std::filesystem::path(std::string(value));
+			outDirSet = true;
+			continue;
+		}
+
+		if (!arg.empty() && arg.front() == '-')
+			throw std::runtime_error(std::format("Unknown argument '{}'", arg));
+
+		if (outDirSet)
+			throw std::runtime_error(std::format("Unexpected positional argument '{}'", arg));
+		options.outDir = std::filesystem::path(argv[i]);
+		outDirSet = true;
+	}
+
+	return options;
+}
+
+} // namespace
+
 int main(int argc, char** argv)
 {
-	const std::filesystem::path outDir = (argc >= 2)
-	    ? std::filesystem::path(argv[1])
-	    : std::filesystem::current_path() / "profile_out";
+	ProfileCLIOptions cliOptions;
+	try {
+		cliOptions = ParseProfileCLIOptions(argc, argv);
+	} catch (const std::exception& e) {
+		std::cerr << "litenn_profile: " << e.what() << "\n\n";
+		PrintProfileUsage(std::cerr);
+		return 2;
+	}
+
+	if (cliOptions.showHelp)
+	{
+		PrintProfileUsage(std::cout);
+		return 0;
+	}
+
+	const std::filesystem::path outDir = cliOptions.outDir;
 	std::filesystem::create_directories(outDir);
 
 	std::cout << "LiteNN AOT Profile Report\n";

@@ -1999,6 +1999,8 @@ packaging slice to a useful production backend.
             `ElementWiseChain` Unary/Binary DAGs such as `Multiply(Abs(Add(lhs, rhs)), tail)` now lower to one SPIR-V
             module with multiple entry points, explicit `WorkspaceTensor` lifetimes, support/payload/runtime tests, and
             `litenn_bench` / `litenn_profile` mixed-DAG rows.
+      - [x] Normalize `litenn_profile` output-directory parsing so both positional paths and `--out-dir` /
+            `--out-dir=...` forms write raw objects, assembly, and Vulkan CSV rows to the intended directory.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:
