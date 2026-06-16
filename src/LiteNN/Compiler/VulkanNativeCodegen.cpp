@@ -268,15 +268,21 @@ namespace LiteNN
 			return static_cast<std::uint32_t>(count);
 		}
 
-		std::string ReduceF32KernelName(ReduceOp op)
+		std::string_view ReduceF32KernelName(ReduceOp op)
 		{
-			using namespace std::string_literals;
-			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(op);
-			if (name)
+			switch (op)
 			{
-				return "Reduce"s + *name;
+			case ReduceOp::Sum:
+				return "ReduceSum";
+			case ReduceOp::Mean:
+				return "ReduceMean";
+			case ReduceOp::Max:
+				return "ReduceMax";
+			case ReduceOp::Min:
+				return "ReduceMin";
+			default:
+				throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
 			}
-			throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
 		}
 
 		std::string_view SoftmaxRowMaxF32KernelName()
@@ -996,7 +1002,9 @@ namespace LiteNN
 			    mlir::spirv::BuiltIn::GlobalInvocationId);
 
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
-			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, ReduceF32KernelName(op), funcType);
+			const auto reduceEntryName = ReduceF32KernelName(op);
+			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(
+			    loc, llvm::StringRef(reduceEntryName.data(), reduceEntryName.size()), funcType);
 			auto* entry = moduleBuilder.createBlock(&func.getBody());
 			moduleBuilder.setInsertionPointToStart(entry);
 
