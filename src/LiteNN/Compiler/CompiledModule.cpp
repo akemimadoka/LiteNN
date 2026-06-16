@@ -9104,8 +9104,42 @@ namespace
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
+		const auto axisSize = static_cast<std::uint32_t>(plan->inputShape[plan->axis]);
+		const auto rowCount = plan->elementCount / axisSize;
+		const auto rowWorkspaceBytes = static_cast<std::uint64_t>(rowCount) * sizeof(float);
+		VulkanP0WorkspacePlanner workspacePlanner;
+		const auto rowMaxWorkspace = workspacePlanner.Allocate(rowWorkspaceBytes, alignof(float), 0, 2);
+		const auto rowSumWorkspace = workspacePlanner.Allocate(rowWorkspaceBytes, alignof(float), 1, 2);
+
 		payload.kernels.push_back({
-		    .entryPoint = "softmax",
+		    .entryPoint = std::string(VulkanNativeSoftmaxRowMaxF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(rowCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        workspacePlanner.Argument(rowMaxWorkspace, 1, rowWorkspaceBytes),
+		    },
+		});
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeSoftmaxRowSumF32KernelName()),
+		    .groups = { .x = VulkanP0ElementwiseGroupCount(rowCount), .y = 1, .z = 1 },
+		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+		    .arguments = {
+		        { .kind = VulkanNativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .binding = 0,
+		          .byteOffset = 0,
+		          .byteSize = byteSize },
+		        workspacePlanner.Argument(rowMaxWorkspace, 1, rowWorkspaceBytes),
+		        workspacePlanner.Argument(rowSumWorkspace, 2, rowWorkspaceBytes),
+		    },
+		});
+		payload.kernels.push_back({
+		    .entryPoint = std::string(VulkanNativeSoftmaxWriteF32KernelName()),
 		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 		    .arguments = {
@@ -9114,13 +9148,16 @@ namespace
 		          .binding = 0,
 		          .byteOffset = 0,
 		          .byteSize = byteSize },
+		        workspacePlanner.Argument(rowMaxWorkspace, 1, rowWorkspaceBytes),
+		        workspacePlanner.Argument(rowSumWorkspace, 2, rowWorkspaceBytes),
 		        { .kind = VulkanNativeArgumentKind::OutputTensor,
 		          .index = 0,
-		          .binding = 1,
+		          .binding = 3,
 		          .byteOffset = 0,
 		          .byteSize = byteSize },
 		    },
 		});
+		payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);

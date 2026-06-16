@@ -2023,6 +2023,10 @@ packaging slice to a useful production backend.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeSoftmax/F32/Axis1` rows and the local `batch:1/width:128` smoke row ran successfully.
+      - [x] Replace the scalar-loop-per-output Vulkan Softmax baseline with a three-dispatch workspace schedule:
+            row max, row sum, and elementwise write now share two row-sized `WorkspaceTensor` buffers. Validation on
+            2026-06-17: `CompiledModuleVulkanTest.*Softmax*` passed, and `litenn_profile` reduced
+            `softmax_b512` GPU time from roughly 4.93 ms to roughly 0.30 ms on the local Vulkan device.
       - [x] Add the first static-axis f32 normalization slice: non-affine `LayerNorm` and `RMSNorm` now lower to
             Vulkan-native SPIR-V with one invocation per output element and scalar loops over the normalized axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 44/45 Vulkan tests with only the local

@@ -279,6 +279,21 @@ namespace LiteNN
 			throw std::runtime_error("Unsupported Vulkan native f32 reduce op");
 		}
 
+		std::string_view SoftmaxRowMaxF32KernelName()
+		{
+			return "softmax_row_max";
+		}
+
+		std::string_view SoftmaxRowSumF32KernelName()
+		{
+			return "softmax_row_sum";
+		}
+
+		std::string_view SoftmaxWriteF32KernelName()
+		{
+			return "softmax_write";
+		}
+
 		std::string_view NormalizationF32KernelName(NormalizationMode mode)
 		{
 			switch (mode)
@@ -2306,6 +2321,8 @@ namespace LiteNN
 				throw std::runtime_error("Vulkan native softmax shape is too large or empty");
 			}
 			const auto axisSize = static_cast<std::uint32_t>(inputShape[axis]);
+			const auto rowCount = *elementCount / axisSize;
+			const auto axisSpan = axisSize * *innerSize;
 
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -2322,37 +2339,56 @@ namespace LiteNN
 			mlir::OpBuilder moduleBuilder(module.getRegion());
 			auto bufferStruct = CreateF32StorageBufferStruct(moduleBuilder);
 			auto input = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "input", 0);
-			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 1);
+			auto rowMax = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "row_max", 1);
+			auto rowSum = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "row_sum", 2);
+			auto out = CreateStorageBuffer(moduleBuilder, loc, bufferStruct, "out", 3);
 			auto globalInvocationType = mlir::spirv::PointerType::get(
 			    mlir::VectorType::get({ 3 }, moduleBuilder.getI32Type()), mlir::spirv::StorageClass::Input);
 			auto globalInvocationId = moduleBuilder.create<mlir::spirv::GlobalVariableOp>(
 			    loc, globalInvocationType, "__builtin_var_GlobalInvocationId",
 			    mlir::spirv::BuiltIn::GlobalInvocationId);
 
-			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
-			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, "softmax", funcType);
-			auto* entry = moduleBuilder.createBlock(&func.getBody());
-			moduleBuilder.setInsertionPointToStart(entry);
+			const auto emitRowBase = [&](mlir::OpBuilder& b, mlir::Value rowIndex) {
+				auto inner = EmitI32Constant(b, loc, *innerSize);
+				auto axisValue = EmitI32Constant(b, loc, axisSize);
+				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, rowIndex, inner).getResult();
+				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, rowIndex, inner).getResult();
+				auto outerAxis = b.create<mlir::spirv::IMulOp>(loc, outerIndex, axisValue).getResult();
+				return b.create<mlir::spirv::IAddOp>(
+				            loc, b.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(), innerIndex)
+				    .getResult();
+			};
+			const auto emitRowIndexFromElement = [&](mlir::OpBuilder& b, mlir::Value elementIndex) {
+				auto inner = EmitI32Constant(b, loc, *innerSize);
+				auto span = EmitI32Constant(b, loc, axisSpan);
+				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, elementIndex, span).getResult();
+				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, elementIndex, inner).getResult();
+				return b.create<mlir::spirv::IAddOp>(
+				            loc, b.create<mlir::spirv::IMulOp>(loc, outerIndex, inner).getResult(), innerIndex)
+				    .getResult();
+			};
+			const auto emitEntryPoint = [&](mlir::spirv::FuncOp func) {
+				moduleBuilder.setInsertionPointAfter(func);
+				moduleBuilder.create<mlir::spirv::EntryPointOp>(
+				    loc, mlir::spirv::ExecutionModel::GLCompute, func,
+				    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
+				moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
+				    loc, func, mlir::spirv::ExecutionMode::LocalSize,
+				    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+			};
 
-			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
-			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *elementCount);
+			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
+			auto rowMaxFunc = moduleBuilder.create<mlir::spirv::FuncOp>(
+			    loc, SoftmaxRowMaxF32KernelName(), funcType);
+			auto* entry = moduleBuilder.createBlock(&rowMaxFunc.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+			auto rowIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			auto inBounds = EmitElementwiseInBounds(moduleBuilder, loc, rowIndex, rowCount);
 			mlir::spirv::SelectionOp::createIfThen(
 			    loc, inBounds,
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
-				    auto axisValue = EmitI32Constant(bodyBuilder, loc, axisSize);
-				    auto axisIndex =
-				        bodyBuilder
-				            .create<mlir::spirv::UModOp>(
-				                loc, bodyBuilder.create<mlir::spirv::UDivOp>(loc, outputIndex, inner).getResult(),
-				                axisValue)
-				            .getResult();
-				    auto base = bodyBuilder
-				                    .create<mlir::spirv::ISubOp>(
-				                        loc, outputIndex,
-				                        bodyBuilder.create<mlir::spirv::IMulOp>(loc, axisIndex, inner).getResult())
-				                    .getResult();
-
+				    auto base = emitRowBase(bodyBuilder, rowIndex);
 				    mlir::Value maxValue;
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
 				    {
@@ -2379,7 +2415,31 @@ namespace LiteNN
 						    maxValue = bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, maxValue, value).getResult();
 					    }
 				    }
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax, rowIndex), maxValue,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+			emitEntryPoint(rowMaxFunc);
 
+			auto rowSumFunc = moduleBuilder.create<mlir::spirv::FuncOp>(
+			    loc, SoftmaxRowSumF32KernelName(), funcType);
+			entry = moduleBuilder.createBlock(&rowSumFunc.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+			rowIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			inBounds = EmitElementwiseInBounds(moduleBuilder, loc, rowIndex, rowCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
+				    auto base = emitRowBase(bodyBuilder, rowIndex);
+				    auto maxValue = bodyBuilder
+				                        .create<mlir::spirv::LoadOp>(
+				                            loc, bodyBuilder.getF32Type(),
+				                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax, rowIndex),
+				                            nullptr, nullptr)
+				                        .getValue();
 				    auto sum = EmitF32Constant(bodyBuilder, loc, 0.0f);
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
 				    {
@@ -2401,7 +2461,36 @@ namespace LiteNN
 					    auto expValue = bodyBuilder.create<mlir::spirv::GLExpOp>(loc, shifted).getResult();
 					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, expValue).getResult();
 				    }
+				    bodyBuilder.create<mlir::spirv::StoreOp>(
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowSum, rowIndex), sum,
+				        nullptr, nullptr);
+			    },
+			    moduleBuilder);
+			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
+			emitEntryPoint(rowSumFunc);
 
+			auto writeFunc = moduleBuilder.create<mlir::spirv::FuncOp>(loc, SoftmaxWriteF32KernelName(), funcType);
+			entry = moduleBuilder.createBlock(&writeFunc.getBody());
+			moduleBuilder.setInsertionPointToStart(entry);
+			auto outputIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
+			inBounds = EmitElementwiseInBounds(moduleBuilder, loc, outputIndex, *elementCount);
+			mlir::spirv::SelectionOp::createIfThen(
+			    loc, inBounds,
+			    [&](mlir::OpBuilder& bodyBuilder) {
+				    auto rowIndexForElement = emitRowIndexFromElement(bodyBuilder, outputIndex);
+				    auto maxValue = bodyBuilder
+				                        .create<mlir::spirv::LoadOp>(
+				                            loc, bodyBuilder.getF32Type(),
+				                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax,
+				                                                               rowIndexForElement),
+				                            nullptr, nullptr)
+				                        .getValue();
+				    auto sum = bodyBuilder
+				                   .create<mlir::spirv::LoadOp>(
+				                       loc, bodyBuilder.getF32Type(),
+				                       EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowSum, rowIndexForElement),
+				                       nullptr, nullptr)
+				                   .getValue();
 				    auto current = bodyBuilder
 				                       .create<mlir::spirv::LoadOp>(
 				                           loc, bodyBuilder.getF32Type(),
@@ -2417,14 +2506,7 @@ namespace LiteNN
 			    },
 			    moduleBuilder);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
-
-			moduleBuilder.setInsertionPointAfter(func);
-			moduleBuilder.create<mlir::spirv::EntryPointOp>(
-			    loc, mlir::spirv::ExecutionModel::GLCompute, func,
-			    llvm::ArrayRef<mlir::Attribute>{ mlir::FlatSymbolRefAttr::get(globalInvocationId) });
-			moduleBuilder.create<mlir::spirv::ExecutionModeOp>(
-			    loc, func, mlir::spirv::ExecutionMode::LocalSize,
-			    llvm::ArrayRef<int32_t>{ static_cast<int32_t>(kVulkanNativeElementwiseWorkgroupSize), 1, 1 });
+			emitEntryPoint(writeFunc);
 
 			if (mlir::failed(mlir::verify(module)))
 			{
@@ -3182,7 +3264,7 @@ namespace LiteNN
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
 			auto module = BuildSoftmaxF32SPIRVModule(inputShape, axis, context);
-			ValidateVulkanShaderModule(module.get());
+			ValidateVulkanShaderModule(module.get(), 3);
 
 			std::string mlirText;
 			llvm::raw_string_ostream mlirStream(mlirText);
@@ -3727,6 +3809,21 @@ namespace LiteNN
 			    "Vulkan native f32 softmax requires a static non-empty shape and an in-range axis");
 		}
 		return SerializeSoftmaxF32SPIRV(inputShape, axis);
+	}
+
+	std::string_view VulkanNativeSoftmaxRowMaxF32KernelName()
+	{
+		return SoftmaxRowMaxF32KernelName();
+	}
+
+	std::string_view VulkanNativeSoftmaxRowSumF32KernelName()
+	{
+		return SoftmaxRowSumF32KernelName();
+	}
+
+	std::string_view VulkanNativeSoftmaxWriteF32KernelName()
+	{
+		return SoftmaxWriteF32KernelName();
 	}
 
 	std::string_view VulkanNativePool2DF32KernelName(PoolMode mode)

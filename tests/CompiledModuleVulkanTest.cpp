@@ -1620,17 +1620,40 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSoftmax)
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_TRUE(payload.featureSet.CheckIsValid());
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SoftmaxF32)), 0ull);
-	ASSERT_EQ(payload.kernels.size(), 1u);
-	EXPECT_EQ(payload.kernels[0].entryPoint, "softmax");
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, 2u * sizeof(float));
+	EXPECT_EQ(payload.workspaceTensors[1].byteSize, 2u * sizeof(float));
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeSoftmaxRowMaxF32KernelName());
+	EXPECT_EQ(payload.kernels[1].entryPoint, VulkanNativeSoftmaxRowSumF32KernelName());
+	EXPECT_EQ(payload.kernels[2].entryPoint, VulkanNativeSoftmaxWriteF32KernelName());
 	EXPECT_EQ(payload.kernels[0].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[1].groups.x, 1u);
+	EXPECT_EQ(payload.kernels[2].groups.x, 1u);
 	EXPECT_EQ(payload.kernels[0].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_EQ(payload.kernels[1].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
+	EXPECT_EQ(payload.kernels[2].requirements.localSize.x, kVulkanNativeElementwiseWorkgroupSize);
 	ASSERT_EQ(payload.kernels[0].arguments.size(), 2u);
+	ASSERT_EQ(payload.kernels[1].arguments.size(), 3u);
+	ASSERT_EQ(payload.kernels[2].arguments.size(), 4u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 6u * sizeof(float));
-	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
-	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 2u * sizeof(float));
+	EXPECT_EQ(payload.kernels[1].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].binding, 2u);
+	EXPECT_NE(payload.kernels[1].arguments[1].index, payload.kernels[1].arguments[2].index);
+	EXPECT_EQ(payload.kernels[2].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[2].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[3].binding, 3u);
+	EXPECT_EQ(payload.kernels[2].arguments[3].byteSize, 6u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNormalization)
