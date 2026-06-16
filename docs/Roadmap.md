@@ -2001,8 +2001,9 @@ packaging slice to a useful production backend.
             `litenn_bench` / `litenn_profile` mixed-DAG rows.
       - [x] Normalize `litenn_profile` output-directory parsing so both positional paths and `--out-dir` /
             `--out-dir=...` forms write raw objects, assembly, and Vulkan CSV rows to the intended directory.
-      - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
-            can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
+      - [x] Generalize schedule-level lifetime planning beyond binary DAGs: binary DAG and mixed unary/binary
+            elementwise DAG payload emission now share the same schedule-level last-use/workspace allocation helper,
+            leaving future operator-family schedulers to feed the common planner instead of duplicating buffer logic.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now

@@ -5933,6 +5933,100 @@ namespace
 		std::vector<Slot> slots_;
 	};
 
+	struct VulkanP0ScheduleWorkspaceAllocation
+	{
+		std::vector<std::uint32_t> workspaceByKernel;
+		std::vector<VulkanNativeWorkspaceSpec> workspaceTensors;
+	};
+
+	template <typename VisitKernelIntermediateUses>
+	std::vector<std::size_t> BuildVulkanP0ScheduleLastUses(std::size_t kernelCount,
+	                                                       VisitKernelIntermediateUses&& visitKernelIntermediateUses)
+	{
+		std::vector<std::size_t> lastUse(kernelCount, 0);
+		for (std::size_t kernelIndex = 0; kernelIndex < kernelCount; ++kernelIndex)
+		{
+			lastUse[kernelIndex] = kernelIndex;
+			const auto markIntermediateUse = [&](std::uint32_t producerKernelIndex) {
+				if (producerKernelIndex >= lastUse.size())
+				{
+					throw std::runtime_error("Vulkan native schedule intermediate operand index is out of bounds");
+				}
+				lastUse[producerKernelIndex] = std::max(lastUse[producerKernelIndex], kernelIndex);
+			};
+			visitKernelIntermediateUses(kernelIndex, markIntermediateUse);
+		}
+		return lastUse;
+	}
+
+	VulkanP0ScheduleWorkspaceAllocation AllocateVulkanP0ScheduleWorkspaces(std::size_t kernelCount,
+	                                                                       std::uint32_t outputKernelIndex,
+	                                                                       std::span<const std::size_t> lastUse,
+	                                                                       std::uint64_t byteSize,
+	                                                                       std::uint64_t alignment)
+	{
+		if (outputKernelIndex >= kernelCount || lastUse.size() != kernelCount)
+		{
+			throw std::runtime_error("Vulkan native schedule workspace plan is inconsistent");
+		}
+
+		VulkanP0WorkspacePlanner workspacePlanner;
+		VulkanP0ScheduleWorkspaceAllocation allocation{
+			.workspaceByKernel = std::vector<std::uint32_t>(kernelCount, 0),
+		};
+		for (std::size_t kernelIndex = 0; kernelIndex < kernelCount; ++kernelIndex)
+		{
+			if (kernelIndex == outputKernelIndex)
+			{
+				continue;
+			}
+			allocation.workspaceByKernel[kernelIndex] =
+			    workspacePlanner.Allocate(byteSize, alignment, kernelIndex, lastUse[kernelIndex]);
+		}
+		allocation.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
+		return allocation;
+	}
+
+	VulkanNativeArgumentSpec VulkanP0ScheduleWorkspaceArgument(std::uint32_t producerKernelIndex,
+	                                                           std::uint32_t binding,
+	                                                           std::uint64_t byteSize,
+	                                                           std::span<const std::uint32_t> workspaceByKernel)
+	{
+		if (producerKernelIndex >= workspaceByKernel.size())
+		{
+			throw std::runtime_error("Vulkan native schedule workspace operand index is out of bounds");
+		}
+		return VulkanNativeArgumentSpec{
+			.kind = VulkanNativeArgumentKind::WorkspaceTensor,
+			.index = workspaceByKernel[producerKernelIndex],
+			.binding = binding,
+			.byteOffset = 0,
+			.byteSize = byteSize,
+		};
+	}
+
+	VulkanNativeArgumentSpec VulkanP0ScheduleOutputArgument(std::size_t kernelIndex, std::uint32_t outputKernelIndex,
+	                                                        std::uint32_t binding, std::uint64_t byteSize,
+	                                                        std::span<const std::uint32_t> workspaceByKernel)
+	{
+		if (kernelIndex == outputKernelIndex)
+		{
+			return VulkanNativeArgumentSpec{
+				.kind = VulkanNativeArgumentKind::OutputTensor,
+				.index = 0,
+				.binding = binding,
+				.byteOffset = 0,
+				.byteSize = byteSize,
+			};
+		}
+		if (kernelIndex > std::numeric_limits<std::uint32_t>::max())
+		{
+			throw std::runtime_error("Vulkan native schedule kernel index overflows uint32_t");
+		}
+		return VulkanP0ScheduleWorkspaceArgument(static_cast<std::uint32_t>(kernelIndex), binding, byteSize,
+		                                         workspaceByKernel);
+	}
+
 	struct VulkanP0UnaryPlan
 	{
 		UnaryOp op{ UnaryOp::Negate };
@@ -9241,17 +9335,7 @@ namespace
 	{
 		if (operand.kind == VulkanP0BinaryDAGOperandKind::Intermediate)
 		{
-			if (operand.index >= workspaceByKernel.size())
-			{
-				throw std::runtime_error("Vulkan native binary DAG workspace operand index is out of bounds");
-			}
-			return VulkanNativeArgumentSpec{
-				.kind = VulkanNativeArgumentKind::WorkspaceTensor,
-				.index = workspaceByKernel[operand.index],
-				.binding = binding,
-				.byteOffset = 0,
-				.byteSize = byteSize,
-			};
+			return VulkanP0ScheduleWorkspaceArgument(operand.index, binding, byteSize, workspaceByKernel);
 		}
 		return VulkanNativeArgumentSpec{
 			.kind = VulkanNativeArgumentKind::InputTensor,
@@ -9344,57 +9428,36 @@ namespace
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		std::vector<std::size_t> lastUse(plan->kernels.size(), 0);
-		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
-		{
-			lastUse[kernelIndex] = kernelIndex;
-			const auto markUse = [&](VulkanP0BinaryDAGOperand operand) {
-				if (operand.kind == VulkanP0BinaryDAGOperandKind::Intermediate)
-				{
-					if (operand.index >= lastUse.size())
-					{
-						throw std::runtime_error("Vulkan native binary DAG intermediate operand index is out of bounds");
-					}
-					lastUse[operand.index] = std::max(lastUse[operand.index], kernelIndex);
-				}
-			};
-			markUse(plan->kernels[kernelIndex].lhs);
-			markUse(plan->kernels[kernelIndex].rhs);
-		}
-
-		VulkanP0WorkspacePlanner workspacePlanner;
-		std::vector<std::uint32_t> workspaceByKernel(plan->kernels.size(), 0);
-		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
-		{
-			if (kernelIndex == plan->outputKernelIndex)
-			{
-				continue;
-			}
-			workspaceByKernel[kernelIndex] =
-			    workspacePlanner.Allocate(byteSize, alignof(float), kernelIndex, lastUse[kernelIndex]);
-		}
+		const auto lastUse = BuildVulkanP0ScheduleLastUses(
+		    plan->kernels.size(), [&](std::size_t kernelIndex, const auto& markIntermediateUse) {
+			    const auto markUse = [&](VulkanP0BinaryDAGOperand operand) {
+				    if (operand.kind == VulkanP0BinaryDAGOperandKind::Intermediate)
+				    {
+					    markIntermediateUse(operand.index);
+				    }
+			    };
+			    markUse(plan->kernels[kernelIndex].lhs);
+			    markUse(plan->kernels[kernelIndex].rhs);
+		    });
+		auto workspaceAllocation = AllocateVulkanP0ScheduleWorkspaces(plan->kernels.size(), plan->outputKernelIndex,
+		                                                              lastUse, byteSize, alignof(float));
 
 		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
 			const auto& kernelPlan = plan->kernels[kernelIndex];
-			const auto writesOutput = kernelIndex == plan->outputKernelIndex;
 			payload.kernels.push_back({
 			    .entryPoint = VulkanNativeSameShapeBinaryF32KernelName(kernelPlan.op),
 			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 			    .arguments = {
-			        VulkanP0BinaryDAGArgument(kernelPlan.lhs, 0, byteSize, workspaceByKernel),
-			        VulkanP0BinaryDAGArgument(kernelPlan.rhs, 1, byteSize, workspaceByKernel),
-			        writesOutput ? VulkanNativeArgumentSpec{ .kind = VulkanNativeArgumentKind::OutputTensor,
-			                                                 .index = 0,
-			                                                 .binding = 2,
-			                                                 .byteOffset = 0,
-			                                                 .byteSize = byteSize }
-			                     : workspacePlanner.Argument(workspaceByKernel[kernelIndex], 2, byteSize),
+			        VulkanP0BinaryDAGArgument(kernelPlan.lhs, 0, byteSize, workspaceAllocation.workspaceByKernel),
+			        VulkanP0BinaryDAGArgument(kernelPlan.rhs, 1, byteSize, workspaceAllocation.workspaceByKernel),
+			        VulkanP0ScheduleOutputArgument(kernelIndex, plan->outputKernelIndex, 2, byteSize,
+			                                       workspaceAllocation.workspaceByKernel),
 			    },
 			});
 		}
-		payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
+		payload.workspaceTensors = std::move(workspaceAllocation.workspaceTensors);
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
@@ -9441,56 +9504,33 @@ namespace
 		payload.spirv = std::move(spirv.words);
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		std::vector<std::size_t> lastUse(plan->kernels.size(), 0);
-		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
-		{
-			lastUse[kernelIndex] = kernelIndex;
-			const auto markUse = [&](VulkanP0ElementwiseDAGOperand operand) {
-				if (operand.kind == VulkanP0ElementwiseDAGOperandKind::Intermediate)
-				{
-					if (operand.index >= lastUse.size())
-					{
-						throw std::runtime_error(
-						    "Vulkan native elementwise DAG intermediate operand index is out of bounds");
-					}
-					lastUse[operand.index] = std::max(lastUse[operand.index], kernelIndex);
-				}
-			};
-			const auto& kernelPlan = plan->kernels[kernelIndex];
-			if (kernelPlan.kind == VulkanNativeElementwiseF32KernelKind::Unary)
-			{
-				markUse(kernelPlan.input);
-			}
-			else
-			{
-				markUse(kernelPlan.lhs);
-				markUse(kernelPlan.rhs);
-			}
-		}
-
-		VulkanP0WorkspacePlanner workspacePlanner;
-		std::vector<std::uint32_t> workspaceByKernel(plan->kernels.size(), 0);
-		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
-		{
-			if (kernelIndex == plan->outputKernelIndex)
-			{
-				continue;
-			}
-			workspaceByKernel[kernelIndex] =
-			    workspacePlanner.Allocate(byteSize, alignof(float), kernelIndex, lastUse[kernelIndex]);
-		}
+		const auto lastUse = BuildVulkanP0ScheduleLastUses(
+		    plan->kernels.size(), [&](std::size_t kernelIndex, const auto& markIntermediateUse) {
+			    const auto markUse = [&](VulkanP0ElementwiseDAGOperand operand) {
+				    if (operand.kind == VulkanP0ElementwiseDAGOperandKind::Intermediate)
+				    {
+					    markIntermediateUse(operand.index);
+				    }
+			    };
+			    const auto& kernelPlan = plan->kernels[kernelIndex];
+			    if (kernelPlan.kind == VulkanNativeElementwiseF32KernelKind::Unary)
+			    {
+				    markUse(kernelPlan.input);
+			    }
+			    else
+			    {
+				    markUse(kernelPlan.lhs);
+				    markUse(kernelPlan.rhs);
+			    }
+		    });
+		auto workspaceAllocation = AllocateVulkanP0ScheduleWorkspaces(plan->kernels.size(), plan->outputKernelIndex,
+		                                                              lastUse, byteSize, alignof(float));
 
 		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
 			const auto& kernelPlan = plan->kernels[kernelIndex];
-			const auto writesOutput = kernelIndex == plan->outputKernelIndex;
-			VulkanNativeArgumentSpec outputArgument =
-			    writesOutput ? VulkanNativeArgumentSpec{ .kind = VulkanNativeArgumentKind::OutputTensor,
-			                                             .index = 0,
-			                                             .binding = 2,
-			                                             .byteOffset = 0,
-			                                             .byteSize = byteSize }
-			                 : workspacePlanner.Argument(workspaceByKernel[kernelIndex], 2, byteSize);
+			VulkanNativeArgumentSpec outputArgument = VulkanP0ScheduleOutputArgument(
+			    kernelIndex, plan->outputKernelIndex, 2, byteSize, workspaceAllocation.workspaceByKernel);
 
 			if (kernelPlan.kind == VulkanNativeElementwiseF32KernelKind::Unary)
 			{
@@ -9499,8 +9539,8 @@ namespace
 				    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 				    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 				    .arguments = {
-				        VulkanP0BinaryDAGArgument(kernelPlan.input, 0, byteSize, workspaceByKernel),
-				        VulkanP0BinaryDAGArgument(kernelPlan.input, 1, byteSize, workspaceByKernel),
+				        VulkanP0BinaryDAGArgument(kernelPlan.input, 0, byteSize, workspaceAllocation.workspaceByKernel),
+				        VulkanP0BinaryDAGArgument(kernelPlan.input, 1, byteSize, workspaceAllocation.workspaceByKernel),
 				        outputArgument,
 				    },
 				});
@@ -9512,14 +9552,14 @@ namespace
 				    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
 				    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
 				    .arguments = {
-				        VulkanP0BinaryDAGArgument(kernelPlan.lhs, 0, byteSize, workspaceByKernel),
-				        VulkanP0BinaryDAGArgument(kernelPlan.rhs, 1, byteSize, workspaceByKernel),
+				        VulkanP0BinaryDAGArgument(kernelPlan.lhs, 0, byteSize, workspaceAllocation.workspaceByKernel),
+				        VulkanP0BinaryDAGArgument(kernelPlan.rhs, 1, byteSize, workspaceAllocation.workspaceByKernel),
 				        outputArgument,
 				    },
 				});
 			}
 		}
-		payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
+		payload.workspaceTensors = std::move(workspaceAllocation.workspaceTensors);
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);
