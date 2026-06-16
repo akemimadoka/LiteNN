@@ -126,6 +126,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildMixedElementwiseDAGGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto rhs = sg.AddParam(DataType::Float32, { 4 });
+		const auto tail = sg.AddParam(DataType::Float32, { 4 });
+		const auto added = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                              { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto abs =
+		    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { abs, 0 }, { tail, 0 } },
+		                            { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { out, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs", "tail" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildReduceGraph(ReduceOp op, std::size_t axis, std::vector<std::size_t> outputShape)
 	{
 		Graph graph;
@@ -1046,6 +1067,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForBranchedBinaryDAGWithTail)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMixedElementwiseDAG)
+{
+	const auto graph = BuildMixedElementwiseDAGGraph();
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("elementwise DAG"), std::string::npos);
+	EXPECT_NE(report.capability.find("3 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMul)
 {
 	const auto graph = BuildSimpleMatMulGraph();
@@ -1226,6 +1258,52 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForBinaryChain)
 	EXPECT_EQ(payload.kernels[1].arguments[1].index, 2u);
 	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 	EXPECT_EQ(payload.kernels[1].arguments[2].index, 0u);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForMixedElementwiseDAG)
+{
+	const auto graph = BuildMixedElementwiseDAGGraph();
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const std::array ops{
+		VulkanNativeElementwiseF32KernelOp{ .kind = VulkanNativeElementwiseF32KernelKind::Binary,
+		                                    .binaryOp = BinaryOp::Add },
+		VulkanNativeElementwiseF32KernelOp{ .kind = VulkanNativeElementwiseF32KernelKind::Unary,
+		                                    .unaryOp = UnaryOp::Abs },
+		VulkanNativeElementwiseF32KernelOp{ .kind = VulkanNativeElementwiseF32KernelKind::Binary,
+		                                    .binaryOp = BinaryOp::Multiply },
+	};
+	const auto generated = VulkanNativeSameShapeElementwiseF32DAGSPIRV(ops, kElementCount);
+	EXPECT_EQ(payload.spirv, generated.words);
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Add));
+	EXPECT_EQ(payload.kernels[1].entryPoint, VulkanNativeSameShapeUnaryF32KernelName(UnaryOp::Abs));
+	EXPECT_EQ(payload.kernels[2].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Multiply));
+
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[0].index, 0u);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].index, 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].index, 0u);
+
+	ASSERT_EQ(payload.kernels[1].arguments.size(), 3u);
+	EXPECT_EQ(payload.kernels[1].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[0].index, 0u);
+	EXPECT_EQ(payload.kernels[1].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[1].index, 0u);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].index, 1u);
+
+	EXPECT_EQ(payload.kernels[2].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[0].index, 1u);
+	EXPECT_EQ(payload.kernels[2].arguments[1].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[1].index, 2u);
+	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[2].arguments[2].index, 0u);
 }
 
 TEST(CompiledModuleVulkanTest, ReusesOneWorkspaceForLongBinaryChain)
@@ -2608,6 +2686,41 @@ TEST(CompiledModuleVulkanTest, RunsBranchedBinaryDAGWithTailWorkspace)
 
 	const auto actual = CopyToHost(outputs[0]);
 	const std::array expected{ 39.0f, 104.0f, 191.0f, 300.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsMixedElementwiseDAGWithWorkspace)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildMixedElementwiseDAGGraph();
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ -2.0, -1.0, 3.0, -4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 3.0, -5.0, 2.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 2.0, 4.0, 3.0, 5.0 }, { 4 }, DataType::Float32, device),
+	};
+	std::vector<CompiledModuleVulkanProfileEvent> events;
+	auto outputs =
+	    module.RunTensors(std::span<const Tensor<Vulkan>>(inputs), { .synchronize = true, .profileEvents = &events });
+	ASSERT_EQ(outputs.size(), 1);
+	ASSERT_EQ(events.size(), 3u);
+	EXPECT_EQ(events[0].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Add));
+	EXPECT_EQ(events[1].entryPoint, VulkanNativeSameShapeUnaryF32KernelName(UnaryOp::Abs));
+	EXPECT_EQ(events[1].descriptorCount, 3u);
+	EXPECT_EQ(events[2].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Multiply));
+
+	const auto actual = CopyToHost(outputs[0]);
+	const std::array expected{ 2.0f, 8.0f, 6.0f, 10.0f };
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_FLOAT_EQ(actual[i], expected[i]);

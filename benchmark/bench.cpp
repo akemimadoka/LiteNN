@@ -871,6 +871,26 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanMixedElementwiseDAGGraph(std::size_t elementCount)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto rhs = sg.AddParam(DataType::Float32, { elementCount });
+		const auto tail = sg.AddParam(DataType::Float32, { elementCount });
+		const auto added = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                              { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto abs =
+		    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { abs, 0 }, { tail, 0 } },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "lhs", "rhs", "tail" });
+		graph.SetOutputNames({ "out" });
+		return graph;
+	}
+
 	Graph BuildVulkanBranchedBinaryDAGGraph(std::size_t elementCount)
 	{
 		Graph graph;
@@ -1660,6 +1680,42 @@ namespace
 			MakeElementwiseInputData(elementCount, 29u),
 			MakeElementwiseInputData(elementCount, 30u),
 			MakeElementwiseInputData(elementCount, 31u),
+		};
+		auto inputs = MakeVulkanSameShapeInputs(std::span<const std::vector<float>>(inputData));
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeMixedElementwiseDAGRunTensorsInto(benchmark::State& state, std::size_t elementCount)
+	{
+		auto graph = BuildVulkanMixedElementwiseDAGGraph(elementCount);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for mixed elementwise DAG benchmark");
+			return;
+		}
+
+		std::array inputData{
+			MakeElementwiseInputData(elementCount, 35u),
+			MakeElementwiseInputData(elementCount, 36u),
+			MakeElementwiseInputData(elementCount, 37u),
 		};
 		auto inputs = MakeVulkanSameShapeInputs(std::span<const std::vector<float>>(inputData));
 		auto outputs = AllocateVulkanOutputs(module);
@@ -2597,6 +2653,13 @@ namespace
 				    std::format("VulkanNativeBinaryDAGRunInto/F32/elements:{}", elementCount),
 				    [=](benchmark::State& state) { BMVulkanNativeBinaryDAGRunTensorsInto(state, elementCount); });
 				binaryDAGBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* mixedElementwiseDAGBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeMixedElementwiseDAGRunInto/F32/elements:{}", elementCount),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeMixedElementwiseDAGRunTensorsInto(state, elementCount);
+				    });
+				mixedElementwiseDAGBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* branchedBinaryDAGBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeBranchedBinaryDAGRunInto/F32/elements:{}", elementCount),

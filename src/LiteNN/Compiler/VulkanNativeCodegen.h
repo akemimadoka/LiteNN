@@ -18,6 +18,19 @@ namespace LiteNN
 		std::string mlir;
 	};
 
+	enum class VulkanNativeElementwiseF32KernelKind
+	{
+		Unary,
+		Binary,
+	};
+
+	struct VulkanNativeElementwiseF32KernelOp
+	{
+		VulkanNativeElementwiseF32KernelKind kind{ VulkanNativeElementwiseF32KernelKind::Binary };
+		UnaryOp unaryOp{ UnaryOp::Abs };
+		BinaryOp binaryOp{ BinaryOp::Add };
+	};
+
 	constexpr std::uint32_t kVulkanNativeElementwiseWorkgroupSize = 64;
 	constexpr std::uint32_t kVulkanNativeMatMulWorkgroupSize = 64;
 
@@ -26,6 +39,7 @@ namespace LiteNN
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op,
 	                                                           std::uint32_t elementCount);
+	std::string VulkanNativeSameShapeUnaryF32KernelName(UnaryOp op);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32SPIRV(BinaryOp op, std::uint32_t elementCount);
@@ -35,6 +49,9 @@ namespace LiteNN
 	std::string VulkanNativeSameShapeBinaryKernelName(DataType dtype, BinaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinaryF32ChainSPIRV(std::span<const BinaryOp> ops,
 	                                                                    std::uint32_t elementCount);
+	VulkanNativeGeneratedSPIRV
+	VulkanNativeSameShapeElementwiseF32DAGSPIRV(std::span<const VulkanNativeElementwiseF32KernelOp> ops,
+	                                           std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 	                                                          std::uint32_t elementCount);
