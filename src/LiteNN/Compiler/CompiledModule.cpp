@@ -9185,45 +9185,113 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
-		auto spirv =
-		    VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
-		                                      plan->scale.has_value(), plan->bias.has_value(), plan->groupCount);
-		payload.spirv = std::move(spirv.words);
 
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		std::vector<VulkanNativeArgumentSpec> arguments;
-		arguments.push_back({ .kind = VulkanNativeArgumentKind::InputTensor,
-		                      .index = plan->inputIndex,
-		                      .binding = 0,
-		                      .byteOffset = 0,
-		                      .byteSize = outputByteSize });
-		std::uint32_t nextBinding = 1;
-		const auto appendAffine = [&](const VulkanP0TensorRef& ref) {
-			arguments.push_back({ .kind = ref.argumentKind,
-			                      .index = ref.argumentIndex,
-			                      .binding = nextBinding++,
+		const auto useStagedAxisNormalization =
+		    !plan->scale && !plan->bias && plan->groupCount == 1 && plan->mode == NormalizationMode::LayerNorm;
+		if (useStagedAxisNormalization)
+		{
+			auto spirv = VulkanNativeAxisNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon);
+			payload.spirv = std::move(spirv.words);
+
+			const auto axisSize = static_cast<std::uint32_t>(plan->inputShape[plan->axis]);
+			const auto rowCount = plan->elementCount / axisSize;
+			const auto rowWorkspaceBytes = static_cast<std::uint64_t>(rowCount) * sizeof(float);
+			VulkanP0WorkspacePlanner workspacePlanner;
+			std::optional<std::uint32_t> rowMeanWorkspace;
+			if (plan->mode == NormalizationMode::LayerNorm)
+			{
+				rowMeanWorkspace = workspacePlanner.Allocate(rowWorkspaceBytes, alignof(float), 0, 1);
+			}
+			const auto rowDenomWorkspace = workspacePlanner.Allocate(rowWorkspaceBytes, alignof(float), 0, 1);
+
+			std::vector<VulkanNativeArgumentSpec> statsArgs{
+			    { .kind = VulkanNativeArgumentKind::InputTensor,
+			      .index = plan->inputIndex,
+			      .binding = 0,
+			      .byteOffset = 0,
+			      .byteSize = outputByteSize },
+			};
+			std::uint32_t nextBinding = 1;
+			if (rowMeanWorkspace)
+			{
+				statsArgs.push_back(workspacePlanner.Argument(*rowMeanWorkspace, nextBinding++, rowWorkspaceBytes));
+			}
+			statsArgs.push_back(workspacePlanner.Argument(rowDenomWorkspace, nextBinding, rowWorkspaceBytes));
+			payload.kernels.push_back({
+			    .entryPoint = std::string(VulkanNativeAxisNormalizationStatsF32KernelName(plan->mode)),
+			    .groups = { .x = VulkanP0ElementwiseGroupCount(rowCount), .y = 1, .z = 1 },
+			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+			    .arguments = std::move(statsArgs),
+			});
+
+			std::vector<VulkanNativeArgumentSpec> writeArgs{
+			    { .kind = VulkanNativeArgumentKind::InputTensor,
+			      .index = plan->inputIndex,
+			      .binding = 0,
+			      .byteOffset = 0,
+			      .byteSize = outputByteSize },
+			};
+			nextBinding = 1;
+			if (rowMeanWorkspace)
+			{
+				writeArgs.push_back(workspacePlanner.Argument(*rowMeanWorkspace, nextBinding++, rowWorkspaceBytes));
+			}
+			writeArgs.push_back(workspacePlanner.Argument(rowDenomWorkspace, nextBinding++, rowWorkspaceBytes));
+			writeArgs.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
+			                      .index = 0,
+			                      .binding = nextBinding,
 			                      .byteOffset = 0,
-			                      .byteSize = static_cast<std::uint64_t>(ref.elementCount) * sizeof(float) });
-		};
-		if (plan->scale)
-		{
-			appendAffine(*plan->scale);
+			                      .byteSize = outputByteSize });
+			payload.kernels.push_back({
+			    .entryPoint = std::string(VulkanNativeAxisNormalizationWriteF32KernelName(plan->mode)),
+			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+			    .arguments = std::move(writeArgs),
+			});
+			payload.workspaceTensors = workspacePlanner.TakeWorkspaceTensors();
 		}
-		if (plan->bias)
+		else
 		{
-			appendAffine(*plan->bias);
+			auto spirv =
+			    VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
+			                                      plan->scale.has_value(), plan->bias.has_value(), plan->groupCount);
+			payload.spirv = std::move(spirv.words);
+
+			std::vector<VulkanNativeArgumentSpec> arguments;
+			arguments.push_back({ .kind = VulkanNativeArgumentKind::InputTensor,
+			                      .index = plan->inputIndex,
+			                      .binding = 0,
+			                      .byteOffset = 0,
+			                      .byteSize = outputByteSize });
+			std::uint32_t nextBinding = 1;
+			const auto appendAffine = [&](const VulkanP0TensorRef& ref) {
+				arguments.push_back({ .kind = ref.argumentKind,
+				                      .index = ref.argumentIndex,
+				                      .binding = nextBinding++,
+				                      .byteOffset = 0,
+				                      .byteSize = static_cast<std::uint64_t>(ref.elementCount) * sizeof(float) });
+			};
+			if (plan->scale)
+			{
+				appendAffine(*plan->scale);
+			}
+			if (plan->bias)
+			{
+				appendAffine(*plan->bias);
+			}
+			arguments.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
+			                      .index = 0,
+			                      .binding = nextBinding,
+			                      .byteOffset = 0,
+			                      .byteSize = outputByteSize });
+			payload.kernels.push_back({
+			    .entryPoint = std::string(VulkanNativeNormalizationF32KernelName(plan->mode)),
+			    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
+			    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
+			    .arguments = std::move(arguments),
+			});
 		}
-		arguments.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
-		                      .index = 0,
-		                      .binding = nextBinding,
-		                      .byteOffset = 0,
-		                      .byteSize = outputByteSize });
-		payload.kernels.push_back({
-		    .entryPoint = std::string(VulkanNativeNormalizationF32KernelName(plan->mode)),
-		    .groups = { .x = VulkanP0ElementwiseGroupCount(plan->elementCount), .y = 1, .z = 1 },
-		    .requirements = VulkanP0KernelRequirements(kVulkanNativeElementwiseWorkgroupSize),
-		    .arguments = std::move(arguments),
-		});
 
 		auto inputSpecs = BuildInputSpecs(graph);
 		auto outputSpecs = BuildOutputSpecs(graph);

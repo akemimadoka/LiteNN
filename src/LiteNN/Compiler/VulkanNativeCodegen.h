@@ -77,6 +77,11 @@ namespace LiteNN
 	                                                             std::size_t axis, double epsilon,
 	                                                             bool hasScale = false, bool hasBias = false,
 	                                                             std::size_t groupCount = 1);
+	VulkanNativeGeneratedSPIRV VulkanNativeAxisNormalizationF32SPIRV(NormalizationMode mode,
+	                                                                 std::span<const std::size_t> inputShape,
+	                                                                 std::size_t axis, double epsilon);
+	std::string_view VulkanNativeAxisNormalizationStatsF32KernelName(NormalizationMode mode);
+	std::string_view VulkanNativeAxisNormalizationWriteF32KernelName(NormalizationMode mode);
 	std::string_view VulkanNativePool2DF32KernelName(PoolMode mode);
 	bool VulkanNativeSupportsPool2DF32(PoolMode mode, std::span<const std::size_t> inputShape,
 	                                   std::span<const std::size_t> outputShape,
