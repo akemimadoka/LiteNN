@@ -814,6 +814,20 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanUnaryAbsGraph(std::size_t elementCount, DataType dtype = DataType::Float32)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(dtype, { elementCount });
+		const auto out = sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { input, 0 } },
+		                            { OutputInfo{ dtype, { elementCount } } });
+		sg.SetResults({ { out, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "abs" });
+		return graph;
+	}
+
 	Graph BuildVulkanBinaryChainGraph(std::size_t elementCount)
 	{
 		Graph graph;
@@ -1399,6 +1413,16 @@ namespace
 		return inputs;
 	}
 
+	std::vector<Tensor<Vulkan>> MakeVulkanUnaryInputs(const std::vector<float>& data,
+	                                                  DataType dtype = DataType::Float32)
+	{
+		std::vector<Tensor<Vulkan>> inputs;
+		const std::vector<double> values(data.begin(), data.end());
+		const Tensor<CPU> cpu(std::span<const double>(values), { data.size() }, dtype);
+		inputs.push_back(cpu.CopyToDevice(Vulkan{}));
+		return inputs;
+	}
+
 	std::vector<Tensor<Vulkan>> MakeVulkanSameShapeInputs(std::span<const std::vector<float>> inputData)
 	{
 		if (inputData.empty())
@@ -1532,6 +1556,39 @@ namespace
 		const auto lhsData = MakeElementwiseInputData(elementCount, 0);
 		const auto rhsData = MakeElementwiseInputData(elementCount, 1);
 		auto inputs = MakeVulkanElementwiseInputs(lhsData, rhsData, dtype);
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(elementCount));
+		state.counters["elements_per_second"] =
+		    benchmark::Counter(static_cast<double>(elementCount), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeUnaryAbsRunTensorsInto(benchmark::State& state, std::size_t elementCount,
+	                                          DataType dtype = DataType::Float32)
+	{
+		auto graph = BuildVulkanUnaryAbsGraph(elementCount, dtype);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for unary Abs benchmark");
+			return;
+		}
+
+		const auto inputData = MakeElementwiseInputData(elementCount, 17);
+		auto inputs = MakeVulkanUnaryInputs(inputData, dtype);
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -2509,6 +2566,11 @@ namespace
 				    [=](benchmark::State& state) { BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount); });
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
+				auto* unaryAbsBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeUnaryAbsRunInto/F32/elements:{}", elementCount),
+				    [=](benchmark::State& state) { BMVulkanNativeUnaryAbsRunTensorsInto(state, elementCount); });
+				unaryAbsBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
 				if (SupportsVulkanNativeElementwiseBenchmarkDType(DataType::Float16))
 				{
 					auto* fp16BenchmarkCase = benchmark::RegisterBenchmark(
@@ -2517,6 +2579,13 @@ namespace
 						    BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount, DataType::Float16);
 					    });
 					fp16BenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+					auto* fp16UnaryAbsBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeUnaryAbsRunInto/F16/elements:{}", elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeUnaryAbsRunTensorsInto(state, elementCount, DataType::Float16);
+					    });
+					fp16UnaryAbsBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
 				auto* binaryChainBenchmarkCase = benchmark::RegisterBenchmark(

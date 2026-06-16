@@ -2090,6 +2090,9 @@ packaging slice to a useful production backend.
             - [x] Add the matching fp16 same-shape unary slice for Vulkan native Negate/Abs/Sqrt/Exp/Log/Sin/Cos,
                   including dtype-aware SPIR-V generation, payload feature bits, device requirements, support
                   diagnostics, and feature-gated runtime coverage.
+            - [x] Add load-time capability regression coverage and benchmark visibility for fp16 Vulkan arithmetic:
+                  Float16 binary/unary payloads are rejected when required device features are disabled, and
+                  `litenn_bench` now registers `VulkanNativeUnaryAbsRunInto` F32/F16 rows when supported.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.

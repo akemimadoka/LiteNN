@@ -608,6 +608,23 @@ namespace
 		};
 	}
 
+	void ExpectFloat16FeatureGateRejectsLoad(const CompiledModuleArtifact& artifact, Vulkan& device)
+	{
+		try
+		{
+			(void) artifact.Load(device);
+			FAIL() << "Expected low-precision Vulkan artifact loading to require enabled device features";
+		}
+		catch (const std::runtime_error& ex)
+		{
+			const std::string message = ex.what();
+			EXPECT_TRUE(message.find("shaderFloat16") != std::string::npos ||
+			            message.find("storageBuffer16BitAccess") != std::string::npos)
+			    << message;
+			EXPECT_NE(message.find("enabled=false"), std::string::npos);
+		}
+	}
+
 	struct BinaryCase
 	{
 		BinaryOp op;
@@ -1809,19 +1826,49 @@ TEST(CompiledModuleVulkanTest, RejectsLowPrecisionCastWhenDeviceFeaturesAreNotEn
 	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
 	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
-	try
+	ExpectFloat16FeatureGateRejectsLoad(artifact, device);
+}
+
+TEST(CompiledModuleVulkanTest, RejectsFloat16BinaryWhenDeviceFeaturesAreNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
 	{
-		(void) artifact.Load(device);
-		FAIL() << "Expected low-precision Vulkan artifact loading to require enabled device features";
+		GTEST_SKIP() << "No Vulkan compute device is available";
 	}
-	catch (const std::runtime_error& ex)
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled)
 	{
-		const std::string message = ex.what();
-		EXPECT_TRUE(message.find("shaderFloat16") != std::string::npos ||
-		            message.find("storageBuffer16BitAccess") != std::string::npos)
-		    << message;
-		EXPECT_NE(message.find("enabled=false"), std::string::npos);
+		GTEST_SKIP() << "Vulkan Float16 storage features are enabled by the runtime";
 	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kElementCount, DataType::Float16);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	ExpectFloat16FeatureGateRejectsLoad(artifact, device);
+}
+
+TEST(CompiledModuleVulkanTest, RejectsFloat16UnaryWhenDeviceFeaturesAreNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Float16 storage features are enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Float16);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	ExpectFloat16FeatureGateRejectsLoad(artifact, device);
 }
 
 TEST(CompiledModuleVulkanTest, ReportsDescriptorAndDispatchLimits)
