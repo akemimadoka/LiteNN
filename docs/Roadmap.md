@@ -2001,6 +2001,8 @@ packaging slice to a useful production backend.
             `litenn_bench` / `litenn_profile` mixed-DAG rows.
       - [x] Normalize `litenn_profile` output-directory parsing so both positional paths and `--out-dir` /
             `--out-dir=...` forms write raw objects, assembly, and Vulkan CSV rows to the intended directory.
+      - [x] Add representative `litenn_profile` Vulkan rows for Reduce, Softmax, LayerNorm, and RMSNorm native
+            kernels so scalar-loop reduction/normalization bottlenecks show up beside elementwise DAG GPU timing.
       - [x] Generalize schedule-level lifetime planning beyond binary DAGs: binary DAG and mixed unary/binary
             elementwise DAG payload emission now share the same schedule-level last-use/workspace allocation helper,
             leaving future operator-family schedulers to feed the common planner instead of duplicating buffer logic.

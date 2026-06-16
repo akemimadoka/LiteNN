@@ -189,6 +189,89 @@ static Graph BuildBranchedBinaryDAGProfileGraph(std::size_t batch, std::mt19937&
 	return graph;
 }
 
+static Graph BuildReduceProfileGraph(ReduceOp op, std::size_t batch)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> inputShape{ batch, 784 };
+	const auto input = sg.AddParam(DataType::Float32, inputShape);
+	const auto out =
+	    sg.AddNode(ReduceOpNode{ op, { input, 0 }, 1 }, { OutputInfo{ DataType::Float32, { batch } } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
+static Graph BuildReduceSumProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildReduceProfileGraph(ReduceOp::Sum, batch);
+}
+
+static Graph BuildReduceMeanProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildReduceProfileGraph(ReduceOp::Mean, batch);
+}
+
+static Graph BuildReduceMaxProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildReduceProfileGraph(ReduceOp::Max, batch);
+}
+
+static Graph BuildReduceMinProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildReduceProfileGraph(ReduceOp::Min, batch);
+}
+
+static Graph BuildSoftmaxProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto input = sg.AddParam(DataType::Float32, shape);
+	const auto out = sg.AddNode(SoftmaxNode{ { input, 0 }, 1 }, { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
+static Graph BuildNormalizationProfileGraph(NormalizationMode mode, std::size_t batch)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto input = sg.AddParam(DataType::Float32, shape);
+	const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+	                                               .scale = std::nullopt,
+	                                               .bias = std::nullopt,
+	                                               .mode = mode,
+	                                               .axis = 1,
+	                                               .groupCount = 1,
+	                                               .epsilon = 1e-5 },
+	                            { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
+static Graph BuildLayerNormProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildNormalizationProfileGraph(NormalizationMode::LayerNorm, batch);
+}
+
+static Graph BuildRMSNormProfileGraph(std::size_t batch, std::mt19937&)
+{
+	return BuildNormalizationProfileGraph(NormalizationMode::RMSNorm, batch);
+}
+
 static void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
@@ -1337,6 +1420,46 @@ int main(int argc, char** argv)
 			  .build = BuildBranchedBinaryDAGProfileGraph,
 			  .batch = 512,
 			  .makeInputs = MakeVulkanBranchedBinaryDAGProfileInputs },
+			{ .name = "reduce_sum_b1",
+			  .build = BuildReduceSumProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "reduce_sum_b512",
+			  .build = BuildReduceSumProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "reduce_mean_b512",
+			  .build = BuildReduceMeanProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "reduce_max_b512",
+			  .build = BuildReduceMaxProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "reduce_min_b512",
+			  .build = BuildReduceMinProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "softmax_b1",
+			  .build = BuildSoftmaxProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "softmax_b512",
+			  .build = BuildSoftmaxProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "layernorm_b1",
+			  .build = BuildLayerNormProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "layernorm_b512",
+			  .build = BuildLayerNormProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "rmsnorm_b512",
+			  .build = BuildRMSNormProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
 		};
 		std::cout << std::format(
 		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
