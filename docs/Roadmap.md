@@ -1993,6 +1993,8 @@ packaging slice to a useful production backend.
             directly visible in the normal backend benchmark matrix.
       - [x] Add support/payload/runtime coverage for branched same-shape f32 binary DAGs with tail reuse, proving the
             current last-use planner handles non-diamond multi-kernel schedules and workspace slot reuse.
+      - [x] Add `litenn_profile` and `litenn_bench` rows for branched same-shape f32 binary DAGs so `WS=3` schedules
+            and five-dispatch workspace behavior are visible in normal performance runs.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:

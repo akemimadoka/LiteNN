@@ -139,6 +139,34 @@ static Graph BuildBinaryDAGProfileGraph(std::size_t batch, std::mt19937&)
 	return graph;
 }
 
+static Graph BuildBranchedBinaryDAGProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto a = sg.AddParam(DataType::Float32, shape);
+	const auto b = sg.AddParam(DataType::Float32, shape);
+	const auto c = sg.AddParam(DataType::Float32, shape);
+	const auto d = sg.AddParam(DataType::Float32, shape);
+	const auto e = sg.AddParam(DataType::Float32, shape);
+	const auto first =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto second =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { c, 0 }, { d, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto merged = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { second, 0 } },
+	                               { OutputInfo{ DataType::Float32, shape } });
+	const auto tail = sg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { first, 0 }, { e, 0 } },
+	                             { OutputInfo{ DataType::Float32, shape } });
+	const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { merged, 0 }, { tail, 0 } },
+	                            { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "a", "b", "c", "d", "e" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
 static void Optimize(Graph& graph)
 {
 	InlinePass{}.Run(graph);
@@ -709,40 +737,30 @@ static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
 }
 
+static VulkanProfileInputs MakeVulkanSameShapeProfileInputs(std::size_t batch, std::size_t inputCount);
+
 static VulkanProfileInputs MakeVulkanBinaryChainProfileInputs(std::size_t batch)
 {
-	std::mt19937 rng(0);
-	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	std::vector<Tensor<CPU>> cpuInputs;
-	cpuInputs.reserve(4);
-	for (std::size_t inputIndex = 0; inputIndex < 4; ++inputIndex)
-	{
-		std::vector<float> data(batch * 784);
-		for (auto& value : data)
-		{
-			value = dist(rng);
-		}
-		cpuInputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 }));
-	}
-
-	std::vector<Tensor<Vulkan>> inputs;
-	inputs.reserve(cpuInputs.size());
-	const auto uploadMs = TimedOnceMs([&] {
-		for (const auto& input : cpuInputs)
-		{
-			inputs.emplace_back(input.CopyToDevice(Vulkan{}));
-		}
-	});
-	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
+	return MakeVulkanSameShapeProfileInputs(batch, 4);
 }
 
 static VulkanProfileInputs MakeVulkanBinaryDAGProfileInputs(std::size_t batch)
 {
+	return MakeVulkanSameShapeProfileInputs(batch, 3);
+}
+
+static VulkanProfileInputs MakeVulkanBranchedBinaryDAGProfileInputs(std::size_t batch)
+{
+	return MakeVulkanSameShapeProfileInputs(batch, 5);
+}
+
+static VulkanProfileInputs MakeVulkanSameShapeProfileInputs(std::size_t batch, std::size_t inputCount)
+{
 	std::mt19937 rng(0);
 	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 	std::vector<Tensor<CPU>> cpuInputs;
-	cpuInputs.reserve(3);
-	for (std::size_t inputIndex = 0; inputIndex < 3; ++inputIndex)
+	cpuInputs.reserve(inputCount);
+	for (std::size_t inputIndex = 0; inputIndex < inputCount; ++inputIndex)
 	{
 		std::vector<float> data(batch * 784);
 		for (auto& value : data)
@@ -1170,6 +1188,22 @@ int main(int argc, char** argv)
 			  .build = BuildBinaryDAGProfileGraph,
 			  .batch = 512,
 			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
+			{ .name = "branch_dag_b1",
+			  .build = BuildBranchedBinaryDAGProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanBranchedBinaryDAGProfileInputs },
+			{ .name = "branch_dag_b32",
+			  .build = BuildBranchedBinaryDAGProfileGraph,
+			  .batch = 32,
+			  .makeInputs = MakeVulkanBranchedBinaryDAGProfileInputs },
+			{ .name = "branch_dag_b128",
+			  .build = BuildBranchedBinaryDAGProfileGraph,
+			  .batch = 128,
+			  .makeInputs = MakeVulkanBranchedBinaryDAGProfileInputs },
+			{ .name = "branch_dag_b512",
+			  .build = BuildBranchedBinaryDAGProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanBranchedBinaryDAGProfileInputs },
 		};
 		std::cout << std::format(
 		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
