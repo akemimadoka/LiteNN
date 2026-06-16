@@ -1361,6 +1361,30 @@ TEST(CompiledModuleVulkanTest, LowersFusedElementWiseChainToVulkanWorkspaceChain
 	EXPECT_EQ(payload.kernels[2].arguments[2].kind, VulkanNativeArgumentKind::OutputTensor);
 }
 
+TEST(CompiledModuleVulkanTest, LowersFusedMixedElementWiseChainToVulkanWorkspaceDAG)
+{
+	auto graph = BuildMixedElementwiseDAGGraph();
+	FusionPass{}.Run(graph);
+	const auto& forward = graph.GetSubgraph(graph.Forward());
+	ASSERT_EQ(forward.Results().size(), 1u);
+	const auto& fusedEntry = forward.GetNodeEntry(forward.Results()[0].node);
+	const auto* fused = std::get_if<FusedOpNode>(&fusedEntry.node);
+	ASSERT_NE(fused, nullptr);
+	EXPECT_EQ(fused->pattern, FusionPattern::ElementWiseChain);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_TRUE(report.supported) << report.reason;
+	EXPECT_NE(report.capability.find("elementwise DAG"), std::string::npos);
+
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	ASSERT_EQ(payload.kernels.size(), 3u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Add));
+	EXPECT_EQ(payload.kernels[1].entryPoint, VulkanNativeSameShapeUnaryF32KernelName(UnaryOp::Abs));
+	EXPECT_EQ(payload.kernels[2].entryPoint, VulkanNativeSameShapeBinaryF32KernelName(BinaryOp::Multiply));
+}
+
 TEST(CompiledModuleVulkanTest, PlansWorkspaceForDiamondBinaryDAG)
 {
 	const auto graph = BuildBinaryDiamondGraph();

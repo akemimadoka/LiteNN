@@ -1995,10 +1995,10 @@ packaging slice to a useful production backend.
             current last-use planner handles non-diamond multi-kernel schedules and workspace slot reuse.
       - [x] Add `litenn_profile` and `litenn_bench` rows for branched same-shape f32 binary DAGs so `WS=3` schedules
             and five-dispatch workspace behavior are visible in normal performance runs.
-      - [x] Add the first mixed same-shape f32 elementwise DAG schedule: non-fused Unary/Binary DAGs such as
-            `Multiply(Abs(Add(lhs, rhs)), tail)` now lower to one SPIR-V module with multiple entry points, explicit
-            `WorkspaceTensor` lifetimes, support/payload/runtime tests, and a `litenn_bench`
-            `VulkanNativeMixedElementwiseDAGRunInto/F32` row.
+      - [x] Add the first mixed same-shape f32 elementwise DAG schedule: non-fused and fused
+            `ElementWiseChain` Unary/Binary DAGs such as `Multiply(Abs(Add(lhs, rhs)), tail)` now lower to one SPIR-V
+            module with multiple entry points, explicit `WorkspaceTensor` lifetimes, support/payload/runtime tests, and
+            `litenn_bench` / `litenn_profile` mixed-DAG rows.
       - [ ] Generalize schedule-level lifetime planning beyond binary DAGs so arbitrary multi-kernel intermediate values
             can be assigned to `WorkspaceTensor` buffers and emitted across mixed operator schedules.
 - [ ] Implement production operator families in priority order:

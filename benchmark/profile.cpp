@@ -139,6 +139,28 @@ static Graph BuildBinaryDAGProfileGraph(std::size_t batch, std::mt19937&)
 	return graph;
 }
 
+static Graph BuildMixedElementwiseDAGProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto lhs = sg.AddParam(DataType::Float32, shape);
+	const auto rhs = sg.AddParam(DataType::Float32, shape);
+	const auto tail = sg.AddParam(DataType::Float32, shape);
+	const auto added =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto abs =
+	    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { abs, 0 }, { tail, 0 } },
+	                            { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "lhs", "rhs", "tail" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
 static Graph BuildBranchedBinaryDAGProfileGraph(std::size_t batch, std::mt19937&)
 {
 	Graph graph;
@@ -749,6 +771,11 @@ static VulkanProfileInputs MakeVulkanBinaryDAGProfileInputs(std::size_t batch)
 	return MakeVulkanSameShapeProfileInputs(batch, 3);
 }
 
+static VulkanProfileInputs MakeVulkanMixedElementwiseDAGProfileInputs(std::size_t batch)
+{
+	return MakeVulkanSameShapeProfileInputs(batch, 3);
+}
+
 static VulkanProfileInputs MakeVulkanBranchedBinaryDAGProfileInputs(std::size_t batch)
 {
 	return MakeVulkanSameShapeProfileInputs(batch, 5);
@@ -1188,6 +1215,22 @@ int main(int argc, char** argv)
 			  .build = BuildBinaryDAGProfileGraph,
 			  .batch = 512,
 			  .makeInputs = MakeVulkanBinaryDAGProfileInputs },
+			{ .name = "mixed_elementwise_dag_b1",
+			  .build = BuildMixedElementwiseDAGProfileGraph,
+			  .batch = 1,
+			  .makeInputs = MakeVulkanMixedElementwiseDAGProfileInputs },
+			{ .name = "mixed_elementwise_dag_b32",
+			  .build = BuildMixedElementwiseDAGProfileGraph,
+			  .batch = 32,
+			  .makeInputs = MakeVulkanMixedElementwiseDAGProfileInputs },
+			{ .name = "mixed_elementwise_dag_b128",
+			  .build = BuildMixedElementwiseDAGProfileGraph,
+			  .batch = 128,
+			  .makeInputs = MakeVulkanMixedElementwiseDAGProfileInputs },
+			{ .name = "mixed_elementwise_dag_b512",
+			  .build = BuildMixedElementwiseDAGProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanMixedElementwiseDAGProfileInputs },
 			{ .name = "branch_dag_b1",
 			  .build = BuildBranchedBinaryDAGProfileGraph,
 			  .batch = 1,
