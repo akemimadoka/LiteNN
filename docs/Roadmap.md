@@ -2115,9 +2115,9 @@ packaging slice to a useful production backend.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.
-      - [x] Reuse per-module descriptor set, command buffer, and fence in the synchronous P0 runtime path instead of
-            allocating/resetting those Vulkan objects on every dispatch; timeline semaphore based async submission
-            remains open.
+      - [x] Reuse per-module descriptor set, command buffer, fence, and timestamp query pool in the synchronous P0
+            runtime path instead of allocating/resetting those Vulkan objects on every dispatch; timeline semaphore
+            based async submission remains open.
 - [x] Add the first Vulkan profiling tranche: `CompiledModuleVulkanRunOptions` accepts a profile-event sink, native
       dispatch records now include kernel index, entry point, dispatch groups, local workgroup layout, descriptor count,
       module creation wall time, and synchronized CPU-side dispatch wall time. `litenn_profile` prints a Vulkan native

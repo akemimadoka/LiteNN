@@ -993,29 +993,9 @@ namespace LiteNN
 		VkPipeline pipeline{};
 		VkCommandBuffer commandBuffer{};
 		VkFence fence{};
+		VkQueryPool timestampQueryPool{};
 		std::uint32_t descriptorCount{};
 		double creationWallTimeMs{};
-	};
-
-	struct VulkanQueryPoolGuard
-	{
-		VkDevice device{};
-		VkQueryPool queryPool{};
-
-		VulkanQueryPoolGuard() = default;
-		explicit VulkanQueryPoolGuard(VkDevice deviceHandle) : device(deviceHandle)
-		{
-		}
-		VulkanQueryPoolGuard(const VulkanQueryPoolGuard&) = delete;
-		VulkanQueryPoolGuard& operator=(const VulkanQueryPoolGuard&) = delete;
-
-		~VulkanQueryPoolGuard()
-		{
-			if (device != VK_NULL_HANDLE && queryPool != VK_NULL_HANDLE)
-			{
-				vkDestroyQueryPool(device, queryPool, nullptr);
-			}
-		}
 	};
 
 	std::uint64_t VulkanTimestampDelta(std::uint64_t begin, std::uint64_t end, std::uint32_t validBits)
@@ -1205,6 +1185,10 @@ namespace LiteNN
 		{
 			vkDestroyFence(impl_->context->device, impl_->fence, nullptr);
 		}
+		if (impl_->timestampQueryPool != VK_NULL_HANDLE)
+		{
+			vkDestroyQueryPool(impl_->context->device, impl_->timestampQueryPool, nullptr);
+		}
 		if (impl_->commandBuffer != VK_NULL_HANDLE)
 		{
 			vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &impl_->commandBuffer);
@@ -1300,8 +1284,7 @@ namespace LiteNN
 		vkUpdateDescriptorSets(impl_->context->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
 		                       nullptr);
 
-		VulkanQueryPoolGuard timestampPool(impl_->context->device);
-		if (recordGpuTimestamp)
+		if (recordGpuTimestamp && impl_->timestampQueryPool == VK_NULL_HANDLE)
 		{
 			const VkQueryPoolCreateInfo queryPoolInfo{
 				.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -1309,7 +1292,7 @@ namespace LiteNN
 				.queryCount = 2,
 			};
 			CheckVulkan(vkCreateQueryPool(impl_->context->device, &queryPoolInfo, nullptr,
-			                              &timestampPool.queryPool),
+			                              &impl_->timestampQueryPool),
 			            "vkCreateQueryPool(timestamp)");
 		}
 
@@ -1321,8 +1304,8 @@ namespace LiteNN
 		CheckVulkan(vkBeginCommandBuffer(impl_->commandBuffer, &beginInfo), "vkBeginCommandBuffer");
 		if (recordGpuTimestamp)
 		{
-			vkCmdResetQueryPool(impl_->commandBuffer, timestampPool.queryPool, 0, 2);
-			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool.queryPool, 0);
+			vkCmdResetQueryPool(impl_->commandBuffer, impl_->timestampQueryPool, 0, 2);
+			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, impl_->timestampQueryPool, 0);
 		}
 		vkCmdBindPipeline(impl_->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
 		vkCmdBindDescriptorSets(impl_->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipelineLayout, 0, 1,
@@ -1330,7 +1313,8 @@ namespace LiteNN
 		vkCmdDispatch(impl_->commandBuffer, groups.x, groups.y, groups.z);
 		if (recordGpuTimestamp)
 		{
-			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool.queryPool, 1);
+			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timestampQueryPool,
+			                    1);
 		}
 		CheckVulkan(vkEndCommandBuffer(impl_->commandBuffer), "vkEndCommandBuffer");
 
@@ -1349,7 +1333,7 @@ namespace LiteNN
 			{
 				std::array<std::uint64_t, 2> timestamps{};
 				const auto queryResult = vkGetQueryPoolResults(
-				    impl_->context->device, timestampPool.queryPool, 0, 2, sizeof(timestamps), timestamps.data(),
+				    impl_->context->device, impl_->timestampQueryPool, 0, 2, sizeof(timestamps), timestamps.data(),
 				    sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
 				if (queryResult == VK_SUCCESS)
 				{
