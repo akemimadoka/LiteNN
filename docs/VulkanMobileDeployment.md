@@ -171,7 +171,10 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeMatMulBiasAdd/F32`, and `VulkanNativeLinearChain/F32/layers:2` rows only when a Vulkan
   compute device exists. It also registers model-level
   `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available, plus
-  `VulkanNativeGraphRunInto/MLP(784->128->10)` whole-graph rows for mixed-shape linear chains.
+  `VulkanNativeGraphRunInto/MLP(784->128->10)` and `VulkanNativeGraphRunInto/MLP(784->512->256->10)` whole-graph rows
+  for mixed-shape linear chains.
+  `benchmark/compare_backends.py` reports those whole-graph rows separately as `LiteNN Vulkan Graph` instead of merging
+  them into the single-kernel `LiteNN Vulkan Native` bucket.
 
 Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
 linear chains, tiled/shared-memory convolution, device-local memory, tiled/shared-memory kernels, and async queue integration

@@ -819,8 +819,8 @@ namespace
 		Graph graph;
 		Subgraph sg;
 		const auto input = sg.AddParam(dtype, { elementCount });
-		const auto out = sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { input, 0 } },
-		                            { OutputInfo{ dtype, { elementCount } } });
+		const auto out =
+		    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { input, 0 } }, { OutputInfo{ dtype, { elementCount } } });
 		sg.SetResults({ { out, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
@@ -880,8 +880,8 @@ namespace
 		const auto tail = sg.AddParam(DataType::Float32, { elementCount });
 		const auto added = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
 		                              { OutputInfo{ DataType::Float32, { elementCount } } });
-		const auto abs =
-		    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, { elementCount } } });
+		const auto abs = sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } },
+		                            { OutputInfo{ DataType::Float32, { elementCount } } });
 		const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { abs, 0 }, { tail, 0 } },
 		                            { OutputInfo{ DataType::Float32, { elementCount } } });
 		sg.SetResults({ { out, 0 } });
@@ -1031,15 +1031,15 @@ namespace
 
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { batch, width });
-		const auto weight0 = sg.AddNode(VariableRefNode{ weight0Index },
-		                                { OutputInfo{ DataType::Float32, { width, width } } });
+		const auto weight0 =
+		    sg.AddNode(VariableRefNode{ weight0Index }, { OutputInfo{ DataType::Float32, { width, width } } });
 		const auto bias0 = sg.AddNode(VariableRefNode{ bias0Index }, { OutputInfo{ DataType::Float32, { 1, width } } });
 		const auto matmul0 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight0, 0 } },
 		                                { OutputInfo{ DataType::Float32, { batch, width } } });
 		const auto hidden = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul0, 0 }, { bias0, 0 } },
 		                               { OutputInfo{ DataType::Float32, { batch, width } } });
-		const auto weight1 = sg.AddNode(VariableRefNode{ weight1Index },
-		                                { OutputInfo{ DataType::Float32, { width, width } } });
+		const auto weight1 =
+		    sg.AddNode(VariableRefNode{ weight1Index }, { OutputInfo{ DataType::Float32, { width, width } } });
 		const auto bias1 = sg.AddNode(VariableRefNode{ bias1Index }, { OutputInfo{ DataType::Float32, { 1, width } } });
 		const auto matmul1 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { weight1, 0 } },
 		                                { OutputInfo{ DataType::Float32, { batch, width } } });
@@ -1053,8 +1053,25 @@ namespace
 		return graph;
 	}
 
-	Graph BuildVulkanMLP128VariableGraph(std::size_t batch)
+	double EstimateLayerFlops(std::span<const GGMLLayerSpec> layers, std::size_t batch)
 	{
+		std::uint64_t flops = 0;
+		for (const auto& layer : layers)
+		{
+			flops += 2ull * static_cast<std::uint64_t>(batch) * static_cast<std::uint64_t>(layer.inputWidth) *
+			         static_cast<std::uint64_t>(layer.outputWidth);
+		}
+		return static_cast<double>(flops);
+	}
+
+	Graph BuildVulkanMLPVariableGraph(ModelKind kind, std::size_t batch)
+	{
+		const auto layers = GetGGMLLayerSpecs(kind);
+		if (layers.size() < 2)
+		{
+			throw std::runtime_error("Vulkan graph MLP benchmark requires at least two layers");
+		}
+
 		Graph graph;
 		const auto makeVariable = [&](std::string name, std::vector<double> data, std::vector<std::size_t> shape) {
 			const auto index =
@@ -1078,34 +1095,44 @@ namespace
 			}
 			return data;
 		};
-		const auto weight0Index =
-		    makeVariable("mlp128_weight0", makeWeightData(kInputWidth, 128, 31u), { kInputWidth, 128 });
-		const auto bias0Index = makeVariable("mlp128_bias0", makeBiasData(128, 31u), { 1, 128 });
-		const auto weight1Index = makeVariable("mlp128_weight1", makeWeightData(128, 10, 47u), { 128, 10 });
-		const auto bias1Index = makeVariable("mlp128_bias1", makeBiasData(10, 47u), { 1, 10 });
 
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { batch, kInputWidth });
-		const auto weight0 = sg.AddNode(VariableRefNode{ weight0Index },
-		                                { OutputInfo{ DataType::Float32, { kInputWidth, 128 } } });
-		const auto bias0 = sg.AddNode(VariableRefNode{ bias0Index }, { OutputInfo{ DataType::Float32, { 1, 128 } } });
-		const auto matmul0 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight0, 0 } },
-		                                { OutputInfo{ DataType::Float32, { batch, 128 } } });
-		const auto shifted0 = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul0, 0 }, { bias0, 0 } },
-		                                 { OutputInfo{ DataType::Float32, { batch, 128 } } });
-		Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
-		const auto zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-		                                 { OutputInfo{ DataType::Float32, { 1, 1 } } });
-		const auto hidden = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted0, 0 }, { zeroNode, 0 } },
-		                               { OutputInfo{ DataType::Float32, { batch, 128 } } });
-		const auto weight1 =
-		    sg.AddNode(VariableRefNode{ weight1Index }, { OutputInfo{ DataType::Float32, { 128, 10 } } });
-		const auto bias1 = sg.AddNode(VariableRefNode{ bias1Index }, { OutputInfo{ DataType::Float32, { 1, 10 } } });
-		const auto matmul1 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { weight1, 0 } },
-		                                { OutputInfo{ DataType::Float32, { batch, 10 } } });
-		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul1, 0 }, { bias1, 0 } },
-		                               { OutputInfo{ DataType::Float32, { batch, 10 } } });
-		sg.SetResults({ { output, 0 } });
+		NodeOutput activation{ input, 0 };
+		std::optional<NodeId> zeroNode;
+		for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+		{
+			const auto& layer = layers[layerIndex];
+			const auto seed = static_cast<std::uint32_t>(31u + layerIndex * 16u);
+			const auto weightIndex = makeVariable(std::format("vulkan_mlp_weight{}", layerIndex),
+			                                      makeWeightData(layer.inputWidth, layer.outputWidth, seed),
+			                                      { layer.inputWidth, layer.outputWidth });
+			const auto biasIndex = makeVariable(std::format("vulkan_mlp_bias{}", layerIndex),
+			                                    makeBiasData(layer.outputWidth, seed), { 1, layer.outputWidth });
+			const auto weight =
+			    sg.AddNode(VariableRefNode{ weightIndex },
+			               { OutputInfo{ DataType::Float32, { layer.inputWidth, layer.outputWidth } } });
+			const auto bias =
+			    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, layer.outputWidth } } });
+			const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, activation, { weight, 0 } },
+			                               { OutputInfo{ DataType::Float32, { batch, layer.outputWidth } } });
+			const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+			                                { OutputInfo{ DataType::Float32, { batch, layer.outputWidth } } });
+			activation = { shifted, 0 };
+			if (layer.relu)
+			{
+				if (!zeroNode)
+				{
+					Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
+					zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+					                      { OutputInfo{ DataType::Float32, { 1, 1 } } });
+				}
+				const auto relu = sg.AddNode(BinaryOpNode{ BinaryOp::Max, activation, { *zeroNode, 0 } },
+				                             { OutputInfo{ DataType::Float32, { batch, layer.outputWidth } } });
+				activation = { relu, 0 };
+			}
+		}
+		sg.SetResults({ activation });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "input" });
 		graph.SetOutputNames({ "out" });
@@ -1861,10 +1888,8 @@ namespace
 		}
 
 		std::array inputData{
-			MakeElementwiseInputData(elementCount, 32u),
-			MakeElementwiseInputData(elementCount, 33u),
-			MakeElementwiseInputData(elementCount, 34u),
-			MakeElementwiseInputData(elementCount, 35u),
+			MakeElementwiseInputData(elementCount, 32u), MakeElementwiseInputData(elementCount, 33u),
+			MakeElementwiseInputData(elementCount, 34u), MakeElementwiseInputData(elementCount, 35u),
 			MakeElementwiseInputData(elementCount, 36u),
 		};
 		auto inputs = MakeVulkanSameShapeInputs(std::span<const std::vector<float>>(inputData));
@@ -1997,14 +2022,14 @@ namespace
 		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
-	void BMVulkanNativeGraphMLP128RunTensorsInto(benchmark::State& state, std::size_t batch)
+	void BMVulkanNativeGraphMLPRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
-		auto graph = BuildVulkanMLP128VariableGraph(batch);
+		auto graph = BuildVulkanMLPVariableGraph(kind, batch);
 		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
 		                                        LiteNNBenchCompilerOptionsFromEnvironment());
 		if (module.Backend() != CompiledModuleBackend::VulkanNative)
 		{
-			state.SkipWithError("expected Vulkan native backend for whole-graph MLP128 benchmark");
+			state.SkipWithError("expected Vulkan native backend for whole-graph MLP benchmark");
 			return;
 		}
 
@@ -2028,9 +2053,8 @@ namespace
 		}
 
 		SetThroughputCounters(state, batch);
-		const auto flops = 2 * batch * ((kInputWidth * 128) + (128 * 10));
-		state.counters["flops"] =
-		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
+		state.counters["flops"] = benchmark::Counter(EstimateLayerFlops(GetGGMLLayerSpecs(kind), batch),
+		                                             benchmark::Counter::kIsIterationInvariantRate);
 	}
 
 	void BMVulkanNativeHomogeneousLinearChainRunTensorsInto(benchmark::State& state, std::size_t batch,
@@ -2745,14 +2769,17 @@ namespace
 						BMVulkanNativeModelRunTensorsInto(state, kind, batch);
 					});
 				}
-				if (vulkanDeviceAvailable && kind == ModelKind::MLP128)
+				if (vulkanDeviceAvailable && (kind == ModelKind::MLP128 || kind == ModelKind::MLP512))
 				{
 					RegisterBenchmarkCase("VulkanNativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
-						BMVulkanNativeGraphMLP128RunTensorsInto(state, batch);
+						BMVulkanNativeGraphMLPRunTensorsInto(state, kind, batch);
 					});
-					RegisterBenchmarkCase("VulkanNativeManualPipeline", kind, batch, [=](benchmark::State& state) {
-						BMVulkanNativeManualMLP128RunTensorsInto(state, batch);
-					});
+					if (kind == ModelKind::MLP128)
+					{
+						RegisterBenchmarkCase("VulkanNativeManualPipeline", kind, batch, [=](benchmark::State& state) {
+							BMVulkanNativeManualMLP128RunTensorsInto(state, batch);
+						});
+					}
 				}
 #endif
 #endif
@@ -2875,7 +2902,7 @@ namespace
 				}
 
 				constexpr std::array vulkanNativeReduceOps{ ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max,
-				                                             ReduceOp::Min };
+					                                        ReduceOp::Min };
 				for (const auto op : vulkanNativeReduceOps)
 				{
 					auto* reduceBenchmarkCase = benchmark::RegisterBenchmark(

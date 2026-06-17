@@ -2147,13 +2147,17 @@ packaging slice to a useful production backend.
       Validation on 2026-06-13: `litenn_profile` smoke printed Upload/GPUTime/Download columns for Vulkan Linear rows.
 - [x] Persist raw Vulkan profile rows from `litenn_profile` as `vulkan_profile.csv` under the requested output directory.
       Validation on 2026-06-13: smoke profile wrote `build-release/profile_vulkan_smoke/vulkan_profile.csv` with
-      Vulkan-native Linear rows and explicit CPU-bridge MLP rows.
+      Vulkan-native Linear rows and explicit CPU-bridge MLP rows. As of 2026-06-18, the existing MLP128 profile rows
+      exercise the mixed-shape Vulkan-native graph path when the current backend can compile it; a local
+      `litenn_profile --out-dir build-release/profile_vulkan_graph_smoke` smoke also confirmed MLP512 runs as a
+      three-kernel Vulkan-native graph.
 - [x] Add full comparison-table automation across CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes:
       `benchmark/compare_backends.py` reads Google Benchmark JSON plus PyTorch text output and emits Markdown/CSV
       tables with per-backend `ms/batch` and percent deltas against PyTorch CPU/CUDA and ggml baselines. Fresh result
       generation still depends on the local machine having the requested CUDA/Vulkan/PyTorch/ggml capabilities. The
       default report is scoped to the standard inference model set; use `--include-all-models` only for microbench
-      diagnostics.
+      diagnostics. It now distinguishes `VulkanNativeGraphRunInto` as `LiteNN Vulkan Graph` so whole-graph Vulkan AOT
+      rows do not collapse into the single-kernel native bucket.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
@@ -2170,11 +2174,14 @@ packaging slice to a useful production backend.
 - [x] Add a model-shaped Vulkan benchmark beyond the current single-Linear external-weight slice without pretending
       whole-graph partitioning is complete: `benchmark/bench.cpp` now registers
       `VulkanNativeManualPipeline/MLP(784->128->10)` rows that explicitly run two Vulkan-native Linear artifacts with a
-      Vulkan-resident hidden tensor between them. Automatic graph partitioning and fused multi-layer schedules remain
-      tracked separately above.
+      Vulkan-resident hidden tensor between them, and `VulkanNativeGraphRunInto/MLP(784->128->10)` plus
+      `VulkanNativeGraphRunInto/MLP(784->512->256->10)` rows for the current mixed-shape whole-graph linear-chain path.
+      Automatic graph partitioning remains tracked separately above.
       Validation on 2026-06-14: a local
       `litenn_bench --benchmark_filter=VulkanNativeManualPipeline.*batch:1 --benchmark_min_time=0.01s` smoke run
-      reported roughly 0.283 ms for batch 1 and 0.280 ms for batch 128.
+      reported roughly 0.283 ms for batch 1 and 0.280 ms for batch 128. Validation on 2026-06-18:
+      `VulkanNativeGraphRunInto.*batch:1/real_time$` smoke reported roughly 0.150 ms for MLP128 and 0.258 ms for
+      MLP512.
 
 Hidden requirements:
 
