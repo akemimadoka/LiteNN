@@ -15,6 +15,7 @@
 namespace LiteNN
 {
 	class VulkanContext;
+	class VulkanComputeModule;
 
 	/// Host fallback is an explicit execution policy, not part of Vulkan device identity.
 	enum class VulkanHostFallbackPolicy
@@ -128,6 +129,13 @@ namespace LiteNN
 		std::uint32_t byteSize{};
 	};
 
+	struct VulkanComputeBatchDispatch
+	{
+		const VulkanComputeModule* module{};
+		std::span<const void*> descriptorBuffers;
+		VulkanDispatchDim groups;
+	};
+
 	class VulkanComputeModule
 	{
 	public:
@@ -142,10 +150,13 @@ namespace LiteNN
 		VulkanComputeModule& operator=(VulkanComputeModule&&) noexcept;
 		~VulkanComputeModule();
 
+		static void DispatchBatch(std::span<const VulkanComputeBatchDispatch> dispatches);
+
 		bool Empty() const noexcept;
 		double CreationWallTimeMs() const noexcept;
 		void Dispatch(std::span<const void*> descriptorBuffers, VulkanDispatchDim groups,
 		              VulkanExecutionOptions options = {}) const;
+		void WaitForCompletion() const;
 
 	private:
 		struct Impl;
@@ -210,9 +221,9 @@ namespace LiteNN
 		static void DoSliceOp(Vulkan& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 		                      std::size_t axis, std::size_t start, std::size_t length);
 		static void DoGetRowsOp(Vulkan& device, void* dst, DataType dataType, ShapeView dataShape, const void* data,
-		                       DataType indexType, ShapeView indexShape, const void* indices);
+		                        DataType indexType, ShapeView indexShape, const void* indices);
 		static void DoPermuteOp(Vulkan& device, void* dst, DataType type, ShapeView srcShape, const void* src,
-		                       ShapeView permutation);
+		                        ShapeView permutation);
 	};
 } // namespace LiteNN
 

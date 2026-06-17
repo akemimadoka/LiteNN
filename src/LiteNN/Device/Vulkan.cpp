@@ -28,7 +28,8 @@ namespace LiteNN
 		{
 			if (result != VK_SUCCESS)
 			{
-				throw std::runtime_error(std::format("{} failed with VkResult {}", operation, static_cast<int>(result)));
+				throw std::runtime_error(
+				    std::format("{} failed with VkResult {}", operation, static_cast<int>(result)));
 			}
 		}
 
@@ -200,7 +201,7 @@ namespace LiteNN
 			*propertiesNext = &descriptorIndexingProperties;
 			propertiesNext = &descriptorIndexingProperties.pNext;
 #endif
-			(void)propertiesNext;
+			(void) propertiesNext;
 			vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
 			properties = properties2.properties;
 			capabilities.apiVersionMajor = VK_VERSION_MAJOR(properties.apiVersion);
@@ -222,8 +223,7 @@ namespace LiteNN
 			capabilities.maxPerStageResources = properties.limits.maxPerStageResources;
 			capabilities.maxComputeSharedMemorySize = properties.limits.maxComputeSharedMemorySize;
 			capabilities.maxPushConstantsSize = properties.limits.maxPushConstantsSize;
-			capabilities.maxPerStageDescriptorStorageBuffers =
-			    properties.limits.maxPerStageDescriptorStorageBuffers;
+			capabilities.maxPerStageDescriptorStorageBuffers = properties.limits.maxPerStageDescriptorStorageBuffers;
 			capabilities.maxDescriptorSetStorageBuffers = properties.limits.maxDescriptorSetStorageBuffers;
 			capabilities.maxBoundDescriptorSets = properties.limits.maxBoundDescriptorSets;
 			capabilities.deviceName = properties.deviceName;
@@ -293,7 +293,7 @@ namespace LiteNN
 			*availableNext = &availableDescriptorIndexing;
 			availableNext = &availableDescriptorIndexing.pNext;
 #endif
-			(void)availableNext;
+			(void) availableNext;
 			vkGetPhysicalDeviceFeatures2(physicalDevice, &availableFeatures);
 
 			VkPhysicalDeviceFeatures2 enabledFeatures{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
@@ -332,13 +332,12 @@ namespace LiteNN
 			VkPhysicalDevice8BitStorageFeatures enabledStorage8{
 				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
 			};
-			const bool canEnableStorage8 =
-			    capabilities.storageBuffer8BitAccessAvailable &&
-			    (apiAtLeast12
+			const bool canEnableStorage8 = capabilities.storageBuffer8BitAccessAvailable &&
+			                               (apiAtLeast12
 #if defined(VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
-			     || HasDeviceExtension(deviceExtensions, VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
+			                                || HasDeviceExtension(deviceExtensions, VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
 #endif
-			    );
+			                               );
 			if (canEnableStorage8)
 			{
 #if defined(VK_KHR_8BIT_STORAGE_EXTENSION_NAME)
@@ -375,8 +374,7 @@ namespace LiteNN
 					AppendUniqueExtension(enabledDeviceExtensions, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
 				}
 #endif
-				enabledShaderFloat16Int8.shaderFloat16 =
-				    capabilities.shaderFloat16Available ? VK_TRUE : VK_FALSE;
+				enabledShaderFloat16Int8.shaderFloat16 = capabilities.shaderFloat16Available ? VK_TRUE : VK_FALSE;
 				enabledShaderFloat16Int8.shaderInt8 = capabilities.shaderInt8Available ? VK_TRUE : VK_FALSE;
 				capabilities.shaderFloat16Enabled = enabledShaderFloat16Int8.shaderFloat16 == VK_TRUE;
 				capabilities.shaderInt8Enabled = enabledShaderFloat16Int8.shaderInt8 == VK_TRUE;
@@ -442,7 +440,7 @@ namespace LiteNN
 				enabledNext = &enabledDescriptorIndexing.pNext;
 			}
 #endif
-			(void)enabledNext;
+			(void) enabledNext;
 
 			const auto computeQueue = FindComputeQueueFamily(physicalDevice);
 			queueFamilyIndex = computeQueue.index;
@@ -465,8 +463,7 @@ namespace LiteNN
 				.queueCreateInfoCount = 1,
 				.pQueueCreateInfos = &queueInfo,
 				.enabledExtensionCount = static_cast<std::uint32_t>(enabledDeviceExtensions.size()),
-				.ppEnabledExtensionNames =
-				    enabledDeviceExtensions.empty() ? nullptr : enabledDeviceExtensions.data(),
+				.ppEnabledExtensionNames = enabledDeviceExtensions.empty() ? nullptr : enabledDeviceExtensions.data(),
 			};
 			CheckVulkan(vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &device), "vkCreateDevice");
 			vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
@@ -492,7 +489,7 @@ namespace LiteNN
 		{
 			if (device != VK_NULL_HANDLE)
 			{
-				(void)vkDeviceWaitIdle(device);
+				(void) vkDeviceWaitIdle(device);
 				if (commandPool != VK_NULL_HANDLE)
 				{
 					vkDestroyCommandPool(device, commandPool, nullptr);
@@ -559,7 +556,7 @@ namespace LiteNN
 					.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 					.size = std::max<VkDeviceSize>(1, byteSize),
 					.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-					          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
 				};
 				CheckVulkan(vkCreateBuffer(context->device, &bufferInfo, nullptr, &buffer), "vkCreateBuffer");
@@ -702,9 +699,9 @@ namespace LiteNN
 
 		std::string UnsupportedVulkanEagerOp(std::string_view op)
 		{
-			return std::format(
-			    "Vulkan eager {} is not implemented; use Compiler<Vulkan> for supported native AOT kernels or enable an explicit host fallback path",
-			    op);
+			return std::format("Vulkan eager {} is not implemented; use Compiler<Vulkan> for supported native AOT "
+			                   "kernels or enable an explicit host fallback path",
+			                   op);
 		}
 	} // namespace
 
@@ -744,8 +741,7 @@ namespace LiteNN
 		try
 		{
 			const auto context = GetContext(device);
-			device.infoCache =
-			    std::format("Vulkan device {}: {}", device.deviceIndex, context->properties.deviceName);
+			device.infoCache = std::format("Vulkan device {}: {}", device.deviceIndex, context->properties.deviceName);
 		}
 		catch (const std::exception& ex)
 		{
@@ -761,15 +757,15 @@ namespace LiteNN
 
 	void DeviceTraits<Vulkan>::Deallocate(Vulkan& device, void* ptr, DataType type, std::size_t size)
 	{
-		(void)device;
-		(void)type;
-		(void)size;
+		(void) device;
+		(void) type;
+		(void) size;
 		delete static_cast<VulkanBuffer*>(ptr);
 	}
 
 	void DeviceTraits<Vulkan>::ZeroFill(Vulkan& device, void* ptr, DataType type, std::size_t size)
 	{
-		(void)device;
+		(void) device;
 		auto& buffer = AsBuffer(ptr);
 		const auto bytes = CheckedByteSize(type, size);
 		if (bytes > buffer.byteSize)
@@ -793,7 +789,7 @@ namespace LiteNN
 	void DeviceTraits<Vulkan>::CopyToCPU(Vulkan& device, DataType srcType, const void* src, std::size_t size,
 	                                     DataType dstType, void* dst)
 	{
-		(void)device;
+		(void) device;
 		const auto& buffer = AsBuffer(src);
 		const auto srcBytes = CheckedByteSize(srcType, size);
 		if (srcBytes > buffer.byteSize)
@@ -805,7 +801,8 @@ namespace LiteNN
 		const VulkanBuffer* readable = &buffer;
 		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
 		{
-			staging = std::make_unique<VulkanBuffer>(buffer.context, srcBytes, VulkanBufferResidency::HostVisibleCoherent);
+			staging =
+			    std::make_unique<VulkanBuffer>(buffer.context, srcBytes, VulkanBufferResidency::HostVisibleCoherent);
 			CopyBuffer(const_cast<VulkanBuffer&>(buffer), *staging, srcBytes);
 			readable = staging.get();
 		}
@@ -826,7 +823,7 @@ namespace LiteNN
 	void DeviceTraits<Vulkan>::CopyFromCPU(Vulkan& device, DataType dstType, void* dst, DataType srcType,
 	                                       const void* src, std::size_t size)
 	{
-		(void)device;
+		(void) device;
 		auto& buffer = AsBuffer(dst);
 		const auto dstBytes = CheckedByteSize(dstType, size);
 		if (dstBytes > buffer.byteSize)
@@ -838,7 +835,8 @@ namespace LiteNN
 		VulkanBuffer* writable = &buffer;
 		if (buffer.residency == VulkanBufferResidency::DeviceLocal)
 		{
-			staging = std::make_unique<VulkanBuffer>(buffer.context, dstBytes, VulkanBufferResidency::HostVisibleCoherent);
+			staging =
+			    std::make_unique<VulkanBuffer>(buffer.context, dstBytes, VulkanBufferResidency::HostVisibleCoherent);
 			writable = staging.get();
 		}
 
@@ -862,7 +860,7 @@ namespace LiteNN
 	void DeviceTraits<Vulkan>::ConvertTo(Vulkan& device, DataType srcType, const void* src, std::size_t size,
 	                                     DataType dstType, void* dst)
 	{
-		(void)device;
+		(void) device;
 		const auto& srcBuffer = AsBuffer(src);
 		auto& dstBuffer = AsBuffer(dst);
 		const auto srcBytes = CheckedByteSize(srcType, size);
@@ -889,12 +887,12 @@ namespace LiteNN
 	void DeviceTraits<Vulkan>::DoUnaryOp(Vulkan& device, UnaryOp unaryOp, void* dst, DataType type, ShapeView shape,
 	                                     const void* src)
 	{
-		(void)device;
-		(void)unaryOp;
-		(void)dst;
-		(void)type;
-		(void)shape;
-		(void)src;
+		(void) device;
+		(void) unaryOp;
+		(void) dst;
+		(void) type;
+		(void) shape;
+		(void) src;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("unary op"));
 	}
 
@@ -902,82 +900,82 @@ namespace LiteNN
 	                                      ShapeView shape1, const void* src1, DataType type2, ShapeView shape2,
 	                                      const void* src2)
 	{
-		(void)device;
-		(void)binaryOp;
-		(void)dst;
-		(void)type1;
-		(void)shape1;
-		(void)src1;
-		(void)type2;
-		(void)shape2;
-		(void)src2;
+		(void) device;
+		(void) binaryOp;
+		(void) dst;
+		(void) type1;
+		(void) shape1;
+		(void) src1;
+		(void) type2;
+		(void) shape2;
+		(void) src2;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("binary op"));
 	}
 
-	void DeviceTraits<Vulkan>::DoReduceOp(Vulkan& device, ReduceOp reduceOp, void* dst, DataType type,
-	                                      ShapeView shape, const void* src, std::size_t axis)
+	void DeviceTraits<Vulkan>::DoReduceOp(Vulkan& device, ReduceOp reduceOp, void* dst, DataType type, ShapeView shape,
+	                                      const void* src, std::size_t axis)
 	{
-		(void)device;
-		(void)reduceOp;
-		(void)dst;
-		(void)type;
-		(void)shape;
-		(void)src;
-		(void)axis;
+		(void) device;
+		(void) reduceOp;
+		(void) dst;
+		(void) type;
+		(void) shape;
+		(void) src;
+		(void) axis;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("reduce op"));
 	}
 
 	void DeviceTraits<Vulkan>::DoConcatOp(Vulkan& device, void* dst, DataType type, const void* const* srcPtrs,
 	                                      const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis)
 	{
-		(void)device;
-		(void)dst;
-		(void)type;
-		(void)srcPtrs;
-		(void)srcShapes;
-		(void)inputCount;
-		(void)axis;
+		(void) device;
+		(void) dst;
+		(void) type;
+		(void) srcPtrs;
+		(void) srcShapes;
+		(void) inputCount;
+		(void) axis;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("concat op"));
 	}
 
-	void DeviceTraits<Vulkan>::DoSliceOp(Vulkan& device, void* dst, DataType type, ShapeView srcShape,
-	                                     const void* src, std::size_t axis, std::size_t start, std::size_t length)
+	void DeviceTraits<Vulkan>::DoSliceOp(Vulkan& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+	                                     std::size_t axis, std::size_t start, std::size_t length)
 	{
-		(void)device;
-		(void)dst;
-		(void)type;
-		(void)srcShape;
-		(void)src;
-		(void)axis;
-		(void)start;
-		(void)length;
+		(void) device;
+		(void) dst;
+		(void) type;
+		(void) srcShape;
+		(void) src;
+		(void) axis;
+		(void) start;
+		(void) length;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("slice op"));
 	}
 
 	void DeviceTraits<Vulkan>::DoGetRowsOp(Vulkan& device, void* dst, DataType dataType, ShapeView dataShape,
-	                                      const void* data, DataType indexType, ShapeView indexShape,
-	                                      const void* indices)
+	                                       const void* data, DataType indexType, ShapeView indexShape,
+	                                       const void* indices)
 	{
-		(void)device;
-		(void)dst;
-		(void)dataType;
-		(void)dataShape;
-		(void)data;
-		(void)indexType;
-		(void)indexShape;
-		(void)indices;
+		(void) device;
+		(void) dst;
+		(void) dataType;
+		(void) dataShape;
+		(void) data;
+		(void) indexType;
+		(void) indexShape;
+		(void) indices;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("get_rows op"));
 	}
 
 	void DeviceTraits<Vulkan>::DoPermuteOp(Vulkan& device, void* dst, DataType type, ShapeView srcShape,
 	                                       const void* src, ShapeView permutation)
 	{
-		(void)device;
-		(void)dst;
-		(void)type;
-		(void)srcShape;
-		(void)src;
-		(void)permutation;
+		(void) device;
+		(void) dst;
+		(void) type;
+		(void) srcShape;
+		(void) src;
+		(void) permutation;
 		throw std::runtime_error(UnsupportedVulkanEagerOp("permute op"));
 	}
 
@@ -996,6 +994,8 @@ namespace LiteNN
 		VkQueryPool timestampQueryPool{};
 		std::uint32_t descriptorCount{};
 		double creationWallTimeMs{};
+		mutable std::mutex mutex;
+		mutable bool pending{};
 	};
 
 	std::uint64_t VulkanTimestampDelta(std::uint64_t begin, std::uint64_t end, std::uint32_t validBits)
@@ -1010,10 +1010,10 @@ namespace LiteNN
 
 	VulkanComputeModule::VulkanComputeModule() = default;
 
-	VulkanComputeModule::VulkanComputeModule(
-	    Vulkan device, std::span<const std::uint32_t> spirv, std::string_view entryPoint,
-	    std::uint32_t descriptorCount, std::span<const VulkanSpecializationConstant> specializationConstants,
-	    std::span<const std::byte> specializationData)
+	VulkanComputeModule::VulkanComputeModule(Vulkan device, std::span<const std::uint32_t> spirv,
+	                                         std::string_view entryPoint, std::uint32_t descriptorCount,
+	                                         std::span<const VulkanSpecializationConstant> specializationConstants,
+	                                         std::span<const std::byte> specializationData)
 	    : impl_(std::make_unique<Impl>())
 	{
 		const auto creationBegin = clk::steady_clock::now();
@@ -1055,11 +1055,11 @@ namespace LiteNN
 		if (descriptorCount > capabilities.maxPerStageDescriptorStorageBuffers ||
 		    descriptorCount > capabilities.maxDescriptorSetStorageBuffers)
 		{
-			throw std::runtime_error(std::format(
-			    "Vulkan compute module requires {} storage-buffer descriptor(s), but device '{}' reports "
-			    "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
-			    descriptorCount, capabilities.deviceName, capabilities.maxPerStageDescriptorStorageBuffers,
-			    capabilities.maxDescriptorSetStorageBuffers));
+			throw std::runtime_error(
+			    std::format("Vulkan compute module requires {} storage-buffer descriptor(s), but device '{}' reports "
+			                "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
+			                descriptorCount, capabilities.deviceName, capabilities.maxPerStageDescriptorStorageBuffers,
+			                capabilities.maxDescriptorSetStorageBuffers));
 		}
 
 		const VkShaderModuleCreateInfo shaderInfo{
@@ -1115,9 +1115,9 @@ namespace LiteNN
 			.setLayoutCount = 1,
 			.pSetLayouts = &impl_->descriptorSetLayout,
 		};
-		CheckVulkan(vkCreatePipelineLayout(impl_->context->device, &pipelineLayoutInfo, nullptr,
-		                                   &impl_->pipelineLayout),
-		            "vkCreatePipelineLayout");
+		CheckVulkan(
+		    vkCreatePipelineLayout(impl_->context->device, &pipelineLayoutInfo, nullptr, &impl_->pipelineLayout),
+		    "vkCreatePipelineLayout");
 
 		const std::string entryName(entryPoint);
 		std::vector<VkSpecializationMapEntry> specializationEntries;
@@ -1148,8 +1148,8 @@ namespace LiteNN
 			.stage = stageInfo,
 			.layout = impl_->pipelineLayout,
 		};
-		CheckVulkan(vkCreateComputePipelines(impl_->context->device, impl_->context->pipelineCache, 1, &pipelineInfo, nullptr,
-		                                     &impl_->pipeline),
+		CheckVulkan(vkCreateComputePipelines(impl_->context->device, impl_->context->pipelineCache, 1, &pipelineInfo,
+		                                     nullptr, &impl_->pipeline),
 		            "vkCreateComputePipelines");
 		const VkCommandBufferAllocateInfo commandInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1176,6 +1176,11 @@ namespace LiteNN
 		if (!impl_ || !impl_->context)
 		{
 			return;
+		}
+		if (impl_->pending && impl_->fence != VK_NULL_HANDLE)
+		{
+			(void) vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX);
+			impl_->pending = false;
 		}
 		if (impl_->pipeline != VK_NULL_HANDLE)
 		{
@@ -1221,6 +1226,134 @@ namespace LiteNN
 		return impl_ ? impl_->creationWallTimeMs : 0.0;
 	}
 
+	void VulkanComputeModule::DispatchBatch(std::span<const VulkanComputeBatchDispatch> dispatches)
+	{
+		if (dispatches.empty())
+		{
+			return;
+		}
+		if (dispatches[0].module == nullptr || dispatches[0].module->Empty())
+		{
+			throw std::runtime_error("Vulkan compute batch requires non-empty modules");
+		}
+
+		auto context = dispatches[0].module->impl_->context;
+		std::vector<const VulkanComputeModule*> uniqueModules;
+		uniqueModules.reserve(dispatches.size());
+		for (const auto& dispatch : dispatches)
+		{
+			if (dispatch.module == nullptr || dispatch.module->Empty())
+			{
+				throw std::runtime_error("Vulkan compute batch contains an empty module");
+			}
+			if (dispatch.module->impl_->context != context)
+			{
+				throw std::runtime_error("Vulkan compute batch requires all modules to use the same device context");
+			}
+			uniqueModules.push_back(dispatch.module);
+		}
+		std::ranges::sort(uniqueModules);
+		uniqueModules.erase(std::ranges::unique(uniqueModules).begin(), uniqueModules.end());
+
+		std::vector<std::unique_lock<std::mutex>> moduleLocks;
+		moduleLocks.reserve(uniqueModules.size());
+		for (const auto* module : uniqueModules)
+		{
+			moduleLocks.emplace_back(module->impl_->mutex);
+		}
+
+		const auto& capabilities = context->capabilities;
+		std::vector<VkCommandBuffer> commandBuffers;
+		commandBuffers.reserve(dispatches.size());
+
+		std::lock_guard queueLock(context->queueMutex);
+		for (const auto* module : uniqueModules)
+		{
+			if (module->impl_->pending)
+			{
+				CheckVulkan(vkWaitForFences(context->device, 1, &module->impl_->fence, VK_TRUE, UINT64_MAX),
+				            "vkWaitForFences(batch pending)");
+				module->impl_->pending = false;
+			}
+		}
+
+		for (const auto& dispatch : dispatches)
+		{
+			auto& impl = *dispatch.module->impl_;
+			if (dispatch.groups.x == 0 || dispatch.groups.y == 0 || dispatch.groups.z == 0)
+			{
+				throw std::runtime_error("Vulkan dispatch dimensions must be non-zero");
+			}
+			if (dispatch.descriptorBuffers.size() != impl.descriptorCount)
+			{
+				throw std::runtime_error(std::format("Vulkan descriptor count mismatch: expected {}, got {}",
+				                                     impl.descriptorCount, dispatch.descriptorBuffers.size()));
+			}
+			if (dispatch.groups.x > capabilities.maxComputeWorkGroupCount[0] ||
+			    dispatch.groups.y > capabilities.maxComputeWorkGroupCount[1] ||
+			    dispatch.groups.z > capabilities.maxComputeWorkGroupCount[2])
+			{
+				throw std::runtime_error(
+				    std::format("Vulkan dispatch groups {}x{}x{} exceed device '{}' maxComputeWorkGroupCount {}x{}x{}",
+				                dispatch.groups.x, dispatch.groups.y, dispatch.groups.z, capabilities.deviceName,
+				                capabilities.maxComputeWorkGroupCount[0], capabilities.maxComputeWorkGroupCount[1],
+				                capabilities.maxComputeWorkGroupCount[2]));
+			}
+
+			std::vector<VkDescriptorBufferInfo> bufferInfos;
+			bufferInfos.reserve(dispatch.descriptorBuffers.size());
+			std::vector<VkWriteDescriptorSet> writes;
+			writes.reserve(dispatch.descriptorBuffers.size());
+			for (std::uint32_t i = 0; i < dispatch.descriptorBuffers.size(); ++i)
+			{
+				const auto& buffer = AsBuffer(dispatch.descriptorBuffers[i]);
+				bufferInfos.push_back({
+				    .buffer = buffer.buffer,
+				    .offset = 0,
+				    .range = buffer.byteSize,
+				});
+				writes.push_back({
+				    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				    .dstSet = impl.descriptorSet,
+				    .dstBinding = i,
+				    .descriptorCount = 1,
+				    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				    .pBufferInfo = &bufferInfos.back(),
+				});
+			}
+			vkUpdateDescriptorSets(context->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
+			                       nullptr);
+
+			const VkCommandBufferBeginInfo beginInfo{
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+				.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+			};
+			CheckVulkan(vkResetCommandBuffer(impl.commandBuffer, 0), "vkResetCommandBuffer(batch)");
+			CheckVulkan(vkBeginCommandBuffer(impl.commandBuffer, &beginInfo), "vkBeginCommandBuffer(batch)");
+			vkCmdBindPipeline(impl.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl.pipeline);
+			vkCmdBindDescriptorSets(impl.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl.pipelineLayout, 0, 1,
+			                        &impl.descriptorSet, 0, nullptr);
+			vkCmdDispatch(impl.commandBuffer, dispatch.groups.x, dispatch.groups.y, dispatch.groups.z);
+			CheckVulkan(vkEndCommandBuffer(impl.commandBuffer), "vkEndCommandBuffer(batch)");
+			commandBuffers.push_back(impl.commandBuffer);
+		}
+
+		const VkSubmitInfo submitInfo{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount = static_cast<std::uint32_t>(commandBuffers.size()),
+			.pCommandBuffers = commandBuffers.data(),
+		};
+		VkFence batchFence = dispatches[0].module->impl_->fence;
+		CheckVulkan(vkResetFences(context->device, 1, &batchFence), "vkResetFences(batch)");
+		const auto submitResult = vkQueueSubmit(context->queue, 1, &submitInfo, batchFence);
+		if (submitResult == VK_SUCCESS)
+		{
+			CheckVulkan(vkWaitForFences(context->device, 1, &batchFence, VK_TRUE, UINT64_MAX),
+			            "vkWaitForFences(batch)");
+		}
+		CheckVulkan(submitResult, "vkQueueSubmit(batch)");
+	}
+
 	void VulkanComputeModule::Dispatch(std::span<const void*> descriptorBuffers, VulkanDispatchDim groups,
 	                                   VulkanExecutionOptions options) const
 	{
@@ -1232,9 +1365,9 @@ namespace LiteNN
 		{
 			throw std::runtime_error("Vulkan compute module is empty");
 		}
-		if (!options.synchronize)
+		if (!options.synchronize && options.timing != nullptr)
 		{
-			throw std::runtime_error("Vulkan P0 compute module requires synchronous dispatch");
+			throw std::runtime_error("Vulkan timestamp timing requires synchronous dispatch");
 		}
 		if (groups.x == 0 || groups.y == 0 || groups.z == 0)
 		{
@@ -1247,17 +1380,22 @@ namespace LiteNN
 		}
 		const auto& capabilities = impl_->context->capabilities;
 		if (groups.x > capabilities.maxComputeWorkGroupCount[0] ||
-		    groups.y > capabilities.maxComputeWorkGroupCount[1] ||
-		    groups.z > capabilities.maxComputeWorkGroupCount[2])
+		    groups.y > capabilities.maxComputeWorkGroupCount[1] || groups.z > capabilities.maxComputeWorkGroupCount[2])
 		{
 			throw std::runtime_error(std::format(
-			    "Vulkan dispatch groups {}x{}x{} exceed device '{}' maxComputeWorkGroupCount {}x{}x{}",
-			    groups.x, groups.y, groups.z, capabilities.deviceName, capabilities.maxComputeWorkGroupCount[0],
+			    "Vulkan dispatch groups {}x{}x{} exceed device '{}' maxComputeWorkGroupCount {}x{}x{}", groups.x,
+			    groups.y, groups.z, capabilities.deviceName, capabilities.maxComputeWorkGroupCount[0],
 			    capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
 		}
-		const bool recordGpuTimestamp =
-		    options.timing != nullptr && capabilities.computeQueueTimestampsAvailable;
+		const bool recordGpuTimestamp = options.timing != nullptr && capabilities.computeQueueTimestampsAvailable;
 
+		std::lock_guard moduleLock(impl_->mutex);
+		if (impl_->pending)
+		{
+			CheckVulkan(vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX),
+			            "vkWaitForFences(pending)");
+			impl_->pending = false;
+		}
 		std::lock_guard lock(impl_->context->queueMutex);
 
 		std::vector<VkDescriptorBufferInfo> bufferInfos;
@@ -1291,8 +1429,7 @@ namespace LiteNN
 				.queryType = VK_QUERY_TYPE_TIMESTAMP,
 				.queryCount = 2,
 			};
-			CheckVulkan(vkCreateQueryPool(impl_->context->device, &queryPoolInfo, nullptr,
-			                              &impl_->timestampQueryPool),
+			CheckVulkan(vkCreateQueryPool(impl_->context->device, &queryPoolInfo, nullptr, &impl_->timestampQueryPool),
 			            "vkCreateQueryPool(timestamp)");
 		}
 
@@ -1327,29 +1464,52 @@ namespace LiteNN
 		const auto submitResult = vkQueueSubmit(impl_->context->queue, 1, &submitInfo, impl_->fence);
 		if (submitResult == VK_SUCCESS)
 		{
-			CheckVulkan(vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX),
-			            "vkWaitForFences");
-			if (recordGpuTimestamp)
+			if (options.synchronize)
 			{
-				std::array<std::uint64_t, 2> timestamps{};
-				const auto queryResult = vkGetQueryPoolResults(
-				    impl_->context->device, impl_->timestampQueryPool, 0, 2, sizeof(timestamps), timestamps.data(),
-				    sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-				if (queryResult == VK_SUCCESS)
+				CheckVulkan(vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX),
+				            "vkWaitForFences");
+				if (recordGpuTimestamp)
 				{
-					const auto delta = VulkanTimestampDelta(timestamps[0], timestamps[1],
-					                                        capabilities.computeQueueTimestampValidBits);
-					options.timing->gpuTimestampAvailable = true;
-					options.timing->gpuElapsedMs =
-					    static_cast<double>(delta) * capabilities.timestampPeriodNanoseconds / 1'000'000.0;
+					std::array<std::uint64_t, 2> timestamps{};
+					const auto queryResult = vkGetQueryPoolResults(
+					    impl_->context->device, impl_->timestampQueryPool, 0, 2, sizeof(timestamps), timestamps.data(),
+					    sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+					if (queryResult == VK_SUCCESS)
+					{
+						const auto delta = VulkanTimestampDelta(timestamps[0], timestamps[1],
+						                                        capabilities.computeQueueTimestampValidBits);
+						options.timing->gpuTimestampAvailable = true;
+						options.timing->gpuElapsedMs =
+						    static_cast<double>(delta) * capabilities.timestampPeriodNanoseconds / 1'000'000.0;
+					}
+					else if (queryResult != VK_NOT_READY)
+					{
+						CheckVulkan(queryResult, "vkGetQueryPoolResults(timestamp)");
+					}
 				}
-				else if (queryResult != VK_NOT_READY)
-				{
-					CheckVulkan(queryResult, "vkGetQueryPoolResults(timestamp)");
-				}
+			}
+			else
+			{
+				impl_->pending = true;
 			}
 		}
 		CheckVulkan(submitResult, "vkQueueSubmit");
+	}
+
+	void VulkanComputeModule::WaitForCompletion() const
+	{
+		if (Empty())
+		{
+			return;
+		}
+		std::lock_guard moduleLock(impl_->mutex);
+		if (!impl_->pending)
+		{
+			return;
+		}
+		std::lock_guard queueLock(impl_->context->queueMutex);
+		CheckVulkan(vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+		impl_->pending = false;
 	}
 } // namespace LiteNN
 

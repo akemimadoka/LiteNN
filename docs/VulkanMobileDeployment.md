@@ -106,8 +106,10 @@ slice can cover a plan and to surface the reason a graph would otherwise use CPU
 during synchronized Vulkan-native execution. Events include kernel index, entry point, dispatch groups, local workgroup
 layout, descriptor count, module creation wall time, CPU-side dispatch wall time, and optional GPU timestamp-query elapsed
 time. GPU timestamp fields are populated only when the selected compute queue reports timestamp support; otherwise the
-event keeps `gpuTimestampAvailable=false`. `litenn_profile` also reports one-shot input upload and output download time
-for Vulkan rows. Persisted multi-backend Vulkan profile tables are still follow-on work.
+event keeps `gpuTimestampAvailable=false`. Profile-event runs intentionally keep per-kernel synchronized dispatch so the
+CPU/GPU timings remain attributable; normal non-profile multi-kernel native runs can batch recorded command buffers into
+one `vkQueueSubmit` and one fence wait. `litenn_profile` also reports one-shot input upload and output download time for
+Vulkan rows. Persisted multi-backend Vulkan profile tables are still follow-on work.
 
 ## Current Coverage
 
@@ -122,8 +124,8 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
 - same-shape `Float32` binary chains composed of supported binary ops, for example
-  `Multiply(Add(lhs, rhs), tail)`, executed as multiple synchronized Vulkan-native kernels that reuse the public output
-  buffer as the chain accumulator
+  `Multiply(Add(lhs, rhs), tail)`, executed as multiple Vulkan-native kernels that reuse the public output buffer as the
+  chain accumulator and, outside profile-event mode, submit the recorded command buffers as one synchronized batch
 - rank-2 static `Float32` MatMul using one shader invocation per output element; this is a correctness and benchmark
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same

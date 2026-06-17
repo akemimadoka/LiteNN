@@ -5987,8 +5987,7 @@ namespace
 		return allocation;
 	}
 
-	VulkanNativeArgumentSpec VulkanP0ScheduleWorkspaceArgument(std::uint32_t producerKernelIndex,
-	                                                           std::uint32_t binding,
+	VulkanNativeArgumentSpec VulkanP0ScheduleWorkspaceArgument(std::uint32_t producerKernelIndex, std::uint32_t binding,
 	                                                           std::uint64_t byteSize,
 	                                                           std::span<const std::uint32_t> workspaceByKernel)
 	{
@@ -6230,8 +6229,8 @@ namespace
 	};
 
 	std::optional<std::uint32_t> VulkanP0ShapeNumElementsU32(std::span<const std::size_t> shape);
-	std::optional<VulkanP0LinearChainPlan>
-	MatchVulkanP0LinearChainF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder);
+	std::optional<VulkanP0LinearChainPlan> MatchVulkanP0LinearChainF32(const Graph& graph,
+	                                                                   VulkanP0ExternalTensorBuilder* externalBuilder);
 
 	std::optional<std::uint32_t> GetVulkanP0ParamIndex(const Subgraph& subgraph, NodeOutput output)
 	{
@@ -6586,8 +6585,7 @@ namespace
 	template <typename ResolveParamOperand>
 	std::optional<VulkanP0BinaryChainPlan>
 	MatchVulkanP0SameShapeBinaryF32ChainInSubgraph(const Subgraph& subgraph, NodeOutput result,
-	                                               std::span<const std::size_t> chainShape,
-	                                               std::uint32_t elementCount,
+	                                               std::span<const std::size_t> chainShape, std::uint32_t elementCount,
 	                                               ResolveParamOperand&& resolveParamOperand)
 	{
 		if (result.port != 0 || result.node >= subgraph.NodeCount())
@@ -6912,7 +6910,8 @@ namespace
 					const auto kernelIndex = static_cast<std::uint32_t>(plan.kernels.size());
 					bodyVisited[bodyOutput.node] = true;
 					bodyKernelIndexByNode.emplace(bodyOutput.node, kernelIndex);
-					plan.kernels.push_back(VulkanP0BinaryDAGKernelPlan{ .op = bodyBinary->op, .lhs = *lhs, .rhs = *rhs });
+					plan.kernels.push_back(
+					    VulkanP0BinaryDAGKernelPlan{ .op = bodyBinary->op, .lhs = *lhs, .rhs = *rhs });
 					return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
 						                             .index = kernelIndex };
 				};
@@ -6957,8 +6956,7 @@ namespace
 			visited[output.node] = true;
 			kernelIndexByNode.emplace(output.node, kernelIndex);
 			plan.kernels.push_back(VulkanP0BinaryDAGKernelPlan{ .op = binary->op, .lhs = *lhs, .rhs = *rhs });
-			return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
-				                             .index = kernelIndex };
+			return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate, .index = kernelIndex };
 		};
 
 		const auto outputOperand = collect(collect, result);
@@ -7335,8 +7333,7 @@ namespace
 		}
 		if (const auto dag = MatchVulkanP0SameShapeBinaryF32DAG(graph))
 		{
-			return VulkanNativeSupported(
-			    std::format("same-shape f32 binary DAG ({} kernels)", dag->kernels.size()));
+			return VulkanNativeSupported(std::format("same-shape f32 binary DAG ({} kernels)", dag->kernels.size()));
 		}
 		if (const auto dag = MatchVulkanP0SameShapeElementwiseF32DAG(graph))
 		{
@@ -7481,9 +7478,9 @@ namespace
 				}
 				if (!VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op))
 				{
-					return VulkanNativeUnsupported(std::format(
-					    "Vulkan native unary slice requires Float32 or Float16 input/output, got {}",
-					    DataTypeName(input.dtype)));
+					return VulkanNativeUnsupported(
+					    std::format("Vulkan native unary slice requires Float32 or Float16 input/output, got {}",
+					                DataTypeName(input.dtype)));
 				}
 				if (input.shape != output.shape)
 				{
@@ -7872,9 +7869,9 @@ namespace
 			}
 			if (!VulkanNativeSupportsSameShapeBinary(lhsParam.dtype, binary->op))
 			{
-				return VulkanNativeUnsupported(std::format(
-				    "Vulkan native binary slice requires Float32 or Float16 lhs/rhs/output, got {}",
-				    DataTypeName(lhsParam.dtype)));
+				return VulkanNativeUnsupported(
+				    std::format("Vulkan native binary slice requires Float32 or Float16 lhs/rhs/output, got {}",
+				                DataTypeName(lhsParam.dtype)));
 			}
 			if (lhsParam.shape != output.shape || rhsParam.shape != output.shape)
 			{
@@ -8200,8 +8197,8 @@ namespace
 		                                     fused->pattern == FusionPattern::MatMulBiasAddReLU);
 	}
 
-	std::optional<VulkanP0LinearChainPlan> MatchVulkanP0LinearChainF32(
-	    const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
+	std::optional<VulkanP0LinearChainPlan>
+	MatchVulkanP0LinearChainF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -8259,8 +8256,7 @@ namespace
 			const auto& output = entry.outputInfos[0];
 
 			if (std::holds_alternative<ParamRefNode>(entry.node) ||
-			    std::holds_alternative<VariableRefNode>(entry.node) ||
-			    std::holds_alternative<ConstantNode>(entry.node))
+			    std::holds_alternative<VariableRefNode>(entry.node) || std::holds_alternative<ConstantNode>(entry.node))
 			{
 				values[nodeId] = GetVulkanP0TensorRef(graph, subgraph, { nodeId, 0 }, externalBuilder);
 				if (!values[nodeId])
@@ -8307,9 +8303,9 @@ namespace
 						.elementCount = layer->outputElementCount,
 					};
 				}
-				const auto workspaceIndex = workspacePlanner.Allocate(TensorByteSizeForShape(output.dtype, output.shape),
-				                                                       alignof(float), chain.kernels.size(),
-				                                                       subgraph.NodeCount());
+				const auto workspaceIndex =
+				    workspacePlanner.Allocate(TensorByteSizeForShape(output.dtype, output.shape), alignof(float),
+				                              chain.kernels.size(), subgraph.NodeCount());
 				return VulkanP0TensorRef{
 					.argumentKind = VulkanNativeArgumentKind::WorkspaceTensor,
 					.argumentIndex = workspaceIndex,
@@ -9371,13 +9367,11 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::NormalizationF32);
 
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
-		const auto useStagedAxisNormalization =
-		    plan->groupCount == 1 && plan->mode == NormalizationMode::LayerNorm;
+		const auto useStagedAxisNormalization = plan->groupCount == 1 && plan->mode == NormalizationMode::LayerNorm;
 		if (useStagedAxisNormalization)
 		{
-			auto spirv =
-			    VulkanNativeAxisNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
-			                                          plan->scale.has_value(), plan->bias.has_value());
+			auto spirv = VulkanNativeAxisNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
+			                                                   plan->scale.has_value(), plan->bias.has_value());
 			payload.spirv = std::move(spirv.words);
 
 			const auto axisSize = static_cast<std::uint32_t>(plan->inputShape[plan->axis]);
@@ -9392,11 +9386,11 @@ namespace
 			const auto rowDenomWorkspace = workspacePlanner.Allocate(rowWorkspaceBytes, alignof(float), 0, 1);
 
 			std::vector<VulkanNativeArgumentSpec> statsArgs{
-			    { .kind = VulkanNativeArgumentKind::InputTensor,
-			      .index = plan->inputIndex,
-			      .binding = 0,
-			      .byteOffset = 0,
-			      .byteSize = outputByteSize },
+				{ .kind = VulkanNativeArgumentKind::InputTensor,
+				  .index = plan->inputIndex,
+				  .binding = 0,
+				  .byteOffset = 0,
+				  .byteSize = outputByteSize },
 			};
 			std::uint32_t nextBinding = 1;
 			if (rowMeanWorkspace)
@@ -9412,11 +9406,11 @@ namespace
 			});
 
 			std::vector<VulkanNativeArgumentSpec> writeArgs{
-			    { .kind = VulkanNativeArgumentKind::InputTensor,
-			      .index = plan->inputIndex,
-			      .binding = 0,
-			      .byteOffset = 0,
-			      .byteSize = outputByteSize },
+				{ .kind = VulkanNativeArgumentKind::InputTensor,
+				  .index = plan->inputIndex,
+				  .binding = 0,
+				  .byteOffset = 0,
+				  .byteSize = outputByteSize },
 			};
 			nextBinding = 1;
 			if (rowMeanWorkspace)
@@ -9675,8 +9669,8 @@ namespace
 
 		const auto byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		VulkanP0WorkspacePlanner workspacePlanner;
-		const auto accumulatorWorkspace = workspacePlanner.Allocate(byteSize, alignof(float), 0,
-		                                                            plan->kernels.size() - 1);
+		const auto accumulatorWorkspace =
+		    workspacePlanner.Allocate(byteSize, alignof(float), 0, plan->kernels.size() - 1);
 		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
 			const auto& kernelPlan = plan->kernels[kernelIndex];
@@ -9796,14 +9790,14 @@ namespace
 			if (kernelPlan.kind == VulkanNativeElementwiseF32KernelKind::Unary)
 			{
 				payload.featureSet.AddFeature(VulkanNativeUnaryF32FeatureFlag(kernelPlan.unaryOp));
-				kernelOps.push_back({ .kind = VulkanNativeElementwiseF32KernelKind::Unary,
-				                      .unaryOp = kernelPlan.unaryOp });
+				kernelOps.push_back(
+				    { .kind = VulkanNativeElementwiseF32KernelKind::Unary, .unaryOp = kernelPlan.unaryOp });
 			}
 			else
 			{
 				payload.featureSet.AddFeature(VulkanNativeBinaryF32FeatureFlag(kernelPlan.binaryOp));
-				kernelOps.push_back({ .kind = VulkanNativeElementwiseF32KernelKind::Binary,
-				                      .binaryOp = kernelPlan.binaryOp });
+				kernelOps.push_back(
+				    { .kind = VulkanNativeElementwiseF32KernelKind::Binary, .binaryOp = kernelPlan.binaryOp });
 			}
 		}
 		auto spirv = VulkanNativeSameShapeElementwiseF32DAGSPIRV(kernelOps, plan->elementCount);
@@ -12087,12 +12081,24 @@ namespace
 	                            std::span<Tensor<Vulkan>> workspaceTensors, std::span<Tensor<Vulkan>> outputs,
 	                            CompiledModuleVulkanRunOptions options)
 	{
+		if (!options.synchronize)
+		{
+			throw std::runtime_error(
+			    "CompiledModule<Vulkan> native backend does not expose asynchronous execution yet");
+		}
 		if (modules.size() != payload.kernels.size())
 		{
 			throw std::runtime_error("Vulkan native module count does not match payload kernel count");
 		}
-		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
+		const bool batchSubmit = options.profileEvents == nullptr && payload.kernels.size() > 1;
+		std::vector<std::vector<const void*>> batchDescriptorStorage;
+		std::vector<VulkanComputeBatchDispatch> batchDispatches;
+		if (batchSubmit)
 		{
+			batchDescriptorStorage.reserve(payload.kernels.size());
+			batchDispatches.reserve(payload.kernels.size());
+		}
+		const auto dispatchKernel = [&](std::size_t kernelIndex) {
 			const auto& kernel = payload.kernels[kernelIndex];
 			std::vector<const void*> descriptors(VulkanDescriptorCount(kernel), nullptr);
 			for (const auto& argument : kernel.arguments)
@@ -12149,11 +12155,22 @@ namespace
 				.y = kernel.groups.y,
 				.z = kernel.groups.z,
 			};
+			if (batchSubmit)
+			{
+				batchDescriptorStorage.push_back(std::move(descriptors));
+				auto& storedDescriptors = batchDescriptorStorage.back();
+				batchDispatches.push_back({
+				    .module = &modules[kernelIndex],
+				    .descriptorBuffers = std::span<const void*>(storedDescriptors.data(), storedDescriptors.size()),
+				    .groups = dispatchGroups,
+				});
+				return;
+			}
 			VulkanDispatchTiming gpuTiming;
 			const auto dispatchBegin = std::chrono::steady_clock::now();
 			modules[kernelIndex].Dispatch(descriptors, dispatchGroups,
 			                              VulkanExecutionOptions{
-			                                  .synchronize = options.synchronize,
+			                                  .synchronize = true,
 			                                  .timing = options.profileEvents == nullptr ? nullptr : &gpuTiming,
 			                              });
 			const auto dispatchEnd = std::chrono::steady_clock::now();
@@ -12175,6 +12192,14 @@ namespace
 				    .gpuElapsedMs = gpuTiming.gpuElapsedMs,
 				});
 			}
+		};
+		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
+		{
+			dispatchKernel(kernelIndex);
+		}
+		if (batchSubmit)
+		{
+			VulkanComputeModule::DispatchBatch(batchDispatches);
 		}
 	}
 } // namespace
@@ -12192,6 +12217,7 @@ struct CompiledModule<Vulkan>::Impl
 	std::vector<VulkanComputeModule> vulkanModules;
 	std::vector<Tensor<Vulkan>> vulkanExternalTensors;
 	std::vector<Tensor<Vulkan>> vulkanWorkspaceTensors;
+	mutable std::mutex vulkanNativeRunMutex;
 };
 
 CompiledModule<Vulkan>::CompiledModule() = default;
@@ -12373,28 +12399,28 @@ CompiledModuleVulkanRunWorkspace CompiledModule<Vulkan>::CreateRunWorkspace() co
 		workspace.cpuInputs_.reserve(impl_->inputSpecs.size());
 		for (const auto& spec : impl_->inputSpecs)
 		{
-			workspace.cpuInputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() },
-			                                  spec.type.dtype, CPU{});
+			workspace.cpuInputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype,
+			                                  CPU{});
 		}
 		workspace.cpuOutputs_.reserve(impl_->outputSpecs.size());
 		for (const auto& spec : impl_->outputSpecs)
 		{
-			workspace.cpuOutputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() },
-			                                   spec.type.dtype, CPU{});
+			workspace.cpuOutputs_.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype,
+			                                   CPU{});
 		}
 	}
 	return workspace;
 }
 
-std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
-    std::span<const Tensor<Vulkan>> inputs, CompiledModuleVulkanRunWorkspace& workspace) const
+std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const Tensor<Vulkan>> inputs,
+                                                             CompiledModuleVulkanRunWorkspace& workspace) const
 {
 	return RunTensors(inputs, workspace, CompiledModuleVulkanRunOptions{});
 }
 
-std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
-    std::span<const Tensor<Vulkan>> inputs, CompiledModuleVulkanRunWorkspace& workspace,
-    CompiledModuleVulkanRunOptions options) const
+std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const Tensor<Vulkan>> inputs,
+                                                             CompiledModuleVulkanRunWorkspace& workspace,
+                                                             CompiledModuleVulkanRunOptions options) const
 {
 	if (!impl_)
 	{
@@ -12407,8 +12433,9 @@ std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
 	}
 	if (workspace.outputs_.size() != impl_->outputSpecs.size())
 	{
-		throw std::runtime_error(std::format("CompiledModule Vulkan workspace output count mismatch: expected {}, got {}",
-		                                     impl_->outputSpecs.size(), workspace.outputs_.size()));
+		throw std::runtime_error(
+		    std::format("CompiledModule Vulkan workspace output count mismatch: expected {}, got {}",
+		                impl_->outputSpecs.size(), workspace.outputs_.size()));
 	}
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{
@@ -12421,6 +12448,7 @@ std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(
 
 	if (impl_->backend == CompiledModuleBackend::VulkanNative)
 	{
+		std::lock_guard lock(impl_->vulkanNativeRunMutex);
 		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
 		                       impl_->vulkanWorkspaceTensors, workspace.outputs_, options);
 		return workspace.Outputs();
@@ -12490,6 +12518,7 @@ void CompiledModule<Vulkan>::RunTensorsInto(std::span<const Tensor<Vulkan>> inpu
 
 	if (impl_->backend == CompiledModuleBackend::VulkanNative)
 	{
+		std::lock_guard lock(impl_->vulkanNativeRunMutex);
 		RunVulkanNativePayload(impl_->vulkanPayload, impl_->vulkanModules, inputs, impl_->vulkanExternalTensors,
 		                       impl_->vulkanWorkspaceTensors, outputs, options);
 		return;

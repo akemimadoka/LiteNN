@@ -2130,6 +2130,12 @@ packaging slice to a useful production backend.
       - [x] Reuse per-module descriptor set, command buffer, fence, and timestamp query pool in the synchronous P0
             runtime path instead of allocating/resetting those Vulkan objects on every dispatch; timeline semaphore
             based async submission remains open.
+      - [x] Add synchronous multi-kernel batch submission for Vulkan-native payloads without profile-event sinks:
+            `CompiledModule<Vulkan>` now records each kernel's reusable command buffer and submits the command buffers
+            through one `vkQueueSubmit` plus one fence wait, while profile mode keeps per-kernel synchronized dispatch so
+            timestamp attribution remains stable. Validation on 2026-06-18: `CompiledModuleVulkanTest` passed 109/112
+            with the same three local fp16 feature skips; `VulkanNativeGraphRunInto` smoke rows ran for MLP128/MLP512
+            batches 1/32/128/512.
 - [x] Add the first Vulkan profiling tranche: `CompiledModuleVulkanRunOptions` accepts a profile-event sink, native
       dispatch records now include kernel index, entry point, dispatch groups, local workgroup layout, descriptor count,
       module creation wall time, and synchronized CPU-side dispatch wall time. `litenn_profile` prints a Vulkan native
