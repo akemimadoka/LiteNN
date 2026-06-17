@@ -11428,6 +11428,21 @@ namespace
 		return count;
 	}
 
+	std::vector<VulkanSpecializationConstant> VulkanSpecializationConstants(const VulkanNativeKernelSpec& kernel)
+	{
+		std::vector<VulkanSpecializationConstant> constants;
+		constants.reserve(kernel.specializationConstants.size());
+		for (const auto& constant : kernel.specializationConstants)
+		{
+			constants.push_back({
+			    .constantId = constant.constantId,
+			    .byteOffset = constant.byteOffset,
+			    .byteSize = constant.byteSize,
+			});
+		}
+		return constants;
+	}
+
 	std::uint64_t VulkanTensorByteSize(DataType dtype, std::size_t elementCount)
 	{
 		if (elementCount > std::numeric_limits<std::uint64_t>::max() / ElementByteSize(dtype))
@@ -11913,8 +11928,10 @@ CompiledModule<Vulkan> CompiledModule<Vulkan>::Load(CompiledModuleImage image, V
 		impl->vulkanModules.reserve(impl->vulkanPayload.kernels.size());
 		for (const auto& kernel : impl->vulkanPayload.kernels)
 		{
+			const auto specializationConstants = VulkanSpecializationConstants(kernel);
 			impl->vulkanModules.emplace_back(impl->device, impl->vulkanPayload.spirv, kernel.entryPoint,
-			                                 VulkanDescriptorCount(kernel));
+			                                 VulkanDescriptorCount(kernel), specializationConstants,
+			                                 kernel.specializationData);
 		}
 	}
 	else

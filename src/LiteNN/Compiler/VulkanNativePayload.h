@@ -133,6 +133,13 @@ namespace LiteNN
 		std::uint64_t byteSize{};
 	};
 
+	struct VulkanNativeSpecializationConstantSpec
+	{
+		std::uint32_t constantId{};
+		std::uint32_t byteOffset{};
+		std::uint32_t byteSize{};
+	};
+
 	struct VulkanNativeWorkspaceSpec
 	{
 		std::uint64_t byteSize{};
@@ -144,6 +151,8 @@ namespace LiteNN
 		std::string entryPoint{ "main" };
 		VulkanNativeDispatchDim groups;
 		VulkanNativeKernelRequirements requirements;
+		std::vector<std::byte> specializationData;
+		std::vector<VulkanNativeSpecializationConstantSpec> specializationConstants;
 		std::vector<VulkanNativeArgumentSpec> arguments;
 	};
 

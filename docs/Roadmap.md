@@ -2137,8 +2137,10 @@ packaging slice to a useful production backend.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
-- [ ] Add optional specialization constants to Vulkan artifact metadata once generated kernels start using them for
-      tile sizes or runtime-shape constants.
+- [x] Add optional specialization constants to Vulkan artifact metadata: payload v4 carries per-kernel specialization
+      map entries and data blobs, validates their byte ranges, and `VulkanComputeModule` passes them to
+      `vkCreateComputePipelines`. Generated kernels can now use this for tile sizes or runtime-shape constants without
+      changing the artifact ABI again.
 - [ ] Add mobile validation coverage: Android cross-build profile, loader/validation-layer smoke tests, at least one real
       mobile GPU fixture, and clear skip/failure behavior when no Vulkan compute device is present.
 - [x] Add an end-to-end Vulkan example that is honest about backend selection: `example/vulkan` now prints native support

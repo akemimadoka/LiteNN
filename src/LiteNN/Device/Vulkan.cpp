@@ -1027,8 +1027,10 @@ namespace LiteNN
 
 	VulkanComputeModule::VulkanComputeModule() = default;
 
-	VulkanComputeModule::VulkanComputeModule(Vulkan device, std::span<const std::uint32_t> spirv,
-	                                         std::string_view entryPoint, std::uint32_t descriptorCount)
+	VulkanComputeModule::VulkanComputeModule(
+	    Vulkan device, std::span<const std::uint32_t> spirv, std::string_view entryPoint,
+	    std::uint32_t descriptorCount, std::span<const VulkanSpecializationConstant> specializationConstants,
+	    std::span<const std::byte> specializationData)
 	    : impl_(std::make_unique<Impl>())
 	{
 		const auto creationBegin = clk::steady_clock::now();
@@ -1043,6 +1045,18 @@ namespace LiteNN
 		if (descriptorCount == 0)
 		{
 			throw std::runtime_error("Vulkan compute module requires at least one descriptor binding");
+		}
+		for (const auto& constant : specializationConstants)
+		{
+			if (constant.byteSize == 0)
+			{
+				throw std::runtime_error("Vulkan specialization constant byte size must not be zero");
+			}
+			if (constant.byteOffset > specializationData.size() ||
+			    constant.byteSize > specializationData.size() - constant.byteOffset)
+			{
+				throw std::runtime_error("Vulkan specialization constant byte range is out of bounds");
+			}
 		}
 
 		impl_->deviceHandle = std::move(device);
@@ -1115,11 +1129,28 @@ namespace LiteNN
 		            "vkCreatePipelineLayout");
 
 		const std::string entryName(entryPoint);
+		std::vector<VkSpecializationMapEntry> specializationEntries;
+		specializationEntries.reserve(specializationConstants.size());
+		for (const auto& constant : specializationConstants)
+		{
+			specializationEntries.push_back({
+			    .constantID = constant.constantId,
+			    .offset = constant.byteOffset,
+			    .size = constant.byteSize,
+			});
+		}
+		const VkSpecializationInfo specializationInfo{
+			.mapEntryCount = static_cast<std::uint32_t>(specializationEntries.size()),
+			.pMapEntries = specializationEntries.empty() ? nullptr : specializationEntries.data(),
+			.dataSize = specializationData.size(),
+			.pData = specializationData.empty() ? nullptr : specializationData.data(),
+		};
 		const VkPipelineShaderStageCreateInfo stageInfo{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
 			.stage = VK_SHADER_STAGE_COMPUTE_BIT,
 			.module = impl_->shaderModule,
 			.pName = entryName.c_str(),
+			.pSpecializationInfo = specializationEntries.empty() ? nullptr : &specializationInfo,
 		};
 		const VkComputePipelineCreateInfo pipelineInfo{
 			.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,

@@ -922,6 +922,12 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	kernel.requirements.deviceRequirements.AddRequirement(VulkanNativeDeviceRequirement::RuntimeDescriptorArray);
 	kernel.requirements.requiredSubgroupSize = 32;
 	kernel.requirements.requiredStorageBufferOffsetAlignment = 16;
+	kernel.specializationData = { std::byte{ 64 }, std::byte{ 0 }, std::byte{ 0 }, std::byte{ 0 } };
+	kernel.specializationConstants.push_back({
+	    .constantId = 7,
+	    .byteOffset = 0,
+	    .byteSize = 4,
+	});
 	kernel.arguments.push_back({
 	    .kind = VulkanNativeArgumentKind::InputTensor,
 	    .index = 0,
@@ -945,8 +951,16 @@ TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
 	    decodedRequirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::RuntimeDescriptorArray));
 	EXPECT_EQ(decodedRequirements.requiredSubgroupSize, 32u);
 	EXPECT_EQ(decodedRequirements.requiredStorageBufferOffsetAlignment, 16u);
+	ASSERT_EQ(decoded.kernels[0].specializationData.size(), 4u);
+	ASSERT_EQ(decoded.kernels[0].specializationConstants.size(), 1u);
+	EXPECT_EQ(decoded.kernels[0].specializationConstants[0].constantId, 7u);
+	EXPECT_EQ(decoded.kernels[0].specializationConstants[0].byteOffset, 0u);
+	EXPECT_EQ(decoded.kernels[0].specializationConstants[0].byteSize, 4u);
 
 	payload.kernels[0].requirements.deviceRequirements.flags = 1ull << 63;
+	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
+	payload.kernels[0].requirements.deviceRequirements.flags = 0;
+	payload.kernels[0].specializationConstants[0].byteOffset = 2;
 	EXPECT_THROW((void) SerializeVulkanNativeInstructionPayload(payload), std::runtime_error);
 }
 

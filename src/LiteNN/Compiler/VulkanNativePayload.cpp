@@ -14,7 +14,7 @@ namespace LiteNN
 			std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 			std::byte{ 'V' }, std::byte{ 'K' }, std::byte{ 'S' }, std::byte{ 'P' },
 		};
-		constexpr std::uint32_t kPayloadVersion = 3;
+		constexpr std::uint32_t kPayloadVersion = 4;
 
 		void AppendU32(std::vector<std::byte>& bytes, std::uint32_t value)
 		{
@@ -37,6 +37,12 @@ namespace LiteNN
 			AppendU64(bytes, static_cast<std::uint64_t>(value.size()));
 			bytes.insert(bytes.end(), reinterpret_cast<const std::byte*>(value.data()),
 			             reinterpret_cast<const std::byte*>(value.data() + value.size()));
+		}
+
+		void AppendBytes(std::vector<std::byte>& bytes, std::span<const std::byte> value)
+		{
+			AppendU64(bytes, static_cast<std::uint64_t>(value.size()));
+			bytes.insert(bytes.end(), value.begin(), value.end());
 		}
 
 		std::uint32_t ReadU32(std::span<const std::byte> bytes, std::size_t& offset)
@@ -78,6 +84,21 @@ namespace LiteNN
 				throw std::runtime_error("Vulkan native instruction payload string is truncated");
 			}
 			std::string result(reinterpret_cast<const char*>(bytes.data() + offset), static_cast<std::size_t>(size));
+			offset += static_cast<std::size_t>(size);
+			return result;
+		}
+
+		std::vector<std::byte> ReadBytes(std::span<const std::byte> bytes, std::size_t& offset)
+		{
+			const auto size = ReadU64(bytes, offset);
+			if (size > std::numeric_limits<std::size_t>::max() ||
+			    static_cast<std::size_t>(size) > bytes.size() - offset)
+			{
+				throw std::runtime_error("Vulkan native instruction payload byte blob is truncated");
+			}
+			std::vector<std::byte> result(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+			                              bytes.begin() + static_cast<std::ptrdiff_t>(
+			                                                  offset + static_cast<std::size_t>(size)));
 			offset += static_cast<std::size_t>(size);
 			return result;
 		}
@@ -168,6 +189,22 @@ namespace LiteNN
 					throw std::runtime_error(
 					    "Vulkan native kernel storage-buffer offset alignment requirement must be a power of two");
 				}
+				if (!kernel.specializationConstants.empty() && kernel.specializationData.empty())
+				{
+					throw std::runtime_error("Vulkan native kernel specialization data must not be empty");
+				}
+				for (const auto& constant : kernel.specializationConstants)
+				{
+					if (constant.byteSize == 0)
+					{
+						throw std::runtime_error("Vulkan native specialization constant byte size must not be zero");
+					}
+					if (constant.byteOffset > kernel.specializationData.size() ||
+					    constant.byteSize > kernel.specializationData.size() - constant.byteOffset)
+					{
+						throw std::runtime_error("Vulkan native specialization constant byte range is out of bounds");
+					}
+				}
 				for (const auto& argument : kernel.arguments)
 				{
 					if (argument.byteSize == 0)
@@ -230,6 +267,14 @@ namespace LiteNN
 			AppendU64(bytes, kernel.requirements.deviceRequirements.flags);
 			AppendU32(bytes, kernel.requirements.requiredSubgroupSize);
 			AppendU32(bytes, kernel.requirements.requiredStorageBufferOffsetAlignment);
+			AppendBytes(bytes, kernel.specializationData);
+			AppendU32(bytes, static_cast<std::uint32_t>(kernel.specializationConstants.size()));
+			for (const auto& constant : kernel.specializationConstants)
+			{
+				AppendU32(bytes, constant.constantId);
+				AppendU32(bytes, constant.byteOffset);
+				AppendU32(bytes, constant.byteSize);
+			}
 			AppendU32(bytes, static_cast<std::uint32_t>(kernel.arguments.size()));
 			for (const auto& argument : kernel.arguments)
 			{
@@ -299,6 +344,21 @@ namespace LiteNN
 				kernel.requirements.deviceRequirements.flags = ReadU64(bytes, offset);
 				kernel.requirements.requiredSubgroupSize = ReadU32(bytes, offset);
 				kernel.requirements.requiredStorageBufferOffsetAlignment = ReadU32(bytes, offset);
+			}
+			if (version >= 4)
+			{
+				kernel.specializationData = ReadBytes(bytes, offset);
+				const auto specializationCount = ReadU32(bytes, offset);
+				kernel.specializationConstants.reserve(specializationCount);
+				for (std::uint32_t specializationIndex = 0; specializationIndex < specializationCount;
+				     ++specializationIndex)
+				{
+					kernel.specializationConstants.push_back({
+					    .constantId = ReadU32(bytes, offset),
+					    .byteOffset = ReadU32(bytes, offset),
+					    .byteSize = ReadU32(bytes, offset),
+					});
+				}
 			}
 			const auto argumentCount = ReadU32(bytes, offset);
 			kernel.arguments.reserve(argumentCount);

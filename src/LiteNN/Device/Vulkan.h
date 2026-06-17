@@ -121,12 +121,21 @@ namespace LiteNN
 	bool IsVulkanDeviceAvailable(std::uint32_t deviceIndex = 0) noexcept;
 	VulkanDeviceCapabilities QueryVulkanDeviceCapabilities(const Vulkan& device);
 
+	struct VulkanSpecializationConstant
+	{
+		std::uint32_t constantId{};
+		std::uint32_t byteOffset{};
+		std::uint32_t byteSize{};
+	};
+
 	class VulkanComputeModule
 	{
 	public:
 		VulkanComputeModule();
 		VulkanComputeModule(Vulkan device, std::span<const std::uint32_t> spirv, std::string_view entryPoint,
-		                    std::uint32_t descriptorCount);
+		                    std::uint32_t descriptorCount,
+		                    std::span<const VulkanSpecializationConstant> specializationConstants = {},
+		                    std::span<const std::byte> specializationData = {});
 		VulkanComputeModule(const VulkanComputeModule&) = delete;
 		VulkanComputeModule& operator=(const VulkanComputeModule&) = delete;
 		VulkanComputeModule(VulkanComputeModule&&) noexcept;
