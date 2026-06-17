@@ -988,6 +988,7 @@ namespace LiteNN
 		VkShaderModule shaderModule{};
 		VkDescriptorSetLayout descriptorSetLayout{};
 		VkDescriptorPool descriptorPool{};
+		VkDescriptorSet descriptorSet{};
 		VkPipelineLayout pipelineLayout{};
 		VkPipeline pipeline{};
 		std::uint32_t descriptorCount{};
@@ -1118,6 +1119,14 @@ namespace LiteNN
 		};
 		CheckVulkan(vkCreateDescriptorPool(impl_->context->device, &poolInfo, nullptr, &impl_->descriptorPool),
 		            "vkCreateDescriptorPool");
+		const VkDescriptorSetAllocateInfo setInfo{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+			.descriptorPool = impl_->descriptorPool,
+			.descriptorSetCount = 1,
+			.pSetLayouts = &impl_->descriptorSetLayout,
+		};
+		CheckVulkan(vkAllocateDescriptorSets(impl_->context->device, &setInfo, &impl_->descriptorSet),
+		            "vkAllocateDescriptorSets");
 
 		const VkPipelineLayoutCreateInfo pipelineLayoutInfo{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -1244,19 +1253,6 @@ namespace LiteNN
 
 		std::lock_guard lock(impl_->context->queueMutex);
 
-		CheckVulkan(vkResetDescriptorPool(impl_->context->device, impl_->descriptorPool, 0),
-		            "vkResetDescriptorPool before dispatch");
-
-		VkDescriptorSet descriptorSet{};
-		const VkDescriptorSetAllocateInfo setInfo{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-			.descriptorPool = impl_->descriptorPool,
-			.descriptorSetCount = 1,
-			.pSetLayouts = &impl_->descriptorSetLayout,
-		};
-		CheckVulkan(vkAllocateDescriptorSets(impl_->context->device, &setInfo, &descriptorSet),
-		            "vkAllocateDescriptorSets");
-
 		std::vector<VkDescriptorBufferInfo> bufferInfos;
 		bufferInfos.reserve(descriptorBuffers.size());
 		std::vector<VkWriteDescriptorSet> writes;
@@ -1271,7 +1267,7 @@ namespace LiteNN
 			});
 			writes.push_back({
 			    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			    .dstSet = descriptorSet,
+			    .dstSet = impl_->descriptorSet,
 			    .dstBinding = i,
 			    .descriptorCount = 1,
 			    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1316,7 +1312,7 @@ namespace LiteNN
 		}
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipelineLayout, 0, 1,
-		                        &descriptorSet, 0, nullptr);
+		                        &impl_->descriptorSet, 0, nullptr);
 		vkCmdDispatch(commandBuffer, groups.x, groups.y, groups.z);
 		if (recordGpuTimestamp)
 		{
@@ -1358,9 +1354,7 @@ namespace LiteNN
 		}
 		vkDestroyFence(impl_->context->device, fence, nullptr);
 		vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &commandBuffer);
-		const auto resetResult = vkResetDescriptorPool(impl_->context->device, impl_->descriptorPool, 0);
 		CheckVulkan(submitResult, "vkQueueSubmit");
-		CheckVulkan(resetResult, "vkResetDescriptorPool after dispatch");
 	}
 } // namespace LiteNN
 
