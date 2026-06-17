@@ -2135,7 +2135,8 @@ packaging slice to a useful production backend.
             through one `vkQueueSubmit` plus one fence wait, while profile mode keeps per-kernel synchronized dispatch so
             timestamp attribution remains stable. Validation on 2026-06-18: `CompiledModuleVulkanTest` passed 109/112
             with the same three local fp16 feature skips; `VulkanNativeGraphRunInto` smoke rows ran for MLP128/MLP512
-            batches 1/32/128/512.
+            batches 1/32/128/512. Public async entry points remain explicitly rejected until timeline-semaphore
+            ownership is implemented, covered by `CompiledModuleVulkanTest.RejectsPublicAsyncVulkanNativeRun`.
 - [x] Add the first Vulkan profiling tranche: `CompiledModuleVulkanRunOptions` accepts a profile-event sink, native
       dispatch records now include kernel index, entry point, dispatch groups, local workgroup layout, descriptor count,
       module creation wall time, and synchronized CPU-side dispatch wall time. `litenn_profile` prints a Vulkan native

@@ -2581,6 +2581,28 @@ TEST(CompiledModuleVulkanTest, RecordsVulkanNativeProfileEvents)
 	}
 }
 
+TEST(CompiledModuleVulkanTest, RejectsPublicAsyncVulkanNativeRun)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildBinaryChainGraph(BinaryOp::Add, BinaryOp::Multiply);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 100.0, 200.0, 300.0, 400.0 }, { 4 }, DataType::Float32, device),
+	};
+	EXPECT_THROW((void)module.RunTensors(std::span<const Tensor<Vulkan>>(inputs),
+	                                     CompiledModuleVulkanRunOptions{ .synchronize = false }),
+	             std::runtime_error);
+}
+
 TEST(CompiledModuleVulkanTest, RunsSimpleCastArithmetic)
 {
 	if (!IsVulkanDeviceAvailable())

@@ -6,7 +6,8 @@ This example shows the current Vulkan AOT backend selection boundary:
   normal artifact, loads the separated metadata/instruction regions, runs both modules on `Tensor<Vulkan>` inputs, and
   prints CPU-side Vulkan profile events.
 - `Add(Add(lhs, rhs), tail)` and `Multiply(Add(lhs, rhs), tail)` are supported by the first Vulkan-native binary chain
-  path and run as synchronized native kernels.
+  path. Normal runs batch the recorded native command buffers into one synchronized queue submit; profile runs keep
+  per-kernel synchronized dispatch so CPU/GPU timings remain attributable.
 - A diamond-shaped binary graph intentionally exceeds the current chain matcher. The compiler emits a CPU-native bridge
   artifact, strict Vulkan loading rejects it, and the example only runs it after explicitly setting
   `VulkanHostFallbackPolicy::Allow`.
