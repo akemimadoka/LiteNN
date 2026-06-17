@@ -10080,6 +10080,79 @@ namespace
 		};
 	}
 
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeP0(const Graph& graph)
+	{
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeReduceF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSoftmaxF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeNormalizationF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativePool2DF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeUpsampleNearestF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSliceF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeConcatF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeConv2DF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeConvTranspose2DF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeMatMulBiasF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeMatMulF32P0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32ChainP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32DAGP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeElementwiseF32DAGP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryP0(graph))
+		{
+			return std::move(nativeParts);
+		}
+		return std::nullopt;
+	}
+
 	CompiledArtifactParts MakeVulkanNativeCompiledArtifactParts(VulkanP0ArtifactParts parts)
 	{
 		return MakeCompiledArtifactParts(std::move(parts.rodata), std::move(parts.instructions),
@@ -12583,74 +12656,18 @@ namespace
 		Validation::ValidateGraph(graph);
 		if (options.enableVulkanNativeAOT)
 		{
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeUnaryP0(graph))
+			if (auto nativeParts = TryCompileVulkanNativeP0(graph))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeCastP0(graph))
+
+			Graph optimized = graph;
+			FusionPass{}.Run(optimized);
+			if (auto nativeParts = TryCompileVulkanNativeP0(optimized))
 			{
 				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
 			}
-			if (auto nativeParts = TryCompileVulkanNativeReduceF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSoftmaxF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeNormalizationF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativePool2DF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeUpsampleNearestF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSliceF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeConcatF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeConv2DF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeConvTranspose2DF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeMatMulBiasF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeMatMulF32P0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32ChainP0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryF32DAGP0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeElementwiseF32DAGP0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
-			if (auto nativeParts = TryCompileVulkanNativeSameShapeBinaryP0(graph))
-			{
-				return MakeVulkanNativeCompiledArtifactParts(std::move(*nativeParts));
-			}
+
 			const auto report = DiagnoseVulkanNativeSupport(graph);
 			if (!report.supported)
 			{

@@ -399,7 +399,7 @@ namespace
 		return graph;
 	}
 
-	Graph BuildSimpleMatMulBiasGraph(bool relu)
+	Graph BuildSimpleMatMulBiasGraph(bool relu, bool runFusion = true)
 	{
 		Graph graph;
 		Subgraph sg;
@@ -425,11 +425,14 @@ namespace
 		graph.SetForward(0);
 		graph.SetInputNames({ "lhs", "rhs", "bias" });
 		graph.SetOutputNames({ relu ? "relu" : "out" });
-		FusionPass{}.Run(graph);
+		if (runFusion)
+		{
+			FusionPass{}.Run(graph);
+		}
 		return graph;
 	}
 
-	Graph BuildSimpleMatMulBiasVariableGraph(bool relu)
+	Graph BuildSimpleMatMulBiasVariableGraph(bool relu, bool runFusion = true)
 	{
 		Graph graph;
 		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
@@ -462,7 +465,10 @@ namespace
 		graph.SetForward(0);
 		graph.SetInputNames({ "lhs" });
 		graph.SetOutputNames({ relu ? "relu" : "out" });
-		FusionPass{}.Run(graph);
+		if (runFusion)
+		{
+			FusionPass{}.Run(graph);
+		}
 		return graph;
 	}
 
@@ -1552,6 +1558,21 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleMatMulBiasReLU)
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * 4u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 1u * 4u * sizeof(float));
 	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 2u * 4u * sizeof(float));
+}
+
+TEST(CompiledModuleVulkanTest, AutoFusesMatMulBiasReLUForNativePayload)
+{
+	const auto graph = BuildSimpleMatMulBiasGraph(true, false);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::MatMulBiasAddReLUF32)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForMatMulBiasExternalWeights)
@@ -3483,6 +3504,36 @@ TEST(CompiledModuleVulkanTest, RunsSimpleMatMulBiasReLUArithmetic)
 	}
 
 	const auto graph = BuildSimpleMatMulBiasGraph(true);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 }, DataType::Float32,
+		               device),
+		Tensor<Vulkan>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 39.0f, 0.0f, 53.0f, 0.0f, 84.0f, 0.0f, 116.0f, 0.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsAutoFusedMatMulBiasReLUArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildSimpleMatMulBiasGraph(true, false);
 	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{});
 	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
 
