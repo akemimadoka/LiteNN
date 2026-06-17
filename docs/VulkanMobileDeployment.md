@@ -128,6 +128,9 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   baseline, not the final tiled/shared-memory production GEMM kernel
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU with `[1,N]` or `[M,N]` bias rows; this uses the same
   baseline one-output-element-per-invocation kernel shape
+- homogeneous rank-2 static `Float32` MatMulBiasAdd chains where every layer has the same M/K/N/biasRows/ReLU shape
+  signature; the artifact emits multiple Vulkan kernels from one SPIR-V module and uses `WorkspaceTensor` buffers for
+  hidden activations. Mixed-shape MLP chains still require multi-module payload support or shape specialization constants
 - static-axis `Float32` Reduce Sum/Mean/Max/Min using one shader invocation per output element and a scalar loop over the
   reduced axis; this is a correctness baseline before workgroup/subgroup reductions
 - static-axis `Float32` Softmax using max-subtracted scalar loops along the softmax axis; this is a correctness baseline
@@ -162,11 +165,12 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeGroupNormAffine/F32`, `VulkanNativePool2D/F32/Max|Average`,
   `VulkanNativePool2D/F32/MaxPadded|AveragePadded|AveragePaddedIncludePad`, `VulkanNativeConv2D/F32`,
   `VulkanNativeConvTranspose2D/F32`, `VulkanNativeUpsampleNearest/F32`, `VulkanNativeSlice/F32`,
-  `VulkanNativeConcat/F32`, `VulkanNativeMatMul/F32`, and
-  `VulkanNativeMatMulBiasAdd/F32` rows only when a Vulkan
+  `VulkanNativeConcat/F32`, `VulkanNativeMatMul/F32`,
+  `VulkanNativeMatMulBiasAdd/F32`, and `VulkanNativeLinearChain/F32/layers:2` rows only when a Vulkan
   compute device exists. It also registers model-level
-  `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Multi-layer MLP rows
-  remain deferred until Vulkan has workspace/multi-kernel linear-chain scheduling.
+  `VulkanNativeRunInto` rows for the single-Linear model once external weight binding is available. Mixed-shape
+  multi-layer MLP rows remain deferred until Vulkan can package multiple specialized MatMulBias shader shapes in one
+  artifact.
 
 Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
 linear chains, tiled/shared-memory convolution, device-local memory, tiled/shared-memory kernels, and async queue integration

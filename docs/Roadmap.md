@@ -2018,6 +2018,14 @@ packaging slice to a useful production backend.
             workgroup/subgroup reductions for larger axes.
       - [ ] Complete f32 multi-layer linear-chain lowering with workspace/multi-kernel schedules, then replace the
             current one-output-element-per-thread MatMul/MatMulBias kernels with tiled/shared-memory kernels.
+            - [x] Add the first Vulkan-native homogeneous f32 linear-chain slice: same-shape fused
+                  `MatMulBiasAdd` chains now compile into one artifact with multiple MatMulBias kernels and
+                  `WorkspaceTensor` handoff between layers. Validation on 2026-06-18:
+                  `CompiledModuleVulkanTest.WritesVulkanNativePayloadForHomogeneousLinearChain` and
+                  `CompiledModuleVulkanTest.RunsHomogeneousLinearChainArithmetic` passed locally; `litenn_bench`
+                  registers `VulkanNativeLinearChain/F32/layers:2` microbench rows.
+            - [ ] Extend linear-chain payloads beyond homogeneous shapes by either adding multi-SPIR-V-module payload
+                  support or moving MatMulBias dimensions into specialization constants.
       - [x] Add the first static-axis f32 `SoftmaxNode` slice: Vulkan-native SPIR-V now computes numerically stable
             max-subtracted softmax with one invocation per output element and scalar loops over the softmax axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local

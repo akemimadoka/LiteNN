@@ -1001,6 +1001,58 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanHomogeneousLinearChainVariableGraph(std::size_t batch, std::size_t width)
+	{
+		Graph graph;
+		const auto makeVariable = [&](std::string name, std::vector<double> data, std::vector<std::size_t> shape) {
+			const auto index =
+			    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(data), std::move(shape), DataType::Float32)));
+			graph.SetVariableName(index, std::move(name));
+			return index;
+		};
+		std::vector<double> weight0Data(width * width);
+		std::vector<double> weight1Data(width * width);
+		std::vector<double> bias0Data(width);
+		std::vector<double> bias1Data(width);
+		for (std::size_t i = 0; i < weight0Data.size(); ++i)
+		{
+			weight0Data[i] = i % (width + 1) == 0 ? 1.0 : 0.0;
+			weight1Data[i] = i % (width + 1) == 0 ? 0.5 : 0.0;
+		}
+		for (std::size_t i = 0; i < width; ++i)
+		{
+			bias0Data[i] = 0.001;
+			bias1Data[i] = -0.001;
+		}
+		const auto weight0Index = makeVariable("linear_chain_weight0", std::move(weight0Data), { width, width });
+		const auto bias0Index = makeVariable("linear_chain_bias0", std::move(bias0Data), { 1, width });
+		const auto weight1Index = makeVariable("linear_chain_weight1", std::move(weight1Data), { width, width });
+		const auto bias1Index = makeVariable("linear_chain_bias1", std::move(bias1Data), { 1, width });
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, width });
+		const auto weight0 = sg.AddNode(VariableRefNode{ weight0Index },
+		                                { OutputInfo{ DataType::Float32, { width, width } } });
+		const auto bias0 = sg.AddNode(VariableRefNode{ bias0Index }, { OutputInfo{ DataType::Float32, { 1, width } } });
+		const auto matmul0 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight0, 0 } },
+		                                { OutputInfo{ DataType::Float32, { batch, width } } });
+		const auto hidden = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul0, 0 }, { bias0, 0 } },
+		                               { OutputInfo{ DataType::Float32, { batch, width } } });
+		const auto weight1 = sg.AddNode(VariableRefNode{ weight1Index },
+		                                { OutputInfo{ DataType::Float32, { width, width } } });
+		const auto bias1 = sg.AddNode(VariableRefNode{ bias1Index }, { OutputInfo{ DataType::Float32, { 1, width } } });
+		const auto matmul1 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { weight1, 0 } },
+		                                { OutputInfo{ DataType::Float32, { batch, width } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul1, 0 }, { bias1, 0 } },
+		                               { OutputInfo{ DataType::Float32, { batch, width } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	Graph BuildVulkanCastGraph(DataType srcType, DataType dstType, std::size_t elementCount)
 	{
 		Graph graph;
@@ -1881,6 +1933,47 @@ namespace
 
 		SetThroughputCounters(state, batch);
 		const auto flops = 2 * batch * ((kInputWidth * 128) + (128 * 10));
+		state.counters["flops"] =
+		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
+	void BMVulkanNativeHomogeneousLinearChainRunTensorsInto(benchmark::State& state, std::size_t batch,
+	                                                        std::size_t width)
+	{
+		auto graph = BuildVulkanHomogeneousLinearChainVariableGraph(batch, width);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for homogeneous linear-chain benchmark");
+			return;
+		}
+
+		std::vector<float> inputData(batch * width);
+		for (std::size_t i = 0; i < inputData.size(); ++i)
+		{
+			inputData[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.01f;
+		}
+		std::vector<Tensor<Vulkan>> inputs;
+		inputs.reserve(1);
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, width });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		const auto flops = 2 * batch * width * width * 2;
 		state.counters["flops"] =
 		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
 	}
@@ -2839,6 +2932,14 @@ namespace
 					    BMVulkanNativeMatMulBiasAddRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
 				    });
 				matMulBiasBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+				auto* linearChainBenchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("VulkanNativeLinearChain/F32/layers:2/batch:{}/width:{}", batch,
+				                vulkanNativeMatMulWidth),
+				    [=](benchmark::State& state) {
+					    BMVulkanNativeHomogeneousLinearChainRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
+				    });
+				linearChainBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 			}
 		}
 #endif
