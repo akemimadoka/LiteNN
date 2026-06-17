@@ -514,6 +514,55 @@ namespace
 		return graph;
 	}
 
+	Graph BuildMixedShapeLinearChainGraph(bool runFusion = true)
+	{
+		Graph graph;
+		const auto weight0Index = graph.AddVariable(Variable::Create(Tensor<CPU>(
+		    { 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0 }, { 3, 4 },
+		    DataType::Float32)));
+		const auto bias0Index =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0, -10.0, 1.0, 0.0 }, { 1, 4 }, DataType::Float32)));
+		const auto weight1Index =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 2.0 }, { 4, 2 },
+		                                       DataType::Float32)));
+		const auto bias1Index =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -1.0 }, { 1, 2 }, DataType::Float32)));
+		graph.SetVariableName(weight0Index, "mixed_weight0");
+		graph.SetVariableName(bias0Index, "mixed_bias0");
+		graph.SetVariableName(weight1Index, "mixed_weight1");
+		graph.SetVariableName(bias1Index, "mixed_bias1");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto weight0 = sg.AddNode(VariableRefNode{ weight0Index }, { OutputInfo{ DataType::Float32, { 3, 4 } } });
+		const auto bias0 = sg.AddNode(VariableRefNode{ bias0Index }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		const auto matmul0 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight0, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		const auto shifted0 = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul0, 0 }, { bias0, 0 } },
+		                                 { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
+		const auto zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                 { OutputInfo{ DataType::Float32, { 1, 1 } } });
+		const auto hidden = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted0, 0 }, { zeroNode, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		const auto weight1 = sg.AddNode(VariableRefNode{ weight1Index }, { OutputInfo{ DataType::Float32, { 4, 2 } } });
+		const auto bias1 = sg.AddNode(VariableRefNode{ bias1Index }, { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto matmul1 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { weight1, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul1, 0 }, { bias1, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		if (runFusion)
+		{
+			FusionPass{}.Run(graph);
+		}
+		return graph;
+	}
+
 	Graph BuildSimpleConv2DVariableGraph()
 	{
 		Graph graph;
@@ -1176,7 +1225,18 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForHomogeneousLinearChain)
 	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
 
 	EXPECT_TRUE(report.supported);
-	EXPECT_NE(report.capability.find("homogeneous f32 linear chain"), std::string::npos);
+	EXPECT_NE(report.capability.find("f32 linear chain"), std::string::npos);
+	EXPECT_NE(report.capability.find("2 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMixedShapeLinearChain)
+{
+	const auto graph = BuildMixedShapeLinearChainGraph(false);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("f32 linear chain"), std::string::npos);
 	EXPECT_NE(report.capability.find("2 kernels"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
@@ -1662,6 +1722,34 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForHomogeneousLinearChai
 	          0ull);
 	ASSERT_EQ(payload.workspaceTensors.size(), 1u);
 	ASSERT_EQ(payload.kernels.size(), 2u);
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	ASSERT_EQ(payload.kernels[1].arguments.size(), 4u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[0].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForMixedShapeLinearChain)
+{
+	const auto graph = BuildMixedShapeLinearChainGraph(false);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_EQ(artifact.InputSpecs().size(), 1u);
+	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 5u);
+	EXPECT_GT(artifact.Weights().size(), 0u);
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::MatMulBiasAddF32)),
+	          0ull);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::MatMulBiasAddReLUF32)),
+	          0ull);
+	ASSERT_EQ(payload.workspaceTensors.size(), 1u);
+	EXPECT_EQ(payload.workspaceTensors[0].byteSize, 2u * 4u * sizeof(float));
+	ASSERT_EQ(payload.kernels.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].entryPoint, "matmul_bias_f32_0");
+	EXPECT_EQ(payload.kernels[1].entryPoint, "matmul_bias_f32_1");
 	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
 	ASSERT_EQ(payload.kernels[1].arguments.size(), 4u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
@@ -3653,6 +3741,35 @@ TEST(CompiledModuleVulkanTest, RunsHomogeneousLinearChainArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 4.0f, 10.0f, 8.0f, 16.0f };
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsMixedShapeLinearChainArithmetic)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	const auto graph = BuildMixedShapeLinearChainGraph(false);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	auto module = artifact.Load(Vulkan{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	Vulkan device;
+	std::array inputs{
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, { 2, 3 }, DataType::Float32, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+
+	const auto actual = CopyToHostVector(outputs[0]);
+	const std::array expected{ 6.0f, 9.0f, 12.0f, 18.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{

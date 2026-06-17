@@ -6231,7 +6231,7 @@ namespace
 
 	std::optional<std::uint32_t> VulkanP0ShapeNumElementsU32(std::span<const std::size_t> shape);
 	std::optional<VulkanP0LinearChainPlan>
-	MatchVulkanP0HomogeneousLinearChainF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder);
+	MatchVulkanP0LinearChainF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder);
 
 	std::optional<std::uint32_t> GetVulkanP0ParamIndex(const Subgraph& subgraph, NodeOutput output)
 	{
@@ -7276,10 +7276,9 @@ namespace
 		}
 		const auto& output = resultEntry.outputInfos[0];
 
-		if (const auto chain = MatchVulkanP0HomogeneousLinearChainF32(graph, nullptr))
+		if (const auto chain = MatchVulkanP0LinearChainF32(graph, nullptr))
 		{
-			return VulkanNativeSupported(
-			    std::format("homogeneous f32 linear chain ({} kernels)", chain->kernels.size()));
+			return VulkanNativeSupported(std::format("f32 linear chain ({} kernels)", chain->kernels.size()));
 		}
 
 		if (const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
@@ -8201,9 +8200,8 @@ namespace
 		                                     fused->pattern == FusionPattern::MatMulBiasAddReLU);
 	}
 
-	std::optional<VulkanP0LinearChainPlan>
-	MatchVulkanP0HomogeneousLinearChainF32(const Graph& graph,
-	                                       VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
+	std::optional<VulkanP0LinearChainPlan> MatchVulkanP0LinearChainF32(
+	    const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder = nullptr)
 	{
 		if (!IsVulkanP0SingleForwardGraph(graph))
 		{
@@ -8242,7 +8240,6 @@ namespace
 		VulkanP0WorkspacePlanner workspacePlanner;
 		std::vector<std::optional<VulkanP0TensorRef>> values(subgraph.NodeCount());
 		VulkanP0LinearChainPlan chain;
-		std::optional<VulkanP0MatMulBiasPlan> common;
 
 		const auto requireValue = [&](NodeOutput output) -> std::optional<VulkanP0TensorRef> {
 			if (output.port != 0 || output.node >= values.size() || !values[output.node])
@@ -8299,16 +8296,6 @@ namespace
 			{
 				return std::nullopt;
 			}
-			if (common && (common->m != layer->m || common->k != layer->k || common->n != layer->n ||
-			               common->biasRows != layer->biasRows || common->relu != layer->relu))
-			{
-				return std::nullopt;
-			}
-			if (!common)
-			{
-				common = layer;
-			}
-
 			const auto outputRef = [&]() -> VulkanP0TensorRef {
 				if (NodeOutput{ nodeId, 0 } == finalResult)
 				{
@@ -10277,29 +10264,44 @@ namespace
 		};
 	}
 
-	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeHomogeneousLinearChainF32P0(const Graph& graph)
+	std::optional<VulkanP0ArtifactParts> TryCompileVulkanNativeLinearChainF32P0(const Graph& graph)
 	{
 		VulkanP0ExternalTensorBuilder externalBuilder;
-		const auto plan = MatchVulkanP0HomogeneousLinearChainF32(graph, &externalBuilder);
+		const auto plan = MatchVulkanP0LinearChainF32(graph, &externalBuilder);
 		if (!plan)
 		{
 			return std::nullopt;
 		}
-		const auto& first = plan->kernels.front();
 
 		VulkanNativeInstructionPayload payload;
 		payload.featureSet.AddFeature(VulkanNativeFeature::StaticShape);
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
-		payload.featureSet.AddFeature(first.relu ? VulkanNativeFeature::MatMulBiasAddReLUF32
-		                                         : VulkanNativeFeature::MatMulBiasAddF32);
 		payload.workspaceTensors = plan->workspaceTensors;
-		auto spirv = VulkanNativeMatMulBiasF32SPIRV(first.m, first.k, first.n, first.biasRows, first.relu);
+
+		std::vector<VulkanNativeMatMulBiasF32KernelSpec> codegenSpecs;
+		codegenSpecs.reserve(plan->kernels.size());
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
+		{
+			const auto& kernelPlan = plan->kernels[kernelIndex];
+			payload.featureSet.AddFeature(kernelPlan.relu ? VulkanNativeFeature::MatMulBiasAddReLUF32
+			                                              : VulkanNativeFeature::MatMulBiasAddF32);
+			codegenSpecs.push_back({
+			    .kernelName = std::format("matmul_bias_f32_{}", kernelIndex),
+			    .m = kernelPlan.m,
+			    .k = kernelPlan.k,
+			    .n = kernelPlan.n,
+			    .biasRows = kernelPlan.biasRows,
+			    .relu = kernelPlan.relu,
+			});
+		}
+		auto spirv = VulkanNativeMatMulBiasF32SPIRV(codegenSpecs);
 		payload.spirv = std::move(spirv.words);
 
-		for (const auto& kernelPlan : plan->kernels)
+		for (std::size_t kernelIndex = 0; kernelIndex < plan->kernels.size(); ++kernelIndex)
 		{
+			const auto& kernelPlan = plan->kernels[kernelIndex];
 			payload.kernels.push_back({
-			    .entryPoint = "main",
+			    .entryPoint = codegenSpecs[kernelIndex].kernelName,
 			    .groups = { .x = VulkanP0MatMulGroupCount(kernelPlan.outputElementCount), .y = 1, .z = 1 },
 			    .requirements = VulkanP0KernelRequirements(kVulkanNativeMatMulWorkgroupSize),
 			    .arguments = {
@@ -10377,7 +10379,7 @@ namespace
 		{
 			return std::move(nativeParts);
 		}
-		if (auto nativeParts = TryCompileVulkanNativeHomogeneousLinearChainF32P0(graph))
+		if (auto nativeParts = TryCompileVulkanNativeLinearChainF32P0(graph))
 		{
 			return std::move(nativeParts);
 		}

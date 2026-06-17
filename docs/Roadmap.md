@@ -2024,8 +2024,12 @@ packaging slice to a useful production backend.
                   `CompiledModuleVulkanTest.WritesVulkanNativePayloadForHomogeneousLinearChain` and
                   `CompiledModuleVulkanTest.RunsHomogeneousLinearChainArithmetic` passed locally; `litenn_bench`
                   registers `VulkanNativeLinearChain/F32/layers:2` microbench rows.
-            - [ ] Extend linear-chain payloads beyond homogeneous shapes by either adding multi-SPIR-V-module payload
-                  support or moving MatMulBias dimensions into specialization constants.
+            - [x] Extend linear-chain payloads beyond homogeneous shapes without changing the artifact ABI: generated
+                  MatMulBias SPIR-V modules can now contain multiple named entry points, and mixed-shape
+                  `MatMulBiasAddReLU -> MatMulBiasAdd` chains run as one Vulkan-native artifact. Validation on
+                  2026-06-18: mixed-shape QueryNativeSupport/payload/runtime tests passed; `litenn_bench` registers
+                  `VulkanNativeGraphRunInto/MLP(784->128->10)` and smoke-ran batch 1 at roughly 0.266 ms and batch
+                  128 at roughly 0.276 ms.
       - [x] Add the first static-axis f32 `SoftmaxNode` slice: Vulkan-native SPIR-V now computes numerically stable
             max-subtracted softmax with one invocation per output element and scalar loops over the softmax axis.
             Validation on 2026-06-13: `CompiledModuleVulkanTest` passed 42/43 Vulkan tests with only the local

@@ -31,6 +31,16 @@ namespace LiteNN
 		BinaryOp binaryOp{ BinaryOp::Add };
 	};
 
+	struct VulkanNativeMatMulBiasF32KernelSpec
+	{
+		std::string kernelName;
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t biasRows{};
+		bool relu{};
+	};
+
 	constexpr std::uint32_t kVulkanNativeElementwiseWorkgroupSize = 64;
 	constexpr std::uint32_t kVulkanNativeMatMulWorkgroupSize = 64;
 
@@ -60,6 +70,8 @@ namespace LiteNN
 	bool VulkanNativeSupportsMatMulBiasF32(std::uint32_t m, std::uint32_t k, std::uint32_t n, std::uint32_t biasRows);
 	VulkanNativeGeneratedSPIRV VulkanNativeMatMulBiasF32SPIRV(std::uint32_t m, std::uint32_t k, std::uint32_t n,
 	                                                          std::uint32_t biasRows, bool relu);
+	VulkanNativeGeneratedSPIRV
+	VulkanNativeMatMulBiasF32SPIRV(std::span<const VulkanNativeMatMulBiasF32KernelSpec> specs);
 	std::string_view VulkanNativeReduceF32KernelName(ReduceOp op);
 	bool VulkanNativeSupportsReduceF32(ReduceOp op, std::span<const std::size_t> inputShape, std::size_t axis);
 	VulkanNativeGeneratedSPIRV VulkanNativeReduceF32SPIRV(ReduceOp op, std::span<const std::size_t> inputShape,

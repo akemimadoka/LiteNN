@@ -1053,6 +1053,66 @@ namespace
 		return graph;
 	}
 
+	Graph BuildVulkanMLP128VariableGraph(std::size_t batch)
+	{
+		Graph graph;
+		const auto makeVariable = [&](std::string name, std::vector<double> data, std::vector<std::size_t> shape) {
+			const auto index =
+			    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(data), std::move(shape), DataType::Float32)));
+			graph.SetVariableName(index, std::move(name));
+			return index;
+		};
+		const auto makeWeightData = [](std::size_t inputWidth, std::size_t outputWidth, std::uint32_t seed) {
+			std::vector<double> data(inputWidth * outputWidth);
+			for (std::size_t i = 0; i < data.size(); ++i)
+			{
+				data[i] = static_cast<double>(static_cast<int>((i + seed) % 17) - 8) * 0.01;
+			}
+			return data;
+		};
+		const auto makeBiasData = [](std::size_t outputWidth, std::uint32_t seed) {
+			std::vector<double> data(outputWidth);
+			for (std::size_t i = 0; i < data.size(); ++i)
+			{
+				data[i] = static_cast<double>(static_cast<int>((i + seed) % 7) - 3) * 0.001;
+			}
+			return data;
+		};
+		const auto weight0Index =
+		    makeVariable("mlp128_weight0", makeWeightData(kInputWidth, 128, 31u), { kInputWidth, 128 });
+		const auto bias0Index = makeVariable("mlp128_bias0", makeBiasData(128, 31u), { 1, 128 });
+		const auto weight1Index = makeVariable("mlp128_weight1", makeWeightData(128, 10, 47u), { 128, 10 });
+		const auto bias1Index = makeVariable("mlp128_bias1", makeBiasData(10, 47u), { 1, 10 });
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, kInputWidth });
+		const auto weight0 = sg.AddNode(VariableRefNode{ weight0Index },
+		                                { OutputInfo{ DataType::Float32, { kInputWidth, 128 } } });
+		const auto bias0 = sg.AddNode(VariableRefNode{ bias0Index }, { OutputInfo{ DataType::Float32, { 1, 128 } } });
+		const auto matmul0 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight0, 0 } },
+		                                { OutputInfo{ DataType::Float32, { batch, 128 } } });
+		const auto shifted0 = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul0, 0 }, { bias0, 0 } },
+		                                 { OutputInfo{ DataType::Float32, { batch, 128 } } });
+		Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
+		const auto zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                 { OutputInfo{ DataType::Float32, { 1, 1 } } });
+		const auto hidden = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted0, 0 }, { zeroNode, 0 } },
+		                               { OutputInfo{ DataType::Float32, { batch, 128 } } });
+		const auto weight1 =
+		    sg.AddNode(VariableRefNode{ weight1Index }, { OutputInfo{ DataType::Float32, { 128, 10 } } });
+		const auto bias1 = sg.AddNode(VariableRefNode{ bias1Index }, { OutputInfo{ DataType::Float32, { 1, 10 } } });
+		const auto matmul1 = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { weight1, 0 } },
+		                                { OutputInfo{ DataType::Float32, { batch, 10 } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul1, 0 }, { bias1, 0 } },
+		                               { OutputInfo{ DataType::Float32, { batch, 10 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "out" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	Graph BuildVulkanCastGraph(DataType srcType, DataType dstType, std::size_t elementCount)
 	{
 		Graph graph;
@@ -1937,6 +1997,42 @@ namespace
 		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
+	void BMVulkanNativeGraphMLP128RunTensorsInto(benchmark::State& state, std::size_t batch)
+	{
+		auto graph = BuildVulkanMLP128VariableGraph(batch);
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		                                        LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::VulkanNative)
+		{
+			state.SkipWithError("expected Vulkan native backend for whole-graph MLP128 benchmark");
+			return;
+		}
+
+		const auto inputData = MakeInputData(batch);
+		std::vector<Tensor<Vulkan>> inputs;
+		inputs.reserve(1);
+		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, kInputWidth });
+		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		auto outputs = AllocateVulkanOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<Vulkan>>(inputs), std::span<Tensor<Vulkan>>(outputs));
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		const auto flops = 2 * batch * ((kInputWidth * 128) + (128 * 10));
+		state.counters["flops"] =
+		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
+	}
+
 	void BMVulkanNativeHomogeneousLinearChainRunTensorsInto(benchmark::State& state, std::size_t batch,
 	                                                        std::size_t width)
 	{
@@ -2651,6 +2747,9 @@ namespace
 				}
 				if (vulkanDeviceAvailable && kind == ModelKind::MLP128)
 				{
+					RegisterBenchmarkCase("VulkanNativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
+						BMVulkanNativeGraphMLP128RunTensorsInto(state, batch);
+					});
 					RegisterBenchmarkCase("VulkanNativeManualPipeline", kind, batch, [=](benchmark::State& state) {
 						BMVulkanNativeManualMLP128RunTensorsInto(state, batch);
 					});
