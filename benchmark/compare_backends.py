@@ -30,6 +30,11 @@ BENCH_RE = re.compile(r"^(?P<backend>[^/]+)/(?P<model>.+)/batch:(?P<batch>\d+)(?
 PYTORCH_ROW_RE = re.compile(
     r"^(?P<model>.+?)\s+(?P<batch>\d+)\s+(?P<ms>[0-9.]+)ms\s+(?P<throughput>[0-9.]+)/s$"
 )
+DEFAULT_MODEL_SET = {
+    "Linear(784->10)",
+    "MLP(784->128->10)",
+    "MLP(784->512->256->10)",
+}
 
 
 def canonical_backend(name: str) -> str:
@@ -53,7 +58,11 @@ def canonical_backend(name: str) -> str:
     return aliases.get(name, name)
 
 
-def read_litenn_json(path: Path) -> list[Result]:
+def should_include_model(model: str, include_all_models: bool) -> bool:
+    return include_all_models or model in DEFAULT_MODEL_SET
+
+
+def read_litenn_json(path: Path, *, include_all_models: bool = False) -> list[Result]:
     data = json.loads(path.read_text(encoding="utf-8"))
     results: list[Result] = []
     for entry in data.get("benchmarks", []):
@@ -62,6 +71,9 @@ def read_litenn_json(path: Path) -> list[Result]:
             continue
         match = BENCH_RE.match(name)
         if match is None:
+            continue
+        model = match.group("model")
+        if not should_include_model(model, include_all_models):
             continue
         time_unit = entry.get("time_unit", "ms")
         real_time = float(entry["real_time"])
@@ -73,7 +85,7 @@ def read_litenn_json(path: Path) -> list[Result]:
             raise ValueError(f"Unsupported Google Benchmark time unit '{time_unit}' in {path}")
         results.append(
             Result(
-                model=match.group("model"),
+                model=model,
                 batch=int(match.group("batch")),
                 backend=canonical_backend(match.group("backend")),
                 ms=real_time,
@@ -82,7 +94,7 @@ def read_litenn_json(path: Path) -> list[Result]:
     return results
 
 
-def read_pytorch_text(path: Path, *, cpu1: bool = False) -> list[Result]:
+def read_pytorch_text(path: Path, *, cpu1: bool = False, include_all_models: bool = False) -> list[Result]:
     results: list[Result] = []
     backend: str | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -96,9 +108,12 @@ def read_pytorch_text(path: Path, *, cpu1: bool = False) -> list[Result]:
         match = PYTORCH_ROW_RE.match(line)
         if match is None or backend is None:
             continue
+        model = match.group("model").strip()
+        if not should_include_model(model, include_all_models):
+            continue
         results.append(
             Result(
-                model=match.group("model").strip(),
+                model=model,
                 batch=int(match.group("batch")),
                 backend=backend,
                 ms=float(match.group("ms")),
@@ -253,6 +268,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out-md", type=Path, required=True, help="Markdown output path")
     parser.add_argument("--out-csv", type=Path, required=True, help="CSV output path")
+    parser.add_argument(
+        "--include-all-models",
+        action="store_true",
+        help="Include every parsed model-like benchmark row instead of only the standard inference model set.",
+    )
     return parser.parse_args()
 
 
@@ -261,11 +281,11 @@ def main() -> None:
     results: list[Result] = []
     sources = [*args.litenn_json, *args.pytorch_text, *args.pytorch_cpu1_text]
     for path in args.litenn_json:
-        results.extend(read_litenn_json(path))
+        results.extend(read_litenn_json(path, include_all_models=args.include_all_models))
     for path in args.pytorch_text:
-        results.extend(read_pytorch_text(path))
+        results.extend(read_pytorch_text(path, include_all_models=args.include_all_models))
     for path in args.pytorch_cpu1_text:
-        results.extend(read_pytorch_text(path, cpu1=True))
+        results.extend(read_pytorch_text(path, cpu1=True, include_all_models=args.include_all_models))
     if not results:
         raise SystemExit("No benchmark rows were parsed")
     rows, backends, values = build_table(results)
