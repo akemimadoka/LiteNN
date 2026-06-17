@@ -991,6 +991,8 @@ namespace LiteNN
 		VkDescriptorSet descriptorSet{};
 		VkPipelineLayout pipelineLayout{};
 		VkPipeline pipeline{};
+		VkCommandBuffer commandBuffer{};
+		VkFence fence{};
 		std::uint32_t descriptorCount{};
 		double creationWallTimeMs{};
 	};
@@ -1169,6 +1171,19 @@ namespace LiteNN
 		CheckVulkan(vkCreateComputePipelines(impl_->context->device, impl_->context->pipelineCache, 1, &pipelineInfo, nullptr,
 		                                     &impl_->pipeline),
 		            "vkCreateComputePipelines");
+		const VkCommandBufferAllocateInfo commandInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			.commandPool = impl_->context->commandPool,
+			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			.commandBufferCount = 1,
+		};
+		CheckVulkan(vkAllocateCommandBuffers(impl_->context->device, &commandInfo, &impl_->commandBuffer),
+		            "vkAllocateCommandBuffers");
+		const VkFenceCreateInfo fenceInfo{
+			.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+			.flags = VK_FENCE_CREATE_SIGNALED_BIT,
+		};
+		CheckVulkan(vkCreateFence(impl_->context->device, &fenceInfo, nullptr, &impl_->fence), "vkCreateFence");
 		const auto creationEnd = clk::steady_clock::now();
 		impl_->creationWallTimeMs = clk::duration<double, std::milli>(creationEnd - creationBegin).count();
 	}
@@ -1185,6 +1200,14 @@ namespace LiteNN
 		if (impl_->pipeline != VK_NULL_HANDLE)
 		{
 			vkDestroyPipeline(impl_->context->device, impl_->pipeline, nullptr);
+		}
+		if (impl_->fence != VK_NULL_HANDLE)
+		{
+			vkDestroyFence(impl_->context->device, impl_->fence, nullptr);
+		}
+		if (impl_->commandBuffer != VK_NULL_HANDLE)
+		{
+			vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &impl_->commandBuffer);
 		}
 		if (impl_->pipelineLayout != VK_NULL_HANDLE)
 		{
@@ -1277,16 +1300,6 @@ namespace LiteNN
 		vkUpdateDescriptorSets(impl_->context->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
 		                       nullptr);
 
-		VkCommandBuffer commandBuffer{};
-		const VkCommandBufferAllocateInfo commandInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-			.commandPool = impl_->context->commandPool,
-			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-			.commandBufferCount = 1,
-		};
-		CheckVulkan(vkAllocateCommandBuffers(impl_->context->device, &commandInfo, &commandBuffer),
-		            "vkAllocateCommandBuffers");
-
 		VulkanQueryPoolGuard timestampPool(impl_->context->device);
 		if (recordGpuTimestamp)
 		{
@@ -1304,34 +1317,34 @@ namespace LiteNN
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 		};
-		CheckVulkan(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+		CheckVulkan(vkResetCommandBuffer(impl_->commandBuffer, 0), "vkResetCommandBuffer");
+		CheckVulkan(vkBeginCommandBuffer(impl_->commandBuffer, &beginInfo), "vkBeginCommandBuffer");
 		if (recordGpuTimestamp)
 		{
-			vkCmdResetQueryPool(commandBuffer, timestampPool.queryPool, 0, 2);
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool.queryPool, 0);
+			vkCmdResetQueryPool(impl_->commandBuffer, timestampPool.queryPool, 0, 2);
+			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool.queryPool, 0);
 		}
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipelineLayout, 0, 1,
+		vkCmdBindPipeline(impl_->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipeline);
+		vkCmdBindDescriptorSets(impl_->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->pipelineLayout, 0, 1,
 		                        &impl_->descriptorSet, 0, nullptr);
-		vkCmdDispatch(commandBuffer, groups.x, groups.y, groups.z);
+		vkCmdDispatch(impl_->commandBuffer, groups.x, groups.y, groups.z);
 		if (recordGpuTimestamp)
 		{
-			vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool.queryPool, 1);
+			vkCmdWriteTimestamp(impl_->commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool.queryPool, 1);
 		}
-		CheckVulkan(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
+		CheckVulkan(vkEndCommandBuffer(impl_->commandBuffer), "vkEndCommandBuffer");
 
-		VkFence fence{};
-		const VkFenceCreateInfo fenceInfo{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-		CheckVulkan(vkCreateFence(impl_->context->device, &fenceInfo, nullptr, &fence), "vkCreateFence");
 		const VkSubmitInfo submitInfo{
 			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffer,
+			.pCommandBuffers = &impl_->commandBuffer,
 		};
-		const auto submitResult = vkQueueSubmit(impl_->context->queue, 1, &submitInfo, fence);
+		CheckVulkan(vkResetFences(impl_->context->device, 1, &impl_->fence), "vkResetFences");
+		const auto submitResult = vkQueueSubmit(impl_->context->queue, 1, &submitInfo, impl_->fence);
 		if (submitResult == VK_SUCCESS)
 		{
-			CheckVulkan(vkWaitForFences(impl_->context->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+			CheckVulkan(vkWaitForFences(impl_->context->device, 1, &impl_->fence, VK_TRUE, UINT64_MAX),
+			            "vkWaitForFences");
 			if (recordGpuTimestamp)
 			{
 				std::array<std::uint64_t, 2> timestamps{};
@@ -1352,8 +1365,6 @@ namespace LiteNN
 				}
 			}
 		}
-		vkDestroyFence(impl_->context->device, fence, nullptr);
-		vkFreeCommandBuffers(impl_->context->device, impl_->context->commandPool, 1, &commandBuffer);
 		CheckVulkan(submitResult, "vkQueueSubmit");
 	}
 } // namespace LiteNN
