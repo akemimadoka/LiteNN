@@ -1640,7 +1640,8 @@ namespace
 		return inputs;
 	}
 
-	std::vector<Tensor<Vulkan>> MakeVulkanModelInputs(const std::vector<float>& data, std::size_t batch)
+	std::vector<Tensor<Vulkan>> MakeVulkanModelInputs(const std::vector<float>& data, std::size_t batch,
+	                                                  const Vulkan& device = Vulkan{})
 	{
 		if (data.size() != batch * kInputWidth)
 		{
@@ -1649,7 +1650,7 @@ namespace
 
 		std::vector<Tensor<Vulkan>> inputs;
 		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth });
-		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(inputCpu.CopyToDevice(device));
 		return inputs;
 	}
 
@@ -2022,10 +2023,13 @@ namespace
 		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
-	void BMVulkanNativeGraphMLPRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch)
+	void BMVulkanNativeGraphMLPRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch,
+	                                          VulkanBufferResidency residency = VulkanBufferResidency::HostVisibleCoherent)
 	{
 		auto graph = BuildVulkanMLPVariableGraph(kind, batch);
-		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), Vulkan{},
+		Vulkan device;
+		device.bufferResidency = residency;
+		auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device,
 		                                        LiteNNBenchCompilerOptionsFromEnvironment());
 		if (module.Backend() != CompiledModuleBackend::VulkanNative)
 		{
@@ -2037,7 +2041,7 @@ namespace
 		std::vector<Tensor<Vulkan>> inputs;
 		inputs.reserve(1);
 		const auto inputCpu = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, kInputWidth });
-		inputs.push_back(inputCpu.CopyToDevice(Vulkan{}));
+		inputs.push_back(inputCpu.CopyToDevice(device));
 		auto outputs = AllocateVulkanOutputs(module);
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -2774,6 +2778,11 @@ namespace
 					RegisterBenchmarkCase("VulkanNativeGraphRunInto", kind, batch, [=](benchmark::State& state) {
 						BMVulkanNativeGraphMLPRunTensorsInto(state, kind, batch);
 					});
+					RegisterBenchmarkCase("VulkanNativeGraphDeviceLocalRunInto", kind, batch,
+					                      [=](benchmark::State& state) {
+						                      BMVulkanNativeGraphMLPRunTensorsInto(
+						                          state, kind, batch, VulkanBufferResidency::DeviceLocal);
+					                      });
 					if (kind == ModelKind::MLP128)
 					{
 						RegisterBenchmarkCase("VulkanNativeManualPipeline", kind, batch, [=](benchmark::State& state) {

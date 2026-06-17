@@ -49,6 +49,7 @@ def canonical_backend(name: str) -> str:
         "CUDANativeGraphRunInto": "LiteNN CUDA Graph",
         "VulkanNativeRunInto": "LiteNN Vulkan Native",
         "VulkanNativeGraphRunInto": "LiteNN Vulkan Graph",
+        "VulkanNativeGraphDeviceLocalRunInto": "LiteNN Vulkan Graph DeviceLocal",
         "VulkanNativeManualPipeline": "LiteNN Vulkan ManualPipeline",
         "AOTRun": "LiteNN CPU AOT Run",
         "AOTRunInto": "LiteNN CPU AOT RunInto",
@@ -171,7 +172,8 @@ def backend_sort_key(backend: str) -> tuple[int, str]:
         "LiteNN CUDA DeviceMatMul": 13,
         "LiteNN Vulkan Native": 14,
         "LiteNN Vulkan Graph": 15,
-        "LiteNN Vulkan ManualPipeline": 16,
+        "LiteNN Vulkan Graph DeviceLocal": 16,
+        "LiteNN Vulkan ManualPipeline": 17,
     }
     return (order.get(backend, 100), backend)
 

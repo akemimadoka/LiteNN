@@ -176,8 +176,10 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeGraphRunInto/MLP(784->128->10)` and `VulkanNativeGraphRunInto/MLP(784->512->256->10)` whole-graph rows
   for mixed-shape linear chains.
   `benchmark/compare_backends.py` reports those whole-graph rows separately as `LiteNN Vulkan Graph` instead of merging
-  them into the single-kernel `LiteNN Vulkan Native` bucket.
+  them into the single-kernel `LiteNN Vulkan Native` bucket. Matching
+  `VulkanNativeGraphDeviceLocalRunInto/MLP(...)` rows use `VulkanBufferResidency::DeviceLocal` for module policy,
+  inputs, outputs, and separated weights so mobile residency tradeoffs remain visible in comparison tables.
 
 Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
-linear chains, tiled/shared-memory convolution, device-local memory, tiled/shared-memory kernels, and async queue integration
+linear chains, tiled/shared-memory convolution, tiled/shared-memory kernels, and async queue integration
 remain follow-on production GPU-backend work rather than part of the current bootstrap.

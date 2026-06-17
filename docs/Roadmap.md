@@ -2006,6 +2006,8 @@ packaging slice to a useful production backend.
       - [x] Generalize schedule-level lifetime planning beyond binary DAGs: binary DAG and mixed unary/binary
             elementwise DAG payload emission now share the same schedule-level last-use/workspace allocation helper,
             leaving future operator-family schedulers to feed the common planner instead of duplicating buffer logic.
+      - [x] Add graph-level device-local benchmark rows for Vulkan-native MLP128/MLP512 so host-visible and
+            device-local residency policies can be compared in the standard benchmark matrix.
 - [ ] Implement production operator families in priority order:
       - [x] Add the first static-axis f32 reduction slice: `ReduceOp::Sum`, `ReduceOp::Mean`, `ReduceOp::Max`, and
             `ReduceOp::Min` now
@@ -2164,7 +2166,8 @@ packaging slice to a useful production backend.
       generation still depends on the local machine having the requested CUDA/Vulkan/PyTorch/ggml capabilities. The
       default report is scoped to the standard inference model set; use `--include-all-models` only for microbench
       diagnostics. It now distinguishes `VulkanNativeGraphRunInto` as `LiteNN Vulkan Graph` so whole-graph Vulkan AOT
-      rows do not collapse into the single-kernel native bucket.
+      rows do not collapse into the single-kernel native bucket, and reports
+      `VulkanNativeGraphDeviceLocalRunInto` as `LiteNN Vulkan Graph DeviceLocal` for residency comparisons.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
@@ -2183,6 +2186,8 @@ packaging slice to a useful production backend.
       `VulkanNativeManualPipeline/MLP(784->128->10)` rows that explicitly run two Vulkan-native Linear artifacts with a
       Vulkan-resident hidden tensor between them, and `VulkanNativeGraphRunInto/MLP(784->128->10)` plus
       `VulkanNativeGraphRunInto/MLP(784->512->256->10)` rows for the current mixed-shape whole-graph linear-chain path.
+      `VulkanNativeGraphDeviceLocalRunInto/MLP(...)` mirrors the whole-graph rows with device-local module/input/output
+      residency so transfer policy effects are visible.
       Automatic graph partitioning remains tracked separately above.
       Validation on 2026-06-14: a local
       `litenn_bench --benchmark_filter=VulkanNativeManualPipeline.*batch:1 --benchmark_min_time=0.01s` smoke run
