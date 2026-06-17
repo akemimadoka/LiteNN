@@ -1170,6 +1170,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForMatMulBiasExternalWeights)
 	EXPECT_TRUE(report.reason.empty());
 }
 
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForHomogeneousLinearChain)
+{
+	const auto graph = BuildHomogeneousLinearChainGraph(false);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("homogeneous f32 linear chain"), std::string::npos);
+	EXPECT_NE(report.capability.find("2 kernels"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
 TEST(CompiledModuleVulkanTest, ReportsNativeSupportForReduce)
 {
 	const auto graph = BuildReduceGraph(ReduceOp::Mean, 0, { 3 });

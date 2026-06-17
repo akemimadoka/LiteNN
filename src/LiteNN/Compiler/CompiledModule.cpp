@@ -6230,6 +6230,8 @@ namespace
 	};
 
 	std::optional<std::uint32_t> VulkanP0ShapeNumElementsU32(std::span<const std::size_t> shape);
+	std::optional<VulkanP0LinearChainPlan>
+	MatchVulkanP0HomogeneousLinearChainF32(const Graph& graph, VulkanP0ExternalTensorBuilder* externalBuilder);
 
 	std::optional<std::uint32_t> GetVulkanP0ParamIndex(const Subgraph& subgraph, NodeOutput output)
 	{
@@ -7273,6 +7275,12 @@ namespace
 			                                           resultEntry.outputInfos.size()));
 		}
 		const auto& output = resultEntry.outputInfos[0];
+
+		if (const auto chain = MatchVulkanP0HomogeneousLinearChainF32(graph, nullptr))
+		{
+			return VulkanNativeSupported(
+			    std::format("homogeneous f32 linear chain ({} kernels)", chain->kernels.size()));
+		}
 
 		if (const auto* fused = std::get_if<FusedOpNode>(&resultEntry.node);
 		    fused != nullptr &&
@@ -12981,7 +12989,15 @@ CompiledModule<CUDA> Compiler<CUDA>::Compile(const ExecutablePlan& plan, CUDA de
 VulkanNativeSupportReport Compiler<Vulkan>::QueryNativeSupport(const ExecutablePlan& plan)
 {
 	ValidateExecutablePlan(plan);
-	return DiagnoseVulkanNativeSupport(BuildCompilerGraphFromPlan(plan));
+	auto graph = BuildCompilerGraphFromPlan(plan);
+	auto report = DiagnoseVulkanNativeSupport(graph);
+	if (report.supported)
+	{
+		return report;
+	}
+	FusionPass{}.Run(graph);
+	auto fusedReport = DiagnoseVulkanNativeSupport(graph);
+	return fusedReport.supported ? fusedReport : report;
 }
 
 CompiledModuleArtifact Compiler<Vulkan>::CompileArtifact(const ExecutablePlan& plan)
