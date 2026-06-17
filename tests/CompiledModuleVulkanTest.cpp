@@ -1711,24 +1711,38 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForAffineNormalizationEx
 	EXPECT_EQ(artifact.ExternalTensorInfos().size(), 2u);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated = VulkanNativeNormalizationF32SPIRV(NormalizationMode::LayerNorm,
-	                                                         std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5, true, true);
+	const auto generated = VulkanNativeAxisNormalizationF32SPIRV(
+	    NormalizationMode::LayerNorm, std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5, true, true);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
 	          0ull);
-	ASSERT_EQ(payload.kernels.size(), 1u);
-	ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+	ASSERT_EQ(payload.workspaceTensors.size(), 2u);
+	ASSERT_EQ(payload.kernels.size(), 2u);
+	EXPECT_EQ(payload.kernels[0].entryPoint,
+	          VulkanNativeAxisNormalizationStatsF32KernelName(NormalizationMode::LayerNorm));
+	EXPECT_EQ(payload.kernels[1].entryPoint,
+	          VulkanNativeAxisNormalizationWriteF32KernelName(NormalizationMode::LayerNorm));
+	ASSERT_EQ(payload.kernels[0].arguments.size(), 3u);
+	ASSERT_EQ(payload.kernels[1].arguments.size(), 6u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].kind, VulkanNativeArgumentKind::InputTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[0].binding, 0u);
-	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[1].binding, 1u);
-	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 3u * sizeof(float));
-	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[0].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
 	EXPECT_EQ(payload.kernels[0].arguments[2].binding, 2u);
-	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 3u * sizeof(float));
-	EXPECT_EQ(payload.kernels[0].arguments[3].kind, VulkanNativeArgumentKind::OutputTensor);
-	EXPECT_EQ(payload.kernels[0].arguments[3].binding, 3u);
-	EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 6u * sizeof(float));
+	EXPECT_EQ(payload.kernels[1].arguments[1].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[1].binding, 1u);
+	EXPECT_EQ(payload.kernels[1].arguments[2].kind, VulkanNativeArgumentKind::WorkspaceTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[2].binding, 2u);
+	EXPECT_EQ(payload.kernels[1].arguments[3].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[3].binding, 3u);
+	EXPECT_EQ(payload.kernels[1].arguments[3].byteSize, 3u * sizeof(float));
+	EXPECT_EQ(payload.kernels[1].arguments[4].kind, VulkanNativeArgumentKind::ExternalTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[4].binding, 4u);
+	EXPECT_EQ(payload.kernels[1].arguments[4].byteSize, 3u * sizeof(float));
+	EXPECT_EQ(payload.kernels[1].arguments[5].kind, VulkanNativeArgumentKind::OutputTensor);
+	EXPECT_EQ(payload.kernels[1].arguments[5].binding, 5u);
+	EXPECT_EQ(payload.kernels[1].arguments[5].byteSize, 6u * sizeof(float));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForGroupNorm)

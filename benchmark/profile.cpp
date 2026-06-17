@@ -262,6 +262,44 @@ static Graph BuildNormalizationProfileGraph(NormalizationMode mode, std::size_t 
 	return graph;
 }
 
+static Graph BuildAffineLayerNormProfileGraph(std::size_t batch, std::mt19937&)
+{
+	Graph graph;
+	std::vector<double> scale(784);
+	std::vector<double> bias(784);
+	for (std::size_t i = 0; i < 784; ++i)
+	{
+		scale[i] = 0.75 + 0.01 * static_cast<double>(i % 17);
+		bias[i] = -0.05 + 0.001 * static_cast<double>(i % 23);
+	}
+	const auto scaleIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(scale), { 784 }, DataType::Float32)));
+	const auto biasIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>(std::move(bias), { 784 }, DataType::Float32)));
+	graph.SetVariableName(scaleIndex, "layernorm_scale");
+	graph.SetVariableName(biasIndex, "layernorm_bias");
+
+	Subgraph sg;
+	const std::vector<std::size_t> shape{ batch, 784 };
+	const auto input = sg.AddParam(DataType::Float32, shape);
+	const auto scaleRef = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 784 } } });
+	const auto biasRef = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 784 } } });
+	const auto out = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+	                                               .scale = NodeOutput{ scaleRef, 0 },
+	                                               .bias = NodeOutput{ biasRef, 0 },
+	                                               .mode = NormalizationMode::LayerNorm,
+	                                               .axis = 1,
+	                                               .groupCount = 1,
+	                                               .epsilon = 1e-5 },
+	                            { OutputInfo{ DataType::Float32, shape } });
+	sg.SetResults({ { out, 0 } });
+	graph.AddSubgraph(std::move(sg));
+	graph.SetForward(0);
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "out" });
+	return graph;
+}
+
 static Graph BuildLayerNormProfileGraph(std::size_t batch, std::mt19937&)
 {
 	return BuildNormalizationProfileGraph(NormalizationMode::LayerNorm, batch);
@@ -1454,6 +1492,10 @@ int main(int argc, char** argv)
 			  .makeInputs = MakeVulkanProfileInputs },
 			{ .name = "layernorm_b512",
 			  .build = BuildLayerNormProfileGraph,
+			  .batch = 512,
+			  .makeInputs = MakeVulkanProfileInputs },
+			{ .name = "affine_layernorm_b512",
+			  .build = BuildAffineLayerNormProfileGraph,
 			  .batch = 512,
 			  .makeInputs = MakeVulkanProfileInputs },
 			{ .name = "rmsnorm_b512",

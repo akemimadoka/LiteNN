@@ -9188,10 +9188,12 @@ namespace
 
 		const auto outputByteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float);
 		const auto useStagedAxisNormalization =
-		    !plan->scale && !plan->bias && plan->groupCount == 1 && plan->mode == NormalizationMode::LayerNorm;
+		    plan->groupCount == 1 && plan->mode == NormalizationMode::LayerNorm;
 		if (useStagedAxisNormalization)
 		{
-			auto spirv = VulkanNativeAxisNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon);
+			auto spirv =
+			    VulkanNativeAxisNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
+			                                          plan->scale.has_value(), plan->bias.has_value());
 			payload.spirv = std::move(spirv.words);
 
 			const auto axisSize = static_cast<std::uint32_t>(plan->inputShape[plan->axis]);
@@ -9238,6 +9240,21 @@ namespace
 				writeArgs.push_back(workspacePlanner.Argument(*rowMeanWorkspace, nextBinding++, rowWorkspaceBytes));
 			}
 			writeArgs.push_back(workspacePlanner.Argument(rowDenomWorkspace, nextBinding++, rowWorkspaceBytes));
+			const auto appendAffine = [&](const VulkanP0TensorRef& ref) {
+				writeArgs.push_back({ .kind = ref.argumentKind,
+				                      .index = ref.argumentIndex,
+				                      .binding = nextBinding++,
+				                      .byteOffset = 0,
+				                      .byteSize = static_cast<std::uint64_t>(ref.elementCount) * sizeof(float) });
+			};
+			if (plan->scale)
+			{
+				appendAffine(*plan->scale);
+			}
+			if (plan->bias)
+			{
+				appendAffine(*plan->bias);
+			}
 			writeArgs.push_back({ .kind = VulkanNativeArgumentKind::OutputTensor,
 			                      .index = 0,
 			                      .binding = nextBinding,

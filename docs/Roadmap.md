@@ -2033,10 +2033,11 @@ packaging slice to a useful production backend.
             feature-dependent Float16 runtime case skipped; `litenn_bench` now registers
             `VulkanNativeNormalization/F32/LayerNormAxis1|RMSNormAxis1` rows and the local
             `RMSNormAxis1/batch:1/width:128` smoke row ran successfully.
-      - [x] Replace the non-affine Vulkan LayerNorm scalar-loop baseline with a two-dispatch workspace schedule:
-            row stats and elementwise write now share row-sized mean/denominator `WorkspaceTensor` buffers. Validation
-            on 2026-06-17: `CompiledModuleVulkanTest.*Normalization*` and `CompiledModuleVulkanTest.*GroupNorm*`
-            passed, and `litenn_profile` reduced `layernorm_b512` GPU time from roughly 1.45 ms to roughly 0.21 ms.
+      - [x] Replace the Vulkan LayerNorm scalar-loop baseline with a two-dispatch workspace schedule: row stats and
+            elementwise write now share row-sized mean/denominator `WorkspaceTensor` buffers, including affine
+            scale/bias bindings. Validation on 2026-06-17: `CompiledModuleVulkanTest.*Normalization*` and
+            `CompiledModuleVulkanTest.*GroupNorm*` passed, `litenn_profile` reduced `layernorm_b512` GPU time from
+            roughly 1.45 ms to roughly 0.21 ms, and `affine_layernorm_b512` profiled at roughly 0.23 ms.
             RMSNorm remains on the single-dispatch path because local profile showed the staged route was slower.
       - [x] Add affine `LayerNorm`/`RMSNorm` for the common rank-2 axis-1 layout: scale/bias tensors with shape
             `[axis]` or `[1,axis]` now bind as Vulkan input/external tensors, including separated variable weights.
