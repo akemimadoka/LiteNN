@@ -2133,7 +2133,10 @@ packaging slice to a useful production backend.
 - [x] Persist raw Vulkan profile rows from `litenn_profile` as `vulkan_profile.csv` under the requested output directory.
       Validation on 2026-06-13: smoke profile wrote `build-release/profile_vulkan_smoke/vulkan_profile.csv` with
       Vulkan-native Linear rows and explicit CPU-bridge MLP rows.
-- [ ] Add full comparison tables across CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes.
+- [x] Add full comparison-table automation across CPU AOT, CUDA, Vulkan, ggml, and PyTorch for supported shapes:
+      `benchmark/compare_backends.py` reads Google Benchmark JSON plus PyTorch text output and emits Markdown/CSV
+      tables with per-backend `ms/batch` and percent deltas against PyTorch CPU/CUDA and ggml baselines. Fresh result
+      generation still depends on the local machine having the requested CUDA/Vulkan/PyTorch/ggml capabilities.
 - [x] Expand artifact ABI metadata for current Vulkan kernel requirements: SPIR-V target environment stays in
       `VulkanNativeInstructionPayload::target`, while each kernel now records descriptor ABI version, required feature
       bits, local workgroup layout, subgroup-size requirement, and storage-buffer offset alignment.
