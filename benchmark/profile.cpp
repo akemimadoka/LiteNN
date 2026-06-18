@@ -799,7 +799,9 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		auto outputs = AllocateCUDAProfileOutputs(module);
 		const auto runInto = [&](bool enableGraphReplay) {
 			module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs),
-			               CompiledModuleCUDARunOptions{ .enableGraphReplay = enableGraphReplay });
+			                      CompiledModuleCUDARunOptions{
+			                          .graphReplay = enableGraphReplay ? CUDAGraphReplayMode::Enabled
+			                                                           : CUDAGraphReplayMode::Disabled });
 		};
 
 		{
@@ -1375,7 +1377,7 @@ int main(int argc, char** argv)
 			    row.compileMs, row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs, row.message);
 		}
 		std::cout << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
-		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with enableGraphReplay=true.\n";
+		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with graphReplay=Enabled.\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";

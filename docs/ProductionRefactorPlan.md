@@ -81,6 +81,9 @@ CPU:
 CUDA:
 
 - [ ] Keep native CUDA support capability-gated.
+- [x] Make CUDA Graph replay an explicit production fast-path policy instead of a loose boolean switch; callers request
+      it through `CompiledModuleCUDARunOptions::GraphReplay()`, and unsupported stream/synchronization combinations fail
+      loudly instead of silently falling back to non-graph launch.
 - [ ] Prioritize high-value kernels: Linear/MatMul, normalization, reductions, attention, and quantized projection.
 - [ ] Keep host fallback explicit and visible in schedules/profile output.
 

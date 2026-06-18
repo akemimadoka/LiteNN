@@ -765,7 +765,9 @@ namespace
 		const auto inputData = MakeInputData(batch);
 		auto inputs = MakeCUDAInputs(inputData, batch);
 		auto outputs = AllocateCUDAOutputs(module);
-		const CompiledModuleCUDARunOptions runOptions{ .enableGraphReplay = enableGraphReplay };
+		const CompiledModuleCUDARunOptions runOptions{
+			.graphReplay = enableGraphReplay ? CUDAGraphReplayMode::Enabled : CUDAGraphReplayMode::Disabled
+		};
 
 		for (int i = 0; i < kWarmupIterations; ++i)
 		{

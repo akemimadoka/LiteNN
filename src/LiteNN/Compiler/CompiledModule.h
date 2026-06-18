@@ -409,12 +409,23 @@ namespace LiteNN
 	};
 
 #ifdef LITENN_ENABLE_CUDA
+	enum class CUDAGraphReplayMode
+	{
+		Disabled,
+		Enabled,
+	};
+
 	struct CompiledModuleCUDARunOptions
 	{
 		void* stream{};
 		bool synchronize{ true };
-		bool enableGraphReplay{};
+		CUDAGraphReplayMode graphReplay{ CUDAGraphReplayMode::Disabled };
 		bool enableCUBLASLt{ true };
+
+		static CompiledModuleCUDARunOptions GraphReplay()
+		{
+			return CompiledModuleCUDARunOptions{ .graphReplay = CUDAGraphReplayMode::Enabled };
+		}
 	};
 
 	struct CompiledModuleCUDATensorInvocation

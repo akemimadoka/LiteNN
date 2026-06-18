@@ -96,7 +96,8 @@ Values are `ms/batch`; lower is better.
   a maintained packed-GEMM/Conv kernel family. The current AOT path is good enough for control overhead, but not enough
   to beat PyTorch default CPU on larger dense batches.
 - CUDA: make graph replay the production CUDA model path. Keep non-graph native rows as diagnostics and fallback, not as
-  the expected fast path.
+  the expected fast path. Callers should request it explicitly with `CompiledModuleCUDARunOptions::GraphReplay()` for
+  pointer-stable, synchronized `RunTensorsInto` loops.
 - Vulkan: prioritize whole-graph scheduling, device-local memory planning, and MatMul kernel work before broader op
   breadth claims.
 - Benchmarking: keep `python311` for PyTorch comparison, keep the benchmark output table as a required artifact for

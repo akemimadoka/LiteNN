@@ -1675,8 +1675,8 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		cudaOutputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
 	}
 
-	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
-	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions{ .enableGraphReplay = true });
+	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions::GraphReplay());
+	module.RunTensorsInto(cudaInputs, cudaOutputs, CompiledModuleCUDARunOptions::GraphReplay());
 
 	std::vector<Tensor<CPU>> cudaCPUOutputs;
 	for (const auto& output : cudaOutputs)
@@ -1684,6 +1684,44 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 		cudaCPUOutputs.push_back(output.CopyToDevice(CPU{}));
 	}
 	ExpectOutputsNear(cudaCPUOutputs, expected, 1e-4f);
+}
+
+TEST(CompiledModuleCUDATest, CUDAGraphReplayRejectsExternalStream)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, "sum");
+	auto module = Compiler<CUDA>::Compile(Detail::BuildExecutablePlanFromGraph(graph), CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	auto lhs = Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	auto rhs = Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32).CopyToDevice(CUDA{});
+	std::array<Tensor<CUDA>, 2> inputs = { std::move(lhs), std::move(rhs) };
+	std::array<Tensor<CUDA>, 1> outputs = { Tensor<CUDA>(Uninitialized, { 2, 2 }, DataType::Float32, CUDA{}) };
+
+	cudaStream_t stream{};
+	ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+	try
+	{
+		module.RunTensorsInto(inputs, outputs,
+		                      CompiledModuleCUDARunOptions{ .stream = stream,
+		                                                    .graphReplay = CUDAGraphReplayMode::Enabled });
+		FAIL() << "expected graph replay stream validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("CUDA graph replay"), std::string::npos);
+		EXPECT_NE(message.find("default stream"), std::string::npos);
+	}
+	EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }
 
 TEST(CompiledModuleCUDATest, LoadsCUDANativeArtifactFromExportedSymbolAddresses)

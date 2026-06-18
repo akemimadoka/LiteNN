@@ -5353,6 +5353,16 @@ namespace
 			                         .enableCUBLASLt = options.enableCUBLASLt };
 	}
 
+	bool RequestsCUDAGraphReplay(CompiledModuleCUDARunOptions options)
+	{
+		return options.graphReplay == CUDAGraphReplayMode::Enabled;
+	}
+
+	bool CanUseCUDAGraphReplay(CompiledModuleCUDARunOptions options)
+	{
+		return RequestsCUDAGraphReplay(options) && options.synchronize && options.stream == nullptr;
+	}
+
 	void CheckCUDARuntime(cudaError_t status, std::string_view action)
 	{
 		if (status != cudaSuccess)
@@ -11548,7 +11558,11 @@ void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, 
 		{
 			throw std::runtime_error("CUDA native asynchronous execution with shared workspace is not supported");
 		}
-		if (options.enableGraphReplay && options.synchronize && options.stream == nullptr)
+		if (RequestsCUDAGraphReplay(options) && !CanUseCUDAGraphReplay(options))
+		{
+			throw std::runtime_error("CUDA graph replay requires synchronized execution on the module-owned default stream");
+		}
+		if (CanUseCUDAGraphReplay(options))
 		{
 			std::scoped_lock lock(impl_->cudaWorkspaceMutex, impl_->cudaGraphReplayMutex);
 			RunCUDANativePayloadWithGraphReplay(impl_->cudaGraphReplayCache, impl_->device, impl_->cudaPayload,
