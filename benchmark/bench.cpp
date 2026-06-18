@@ -2889,6 +2889,13 @@ namespace
 						    BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount, DataType::UInt8);
 					    });
 					uint8BenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+					auto* int8UnaryAbsBenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeUnaryAbsRunInto/Int8/elements:{}", elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeUnaryAbsRunTensorsInto(state, elementCount, DataType::Int8);
+					    });
+					int8UnaryAbsBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
 				auto* binaryChainBenchmarkCase = benchmark::RegisterBenchmark(

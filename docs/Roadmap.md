@@ -2130,6 +2130,10 @@ packaging slice to a useful production backend.
                   Multiply/Divide/Min/Max now lower through integer SPIR-V ops for `Int8` and `UInt8`, carry
                   shaderInt8/storageBuffer8BitAccess requirements, and register optional Int8/UInt8 Add benchmark rows
                   when the selected device enables those features.
+            - [x] Add the first int8 unary arithmetic slice for Vulkan native same-shape kernels: Negate/Abs now lower
+                  through integer SPIR-V ops for `Int8`, carry shaderInt8/storageBuffer8BitAccess requirements, report
+                  native support, validate runtime behavior when the selected device enables those features, and register
+                  optional Int8 Abs benchmark rows.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.

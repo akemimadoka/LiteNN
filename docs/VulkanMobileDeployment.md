@@ -159,6 +159,9 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
 - fused rank-2 static `Float32` MatMulBiasAdd/MatMulBiasAddReLU where weight and bias are graph variables/constants in
   separated constants/weights regions; the first model-shaped benchmark is `VulkanNativeRunInto/Linear(784->10)`
 - same-shape `Float32` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos
+- same-shape `Float16` unary Negate/Abs/Sqrt/Exp/Log/Sin/Cos when `shaderFloat16` and
+  `storageBuffer16BitAccess` are enabled
+- same-shape `Int8` unary Negate/Abs when `shaderInt8` and `storageBuffer8BitAccess` are enabled
 - same-shape 32-bit casts: `Float32 -> Int32` and `Int32 -> Float32`
 - same-shape low-precision cast SPIR-V generation for `Float16`, `Int8`, and `UInt8` storage types; runtime execution
   requires target-device feature enablement for matching 8-bit or 16-bit storage-buffer access. Current builds enable the
@@ -182,6 +185,7 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeGraphDeviceLocalRunInto/MLP(...)` rows use `VulkanBufferResidency::DeviceLocal` for module policy,
   inputs, outputs, and separated weights so mobile residency tradeoffs remain visible in comparison tables.
 
-Low-precision arithmetic beyond the current f16 elementwise and int8/uint8 binary bootstrap slices, production tiled
-reductions/softmax/normalization/matmul/multi-layer linear chains, tiled/shared-memory convolution, tiled/shared-memory kernels, and async queue integration
-remain follow-on production GPU-backend work rather than part of the current bootstrap.
+Low-precision arithmetic beyond the current f16 elementwise, int8/uint8 binary, and int8 unary bootstrap slices,
+production tiled reductions/softmax/normalization/matmul/multi-layer linear chains, tiled/shared-memory convolution,
+tiled/shared-memory kernels, and async queue integration remain follow-on production GPU-backend work rather than part
+of the current bootstrap.

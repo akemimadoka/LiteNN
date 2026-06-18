@@ -7496,7 +7496,7 @@ namespace
 				if (!VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op))
 				{
 					return VulkanNativeUnsupported(
-					    std::format("Vulkan native unary slice requires Float32 or Float16 input/output, got {}",
+					    std::format("Vulkan native unary slice requires Float32/Float16 or Int8 Negate/Abs input/output, got {}",
 					                DataTypeName(input.dtype)));
 				}
 				if (input.shape != output.shape)
@@ -7511,7 +7511,7 @@ namespace
 					return shapeReport;
 				}
 				return VulkanNativeSupported(std::format("same-shape {} unary {}",
-				                                         output.dtype == DataType::Float16 ? "f16" : "f32",
+				                                         VulkanNativeShortDTypeName(output.dtype),
 				                                         VulkanNativeOpName(unary->op)));
 			}
 

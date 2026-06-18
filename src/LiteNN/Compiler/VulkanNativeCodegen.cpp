@@ -533,31 +533,52 @@ namespace LiteNN
 				            .getValue();
 
 				    mlir::Value result;
-				    switch (op)
+				    if (VulkanSPIRVScalarIsFloat(dtype))
 				    {
-				    case UnaryOp::Negate:
-					    result = bodyBuilder.create<mlir::spirv::FNegateOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Abs:
-					    result = bodyBuilder.create<mlir::spirv::GLFAbsOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Sqrt:
-					    result = bodyBuilder.create<mlir::spirv::GLSqrtOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Exp:
-					    result = bodyBuilder.create<mlir::spirv::GLExpOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Log:
-					    result = bodyBuilder.create<mlir::spirv::GLLogOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Sin:
-					    result = bodyBuilder.create<mlir::spirv::GLSinOp>(loc, inputValue).getResult();
-					    break;
-				    case UnaryOp::Cos:
-					    result = bodyBuilder.create<mlir::spirv::GLCosOp>(loc, inputValue).getResult();
-					    break;
-				    default:
-					    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape unary op");
+					    switch (op)
+					    {
+					    case UnaryOp::Negate:
+						    result = bodyBuilder.create<mlir::spirv::FNegateOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Abs:
+						    result = bodyBuilder.create<mlir::spirv::GLFAbsOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Sqrt:
+						    result = bodyBuilder.create<mlir::spirv::GLSqrtOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Exp:
+						    result = bodyBuilder.create<mlir::spirv::GLExpOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Log:
+						    result = bodyBuilder.create<mlir::spirv::GLLogOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Sin:
+						    result = bodyBuilder.create<mlir::spirv::GLSinOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Cos:
+						    result = bodyBuilder.create<mlir::spirv::GLCosOp>(loc, inputValue).getResult();
+						    break;
+					    default:
+						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape floating unary op");
+					    }
+				    }
+				    else if (dtype == DataType::Int8)
+				    {
+					    switch (op)
+					    {
+					    case UnaryOp::Negate:
+						    result = bodyBuilder.create<mlir::spirv::SNegateOp>(loc, inputValue).getResult();
+						    break;
+					    case UnaryOp::Abs:
+						    result = bodyBuilder.create<mlir::spirv::GLSAbsOp>(loc, inputValue).getResult();
+						    break;
+					    default:
+						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape int8 unary op");
+					    }
+				    }
+				    else
+				    {
+					    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape unary dtype");
 				    }
 
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
@@ -4073,6 +4094,10 @@ namespace LiteNN
 
 	bool VulkanNativeSupportsSameShapeUnary(DataType dtype, UnaryOp op)
 	{
+		if (dtype == DataType::Int8)
+		{
+			return op == UnaryOp::Negate || op == UnaryOp::Abs;
+		}
 		if (dtype != DataType::Float32 && dtype != DataType::Float16)
 		{
 			return false;

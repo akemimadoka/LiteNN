@@ -955,6 +955,25 @@ TEST(CompiledModuleVulkanTest, GeneratesFloat16UnarySPIRVFromMLIR)
 	EXPECT_NE(generated.mlir.find("SPV_KHR_16bit_storage"), std::string::npos);
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesInt8UnarySPIRVFromMLIR)
+{
+	{
+		const auto generated = VulkanNativeSameShapeUnarySPIRV(DataType::Int8, UnaryOp::Abs, kElementCount);
+		EXPECT_FALSE(generated.words.empty());
+		EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("spirv.GL.SAbs"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("i8"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("StorageBuffer8BitAccess"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("SPV_KHR_8bit_storage"), std::string::npos);
+	}
+	{
+		const auto generated = VulkanNativeSameShapeUnarySPIRV(DataType::Int8, UnaryOp::Negate, kElementCount);
+		EXPECT_FALSE(generated.words.empty());
+		EXPECT_NE(generated.mlir.find("spirv.SNegate"), std::string::npos);
+		EXPECT_NE(generated.mlir.find("i8"), std::string::npos);
+	}
+}
+
 TEST(CompiledModuleVulkanTest, GeneratesSimpleCastSPIRVFromMLIR)
 {
 	for (const auto& item : kCastCases)
@@ -1214,6 +1233,17 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForFloat16Unary)
 
 	EXPECT_TRUE(report.supported);
 	EXPECT_NE(report.capability.find("same-shape f16 unary"), std::string::npos);
+	EXPECT_NE(report.capability.find("Abs"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForInt8Unary)
+{
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Int8);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("same-shape int8 unary"), std::string::npos);
 	EXPECT_NE(report.capability.find("Abs"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
@@ -1698,6 +1728,28 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForFloat16Unary)
 	    VulkanNativeDeviceRequirement::ShaderFloat16));
 	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForInt8Unary)
+{
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Int8);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeUnarySPIRV(DataType::Int8, UnaryOp::Abs, kElementCount);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeElementwiseUnaryLowPrecision)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, kElementCount * ElementByteSize(DataType::Int8));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, kElementCount * ElementByteSize(DataType::Int8));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
 }
 
 TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForSimpleCast)
@@ -2334,6 +2386,27 @@ TEST(CompiledModuleVulkanTest, RejectsFloat16UnaryWhenDeviceFeaturesAreNotEnable
 	ExpectFloat16FeatureGateRejectsLoad(artifact, device);
 }
 
+TEST(CompiledModuleVulkanTest, RejectsInt8UnaryWhenDeviceFeaturesAreNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.shaderInt8Enabled && capabilities.storageBuffer8BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Int8 storage features are enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Int8);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	ExpectInt8FeatureGateRejectsLoad(artifact, device);
+}
+
 TEST(CompiledModuleVulkanTest, ReportsDescriptorAndDispatchLimits)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -2648,6 +2721,39 @@ TEST(CompiledModuleVulkanTest, RunsFloat16UnaryArithmeticWhenDeviceFeaturesAreEn
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsInt8UnaryArithmeticWhenDeviceFeaturesAreEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (!capabilities.shaderInt8Enabled || !capabilities.storageBuffer8BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Int8 storage features are not enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleUnaryGraph(UnaryOp::Abs, DataType::Int8);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ -4.0, -1.0, 2.0, 7.0 }, { 4 }, DataType::Int8, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].DType(), DataType::Int8);
+
+	const auto actual = CopyToHostAsFloat32(outputs[0]);
+	const std::array expected{ 4.0f, 1.0f, 2.0f, 7.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
 	}
 }
 
