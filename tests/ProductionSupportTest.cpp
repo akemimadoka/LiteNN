@@ -139,3 +139,14 @@ TEST(ProductionSupportTest, ReportsBackendProfilesWithoutCollapsingMobileAndDesk
 	EXPECT_TRUE(Contains(desktopVulkan.skipOrFailurePolicy, "skip or fail explicitly"));
 	EXPECT_TRUE(Contains(mobileVulkan.skipOrFailurePolicy, "skip/fail explicitly"));
 }
+
+TEST(ProductionSupportTest, ReportsCPUKernelStrategy)
+{
+	const auto strategy = QueryProductionCPUKernelStrategy();
+	EXPECT_TRUE(Contains(strategy.referencePath, "cpu-reference-interpreter"));
+	EXPECT_TRUE(strategy.preferExternalLibraryBackend);
+	EXPECT_TRUE(strategy.allowSmallNativeKernelSet);
+	EXPECT_FALSE(strategy.allowUnplannedHandwrittenGemmOrConv);
+	EXPECT_TRUE(Contains(strategy.throughputPolicy, "external-library"));
+	EXPECT_TRUE(Contains(strategy.handwrittenKernelGate, "benchmark"));
+}

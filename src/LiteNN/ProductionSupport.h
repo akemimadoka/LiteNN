@@ -107,6 +107,16 @@ namespace LiteNN
 		std::string_view skipOrFailurePolicy;
 	};
 
+	struct ProductionCPUKernelStrategy
+	{
+		std::string_view referencePath;
+		std::string_view throughputPolicy;
+		bool preferExternalLibraryBackend;
+		bool allowSmallNativeKernelSet;
+		bool allowUnplannedHandwrittenGemmOrConv;
+		std::string_view handwrittenKernelGate;
+	};
+
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
 	{
 		switch (area)
@@ -622,6 +632,18 @@ namespace LiteNN
 			     "Unknown backend profile.",
 			     "Unknown backend profile.",
 			     "Unknown backend profile." };
+	}
+
+	inline constexpr ProductionCPUKernelStrategy QueryProductionCPUKernelStrategy()
+	{
+		return { "cpu-reference-interpreter",
+			     "CPU production throughput should come from an explicit external-library backend or a deliberately "
+			     "small maintained native kernel set.",
+			     true,
+			     true,
+			     false,
+			     "New handwritten CPU GEMM/Conv kernels require a measured gap, a workload owner, and benchmark "
+			     "evidence before they enter the production profile." };
 	}
 
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()

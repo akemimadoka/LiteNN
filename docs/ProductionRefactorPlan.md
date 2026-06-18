@@ -88,8 +88,11 @@ CPU:
 
 - [x] Keep CPU interpreter as the reference path. `ProductionBackendProfile::CPUReferenceInterpreter` is the explicit
       reference correctness profile.
-- [ ] Decide whether CPU production kernels use an external library backend or a small maintained native kernel set.
-- [ ] Avoid expanding hand-written CPU GEMM/Conv kernels without a clear backend strategy.
+- [x] Decide whether CPU production kernels use an external library backend or a small maintained native kernel set.
+      `QueryProductionCPUKernelStrategy()` records the policy: prefer an explicit external-library backend while allowing
+      a small maintained native kernel set.
+- [x] Avoid expanding hand-written CPU GEMM/Conv kernels without a clear backend strategy. New handwritten CPU
+      GEMM/Conv kernels are gated on measured gaps, workload ownership, and benchmark evidence.
 
 CUDA:
 
@@ -98,7 +101,7 @@ CUDA:
       it through `CompiledModuleCUDARunOptions::GraphReplay()`, and unsupported stream/synchronization combinations fail
       loudly instead of silently falling back to non-graph launch.
 - [ ] Prioritize high-value kernels: Linear/MatMul, normalization, reductions, attention, and quantized projection.
-- [ ] Keep host fallback explicit and visible in schedules/profile output.
+- [x] Keep host fallback explicit and visible in schedules/profile output.
 
 Vulkan/mobile:
 
