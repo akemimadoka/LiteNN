@@ -254,7 +254,7 @@ namespace LiteNN::Layer
 
 		if (!linear.biasVariable)
 		{
-			return Detail::CreateLinearImpl(graph, std::move(merged));
+			return Detail::MakeLinearLayerImpl(graph, std::move(merged));
 		}
 
 		auto bias = graph.GetVariable(*linear.biasVariable)->Data().CopyToDevice(CPU{});
@@ -262,7 +262,7 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("Merged LoRA export bias dtype metadata must be Float32");
 		}
-		return Detail::CreateLinearImpl(graph, std::move(merged), std::move(bias));
+		return Detail::MakeLinearLayerImpl(graph, std::move(merged), std::move(bias));
 	}
 } // namespace LiteNN::Layer
 

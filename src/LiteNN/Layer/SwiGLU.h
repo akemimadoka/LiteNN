@@ -43,9 +43,9 @@ namespace LiteNN::Layer
 		inline SwiGLUMLPLayer CreateSwiGLUMLPImpl(Graph& graph, Tensor<CPU> gateWeight, Tensor<CPU> upWeight,
 		                                          Tensor<CPU> downWeight)
 		{
-			const auto gateProjection = Detail::CreateLinearImpl(graph, std::move(gateWeight));
-			const auto upProjection = Detail::CreateLinearImpl(graph, std::move(upWeight));
-			const auto downProjection = Detail::CreateLinearImpl(graph, std::move(downWeight));
+			const auto gateProjection = Detail::MakeLinearLayerImpl(graph, std::move(gateWeight));
+			const auto upProjection = Detail::MakeLinearLayerImpl(graph, std::move(upWeight));
+			const auto downProjection = Detail::MakeLinearLayerImpl(graph, std::move(downWeight));
 			ValidateSwiGLUMLP(gateProjection, upProjection, downProjection);
 			return {
 				.gateProjection = gateProjection,

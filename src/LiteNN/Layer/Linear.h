@@ -39,7 +39,7 @@ namespace LiteNN::Layer
 
 	namespace Detail
 	{
-		inline LinearLayer CreateLinearImpl(Graph& graph, Tensor<CPU> weight)
+		inline LinearLayer MakeLinearLayerImpl(Graph& graph, Tensor<CPU> weight)
 		{
 			ValidateLinearWeight(weight);
 			LinearLayer layer;
@@ -50,7 +50,7 @@ namespace LiteNN::Layer
 			return layer;
 		}
 
-		inline LinearLayer CreateLinearImpl(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
+		inline LinearLayer MakeLinearLayerImpl(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
 		{
 			ValidateLinearWeight(weight);
 			ValidateLinearBias(bias, weight.Shape()[1], weight.DType());
@@ -68,12 +68,12 @@ namespace LiteNN::Layer
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight)
 	{
-		return Detail::CreateLinearImpl(builder.UnsafeMutableGraph(), std::move(weight));
+		return Detail::MakeLinearLayerImpl(builder.UnsafeMutableGraph(), std::move(weight));
 	}
 
 	inline LinearLayer CreateLinear(ModelBuilder& builder, Tensor<CPU> weight, Tensor<CPU> bias)
 	{
-		return Detail::CreateLinearImpl(builder.UnsafeMutableGraph(), std::move(weight), std::move(bias));
+		return Detail::MakeLinearLayerImpl(builder.UnsafeMutableGraph(), std::move(weight), std::move(bias));
 	}
 
 	inline NodeOutput AddLinear(Subgraph& subgraph, const LinearLayer& layer, NodeOutput input)
