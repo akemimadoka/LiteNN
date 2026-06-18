@@ -412,6 +412,40 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 }
 
+TEST(G14VNext, VNextABIVersionBumpRulesCoverProductionContracts)
+{
+	const auto tensorBinding = VNextABIVersionBumpRuleFor(VNextABIChangeArea::TensorBinding);
+	const auto externalRegion = VNextABIVersionBumpRuleFor(VNextABIChangeArea::ExternalRegion);
+	const auto backendRequirement = VNextABIVersionBumpRuleFor(VNextABIChangeArea::BackendRequirement);
+	const auto runtimeState = VNextABIVersionBumpRuleFor(VNextABIChangeArea::RuntimeState);
+	const auto runtimeSchedule = VNextABIVersionBumpRuleFor(VNextABIChangeArea::RuntimeSchedule);
+	const auto artifactEntry = VNextABIVersionBumpRuleFor(VNextABIChangeArea::ArtifactEntry);
+
+	EXPECT_EQ(tensorBinding.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(externalRegion.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(backendRequirement.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(runtimeState.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(runtimeSchedule.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(artifactEntry.component, VNextVersionComponent::ArtifactABI);
+	EXPECT_EQ(VNextVersionComponentName(tensorBinding.component), "artifactABI");
+	EXPECT_EQ(VNextABIChangeAreaName(VNextABIChangeArea::TensorBinding), "tensor-binding");
+	EXPECT_NE(runtimeState.reason.find("runtime-state"), std::string_view::npos);
+
+	const auto rules = DescribeVNextABIVersionBumpRules();
+	EXPECT_GE(rules.size(), 11u);
+	const auto covers = [&](VNextABIChangeArea area) {
+		return std::ranges::any_of(rules, [&](const VNextABIVersionBumpRule& rule) {
+			return rule.area == area;
+		});
+	};
+	EXPECT_TRUE(covers(VNextABIChangeArea::TensorBinding));
+	EXPECT_TRUE(covers(VNextABIChangeArea::ExternalRegion));
+	EXPECT_TRUE(covers(VNextABIChangeArea::BackendRequirement));
+	EXPECT_TRUE(covers(VNextABIChangeArea::RuntimeState));
+	EXPECT_TRUE(covers(VNextABIChangeArea::RuntimeSchedule));
+	EXPECT_TRUE(covers(VNextABIChangeArea::ArtifactEntry));
+}
+
 TEST(G14VNext, MemoryPlanRejectsHiddenMemorySpaceCopies)
 {
 	auto plan = Detail::BuildExecutablePlanFromGraph(BuildLinearAddGraph());

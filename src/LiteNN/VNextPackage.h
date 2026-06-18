@@ -26,6 +26,146 @@ namespace LiteNN
 		std::uint32_t artifactABI{ 1 };
 	};
 
+	enum class VNextVersionComponent
+	{
+		Manifest,
+		OpSet,
+		DTypeSet,
+		LayoutSet,
+		QuantizationSet,
+		ArtifactABI
+	};
+
+	inline std::string_view VNextVersionComponentName(VNextVersionComponent component) noexcept
+	{
+		switch (component)
+		{
+		case VNextVersionComponent::Manifest:
+			return "manifest";
+		case VNextVersionComponent::OpSet:
+			return "opSet";
+		case VNextVersionComponent::DTypeSet:
+			return "dtypeSet";
+		case VNextVersionComponent::LayoutSet:
+			return "layoutSet";
+		case VNextVersionComponent::QuantizationSet:
+			return "quantizationSet";
+		case VNextVersionComponent::ArtifactABI:
+			return "artifactABI";
+		}
+		return "unknown";
+	}
+
+	enum class VNextABIChangeArea
+	{
+		ManifestShape,
+		OpSemantics,
+		DTypeSemantics,
+		LayoutSemantics,
+		QuantizationSemantics,
+		TensorBinding,
+		ExternalRegion,
+		BackendRequirement,
+		RuntimeState,
+		RuntimeSchedule,
+		ArtifactEntry
+	};
+
+	inline std::string_view VNextABIChangeAreaName(VNextABIChangeArea area) noexcept
+	{
+		switch (area)
+		{
+		case VNextABIChangeArea::ManifestShape:
+			return "manifest-shape";
+		case VNextABIChangeArea::OpSemantics:
+			return "op-semantics";
+		case VNextABIChangeArea::DTypeSemantics:
+			return "dtype-semantics";
+		case VNextABIChangeArea::LayoutSemantics:
+			return "layout-semantics";
+		case VNextABIChangeArea::QuantizationSemantics:
+			return "quantization-semantics";
+		case VNextABIChangeArea::TensorBinding:
+			return "tensor-binding";
+		case VNextABIChangeArea::ExternalRegion:
+			return "external-region";
+		case VNextABIChangeArea::BackendRequirement:
+			return "backend-requirement";
+		case VNextABIChangeArea::RuntimeState:
+			return "runtime-state";
+		case VNextABIChangeArea::RuntimeSchedule:
+			return "runtime-schedule";
+		case VNextABIChangeArea::ArtifactEntry:
+			return "artifact-entry";
+		}
+		return "unknown";
+	}
+
+	struct VNextABIVersionBumpRule
+	{
+		VNextABIChangeArea area{ VNextABIChangeArea::ManifestShape };
+		VNextVersionComponent component{ VNextVersionComponent::Manifest };
+		std::string_view reason;
+	};
+
+	inline VNextABIVersionBumpRule VNextABIVersionBumpRuleFor(VNextABIChangeArea area)
+	{
+		switch (area)
+		{
+		case VNextABIChangeArea::ManifestShape:
+			return { area, VNextVersionComponent::Manifest,
+				     "JSON manifest keys, required sections, or package layout shape changed" };
+		case VNextABIChangeArea::OpSemantics:
+			return { area, VNextVersionComponent::OpSet,
+				     "Executable op semantics or required op attributes changed" };
+		case VNextABIChangeArea::DTypeSemantics:
+			return { area, VNextVersionComponent::DTypeSet,
+				     "Data type encoding, precision behavior, or dtype availability changed" };
+		case VNextABIChangeArea::LayoutSemantics:
+			return { area, VNextVersionComponent::LayoutSet,
+				     "Tensor layout interpretation, strides, or memory-space layout contracts changed" };
+		case VNextABIChangeArea::QuantizationSemantics:
+			return { area, VNextVersionComponent::QuantizationSet,
+				     "Quantization parameter, block format, scale, or zero-point semantics changed" };
+		case VNextABIChangeArea::TensorBinding:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "Runtime-visible tensor binding names, mutability, rebind policy, or checksum contracts changed" };
+		case VNextABIChangeArea::ExternalRegion:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "External rodata, weight, instruction, or object-region ownership/alignment contracts changed" };
+		case VNextABIChangeArea::BackendRequirement:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "Backend selection, capability, fallback, or native artifact requirement contracts changed" };
+		case VNextABIChangeArea::RuntimeState:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "KV cache, diffusion, training, optimizer, or adapter runtime-state binding contracts changed" };
+		case VNextABIChangeArea::RuntimeSchedule:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "Runtime schedule step, transfer, fallback, or profile-record contracts changed" };
+		case VNextABIChangeArea::ArtifactEntry:
+			return { area, VNextVersionComponent::ArtifactABI,
+				     "Named artifact entry kinds, entry functions, or required binding contracts changed" };
+		}
+		return { area, VNextVersionComponent::Manifest, "Unknown vNext ABI change area" };
+	}
+
+	inline std::vector<VNextABIVersionBumpRule> DescribeVNextABIVersionBumpRules()
+	{
+		return {
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::ManifestShape),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::OpSemantics),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::DTypeSemantics),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::LayoutSemantics),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::QuantizationSemantics),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::TensorBinding),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::ExternalRegion),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::BackendRequirement),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::RuntimeState),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::RuntimeSchedule),
+			VNextABIVersionBumpRuleFor(VNextABIChangeArea::ArtifactEntry),
+		};
+	}
+
 	struct VNextExternalTensorRef
 	{
 		std::string name;

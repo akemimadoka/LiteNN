@@ -72,8 +72,10 @@ Exit criteria:
 - [x] Make fallback/transfer/profile records available from the same schedule representation across CPU, CUDA, Vulkan,
       and heterogeneous execution. `RuntimeScheduleProfileRecord` now derives profile rows from runtime schedule steps,
       and vNext packages preserve fallback backend metadata in runtime step JSON.
-- [ ] Define an ABI version bump rule for changes to tensor binding, external regions, backend requirements, and runtime
-      state.
+- [x] Define an ABI version bump rule for changes to tensor binding, external regions, backend requirements, and runtime
+      state. `VNextABIVersionBumpRuleFor()` maps production ABI changes to the required version component; tensor
+      binding, external regions, backend requirements, runtime state, runtime schedule, and artifact entries require an
+      `artifactABI` bump.
 
 Exit criteria:
 
