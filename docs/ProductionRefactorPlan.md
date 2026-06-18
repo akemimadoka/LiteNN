@@ -60,8 +60,9 @@ Exit criteria:
 
 ## Phase 2: Runtime and Artifact ABI Convergence
 
-- [ ] Treat runtime schedule, compiled artifact metadata, vNext package manifests, and external tensor binding as one ABI
-      family rather than separate backend-specific conventions.
+- [x] Treat runtime schedule, compiled artifact metadata, vNext package manifests, and external tensor binding as one ABI
+      family rather than separate backend-specific conventions. `DescribeVNextABIFamily()` now exposes a shared summary
+      over package versions, functions, runtime state/buffer bindings, tensor bindings, and artifact entries/regions.
 - [ ] Add named entry-point metadata for future multi-entry artifacts: `forward`, `loss`, `backward`, `optimizer_step`,
       and backend-specific entry names.
 - [ ] Normalize state binding for KV cache, diffusion latent/state, training activations, optimizer state, and LoRA

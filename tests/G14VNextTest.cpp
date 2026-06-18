@@ -3,6 +3,7 @@
 #include <LiteNN.h>
 #include <LiteNNImporters.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -80,6 +81,18 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_EQ(manifest.bufferBindings[0].name, "linear.bias");
 	EXPECT_FALSE(manifest.opCoverage.empty());
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(manifest));
+	EXPECT_NO_THROW(ValidateVNextABIFamily(manifest));
+
+	const auto abi = DescribeVNextABIFamily(manifest);
+	EXPECT_EQ(abi.versions.artifactABI, 1u);
+	EXPECT_TRUE(abi.hasRuntimeSchedule);
+	EXPECT_TRUE(abi.hasExternalTensorBindings);
+	EXPECT_TRUE(abi.hasArtifactMetadata);
+	EXPECT_TRUE(std::ranges::contains(abi.functions, std::string("forward")));
+	EXPECT_TRUE(std::ranges::contains(abi.bufferBindings, std::string("linear.bias")));
+	EXPECT_TRUE(std::ranges::contains(abi.tensorBindings, std::string("linear.bias")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_forward:forward")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactRegions, std::string("cpu_forward:instructions")));
 }
 
 TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)

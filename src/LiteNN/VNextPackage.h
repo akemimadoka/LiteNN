@@ -107,6 +107,67 @@ namespace LiteNN
 		std::vector<OpCoverageRow> opCoverage;
 	};
 
+	struct VNextABIFamilySummary
+	{
+		VNextVersionSet versions;
+		std::vector<std::string> functions;
+		std::vector<std::string> runtimeStates;
+		std::vector<std::string> bufferBindings;
+		std::vector<std::string> tensorBindings;
+		std::vector<std::string> artifactEntries;
+		std::vector<std::string> artifactRegions;
+		bool hasRuntimeSchedule{};
+		bool hasExternalTensorBindings{};
+		bool hasArtifactMetadata{};
+	};
+
+	inline VNextABIFamilySummary DescribeVNextABIFamily(const VNextPackageManifest& manifest)
+	{
+		VNextABIFamilySummary summary;
+		summary.versions = manifest.versions;
+		summary.hasRuntimeSchedule = !manifest.runtimeSteps.empty();
+		summary.hasExternalTensorBindings = !manifest.tensors.empty();
+		summary.hasArtifactMetadata = !manifest.artifacts.empty();
+
+		summary.functions.reserve(manifest.functions.size());
+		for (const auto& function : manifest.functions)
+		{
+			summary.functions.push_back(function.name);
+		}
+
+		summary.runtimeStates.reserve(manifest.runtimeStates.size());
+		for (const auto& state : manifest.runtimeStates)
+		{
+			summary.runtimeStates.push_back(state.name);
+		}
+
+		summary.bufferBindings.reserve(manifest.bufferBindings.size());
+		for (const auto& binding : manifest.bufferBindings)
+		{
+			summary.bufferBindings.push_back(binding.name);
+		}
+
+		summary.tensorBindings.reserve(manifest.tensors.size());
+		for (const auto& tensor : manifest.tensors)
+		{
+			summary.tensorBindings.push_back(tensor.name);
+		}
+
+		for (const auto& artifact : manifest.artifacts)
+		{
+			for (const auto& entry : artifact.entries)
+			{
+				summary.artifactEntries.push_back(artifact.name + ":" + entry.name);
+			}
+			for (const auto& region : artifact.regions)
+			{
+				summary.artifactRegions.push_back(artifact.name + ":" + region.name);
+			}
+		}
+
+		return summary;
+	}
+
 	inline VNextExternalTensorRef ToVNextExternalTensorRef(std::string name, const TensorStorageRef& storage)
 	{
 		return { .name = std::move(name),
@@ -392,6 +453,20 @@ namespace LiteNN
 					throw std::runtime_error("vNext artifact '" + artifact.name + "' has a zero-sized region");
 				}
 			}
+		}
+	}
+
+	inline void ValidateVNextABIFamily(const VNextPackageManifest& manifest)
+	{
+		ValidateVNextPackageManifest(manifest);
+		const auto summary = DescribeVNextABIFamily(manifest);
+		if (!std::ranges::any_of(summary.functions, [](std::string_view name) { return name == "forward"; }))
+		{
+			throw std::runtime_error("vNext ABI family must expose a named forward entry point");
+		}
+		if (!summary.hasRuntimeSchedule)
+		{
+			throw std::runtime_error("vNext ABI family must include runtime schedule metadata");
 		}
 	}
 } // namespace LiteNN
