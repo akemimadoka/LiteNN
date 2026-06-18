@@ -54,6 +54,7 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
 	artifact.entries.push_back({ .name = "forward",
+		                         .kind = VNextArtifactEntryKind::Forward,
 		                         .function = 0,
 		                         .requiredBufferBindings = { "linear.bias" } });
 	artifact.regions.push_back({ .name = "instructions",
@@ -92,6 +93,7 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_TRUE(std::ranges::contains(abi.bufferBindings, std::string("linear.bias")));
 	EXPECT_TRUE(std::ranges::contains(abi.tensorBindings, std::string("linear.bias")));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_forward:forward")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntryKinds, std::string("cpu_forward:forward:forward")));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactRegions, std::string("cpu_forward:instructions")));
 }
 
@@ -105,6 +107,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
 	artifact.entries.push_back({ .name = "forward",
+		                         .kind = VNextArtifactEntryKind::Forward,
 		                         .function = 0,
 		                         .requiredStateBindings = { "kv.cache.0" },
 		                         .requiredBufferBindings = { "linear.bias" } });
@@ -123,10 +126,11 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 		EXPECT_NE(json.find("\"op\":"), std::string::npos);
 		EXPECT_EQ(json.find("\"opKind\""), std::string::npos);
-		EXPECT_NE(json.find("\"runtimeStates\""), std::string::npos);
-		EXPECT_NE(json.find("\"kv.cache.0\""), std::string::npos);
-		EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
-		EXPECT_NE(json.find("\"entries\""), std::string::npos);
+	EXPECT_NE(json.find("\"runtimeStates\""), std::string::npos);
+	EXPECT_NE(json.find("\"kv.cache.0\""), std::string::npos);
+	EXPECT_NE(json.find("\"kind\":"), std::string::npos);
+	EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
+	EXPECT_NE(json.find("\"entries\""), std::string::npos);
 		EXPECT_EQ(json.find("\"entryFunction\""), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
@@ -149,6 +153,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
 	EXPECT_EQ(package.manifest.artifacts[0].backend, BackendCPUAOT);
 	ASSERT_EQ(package.manifest.artifacts[0].entries.size(), 1u);
+	EXPECT_EQ(package.manifest.artifacts[0].entries[0].kind, VNextArtifactEntryKind::Forward);
 	ASSERT_EQ(package.manifest.artifacts[0].entries[0].requiredStateBindings.size(), 1u);
 	EXPECT_EQ(package.manifest.artifacts[0].entries[0].requiredStateBindings[0], "kv.cache.0");
 	EXPECT_EQ(package.manifest.artifacts[0].entries[0].requiredBufferBindings[0], "linear.bias");
@@ -316,6 +321,19 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entries = { { .name = "forward" } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
+	manifest.artifacts.push_back({ .name = "broken-kind",
+		                           .backend = std::string(BackendCPUAOT),
+		                           .entries = { { .name = "forward",
+		                                          .kind = static_cast<VNextArtifactEntryKind>(99),
+		                                          .function = 0 } },
+		                           .regions = { { .name = "instructions",
+		                                          .relativePath = "artifacts/broken.o",
+		                                          .byteSize = 1 } } });
+	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
+
+	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
+	manifest.artifacts.push_back({ .name = "broken", .backend = "", .entries = { { .name = "forward" } } });
 	manifest.artifacts[0].backend = std::string(BackendCPUAOT);
 	manifest.artifacts[0].entries[0].function = 99;
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);

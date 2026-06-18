@@ -615,7 +615,8 @@ namespace LiteNN::Serialization
 					}
 					out << "{\"name\":";
 					JsonString(out, entry.name);
-					out << ",\"function\":" << entry.function << ",\"requiredStateBindings\":";
+					out << ",\"kind\":" << EnumValue(entry.kind) << ",\"function\":" << entry.function
+					    << ",\"requiredStateBindings\":";
 					StringListJson(out, entry.requiredStateBindings);
 					out << ",\"requiredBufferBindings\":";
 					StringListJson(out, entry.requiredBufferBindings);
@@ -1249,6 +1250,9 @@ namespace LiteNN::Serialization
 					const auto entryObject = AsObject(entryItem, "artifact.entries");
 					artifact.entries.push_back({
 					    .name = AsString(Member(entryObject, "name", "artifact.entry.name"), "artifact.entry.name"),
+					    .kind = static_cast<VNextArtifactEntryKind>(AsUInt(Member(entryObject, "kind",
+					                                                              "artifact.entry.kind"),
+					                                                     "artifact.entry.kind")),
 					    .function = static_cast<FunctionId>(AsUInt(Member(entryObject, "function",
 					                                                        "artifact.entry.function"),
 					                                               "artifact.entry.function")),

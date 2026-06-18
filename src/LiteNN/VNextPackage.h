@@ -51,9 +51,51 @@ namespace LiteNN
 		std::uint64_t checksum{};
 	};
 
+	enum class VNextArtifactEntryKind
+	{
+		Forward,
+		Loss,
+		Backward,
+		OptimizerStep,
+		BackendSpecific
+	};
+
+	inline std::string_view VNextArtifactEntryKindName(VNextArtifactEntryKind kind) noexcept
+	{
+		switch (kind)
+		{
+		case VNextArtifactEntryKind::Forward:
+			return "forward";
+		case VNextArtifactEntryKind::Loss:
+			return "loss";
+		case VNextArtifactEntryKind::Backward:
+			return "backward";
+		case VNextArtifactEntryKind::OptimizerStep:
+			return "optimizer_step";
+		case VNextArtifactEntryKind::BackendSpecific:
+			return "backend_specific";
+		}
+		return "unknown";
+	}
+
+	inline bool IsKnownVNextArtifactEntryKind(VNextArtifactEntryKind kind) noexcept
+	{
+		switch (kind)
+		{
+		case VNextArtifactEntryKind::Forward:
+		case VNextArtifactEntryKind::Loss:
+		case VNextArtifactEntryKind::Backward:
+		case VNextArtifactEntryKind::OptimizerStep:
+		case VNextArtifactEntryKind::BackendSpecific:
+			return true;
+		}
+		return false;
+	}
+
 	struct VNextArtifactEntryRef
 	{
 		std::string name;
+		VNextArtifactEntryKind kind{ VNextArtifactEntryKind::BackendSpecific };
 		FunctionId function{};
 		std::vector<std::string> requiredStateBindings;
 		std::vector<std::string> requiredBufferBindings;
@@ -115,6 +157,7 @@ namespace LiteNN
 		std::vector<std::string> bufferBindings;
 		std::vector<std::string> tensorBindings;
 		std::vector<std::string> artifactEntries;
+		std::vector<std::string> artifactEntryKinds;
 		std::vector<std::string> artifactRegions;
 		bool hasRuntimeSchedule{};
 		bool hasExternalTensorBindings{};
@@ -158,6 +201,9 @@ namespace LiteNN
 			for (const auto& entry : artifact.entries)
 			{
 				summary.artifactEntries.push_back(artifact.name + ":" + entry.name);
+				summary.artifactEntryKinds.push_back(std::format("{}:{}:{}",
+				                                                artifact.name, entry.name,
+				                                                VNextArtifactEntryKindName(entry.kind)));
 			}
 			for (const auto& region : artifact.regions)
 			{
@@ -446,6 +492,11 @@ namespace LiteNN
 				if (entry.name.empty())
 				{
 					throw std::runtime_error("vNext artifact '" + artifact.name + "' has an entry with empty name");
+				}
+				if (!IsKnownVNextArtifactEntryKind(entry.kind))
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+					                         "' has an unknown entry kind");
 				}
 				if (entry.function >= manifest.functions.size())
 				{
