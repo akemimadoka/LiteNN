@@ -64,6 +64,7 @@ target_include_directories(LiteNNTrainingAOT PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+target_compile_definitions(LiteNNTrainingAOT PUBLIC LITENN_ENABLE_TRAINING_AOT=1)
 
 target_link_libraries(LiteNNCompiler PUBLIC LiteNN)
 target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)

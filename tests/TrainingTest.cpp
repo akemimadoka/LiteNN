@@ -102,6 +102,7 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 3.0f);
 }
 
+#ifdef LITENN_ENABLE_TRAINING_AOT
 TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 {
 	ModelGraph model;
@@ -193,6 +194,7 @@ TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
 	EXPECT_NEAR(ReadVariableDataFloat(graph, weightIndex, 0), 2.8f, 1.0e-5f);
 	EXPECT_EQ(trainer.Optimizer().StepIndex(), 2u);
 }
+#endif
 
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
 {

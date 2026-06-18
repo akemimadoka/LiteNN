@@ -56,6 +56,7 @@ namespace LiteNN::Training
 		throw std::runtime_error("Trainer AOT AdamW update runner is not available for this device");
 	}
 
+#ifdef LITENN_ENABLE_TRAINING_AOT
 	template <>
 	CompiledForwardRunner<CPU> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CPU device);
 	template <>
@@ -73,6 +74,7 @@ namespace LiteNN::Training
 	CompiledForwardRunner<CUDA> CreateCompiledTrainForwardRunner(const ExecutablePlan& plan, CUDA device);
 	template <>
 	CompiledBackwardRunner<CUDA> CreateCompiledTrainBackwardRunner(const ExecutablePlan& plan, CUDA device);
+#endif
 #endif
 } // namespace LiteNN::Training
 

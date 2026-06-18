@@ -399,6 +399,8 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 	EXPECT_NE(compilerCmake.find("add_library(LiteNNTrainingAOT"), std::string::npos);
 	EXPECT_NE(compilerCmake.find("add_library(LiteNN::LiteNNTrainingAOT ALIAS LiteNNTrainingAOT)"),
 	          std::string::npos);
+	EXPECT_NE(compilerCmake.find("target_compile_definitions(LiteNNTrainingAOT PUBLIC LITENN_ENABLE_TRAINING_AOT=1)"),
+	          std::string::npos);
 	EXPECT_NE(compilerCmake.find("target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)"),
 	          std::string::npos);
 	EXPECT_NE(compilerCmake.find("src/LiteNN/Training/TrainStepAOTRunner.cpp"), std::string::npos);
