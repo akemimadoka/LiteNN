@@ -304,6 +304,40 @@ namespace LiteNN
 		bool operator==(const CPU&) const = default;
 	};
 
+	struct CPUCapabilities
+	{
+		bool x86SSE2 = false;
+		bool x86AVX = false;
+		bool x86AVX2 = false;
+		bool armNEON = false;
+		bool armNEONFP16 = false;
+		bool armSVE = false;
+	};
+
+	inline constexpr CPUCapabilities QueryCPUCapabilities()
+	{
+		CPUCapabilities caps{};
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+		caps.x86SSE2 = true;
+#endif
+#if defined(__AVX__) || defined(__AVX2__) || defined(_M_AVX)
+		caps.x86AVX = true;
+#endif
+#if defined(__AVX2__)
+		caps.x86AVX2 = true;
+#endif
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+		caps.armNEON = true;
+#endif
+#if defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC) || defined(__ARM_FP16_FORMAT_IEEE)
+		caps.armNEONFP16 = true;
+#endif
+#if defined(__ARM_FEATURE_SVE)
+		caps.armSVE = true;
+#endif
+		return caps;
+	}
+
 	template <>
 	struct DeviceTraits<CPU>
 	{
