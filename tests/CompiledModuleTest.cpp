@@ -251,6 +251,23 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPackedQuantizedConstantOutputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8,
+		                                       PackedNibbleOrder::HighThenLow);
+		Tensor<CPU> storage({ 0xf1, 0x02 }, { 2 }, DataType::UInt8);
+		const auto quantized =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 2 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetOutputNames({ "packed_uint4_weight" });
+		return graph;
+	}
+
 	Graph BuildGetRowsGraph()
 	{
 		Graph graph;
@@ -1360,6 +1377,40 @@ TEST(CompiledModuleTest, PreservesQuantizationMetadataInCompiledSignatures)
 	const auto dump = Debug::DumpCompiledModuleMetadata(artifact);
 	EXPECT_NE(dump.find("quant=Affine"), std::string::npos);
 	EXPECT_NE(dump.find("expressed=Float32[2, 2]"), std::string::npos);
+}
+
+TEST(CompiledModuleTest, PreservesPackedNibbleQuantizationMetadataInCompiledSignatures)
+{
+	auto graph = BuildPackedQuantizedConstantOutputGraph();
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	const auto& spec = artifact.OutputSpecs()[0];
+	EXPECT_EQ(spec.name, "packed_uint4_weight");
+	EXPECT_EQ(spec.type.dtype, DataType::UInt8);
+	EXPECT_EQ(spec.type.StaticShape(), (std::vector<std::size_t>{ 2 }));
+	ASSERT_TRUE(spec.quantization.has_value());
+	EXPECT_EQ(spec.quantization->scheme, QuantizationScheme::Block);
+	EXPECT_EQ(spec.quantization->blockFormat, QuantizedBlockFormat::PackedNibble);
+	EXPECT_EQ(spec.quantization->packedFormat, PackedNibbleFormat::UInt4);
+	EXPECT_EQ(spec.quantization->packedOrder, PackedNibbleOrder::HighThenLow);
+	EXPECT_EQ(spec.quantization->blockScaleLayout, BlockScaleLayout::None);
+	EXPECT_EQ(spec.quantization->expressedShape, (std::vector<std::size_t>{ 3 }));
+	ASSERT_EQ(spec.quantization->scales.size(), 1u);
+	EXPECT_FLOAT_EQ(spec.quantization->scales[0], 0.25F);
+	ASSERT_EQ(spec.quantization->zeroPoints.size(), 1u);
+	EXPECT_EQ(spec.quantization->zeroPoints[0], 8);
+
+	auto copied = CompiledModuleArtifact::CopyFromImage(artifact.Image());
+	ASSERT_EQ(copied.OutputSpecs().size(), 1u);
+	ASSERT_TRUE(copied.OutputSpecs()[0].quantization.has_value());
+	EXPECT_EQ(copied.OutputSpecs()[0].quantization->packedFormat, PackedNibbleFormat::UInt4);
+	EXPECT_EQ(copied.OutputSpecs()[0].quantization->packedOrder, PackedNibbleOrder::HighThenLow);
+
+	const auto dump = Debug::DumpCompiledModuleMetadata(artifact);
+	EXPECT_NE(dump.find("format=PackedNibble"), std::string::npos);
+	EXPECT_NE(dump.find("packed=UInt4"), std::string::npos);
+	EXPECT_NE(dump.find("order=HighThenLow"), std::string::npos);
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)

@@ -31,6 +31,7 @@ namespace LiteNN
 	enum class QuantizedBlockFormat : std::uint32_t
 	{
 		Scalar,
+		PackedNibble,
 		GGML_Q4_0,
 		GGML_Q4_1,
 		GGML_Q5_0,
@@ -61,11 +62,37 @@ namespace LiteNN
 		GGML_F64,
 	};
 
+	enum class PackedNibbleFormat : std::uint32_t
+	{
+		None,
+		Int4,
+		UInt4,
+		FP4E2M1,
+		FP4E3M0,
+	};
+
+	enum class PackedNibbleOrder : std::uint32_t
+	{
+		LowThenHigh,
+		HighThenLow,
+	};
+
+	enum class BlockScaleLayout : std::uint32_t
+	{
+		None,
+		PerBlockFloat16,
+		PerBlockBFloat16,
+		PerBlockFloat32,
+	};
+
 	struct QuantizationParams
 	{
 		QuantizationScheme scheme{ QuantizationScheme::Affine };
 		QuantizationGranularity granularity{ QuantizationGranularity::PerTensor };
 		QuantizedBlockFormat blockFormat{ QuantizedBlockFormat::Scalar };
+		PackedNibbleFormat packedFormat{ PackedNibbleFormat::None };
+		PackedNibbleOrder packedOrder{ PackedNibbleOrder::LowThenHigh };
+		BlockScaleLayout blockScaleLayout{ BlockScaleLayout::None };
 		DataType storageType{ DataType::Int8 };
 		DataType expressedType{ DataType::Float32 };
 		std::int64_t axis{ -1 };
@@ -79,6 +106,13 @@ namespace LiteNN
 	{
 		std::size_t elementsPerBlock;
 		std::size_t bytesPerBlock;
+	};
+
+	struct PackedNibbleLayout
+	{
+		PackedNibbleFormat format{ PackedNibbleFormat::None };
+		PackedNibbleOrder order{ PackedNibbleOrder::LowThenHigh };
+		std::size_t valuesPerByte{ 2 };
 	};
 
 	inline std::string_view QuantizationSchemeName(QuantizationScheme scheme)
@@ -108,6 +142,33 @@ namespace LiteNN
 		throw std::runtime_error("Invalid quantized block format");
 	}
 
+	inline std::string_view PackedNibbleFormatName(PackedNibbleFormat format)
+	{
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(format))
+		{
+			return *name;
+		}
+		throw std::runtime_error("Invalid packed nibble format");
+	}
+
+	inline std::string_view PackedNibbleOrderName(PackedNibbleOrder order)
+	{
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(order))
+		{
+			return *name;
+		}
+		throw std::runtime_error("Invalid packed nibble order");
+	}
+
+	inline std::string_view BlockScaleLayoutName(BlockScaleLayout layout)
+	{
+		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(layout))
+		{
+			return *name;
+		}
+		throw std::runtime_error("Invalid block scale layout");
+	}
+
 	inline bool IsScalarQuantizedBlockFormat(QuantizedBlockFormat format)
 	{
 		return format == QuantizedBlockFormat::Scalar;
@@ -115,13 +176,20 @@ namespace LiteNN
 
 	inline bool IsGGMLQuantizedBlockFormat(QuantizedBlockFormat format)
 	{
-		return !IsScalarQuantizedBlockFormat(format);
+		return format != QuantizedBlockFormat::Scalar && format != QuantizedBlockFormat::PackedNibble;
+	}
+
+	inline bool IsPackedNibbleQuantizedBlockFormat(QuantizedBlockFormat format)
+	{
+		return format == QuantizedBlockFormat::PackedNibble;
 	}
 
 	inline std::optional<QuantizedBlockLayout> GetQuantizedBlockLayout(QuantizedBlockFormat format)
 	{
 		switch (format)
 		{
+		case QuantizedBlockFormat::PackedNibble:
+			return QuantizedBlockLayout{ 2, 1 };
 		case QuantizedBlockFormat::GGML_Q4_0:
 			return QuantizedBlockLayout{ 32, 18 };
 		case QuantizedBlockFormat::GGML_Q4_1:
@@ -154,6 +222,16 @@ namespace LiteNN
 	inline bool IsAffineQuantizedStorageType(DataType dtype)
 	{
 		return dtype == DataType::Int8 || dtype == DataType::UInt8;
+	}
+
+	inline bool IsPackedNibbleFormat(PackedNibbleFormat format)
+	{
+		return format != PackedNibbleFormat::None;
+	}
+
+	inline bool IsIntegerPackedNibbleFormat(PackedNibbleFormat format)
+	{
+		return format == PackedNibbleFormat::Int4 || format == PackedNibbleFormat::UInt4;
 	}
 
 	namespace QuantizationDetail
@@ -338,7 +416,7 @@ namespace LiteNN
 			break;
 		}
 		case QuantizationScheme::Block:
-			if (!IsGGMLQuantizedBlockFormat(params.blockFormat))
+			if (!IsGGMLQuantizedBlockFormat(params.blockFormat) && !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
 			{
 				throw std::runtime_error("Block quantization requires a non-scalar block format");
 			}
@@ -356,7 +434,40 @@ namespace LiteNN
 			}
 			if (!params.scales.empty() || !params.zeroPoints.empty())
 			{
-				throw std::runtime_error("Block quantization does not use affine scales or zero-points");
+				if (!IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+				{
+					throw std::runtime_error("GGML block quantization does not use affine scales or zero-points");
+				}
+				if (params.scales.size() != 1)
+				{
+					throw std::runtime_error("Packed nibble quantization currently requires one scale");
+				}
+				if (!params.zeroPoints.empty() && params.zeroPoints.size() != params.scales.size())
+				{
+					throw std::runtime_error("Packed nibble zero-point count must be zero or equal to scale count");
+				}
+			}
+			if (IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+			{
+				if (!IsPackedNibbleFormat(params.packedFormat))
+				{
+					throw std::runtime_error("Packed nibble quantization requires a packedFormat");
+				}
+				if (params.blockScaleLayout != BlockScaleLayout::None && !params.scales.empty())
+				{
+					throw std::runtime_error("Packed nibble quantization cannot use both inline scales and blockScaleLayout");
+				}
+				const auto expectedBytes =
+				    QuantizationDetail::CeilDiv(ShapeView{ params.expressedShape }.NumElements(), std::size_t{ 2 });
+				if (storageShape.NumElements() != expectedBytes)
+				{
+					throw std::runtime_error("Packed nibble storage byte count does not match expressed shape");
+				}
+			}
+			else if (params.packedFormat != PackedNibbleFormat::None ||
+			         params.blockScaleLayout != BlockScaleLayout::None)
+			{
+				throw std::runtime_error("Only packed nibble quantization may set packedFormat or blockScaleLayout");
 			}
 			break;
 		}
@@ -383,6 +494,25 @@ namespace LiteNN
 			.expressedType = expressedType,
 			.expressedShape = std::move(expressedShape),
 		};
+	}
+
+	inline QuantizationParams PackedNibbleQuantization(PackedNibbleFormat format, std::vector<std::size_t> expressedShape,
+	                                                   float scale = 1.0F, std::int32_t zeroPoint = 0,
+	                                                   PackedNibbleOrder order = PackedNibbleOrder::LowThenHigh,
+	                                                   DataType expressedType = DataType::Float32)
+	{
+		QuantizationParams params{
+			.scheme = QuantizationScheme::Block,
+			.blockFormat = QuantizedBlockFormat::PackedNibble,
+			.packedFormat = format,
+			.packedOrder = order,
+			.storageType = DataType::UInt8,
+			.expressedType = expressedType,
+			.scales = { scale },
+			.zeroPoints = { zeroPoint },
+			.expressedShape = std::move(expressedShape),
+		};
+		return params;
 	}
 
 	inline QuantizationParams PerAxisAffineQuantization(DataType storageType, std::int64_t axis,
@@ -511,6 +641,113 @@ namespace LiteNN
 	inline Tensor<CPU> DequantizeAffine(const QuantizedTensor<CPU>& tensor, DataType targetType = DataType::Float32)
 	{
 		return DequantizeAffine(tensor.Storage(), tensor.Params(), targetType);
+	}
+
+	inline Tensor<CPU> PackInteger4(const Tensor<CPU>& source, QuantizationParams params)
+	{
+		if (!IsIntegerPackedNibbleFormat(params.packedFormat))
+		{
+			throw std::runtime_error("PackInteger4 requires Int4 or UInt4 packed format");
+		}
+		if (source.DType() != DataType::Int8 && source.DType() != DataType::UInt8)
+		{
+			throw std::runtime_error("PackInteger4 requires Int8 or UInt8 source tensor");
+		}
+		params.scheme = QuantizationScheme::Block;
+		params.blockFormat = QuantizedBlockFormat::PackedNibble;
+		params.storageType = DataType::UInt8;
+		if (params.expressedShape.empty())
+		{
+			params.expressedShape = source.Shape().ToOwned();
+		}
+		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(), std::size_t{ 2 }) };
+		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+
+		const auto readNibble = [&](std::size_t index) -> std::uint8_t {
+			if (source.DType() == DataType::Int8)
+			{
+				const auto value = static_cast<const std::int8_t*>(source.UnsafeRawData())[index];
+				if (params.packedFormat == PackedNibbleFormat::Int4)
+				{
+					if (value < -8 || value > 7)
+					{
+						throw std::runtime_error("Int4 value is outside [-8, 7]");
+					}
+					return static_cast<std::uint8_t>(static_cast<std::int32_t>(value) & 0x0f);
+				}
+				if (value < 0 || value > 15)
+				{
+					throw std::runtime_error("UInt4 value is outside [0, 15]");
+				}
+				return static_cast<std::uint8_t>(value);
+			}
+			const auto value = static_cast<const std::uint8_t*>(source.UnsafeRawData())[index];
+			if (params.packedFormat == PackedNibbleFormat::Int4)
+			{
+				if (value > 15)
+				{
+					throw std::runtime_error("Packed Int4 source byte must contain a sign-extended nibble");
+				}
+				return value;
+			}
+			if (value > 15)
+			{
+				throw std::runtime_error("UInt4 value is outside [0, 15]");
+			}
+			return value;
+		};
+
+		auto* dst = static_cast<std::uint8_t*>(storage.UnsafeRawData());
+		for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
+		{
+			const auto first = readNibble(byte * 2) & 0x0f;
+			const auto second = byte * 2 + 1 < source.NumElements() ? (readNibble(byte * 2 + 1) & 0x0f) : 0;
+			dst[byte] = params.packedOrder == PackedNibbleOrder::LowThenHigh
+			              ? static_cast<std::uint8_t>(first | (second << 4))
+			              : static_cast<std::uint8_t>((first << 4) | second);
+		}
+		return storage;
+	}
+
+	inline Tensor<CPU> UnpackInteger4(const Tensor<CPU>& storage, const QuantizationParams& params)
+	{
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+		if (!IsIntegerPackedNibbleFormat(params.packedFormat))
+		{
+			throw std::runtime_error("UnpackInteger4 requires Int4 or UInt4 packed format");
+		}
+		const std::vector<std::size_t> outputShape{ params.expressedShape };
+		Tensor<CPU> output(Uninitialized, outputShape,
+		                   params.packedFormat == PackedNibbleFormat::Int4 ? DataType::Int8 : DataType::UInt8);
+		const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+		for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
+		{
+			const auto low = static_cast<std::uint8_t>(src[byte] & 0x0f);
+			const auto high = static_cast<std::uint8_t>((src[byte] >> 4) & 0x0f);
+			const auto first = params.packedOrder == PackedNibbleOrder::LowThenHigh ? low : high;
+			const auto second = params.packedOrder == PackedNibbleOrder::LowThenHigh ? high : low;
+			const auto write = [&](std::size_t index, std::uint8_t nibble) {
+				if (index >= output.NumElements())
+				{
+					return;
+				}
+				if (params.packedFormat == PackedNibbleFormat::Int4)
+				{
+					const auto signedValue =
+					    (nibble & 0x08U) != 0 ? static_cast<std::int8_t>(static_cast<int>(nibble) - 16)
+					                         : static_cast<std::int8_t>(nibble);
+					static_cast<std::int8_t*>(output.UnsafeRawData())[index] = signedValue;
+				}
+				else
+				{
+					static_cast<std::uint8_t*>(output.UnsafeRawData())[index] = nibble;
+				}
+			};
+			write(byte * 2, first);
+			write(byte * 2 + 1, second);
+		}
+		return output;
 	}
 } // namespace LiteNN
 

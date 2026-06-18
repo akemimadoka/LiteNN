@@ -288,6 +288,52 @@ TEST(G14VNext, VNextModelPackageExternalWeightsBindLoadedPlanStorage)
 	std::filesystem::remove(weightsPath);
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsPackedNibbleQuantizationMetadata)
+{
+	Graph graph;
+	auto packed = PackInteger4(Tensor<CPU>({ 1.0, 15.0, 2.0 }, { 3 }, DataType::UInt8),
+	                           PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }));
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8,
+	                                       PackedNibbleOrder::HighThenLow);
+	const auto packedVariable = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(packed), params));
+	graph.SetVariableName(packedVariable, "linear.weight.uint4");
+	Subgraph subgraph;
+	const auto ref = subgraph.AddNode(VariableRefNode{ packedVariable }, { OutputInfo{ DataType::UInt8, { 2 } } });
+	subgraph.SetResults({ { ref, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+	graph.SetOutputNames({ "packed" });
+
+	const auto root = std::filesystem::temp_directory_path();
+	const auto path = root / "litenn_vnext_packed_nibble_quantization.json";
+	const auto weightsPath = root / "litenn_vnext_packed_nibble_quantization.bin";
+
+	Serialization::ExternalWeightSaveOptions options;
+	options.minVariableBytes = 0;
+	Serialization::SaveVNextModelPackageExternalWeights(graph, path, weightsPath, options);
+
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	const auto found = std::ranges::find_if(package.manifest.tensors, [](const auto& tensor) {
+		return tensor.relativePath == "litenn_vnext_packed_nibble_quantization.bin";
+	});
+	ASSERT_NE(found, package.manifest.tensors.end());
+	ASSERT_TRUE(found->quantization.has_value());
+	const auto& loaded = *found->quantization;
+	EXPECT_EQ(loaded.scheme, QuantizationScheme::Block);
+	EXPECT_EQ(loaded.blockFormat, QuantizedBlockFormat::PackedNibble);
+	EXPECT_EQ(loaded.packedFormat, PackedNibbleFormat::UInt4);
+	EXPECT_EQ(loaded.packedOrder, PackedNibbleOrder::HighThenLow);
+	EXPECT_EQ(loaded.blockScaleLayout, BlockScaleLayout::None);
+	EXPECT_EQ(loaded.storageType, DataType::UInt8);
+	EXPECT_EQ(loaded.expressedShape, (std::vector<std::size_t>{ 3 }));
+	ASSERT_EQ(loaded.scales.size(), 1u);
+	EXPECT_FLOAT_EQ(loaded.scales[0], 0.25F);
+	ASSERT_EQ(loaded.zeroPoints.size(), 1u);
+	EXPECT_EQ(loaded.zeroPoints[0], 8);
+
+	std::filesystem::remove(path);
+	std::filesystem::remove(weightsPath);
+}
+
 TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
 {
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_legacy.json";

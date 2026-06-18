@@ -100,22 +100,24 @@ Completed notes:
 
 #### G1.4 Int4 / FP4 and Native Quantized Execution
 
-Status: planned. LiteNN currently has scalar fp16/bf16/fp8/int8/uint8 dtypes plus GGML-style 4-bit block-quantized
+Status: in progress. LiteNN currently has scalar fp16/bf16/fp8/int8/uint8 dtypes plus GGML-style 4-bit block-quantized
 metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit execution kernels.
 
-- [ ] Add packed scalar storage descriptors for int4/uint4 and fp4 variants without pretending they are byte-addressable
+- [x] Add packed scalar storage descriptors for int4/uint4 and fp4 variants without pretending they are byte-addressable
       `DataType` values; decide whether they live as `QuantizationParams` storage kinds, `TensorStorageRef` formats, or a
-      separate packed dtype set.
-- [ ] Define fp4 numerical variants explicitly, starting with common e2m1/e3m0-style formats if required by target
-      hardware/importers, including NaN/Inf/subnormal/rounding policy.
-- [ ] Extend quantization metadata with packed nibble layout, signedness, block scale layout, and byte-order rules so
+      separate packed dtype set. Completed by `PackedNibbleFormat` metadata on `QuantizationParams`.
+- [x] Define fp4 variant identifiers explicitly, starting with common e2m1/e3m0-style formats required by target
+      hardware/importers.
+- [ ] Define fp4 NaN/Inf/subnormal/rounding policy and implement numeric conversion golden tests.
+- [x] Extend quantization metadata with packed nibble layout, signedness, block scale layout, and byte-order rules so
       GGUF, safetensors-like extensions, and future vendor formats can share one contract.
 - [ ] Add CPU reference pack/unpack, dequantize, and optional quantize helpers for int4/uint4/fp4 with golden tests.
+      Current slice: int4/uint4 pack/unpack golden tests are present; fp4 numeric conversion and dequantize remain.
 - [ ] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
       into supported compute dtypes when a backend has no native 4-bit kernel.
 - [ ] Add native quantized MatMul/Linear paths in priority order: CPU reference, CUDA/cuBLASLt or custom kernels,
       Vulkan shader path, then CPU AOT lowering.
-- [ ] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
+- [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [ ] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
 

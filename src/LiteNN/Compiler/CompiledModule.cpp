@@ -777,6 +777,9 @@ namespace
 		AppendU32(out, static_cast<std::uint32_t>(params.scheme));
 		AppendU32(out, static_cast<std::uint32_t>(params.granularity));
 		AppendU32(out, static_cast<std::uint32_t>(params.blockFormat));
+		AppendU32(out, static_cast<std::uint32_t>(params.packedFormat));
+		AppendU32(out, static_cast<std::uint32_t>(params.packedOrder));
+		AppendU32(out, static_cast<std::uint32_t>(params.blockScaleLayout));
 		AppendU32(out, static_cast<std::uint32_t>(params.storageType));
 		AppendU32(out, static_cast<std::uint32_t>(params.expressedType));
 		AppendI64(out, params.axis);
@@ -807,6 +810,9 @@ namespace
 		params.scheme = static_cast<QuantizationScheme>(ReadU32(bytes, offset));
 		params.granularity = static_cast<QuantizationGranularity>(ReadU32(bytes, offset));
 		params.blockFormat = static_cast<QuantizedBlockFormat>(ReadU32(bytes, offset));
+		params.packedFormat = static_cast<PackedNibbleFormat>(ReadU32(bytes, offset));
+		params.packedOrder = static_cast<PackedNibbleOrder>(ReadU32(bytes, offset));
+		params.blockScaleLayout = static_cast<BlockScaleLayout>(ReadU32(bytes, offset));
 		params.storageType = static_cast<DataType>(ReadU32(bytes, offset));
 		params.expressedType = static_cast<DataType>(ReadU32(bytes, offset));
 		params.axis = ReadI64(bytes, offset);

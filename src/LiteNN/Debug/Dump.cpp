@@ -326,10 +326,13 @@ namespace
 				}
 				else if constexpr (std::same_as<T, QuantizedConstantNode>)
 				{
-					return std::format("QuantizedConstantNode(storage={}, scheme={}, format={})",
+					return std::format("QuantizedConstantNode(storage={}, scheme={}, format={}, packed={}, order={}, scaleLayout={})",
 					                   FormatTensorSummary(value.storage, options),
 					                   QuantizationSchemeName(value.params.scheme),
-					                   QuantizedBlockFormatName(value.params.blockFormat));
+					                   QuantizedBlockFormatName(value.params.blockFormat),
+					                   PackedNibbleFormatName(value.params.packedFormat),
+					                   PackedNibbleOrderName(value.params.packedOrder),
+					                   BlockScaleLayoutName(value.params.blockScaleLayout));
 				}
 				else if constexpr (std::same_as<T, VariableRefNode>)
 				{
@@ -363,10 +366,13 @@ namespace
 				}
 				else if constexpr (std::same_as<T, DequantizeNode>)
 				{
-					return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={})",
+					return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={}, packed={}, order={}, scaleLayout={})",
 					                   FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
 					                   QuantizationSchemeName(value.params.scheme),
-					                   QuantizedBlockFormatName(value.params.blockFormat));
+					                   QuantizedBlockFormatName(value.params.blockFormat),
+					                   PackedNibbleFormatName(value.params.packedFormat),
+					                   PackedNibbleOrderName(value.params.packedOrder),
+					                   BlockScaleLayoutName(value.params.blockScaleLayout));
 				}
 				else if constexpr (std::same_as<T, CondNode>)
 				{

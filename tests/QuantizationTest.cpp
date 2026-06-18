@@ -100,6 +100,54 @@ TEST(Quantization, UInt8ZeroPointIsApplied)
 	EXPECT_FLOAT_EQ(ReadFloat(dequantized, 2), 1.0F);
 }
 
+TEST(Quantization, PackedUInt4RoundTripsLowThenHigh)
+{
+	const Tensor<CPU> source({ 1.0, 15.0, 2.0 }, { 3 }, DataType::UInt8);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 });
+
+	const auto packed = PackInteger4(source, params);
+	ASSERT_EQ(packed.DType(), DataType::UInt8);
+	ASSERT_EQ(packed.NumElements(), 2);
+	const auto* packedData = static_cast<const std::uint8_t*>(packed.UnsafeRawData());
+	EXPECT_EQ(packedData[0], 0xf1);
+	EXPECT_EQ(packedData[1], 0x02);
+
+	const auto unpacked = UnpackInteger4(packed, params);
+	ASSERT_EQ(unpacked.DType(), DataType::UInt8);
+	const auto* unpackedData = static_cast<const std::uint8_t*>(unpacked.UnsafeRawData());
+	EXPECT_EQ(unpackedData[0], 1);
+	EXPECT_EQ(unpackedData[1], 15);
+	EXPECT_EQ(unpackedData[2], 2);
+}
+
+TEST(Quantization, PackedInt4RoundTripsHighThenLow)
+{
+	const Tensor<CPU> source({ -8.0, -1.0, 0.0, 7.0 }, { 4 }, DataType::Int8);
+	auto params =
+	    PackedNibbleQuantization(PackedNibbleFormat::Int4, { 4 }, 1.0F, 0, PackedNibbleOrder::HighThenLow);
+
+	const auto packed = PackInteger4(source, params);
+	const auto* packedData = static_cast<const std::uint8_t*>(packed.UnsafeRawData());
+	EXPECT_EQ(packedData[0], 0x8f);
+	EXPECT_EQ(packedData[1], 0x07);
+
+	const auto unpacked = UnpackInteger4(packed, params);
+	ASSERT_EQ(unpacked.DType(), DataType::Int8);
+	const auto* unpackedData = static_cast<const std::int8_t*>(unpacked.UnsafeRawData());
+	EXPECT_EQ(unpackedData[0], -8);
+	EXPECT_EQ(unpackedData[1], -1);
+	EXPECT_EQ(unpackedData[2], 0);
+	EXPECT_EQ(unpackedData[3], 7);
+}
+
+TEST(Quantization, PackedInt4RejectsOutOfRangeValues)
+{
+	const Tensor<CPU> source({ -9.0 }, { 1 }, DataType::Int8);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 1 });
+
+	EXPECT_THROW((void)PackInteger4(source, params), std::runtime_error);
+}
+
 TEST(Quantization, RejectsInvalidScaleCount)
 {
 	const Tensor<CPU> source({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32);

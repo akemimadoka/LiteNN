@@ -55,9 +55,12 @@ namespace
 		auto text = std::format("{}: {}", name, Validation::FormatInfo(spec.type.dtype, shape));
 		if (spec.quantization)
 		{
-			text += std::format(" quant={} format={} expressed={}",
+			text += std::format(" quant={} format={} packed={} order={} scaleLayout={} expressed={}",
 			                    QuantizationSchemeName(spec.quantization->scheme),
 			                    QuantizedBlockFormatName(spec.quantization->blockFormat),
+			                    PackedNibbleFormatName(spec.quantization->packedFormat),
+			                    PackedNibbleOrderName(spec.quantization->packedOrder),
+			                    BlockScaleLayoutName(spec.quantization->blockScaleLayout),
 			                    Validation::FormatInfo(spec.quantization->expressedType,
 			                                           spec.quantization->expressedShape.empty()
 			                                               ? shape

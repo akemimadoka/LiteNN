@@ -260,6 +260,8 @@ namespace LiteNN::Serialization
 				const auto& q = *tensor.quantization;
 				out << ",\"quantization\":{\"scheme\":" << EnumValue(q.scheme) << ",\"granularity\":"
 				    << EnumValue(q.granularity) << ",\"blockFormat\":" << EnumValue(q.blockFormat)
+				    << ",\"packedFormat\":" << EnumValue(q.packedFormat) << ",\"packedOrder\":"
+				    << EnumValue(q.packedOrder) << ",\"blockScaleLayout\":" << EnumValue(q.blockScaleLayout)
 				    << ",\"storageType\":" << EnumValue(q.storageType) << ",\"expressedType\":"
 				    << EnumValue(q.expressedType) << ",\"axis\":" << q.axis << ",\"groupSize\":"
 				    << q.groupSize << ",\"scales\":";
@@ -762,6 +764,12 @@ namespace LiteNN::Serialization
 				    static_cast<QuantizationGranularity>(AsUInt(Member(quantObject, "granularity", label), label));
 				q.blockFormat =
 				    static_cast<QuantizedBlockFormat>(AsUInt(Member(quantObject, "blockFormat", label), label));
+				q.packedFormat =
+				    static_cast<PackedNibbleFormat>(AsUInt(Member(quantObject, "packedFormat", label), label));
+				q.packedOrder =
+				    static_cast<PackedNibbleOrder>(AsUInt(Member(quantObject, "packedOrder", label), label));
+				q.blockScaleLayout =
+				    static_cast<BlockScaleLayout>(AsUInt(Member(quantObject, "blockScaleLayout", label), label));
 				q.storageType = static_cast<DataType>(AsUInt(Member(quantObject, "storageType", label), label));
 				q.expressedType = static_cast<DataType>(AsUInt(Member(quantObject, "expressedType", label), label));
 				q.axis = AsInt(Member(quantObject, "axis", label), label);
