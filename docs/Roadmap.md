@@ -857,7 +857,9 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 - [x] Add mobile package examples using separated rodata/weights from G9: `example/vulkan` now demonstrates both
       metadata/instruction-only Vulkan-native Add and a fused LinearExternalWeights graph with a non-empty separated
       weights region loaded through borrowed external regions.
-- [ ] Track performance and memory baselines for at least one small MLP/CNN and one tiny transformer block.
+- [x] Track performance and memory baselines for at least one small MLP/CNN and one tiny transformer block:
+      `scripts/mobile_baseline_report.py` combines Google Benchmark JSON rows for MLP/CNN/transformer-like kernels with
+      `mobile_size_report.py` JSON totals into Markdown/JSON reports for CI artifacts and local release baselines.
 
 ### G12: Torch and Safetensors Import
 

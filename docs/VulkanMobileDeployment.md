@@ -27,6 +27,17 @@ python311 scripts/mobile_size_report.py `
   --json build/mobile_size_report.json
 ```
 
+After collecting a Google Benchmark JSON from `litenn_bench`, combine performance and memory into the mobile baseline
+artifact:
+
+```powershell
+python311 scripts/mobile_baseline_report.py `
+  --benchmark-json benchmark/results/litenn_mobile.json `
+  --size-json build/mobile_size_report.json `
+  --markdown build/mobile_baseline.md `
+  --json build/mobile_baseline.json
+```
+
 The production mobile runtime should link `LiteNNCore` and `LiteNNVulkanRuntime`. Keep `LiteNNCompiler` out of the
 application package unless the app explicitly compiles graphs on device. The normal mobile flow is:
 
