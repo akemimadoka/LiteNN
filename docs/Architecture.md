@@ -292,7 +292,7 @@ struct Pass {
 `CompiledModule<CPU>` 是当前 CPU 原生 AOT 运行时封装；`CompiledModule<CUDA>` 采用 native 优先、bridge fallback：可直接加载 `CUDANative` payload 运行 CUDA kernel；不支持 native codegen 的图仍用 CUDA Tensor 作为公开输入/输出边界，内部复用 CPU AOT image/JIT 执行。
 
 - `Compiler<CPU>::CompileArtifact(graph)` 生成拥有 rodata/native object bytes 的 `CompiledModuleArtifact`；这是编译期的稳定产物层，可用于写 carrier object 或延后加载
-- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、parallel min-FLOPs、LLVM opt level、编译阶段诊断、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库编译路径不直接读取环境变量，CLI/benchmark/example 若需要环境变量控制，应在入口层读取并填充该配置对象
+- `CompilerOptions` 是编译行为的显式配置面，覆盖 CPU AOT thread count、worker affinity policy、parallel min-FLOPs、LLVM opt level、编译阶段诊断、CPU external regions、generic MLIR 外置常量最小字节数、external-region fusion 和 CUDA native AOT enablement；库编译路径不直接读取环境变量，CLI/benchmark/example 若需要环境变量控制，应在入口层读取并填充该配置对象
 - `Compiler<CPU>::Compile(graph)` 保留为便捷接口，等价于 `CompileArtifact(graph).Load()`
 - `Compiler<CUDA>::CompileArtifact(graph)` 当前优先匹配静态 `Float32` elementwise Negate/Abs/Sqrt/Add/Subtract/Multiply/Divide、同 rank binary broadcast native PTX 和二维 `Float32` MatMul/cuBLAS library call；不匹配时复用 CPU artifact。`Compiler<CUDA>::Compile(graph, CUDA{})` 返回 `CompiledModule<CUDA>`，在 `Run` / `RunInto` / `RunManyInto` 中根据 backend 直接 launch CUDA kernel、调用 cuBLAS 或执行 CPU AOT bridge
 - `CompiledModuleArtifact::FromExportedSymbols(...)` 可从静态库/动态库导出的 `<prefix>_rodata{,_size}`、`<prefix>_instructions{,_size}` 符号恢复拥有型 artifact

@@ -63,6 +63,16 @@
 #include <cuda_runtime_api.h>
 #endif
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -187,6 +197,88 @@ namespace
 		return LiteNNCPUHardwareThreadCount();
 	}
 
+	class LiteNNCPUThreadAffinityState
+	{
+	public:
+		LiteNNCPUThreadAffinityState() = default;
+
+		void Apply(CPUAOTAffinityPolicy policy, std::size_t workerSlot)
+		{
+			if (policy == activePolicy_)
+			{
+				return;
+			}
+			Restore();
+			if (policy != CPUAOTAffinityPolicy::Compact)
+			{
+				return;
+			}
+			const auto hardware = LiteNNCPUHardwareThreadCount();
+			if (hardware == 0 || workerSlot >= hardware)
+			{
+				return;
+			}
+#ifdef _WIN32
+			if (workerSlot >= sizeof(DWORD_PTR) * 8)
+			{
+				return;
+			}
+			const DWORD_PTR mask = static_cast<DWORD_PTR>(1) << workerSlot;
+			const auto previous = SetThreadAffinityMask(GetCurrentThread(), mask);
+			if (previous != 0)
+			{
+				previousMask_ = previous;
+				activePolicy_ = policy;
+			}
+#elif defined(__linux__)
+			cpu_set_t currentSet;
+			CPU_ZERO(&currentSet);
+			if (pthread_getaffinity_np(pthread_self(), sizeof(currentSet), &currentSet) != 0)
+			{
+				return;
+			}
+			cpu_set_t targetSet;
+			CPU_ZERO(&targetSet);
+			CPU_SET(workerSlot, &targetSet);
+			if (pthread_setaffinity_np(pthread_self(), sizeof(targetSet), &targetSet) == 0)
+			{
+				previousSet_ = currentSet;
+				activePolicy_ = policy;
+			}
+#endif
+		}
+
+		~LiteNNCPUThreadAffinityState()
+		{
+			Restore();
+		}
+
+		LiteNNCPUThreadAffinityState(const LiteNNCPUThreadAffinityState&) = delete;
+		LiteNNCPUThreadAffinityState& operator=(const LiteNNCPUThreadAffinityState&) = delete;
+
+	private:
+		void Restore()
+		{
+			if (activePolicy_ == CPUAOTAffinityPolicy::None)
+			{
+				return;
+			}
+#ifdef _WIN32
+			SetThreadAffinityMask(GetCurrentThread(), previousMask_);
+#elif defined(__linux__)
+			pthread_setaffinity_np(pthread_self(), sizeof(previousSet_), &previousSet_);
+#endif
+			activePolicy_ = CPUAOTAffinityPolicy::None;
+		}
+
+		CPUAOTAffinityPolicy activePolicy_{ CPUAOTAffinityPolicy::None };
+#ifdef _WIN32
+		DWORD_PTR previousMask_{};
+#elif defined(__linux__)
+		cpu_set_t previousSet_{};
+#endif
+	};
+
 	class LiteNNCPUThreadPool
 	{
 	public:
@@ -221,7 +313,7 @@ namespace
 		LiteNNCPUThreadPool& operator=(const LiteNNCPUThreadPool&) = delete;
 
 		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain, LiteNNCPUParallelForBody body,
-		                 void* userData, std::size_t requestedThreads)
+		                 void* userData, std::size_t requestedThreads, CPUAOTAffinityPolicy affinityPolicy)
 		{
 			if (begin >= end)
 			{
@@ -247,6 +339,7 @@ namespace
 				grain_ = grain;
 				body_ = body;
 				userData_ = userData;
+				affinityPolicy_ = affinityPolicy;
 				next_.store(begin, std::memory_order_relaxed);
 				workersDone_ = 0;
 				desiredWorkers_ = desiredWorkers;
@@ -276,10 +369,12 @@ namespace
 
 		void WorkerLoop(std::size_t workerIndex)
 		{
+			LiteNNCPUThreadAffinityState affinity;
 			std::uint64_t seenGeneration = 0;
 			while (true)
 			{
 				bool participate = false;
+				CPUAOTAffinityPolicy affinityPolicy = CPUAOTAffinityPolicy::None;
 				{
 					std::unique_lock lock(mutex_);
 					start_.wait(lock, [&] { return stopping_ || generation_ != seenGeneration; });
@@ -289,10 +384,12 @@ namespace
 					}
 					seenGeneration = generation_;
 					participate = workerIndex < desiredWorkers_;
+					affinityPolicy = affinityPolicy_;
 				}
 
 				if (participate)
 				{
+					affinity.Apply(affinityPolicy, workerIndex + 1);
 					RunTasks();
 
 					std::lock_guard lock(mutex_);
@@ -301,6 +398,10 @@ namespace
 					{
 						done_.notify_one();
 					}
+				}
+				else
+				{
+					affinity.Apply(CPUAOTAffinityPolicy::None, workerIndex);
 				}
 			}
 		}
@@ -316,6 +417,7 @@ namespace
 		std::uint64_t grain_{ 1 };
 		LiteNNCPUParallelForBody body_{};
 		void* userData_{};
+		CPUAOTAffinityPolicy affinityPolicy_{ CPUAOTAffinityPolicy::None };
 		std::size_t desiredWorkers_{};
 		std::size_t workersDone_{};
 		std::uint64_t generation_{};
@@ -329,9 +431,11 @@ namespace
 	}
 
 	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
-	                          LiteNNCPUParallelForBody body, void* userData, std::uint64_t threadCount)
+	                          LiteNNCPUParallelForBody body, void* userData, std::uint64_t threadCount,
+	                          CPUAOTAffinityPolicy affinityPolicy)
 	{
-		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, static_cast<std::size_t>(threadCount));
+		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, static_cast<std::size_t>(threadCount),
+		                                     affinityPolicy);
 	}
 
 	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
@@ -419,7 +523,8 @@ namespace
 	void LiteNNCPUMatMulBiasReLUParallel(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
 	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out, std::uint64_t m,
 	                                     std::uint64_t k, std::uint64_t n, std::uint64_t biasRows,
-	                                     std::uint64_t requestedThreadCount, bool relu)
+	                                     std::uint64_t requestedThreadCount, bool relu,
+	                                     CPUAOTAffinityPolicy affinityPolicy)
 	{
 		const auto flops = m * k * n * 2;
 		const auto threadCount = std::min<std::uint64_t>(
@@ -449,7 +554,7 @@ namespace
 		};
 
 		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
-		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount);
+		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount, affinityPolicy);
 	}
 
 	bool ShouldUseCPUSidecarLinearLayer(std::uint64_t m, std::uint64_t k, std::uint64_t n, std::uint64_t flops)
@@ -463,9 +568,13 @@ namespace
 	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
 	                                                         float* out, std::uint64_t m, std::uint64_t k,
 	                                                         std::uint64_t n, std::uint64_t biasRows,
-	                                                         std::uint64_t threadCount, bool relu)
+	                                                         std::uint64_t threadCount, std::uint64_t affinityPolicy,
+	                                                         bool relu)
 	{
-		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu);
+		const auto policy = affinityPolicy == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
+		                        ? CPUAOTAffinityPolicy::Compact
+		                        : CPUAOTAffinityPolicy::None;
+		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
@@ -2329,8 +2438,8 @@ namespace
 		auto freeFn = module->getOrInsertFunction("free", llvm::FunctionType::get(voidTy, { ptrTy }, false));
 		auto kernelFn = module->getOrInsertFunction(
 		    "litenn_cpu_matmul_bias_relu_parallel_f32",
-		    llvm::FunctionType::get(voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty },
-		                            false));
+		    llvm::FunctionType::get(
+		        voidTy, { ptrTy, ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i1Ty }, false));
 
 		const bool useExternalRegions = IsCPUExternalRegionsEnabled(options);
 		std::vector<std::byte> externalConstants;
@@ -2485,6 +2594,7 @@ namespace
 			                   { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m), builder.getInt64(k),
 			                     builder.getInt64(n), builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
 			                     builder.getInt64(layerThreadCount),
+			                     builder.getInt64(static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy)),
 			                     builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
 			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;

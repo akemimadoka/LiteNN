@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -56,6 +58,17 @@ inline LiteNN::CompilerOptions LiteNNBenchCompilerOptionsFromEnvironment()
 	if (const auto optLevel = LiteNNBenchParseU64Env("LITENN_CPU_AOT_LLVM_OPT_LEVEL"))
 	{
 		options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
+	}
+	if (const char* affinity = std::getenv("LITENN_CPU_AOT_AFFINITY"))
+	{
+		std::string value{ affinity };
+		std::ranges::transform(value, value.begin(), [](unsigned char ch) {
+			return static_cast<char>(std::tolower(ch));
+		});
+		if (value == "compact" || value == "1" || value == "true" || value == "on")
+		{
+			options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Compact;
+		}
 	}
 	options.enableCPUAOTExternalRegions =
 	    LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||

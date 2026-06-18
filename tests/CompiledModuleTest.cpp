@@ -2186,6 +2186,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 {
 	CompilerOptions options;
 	options.cpuAOTThreadCount = 4;
+	options.cpuAOTAffinityPolicy = CPUAOTAffinityPolicy::Compact;
 	options.cpuAOTParallelMinFlops = 1;
 	constexpr std::size_t kBatch = 128;
 	constexpr std::size_t kInput = 64;

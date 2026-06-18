@@ -106,6 +106,12 @@ namespace LiteNN
 		ExactChecksum = 1,
 	};
 
+	enum class CPUAOTAffinityPolicy : std::uint32_t
+	{
+		None = 0,
+		Compact = 1,
+	};
+
 	struct CompiledModuleExternalTensorInfo
 	{
 		std::string name;
@@ -122,6 +128,8 @@ namespace LiteNN
 	{
 		/// CPU AOT worker count. Zero means use hardware_concurrency().
 		std::size_t cpuAOTThreadCount{};
+		/// Optional CPU AOT worker affinity policy. Defaults to no pinning.
+		CPUAOTAffinityPolicy cpuAOTAffinityPolicy{ CPUAOTAffinityPolicy::None };
 		/// Minimum f32 linear-chain FLOPs before the CPU parallel AOT path is used.
 		std::uint64_t cpuAOTParallelMinFlops{ 1ull << 28 };
 		/// Store CPU AOT constants/variable weights in separated artifact regions when supported.

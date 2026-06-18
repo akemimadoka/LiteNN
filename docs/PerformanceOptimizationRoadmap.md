@@ -126,6 +126,14 @@ beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP s
     enables multithread helper calls for sufficiently wide/high-FLOP layers; narrow tail projections use one helper
     thread inside an otherwise eligible chain. Tests and diagnostic runs can still force the sidecar path by setting
     `CompilerOptions::cpuAOTParallelMinFlops` to `1`.
+- [x] Add a configurable worker-affinity policy for multithread experiments.
+  - Implementation: `CompilerOptions::cpuAOTAffinityPolicy` defaults to `None`; `Compact` pins the CPU AOT helper's
+    persistent worker threads to low-numbered CPUs while the policy remains active and restores their prior affinity
+    when the policy is disabled or workers exit. Benchmark/profile entry points can set it through
+    `LITENN_CPU_AOT_AFFINITY=compact`.
+  - Evaluation: local Windows `MLP(784->512->256->10)/batch:128` sidecar-helper runs with
+    `LITENN_CPU_AOT_THREADS=16` and `LITENN_CPU_AOT_PARALLEL_MIN_FLOPS=1` did not improve with compact affinity; the
+    measured real time regressed versus no affinity. Keep affinity opt-in until topology-aware policies are available.
 - [ ] Add profile counters for helper layer shapes and selected grain/thread counts.
   - Requirement: profile output should explain whether a benchmark used MLIR fallback or the parallel sidecar helper,
     and why.
