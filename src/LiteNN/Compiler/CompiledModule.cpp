@@ -339,11 +339,67 @@ namespace
 	                                  std::uint64_t rowBegin, std::uint64_t rowEnd, std::uint64_t k, std::uint64_t n,
 	                                  std::uint64_t biasRows, bool relu)
 	{
-		for (std::uint64_t row = rowBegin; row < rowEnd; ++row)
-		{
-			float* outRow = out + row * n;
+		constexpr std::uint64_t kRowBlock = 4;
+		auto copyBias = [&](std::uint64_t row, float* outRow) {
 			const float* biasRow = bias + (biasRows == 1 ? 0 : row) * n;
 			std::memcpy(outRow, biasRow, static_cast<std::size_t>(n) * sizeof(float));
+		};
+		auto applyRelu = [&](float* outRow) {
+			if (!relu)
+			{
+				return;
+			}
+			LITENN_GCC_IVDEP
+			for (std::uint64_t col = 0; col < n; ++col)
+			{
+				if (outRow[col] < 0.0f)
+				{
+					outRow[col] = 0.0f;
+				}
+			}
+		};
+
+		std::uint64_t row = rowBegin;
+		for (; row + kRowBlock <= rowEnd; row += kRowBlock)
+		{
+			float* out0 = out + (row + 0) * n;
+			float* out1 = out + (row + 1) * n;
+			float* out2 = out + (row + 2) * n;
+			float* out3 = out + (row + 3) * n;
+			copyBias(row + 0, out0);
+			copyBias(row + 1, out1);
+			copyBias(row + 2, out2);
+			copyBias(row + 3, out3);
+
+			for (std::uint64_t kk = 0; kk < k; ++kk)
+			{
+				const auto lhsOffset = kk;
+				const float a0 = lhs[(row + 0) * k + lhsOffset];
+				const float a1 = lhs[(row + 1) * k + lhsOffset];
+				const float a2 = lhs[(row + 2) * k + lhsOffset];
+				const float a3 = lhs[(row + 3) * k + lhsOffset];
+				const float* rhsRow = rhs + kk * n;
+				LITENN_GCC_IVDEP
+				for (std::uint64_t col = 0; col < n; ++col)
+				{
+					const float b = rhsRow[col];
+					out0[col] += a0 * b;
+					out1[col] += a1 * b;
+					out2[col] += a2 * b;
+					out3[col] += a3 * b;
+				}
+			}
+
+			applyRelu(out0);
+			applyRelu(out1);
+			applyRelu(out2);
+			applyRelu(out3);
+		}
+
+		for (; row < rowEnd; ++row)
+		{
+			float* outRow = out + row * n;
+			copyBias(row, outRow);
 
 			for (std::uint64_t kk = 0; kk < k; ++kk)
 			{
@@ -356,17 +412,7 @@ namespace
 				}
 			}
 
-			if (relu)
-			{
-				LITENN_GCC_IVDEP
-				for (std::uint64_t col = 0; col < n; ++col)
-				{
-					if (outRow[col] < 0.0f)
-					{
-						outRow[col] = 0.0f;
-					}
-				}
-			}
+			applyRelu(outRow);
 		}
 	}
 
@@ -404,6 +450,14 @@ namespace
 
 		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
 		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount);
+	}
+
+	bool ShouldUseCPUSidecarLinearLayer(std::uint64_t m, std::uint64_t k, std::uint64_t n, std::uint64_t flops)
+	{
+		constexpr std::uint64_t kMinLayerFlops = 1ull << 26;
+		constexpr std::uint64_t kMaxRowsBeforePackedMLIR = 256;
+		constexpr std::uint64_t kMinOutputColumns = 64;
+		return flops >= kMinLayerFlops && m <= kMaxRowsBeforePackedMLIR && k >= 64 && n >= kMinOutputColumns;
 	}
 
 	extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
@@ -2285,6 +2339,8 @@ namespace
 		std::vector<std::optional<ValueRef>> values(subgraph.NodeCount());
 		std::vector<llvm::Value*> heapAllocations;
 		std::size_t fusedLayerCount = 0;
+		bool hasParallelEligibleLayer = false;
+		const bool forceSidecarShapeGate = options.cpuAOTParallelMinFlops <= 1;
 		std::uint64_t totalFlops = 0;
 
 		const auto loadArrayPointer = [&](llvm::Value* array, std::size_t index) {
@@ -2416,17 +2472,26 @@ namespace
 			const auto k = static_cast<std::uint64_t>(lhs->shape[1]);
 			const auto n = static_cast<std::uint64_t>(output.shape[1]);
 			const auto layerFlops = SaturatedMulU64(SaturatedMulU64(SaturatedMulU64(m, k), n), 2);
+			if (!forceSidecarShapeGate && m > 256)
+			{
+				return std::nullopt;
+			}
+			const auto layerThreadCount = (forceSidecarShapeGate || ShouldUseCPUSidecarLinearLayer(m, k, n, layerFlops))
+			                                  ? static_cast<std::uint64_t>(threadCount)
+			                                  : 1;
+			hasParallelEligibleLayer |= layerThreadCount > 1;
 			totalFlops = SaturatedAddU64(totalFlops, layerFlops);
 			builder.CreateCall(kernelFn,
 			                   { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m), builder.getInt64(k),
 			                     builder.getInt64(n), builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
-			                     builder.getInt64(static_cast<std::uint64_t>(threadCount)),
+			                     builder.getInt64(layerThreadCount),
 			                     builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
 			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;
 		}
 
-		if (fusedLayerCount == 0 || !values[finalResult.node] || totalFlops < options.cpuAOTParallelMinFlops)
+		if (fusedLayerCount == 0 || !hasParallelEligibleLayer || !values[finalResult.node] ||
+		    totalFlops < options.cpuAOTParallelMinFlops)
 		{
 			return std::nullopt;
 		}

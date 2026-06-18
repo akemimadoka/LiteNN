@@ -594,9 +594,11 @@ stateful recurrence, convolution families, and optimizer-only nodes to backend-s
 
 ### G6: Performance, Profiling, and Backend Optimization
 
-Purpose: keep performance claims tied to repeatable profile/benchmark evidence across CPU AOT, CUDA native, CUDA Graph, PyTorch, and ggml.
+Purpose: keep performance claims tied to repeatable profile/benchmark evidence across CPU AOT, CPU multithread,
+CUDA native, CUDA Graph, PyTorch, and ggml.
 
-Status: completed for current profile/benchmark and guarded intra-op tranche; deeper production CPU kernel backend work is deferred to the long-term queue.
+Status: current profile/benchmark coverage is in place. CPU AOT multithread optimization is active again because
+large-batch MLP measurements show the first sidecar helper path can lose to the packed MLIR fallback on some shapes.
 
 - [x] Profile CPU AOT at instruction level and document whether generated code is scalar or vectorized.
 - [x] Remove the misleading old CPU scalar "fast path" benchmark/compiler branch.
@@ -605,8 +607,9 @@ Status: completed for current profile/benchmark and guarded intra-op tranche; de
 - [x] Add a persistent CPU worker pool for the current AOT helper path.
 - [x] Add CUDA native and CUDA Graph profile/benchmark notes, including comparison with PyTorch CUDA.
 - [x] Persist raw CPU/CUDA profile and benchmark outputs under `benchmark/results/`.
-- [x] Move CPU intra-op parallelism into the optimized MLIR/LLVM lowering path or a production CPU GEMM backend:
-      deferred as long-term backend work after the current guarded helper path and profiling tools.
+- [ ] Productionize CPU AOT multithreading so T16 is not a regression on large-batch Linear/MLP shapes:
+      tune helper microkernels, gating, thread grain policy, and eventually move the work into optimized MLIR/LLVM
+      lowering or a production GEMM backend.
 - [x] Extend `litenn_profile` with first-class CPU AOT instruction stats instead of relying on manual objdump report synthesis.
 - [x] Extend `litenn_profile` with CUDA launch breakdowns.
 
@@ -615,6 +618,7 @@ Completed notes:
 - `docs/PerformanceAnalysis_2026-05-19.md` records CPU instruction-level findings, CPU intra-op results, CUDA native/CUDA Graph profile results, and the old fastpath retirement rationale.
 - `docs/PerformanceOptimizationRoadmap.md` tracks the performance-specific P0-P5 checklist and current validation numbers.
 - CPU AOT now keeps `LITENN_CPU_AOT_THREADS=1` on the MLIR packed/zmm fallback path, while larger static f32 fused chains can call `litenn_cpu_matmul_bias_relu_parallel_f32`.
+  The productionization goal is to make that multithread path consistently profitable instead of merely available.
 - CUDA Graph replay is currently the best CUDA inference path for pointer-stable static-shape runs; local batch-512 MLP512 graph replay reaches the same reported time as PyTorch CUDA in the 2026-05-19 run.
 - Completed on 2026-05-20: `litenn_profile` writes raw `.o` and `.s` files, counts packed/scalar FMA, vector loads, broadcasts, gathers/scatters, stack vector ops, and falls back from `subgraph_0` to the first function for fused helper artifacts.
 - Completed on 2026-05-20: `litenn_profile` prints CUDA launch breakdowns with backend kind, binary kind, kernel/library/PTX counts, workspace bytes, compile/load time, first native run, steady native run, first CUDA Graph run, and steady CUDA Graph replay time.

@@ -89,11 +89,12 @@ P1 CUDA Graph replay spot check:
 
 Goal: close the gap with PyTorch CPU 16T on large batch and large hidden sizes.
 
-Status: initial implementation landed on 2026-05-19. The old 2026-05-16 experimental Linear/MLP runtime fast path was
+Status: active again as of 2026-06-19. The initial implementation landed on 2026-05-19. The old 2026-05-16 experimental Linear/MLP runtime fast path was
 removed after instruction-level profiling and focused benchmark validation. It lowered fused linear chains into calls
 to a scalar C++ row kernel plus per-call thread creation, bypassing the MLIR-generated packed/zmm FMA kernel. The new
 path keeps the small/medium default MLIR path and only tries a persistent-pool sidecar helper for large static f32 fused
-Linear/MLP chains.
+Linear/MLP chains. Recent internal T1/T16 benchmark runs show that the sidecar path still needs production tuning: it can
+beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP shapes.
 
 - [x] Profile the default CPU AOT object path at instruction level.
   - Result: generated objects use packed `zmm` FMA instructions and have no gather/scatter in the tested MNIST-like
@@ -110,11 +111,24 @@ Linear/MLP chains.
 - [x] Improve the helper's local kernel quality enough for the large benchmark to benefit.
   - Implementation: row-bias initialization uses `memcpy`; helper pointers carry restrict semantics; GCC is given
     ivdep hints for the inner contiguous column loops.
+- [x] Add the first cache-reuse microkernel improvement for the sidecar helper.
+  - Implementation: the helper now processes rows in blocks of four so each RHS row load is reused across multiple
+    output rows before advancing `k`.
 - [x] Add benchmark labels for CPU AOT thread-policy comparison.
   - Implementation: `AOTRunIntoT1`, `AOTRunIntoT16`, `TrainCPUAOTT1`, and `TrainCPUAOTT16`.
 - [x] Add correctness coverage for the new branch.
   - Validation: `CompiledModuleTest.CPUParallelLinearChainMatchesInterpreter` forces the branch and compares with the
     interpreter.
+- [x] Add a shape-aware gate for the sidecar path.
+  - Requirement: use the helper only when `m/k/n`, total FLOPs, and estimated thread overhead predict a win over the
+    packed MLIR fallback; narrow final projections should not drag a whole fused chain into a slower path.
+  - Implementation: the current conservative gate keeps very large row counts on the packed MLIR fallback and only
+    enables multithread helper calls for sufficiently wide/high-FLOP layers; narrow tail projections use one helper
+    thread inside an otherwise eligible chain. Tests and diagnostic runs can still force the sidecar path by setting
+    `CompilerOptions::cpuAOTParallelMinFlops` to `1`.
+- [ ] Add profile counters for helper layer shapes and selected grain/thread counts.
+  - Requirement: profile output should explain whether a benchmark used MLIR fallback or the parallel sidecar helper,
+    and why.
 - [ ] Move the parallel work into the optimized MLIR/LLVM lowering path or a production GEMM backend.
   - Requirement: the sidecar helper is acceptable as a first intra-op landing, but it does not preserve the MLIR
     packed/zmm microkernel and should not become the long-term CPU kernel architecture.
