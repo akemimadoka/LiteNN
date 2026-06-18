@@ -1,6 +1,7 @@
 #include <LiteNN/DType.h>
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LoRA.h>
+#include <LiteNN/Serialization/ImportManifest.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/TensorType.h>
 
@@ -84,6 +85,8 @@ namespace LiteNN::Serialization
 	                                 const SafetensorsImportOptions& options = {});
 	Graph LoadSafetensorsVariables(const std::filesystem::path& path,
 	                               const SafetensorsImportOptions& options = {});
+	ImporterOwnedManifest ImportSafetensorsVariablesManifest(const SafetensorsArchive& archive,
+	                                                         const SafetensorsImportOptions& options = {});
 	SafetensorsLoRAImportResult ImportLinearLoRAAdapters(Graph& graph, const SafetensorsArchive& archive,
 	                                                     const SafetensorsLoRAImportOptions& options = {});
 } // namespace LiteNN::Serialization

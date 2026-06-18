@@ -132,9 +132,15 @@ GGUF / llama.cpp:
 
 Torch / safetensors:
 
-- [ ] Keep safetensors as tensor storage, not graph architecture discovery.
-- [ ] Require explicit manifest/config information for graph construction.
-- [ ] Preserve layout, dtype, quantization, and LoRA mapping diagnostics in importer reports.
+- [x] Keep safetensors as tensor storage, not graph architecture discovery.
+      `ImportSafetensorsVariablesManifest()` now emits an importer-owned manifest with an explicit
+      tensor-storage-only diagnostic instead of implying that safetensors can discover architecture.
+- [x] Require explicit manifest/config information for graph construction.
+      Safetensors variable import records a `MissingMetadata` diagnostic for production graph construction; Torch
+      graph construction remains manifest-driven through `ImportTorchManifest`.
+- [x] Preserve layout, dtype, quantization, and LoRA mapping diagnostics in importer reports.
+      Safetensors manifest weight mappings now record source/graph tensor types, layout conversion,
+      quantization mapping, and LoRA binding; Torch/LoRA import paths continue to expose their detailed reports.
 
 SDXL:
 

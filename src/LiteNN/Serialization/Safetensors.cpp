@@ -576,6 +576,45 @@ namespace LiteNN::Serialization
 		return ImportSafetensorsVariables(SafetensorsArchive::LoadFile(path), options);
 	}
 
+	ImporterOwnedManifest ImportSafetensorsVariablesManifest(const SafetensorsArchive& archive,
+	                                                         const SafetensorsImportOptions& options)
+	{
+		auto graph = ImportSafetensorsVariables(archive, options);
+		auto manifest = BuildImporterOwnedManifest("safetensors", std::move(graph));
+		manifest.configMetadata.assign(archive.Metadata().begin(), archive.Metadata().end());
+		manifest.diagnostics.push_back(MakeImportDiagnostic(
+		    ImportDiagnosticKind::MissingMetadata, "safetensors",
+		    "safetensors is tensor storage only; production graph construction requires an explicit manifest/config"));
+
+		manifest.weights.reserve(archive.Tensors().size());
+		for (const auto& tensor : archive.Tensors())
+		{
+			const auto targetName = options.renameTensor ? options.renameTensor(tensor.name) : tensor.name;
+			const auto variableIndex = manifest.model.UnsafeGraphView().FindVariable(targetName);
+			if (!variableIndex)
+			{
+				throw std::runtime_error("Safetensors manifest could not find imported variable: " + targetName);
+			}
+			const auto& imported = manifest.model.UnsafeGraphView().GetVariable(*variableIndex)->Data();
+			const auto transposed = options.transpose2D && options.transpose2D(tensor.name);
+			manifest.weights.push_back({
+			    .sourceName = tensor.name,
+			    .graphName = targetName,
+			    .sourceType = tensor.type,
+			    .graphType = TensorType::Dense(imported.DType(), imported.Shape()),
+			    .layoutConversion = transposed ? "transpose2d" : "identity",
+			    .quantizationMapping = "none",
+			    .loraBinding = "none",
+			});
+			manifest.diagnostics.push_back(MakeImportDiagnostic(
+			    ImportDiagnosticKind::MissingMetadata, tensor.name,
+			    "tensor imported without architecture role; bind it through a model manifest before production use"));
+		}
+
+		ValidateImporterOwnedManifest(manifest);
+		return manifest;
+	}
+
 	SafetensorsLoRAImportResult ImportLinearLoRAAdapters(Graph& graph, const SafetensorsArchive& archive,
 	                                                     const SafetensorsLoRAImportOptions& options)
 	{

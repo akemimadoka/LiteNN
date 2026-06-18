@@ -178,6 +178,40 @@ TEST(Safetensors, ImportsVariablesWithRenameAndTransposeHooks)
 	ASSERT_NE(graph.FindMetadata("safetensors.metadata.format"), nullptr);
 }
 
+TEST(Safetensors, BuildsTensorStorageOnlyImporterManifest)
+{
+	const auto bytes = BuildFixture();
+	const auto archive = Serialization::SafetensorsArchive::Load(std::span<const std::byte>(bytes));
+
+	Serialization::SafetensorsImportOptions options;
+	options.renameTensor = [](std::string_view name) {
+		if (name == "linear.weight")
+		{
+			return std::string("fc.weight");
+		}
+		return std::string(name);
+	};
+	options.transpose2D = [](std::string_view name) { return name == "linear.weight"; };
+
+	const auto manifest = Serialization::ImportSafetensorsVariablesManifest(archive, options);
+	EXPECT_EQ(manifest.sourceFormat, "safetensors");
+	ASSERT_EQ(manifest.weights.size(), 2u);
+	EXPECT_EQ(manifest.weights[0].sourceName, "linear.weight");
+	EXPECT_EQ(manifest.weights[0].graphName, "fc.weight");
+	EXPECT_EQ(manifest.weights[0].sourceType.StaticShape(), (std::vector<std::size_t>{ 2, 3 }));
+	EXPECT_EQ(manifest.weights[0].graphType.StaticShape(), (std::vector<std::size_t>{ 3, 2 }));
+	EXPECT_EQ(manifest.weights[0].layoutConversion, "transpose2d");
+	EXPECT_EQ(manifest.weights[0].quantizationMapping, "none");
+	EXPECT_EQ(manifest.weights[0].loraBinding, "none");
+	EXPECT_EQ(manifest.weights[1].layoutConversion, "identity");
+	ASSERT_FALSE(manifest.configMetadata.empty());
+	EXPECT_EQ(manifest.configMetadata[0].key, "format");
+	ASSERT_GE(manifest.diagnostics.size(), 3u);
+	EXPECT_EQ(manifest.diagnostics[0].kind, Serialization::ImportDiagnosticKind::MissingMetadata);
+	EXPECT_NE(manifest.diagnostics[0].message.find("tensor storage only"), std::string::npos);
+	EXPECT_NO_THROW(Serialization::ValidateImporterOwnedManifest(manifest));
+}
+
 TEST(Safetensors, ImportsPEFTLinearLoRAAdapters)
 {
 	const auto bytes = BuildLoRAFixture();
