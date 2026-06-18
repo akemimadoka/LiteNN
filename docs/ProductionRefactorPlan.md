@@ -8,6 +8,11 @@ paths.
 
 The next phase should prioritize deployable execution paths over more feature breadth.
 
+The latest direction-setting benchmark snapshot is recorded in
+[`PerformanceBenchmark_2026-06-18.md`](PerformanceBenchmark_2026-06-18.md). The short version is: CPU AOT has already
+removed most graph/runtime overhead, CUDA Graph replay is the only competitive CUDA model path, and Vulkan needs
+device-local memory plus MatMul/schedule work before it can be treated as a broad performance backend.
+
 Production profile:
 
 - Core graph construction through `ModelGraph` / `ModelBuilder`.
@@ -155,4 +160,3 @@ Demote to non-blocking or long-term:
 3. Add CI/build profiles for the supported production surface.
 4. Make CPU AOT vNext package deployment the default example path.
 5. Pick the next performance project: either CPU production backend integration or native quantized Linear/MatMul.
-
