@@ -209,9 +209,10 @@ TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 
 TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
 {
-	Graph graph;
+	ModelBuilder builder;
+	auto& graph = builder.UnsafeMutableGraph();
 	auto linear = Layer::CreateLinear(
-	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
+	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,
 	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
@@ -221,7 +222,7 @@ TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
 	Subgraph subgraph;
 	const auto input = subgraph.AddParam(DataType::Float32, { 1, 2 });
 	const auto output = Layer::AddLinearWithLoRA(subgraph, linear, adapter, { input, 0 });
-	subgraph.SetResults({ output });
+	subgraph.SetResults(std::vector<NodeOutput>{ output });
 	graph.AddSubgraph(std::move(subgraph));
 
 	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
@@ -261,8 +262,9 @@ TEST(LoRALayerTest, RejectsIncompatibleRank)
 
 TEST(LoRALayerTest, RejectsQuantizedAdapterForUnmergedRuntimePath)
 {
-	Graph graph;
-	auto linear = Layer::CreateLinear(graph, Tensor<CPU>({ 1, 0, 0, 1 }, { 2, 2 }, DataType::Int8));
+	ModelBuilder builder;
+	auto& graph = builder.UnsafeMutableGraph();
+	auto linear = Layer::CreateLinear(builder, Tensor<CPU>({ 1, 0, 0, 1 }, { 2, 2 }, DataType::Int8));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph, Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 1.0f, .dtype = DataType::Int8 },
 	    Tensor<CPU>({ 1, 1 }, { 2, 1 }, DataType::Int8), Tensor<CPU>({ 1, 1 }, { 1, 2 }, DataType::Int8));
@@ -274,9 +276,10 @@ TEST(LoRALayerTest, RejectsQuantizedAdapterForUnmergedRuntimePath)
 
 TEST(LoRALayerTest, MergesLinearAdapterIntoBaseWeight)
 {
-	Graph graph;
+	ModelBuilder builder;
+	auto& graph = builder.UnsafeMutableGraph();
 	auto linear = Layer::CreateLinear(
-	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
 	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,

@@ -316,6 +316,21 @@ namespace LiteNN::Serialization
 			out << ",\"aliasSet\":" << binding.aliasSet << '}';
 		}
 
+		void AdapterRefJson(std::ostream& out, const VNextAdapterRef& adapter)
+		{
+			out << "{\"targetName\":";
+			JsonString(out, adapter.targetName);
+			out << ",\"adapterName\":";
+			JsonString(out, adapter.adapterName);
+			out << ",\"kind\":";
+			JsonString(out, adapter.kind);
+			out << ",\"aTensor\":" << adapter.aTensor << ",\"bTensor\":" << adapter.bTensor
+			    << ",\"rank\":" << adapter.rank << ",\"alpha\":" << adapter.alpha << ",\"dropout\":"
+			    << adapter.dropout << ",\"dtype\":" << EnumValue(adapter.dtype) << ",\"mergeMode\":";
+			JsonString(out, adapter.mergeMode);
+			out << '}';
+		}
+
 		void PlanJson(std::ostream& out, const ExecutablePlan& plan)
 		{
 			out << "{\"forward\":" << plan.forward << ",\"backward\":";
@@ -537,6 +552,15 @@ namespace LiteNN::Serialization
 					out << ',';
 				}
 				TensorRefJson(out, manifest.tensors[i]);
+			}
+			out << "],\"adapters\":[";
+			for (std::size_t i = 0; i < manifest.adapters.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				AdapterRefJson(out, manifest.adapters[i]);
 			}
 			out << "],\"artifacts\":[";
 			for (std::size_t i = 0; i < manifest.artifacts.size(); ++i)
@@ -974,6 +998,23 @@ namespace LiteNN::Serialization
 			return binding;
 		}
 
+		VNextAdapterRef ParseAdapterRef(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			VNextAdapterRef adapter;
+			adapter.targetName = AsString(Member(object, "targetName", label), label);
+			adapter.adapterName = AsString(Member(object, "adapterName", label), label);
+			adapter.kind = AsString(Member(object, "kind", label), label);
+			adapter.aTensor = static_cast<std::size_t>(AsUInt(Member(object, "aTensor", label), label));
+			adapter.bTensor = static_cast<std::size_t>(AsUInt(Member(object, "bTensor", label), label));
+			adapter.rank = static_cast<std::size_t>(AsUInt(Member(object, "rank", label), label));
+			adapter.alpha = static_cast<float>(AsDouble(Member(object, "alpha", label), label));
+			adapter.dropout = static_cast<float>(AsDouble(Member(object, "dropout", label), label));
+			adapter.dtype = static_cast<DataType>(AsUInt(Member(object, "dtype", label), label));
+			adapter.mergeMode = AsString(Member(object, "mergeMode", label), label);
+			return adapter;
+		}
+
 		ExecutablePlan ParsePlan(simdjson::dom::element value)
 		{
 			const auto object = AsObject(value, "plan");
@@ -1139,6 +1180,10 @@ namespace LiteNN::Serialization
 			{
 				manifest.tensors.push_back(ParseTensorRef(item, "manifest.tensors"));
 			}
+			for (const auto item : AsArray(Member(object, "adapters", "manifest.adapters"), "manifest.adapters"))
+			{
+				manifest.adapters.push_back(ParseAdapterRef(item, "manifest.adapters"));
+			}
 			for (const auto item : AsArray(Member(object, "artifacts", "manifest.artifacts"), "manifest.artifacts"))
 			{
 				const auto a = AsObject(item, "manifest.artifacts");
@@ -1191,10 +1236,10 @@ namespace LiteNN::Serialization
 
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
 	                           std::vector<VNextArtifactRef> artifacts,
-	                           VNextPackageLayout layout)
+	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters)
 	{
 		ValidateExecutablePlan(module.plan);
-		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout));
+		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout), std::move(adapters));
 		ValidateVNextPackageManifest(manifest);
 
 		std::ofstream out(path, std::ios::binary);

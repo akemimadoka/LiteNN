@@ -68,6 +68,20 @@ namespace LiteNN
 		std::vector<VNextExternalTensorRef> externalTensors;
 	};
 
+	struct VNextAdapterRef
+	{
+		std::string targetName;
+		std::string adapterName{ "default" };
+		std::string kind{ "linear-lora" };
+		std::size_t aTensor{};
+		std::size_t bTensor{};
+		std::size_t rank{};
+		float alpha{ 1.0f };
+		float dropout{ 0.0f };
+		DataType dtype{ DataType::Float32 };
+		std::string mergeMode{ "unmerged" };
+	};
+
 	struct VNextPackageLayout
 	{
 		std::string mode{ "standalone-archive" };
@@ -89,6 +103,7 @@ namespace LiteNN
 		std::vector<Runtime::RuntimeScheduleStep> runtimeSteps;
 		std::vector<VNextExternalTensorRef> tensors;
 		std::vector<VNextArtifactRef> artifacts;
+		std::vector<VNextAdapterRef> adapters;
 		std::vector<OpCoverageRow> opCoverage;
 	};
 
@@ -109,7 +124,8 @@ namespace LiteNN
 
 	inline VNextPackageManifest BuildVNextPackageManifest(
 	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts = {},
-	    VNextPackageLayout layout = {}, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
+	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		ValidateExecutablePlan(module.plan, registry);
 		VNextPackageManifest manifest;
@@ -124,6 +140,7 @@ namespace LiteNN
 		manifest.bufferBindings = std::move(schedule.bufferBindings);
 		manifest.runtimeSteps = std::move(schedule.steps);
 		manifest.artifacts = std::move(artifacts);
+		manifest.adapters = std::move(adapters);
 		manifest.opCoverage = registry.CoverageReport();
 		manifest.tensors.reserve(module.plan.variables.size());
 		for (std::size_t i = 0; i < module.plan.variables.size(); ++i)
@@ -269,6 +286,43 @@ namespace LiteNN
 			if (tensor.kind != ExternalBufferKind::None && tensor.relativePath.empty())
 			{
 				throw std::runtime_error(std::format("vNext tensor '{}' has empty external path", tensor.name));
+			}
+		}
+		for (const auto& adapter : manifest.adapters)
+		{
+			if (adapter.targetName.empty())
+			{
+				throw std::runtime_error("vNext adapter has empty target name");
+			}
+			if (adapter.adapterName.empty())
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has empty adapter name");
+			}
+			if (adapter.kind != "linear-lora")
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has unsupported kind: " +
+				                         adapter.kind);
+			}
+			if (adapter.aTensor >= manifest.tensors.size() || adapter.bTensor >= manifest.tensors.size())
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' references an unknown tensor");
+			}
+			if (adapter.rank == 0)
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has zero rank");
+			}
+			if (adapter.alpha == 0.0f)
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has zero alpha");
+			}
+			if (adapter.dropout < 0.0f || adapter.dropout >= 1.0f)
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has invalid dropout");
+			}
+			if (adapter.mergeMode != "unmerged" && adapter.mergeMode != "merged")
+			{
+				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has unsupported merge mode: " +
+				                         adapter.mergeMode);
 			}
 		}
 		for (const auto& artifact : manifest.artifacts)

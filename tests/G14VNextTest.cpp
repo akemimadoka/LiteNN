@@ -31,6 +31,18 @@ namespace
 		graph.SetOutputNames({ "y" });
 		return graph;
 	}
+
+	Graph BuildLinearAddGraphWithLoRAWeights()
+	{
+		auto graph = BuildLinearAddGraph();
+		const auto a = graph.AddVariable(
+		    Variable::CreateFrozen(Tensor<CPU>({ 0.5F, -0.25F }, { 2, 1 }, DataType::Float32)));
+		const auto b = graph.AddVariable(
+		    Variable::CreateFrozen(Tensor<CPU>({ 1.5F, 2.0F }, { 1, 2 }, DataType::Float32)));
+		graph.SetVariableName(a, "linear.lora_A.default.weight");
+		graph.SetVariableName(b, "linear.lora_B.default.weight");
+		return graph;
+	}
 } // namespace
 
 TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
@@ -117,6 +129,46 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].op.kind, "BinaryOpNode");
 	EXPECT_FALSE(package.plan.subgraphs[package.plan.forward].nodes[2].op.attributes.empty());
 	EXPECT_EQ(package.plan.outputs[0].name, "y");
+}
+
+TEST(G14VNext, VNextModelPackageRoundTripsLoRAAdapterManifest)
+{
+	const auto graph = BuildLinearAddGraphWithLoRAWeights();
+	auto module = Detail::BuildExecutableModuleFromGraph(graph);
+	std::vector<VNextAdapterRef> adapters;
+	adapters.push_back({ .targetName = "linear",
+	                     .adapterName = "default",
+	                     .aTensor = 1,
+	                     .bTensor = 2,
+	                     .rank = 1,
+	                     .alpha = 2.0F,
+	                     .dtype = DataType::Float32 });
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_lora_adapter_roundtrip.json";
+	Serialization::SaveVNextModelPackage(module, path, {}, {}, std::move(adapters));
+	{
+		std::ifstream input(path, std::ios::binary);
+		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		EXPECT_NE(json.find("\"adapters\""), std::string::npos);
+		EXPECT_NE(json.find("\"linear-lora\""), std::string::npos);
+	}
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+	ASSERT_EQ(package.manifest.adapters.size(), 1u);
+	const auto& adapter = package.manifest.adapters[0];
+	EXPECT_EQ(adapter.targetName, "linear");
+	EXPECT_EQ(adapter.adapterName, "default");
+	EXPECT_EQ(adapter.kind, "linear-lora");
+	EXPECT_EQ(adapter.aTensor, 1u);
+	EXPECT_EQ(adapter.bTensor, 2u);
+	EXPECT_EQ(adapter.rank, 1u);
+	EXPECT_FLOAT_EQ(adapter.alpha, 2.0F);
+	EXPECT_EQ(adapter.dtype, DataType::Float32);
+	ASSERT_EQ(package.manifest.tensors.size(), 3u);
+	EXPECT_EQ(package.manifest.tensors[adapter.aTensor].name, "linear.lora_A.default.weight");
+	EXPECT_EQ(package.manifest.tensors[adapter.bTensor].name, "linear.lora_B.default.weight");
 }
 
 TEST(G14VNext, VNextModelPackageExternalWeightsBindLoadedPlanStorage)

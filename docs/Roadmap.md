@@ -837,13 +837,15 @@ and clear base-weight versus adapter-weight ownership.
 
 #### G10.2 Import and Serialization
 
-- [ ] Add LiteNN serialization for adapter tensors and adapter metadata.
+- [x] Add LiteNN serialization for adapter tensors and adapter metadata:
+      vNext package manifests now carry typed `linear-lora` adapter entries that reference A/B tensor records.
 - [x] Add safetensors LoRA import for common naming schemes used by Hugging Face/PEFT-style adapters:
       `ImportLinearLoRAAdapters` scans PEFT `*.lora_A[.adapter].weight` / `*.lora_B[.adapter].weight` tensors,
       materializes LiteNN Linear adapter layout, and returns `LinearLoRAAdapter` handles.
 - [x] Add diagnostics for unmatched target names, shape/rank mismatches, and unsupported adapter variants:
       incomplete A/B pairs return diagnostics, duplicate roles and invalid rank/dtype/layout raise actionable errors.
-- [ ] Add roundtrip tests for saving/loading base model plus one or more adapters.
+- [x] Add roundtrip tests for saving/loading base model plus one or more adapters:
+      `G14VNext.VNextModelPackageRoundTripsLoRAAdapterManifest` verifies adapter metadata and tensor references.
 
 #### G10.3 Runtime and AOT
 
