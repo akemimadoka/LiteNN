@@ -42,24 +42,22 @@ namespace
 		std::cout << std::format(
 		    "Usage:\n"
 		    "  {} --inspect <sdxl.safetensors>\n"
-		    "  {} --import <manifest.json> <sdxl.safetensors> <output.ltnn>"
-		    " [--allow-extra-tensors] [--external-weights weights.bin] [--external-weight-min-bytes N]\n"
 		    "  {} --import-package <manifest.json> <sdxl.safetensors> <output.ltnn.json>"
 		    " [--allow-extra-tensors] [--external-weights weights.bin] [--external-weight-min-bytes N]\n"
-		    "  {} --compile-budget <input.ltnn|input.ltnn.json>\n"
-		    "  {} --run-model <input.ltnn|input.ltnn.json>\n"
-	    "  {} --run-model-with-inputs <input.ltnn|input.ltnn.json> <inputs.safetensors>"
-	    " [--output outputs.safetensors] [--allow-nonfinite]\n"
-	    "  {} --diagnose-model-with-inputs <input.ltnn|input.ltnn.json> <inputs.safetensors>"
-	    " [--verbose] [--max-nodes N] [--allow-nonfinite]\n"
-	    "  {} --benchmark-model-with-inputs <input.ltnn|input.ltnn.json> <inputs.safetensors>"
+		    "  {} --compile-budget <input.ltnn.json>\n"
+		    "  {} --run-model <input.ltnn.json>\n"
+		    "  {} --run-model-with-inputs <input.ltnn.json> <inputs.safetensors>"
+		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
+		    "  {} --diagnose-model-with-inputs <input.ltnn.json> <inputs.safetensors>"
+		    " [--verbose] [--max-nodes N] [--allow-nonfinite]\n"
+		    "  {} --benchmark-model-with-inputs <input.ltnn.json> <inputs.safetensors>"
 		    " [--device cpu|cuda] [--warmup N] [--iterations N] [--json result.json]\n"
-		    "  {} --compile-raw-object <input.ltnn|input.ltnn.json> <output.o|obj>\n"
-		    "  {} --compile-image-regions <input.ltnn|input.ltnn.json> <output-dir> [file-prefix]"
+		    "  {} --compile-raw-object <input.ltnn.json> <output.o|obj>\n"
+		    "  {} --compile-image-regions <input.ltnn.json> <output-dir> [file-prefix]"
 		    " [--cpu-aot-llvm-opt-level 0|1|2|3]\n"
 		    "  {} --run-image-with-inputs <rodata.bin> <instructions.o|obj> <inputs.safetensors>"
 		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
-		    "  {} --compile-object <input.ltnn|input.ltnn.json> <output.o|obj> [symbol-prefix]\n"
+		    "  {} --compile-object <input.ltnn.json> <output.o|obj> [symbol-prefix]\n"
 		    "  {} --load-dll <module.dll|so|dylib> [symbol-prefix]\n"
 		    "  {} --load-dll-with-inputs <module.dll|so|dylib> <inputs.safetensors> [symbol-prefix]"
 		    " [--output outputs.safetensors] [--allow-nonfinite]\n"
@@ -75,8 +73,8 @@ namespace
 		    " <output-latent.safetensors> [same sampler options except --inputs/--output-latent]\n\n"
 		    "This example intentionally requires a LiteNN Torch manifest. A raw SDXL safetensors file contains\n"
 		    "weights only; it does not define the UNet/text-encoder/VAE graph, scheduler, or fixed input shapes.\n",
-	    executable, executable, executable, executable, executable, executable, executable, executable, executable,
-	    executable, executable, executable, executable, executable, executable, executable, executable);
+		    executable, executable, executable, executable, executable, executable, executable, executable, executable,
+		    executable, executable, executable, executable, executable, executable, executable);
 	}
 
 	void PrintReport(const LiteNN::Serialization::TorchManifestReport& report)
@@ -175,34 +173,25 @@ namespace
 	                    const std::filesystem::path& outputPath,
 	                    bool allowExtraTensors,
 	                    const std::optional<std::filesystem::path>& externalWeightsPath,
-	                    std::uint64_t externalWeightMinBytes,
-	                    bool writeVNextPackage)
+	                    std::uint64_t externalWeightMinBytes)
 	{
 		LiteNN::Serialization::TorchManifestImportOptions options;
 		options.failOnUnusedWeights = !allowExtraTensors;
 		auto imported = LiteNN::Serialization::LoadTorchManifest(manifestPath, safetensorsPath, options);
-		(void)writeVNextPackage;
-		if (true)
+		if (externalWeightsPath)
 		{
-			if (externalWeightsPath)
-			{
-				LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
-				externalOptions.minVariableBytes = externalWeightMinBytes;
-				LiteNN::Serialization::SaveVNextModelPackageExternalWeights(imported.model.UnsafeGraphView(), outputPath,
-				                                                            *externalWeightsPath, externalOptions);
-			}
-			else
-			{
-				LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), outputPath);
-			}
+			LiteNN::Serialization::ExternalWeightSaveOptions externalOptions;
+			externalOptions.minVariableBytes = externalWeightMinBytes;
+			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(imported.model.UnsafeGraphView(), outputPath,
+			                                                            *externalWeightsPath, externalOptions);
 		}
-		std::cout << std::format("Wrote LiteNN graph {} with {} variable(s), {} input(s), {} output(s)\n",
+		else
+		{
+			LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), outputPath);
+		}
+		std::cout << std::format("Wrote vNext LiteNN package {} with {} variable(s), {} input(s), {} output(s)\n",
 		                         outputPath.string(), imported.model.UnsafeGraphView().VariableCount(),
 		                         imported.model.UnsafeGraphView().InputSignature().size(), imported.model.UnsafeGraphView().OutputSignature().size());
-		if (writeVNextPackage)
-		{
-			std::cout << "Wrote vNext model package manifest\n";
-		}
 		if (externalWeightsPath)
 		{
 			std::cout << std::format("Wrote external LiteNN weights {}\n", externalWeightsPath->string());
@@ -345,14 +334,8 @@ namespace
 		PrintCompileBudgetEstimate(LiteNN::EstimateCompileBudget(plan, options), options, label);
 	}
 
-	bool IsVNextPackagePath(const std::filesystem::path& path)
-	{
-		return path.extension() == ".json";
-	}
-
 	LiteNN::ExecutablePlan LoadExecutablePlanInput(const std::filesystem::path& path)
 	{
-		(void)IsVNextPackagePath(path);
 		return LiteNN::Serialization::LoadVNextModelPackage(path).plan;
 	}
 
@@ -2531,15 +2514,13 @@ int main(int argc, char** argv)
 			InspectSafetensors(argv[2]);
 			return 0;
 		}
-		if (argc >= 2 && (std::string_view(argv[1]) == "--import" ||
-		                  std::string_view(argv[1]) == "--import-package"))
+		if (argc >= 2 && std::string_view(argv[1]) == "--import-package")
 		{
 			if (argc < 5)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
-			const bool writeVNextPackage = std::string_view(argv[1]) == "--import-package";
 			bool allowExtra = false;
 			std::optional<std::filesystem::path> externalWeightsPath;
 			std::uint64_t externalWeightMinBytes = 0;
@@ -2571,8 +2552,7 @@ int main(int argc, char** argv)
 					throw std::runtime_error("Unknown import option: " + std::string(option));
 				}
 			}
-			ImportManifest(argv[2], argv[3], argv[4], allowExtra, externalWeightsPath, externalWeightMinBytes,
-			               writeVNextPackage);
+			ImportManifest(argv[2], argv[3], argv[4], allowExtra, externalWeightsPath, externalWeightMinBytes);
 			return 0;
 		}
 		if (argc >= 2 && std::string_view(argv[1]) == "--compile-object")

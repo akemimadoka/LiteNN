@@ -36,6 +36,18 @@ namespace
 	{
 		return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
 	}
+
+	bool IsExampleTextFile(const std::filesystem::path& path)
+	{
+		const auto filename = path.filename().string();
+		if (filename == "CMakeLists.txt")
+		{
+			return true;
+		}
+		const auto extension = path.extension().string();
+		return extension == ".cpp" || extension == ".h" || extension == ".hpp" || extension == ".py" ||
+		       extension == ".md" || extension == ".json" || extension == ".txt";
+	}
 } // namespace
 
 TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloads)
@@ -184,19 +196,68 @@ TEST(G14PublicApiGuard, GraphArchiveApisAreRemoved)
 	}
 }
 
-TEST(G14PublicApiGuard, ProductionExamplesDoNotUseGraphArchiveDetailApis)
+TEST(G14PublicApiGuard, ProductionExamplesUseVNextPackagesAndManifests)
 {
-	const std::vector<std::string_view> files{
-		"example/mnist/mnist_common.h",
-		"example/mnist/interpreter.cpp",
-		"example/mnist/aot.cpp",
-		"example/gguf/conversion_example.cpp",
+	const auto exampleDir = std::filesystem::path(LITENN_SOURCE_DIR) / "example";
+	const std::vector<std::string_view> forbidden{
+		"Serialization::Detail::SaveGraphArchive",
+		"Serialization::Detail::LoadGraphArchive",
+		"SaveGraphArchive",
+		"LoadGraphArchive",
+		"GraphArchive",
+		"SaveModel(",
+		"LoadModel(",
+		"--import <manifest",
+		"<input.ltnn|input.ltnn.json>",
+		"writeVNextPackage",
+		"Wrote LiteNN graph",
 	};
-	for (const auto file : files)
+
+	std::vector<std::string> checkedFiles;
+	std::vector<std::string> violations;
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(exampleDir))
+	{
+		if (!entry.is_regular_file() || !IsExampleTextFile(entry.path()))
+		{
+			continue;
+		}
+		const auto relative = entry.path().lexically_relative(std::filesystem::path(LITENN_SOURCE_DIR)).generic_string();
+		const auto text = ReadSourceFile(relative);
+		checkedFiles.push_back(relative);
+		for (const auto pattern : forbidden)
+		{
+			if (text.find(pattern) != std::string::npos)
+			{
+				violations.push_back(relative + ": " + std::string(pattern));
+			}
+		}
+	}
+	ASSERT_FALSE(checkedFiles.empty());
+	EXPECT_TRUE(violations.empty()) << "Production examples must stay on vNext package, separated artifact, or "
+	                                  "importer manifest flows:\n"
+	                               << [&]() {
+		                                  std::ostringstream output;
+		                                  for (const auto& violation : violations)
+		                                  {
+			                                  output << violation << '\n';
+		                                  }
+		                                  return output.str();
+	                                  }();
+
+	const std::vector<std::pair<std::string_view, std::string_view>> required{
+		{ "example/mnist/mnist_common.h", "SaveVNextModelPackage" },
+		{ "example/gguf/conversion_example.cpp", "SaveVNextModelPackage" },
+		{ "example/torch_manifest/main.cpp", "LoadTorchManifest" },
+		{ "example/sdxl/main.cpp", "--import-package" },
+		{ "example/sdxl/main.cpp", "SaveVNextModelPackage" },
+		{ "example/carrier/emit_carrier.cpp", "WriteObjectFile" },
+		{ "example/carrier/shared_loader.cpp", "FromExportedSymbols" },
+		{ "example/carrier/static_loader.cpp", "FromExportedSymbols" },
+	};
+	for (const auto& [file, marker] : required)
 	{
 		const auto text = ReadSourceFile(file);
-		EXPECT_EQ(text.find("Serialization::Detail::SaveGraphArchive"), std::string::npos) << file;
-		EXPECT_EQ(text.find("Serialization::Detail::LoadGraphArchive"), std::string::npos) << file;
+		EXPECT_NE(text.find(marker), std::string::npos) << file << " must keep production example marker " << marker;
 	}
 }
 

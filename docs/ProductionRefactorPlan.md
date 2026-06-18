@@ -43,8 +43,11 @@ requires them.
 - [x] Make every supported path name its package/runtime ABI: inputs, outputs, mutable state, external tensors,
       ownership, alignment, checksum, and fallback policy. `LiteNN/ProductionSupport.h` now exposes
       `QueryProductionPathABIs()` and ABI diagnostics for tooling, examples, and CI gates.
-- [ ] Ensure examples only use vNext packages, separated artifacts, or importer manifests for production flows.
-- [ ] Keep all old graph-archive or raw-Graph convenience paths out of public production APIs.
+- [x] Ensure examples only use vNext packages, separated artifacts, or importer manifests for production flows.
+      `G14PublicApiGuard.ProductionExamplesUseVNextPackagesAndManifests` scans `example/` recursively and the SDXL
+      CLI now exposes package-only import/load wording.
+- [x] Keep all old graph-archive or raw-Graph convenience paths out of public production APIs. The G14 guard covers
+      removed graph archive names, raw `Graph&` overloads, unsafe graph access naming, and production example drift.
 - [ ] Add CI profiles for minimal runtime, importers, compiler/AOT, tools/examples, and optional GPU-enabled builds.
 
 Exit criteria:
