@@ -9,16 +9,13 @@ owns descriptor binding and dispatch.
 Recommended Android profile:
 
 ```powershell
-cmake -S . -B build-android-vulkan `
-  -DCMAKE_TOOLCHAIN_FILE=%ANDROID_NDK_HOME%\build\cmake\android.toolchain.cmake `
-  -DANDROID_ABI=arm64-v8a `
-  -DANDROID_PLATFORM=android-26 `
-  -DLITENN_ENABLE_VULKAN=ON `
-  -DLITENN_ENABLE_MLIR=OFF `
-  -DLITENN_BUILD_TESTS=OFF `
-  -DLITENN_BUILD_EXAMPLES=OFF
-cmake --build build-android-vulkan --parallel
+cmake --preset android-arm64-vulkan-runtime
+cmake --build --preset android-arm64-vulkan-runtime --parallel
 ```
+
+The preset expects `ANDROID_NDK_HOME` to point at an installed Android NDK. It intentionally disables MLIR, CUDA,
+tests, tools, examples, and benchmarks because mobile apps should load host-compiled artifacts rather than compiling
+graphs on device.
 
 The production mobile runtime should link `LiteNNCore` and `LiteNNVulkanRuntime`. Keep `LiteNNCompiler` out of the
 application package unless the app explicitly compiles graphs on device. The normal mobile flow is:

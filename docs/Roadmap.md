@@ -828,10 +828,12 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 
 #### G11.1 Build and Portability
 
-- [ ] Define supported first targets: Android arm64-v8a and iOS arm64 simulator/device if toolchains are available.
-- [ ] Make compiler/MLIR/CUDA features optional so a minimal interpreter/runtime build is possible.
+- [x] Define supported first targets: Android arm64-v8a first; iOS arm64 simulator/device remains future work pending
+      toolchain availability and a non-Vulkan mobile GPU runtime decision.
+- [x] Make compiler/MLIR/CUDA features optional so a minimal interpreter/runtime build is possible.
 - [ ] Audit C++ standard library, filesystem, reflection, dynamic loading, and thread usage for mobile constraints.
-- [ ] Add CMake presets or toolchain documentation for mobile builds.
+- [x] Add CMake presets or toolchain documentation for mobile builds: `CMakePresets.json` now contains
+      `android-arm64-vulkan-runtime`, and `docs/VulkanMobileDeployment.md` documents the preset-based flow.
 
 #### G11.2 Runtime Constraints
 

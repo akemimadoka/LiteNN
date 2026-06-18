@@ -1,0 +1,86 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Host release build with the default optional backends disabled.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_BUILD_TESTS": "ON",
+        "LITENN_BUILD_BENCHMARKS": "ON",
+        "LITENN_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Host debug build with tests enabled.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LITENN_BUILD_TESTS": "ON",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "android-arm64-vulkan-runtime",
+      "displayName": "Android arm64 Vulkan runtime",
+      "description": "Runtime-only Android arm64 build for apps that load host-compiled Vulkan-native artifacts.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-android-arm64-vulkan",
+      "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-26",
+        "LITENN_ENABLE_VULKAN": "ON",
+        "LITENN_ENABLE_MLIR": "OFF",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_BUILD_TESTS": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "OFF",
+        "LITENN_BUILD_TOOLS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "android-arm64-vulkan-runtime",
+      "configurePreset": "android-arm64-vulkan-runtime"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
