@@ -12,6 +12,8 @@
 #ifndef LITENN_DTYPE_H
 #define LITENN_DTYPE_H
 
+#include <LiteNN/Misc.h>
+
 namespace LiteNN
 {
 	enum class DataType
@@ -459,32 +461,7 @@ namespace LiteNN
 
 	constexpr std::string_view DataTypeName(DataType dtype)
 	{
-		switch (dtype)
-		{
-		case DataType::Float32:
-			return "Float32";
-		case DataType::Float64:
-			return "Float64";
-		case DataType::Int32:
-			return "Int32";
-		case DataType::Int64:
-			return "Int64";
-		case DataType::Bool:
-			return "Bool";
-		case DataType::Float16:
-			return "Float16";
-		case DataType::BFloat16:
-			return "BFloat16";
-		case DataType::Float8E4M3:
-			return "Float8E4M3";
-		case DataType::Float8E5M2:
-			return "Float8E5M2";
-		case DataType::Int8:
-			return "Int8";
-		case DataType::UInt8:
-			return "UInt8";
-		}
-		throw std::runtime_error("Invalid data type");
+		return EnumToString<EnumToStringStyle::Unqualified>(dtype);
 	}
 } // namespace LiteNN
 

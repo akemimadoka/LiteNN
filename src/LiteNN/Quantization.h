@@ -118,56 +118,32 @@ namespace LiteNN
 
 	inline std::string_view QuantizationSchemeName(QuantizationScheme scheme)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(scheme))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid quantization scheme");
+		return EnumToString<EnumToStringStyle::Unqualified>(scheme);
 	}
 
 	inline std::string_view QuantizationGranularityName(QuantizationGranularity granularity)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(granularity))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid quantization granularity");
+		return EnumToString<EnumToStringStyle::Unqualified>(granularity);
 	}
 
 	inline std::string_view QuantizedBlockFormatName(QuantizedBlockFormat format)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(format))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid quantized block format");
+		return EnumToString<EnumToStringStyle::Unqualified>(format);
 	}
 
 	inline std::string_view PackedNibbleFormatName(PackedNibbleFormat format)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(format))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid packed nibble format");
+		return EnumToString<EnumToStringStyle::Unqualified>(format);
 	}
 
 	inline std::string_view PackedNibbleOrderName(PackedNibbleOrder order)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(order))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid packed nibble order");
+		return EnumToString<EnumToStringStyle::Unqualified>(order);
 	}
 
 	inline std::string_view BlockScaleLayoutName(BlockScaleLayout layout)
 	{
-		if (const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(layout))
-		{
-			return *name;
-		}
-		throw std::runtime_error("Invalid block scale layout");
+		return EnumToString<EnumToStringStyle::Unqualified>(layout);
 	}
 
 	inline bool IsScalarQuantizedBlockFormat(QuantizedBlockFormat format)

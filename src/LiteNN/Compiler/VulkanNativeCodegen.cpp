@@ -387,23 +387,13 @@ namespace LiteNN
 		std::string SameShapeUnaryF32KernelName(UnaryOp op)
 		{
 			using namespace std::string_literals;
-			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(op);
-			if (name)
-			{
-				return "Unary"s + *name;
-			}
-			throw std::runtime_error("Unsupported Vulkan native same-shape f32 unary op");
+			return "Unary"s + EnumToString<EnumToStringStyle::Unqualified>(op);
 		}
 
 		std::string SameShapeBinaryF32KernelName(BinaryOp op)
 		{
 			using namespace std::string_literals;
-			const auto name = EnumToStringOpt<EnumToStringStyle::Unqualified>(op);
-			if (name)
-			{
-				return "Binary"s + *name;
-			}
-			throw std::runtime_error("Unsupported Vulkan native same-shape f32 binary op");
+			return "Binary"s + EnumToString<EnumToStringStyle::Unqualified>(op);
 		}
 
 		mlir::spirv::FuncOp EmitSameShapeBinaryFunction(

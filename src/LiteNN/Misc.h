@@ -1,8 +1,13 @@
 #include <format>
+#include <limits>
 #include <meta>
 #include <numeric>
+#include <optional>
 #include <ranges>
+#include <span>
+#include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 #ifndef LITENN_MISC_H
 #define LITENN_MISC_H
