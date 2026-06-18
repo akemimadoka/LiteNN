@@ -958,9 +958,10 @@ TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
 
 TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
 {
-	Graph graph;
+	ModelBuilder builder;
+	auto& graph = builder.UnsafeMutableGraph();
 	auto linear = Layer::CreateLinear(
-	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
 	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,
@@ -976,6 +977,74 @@ TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
 
 	std::array inputs = { Tensor<CPU>({ 1.0f, 2.0f }, { 1, 2 }, DataType::Float32) };
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUUnmergedLoRAExternalRegionsCanBindAdapterWeights)
+{
+	ModelBuilder builder;
+	auto& graph = builder.UnsafeMutableGraph();
+	auto linear = Layer::CreateLinear(
+	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	graph.SetVariableName(linear.weightVariable, "linear.weight");
+	graph.SetVariableName(*linear.biasVariable, "linear.bias");
+	auto adapter = Layer::CreateLinearLoRA(
+	    builder,
+	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
+	    Tensor<CPU>({ 3.0f, 4.0f }, { 2, 1 }, DataType::Float32),
+	    Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }, DataType::Float32));
+	graph.SetVariableName(adapter.aVariable, "linear.lora_A.default.weight");
+	graph.SetVariableName(adapter.bVariable, "linear.lora_B.default.weight");
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
+	sg.SetResults({ Layer::AddLinearWithLoRA(sg, linear, adapter, { input, 0 }) });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array inputs = { Tensor<CPU>({ 1.0f, 2.0f }, { 1, 2 }, DataType::Float32) };
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	auto separated = artifact.SeparateRodata();
+	const auto externalInfos = separated.ExternalTensorInfos();
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name == "linear.lora_A.default.weight" && info.region == "weights" &&
+		       info.type.StaticShape() == std::vector<std::size_t>{ 2, 1 };
+	}));
+	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
+		return info.name == "linear.lora_B.default.weight" && info.region == "weights" &&
+		       info.type.StaticShape() == std::vector<std::size_t>{ 1, 2 };
+	}));
+
+	std::vector<std::byte> borrowedWeights(separated.Weights().begin(), separated.Weights().end());
+	auto borrowedImage = separated.Image();
+	borrowedImage.weights = { .data = borrowedWeights.data(), .size = borrowedWeights.size() };
+	auto borrowedLoaded = CompiledModule<CPU>::LoadBorrowedExternalRegions(borrowedImage);
+
+	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { 1, 2 }, DataType::Float32) };
+	borrowedLoaded.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+	ASSERT_EQ(expected.size(), 1u);
+	ExpectTensorNear(outputs[0], expected[0], 1e-5f);
+
+	const auto aInfo = std::ranges::find_if(externalInfos, [](const auto& info) {
+		return info.name == "linear.lora_A.default.weight";
+	});
+	ASSERT_NE(aInfo, externalInfos.end());
+	ASSERT_GE(borrowedWeights.size(), aInfo->byteOffset + aInfo->byteSize);
+	std::fill(borrowedWeights.begin() + static_cast<std::ptrdiff_t>(aInfo->byteOffset),
+	          borrowedWeights.begin() + static_cast<std::ptrdiff_t>(aInfo->byteOffset + aInfo->byteSize),
+	          std::byte{ 0 });
+	std::array<Tensor<CPU>, 1> reboundOutputs = { Tensor<CPU>(Uninitialized, { 1, 2 }, DataType::Float32) };
+	borrowedLoaded.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(reboundOutputs));
+	bool changed = false;
+	for (std::size_t i = 0; i < reboundOutputs[0].NumElements(); ++i)
+	{
+		changed |= std::abs(ReadFloat(reboundOutputs[0], i) - ReadFloat(expected[0], i)) > 1e-4f;
+	}
+	EXPECT_TRUE(changed);
 }
 
 TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)
