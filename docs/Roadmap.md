@@ -803,8 +803,10 @@ and clear base-weight versus adapter-weight ownership.
 
 #### G10.1 Graph Representation
 
-- [ ] Add a LoRA metadata model: target module/name, rank, alpha, dropout policy, dtype, and merge mode.
-- [ ] Add Layer helpers that apply LoRA as `base(x) + scale * (x @ A @ B)` for linear layers.
+- [x] Add a LoRA metadata model: target module/name, rank, alpha, dropout policy, dtype, and merge mode:
+      `Layer/LoRA.h` defines `LoRAAdapterMetadata`, `LoRAMergeMode`, and `LinearLoRAAdapter`.
+- [x] Add Layer helpers that apply LoRA as `base(x) + scale * (x @ A @ B)` for linear layers:
+      `CreateLinearLoRA` plus `AddLinearWithLoRA` now build the unmerged Linear adapter graph.
 - [ ] Support both unmerged runtime adapters and merged-weight export.
 - [ ] Define compatibility rules for quantized base weights and low-precision adapter weights.
 

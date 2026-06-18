@@ -12,6 +12,7 @@
 #include <LiteNN/Layer/KVCache.h>
 #include <LiteNN/Layer/L2Norm.h>
 #include <LiteNN/Layer/LayerNorm.h>
+#include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Pad.h>
 #include <LiteNN/Layer/RelativePosition.h>
@@ -204,6 +205,41 @@ TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), -0.5f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 3.75f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 2.5f);
+}
+
+TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
+{
+	Graph graph;
+	auto linear = Layer::CreateLinear(
+	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
+	auto adapter = Layer::CreateLinearLoRA(
+	    graph,
+	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
+	    Tensor<CPU>({ 3.0f, 4.0f }, { 2, 1 }, DataType::Float32),
+	    Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }, DataType::Float32));
+
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 1, 2 });
+	const auto output = Layer::AddLinearWithLoRA(subgraph, linear, adapter, { input, 0 });
+	subgraph.SetResults({ output });
+	graph.AddSubgraph(std::move(subgraph));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
+	ASSERT_EQ(result.NumElements(), 2u);
+	EXPECT_FLOAT_EQ(ReadFloat(result, 0), 111.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(result, 1), 134.0f);
+}
+
+TEST(LoRALayerTest, RejectsIncompatibleRank)
+{
+	Graph graph;
+	EXPECT_THROW(
+	    Layer::CreateLinearLoRA(
+	        graph,
+	        Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 2, .alpha = 1.0f, .dtype = DataType::Float32 },
+	        Tensor<CPU>({ 1.0f, 2.0f }, { 2, 1 }, DataType::Float32),
+	        Tensor<CPU>({ 1.0f, 2.0f }, { 1, 2 }, DataType::Float32)),
+	    std::runtime_error);
 }
 
 TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)

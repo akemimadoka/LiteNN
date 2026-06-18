@@ -76,6 +76,16 @@ namespace LiteNN::Layer
 		return Detail::CreateLinearImpl(builder.UnsafeMutableGraph(), std::move(weight), std::move(bias));
 	}
 
+	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight)
+	{
+		return Detail::CreateLinearImpl(graph, std::move(weight));
+	}
+
+	inline LinearLayer CreateLinear(Graph& graph, Tensor<CPU> weight, Tensor<CPU> bias)
+	{
+		return Detail::CreateLinearImpl(graph, std::move(weight), std::move(bias));
+	}
+
 	inline NodeOutput AddLinear(Subgraph& subgraph, const LinearLayer& layer, NodeOutput input)
 	{
 		const auto inputInfo = subgraph.GetOutputInfo(input);
