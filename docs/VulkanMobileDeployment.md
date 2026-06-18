@@ -102,6 +102,10 @@ The mobile Vulkan runtime must not depend on:
 - mutable environment-variable configuration as the only policy surface
 - implicit CPU fallback when a Vulkan-native graph cannot be compiled
 
+`LiteNN/MobileSupport.h` exposes the same policy through `QueryMobileFeatureStatus` and
+`CollectUnsupportedMobileFeatureDiagnostics` so CLIs and package validators can print the exact unsupported
+desktop-only features instead of duplicating this list.
+
 Unsupported kernels must remain explicit: either fail compilation for `VulkanNative` or use a caller-selected bridge or
 fallback policy. Benchmarks should report the selected backend rather than silently mixing CPU and Vulkan execution.
 Callers can use `Compiler<Vulkan>::QueryNativeSupport(plan)` before compiling to check whether the current native Vulkan

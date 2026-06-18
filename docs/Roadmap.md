@@ -843,7 +843,9 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
       release baselines.
 - [x] Add CPU feature detection for ARM NEON and future mobile GPU/NNAPI/CoreML delegation points: `QueryCPUCapabilities`
       reports compile-time x86 SIMD plus ARM NEON/NEON FP16/SVE feature bits for mobile runtime policy and tests.
-- [ ] Define unsupported features explicitly, such as CUDA-only paths and desktop object loading where unavailable.
+- [x] Define unsupported features explicitly, such as CUDA-only paths and desktop object loading where unavailable:
+      `LiteNN/MobileSupport.h` now reports supported mobile runtime features and diagnostics for desktop-only features
+      including CUDA, MLIR compiler, dynamic-library carrier loading, CPU object JIT, and on-device graph compilation.
 
 #### G11.3 Testing
 
