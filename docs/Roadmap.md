@@ -76,6 +76,27 @@ Completed notes:
 - FP8 CUDA-native cast payload generation is available in the formal AOT path, but runtime execution is now gated by actual device native-conversion support; the current NVVM/PTX lowering requires SM90+ for FP8 convert instructions.
 - `benchmark/bench.cpp` now registers both `CUDADeviceMatMul/<dtype>` and formal `CUDANativeMatMul/<dtype>` benchmark families, so low-precision CUDA behavior is visible at both the device helper and formal AOT layers.
 
+#### G1.4 Int4 / FP4 and Native Quantized Execution
+
+Status: planned. LiteNN currently has scalar fp16/bf16/fp8/int8/uint8 dtypes plus GGML-style 4-bit block-quantized
+metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit execution kernels.
+
+- [ ] Add packed scalar storage descriptors for int4/uint4 and fp4 variants without pretending they are byte-addressable
+      `DataType` values; decide whether they live as `QuantizationParams` storage kinds, `TensorStorageRef` formats, or a
+      separate packed dtype set.
+- [ ] Define fp4 numerical variants explicitly, starting with common e2m1/e3m0-style formats if required by target
+      hardware/importers, including NaN/Inf/subnormal/rounding policy.
+- [ ] Extend quantization metadata with packed nibble layout, signedness, block scale layout, and byte-order rules so
+      GGUF, safetensors-like extensions, and future vendor formats can share one contract.
+- [ ] Add CPU reference pack/unpack, dequantize, and optional quantize helpers for int4/uint4/fp4 with golden tests.
+- [ ] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
+      into supported compute dtypes when a backend has no native 4-bit kernel.
+- [ ] Add native quantized MatMul/Linear paths in priority order: CPU reference, CUDA/cuBLASLt or custom kernels,
+      Vulkan shader path, then CPU AOT lowering.
+- [ ] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
+      signatures, and dump/diagnostic output.
+- [ ] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
+
 ### G2: llama.cpp / GGUF Compatibility
 
 Purpose: support practical llama.cpp model import, lowering, validation,
@@ -807,7 +828,9 @@ and clear base-weight versus adapter-weight ownership.
       `Layer/LoRA.h` defines `LoRAAdapterMetadata`, `LoRAMergeMode`, and `LinearLoRAAdapter`.
 - [x] Add Layer helpers that apply LoRA as `base(x) + scale * (x @ A @ B)` for linear layers:
       `CreateLinearLoRA` plus `AddLinearWithLoRA` now build the unmerged Linear adapter graph.
-- [ ] Support both unmerged runtime adapters and merged-weight export.
+- [x] Support both unmerged runtime adapters and merged-weight export:
+      `AddLinearWithLoRA` builds the runtime adapter path, and `MergeLinearLoRA` materializes a Float32 merged Linear
+      layer for export/AOT paths.
 - [x] Define compatibility rules for quantized base weights and low-precision adapter weights:
       `ValidateLinearLoRACompatibility` accepts Float32/Float16/BFloat16 unmerged adapters and rejects quantized
       adapters until a dequantized or merged export path is implemented.
@@ -821,8 +844,10 @@ and clear base-weight versus adapter-weight ownership.
 
 #### G10.3 Runtime and AOT
 
-- [ ] Add interpreter execution tests for unmerged LoRA.
-- [ ] Add CPU AOT tests for merged LoRA export.
+- [x] Add interpreter execution tests for unmerged LoRA: `LoRALayerTest.AddsUnmergedLinearAdapterDelta` runs the
+      adapter graph through the CPU interpreter.
+- [x] Add CPU AOT tests for merged LoRA export: `CompiledModuleTest.CPUMergedLoRALinearMatchesInterpreter` compiles
+      the merged Linear graph and compares it with interpreter output.
 - [ ] Add optional runtime adapter binding for AOT when adapter weights are kept separate from base rodata.
 - [ ] Add benchmark coverage for merged versus unmerged adapters.
 

@@ -255,6 +255,31 @@ TEST(LoRALayerTest, RejectsQuantizedAdapterForUnmergedRuntimePath)
 	EXPECT_THROW((void) Layer::AddLinearWithLoRA(subgraph, linear, adapter, { input, 0 }), std::runtime_error);
 }
 
+TEST(LoRALayerTest, MergesLinearAdapterIntoBaseWeight)
+{
+	Graph graph;
+	auto linear = Layer::CreateLinear(
+	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	auto adapter = Layer::CreateLinearLoRA(
+	    graph,
+	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
+	    Tensor<CPU>({ 3.0f, 4.0f }, { 2, 1 }, DataType::Float32),
+	    Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }, DataType::Float32));
+	const auto merged = Layer::MergeLinearLoRA(graph, linear, adapter);
+
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 1, 2 });
+	const auto output = Layer::AddLinear(subgraph, merged, { input, 0 });
+	subgraph.SetResults({ output });
+	graph.AddSubgraph(std::move(subgraph));
+
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
+	ASSERT_EQ(result.NumElements(), 2u);
+	EXPECT_FLOAT_EQ(ReadFloat(result, 0), 112.0f);
+	EXPECT_FLOAT_EQ(ReadFloat(result, 1), 133.0f);
+}
+
 TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 {
 	Graph graph;

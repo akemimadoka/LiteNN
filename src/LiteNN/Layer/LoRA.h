@@ -159,6 +159,59 @@ namespace LiteNN::Layer
 		                                     { OutputInfo{ adapter.metadata.dtype, outputShape } });
 		return { result, 0 };
 	}
+
+	inline LinearLayer MergeLinearLoRA(Graph& graph, const LinearLayer& linear, const LinearLoRAAdapter& adapter)
+	{
+		ValidateLinearLoRACompatibility(linear, adapter);
+		if (linear.dtype != DataType::Float32)
+		{
+			throw std::runtime_error("Merged LoRA export currently supports Float32 Linear layers only");
+		}
+		if (graph.GetVariable(linear.weightVariable)->IsQuantized() || graph.GetVariable(adapter.aVariable)->IsQuantized() ||
+		    graph.GetVariable(adapter.bVariable)->IsQuantized())
+		{
+			throw std::runtime_error("Merged LoRA export currently requires dequantized Float32 variables");
+		}
+
+		const auto weight = graph.GetVariable(linear.weightVariable)->Data().CopyToDevice(CPU{});
+		const auto a = graph.GetVariable(adapter.aVariable)->Data().CopyToDevice(CPU{});
+		const auto b = graph.GetVariable(adapter.bVariable)->Data().CopyToDevice(CPU{});
+		if (weight.DType() != DataType::Float32 || a.DType() != DataType::Float32 || b.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("Merged LoRA export variable dtype metadata must be Float32");
+		}
+
+		Tensor<CPU> merged(Uninitialized, { linear.inFeatures, linear.outFeatures }, DataType::Float32);
+		const auto weightData = weight.Data<float>();
+		const auto aData = a.Data<float>();
+		const auto bData = b.Data<float>();
+		auto mergedData = merged.MutableData<float>();
+		const auto scale = LoRAScale(adapter.metadata);
+		for (auto in = 0uz; in < linear.inFeatures; ++in)
+		{
+			for (auto out = 0uz; out < linear.outFeatures; ++out)
+			{
+				auto delta = 0.0f;
+				for (auto r = 0uz; r < adapter.metadata.rank; ++r)
+				{
+					delta += aData[in * adapter.metadata.rank + r] * bData[r * linear.outFeatures + out];
+				}
+				mergedData[in * linear.outFeatures + out] = weightData[in * linear.outFeatures + out] + scale * delta;
+			}
+		}
+
+		if (!linear.biasVariable)
+		{
+			return CreateLinear(graph, std::move(merged));
+		}
+
+		auto bias = graph.GetVariable(*linear.biasVariable)->Data().CopyToDevice(CPU{});
+		if (bias.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("Merged LoRA export bias dtype metadata must be Float32");
+		}
+		return CreateLinear(graph, std::move(merged), std::move(bias));
+	}
 } // namespace LiteNN::Layer
 
 #endif

@@ -5,6 +5,7 @@
 #include <LiteNN/Compiler/CUDANativePayload.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>
+#include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
@@ -953,6 +954,28 @@ TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
 	}
 	EXPECT_GT(ReadAsFloat(outputs[0], 0), 9.9f);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 0.0f, 1e-3f);
+}
+
+TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
+{
+	Graph graph;
+	auto linear = Layer::CreateLinear(
+	    graph, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	auto adapter = Layer::CreateLinearLoRA(
+	    graph,
+	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
+	    Tensor<CPU>({ 3.0f, 4.0f }, { 2, 1 }, DataType::Float32),
+	    Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }, DataType::Float32));
+	const auto merged = Layer::MergeLinearLoRA(graph, linear, adapter);
+
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
+	sg.SetResults({ Layer::AddLinear(sg, merged, { input, 0 }) });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array inputs = { Tensor<CPU>({ 1.0f, 2.0f }, { 1, 2 }, DataType::Float32) };
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
 
 TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)
