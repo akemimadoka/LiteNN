@@ -854,7 +854,8 @@ and clear base-weight versus adapter-weight ownership.
 - [x] Add CPU AOT tests for merged LoRA export: `CompiledModuleTest.CPUMergedLoRALinearMatchesInterpreter` compiles
       the merged Linear graph and compares it with interpreter output.
 - [ ] Add optional runtime adapter binding for AOT when adapter weights are kept separate from base rodata.
-- [ ] Add benchmark coverage for merged versus unmerged adapters.
+- [x] Add benchmark coverage for merged versus unmerged adapters:
+      `litenn_bench` registers Interpreter and CPU AOT `LinearLoRA(784->512,r8)` rows for merged and unmerged paths.
 
 ### G11: Mobile Support and Test Matrix
 

@@ -5,6 +5,7 @@
 #include <LiteNN.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
+#include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Optimizer/Loss.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Pass/EGraphPass.h>
@@ -61,6 +62,8 @@ namespace
 	constexpr std::array<int, 2> kGGMLThreadCounts = { 1, 16 };
 	constexpr int kWarmupIterations = 5;
 	constexpr std::size_t kInputWidth = 784;
+	constexpr std::size_t kLoRAOutputWidth = 512;
+	constexpr std::size_t kLoRARank = 8;
 
 	struct GGMLLayerSpec
 	{
@@ -130,6 +133,32 @@ namespace
 		const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
 		const auto a2 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h2, a1));
 		fwd.SetResults({ Layer::AddLinear(fwd, h3, a2) });
+		graph.SetForward(graph.AddSubgraph(std::move(fwd)));
+		return builder.UnsafeTakeGraph();
+	}
+
+	Graph BuildLoRALinear(std::size_t batch, std::mt19937& rng, bool merged)
+	{
+		ModelBuilder builder;
+		auto& graph = builder.UnsafeMutableGraph();
+		const auto base =
+		    Layer::CreateLinear(builder, Initializer::XavierUniform({ kInputWidth, kLoRAOutputWidth }, rng),
+		                        Initializer::Zeros({ 1, kLoRAOutputWidth }));
+		const auto adapter = Layer::CreateLinearLoRA(
+		    builder,
+		    Layer::LoRAAdapterMetadata{ .targetName = "linear",
+			                            .rank = kLoRARank,
+			                            .alpha = static_cast<float>(kLoRARank),
+			                            .dtype = DataType::Float32 },
+		    Initializer::XavierUniform({ kInputWidth, kLoRARank }, rng),
+		    Initializer::XavierUniform({ kLoRARank, kLoRAOutputWidth }, rng));
+		const auto active = merged ? Layer::MergeLinearLoRA(graph, base, adapter) : base;
+
+		Subgraph fwd;
+		const auto in = fwd.AddParam(DataType::Float32, { batch, kInputWidth });
+		const auto out = merged ? Layer::AddLinear(fwd, active, { in, 0 })
+		                        : Layer::AddLinearWithLoRA(fwd, active, adapter, { in, 0 });
+		fwd.SetResults(std::vector<NodeOutput>{ out });
 		graph.SetForward(graph.AddSubgraph(std::move(fwd)));
 		return builder.UnsafeTakeGraph();
 	}
@@ -623,6 +652,28 @@ namespace
 			benchmark::ClobberMemory();
 		}
 
+		SetThroughputCounters(state, batch);
+	}
+
+	void BMInterpreterLoRA(benchmark::State& state, std::size_t batch, bool merged)
+	{
+		std::mt19937 rng(123);
+		auto graph = BuildLoRALinear(batch, rng, merged);
+		Optimize(graph);
+		auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+		const auto inputData = MakeInputData(batch);
+		const auto inputs = MakeInputs(inputData, batch);
+		Runtime::Interpreter<CPU> interp;
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto outputs = interp.RunForward(plan, std::span<const Tensor<CPU>>(inputs));
+			benchmark::DoNotOptimize(outputs);
+		}
+		for (auto _ : state)
+		{
+			auto outputs = interp.RunForward(plan, std::span<const Tensor<CPU>>(inputs));
+			benchmark::DoNotOptimize(outputs);
+		}
 		SetThroughputCounters(state, batch);
 	}
 
@@ -2668,6 +2719,30 @@ namespace
 		BMAOTRunIntoConfigured(state, kind, batch, nullptr);
 	}
 
+	void BMAOTLoRARunTensorsInto(benchmark::State& state, std::size_t batch, bool merged)
+	{
+		std::mt19937 rng(123);
+		auto graph = BuildLoRALinear(batch, rng, merged);
+		Optimize(graph);
+		auto options = LiteNNBenchCompilerOptionsFromEnvironment();
+		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph), options);
+		auto module = CompiledModule<CPU>::Load(compiled.Image());
+		const auto inputData = MakeInputData(batch);
+		const auto inputs = MakeInputs(inputData, batch);
+		auto outputs = AllocateOutputs(module);
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+			benchmark::DoNotOptimize(outputs);
+		}
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+			benchmark::DoNotOptimize(outputs);
+		}
+		SetThroughputCounters(state, batch);
+	}
+
 	void BMAOTRunIntoT1(benchmark::State& state, ModelKind kind, std::size_t batch)
 	{
 		BMAOTRunIntoConfigured(state, kind, batch, "1");
@@ -2798,9 +2873,32 @@ namespace
 			}
 		}
 
+		for (const auto batch : kBatchSizes)
+		{
+			auto* unmergedInterpreter = benchmark::RegisterBenchmark(
+			    std::format("InterpreterLoRAUnmerged/LinearLoRA(784->512,r8)/batch:{}", batch),
+			    [=](benchmark::State& state) { BMInterpreterLoRA(state, batch, false); });
+			unmergedInterpreter->Unit(benchmark::kMicrosecond);
+
+			auto* mergedInterpreter = benchmark::RegisterBenchmark(
+			    std::format("InterpreterLoRAMerged/LinearLoRA(784->512,r8)/batch:{}", batch),
+			    [=](benchmark::State& state) { BMInterpreterLoRA(state, batch, true); });
+			mergedInterpreter->Unit(benchmark::kMicrosecond);
+		}
+
 #ifdef LITENN_BENCH_HAS_AOT
 		for (const auto batch : kBatchSizes)
 		{
+			auto* unmergedLoRA = benchmark::RegisterBenchmark(
+			    std::format("AOTLoRAUnmergedRunInto/LinearLoRA(784->512,r8)/batch:{}", batch),
+			    [=](benchmark::State& state) { BMAOTLoRARunTensorsInto(state, batch, false); });
+			unmergedLoRA->Unit(benchmark::kMicrosecond);
+
+			auto* mergedLoRA = benchmark::RegisterBenchmark(
+			    std::format("AOTLoRAMergedRunInto/LinearLoRA(784->512,r8)/batch:{}", batch),
+			    [=](benchmark::State& state) { BMAOTLoRARunTensorsInto(state, batch, true); });
+			mergedLoRA->Unit(benchmark::kMicrosecond);
+
 			auto* rawCase = benchmark::RegisterBenchmark(
 			    std::format("AOTRedundantRawRunInto/RedundantIdentity/batch:{}", batch),
 			    [=](benchmark::State& state) { BMAOTRedundantRawRunTensorsInto(state, batch); });
