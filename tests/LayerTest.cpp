@@ -230,6 +230,23 @@ TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
 	EXPECT_FLOAT_EQ(ReadFloat(result, 1), 134.0f);
 }
 
+TEST(LoRALayerTest, ParsesPEFTAdapterTensorNames)
+{
+	const auto parsed = Layer::ParsePEFTLoRATensorName("base_model.model.layers.0.q_proj.lora_A.default.weight");
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(parsed->targetName, "base_model.model.layers.0.q_proj");
+	EXPECT_EQ(parsed->adapterName, "default");
+	EXPECT_EQ(parsed->role, Layer::LoRATensorRole::A);
+
+	const auto implicitDefault = Layer::ParsePEFTLoRATensorName("linear.lora_B.weight");
+	ASSERT_TRUE(implicitDefault.has_value());
+	EXPECT_EQ(implicitDefault->targetName, "linear");
+	EXPECT_EQ(implicitDefault->adapterName, "default");
+	EXPECT_EQ(implicitDefault->role, Layer::LoRATensorRole::B);
+
+	EXPECT_FALSE(Layer::ParsePEFTLoRATensorName("linear.weight").has_value());
+}
+
 TEST(LoRALayerTest, RejectsIncompatibleRank)
 {
 	Graph graph;

@@ -6,6 +6,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,7 @@ namespace LiteNN::Layer
 	struct LoRAAdapterMetadata
 	{
 		std::string targetName;
+		std::string adapterName{ "default" };
 		std::size_t rank{};
 		float alpha = 1.0f;
 		float dropout = 0.0f;
@@ -37,6 +39,19 @@ namespace LiteNN::Layer
 		std::size_t bVariable{};
 		std::size_t inFeatures{};
 		std::size_t outFeatures{};
+	};
+
+	enum class LoRATensorRole
+	{
+		A,
+		B,
+	};
+
+	struct ParsedLoRATensorName
+	{
+		std::string targetName;
+		std::string adapterName;
+		LoRATensorRole role{};
 	};
 
 	inline void ValidateLoRAMetadata(const LoRAAdapterMetadata& metadata)
@@ -68,6 +83,43 @@ namespace LiteNN::Layer
 	inline bool IsLoRAFloatingAdapterDType(DataType dtype)
 	{
 		return dtype == DataType::Float32 || dtype == DataType::Float16 || dtype == DataType::BFloat16;
+	}
+
+	inline std::optional<ParsedLoRATensorName> ParsePEFTLoRATensorName(std::string_view name)
+	{
+		const auto parse = [&](std::string_view marker, LoRATensorRole role) -> std::optional<ParsedLoRATensorName> {
+			const auto markerPos = name.find(marker);
+			if (markerPos == std::string_view::npos || markerPos == 0)
+			{
+				return std::nullopt;
+			}
+			const auto suffix = name.substr(markerPos + marker.size());
+			if (!suffix.ends_with(".weight"))
+			{
+				return std::nullopt;
+			}
+			auto adapter = suffix.substr(0, suffix.size() - std::string_view(".weight").size());
+			if (adapter.starts_with("."))
+			{
+				adapter.remove_prefix(1);
+			}
+			if (adapter.empty())
+			{
+				adapter = "default";
+			}
+			return ParsedLoRATensorName{ .targetName = std::string(name.substr(0, markerPos)),
+			                             .adapterName = std::string(adapter),
+			                             .role = role };
+		};
+		if (auto parsed = parse(".lora_A", LoRATensorRole::A))
+		{
+			return parsed;
+		}
+		if (auto parsed = parse(".lora_B", LoRATensorRole::B))
+		{
+			return parsed;
+		}
+		return std::nullopt;
 	}
 
 	inline void ValidateLinearLoRACompatibility(const LinearLayer& linear, const LinearLoRAAdapter& adapter)

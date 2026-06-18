@@ -11,6 +11,8 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -572,5 +574,78 @@ namespace LiteNN::Serialization
 	Graph LoadSafetensorsVariables(const std::filesystem::path& path, const SafetensorsImportOptions& options)
 	{
 		return ImportSafetensorsVariables(SafetensorsArchive::LoadFile(path), options);
+	}
+
+	SafetensorsLoRAImportResult ImportLinearLoRAAdapters(Graph& graph, const SafetensorsArchive& archive,
+	                                                     const SafetensorsLoRAImportOptions& options)
+	{
+		struct PendingAdapter
+		{
+			std::string targetName;
+			std::string adapterName;
+			const SafetensorsTensorInfo* a = nullptr;
+			const SafetensorsTensorInfo* b = nullptr;
+		};
+
+		std::map<std::string, PendingAdapter> pending;
+		SafetensorsLoRAImportResult result;
+		for (const auto& tensor : archive.Tensors())
+		{
+			const auto parsed = Layer::ParsePEFTLoRATensorName(tensor.name);
+			if (!parsed)
+			{
+				continue;
+			}
+
+			auto targetName = options.renameTarget ? options.renameTarget(parsed->targetName) : parsed->targetName;
+			if (targetName.empty())
+			{
+				throw std::runtime_error("Safetensors LoRA import produced an empty target name for " + tensor.name);
+			}
+			const auto key = targetName + "\n" + parsed->adapterName;
+			auto& entry = pending[key];
+			entry.targetName = std::move(targetName);
+			entry.adapterName = parsed->adapterName;
+			auto*& slot = parsed->role == Layer::LoRATensorRole::A ? entry.a : entry.b;
+			if (slot != nullptr)
+			{
+				throw std::runtime_error("Safetensors LoRA import found duplicate adapter tensor for " + tensor.name);
+			}
+			slot = &tensor;
+		}
+
+		for (const auto& [_, entry] : pending)
+		{
+			if (entry.a == nullptr || entry.b == nullptr)
+			{
+				result.diagnostics.push_back("LoRA adapter '" + entry.targetName + "'/'" + entry.adapterName +
+				                             "' is missing " + (entry.a == nullptr ? "A" : "B") + " tensor");
+				continue;
+			}
+
+			auto a = archive.TensorAsCPU(*entry.a, options.transposePEFTWeights);
+			auto b = archive.TensorAsCPU(*entry.b, options.transposePEFTWeights);
+			if (a.Shape().NumDim() != 2 || b.Shape().NumDim() != 2)
+			{
+				throw std::runtime_error("Safetensors LoRA adapter tensors must be rank-2: " + entry.targetName);
+			}
+			if (a.DType() != b.DType())
+			{
+				throw std::runtime_error("Safetensors LoRA adapter A/B tensors must have matching dtype: " +
+				                         entry.targetName);
+			}
+			const auto rank = a.Shape()[1];
+			const auto alpha = options.defaultAlpha == 0.0f ? static_cast<float>(rank) : options.defaultAlpha;
+			result.adapters.push_back(Layer::CreateLinearLoRA(
+			    graph,
+			    Layer::LoRAAdapterMetadata{ .targetName = entry.targetName,
+			                                .adapterName = entry.adapterName,
+			                                .rank = rank,
+			                                .alpha = alpha,
+			                                .dtype = a.DType(),
+			                                .mergeMode = Layer::LoRAMergeMode::Unmerged },
+			    std::move(a), std::move(b)));
+		}
+		return result;
 	}
 } // namespace LiteNN::Serialization

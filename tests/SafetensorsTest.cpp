@@ -61,6 +61,23 @@ namespace
 		    std::move(payload));
 	}
 
+	std::vector<std::byte> BuildLoRAFixture()
+	{
+		std::vector<std::byte> payload;
+		for (const auto value : std::array<float, 2>{ 3.0F, 4.0F })
+		{
+			AppendValue(payload, value);
+		}
+		for (const auto value : std::array<float, 2>{ 5.0F, 6.0F })
+		{
+			AppendValue(payload, value);
+		}
+
+		return BuildSafetensors(
+		    R"({"base_model.model.linear.lora_A.default.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[0,8]},"base_model.model.linear.lora_B.default.weight":{"dtype":"F32","shape":[2,1],"data_offsets":[8,16]}})",
+		    std::move(payload));
+	}
+
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		return static_cast<const float*>(tensor.UnsafeRawData())[index];
@@ -159,6 +176,62 @@ TEST(Safetensors, ImportsVariablesWithRenameAndTransposeHooks)
 	EXPECT_EQ(ReadI64(bias, 0), 7);
 	EXPECT_EQ(ReadI64(bias, 1), 8);
 	ASSERT_NE(graph.FindMetadata("safetensors.metadata.format"), nullptr);
+}
+
+TEST(Safetensors, ImportsPEFTLinearLoRAAdapters)
+{
+	const auto bytes = BuildLoRAFixture();
+	const auto archive = Serialization::SafetensorsArchive::Load(std::span<const std::byte>(bytes));
+	Graph graph;
+
+	Serialization::SafetensorsLoRAImportOptions options;
+	options.renameTarget = [](std::string_view target) {
+		constexpr std::string_view prefix = "base_model.model.";
+		if (target.starts_with(prefix))
+		{
+			target.remove_prefix(prefix.size());
+		}
+		return std::string(target);
+	};
+	const auto imported = Serialization::ImportLinearLoRAAdapters(graph, archive, options);
+
+	ASSERT_TRUE(imported.diagnostics.empty());
+	ASSERT_EQ(imported.adapters.size(), 1u);
+	const auto& adapter = imported.adapters[0];
+	EXPECT_EQ(adapter.metadata.targetName, "linear");
+	EXPECT_EQ(adapter.metadata.adapterName, "default");
+	EXPECT_EQ(adapter.metadata.rank, 1u);
+	EXPECT_FLOAT_EQ(adapter.metadata.alpha, 1.0F);
+	EXPECT_EQ(adapter.inFeatures, 2u);
+	EXPECT_EQ(adapter.outFeatures, 2u);
+
+	const auto a = graph.GetVariable(adapter.aVariable)->Data().CopyToDevice(CPU{});
+	EXPECT_EQ(a.Shape().ToOwned(), (std::vector<std::size_t>{ 2, 1 }));
+	EXPECT_FLOAT_EQ(ReadFloat(a, 0), 3.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(a, 1), 4.0F);
+
+	const auto b = graph.GetVariable(adapter.bVariable)->Data().CopyToDevice(CPU{});
+	EXPECT_EQ(b.Shape().ToOwned(), (std::vector<std::size_t>{ 1, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(b, 0), 5.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(b, 1), 6.0F);
+}
+
+TEST(Safetensors, ReportsIncompleteLoRAAdapterPairs)
+{
+	std::vector<std::byte> payload;
+	for (const auto value : std::array<float, 2>{ 3.0F, 4.0F })
+	{
+		AppendValue(payload, value);
+	}
+	const auto bytes = BuildSafetensors(
+	    R"({"linear.lora_A.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[0,8]}})", std::move(payload));
+	const auto archive = Serialization::SafetensorsArchive::Load(std::span<const std::byte>(bytes));
+	Graph graph;
+
+	const auto imported = Serialization::ImportLinearLoRAAdapters(graph, archive);
+	EXPECT_TRUE(imported.adapters.empty());
+	ASSERT_EQ(imported.diagnostics.size(), 1u);
+	EXPECT_NE(imported.diagnostics[0].find("missing B"), std::string::npos);
 }
 
 TEST(Safetensors, RejectsCorruptHeadersAndPayloads)

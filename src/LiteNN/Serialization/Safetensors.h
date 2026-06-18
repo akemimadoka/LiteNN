@@ -1,5 +1,6 @@
 #include <LiteNN/DType.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/TensorType.h>
 
@@ -33,6 +34,19 @@ namespace LiteNN::Serialization
 		std::function<std::string(std::string_view)> renameTensor;
 		std::function<bool(std::string_view)> transpose2D;
 		bool failOnDuplicateVariableNames{ true };
+	};
+
+	struct SafetensorsLoRAImportOptions
+	{
+		std::function<std::string(std::string_view)> renameTarget;
+		float defaultAlpha = 0.0f;
+		bool transposePEFTWeights = true;
+	};
+
+	struct SafetensorsLoRAImportResult
+	{
+		std::vector<Layer::LinearLoRAAdapter> adapters;
+		std::vector<std::string> diagnostics;
 	};
 
 	std::optional<DataType> TryMapSafetensorsDataType(std::string_view dtype);
@@ -70,6 +84,8 @@ namespace LiteNN::Serialization
 	                                 const SafetensorsImportOptions& options = {});
 	Graph LoadSafetensorsVariables(const std::filesystem::path& path,
 	                               const SafetensorsImportOptions& options = {});
+	SafetensorsLoRAImportResult ImportLinearLoRAAdapters(Graph& graph, const SafetensorsArchive& archive,
+	                                                     const SafetensorsLoRAImportOptions& options = {});
 } // namespace LiteNN::Serialization
 
 #endif
