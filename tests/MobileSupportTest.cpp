@@ -39,3 +39,21 @@ TEST(MobileSupportTest, RejectsDesktopOnlyMobileFeatures)
 	EXPECT_TRUE(ContainsDiagnostic("dynamic-library-carrier-loading"));
 	EXPECT_TRUE(ContainsDiagnostic("on-device-graph-compilation"));
 }
+
+TEST(MobileSupportTest, ReportsMobileConstraintPolicies)
+{
+	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::CXXStandardLibrary).level,
+	          MobileConstraintLevel::Supported);
+	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::Filesystem).level, MobileConstraintLevel::Constrained);
+	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::Reflection).level, MobileConstraintLevel::Constrained);
+	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::DynamicLoading).level, MobileConstraintLevel::Unsupported);
+	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::Threading).level, MobileConstraintLevel::Constrained);
+
+	const auto diagnostics = CollectMobileConstraintDiagnostics();
+	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
+		return diagnostic.find("filesystem") != std::string::npos;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
+		return diagnostic.find("dynamic-loading") != std::string::npos;
+	}));
+}

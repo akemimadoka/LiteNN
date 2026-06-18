@@ -105,6 +105,8 @@ The mobile Vulkan runtime must not depend on:
 `LiteNN/MobileSupport.h` exposes the same policy through `QueryMobileFeatureStatus` and
 `CollectUnsupportedMobileFeatureDiagnostics` so CLIs and package validators can print the exact unsupported
 desktop-only features instead of duplicating this list.
+`QueryMobileConstraintStatus` and `CollectMobileConstraintDiagnostics` provide the matching audit surface for C++
+standard-library, filesystem, reflection, dynamic-loading, and threading constraints.
 
 Unsupported kernels must remain explicit: either fail compilation for `VulkanNative` or use a caller-selected bridge or
 fallback policy. Benchmarks should report the selected backend rather than silently mixing CPU and Vulkan execution.

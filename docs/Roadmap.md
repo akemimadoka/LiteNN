@@ -831,7 +831,9 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 - [x] Define supported first targets: Android arm64-v8a first; iOS arm64 simulator/device remains future work pending
       toolchain availability and a non-Vulkan mobile GPU runtime decision.
 - [x] Make compiler/MLIR/CUDA features optional so a minimal interpreter/runtime build is possible.
-- [ ] Audit C++ standard library, filesystem, reflection, dynamic loading, and thread usage for mobile constraints.
+- [x] Audit C++ standard library, filesystem, reflection, dynamic loading, and thread usage for mobile constraints:
+      `MobileSupport.h` exposes `QueryMobileConstraintStatus` / `CollectMobileConstraintDiagnostics` so CLIs can report
+      supported, constrained, and unsupported mobile runtime policies without duplicating the audit.
 - [x] Add CMake presets or toolchain documentation for mobile builds: `CMakePresets.json` now contains
       `android-arm64-vulkan-runtime`, and `docs/VulkanMobileDeployment.md` documents the preset-based flow.
 
