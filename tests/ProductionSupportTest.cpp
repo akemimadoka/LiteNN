@@ -29,6 +29,14 @@ namespace
 			return diagnostic.find(needle) != std::string::npos;
 		});
 	}
+
+	bool HasCUDANativeCapabilityDiagnostic(std::string_view needle)
+	{
+		const auto diagnostics = CollectProductionCUDANativeCapabilityDiagnostics();
+		return std::ranges::any_of(diagnostics, [&](const std::string& diagnostic) {
+			return diagnostic.find(needle) != std::string::npos;
+		});
+	}
 } // namespace
 
 TEST(ProductionSupportTest, ReportsProductionDeploymentCore)
@@ -149,4 +157,44 @@ TEST(ProductionSupportTest, ReportsCPUKernelStrategy)
 	EXPECT_FALSE(strategy.allowUnplannedHandwrittenGemmOrConv);
 	EXPECT_TRUE(Contains(strategy.throughputPolicy, "external-library"));
 	EXPECT_TRUE(Contains(strategy.handwrittenKernelGate, "benchmark"));
+}
+
+TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
+{
+	const auto capabilities = QueryProductionCUDANativeCapabilities();
+	EXPECT_GE(capabilities.size(), 10u);
+
+	const auto graphReplay = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::GraphReplay);
+	EXPECT_EQ(graphReplay.availableInBuild, ProductionBuildHasCUDA());
+	EXPECT_EQ(graphReplay.level, ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+	                                                       : ProductionSupportLevel::Unavailable);
+	EXPECT_TRUE(graphReplay.requiresCUDADevice);
+	EXPECT_TRUE(graphReplay.requiresRuntimeDeviceProbe);
+	EXPECT_TRUE(graphReplay.requiresStablePointers);
+	EXPECT_TRUE(graphReplay.highValueKernelPriority);
+	EXPECT_FALSE(graphReplay.allowsHostFallback);
+	EXPECT_TRUE(Contains(graphReplay.fallbackPolicy, "fail loudly"));
+
+	const auto matmul = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::MatMulF32);
+	EXPECT_TRUE(matmul.highValueKernelPriority);
+	EXPECT_TRUE(Contains(matmul.verifiedScope, "MatMul"));
+	EXPECT_TRUE(Contains(matmul.capabilityGate, "device"));
+	EXPECT_FALSE(matmul.allowsHostFallback);
+
+	const auto attention = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Attention);
+	EXPECT_TRUE(attention.highValueKernelPriority);
+	EXPECT_NE(attention.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(Contains(attention.capabilityGate, "kernel implementation"));
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("attention"));
+
+	const auto normalization = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Normalization);
+	EXPECT_TRUE(normalization.highValueKernelPriority);
+	EXPECT_NE(normalization.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("normalization"));
+
+	const auto quantizedProjection =
+	    QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::QuantizedProjection);
+	EXPECT_TRUE(quantizedProjection.highValueKernelPriority);
+	EXPECT_NE(quantizedProjection.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("quantized-projection"));
 }

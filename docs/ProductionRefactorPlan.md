@@ -96,11 +96,16 @@ CPU:
 
 CUDA:
 
-- [ ] Keep native CUDA support capability-gated.
+- [x] Keep native CUDA support capability-gated. `ProductionSupport.h` now exposes
+      `QueryProductionCUDANativeCapabilities()` so CUDA native is reported as per-feature capability gates rather than
+      a blanket backend label.
 - [x] Make CUDA Graph replay an explicit production fast-path policy instead of a loose boolean switch; callers request
       it through `CompiledModuleCUDARunOptions::GraphReplay()`, and unsupported stream/synchronization combinations fail
       loudly instead of silently falling back to non-graph launch.
-- [ ] Prioritize high-value kernels: Linear/MatMul, normalization, reductions, attention, and quantized projection.
+- [x] Prioritize high-value kernels: Linear/MatMul, normalization, reductions, attention, and quantized projection.
+      The production capability table marks MatMul/Linear/reductions/low-precision MatMul as verified or experimental
+      according to current support, while normalization, attention, and quantized projection remain explicit deferred
+      high-priority capabilities until implementation and benchmark/parity evidence land.
 - [x] Keep host fallback explicit and visible in schedules/profile output.
 
 Vulkan/mobile:

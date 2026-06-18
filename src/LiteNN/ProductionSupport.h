@@ -53,6 +53,22 @@ namespace LiteNN
 		VulkanMobileConstrained,
 	};
 
+	enum class ProductionCUDANativeCapability
+	{
+		StaticShapeDeviceTensorABI,
+		GraphReplay,
+		ElementwiseF32,
+		MatMulF32,
+		LinearChainF32,
+		ReductionF32,
+		Normalization,
+		ConcatSliceF32,
+		LowPrecisionCast,
+		LowPrecisionMatMul,
+		Attention,
+		QuantizedProjection,
+	};
+
 	struct ProductionSupportStatus
 	{
 		ProductionSupportArea area;
@@ -115,6 +131,22 @@ namespace LiteNN
 		bool allowSmallNativeKernelSet;
 		bool allowUnplannedHandwrittenGemmOrConv;
 		std::string_view handwrittenKernelGate;
+	};
+
+	struct ProductionCUDANativeCapabilityDescriptor
+	{
+		ProductionCUDANativeCapability capability;
+		std::string_view name;
+		ProductionSupportLevel level;
+		bool availableInBuild;
+		bool requiresCUDADevice;
+		bool requiresRuntimeDeviceProbe;
+		bool requiresStablePointers;
+		bool highValueKernelPriority;
+		bool allowsHostFallback;
+		std::string_view verifiedScope;
+		std::string_view capabilityGate;
+		std::string_view fallbackPolicy;
 	};
 
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
@@ -205,6 +237,38 @@ namespace LiteNN
 			return "vulkan-desktop-native";
 		case ProductionBackendProfile::VulkanMobileConstrained:
 			return "vulkan-mobile-constrained";
+		}
+		return "unknown";
+	}
+
+	inline constexpr std::string_view ProductionCUDANativeCapabilityName(ProductionCUDANativeCapability capability)
+	{
+		switch (capability)
+		{
+		case ProductionCUDANativeCapability::StaticShapeDeviceTensorABI:
+			return "static-shape-device-tensor-abi";
+		case ProductionCUDANativeCapability::GraphReplay:
+			return "cuda-graph-replay";
+		case ProductionCUDANativeCapability::ElementwiseF32:
+			return "elementwise-f32";
+		case ProductionCUDANativeCapability::MatMulF32:
+			return "matmul-f32";
+		case ProductionCUDANativeCapability::LinearChainF32:
+			return "linear-chain-f32";
+		case ProductionCUDANativeCapability::ReductionF32:
+			return "reduction-f32";
+		case ProductionCUDANativeCapability::Normalization:
+			return "normalization";
+		case ProductionCUDANativeCapability::ConcatSliceF32:
+			return "concat-slice-f32";
+		case ProductionCUDANativeCapability::LowPrecisionCast:
+			return "low-precision-cast";
+		case ProductionCUDANativeCapability::LowPrecisionMatMul:
+			return "low-precision-matmul";
+		case ProductionCUDANativeCapability::Attention:
+			return "attention";
+		case ProductionCUDANativeCapability::QuantizedProjection:
+			return "quantized-projection";
 		}
 		return "unknown";
 	}
@@ -646,6 +710,163 @@ namespace LiteNN
 			     "evidence before they enter the production profile." };
 	}
 
+	inline constexpr ProductionCUDANativeCapabilityDescriptor QueryProductionCUDANativeCapability(
+	    ProductionCUDANativeCapability capability)
+	{
+		const auto unavailableLevel = ProductionBuildHasCUDA() ? ProductionSupportLevel::Deferred
+		                                                       : ProductionSupportLevel::Unavailable;
+		switch (capability)
+		{
+		case ProductionCUDANativeCapability::StaticShapeDeviceTensorABI:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     false,
+				     false,
+				     "Static-shape CUDA Tensor input/output ABI with explicit backend tag and native payload metadata.",
+				     "Requires CUDA build support plus a load-time CUDA device/driver probe.",
+				     "Unsupported native ABI must fail or use a separately declared CPU bridge path." };
+		case ProductionCUDANativeCapability::GraphReplay:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     "Pointer-stable synchronized native CUDA replay for static-shape inference payloads.",
+				     "Requires CUDA build support, CUDA runtime/driver availability, and module-owned default stream.",
+				     "Unsupported replay constraints fail loudly rather than dropping to non-graph launch." };
+		case ProductionCUDANativeCapability::ElementwiseF32:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     false,
+				     false,
+				     "Float32 unary/binary elementwise and same-rank broadcast native payloads.",
+				     "Requires CUDA build support and successful native payload load for the target device.",
+				     "Unsupported shapes or dtypes route only through explicit CPU bridge fallback." };
+		case ProductionCUDANativeCapability::MatMulF32:
+		case ProductionCUDANativeCapability::LinearChainF32:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     capability == ProductionCUDANativeCapability::MatMulF32
+				         ? "Float32 MatMul native payloads backed by CUDA library calls."
+				         : "Float32 fused Linear/MLP chains with native CUDA launch scheduling.",
+				     "Requires CUDA build support, CUDA device availability, and supported static tensor shapes.",
+				     "Unsupported graphs must expose CPU bridge fallback as a separate profile row." };
+		case ProductionCUDANativeCapability::ReductionF32:
+		case ProductionCUDANativeCapability::ConcatSliceF32:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     false,
+				     false,
+				     capability == ProductionCUDANativeCapability::ReductionF32
+				         ? "Selected static-axis Float32 reductions."
+				         : "Selected static-shape Float32 concat/slice payloads.",
+				     "Requires CUDA build support and supported static shape/layout metadata.",
+				     "Unsupported variants are rejected by native lowering and must be visible as fallback." };
+		case ProductionCUDANativeCapability::Normalization:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     unavailableLevel,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     "Production normalization kernels are not yet part of the verified CUDA native profile.",
+				     "Requires explicit LayerNorm/RMSNorm kernel implementation, device capability checks, and parity "
+				     "evidence.",
+				     "Until implemented, normalization workloads must not be advertised as CUDA native production "
+				     "support." };
+		case ProductionCUDANativeCapability::LowPrecisionCast:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Experimental
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     false,
+				     false,
+				     "Native low-precision cast payloads where the CUDA device and target ISA support them.",
+				     "Requires dtype-specific device capability checks such as FP8 target support.",
+				     "Unsupported dtype/device pairs must fail native execution or use explicit bridge conversion." };
+		case ProductionCUDANativeCapability::LowPrecisionMatMul:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Experimental
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     "cuBLAS/cuBLASLt-backed low-precision MatMul where device and build support are present.",
+				     "Requires CUDA build support, library availability, and dtype-specific native MatMul capability.",
+				     "Unsupported dtype/device pairs must remain explicit fallback or rejection cases." };
+		case ProductionCUDANativeCapability::Attention:
+		case ProductionCUDANativeCapability::QuantizedProjection:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     unavailableLevel,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     capability == ProductionCUDANativeCapability::Attention
+				         ? "Production attention kernels are not yet part of the verified CUDA native profile."
+				         : "Native quantized projection kernels are not yet part of the verified CUDA native profile.",
+				     "Requires explicit kernel implementation, device capability checks, and benchmark/parity evidence.",
+				     "Until implemented, these workloads must not be advertised as CUDA native production support." };
+		}
+		return { capability,
+			     ProductionCUDANativeCapabilityName(capability),
+			     ProductionSupportLevel::Unavailable,
+			     false,
+			     true,
+			     true,
+			     false,
+			     false,
+			     false,
+			     "Unknown CUDA native capability.",
+			     "Unknown CUDA native capability.",
+			     "Unknown CUDA native capability." };
+	}
+
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()
 	{
 		return {
@@ -672,6 +893,24 @@ namespace LiteNN
 			QueryProductionBackendProfile(ProductionBackendProfile::CUDACPUBridgeFallback),
 			QueryProductionBackendProfile(ProductionBackendProfile::VulkanDesktopNative),
 			QueryProductionBackendProfile(ProductionBackendProfile::VulkanMobileConstrained),
+		};
+	}
+
+	inline std::vector<ProductionCUDANativeCapabilityDescriptor> QueryProductionCUDANativeCapabilities()
+	{
+		return {
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::StaticShapeDeviceTensorABI),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::GraphReplay),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::ElementwiseF32),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::MatMulF32),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::LinearChainF32),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::ReductionF32),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Normalization),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::ConcatSliceF32),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::LowPrecisionCast),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::LowPrecisionMatMul),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Attention),
+			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::QuantizedProjection),
 		};
 	}
 
@@ -714,6 +953,21 @@ namespace LiteNN
 				diagnostics.push_back(std::string(descriptor.name) + " [" +
 				                      std::string(ProductionSupportLevelName(descriptor.level)) + "]: " +
 				                      std::string(descriptor.fallbackPolicy));
+			}
+		}
+		return diagnostics;
+	}
+
+	inline std::vector<std::string> CollectProductionCUDANativeCapabilityDiagnostics()
+	{
+		std::vector<std::string> diagnostics;
+		for (const auto& capability : QueryProductionCUDANativeCapabilities())
+		{
+			if (capability.level != ProductionSupportLevel::Supported || capability.allowsHostFallback)
+			{
+				diagnostics.push_back(std::string(capability.name) + " [" +
+				                      std::string(ProductionSupportLevelName(capability.level)) + "]: " +
+				                      std::string(capability.capabilityGate));
 			}
 		}
 		return diagnostics;
