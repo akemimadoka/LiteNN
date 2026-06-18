@@ -154,6 +154,7 @@ namespace LiteNN
 		VNextVersionSet versions;
 		std::vector<std::string> functions;
 		std::vector<std::string> runtimeStates;
+		std::vector<std::string> runtimeStepRecords;
 		std::vector<std::string> bufferBindings;
 		std::vector<std::string> tensorBindings;
 		std::vector<std::string> artifactEntries;
@@ -162,6 +163,9 @@ namespace LiteNN
 		bool hasRuntimeSchedule{};
 		bool hasExternalTensorBindings{};
 		bool hasArtifactMetadata{};
+		bool hasFallbackRecords{};
+		bool hasTransferRecords{};
+		bool hasProfileRecords{};
 	};
 
 	inline VNextABIFamilySummary DescribeVNextABIFamily(const VNextPackageManifest& manifest)
@@ -171,6 +175,13 @@ namespace LiteNN
 		summary.hasRuntimeSchedule = !manifest.runtimeSteps.empty();
 		summary.hasExternalTensorBindings = !manifest.tensors.empty();
 		summary.hasArtifactMetadata = !manifest.artifacts.empty();
+		summary.hasFallbackRecords = std::ranges::any_of(manifest.runtimeSteps, [](const auto& step) {
+			return step.kind == Runtime::RuntimeScheduleStepKind::Fallback;
+		});
+		summary.hasTransferRecords = std::ranges::any_of(manifest.runtimeSteps, [](const auto& step) {
+			return step.kind == Runtime::RuntimeScheduleStepKind::Transfer;
+		});
+		summary.hasProfileRecords = summary.hasRuntimeSchedule;
 
 		summary.functions.reserve(manifest.functions.size());
 		for (const auto& function : manifest.functions)
@@ -182,6 +193,18 @@ namespace LiteNN
 		for (const auto& state : manifest.runtimeStates)
 		{
 			summary.runtimeStates.push_back(state.name);
+		}
+
+		summary.runtimeStepRecords.reserve(manifest.runtimeSteps.size());
+		for (const auto& step : manifest.runtimeSteps)
+		{
+			auto record = std::format("{}:{}:{}", step.id, Runtime::RuntimeScheduleStepKindName(step.kind),
+			                          step.backend);
+			if (!step.fallbackBackend.empty())
+			{
+				record += "->" + step.fallbackBackend;
+			}
+			summary.runtimeStepRecords.push_back(std::move(record));
 		}
 
 		summary.bufferBindings.reserve(manifest.bufferBindings.size());
@@ -230,19 +253,17 @@ namespace LiteNN
 	}
 
 	inline VNextPackageManifest BuildVNextPackageManifest(
-	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts = {},
+	    Runtime::RuntimeSchedule schedule, std::vector<VNextArtifactRef> artifacts = {},
 	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
-	    std::vector<Runtime::RuntimeStateBinding> runtimeStates = {},
 	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
-		ValidateExecutablePlan(module.plan, registry);
+		ValidateExecutablePlan(schedule.module.plan, registry);
+		Runtime::ValidateRuntimeSchedule(schedule);
 		VNextPackageManifest manifest;
 		manifest.layout = std::move(layout);
-		manifest.functions = module.functions;
-		manifest.regions = module.regions;
-		manifest.partitions = module.partitions;
-		auto schedule = Runtime::BuildRuntimeSchedule(module, std::move(runtimeStates));
-		Runtime::ValidateRuntimeSchedule(schedule);
+		manifest.functions = schedule.module.functions;
+		manifest.regions = schedule.module.regions;
+		manifest.partitions = schedule.module.partitions;
 		manifest.memory = std::move(schedule.memory);
 		manifest.runtimeStates = std::move(schedule.states);
 		manifest.bufferBindings = std::move(schedule.bufferBindings);
@@ -250,14 +271,25 @@ namespace LiteNN
 		manifest.artifacts = std::move(artifacts);
 		manifest.adapters = std::move(adapters);
 		manifest.opCoverage = registry.CoverageReport();
-		manifest.tensors.reserve(module.plan.variables.size());
-		for (std::size_t i = 0; i < module.plan.variables.size(); ++i)
+		manifest.tensors.reserve(schedule.module.plan.variables.size());
+		for (std::size_t i = 0; i < schedule.module.plan.variables.size(); ++i)
 		{
-			const auto& storage = module.plan.variables[i];
+			const auto& storage = schedule.module.plan.variables[i];
 			manifest.tensors.push_back(ToVNextExternalTensorRef(
 			    storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name, storage));
 		}
 		return manifest;
+	}
+
+	inline VNextPackageManifest BuildVNextPackageManifest(
+	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts = {},
+	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
+	    std::vector<Runtime::RuntimeStateBinding> runtimeStates = {},
+	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	{
+		auto schedule = Runtime::BuildRuntimeSchedule(module, std::move(runtimeStates));
+		return BuildVNextPackageManifest(std::move(schedule), std::move(artifacts), std::move(layout),
+		                                 std::move(adapters), registry);
 	}
 
 	inline VNextPackageManifest BuildVNextPackageManifest(
@@ -353,6 +385,17 @@ namespace LiteNN
 				if (step.function >= manifest.functions.size() || step.region >= manifest.regions.size())
 				{
 					throw std::runtime_error(std::format("vNext runtime step {} references unknown dispatch target", i));
+				}
+				if (step.backend.empty())
+				{
+					throw std::runtime_error(std::format("vNext runtime dispatch step {} has empty backend", i));
+				}
+			}
+			if (step.kind == Runtime::RuntimeScheduleStepKind::Fallback)
+			{
+				if (step.backend.empty() || step.fallbackBackend.empty())
+				{
+					throw std::runtime_error(std::format("vNext runtime fallback step {} must name both backends", i));
 				}
 			}
 			for (const auto buffer : step.inputBuffers)

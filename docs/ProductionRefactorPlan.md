@@ -69,8 +69,9 @@ Exit criteria:
 - [x] Normalize state binding for KV cache, diffusion latent/state, training activations, optimizer state, and LoRA
       adapters. Runtime state bindings now round-trip through vNext package JSON and are validated against persistent
       memory buffers.
-- [ ] Make fallback/transfer/profile records available from the same schedule representation across CPU, CUDA, Vulkan,
-      and heterogeneous execution.
+- [x] Make fallback/transfer/profile records available from the same schedule representation across CPU, CUDA, Vulkan,
+      and heterogeneous execution. `RuntimeScheduleProfileRecord` now derives profile rows from runtime schedule steps,
+      and vNext packages preserve fallback backend metadata in runtime step JSON.
 - [ ] Define an ABI version bump rule for changes to tensor binding, external regions, backend requirements, and runtime
       state.
 

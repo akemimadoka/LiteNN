@@ -163,6 +163,49 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.plan.outputs[0].name, "y");
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleFallbackRecords)
+{
+	const auto graph = BuildLinearAddGraph();
+	auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph));
+	ASSERT_FALSE(schedule.memory.buffers.empty());
+	Runtime::RuntimeScheduleStep fallback;
+	fallback.id = schedule.steps.size();
+	fallback.kind = Runtime::RuntimeScheduleStepKind::Fallback;
+	fallback.backend = std::string(BackendCUDANative);
+	fallback.fallbackBackend = std::string(BackendCPUInterpreter);
+	fallback.inputBuffers.push_back(0);
+	fallback.outputBuffers.push_back(0);
+	schedule.steps.push_back(std::move(fallback));
+	ASSERT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+	const auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
+	ASSERT_EQ(profileRecords.size(), schedule.steps.size());
+	EXPECT_EQ(profileRecords.back().fallbackBackend, BackendCPUInterpreter);
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_schedule_fallback_roundtrip.json";
+	Serialization::SaveVNextModelPackage(schedule, path);
+	{
+		std::ifstream input(path, std::ios::binary);
+		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		EXPECT_NE(json.find("\"fallbackBackend\""), std::string::npos);
+		EXPECT_NE(json.find(BackendCPUInterpreter), std::string::npos);
+	}
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	ASSERT_FALSE(package.manifest.runtimeSteps.empty());
+	const auto& loadedFallback = package.manifest.runtimeSteps.back();
+	EXPECT_EQ(loadedFallback.kind, Runtime::RuntimeScheduleStepKind::Fallback);
+	EXPECT_EQ(loadedFallback.backend, BackendCUDANative);
+	EXPECT_EQ(loadedFallback.fallbackBackend, BackendCPUInterpreter);
+	const auto abi = DescribeVNextABIFamily(package.manifest);
+	EXPECT_TRUE(abi.hasFallbackRecords);
+	EXPECT_TRUE(abi.hasProfileRecords);
+	EXPECT_TRUE(std::ranges::contains(abi.runtimeStepRecords,
+	                                  std::format("{}:fallback:{}->{}",
+	                                              loadedFallback.id, BackendCUDANative, BackendCPUInterpreter)));
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
 TEST(G14VNext, VNextModelPackageRoundTripsLoRAAdapterManifest)
 {
 	const auto graph = BuildLinearAddGraphWithLoRAWeights();

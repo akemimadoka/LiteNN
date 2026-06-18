@@ -95,7 +95,21 @@ namespace LiteNN::Runtime
 		std::size_t step{};
 		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
 		std::string backend;
+		std::string fallbackBackend;
 		std::string message;
+	};
+
+	struct RuntimeScheduleProfileRecord
+	{
+		std::size_t step{};
+		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
+		std::string backend;
+		std::string fallbackBackend;
+		std::vector<std::size_t> inputBuffers;
+		std::vector<std::size_t> outputBuffers;
+		std::string label;
+		std::optional<double> wallTimeMs;
+		std::optional<double> deviceTimeMs;
 	};
 
 	struct RuntimeSchedule
@@ -335,9 +349,43 @@ namespace LiteNN::Runtime
 			events.push_back({ .step = step.id,
 			                   .kind = step.kind,
 			                   .backend = step.backend,
+			                   .fallbackBackend = step.fallbackBackend,
 			                   .message = std::move(message) });
 		}
 		return events;
+	}
+
+	inline RuntimeScheduleProfileRecord MakeRuntimeScheduleProfileRecord(const RuntimeScheduleStep& step)
+	{
+		std::string label;
+		if (step.kind == RuntimeScheduleStepKind::Fallback)
+		{
+			label = std::format("{}:{}->{}", RuntimeScheduleStepKindName(step.kind), step.backend,
+			                    step.fallbackBackend);
+		}
+		else
+		{
+			label = std::format("{}:{}", RuntimeScheduleStepKindName(step.kind), step.backend);
+		}
+		return { .step = step.id,
+			     .kind = step.kind,
+			     .backend = step.backend,
+			     .fallbackBackend = step.fallbackBackend,
+			     .inputBuffers = step.inputBuffers,
+			     .outputBuffers = step.outputBuffers,
+			     .label = std::move(label) };
+	}
+
+	inline std::vector<RuntimeScheduleProfileRecord> BuildRuntimeScheduleProfileRecords(
+	    const RuntimeSchedule& schedule)
+	{
+		std::vector<RuntimeScheduleProfileRecord> records;
+		records.reserve(schedule.steps.size());
+		for (const auto& step : schedule.steps)
+		{
+			records.push_back(MakeRuntimeScheduleProfileRecord(step));
+		}
+		return records;
 	}
 
 	inline void ValidateRuntimeSchedule(const RuntimeSchedule& schedule)

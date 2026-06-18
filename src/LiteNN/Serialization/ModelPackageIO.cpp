@@ -551,6 +551,8 @@ namespace LiteNN::Serialization
 				out << "{\"id\":" << step.id << ",\"kind\":" << EnumValue(step.kind) << ",\"function\":"
 				    << step.function << ",\"region\":" << step.region << ",\"backend\":";
 				JsonString(out, step.backend);
+				out << ",\"fallbackBackend\":";
+				JsonString(out, step.fallbackBackend);
 				out << ",\"inputBuffers\":";
 				NumberList(out, step.inputBuffers);
 				out << ",\"outputBuffers\":";
@@ -1225,6 +1227,8 @@ namespace LiteNN::Serialization
 				    .region = static_cast<RegionId>(AsUInt(Member(step, "region", "runtimeStep.region"),
 				                                           "runtimeStep.region")),
 				    .backend = AsString(Member(step, "backend", "runtimeStep.backend"), "runtimeStep.backend"),
+				    .fallbackBackend = AsString(Member(step, "fallbackBackend", "runtimeStep.fallbackBackend"),
+				                                "runtimeStep.fallbackBackend"),
 				    .inputBuffers = SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"),
 				                             "runtimeStep.inputBuffers"),
 				    .outputBuffers = SizeList(Member(step, "outputBuffers", "runtimeStep.outputBuffers"),
@@ -1290,6 +1294,28 @@ namespace LiteNN::Serialization
 			}
 			return manifest;
 		}
+
+		void WriteVNextModelPackageFile(const std::filesystem::path& path,
+		                                const VNextPackageManifest& manifest,
+		                                const ExecutablePlan& plan)
+		{
+			std::ofstream out(path, std::ios::binary);
+			if (!out)
+			{
+				throw std::runtime_error("Failed to open LiteNN vNext model package for writing: " + path.string());
+			}
+			out << "{\"format\":";
+			JsonString(out, kFormat);
+			out << ",\"manifest\":";
+			ManifestJson(out, manifest);
+			out << ",\"plan\":";
+			PlanJson(out, plan);
+			out << "}\n";
+			if (!out)
+			{
+				throw std::runtime_error("Failed to write LiteNN vNext model package: " + path.string());
+			}
+		}
 	} // namespace
 
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
@@ -1302,22 +1328,18 @@ namespace LiteNN::Serialization
 		                                          std::move(adapters), std::move(runtimeStates));
 		ValidateVNextPackageManifest(manifest);
 
-		std::ofstream out(path, std::ios::binary);
-		if (!out)
-		{
-			throw std::runtime_error("Failed to open LiteNN vNext model package for writing: " + path.string());
-		}
-		out << "{\"format\":";
-		JsonString(out, kFormat);
-		out << ",\"manifest\":";
-		ManifestJson(out, manifest);
-		out << ",\"plan\":";
-		PlanJson(out, module.plan);
-		out << "}\n";
-		if (!out)
-		{
-			throw std::runtime_error("Failed to write LiteNN vNext model package: " + path.string());
-		}
+		WriteVNextModelPackageFile(path, manifest, module.plan);
+	}
+
+	void SaveVNextModelPackage(const Runtime::RuntimeSchedule& schedule, const std::filesystem::path& path,
+	                           std::vector<VNextArtifactRef> artifacts,
+	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters)
+	{
+		Runtime::ValidateRuntimeSchedule(schedule);
+		auto manifest = BuildVNextPackageManifest(schedule, std::move(artifacts), std::move(layout),
+		                                          std::move(adapters));
+		ValidateVNextPackageManifest(manifest);
+		WriteVNextModelPackageFile(path, manifest, schedule.module.plan);
 	}
 
 	void SaveVNextModelPackageExternalWeights(const Graph& graph, const std::filesystem::path& path,
