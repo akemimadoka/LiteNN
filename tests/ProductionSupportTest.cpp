@@ -112,3 +112,30 @@ TEST(ProductionSupportTest, ReportsProductionPathABIDiagnostics)
 	EXPECT_TRUE(HasProductionABIDiagnostic("mobile-separated-runtime"));
 	EXPECT_FALSE(HasProductionABIDiagnostic("vnext-model-package"));
 }
+
+TEST(ProductionSupportTest, ReportsBackendProfilesWithoutCollapsingMobileAndDesktop)
+{
+	const auto profiles = QueryProductionBackendProfiles();
+	EXPECT_GE(profiles.size(), 6u);
+
+	const auto cpu = QueryProductionBackendProfile(ProductionBackendProfile::CPUReferenceInterpreter);
+	EXPECT_EQ(cpu.path, ProductionPath::CPUInterpreter);
+	EXPECT_EQ(cpu.level, ProductionSupportLevel::Production);
+	EXPECT_TRUE(cpu.referenceCorrectnessPath);
+	EXPECT_FALSE(cpu.nativeDeviceProfile);
+	EXPECT_TRUE(Contains(cpu.verifiedScope, "Reference correctness"));
+
+	const auto desktopVulkan = QueryProductionBackendProfile(ProductionBackendProfile::VulkanDesktopNative);
+	const auto mobileVulkan = QueryProductionBackendProfile(ProductionBackendProfile::VulkanMobileConstrained);
+	EXPECT_NE(desktopVulkan.name, mobileVulkan.name);
+	EXPECT_TRUE(desktopVulkan.desktopProfile);
+	EXPECT_FALSE(desktopVulkan.mobileProfile);
+	EXPECT_FALSE(desktopVulkan.allowsHostFallback);
+	EXPECT_FALSE(mobileVulkan.desktopProfile);
+	EXPECT_TRUE(mobileVulkan.mobileProfile);
+	EXPECT_TRUE(mobileVulkan.allowsHostFallback);
+	EXPECT_TRUE(desktopVulkan.requiresDeviceCapabilityProbe);
+	EXPECT_TRUE(mobileVulkan.requiresDeviceCapabilityProbe);
+	EXPECT_TRUE(Contains(desktopVulkan.skipOrFailurePolicy, "skip or fail explicitly"));
+	EXPECT_TRUE(Contains(mobileVulkan.skipOrFailurePolicy, "skip/fail explicitly"));
+}

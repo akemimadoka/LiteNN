@@ -43,6 +43,16 @@ namespace LiteNN
 		Unavailable,
 	};
 
+	enum class ProductionBackendProfile
+	{
+		CPUReferenceInterpreter,
+		CPUAOTSeparatedArtifact,
+		CUDANativeGraphReplay,
+		CUDACPUBridgeFallback,
+		VulkanDesktopNative,
+		VulkanMobileConstrained,
+	};
+
 	struct ProductionSupportStatus
 	{
 		ProductionSupportArea area;
@@ -75,6 +85,26 @@ namespace LiteNN
 		bool usesChecksums;
 		bool allowsHostFallback;
 		bool requiresStableDevicePointers;
+	};
+
+	struct ProductionBackendProfileDescriptor
+	{
+		ProductionBackendProfile profile;
+		std::string_view name;
+		ProductionPath path;
+		ProductionSupportArea area;
+		ProductionSupportLevel level;
+		bool availableInBuild;
+		bool referenceCorrectnessPath;
+		bool desktopProfile;
+		bool mobileProfile;
+		bool nativeDeviceProfile;
+		bool requiresDeviceCapabilityProbe;
+		bool requiresScheduleProfileVisibility;
+		bool allowsHostFallback;
+		std::string_view verifiedScope;
+		std::string_view missingBeforeProduction;
+		std::string_view skipOrFailurePolicy;
 	};
 
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
@@ -145,6 +175,26 @@ namespace LiteNN
 			return "deferred";
 		case ProductionSupportLevel::Unavailable:
 			return "unavailable";
+		}
+		return "unknown";
+	}
+
+	inline constexpr std::string_view ProductionBackendProfileName(ProductionBackendProfile profile)
+	{
+		switch (profile)
+		{
+		case ProductionBackendProfile::CPUReferenceInterpreter:
+			return "cpu-reference-interpreter";
+		case ProductionBackendProfile::CPUAOTSeparatedArtifact:
+			return "cpu-aot-separated-artifact";
+		case ProductionBackendProfile::CUDANativeGraphReplay:
+			return "cuda-native-graph-replay";
+		case ProductionBackendProfile::CUDACPUBridgeFallback:
+			return "cuda-cpu-bridge-fallback";
+		case ProductionBackendProfile::VulkanDesktopNative:
+			return "vulkan-desktop-native";
+		case ProductionBackendProfile::VulkanMobileConstrained:
+			return "vulkan-mobile-constrained";
 		}
 		return "unknown";
 	}
@@ -444,6 +494,136 @@ namespace LiteNN
 			     false };
 	}
 
+	inline constexpr ProductionBackendProfileDescriptor QueryProductionBackendProfile(
+	    ProductionBackendProfile profile)
+	{
+		switch (profile)
+		{
+		case ProductionBackendProfile::CPUReferenceInterpreter:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::CPUInterpreter,
+				     ProductionSupportArea::CPURuntime,
+				     ProductionSupportLevel::Production,
+				     true,
+				     true,
+				     true,
+				     false,
+				     false,
+				     false,
+				     true,
+				     false,
+				     "Reference correctness, diagnostics, constant evaluation, and fallback-free host execution.",
+				     "Not intended to be the peak-throughput production kernel strategy.",
+				     "Always available; failures are graph/runtime validation errors, not device skips." };
+		case ProductionBackendProfile::CPUAOTSeparatedArtifact:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::CPUAOTSeparatedArtifact,
+				     ProductionSupportArea::CPUAOT,
+				     ProductionBuildHasMLIR() ? ProductionSupportLevel::Production
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasMLIR(),
+				     false,
+				     true,
+				     false,
+				     false,
+				     false,
+				     true,
+				     false,
+				     "Reference deployment profile for CPU AOT packages with separated rodata/weights/instructions.",
+				     "External CPU kernel-library strategy is still undecided.",
+				     "Unavailable MLIR/compiler support must fail configure/build or route to interpreter explicitly." };
+		case ProductionBackendProfile::CUDANativeGraphReplay:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::CUDANativeGraphReplay,
+				     ProductionSupportArea::CUDARuntime,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     false,
+				     true,
+				     false,
+				     true,
+				     true,
+				     true,
+				     false,
+				     "Static-shape native CUDA execution with pointer-stable graph replay.",
+				     "Kernel coverage still needs high-value Linear/MatMul, normalization, attention, and quantized paths.",
+				     "Unsupported replay constraints fail loudly instead of silently switching execution mode." };
+		case ProductionBackendProfile::CUDACPUBridgeFallback:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::CUDACPUBridgeFallback,
+				     ProductionSupportArea::CUDARuntime,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Experimental
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     false,
+				     true,
+				     false,
+				     true,
+				     true,
+				     true,
+				     true,
+				     "Diagnostic/profile-visible bridge for unsupported CUDA segments.",
+				     "Not a production-performance claim until transfer/fallback rows are separated in benchmarks.",
+				     "Host fallback is allowed only when schedule/profile records expose the fallback step." };
+		case ProductionBackendProfile::VulkanDesktopNative:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::VulkanNativeSeparatedArtifact,
+				     ProductionSupportArea::VulkanRuntime,
+				     ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental
+				                                : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasVulkan(),
+				     false,
+				     true,
+				     false,
+				     true,
+				     true,
+				     true,
+				     false,
+				     "Desktop Vulkan native payloads for selected static-shape workloads.",
+				     "Graph partitioning and a clearer device-local memory planner remain before broader production claims.",
+				     "Missing storage, subgroup, timestamp, or alignment capabilities must skip or fail explicitly." };
+		case ProductionBackendProfile::VulkanMobileConstrained:
+			return { profile,
+				     ProductionBackendProfileName(profile),
+				     ProductionPath::MobileSeparatedRuntime,
+				     ProductionSupportArea::MobileRuntime,
+				     ProductionSupportLevel::Experimental,
+				     ProductionBuildHasVulkan(),
+				     false,
+				     false,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     "Constrained mobile runtime profile using vNext packages and Vulkan-oriented explicit capabilities.",
+				     "Needs mobile device matrix, memory-mapping policy, and device-local allocation planning.",
+				     "Unavailable mobile GPU features must skip/fail explicitly or use a declared CPU path." };
+		}
+		return { profile,
+			     ProductionBackendProfileName(profile),
+			     ProductionPath::VNextModelPackage,
+			     ProductionSupportArea::VNextPackaging,
+			     ProductionSupportLevel::Unavailable,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     "Unknown backend profile.",
+			     "Unknown backend profile.",
+			     "Unknown backend profile." };
+	}
+
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()
 	{
 		return {
@@ -458,6 +638,18 @@ namespace LiteNN
 			QueryProductionSupportStatus(ProductionSupportArea::MobileRuntime),
 			QueryProductionSupportStatus(ProductionSupportArea::TrainingAOT),
 			QueryProductionSupportStatus(ProductionSupportArea::SDXLGeneration),
+		};
+	}
+
+	inline std::vector<ProductionBackendProfileDescriptor> QueryProductionBackendProfiles()
+	{
+		return {
+			QueryProductionBackendProfile(ProductionBackendProfile::CPUReferenceInterpreter),
+			QueryProductionBackendProfile(ProductionBackendProfile::CPUAOTSeparatedArtifact),
+			QueryProductionBackendProfile(ProductionBackendProfile::CUDANativeGraphReplay),
+			QueryProductionBackendProfile(ProductionBackendProfile::CUDACPUBridgeFallback),
+			QueryProductionBackendProfile(ProductionBackendProfile::VulkanDesktopNative),
+			QueryProductionBackendProfile(ProductionBackendProfile::VulkanMobileConstrained),
 		};
 	}
 

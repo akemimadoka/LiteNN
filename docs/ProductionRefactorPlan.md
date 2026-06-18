@@ -86,7 +86,8 @@ Exit criteria:
 
 CPU:
 
-- [ ] Keep CPU interpreter as the reference path.
+- [x] Keep CPU interpreter as the reference path. `ProductionBackendProfile::CPUReferenceInterpreter` is the explicit
+      reference correctness profile.
 - [ ] Decide whether CPU production kernels use an external library backend or a small maintained native kernel set.
 - [ ] Avoid expanding hand-written CPU GEMM/Conv kernels without a clear backend strategy.
 
@@ -102,9 +103,11 @@ CUDA:
 Vulkan/mobile:
 
 - [ ] Finish graph partitioning and device-local memory planning before claiming broad mobile GPU production support.
-- [ ] Keep desktop Vulkan and mobile Vulkan as separate support profiles.
-- [ ] Require explicit skip/failure behavior when a device lacks required storage, subgroup, timestamp, or alignment
-      capabilities.
+- [x] Keep desktop Vulkan and mobile Vulkan as separate support profiles.
+      `ProductionBackendProfile::VulkanDesktopNative` and `VulkanMobileConstrained` report different scope, fallback,
+      and capability policies.
+- [x] Require explicit skip/failure behavior when a device lacks required storage, subgroup, timestamp, or alignment
+      capabilities. Backend profiles now expose the skip/failure policy that Vulkan tests and device probes must honor.
 
 Exit criteria:
 
