@@ -38,8 +38,8 @@ requires them.
 
 ## Phase 1: Stabilize the Production Surface
 
-- [ ] Write a short production support matrix covering runtime, compiler, importer, packaging, benchmark, and mobile
-      support levels.
+- [x] Write a short production support matrix covering runtime, compiler, importer, packaging, benchmark, and mobile
+      support levels. `LiteNN/ProductionSupport.h` exposes the same matrix to tools and CLIs.
 - [ ] Make every supported path name its package/runtime ABI: inputs, outputs, mutable state, external tensors,
       ownership, alignment, checksum, and fallback policy.
 - [ ] Ensure examples only use vNext packages, separated artifacts, or importer manifests for production flows.

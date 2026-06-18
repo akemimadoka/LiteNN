@@ -26,6 +26,7 @@
 #include <LiteNN/Pass.h>
 #include <LiteNN/Pass/EGraphPass.h>
 #include <LiteNN/Pass/ForwardOnlyPass.h>
+#include <LiteNN/ProductionSupport.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Runtime/Placement.h>
 #include <LiteNN/Runtime/Scheduler.h>
