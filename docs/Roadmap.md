@@ -108,13 +108,16 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       separate packed dtype set. Completed by `PackedNibbleFormat` metadata on `QuantizationParams`.
 - [x] Define fp4 variant identifiers explicitly, starting with common e2m1/e3m0-style formats required by target
       hardware/importers.
-- [ ] Define fp4 NaN/Inf/subnormal/rounding policy and implement numeric conversion golden tests.
+- [x] Define fp4 NaN/Inf/subnormal/rounding policy and implement numeric conversion golden tests.
+      Current CPU reference policy is finite-only, round-to-nearest with ties to the larger magnitude,
+      saturation for overflow/non-finite inputs, E2M1 subnormal 0.5, and E3M0 power-of-two grid.
 - [x] Extend quantization metadata with packed nibble layout, signedness, block scale layout, and byte-order rules so
       GGUF, safetensors-like extensions, and future vendor formats can share one contract.
-- [ ] Add CPU reference pack/unpack, dequantize, and optional quantize helpers for int4/uint4/fp4 with golden tests.
-      Current slice: int4/uint4 pack/unpack golden tests are present; fp4 numeric conversion and dequantize remain.
-- [ ] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
-      into supported compute dtypes when a backend has no native 4-bit kernel.
+- [x] Add CPU reference pack/unpack, dequantize, and optional quantize helpers for int4/uint4/fp4 with golden tests.
+      `PackInteger4`, `UnpackInteger4`, `PackFloat4`, and `DequantizePackedNibble` cover the current CPU reference path.
+- [x] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
+      into supported compute dtypes when a backend has no native 4-bit kernel. The existing `DequantizeNode` now
+      materializes packed-nibble block quantization in the interpreter and ConstFold path.
 - [ ] Add native quantized MatMul/Linear paths in priority order: CPU reference, CUDA/cuBLASLt or custom kernels,
       Vulkan shader path, then CPU AOT lowering.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled

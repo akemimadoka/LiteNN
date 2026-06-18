@@ -1,6 +1,7 @@
 #include <LiteNN/Tensor.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -234,6 +235,11 @@ namespace LiteNN
 		return format == PackedNibbleFormat::Int4 || format == PackedNibbleFormat::UInt4;
 	}
 
+	inline bool IsFloatPackedNibbleFormat(PackedNibbleFormat format)
+	{
+		return format == PackedNibbleFormat::FP4E2M1 || format == PackedNibbleFormat::FP4E3M0;
+	}
+
 	namespace QuantizationDetail
 	{
 		inline std::size_t CeilDiv(std::size_t lhs, std::size_t rhs)
@@ -345,6 +351,51 @@ namespace LiteNN
 			DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), DataType::Float32,
 			                             converted.UnsafeRawData());
 			return converted;
+		}
+
+		inline std::span<const float> FP4PositiveValues(PackedNibbleFormat format)
+		{
+			static constexpr std::array kE2M1 = { 0.0F, 0.5F, 1.0F, 1.5F, 2.0F, 3.0F, 4.0F, 6.0F };
+			static constexpr std::array kE3M0 = { 0.0F, 0.25F, 0.5F, 1.0F, 2.0F, 4.0F, 8.0F, 16.0F };
+			switch (format)
+			{
+			case PackedNibbleFormat::FP4E2M1:
+				return kE2M1;
+			case PackedNibbleFormat::FP4E3M0:
+				return kE3M0;
+			default:
+				throw std::runtime_error("Unsupported FP4 packed format");
+			}
+		}
+
+		inline std::uint8_t Float32ToFP4Bits(float value, PackedNibbleFormat format)
+		{
+			const auto sign = std::signbit(value) ? 0x08U : 0U;
+			auto magnitude = std::fabs(value);
+			const auto values = FP4PositiveValues(format);
+			if (!std::isfinite(magnitude))
+			{
+				return static_cast<std::uint8_t>(sign | 0x07U);
+			}
+			std::size_t best = 0;
+			auto bestDistance = std::numeric_limits<float>::infinity();
+			for (std::size_t i = 0; i < values.size(); ++i)
+			{
+				const auto distance = std::fabs(magnitude - values[i]);
+				if (distance < bestDistance || (distance == bestDistance && values[i] > values[best]))
+				{
+					best = i;
+					bestDistance = distance;
+				}
+			}
+			return static_cast<std::uint8_t>(sign | best);
+		}
+
+		inline float FP4BitsToFloat32(std::uint8_t bits, PackedNibbleFormat format)
+		{
+			const auto sign = (bits & 0x08U) != 0 ? -1.0F : 1.0F;
+			const auto values = FP4PositiveValues(format);
+			return sign * values[bits & 0x07U];
 		}
 	} // namespace QuantizationDetail
 
@@ -710,6 +761,48 @@ namespace LiteNN
 		return storage;
 	}
 
+	inline Tensor<CPU> PackFloat4(const Tensor<CPU>& source, QuantizationParams params)
+	{
+		if (!IsFloatPackedNibbleFormat(params.packedFormat))
+		{
+			throw std::runtime_error("PackFloat4 requires FP4 packed format");
+		}
+		if (!IsFloatingDataType(source.DType()))
+		{
+			throw std::runtime_error("PackFloat4 requires floating-point source tensor");
+		}
+		params.scheme = QuantizationScheme::Block;
+		params.blockFormat = QuantizedBlockFormat::PackedNibble;
+		params.storageType = DataType::UInt8;
+		if (params.expressedShape.empty())
+		{
+			params.expressedShape = source.Shape().ToOwned();
+		}
+		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(), std::size_t{ 2 }) };
+		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+
+		const auto sourceF32 = QuantizationDetail::CopyToFloat32(source);
+		const auto* src = static_cast<const float*>(sourceF32.UnsafeRawData());
+		auto* dst = static_cast<std::uint8_t*>(storage.UnsafeRawData());
+		const auto scale = params.scales.empty() ? 1.0F : params.scales[0];
+		if (!(std::isfinite(scale) && scale > 0.0F))
+		{
+			throw std::runtime_error("PackFloat4 requires a finite positive scale");
+		}
+		for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
+		{
+			const auto first = QuantizationDetail::Float32ToFP4Bits(src[byte * 2] / scale, params.packedFormat);
+			const auto second = byte * 2 + 1 < source.NumElements()
+			                      ? QuantizationDetail::Float32ToFP4Bits(src[byte * 2 + 1] / scale, params.packedFormat)
+			                      : std::uint8_t{ 0 };
+			dst[byte] = params.packedOrder == PackedNibbleOrder::LowThenHigh
+			              ? static_cast<std::uint8_t>(first | (second << 4))
+			              : static_cast<std::uint8_t>((first << 4) | second);
+		}
+		return storage;
+	}
+
 	inline Tensor<CPU> UnpackInteger4(const Tensor<CPU>& storage, const QuantizationParams& params)
 	{
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
@@ -747,6 +840,65 @@ namespace LiteNN
 			write(byte * 2, first);
 			write(byte * 2 + 1, second);
 		}
+		return output;
+	}
+
+	inline Tensor<CPU> DequantizePackedNibble(const Tensor<CPU>& storage, const QuantizationParams& params,
+	                                          DataType targetType = DataType::Float32)
+	{
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+		if (!IsFloatingDataType(targetType))
+		{
+			throw std::runtime_error("DequantizePackedNibble target type must be floating-point");
+		}
+		if (!IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+		{
+			throw std::runtime_error("DequantizePackedNibble requires packed nibble quantization");
+		}
+		const std::vector<std::size_t> outputShape{ params.expressedShape };
+		Tensor<CPU> output(Uninitialized, outputShape, targetType);
+		const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+		const auto scale = params.scales.empty() ? 1.0F : params.scales[0];
+		const auto zeroPoint = params.zeroPoints.empty() ? 0 : params.zeroPoints[0];
+
+		EnumDispatch(targetType, [&]<DataType TargetTypeValue> {
+			if constexpr (IsFloatingDataType(TargetTypeValue))
+			{
+				using TargetT = typename DeviceTraits<CPU>::template DataTypeMapping<TargetTypeValue>;
+				auto* dst = static_cast<TargetT*>(output.UnsafeRawData());
+				const auto decode = [&](std::uint8_t nibble) {
+					if (IsIntegerPackedNibbleFormat(params.packedFormat))
+					{
+						std::int32_t value = nibble;
+						if (params.packedFormat == PackedNibbleFormat::Int4 && (nibble & 0x08U) != 0)
+						{
+							value -= 16;
+						}
+						return (static_cast<float>(value) - static_cast<float>(zeroPoint)) * scale;
+					}
+					if (IsFloatPackedNibbleFormat(params.packedFormat))
+					{
+						return QuantizationDetail::FP4BitsToFloat32(nibble, params.packedFormat) * scale;
+					}
+					throw std::runtime_error("Unsupported packed nibble format");
+				};
+				for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
+				{
+					const auto low = static_cast<std::uint8_t>(src[byte] & 0x0f);
+					const auto high = static_cast<std::uint8_t>((src[byte] >> 4) & 0x0f);
+					const auto first = params.packedOrder == PackedNibbleOrder::LowThenHigh ? low : high;
+					const auto second = params.packedOrder == PackedNibbleOrder::LowThenHigh ? high : low;
+					const auto write = [&](std::size_t index, std::uint8_t nibble) {
+						if (index < output.NumElements())
+						{
+							dst[index] = static_cast<TargetT>(decode(nibble));
+						}
+					};
+					write(byte * 2, first);
+					write(byte * 2 + 1, second);
+				}
+			}
+		});
 		return output;
 	}
 } // namespace LiteNN

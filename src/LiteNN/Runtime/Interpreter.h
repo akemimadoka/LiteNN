@@ -556,11 +556,18 @@ namespace LiteNN::Runtime
 		{
 			if (node.params.scheme != QuantizationScheme::Affine)
 			{
-				throw std::runtime_error("Interpreter DequantizeNode currently supports affine quantization only");
+				if (node.params.scheme != QuantizationScheme::Block ||
+				    !IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))
+				{
+					throw std::runtime_error(
+					    "Interpreter DequantizeNode currently supports affine and packed nibble quantization only");
+				}
 			}
 			const auto& input = GetValue(slots, node.input);
 			const auto cpuInput = input.CopyToDevice(CPU{});
-			auto dequantized = DequantizeAffine(cpuInput, node.params, node.targetType);
+			auto dequantized = node.params.scheme == QuantizationScheme::Affine
+			                     ? DequantizeAffine(cpuInput, node.params, node.targetType)
+			                     : DequantizePackedNibble(cpuInput, node.params, node.targetType);
 			slots[nodeId].push_back(dequantized.CopyToDevice(device));
 		}
 

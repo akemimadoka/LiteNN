@@ -77,9 +77,13 @@ namespace LiteNN
 		{
 			if (params.scheme != QuantizationScheme::Affine)
 			{
-				throw std::runtime_error("ConstFoldPass only folds affine DequantizeNode");
+				if (params.scheme != QuantizationScheme::Block || !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+				{
+					throw std::runtime_error("ConstFoldPass only folds affine and packed nibble DequantizeNode");
+				}
 			}
-			return DequantizeAffine(input, params, targetType);
+			return params.scheme == QuantizationScheme::Affine ? DequantizeAffine(input, params, targetType)
+			                                                   : DequantizePackedNibble(input, params, targetType);
 		}
 
 		static Tensor<CPU> EvalReduceOp(ReduceOp op, const Tensor<CPU>& input, std::size_t axis,
@@ -896,7 +900,10 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, DequantizeNode>)
 					    {
-						    if (isConst[node.input.node] && node.params.scheme == QuantizationScheme::Affine)
+						    if (isConst[node.input.node] &&
+						        (node.params.scheme == QuantizationScheme::Affine ||
+						         (node.params.scheme == QuantizationScheme::Block &&
+						          IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))))
 						    {
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
