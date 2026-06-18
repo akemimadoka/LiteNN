@@ -4,6 +4,28 @@ This document is the planning entry for LiteNN. It is organized as a goal tree.
 Date notes are kept at the end as historical hints, while the checklists below
 are the source of truth for current planning and completion status.
 
+## Production Refactor Focus
+
+The current active direction is documented in `docs/ProductionRefactorPlan.md`. Near-term work should prefer stabilizing
+the vNext production profile over adding more isolated feature breadth.
+
+Current production profile target:
+
+- vNext model packages and separated compiled artifacts are the durable deployment formats.
+- `ExecutablePlan` plus runtime schedule metadata is the stable runtime/compiler boundary.
+- CPU interpreter is the correctness/debug reference; CPU AOT is the first production package/load path.
+- CUDA and Vulkan are optional native backends with explicit capability checks and visible fallback policy.
+- Importers should produce manifests/packages with diagnostics rather than leaking raw graph construction details.
+
+Current demotion/removal policy:
+
+- Do not reintroduce pre-vNext graph archives or raw `Graph&` public runtime/compiler entry points.
+- Do not allow hidden CPU fallback inside GPU paths.
+- Do not block vNext production stabilization on full SDXL generation, full llama.cpp operator parity, full AOT training,
+  or broad mobile Vulkan device coverage.
+- Do not add fake byte-addressable int4/fp4 `DataType` values; packed 4-bit support should start from storage and
+  quantization metadata.
+
 ## Goal Tree
 
 ### G1: Low Precision and Quantization Foundation
