@@ -1,5 +1,6 @@
 #include <LiteNN.h>
 #include <LiteNN/Compiler/CompiledModule.h>
+#include <LiteNN/Pass/FusionPass.h>
 
 #include <array>
 #include <exception>
@@ -87,6 +88,42 @@ namespace
 		return graph;
 	}
 
+	Graph BuildLinearExternalWeightsGraph()
+	{
+		Graph graph;
+		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
+		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 },
+		    DataType::Float32)));
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 },
+		                                                     DataType::Float32)));
+		graph.SetVariableName(weightIndex, "linear.weight");
+		graph.SetVariableName(biasIndex, "linear.bias");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
+		const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
+		                               { OutputInfo{ DataType::Float32, { 3, 4 } } });
+		const auto bias =
+		    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		Tensor<CPU> zero({ 0.0f }, { 1, 1 }, DataType::Float32);
+		const auto zeroNode = sg.AddNode(ConstantNode{ zero.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                 { OutputInfo{ DataType::Float32, { 1, 1 } } });
+		const auto relu = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted, 0 }, { zeroNode, 0 } },
+		                             { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		sg.SetResults({ { relu, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "relu" });
+		FusionPass{}.Run(graph);
+		return graph;
+	}
+
 	std::string_view BackendName(CompiledModuleBackend backend)
 	{
 		switch (backend)
@@ -144,6 +181,15 @@ namespace
 			Tensor<Vulkan>({ 1.0, 2.0, 3.0, 4.0 }, { 4 }, DataType::Float32, device),
 			Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
 			Tensor<Vulkan>({ 100.0, 200.0, 300.0, 400.0 }, { 4 }, DataType::Float32, device),
+		};
+		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+		return CopyToHost(outputs[0]);
+	}
+
+	std::array<float, 4> RunLinear(const CompiledModule<Vulkan>& module, Vulkan device)
+	{
+		std::array inputs{
+			Tensor<Vulkan>({ 1.0, 2.0, 3.0 }, { 1, 3 }, DataType::Float32, device),
 		};
 		auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
 		return CopyToHost(outputs[0]);
@@ -208,6 +254,23 @@ int main()
 	          << " constants=" << separated.Constants().size()
 	          << " weights=" << separated.Weights().size()
 	          << " instructions=" << separated.Instructions().size() << '\n';
+
+	auto linearGraph = BuildLinearExternalWeightsGraph();
+	PrintNativeSupport("LinearExternalWeights", linearGraph);
+	auto linearArtifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(linearGraph));
+	std::cout << "LinearExternalWeights artifact backend: " << BackendName(linearArtifact.Backend()) << '\n';
+	auto linearSeparated = linearArtifact.SeparateRodata();
+	std::cout << "LinearExternalWeights separated regions: metadata=" << linearSeparated.Metadata().size()
+	          << " constants=" << linearSeparated.Constants().size()
+	          << " weights=" << linearSeparated.Weights().size()
+	          << " instructions=" << linearSeparated.Instructions().size()
+	          << " external_tensors=" << linearSeparated.ExternalTensorInfos().size() << '\n';
+	if (linearArtifact.Backend() != CompiledModuleBackend::VulkanNative || linearSeparated.Weights().empty())
+	{
+		throw std::runtime_error("expected Vulkan-native LinearExternalWeights to use a non-empty separated weights region");
+	}
+	auto linearSeparatedModule = linearSeparated.LoadBorrowedExternalRegions(device);
+	PrintResult("Vulkan LinearExternalWeights separated result:", RunLinear(linearSeparatedModule, device));
 
 	auto chainGraph = BuildTwoAddGraph();
 	PrintNativeSupport("TwoAdd", chainGraph);

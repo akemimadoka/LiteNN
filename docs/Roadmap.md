@@ -851,7 +851,9 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 
 - [ ] Add host-side cross-compile smoke tests in CI once toolchains are available.
 - [ ] Add on-device or emulator smoke tests for tensor ops, model loading, and a small inference graph.
-- [ ] Add mobile package examples using separated rodata/weights from G9.
+- [x] Add mobile package examples using separated rodata/weights from G9: `example/vulkan` now demonstrates both
+      metadata/instruction-only Vulkan-native Add and a fused LinearExternalWeights graph with a non-empty separated
+      weights region loaded through borrowed external regions.
 - [ ] Track performance and memory baselines for at least one small MLP/CNN and one tiny transformer block.
 
 ### G12: Torch and Safetensors Import
