@@ -316,6 +316,28 @@ namespace LiteNN::Serialization
 			out << ",\"aliasSet\":" << binding.aliasSet << '}';
 		}
 
+		void RuntimeStateBindingJson(std::ostream& out, const Runtime::RuntimeStateBinding& binding)
+		{
+			out << "{\"name\":";
+			JsonString(out, binding.name);
+			out << ",\"kind\":" << EnumValue(binding.kind) << ",\"role\":";
+			JsonString(out, binding.role);
+			out << ",\"type\":";
+			TensorTypeJson(out, binding.type);
+			out << ",\"mutability\":" << EnumValue(binding.mutability) << ",\"effects\":";
+			StringListJson(out, binding.effects);
+			out << ",\"memoryBuffer\":";
+			if (binding.memoryBuffer)
+			{
+				out << *binding.memoryBuffer;
+			}
+			else
+			{
+				out << "null";
+			}
+			out << '}';
+		}
+
 		void AdapterRefJson(std::ostream& out, const VNextAdapterRef& adapter)
 		{
 			out << "{\"targetName\":";
@@ -535,7 +557,16 @@ namespace LiteNN::Serialization
 				NumberList(out, step.outputBuffers);
 				out << '}';
 			}
-			out << "],\"runtimeStates\":[],\"bufferBindings\":[";
+			out << "],\"runtimeStates\":[";
+			for (std::size_t i = 0; i < manifest.runtimeStates.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				RuntimeStateBindingJson(out, manifest.runtimeStates[i]);
+			}
+			out << "],\"bufferBindings\":[";
 			for (std::size_t i = 0; i < manifest.bufferBindings.size(); ++i)
 			{
 				if (i != 0)
@@ -998,6 +1029,24 @@ namespace LiteNN::Serialization
 			return binding;
 		}
 
+		Runtime::RuntimeStateBinding ParseRuntimeStateBinding(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			Runtime::RuntimeStateBinding binding;
+			binding.name = AsString(Member(object, "name", label), label);
+			binding.kind = static_cast<Runtime::RuntimeStateKind>(AsUInt(Member(object, "kind", label), label));
+			binding.role = AsString(Member(object, "role", label), label);
+			binding.type = ParseTensorType(Member(object, "type", label), label);
+			binding.mutability = static_cast<BufferMutability>(AsUInt(Member(object, "mutability", label), label));
+			binding.effects = StringList(Member(object, "effects", label), label);
+			const auto memoryBuffer = Member(object, "memoryBuffer", label);
+			if (!memoryBuffer.is_null())
+			{
+				binding.memoryBuffer = static_cast<std::size_t>(AsUInt(memoryBuffer, label));
+			}
+			return binding;
+		}
+
 		VNextAdapterRef ParseAdapterRef(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -1152,6 +1201,11 @@ namespace LiteNN::Serialization
 				manifest.partitions.push_back(std::move(partition));
 			}
 			manifest.memory = ParseMemory(Member(object, "memory", "manifest.memory"), "manifest.memory");
+			for (const auto item : AsArray(Member(object, "runtimeStates", "manifest.runtimeStates"),
+			                              "manifest.runtimeStates"))
+			{
+				manifest.runtimeStates.push_back(ParseRuntimeStateBinding(item, "manifest.runtimeStates"));
+			}
 			for (const auto item : AsArray(Member(object, "bufferBindings", "manifest.bufferBindings"),
 			                              "manifest.bufferBindings"))
 			{
@@ -1236,10 +1290,12 @@ namespace LiteNN::Serialization
 
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
 	                           std::vector<VNextArtifactRef> artifacts,
-	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters)
+	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters,
+	                           std::vector<Runtime::RuntimeStateBinding> runtimeStates)
 	{
 		ValidateExecutablePlan(module.plan);
-		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout), std::move(adapters));
+		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout),
+		                                          std::move(adapters), std::move(runtimeStates));
 		ValidateVNextPackageManifest(manifest);
 
 		std::ofstream out(path, std::ios::binary);

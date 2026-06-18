@@ -65,8 +65,9 @@ Exit criteria:
       over package versions, functions, runtime state/buffer bindings, tensor bindings, and artifact entries/regions.
 - [ ] Add named entry-point metadata for future multi-entry artifacts: `forward`, `loss`, `backward`, `optimizer_step`,
       and backend-specific entry names.
-- [ ] Normalize state binding for KV cache, diffusion latent/state, training activations, optimizer state, and LoRA
-      adapters.
+- [x] Normalize state binding for KV cache, diffusion latent/state, training activations, optimizer state, and LoRA
+      adapters. Runtime state bindings now round-trip through vNext package JSON and are validated against persistent
+      memory buffers.
 - [ ] Make fallback/transfer/profile records available from the same schedule representation across CPU, CUDA, Vulkan,
       and heterogeneous execution.
 - [ ] Define an ABI version bump rule for changes to tensor binding, external regions, backend requirements, and runtime

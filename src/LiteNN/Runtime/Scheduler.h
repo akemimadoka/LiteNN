@@ -20,7 +20,8 @@ namespace LiteNN::Runtime
 		Generic,
 		KVCache,
 		Diffusion,
-		Training
+		Training,
+		LoRAAdapter
 	};
 
 	struct RuntimeStateBinding
@@ -58,6 +59,13 @@ namespace LiteNN::Runtime
 		std::vector<RuntimeStateBinding> optimizerStates;
 		std::optional<RuntimeStateBinding> lossInputs;
 		std::string recomputationStrategy{ "none" };
+	};
+
+	struct LoRAAdapterExecutionABI
+	{
+		std::vector<RuntimeStateBinding> adapterWeights;
+		std::optional<RuntimeStateBinding> activeAdapter;
+		std::optional<RuntimeStateBinding> mergeState;
 	};
 
 	enum class RuntimeScheduleStepKind
@@ -150,6 +158,13 @@ namespace LiteNN::Runtime
 	{
 		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::Training, std::move(role),
 		                               std::move(type), mutability, { "read", "write" });
+	}
+
+	inline RuntimeStateBinding MakeLoRAAdapterState(std::string name, std::string role, TensorType type,
+	                                                BufferMutability mutability = BufferMutability::Mutable)
+	{
+		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::LoRAAdapter, std::move(role),
+		                               std::move(type), mutability, { "read", "rebind", "merge" });
 	}
 
 	inline RuntimeSchedule BuildRuntimeSchedule(ExecutableModule module, std::vector<RuntimeStateBinding> states = {})

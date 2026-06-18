@@ -186,6 +186,7 @@ namespace LiteNN
 	inline VNextPackageManifest BuildVNextPackageManifest(
 	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts = {},
 	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
+	    std::vector<Runtime::RuntimeStateBinding> runtimeStates = {},
 	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		ValidateExecutablePlan(module.plan, registry);
@@ -194,7 +195,7 @@ namespace LiteNN
 		manifest.functions = module.functions;
 		manifest.regions = module.regions;
 		manifest.partitions = module.partitions;
-		auto schedule = Runtime::BuildRuntimeSchedule(module);
+		auto schedule = Runtime::BuildRuntimeSchedule(module, std::move(runtimeStates));
 		Runtime::ValidateRuntimeSchedule(schedule);
 		manifest.memory = std::move(schedule.memory);
 		manifest.runtimeStates = std::move(schedule.states);
@@ -211,6 +212,15 @@ namespace LiteNN
 			    storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name, storage));
 		}
 		return manifest;
+	}
+
+	inline VNextPackageManifest BuildVNextPackageManifest(
+	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts,
+	    VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters,
+	    const OpSchemaRegistry& registry)
+	{
+		return BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout),
+		                                 std::move(adapters), {}, registry);
 	}
 
 	inline void ValidateVNextPackageManifest(const VNextPackageManifest& manifest)
@@ -312,6 +322,37 @@ namespace LiteNN
 				{
 					throw std::runtime_error(std::format("vNext runtime step {} references invalid output buffer", i));
 				}
+			}
+		}
+		for (const auto& state : manifest.runtimeStates)
+		{
+			if (state.name.empty())
+			{
+				throw std::runtime_error("vNext runtime state binding name cannot be empty");
+			}
+			if (state.role.empty())
+			{
+				throw std::runtime_error("vNext runtime state binding role cannot be empty: " + state.name);
+			}
+			ValidateExecutableTensorType(state.type, "vNext runtime state " + state.name);
+			if (!state.memoryBuffer || *state.memoryBuffer >= manifest.memory.buffers.size())
+			{
+				throw std::runtime_error("vNext runtime state binding references an invalid memory buffer: " +
+				                         state.name);
+			}
+			const auto& buffer = manifest.memory.buffers[*state.memoryBuffer];
+			if (buffer.kind != MemoryBufferKind::Persistent)
+			{
+				throw std::runtime_error("vNext runtime state binding must use a persistent buffer: " + state.name);
+			}
+			if (buffer.memorySpace != state.type.memorySpace)
+			{
+				throw std::runtime_error("vNext runtime state binding memory space mismatch: " + state.name);
+			}
+			if (const auto stateBytes = state.type.ByteSize(); stateBytes && *stateBytes > buffer.byteSize)
+			{
+				throw std::runtime_error("vNext runtime state binding is larger than its memory buffer: " +
+				                         state.name);
 			}
 		}
 		for (const auto& binding : manifest.bufferBindings)
