@@ -837,7 +837,8 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 
 #### G11.2 Runtime Constraints
 
-- [ ] Add allocator hooks or arena-style allocation for predictable memory usage.
+- [x] Add allocator hooks or arena-style allocation for predictable memory usage: `CPU` now accepts an optional
+      `CPUAllocator`, and `CPULinearArena` provides a resettable bump allocator for CPU/mobile fallback tensors.
 - [x] Add binary-size and model-size reporting for mobile builds: `scripts/mobile_size_report.py` scans mobile build
       binaries and LiteNN model/package asset regions, then emits Markdown/JSON reports for CI artifacts or local
       release baselines.

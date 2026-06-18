@@ -2,7 +2,13 @@
 #include <cassert>
 #include <cmath>
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
+#include <vector>
 
 #include <LiteNN/Operators.h>
 
@@ -299,9 +305,81 @@ namespace LiteNN
 		                       const void* src, ShapeView permutation);
 	};
 
+	struct CPUAllocator
+	{
+		virtual ~CPUAllocator() = default;
+
+		virtual void* Allocate(std::size_t bytes, std::size_t alignment) = 0;
+		virtual void Deallocate(void* ptr, std::size_t bytes, std::size_t alignment) = 0;
+	};
+
+	class CPULinearArena final : public CPUAllocator
+	{
+	public:
+		explicit CPULinearArena(std::size_t capacity) : storage_(capacity)
+		{
+		}
+
+		void* Allocate(std::size_t bytes, std::size_t alignment) override
+		{
+			if (bytes == 0)
+			{
+				return storage_.data();
+			}
+			if (alignment == 0)
+			{
+				alignment = alignof(std::max_align_t);
+			}
+			if ((alignment & (alignment - 1)) != 0)
+			{
+				throw std::invalid_argument("CPU arena alignment must be a power of two");
+			}
+
+			const auto base = reinterpret_cast<std::uintptr_t>(storage_.data());
+			const auto current = base + offset_;
+			const auto aligned = (current + alignment - 1) & ~(static_cast<std::uintptr_t>(alignment) - 1);
+			const auto alignedOffset = static_cast<std::size_t>(aligned - base);
+			if (alignedOffset > storage_.size() || bytes > storage_.size() - alignedOffset)
+			{
+				throw std::bad_alloc{};
+			}
+
+			offset_ = alignedOffset + bytes;
+			return reinterpret_cast<void*>(aligned);
+		}
+
+		void Deallocate(void* ptr, std::size_t bytes, std::size_t alignment) override
+		{
+		}
+
+		void Reset() noexcept
+		{
+			offset_ = 0;
+		}
+
+		std::size_t Used() const noexcept
+		{
+			return offset_;
+		}
+
+		std::size_t Capacity() const noexcept
+		{
+			return storage_.size();
+		}
+
+	private:
+		std::vector<std::byte> storage_;
+		std::size_t offset_ = 0;
+	};
+
 	struct CPU
 	{
-		bool operator==(const CPU&) const = default;
+		std::shared_ptr<CPUAllocator> allocator{};
+
+		bool operator==(const CPU& other) const
+		{
+			return allocator == other.allocator;
+		}
 	};
 
 	struct CPUCapabilities
@@ -383,13 +461,23 @@ namespace LiteNN
 			return "Generic CPU Device";
 		}
 
-		static constexpr void* Allocate(CPU& device, DataType type, std::size_t size)
+		static void* Allocate(CPU& device, DataType type, std::size_t size)
 		{
-			return ::operator new(size * ElementByteSize(type));
+			const auto bytes = AllocationBytes(type, size);
+			if (device.allocator)
+			{
+				return device.allocator->Allocate(bytes, alignof(std::max_align_t));
+			}
+			return ::operator new(bytes);
 		}
 
-		static constexpr void Deallocate(CPU& device, void* ptr, DataType type, std::size_t size)
+		static void Deallocate(CPU& device, void* ptr, DataType type, std::size_t size)
 		{
+			if (device.allocator)
+			{
+				device.allocator->Deallocate(ptr, AllocationBytes(type, size), alignof(std::max_align_t));
+				return;
+			}
 			::operator delete(ptr);
 		}
 
@@ -1030,6 +1118,17 @@ namespace LiteNN
 					}
 				}
 			});
+		}
+
+	private:
+		static std::size_t AllocationBytes(DataType type, std::size_t size)
+		{
+			const auto elementBytes = ElementByteSize(type);
+			if (elementBytes != 0 && size > std::numeric_limits<std::size_t>::max() / elementBytes)
+			{
+				throw std::bad_array_new_length{};
+			}
+			return size * elementBytes;
 		}
 	};
 

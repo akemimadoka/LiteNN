@@ -131,6 +131,11 @@ device-local storage buffers and routes CPU upload/download plus same-dtype devi
 so a module loaded with `DeviceLocal` runs kernels over device-local input/output buffers while host boundaries use
 staging transfers.
 
+CPU fallback and host-side preprocessing paths can use `CPU{ .allocator = std::make_shared<CPULinearArena>(bytes) }`
+to make tensor allocation deterministic inside a caller-owned memory budget. The arena is intentionally a resettable
+bump allocator: individual tensor destruction does not release bytes, and callers should reset it at known graph,
+request, or frame boundaries.
+
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
 
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
