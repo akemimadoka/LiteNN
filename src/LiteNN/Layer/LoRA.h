@@ -65,6 +65,27 @@ namespace LiteNN::Layer
 		return metadata.alpha / static_cast<float>(metadata.rank);
 	}
 
+	inline bool IsLoRAFloatingAdapterDType(DataType dtype)
+	{
+		return dtype == DataType::Float32 || dtype == DataType::Float16 || dtype == DataType::BFloat16;
+	}
+
+	inline void ValidateLinearLoRACompatibility(const LinearLayer& linear, const LinearLoRAAdapter& adapter)
+	{
+		if (linear.inFeatures != adapter.inFeatures || linear.outFeatures != adapter.outFeatures)
+		{
+			throw std::runtime_error("LoRA adapter feature dimensions do not match the target Linear layer");
+		}
+		if (linear.dtype != adapter.metadata.dtype)
+		{
+			throw std::runtime_error("LoRA adapter dtype must match the target Linear layer dtype");
+		}
+		if (!IsLoRAFloatingAdapterDType(adapter.metadata.dtype))
+		{
+			throw std::runtime_error("LoRA adapters currently require Float32, Float16, or BFloat16 tensors");
+		}
+	}
+
 	namespace Detail
 	{
 		inline LinearLoRAAdapter CreateLinearLoRAImpl(Graph& graph, LoRAAdapterMetadata metadata, Tensor<CPU> a,
@@ -108,11 +129,7 @@ namespace LiteNN::Layer
 	inline NodeOutput AddLinearWithLoRA(Subgraph& subgraph, const LinearLayer& linear,
 	                                    const LinearLoRAAdapter& adapter, NodeOutput input)
 	{
-		if (linear.dtype != adapter.metadata.dtype || linear.inFeatures != adapter.inFeatures ||
-		    linear.outFeatures != adapter.outFeatures)
-		{
-			throw std::runtime_error("LoRA adapter is not compatible with the target Linear layer");
-		}
+		ValidateLinearLoRACompatibility(linear, adapter);
 
 		const auto inputInfo = subgraph.GetOutputInfo(input);
 		if (inputInfo.dtype != adapter.metadata.dtype || inputInfo.shape.size() != 2 ||

@@ -242,6 +242,19 @@ TEST(LoRALayerTest, RejectsIncompatibleRank)
 	    std::runtime_error);
 }
 
+TEST(LoRALayerTest, RejectsQuantizedAdapterForUnmergedRuntimePath)
+{
+	Graph graph;
+	auto linear = Layer::CreateLinear(graph, Tensor<CPU>({ 1, 0, 0, 1 }, { 2, 2 }, DataType::Int8));
+	auto adapter = Layer::CreateLinearLoRA(
+	    graph, Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 1.0f, .dtype = DataType::Int8 },
+	    Tensor<CPU>({ 1, 1 }, { 2, 1 }, DataType::Int8), Tensor<CPU>({ 1, 1 }, { 1, 2 }, DataType::Int8));
+
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Int8, { 1, 2 });
+	EXPECT_THROW((void) Layer::AddLinearWithLoRA(subgraph, linear, adapter, { input, 0 }), std::runtime_error);
+}
+
 TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 {
 	Graph graph;

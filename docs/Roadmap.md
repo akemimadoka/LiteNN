@@ -808,7 +808,9 @@ and clear base-weight versus adapter-weight ownership.
 - [x] Add Layer helpers that apply LoRA as `base(x) + scale * (x @ A @ B)` for linear layers:
       `CreateLinearLoRA` plus `AddLinearWithLoRA` now build the unmerged Linear adapter graph.
 - [ ] Support both unmerged runtime adapters and merged-weight export.
-- [ ] Define compatibility rules for quantized base weights and low-precision adapter weights.
+- [x] Define compatibility rules for quantized base weights and low-precision adapter weights:
+      `ValidateLinearLoRACompatibility` accepts Float32/Float16/BFloat16 unmerged adapters and rejects quantized
+      adapters until a dequantized or merged export path is implemented.
 
 #### G10.2 Import and Serialization
 
