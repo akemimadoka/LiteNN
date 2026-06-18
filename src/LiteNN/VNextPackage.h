@@ -3,6 +3,7 @@
 
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/MemoryPlan.h>
+#include <LiteNN/Misc.h>
 #include <LiteNN/OpSchema.h>
 #include <LiteNN/Runtime/Scheduler.h>
 #include <algorithm>
@@ -38,22 +39,7 @@ namespace LiteNN
 
 	inline std::string_view VNextVersionComponentName(VNextVersionComponent component) noexcept
 	{
-		switch (component)
-		{
-		case VNextVersionComponent::Manifest:
-			return "manifest";
-		case VNextVersionComponent::OpSet:
-			return "opSet";
-		case VNextVersionComponent::DTypeSet:
-			return "dtypeSet";
-		case VNextVersionComponent::LayoutSet:
-			return "layoutSet";
-		case VNextVersionComponent::QuantizationSet:
-			return "quantizationSet";
-		case VNextVersionComponent::ArtifactABI:
-			return "artifactABI";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(component);
 	}
 
 	enum class VNextABIChangeArea
@@ -73,32 +59,7 @@ namespace LiteNN
 
 	inline std::string_view VNextABIChangeAreaName(VNextABIChangeArea area) noexcept
 	{
-		switch (area)
-		{
-		case VNextABIChangeArea::ManifestShape:
-			return "manifest-shape";
-		case VNextABIChangeArea::OpSemantics:
-			return "op-semantics";
-		case VNextABIChangeArea::DTypeSemantics:
-			return "dtype-semantics";
-		case VNextABIChangeArea::LayoutSemantics:
-			return "layout-semantics";
-		case VNextABIChangeArea::QuantizationSemantics:
-			return "quantization-semantics";
-		case VNextABIChangeArea::TensorBinding:
-			return "tensor-binding";
-		case VNextABIChangeArea::ExternalRegion:
-			return "external-region";
-		case VNextABIChangeArea::BackendRequirement:
-			return "backend-requirement";
-		case VNextABIChangeArea::RuntimeState:
-			return "runtime-state";
-		case VNextABIChangeArea::RuntimeSchedule:
-			return "runtime-schedule";
-		case VNextABIChangeArea::ArtifactEntry:
-			return "artifact-entry";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(area);
 	}
 
 	struct VNextABIVersionBumpRule
@@ -202,20 +163,7 @@ namespace LiteNN
 
 	inline std::string_view VNextArtifactEntryKindName(VNextArtifactEntryKind kind) noexcept
 	{
-		switch (kind)
-		{
-		case VNextArtifactEntryKind::Forward:
-			return "forward";
-		case VNextArtifactEntryKind::Loss:
-			return "loss";
-		case VNextArtifactEntryKind::Backward:
-			return "backward";
-		case VNextArtifactEntryKind::OptimizerStep:
-			return "optimizer_step";
-		case VNextArtifactEntryKind::BackendSpecific:
-			return "backend_specific";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(kind);
 	}
 
 	inline bool IsKnownVNextArtifactEntryKind(VNextArtifactEntryKind kind) noexcept

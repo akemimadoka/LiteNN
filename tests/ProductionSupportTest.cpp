@@ -74,8 +74,8 @@ TEST(ProductionSupportTest, ReportsDeferredLongTailWork)
 	EXPECT_EQ(QueryProductionSupportStatus(ProductionSupportArea::SDXLGeneration).level,
 	          ProductionSupportLevel::Deferred);
 
-	EXPECT_TRUE(HasProductionDiagnostic("training-aot"));
-	EXPECT_TRUE(HasProductionDiagnostic("sdxl-generation"));
+	EXPECT_TRUE(HasProductionDiagnostic("TrainingAOT"));
+	EXPECT_TRUE(HasProductionDiagnostic("SDXLGeneration"));
 }
 
 TEST(ProductionSupportTest, ReportsProductionPathABIContracts)
@@ -115,10 +115,10 @@ TEST(ProductionSupportTest, ReportsProductionPathABIContracts)
 
 TEST(ProductionSupportTest, ReportsProductionPathABIDiagnostics)
 {
-	EXPECT_TRUE(HasProductionABIDiagnostic("cuda-cpu-bridge-fallback"));
-	EXPECT_TRUE(HasProductionABIDiagnostic("vulkan-native-separated-artifact"));
-	EXPECT_TRUE(HasProductionABIDiagnostic("mobile-separated-runtime"));
-	EXPECT_FALSE(HasProductionABIDiagnostic("vnext-model-package"));
+	EXPECT_TRUE(HasProductionABIDiagnostic("CUDACPUBridgeFallback"));
+	EXPECT_TRUE(HasProductionABIDiagnostic("VulkanNativeSeparatedArtifact"));
+	EXPECT_TRUE(HasProductionABIDiagnostic("MobileSeparatedRuntime"));
+	EXPECT_FALSE(HasProductionABIDiagnostic("VNextModelPackage"));
 }
 
 TEST(ProductionSupportTest, ReportsBackendProfilesWithoutCollapsingMobileAndDesktop)
@@ -185,16 +185,16 @@ TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
 	EXPECT_TRUE(attention.highValueKernelPriority);
 	EXPECT_NE(attention.level, ProductionSupportLevel::Supported);
 	EXPECT_TRUE(Contains(attention.capabilityGate, "kernel implementation"));
-	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("attention"));
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("Attention"));
 
 	const auto normalization = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Normalization);
 	EXPECT_TRUE(normalization.highValueKernelPriority);
 	EXPECT_NE(normalization.level, ProductionSupportLevel::Supported);
-	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("normalization"));
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("Normalization"));
 
 	const auto quantizedProjection =
 	    QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::QuantizedProjection);
 	EXPECT_TRUE(quantizedProjection.highValueKernelPriority);
 	EXPECT_NE(quantizedProjection.level, ProductionSupportLevel::Supported);
-	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("quantized-projection"));
+	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"));
 }

@@ -473,8 +473,8 @@ TEST(G14VNext, VNextABIVersionBumpRulesCoverProductionContracts)
 	EXPECT_EQ(runtimeState.component, VNextVersionComponent::ArtifactABI);
 	EXPECT_EQ(runtimeSchedule.component, VNextVersionComponent::ArtifactABI);
 	EXPECT_EQ(artifactEntry.component, VNextVersionComponent::ArtifactABI);
-	EXPECT_EQ(VNextVersionComponentName(tensorBinding.component), "artifactABI");
-	EXPECT_EQ(VNextABIChangeAreaName(VNextABIChangeArea::TensorBinding), "tensor-binding");
+	EXPECT_EQ(VNextVersionComponentName(tensorBinding.component), "ArtifactABI");
+	EXPECT_EQ(VNextABIChangeAreaName(VNextABIChangeArea::TensorBinding), "TensorBinding");
 	EXPECT_NE(runtimeState.reason.find("runtime-state"), std::string_view::npos);
 
 	const auto rules = DescribeVNextABIVersionBumpRules();

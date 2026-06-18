@@ -2,6 +2,7 @@
 #define LITENN_TRAINING_TRAIN_STEP_PLAN_H
 
 #include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Misc.h>
 #include <LiteNN/Runtime/Scheduler.h>
 
 #include <cstddef>
@@ -49,24 +50,7 @@ namespace LiteNN::Training
 
 	inline std::string_view TrainStepABIRoleName(TrainStepABIRole role) noexcept
 	{
-		switch (role)
-		{
-		case TrainStepABIRole::SavedActivation:
-			return "saved-activation";
-		case TrainStepABIRole::MutableParameter:
-			return "mutable-parameter";
-		case TrainStepABIRole::Gradient:
-			return "gradient";
-		case TrainStepABIRole::OptimizerState:
-			return "optimizer-state";
-		case TrainStepABIRole::LossInput:
-			return "loss-input";
-		case TrainStepABIRole::UpdatedParameter:
-			return "updated-parameter";
-		case TrainStepABIRole::UpdatedOptimizerState:
-			return "updated-optimizer-state";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(role);
 	}
 
 	struct TrainStepABIBinding
@@ -89,18 +73,7 @@ namespace LiteNN::Training
 
 	inline std::string_view TrainStepArtifactEntryKindName(TrainStepArtifactEntryKind kind) noexcept
 	{
-		switch (kind)
-		{
-		case TrainStepArtifactEntryKind::Forward:
-			return "forward";
-		case TrainStepArtifactEntryKind::Backward:
-			return "backward";
-		case TrainStepArtifactEntryKind::Loss:
-			return "loss";
-		case TrainStepArtifactEntryKind::OptimizerUpdate:
-			return "optimizer-update";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(kind);
 	}
 
 	struct TrainStepArtifactEntry

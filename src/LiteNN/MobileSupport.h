@@ -1,6 +1,8 @@
 #ifndef LITENN_MOBILE_SUPPORT_H
 #define LITENN_MOBILE_SUPPORT_H
 
+#include <LiteNN/Misc.h>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -53,26 +55,7 @@ namespace LiteNN
 
 	inline constexpr std::string_view MobileFeatureName(MobileFeature feature)
 	{
-		switch (feature)
-		{
-		case MobileFeature::CPUInterpreter:
-			return "cpu-interpreter";
-		case MobileFeature::SeparatedArtifactLoading:
-			return "separated-artifact-loading";
-		case MobileFeature::VulkanNativeRuntime:
-			return "vulkan-native-runtime";
-		case MobileFeature::CPUObjectJIT:
-			return "cpu-object-jit";
-		case MobileFeature::CUDARuntime:
-			return "cuda-runtime";
-		case MobileFeature::MLIRCompiler:
-			return "mlir-compiler";
-		case MobileFeature::DynamicLibraryCarrierLoading:
-			return "dynamic-library-carrier-loading";
-		case MobileFeature::OnDeviceGraphCompilation:
-			return "on-device-graph-compilation";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(feature);
 	}
 
 	inline constexpr MobileFeatureStatus QueryMobileFeatureStatus(MobileFeature feature)
@@ -109,20 +92,7 @@ namespace LiteNN
 
 	inline constexpr std::string_view MobileConstraintName(MobileConstraint constraint)
 	{
-		switch (constraint)
-		{
-		case MobileConstraint::CXXStandardLibrary:
-			return "cxx-standard-library";
-		case MobileConstraint::Filesystem:
-			return "filesystem";
-		case MobileConstraint::Reflection:
-			return "reflection";
-		case MobileConstraint::DynamicLoading:
-			return "dynamic-loading";
-		case MobileConstraint::Threading:
-			return "threading";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(constraint);
 	}
 
 	inline constexpr MobileConstraintStatus QueryMobileConstraintStatus(MobileConstraint constraint)

@@ -33,11 +33,11 @@ TEST(MobileSupportTest, RejectsDesktopOnlyMobileFeatures)
 	EXPECT_FALSE(QueryMobileFeatureStatus(MobileFeature::DynamicLibraryCarrierLoading).supported);
 	EXPECT_FALSE(QueryMobileFeatureStatus(MobileFeature::OnDeviceGraphCompilation).supported);
 
-	EXPECT_TRUE(ContainsDiagnostic("cpu-object-jit"));
-	EXPECT_TRUE(ContainsDiagnostic("cuda-runtime"));
-	EXPECT_TRUE(ContainsDiagnostic("mlir-compiler"));
-	EXPECT_TRUE(ContainsDiagnostic("dynamic-library-carrier-loading"));
-	EXPECT_TRUE(ContainsDiagnostic("on-device-graph-compilation"));
+	EXPECT_TRUE(ContainsDiagnostic("CPUObjectJIT"));
+	EXPECT_TRUE(ContainsDiagnostic("CUDARuntime"));
+	EXPECT_TRUE(ContainsDiagnostic("MLIRCompiler"));
+	EXPECT_TRUE(ContainsDiagnostic("DynamicLibraryCarrierLoading"));
+	EXPECT_TRUE(ContainsDiagnostic("OnDeviceGraphCompilation"));
 }
 
 TEST(MobileSupportTest, ReportsMobileConstraintPolicies)
@@ -51,9 +51,9 @@ TEST(MobileSupportTest, ReportsMobileConstraintPolicies)
 
 	const auto diagnostics = CollectMobileConstraintDiagnostics();
 	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
-		return diagnostic.find("filesystem") != std::string::npos;
+		return diagnostic.find("Filesystem") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
-		return diagnostic.find("dynamic-loading") != std::string::npos;
+		return diagnostic.find("DynamicLoading") != std::string::npos;
 	}));
 }

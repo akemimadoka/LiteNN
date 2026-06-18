@@ -2,6 +2,7 @@
 #define LITENN_PASS_H
 
 #include <LiteNN/ExecutablePlan.h>
+#include <LiteNN/Misc.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <cstddef>
@@ -25,18 +26,7 @@ namespace LiteNN
 
 	inline std::string_view TransformStageKindName(TransformStageKind stage) noexcept
 	{
-		switch (stage)
-		{
-		case TransformStageKind::ModelGraphToModelGraph:
-			return "ModelGraph->ModelGraph";
-		case TransformStageKind::ModelGraphToExecutablePlan:
-			return "ModelGraph->ExecutablePlan";
-		case TransformStageKind::ExecutablePlanToExecutablePlan:
-			return "ExecutablePlan->ExecutablePlan";
-		case TransformStageKind::ExecutablePlanToBackendPlan:
-			return "ExecutablePlan->BackendPlan";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(stage);
 	}
 
 	enum class TransformInvalidation

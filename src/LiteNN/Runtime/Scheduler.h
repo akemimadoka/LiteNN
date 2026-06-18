@@ -3,6 +3,7 @@
 
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/MemoryPlan.h>
+#include <LiteNN/Misc.h>
 #include <LiteNN/Runtime/Placement.h>
 #include <cstddef>
 #include <format>
@@ -123,22 +124,7 @@ namespace LiteNN::Runtime
 
 	inline std::string_view RuntimeScheduleStepKindName(RuntimeScheduleStepKind kind) noexcept
 	{
-		switch (kind)
-		{
-		case RuntimeScheduleStepKind::DispatchRegion:
-			return "dispatch";
-		case RuntimeScheduleStepKind::Transfer:
-			return "transfer";
-		case RuntimeScheduleStepKind::Sync:
-			return "sync";
-		case RuntimeScheduleStepKind::Fallback:
-			return "fallback";
-		case RuntimeScheduleStepKind::StateRead:
-			return "state-read";
-		case RuntimeScheduleStepKind::StateWrite:
-			return "state-write";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(kind);
 	}
 
 	inline RuntimeStateBinding MakeRuntimeStateBinding(std::string name, RuntimeStateKind kind, std::string role,

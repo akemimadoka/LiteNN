@@ -1,6 +1,8 @@
 #ifndef LITENN_PRODUCTION_SUPPORT_H
 #define LITENN_PRODUCTION_SUPPORT_H
 
+#include <LiteNN/Misc.h>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -151,126 +153,27 @@ namespace LiteNN
 
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
 	{
-		switch (area)
-		{
-		case ProductionSupportArea::CPURuntime:
-			return "cpu-runtime";
-		case ProductionSupportArea::CPUAOT:
-			return "cpu-aot";
-		case ProductionSupportArea::CUDARuntime:
-			return "cuda-runtime";
-		case ProductionSupportArea::VulkanRuntime:
-			return "vulkan-runtime";
-		case ProductionSupportArea::Importers:
-			return "importers";
-		case ProductionSupportArea::VNextPackaging:
-			return "vnext-packaging";
-		case ProductionSupportArea::SeparatedArtifacts:
-			return "separated-artifacts";
-		case ProductionSupportArea::Benchmarks:
-			return "benchmarks";
-		case ProductionSupportArea::MobileRuntime:
-			return "mobile-runtime";
-		case ProductionSupportArea::TrainingAOT:
-			return "training-aot";
-		case ProductionSupportArea::SDXLGeneration:
-			return "sdxl-generation";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(area);
 	}
 
 	inline constexpr std::string_view ProductionPathName(ProductionPath path)
 	{
-		switch (path)
-		{
-		case ProductionPath::CPUInterpreter:
-			return "cpu-interpreter";
-		case ProductionPath::CPUAOTSeparatedArtifact:
-			return "cpu-aot-separated-artifact";
-		case ProductionPath::CUDANativeGraphReplay:
-			return "cuda-native-graph-replay";
-		case ProductionPath::CUDACPUBridgeFallback:
-			return "cuda-cpu-bridge-fallback";
-		case ProductionPath::VulkanNativeSeparatedArtifact:
-			return "vulkan-native-separated-artifact";
-		case ProductionPath::VNextModelPackage:
-			return "vnext-model-package";
-		case ProductionPath::ImporterManifest:
-			return "importer-manifest";
-		case ProductionPath::MobileSeparatedRuntime:
-			return "mobile-separated-runtime";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(path);
 	}
 
 	inline constexpr std::string_view ProductionSupportLevelName(ProductionSupportLevel level)
 	{
-		switch (level)
-		{
-		case ProductionSupportLevel::Production:
-			return "production";
-		case ProductionSupportLevel::Supported:
-			return "supported";
-		case ProductionSupportLevel::Experimental:
-			return "experimental";
-		case ProductionSupportLevel::Deferred:
-			return "deferred";
-		case ProductionSupportLevel::Unavailable:
-			return "unavailable";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(level);
 	}
 
 	inline constexpr std::string_view ProductionBackendProfileName(ProductionBackendProfile profile)
 	{
-		switch (profile)
-		{
-		case ProductionBackendProfile::CPUReferenceInterpreter:
-			return "cpu-reference-interpreter";
-		case ProductionBackendProfile::CPUAOTSeparatedArtifact:
-			return "cpu-aot-separated-artifact";
-		case ProductionBackendProfile::CUDANativeGraphReplay:
-			return "cuda-native-graph-replay";
-		case ProductionBackendProfile::CUDACPUBridgeFallback:
-			return "cuda-cpu-bridge-fallback";
-		case ProductionBackendProfile::VulkanDesktopNative:
-			return "vulkan-desktop-native";
-		case ProductionBackendProfile::VulkanMobileConstrained:
-			return "vulkan-mobile-constrained";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(profile);
 	}
 
 	inline constexpr std::string_view ProductionCUDANativeCapabilityName(ProductionCUDANativeCapability capability)
 	{
-		switch (capability)
-		{
-		case ProductionCUDANativeCapability::StaticShapeDeviceTensorABI:
-			return "static-shape-device-tensor-abi";
-		case ProductionCUDANativeCapability::GraphReplay:
-			return "cuda-graph-replay";
-		case ProductionCUDANativeCapability::ElementwiseF32:
-			return "elementwise-f32";
-		case ProductionCUDANativeCapability::MatMulF32:
-			return "matmul-f32";
-		case ProductionCUDANativeCapability::LinearChainF32:
-			return "linear-chain-f32";
-		case ProductionCUDANativeCapability::ReductionF32:
-			return "reduction-f32";
-		case ProductionCUDANativeCapability::Normalization:
-			return "normalization";
-		case ProductionCUDANativeCapability::ConcatSliceF32:
-			return "concat-slice-f32";
-		case ProductionCUDANativeCapability::LowPrecisionCast:
-			return "low-precision-cast";
-		case ProductionCUDANativeCapability::LowPrecisionMatMul:
-			return "low-precision-matmul";
-		case ProductionCUDANativeCapability::Attention:
-			return "attention";
-		case ProductionCUDANativeCapability::QuantizedProjection:
-			return "quantized-projection";
-		}
-		return "unknown";
+		return EnumToString<EnumToStringStyle::Unqualified>(capability);
 	}
 
 	inline constexpr bool ProductionBuildHasCUDA()
