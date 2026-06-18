@@ -2126,6 +2126,10 @@ packaging slice to a useful production backend.
             - [x] Add load-time capability regression coverage and benchmark visibility for fp16 Vulkan arithmetic:
                   Float16 binary/unary payloads are rejected when required device features are disabled, and
                   `litenn_bench` now registers `VulkanNativeUnaryAbsRunInto` F32/F16 rows when supported.
+            - [x] Add the first int8/uint8 arithmetic slice for Vulkan native same-shape binary kernels: Add/Subtract/
+                  Multiply/Divide/Min/Max now lower through integer SPIR-V ops for `Int8` and `UInt8`, carry
+                  shaderInt8/storageBuffer8BitAccess requirements, and register optional Int8/UInt8 Add benchmark rows
+                  when the selected device enables those features.
 - [ ] Add asynchronous execution and synchronization primitives: reusable command buffers, fences/timeline semaphores,
       queue ownership rules, and `RunManyTensorsInto` semantics that do not serialize every dispatch through a full
       wait.

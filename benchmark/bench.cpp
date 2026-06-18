@@ -1536,6 +1536,9 @@ namespace
 			return true;
 		case DataType::Float16:
 			return capabilities.shaderFloat16Enabled && capabilities.storageBuffer16BitAccessEnabled;
+		case DataType::Int8:
+		case DataType::UInt8:
+			return capabilities.shaderInt8Enabled && capabilities.storageBuffer8BitAccessEnabled;
 		default:
 			return false;
 		}
@@ -2870,6 +2873,22 @@ namespace
 						    BMVulkanNativeUnaryAbsRunTensorsInto(state, elementCount, DataType::Float16);
 					    });
 					fp16UnaryAbsBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+				}
+				if (SupportsVulkanNativeElementwiseBenchmarkDType(DataType::Int8))
+				{
+					auto* int8BenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeElementwiseAddRunInto/Int8/elements:{}", elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount, DataType::Int8);
+					    });
+					int8BenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+
+					auto* uint8BenchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("VulkanNativeElementwiseAddRunInto/UInt8/elements:{}", elementCount),
+					    [=](benchmark::State& state) {
+						    BMVulkanNativeElementwiseAddRunTensorsInto(state, elementCount, DataType::UInt8);
+					    });
+					uint8BenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 
 				auto* binaryChainBenchmarkCase = benchmark::RegisterBenchmark(

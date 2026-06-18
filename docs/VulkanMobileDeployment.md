@@ -123,6 +123,8 @@ staging transfers.
 The current native Vulkan slice supports static-shape, single-subgraph kernels for:
 
 - same-shape `Float32` binary Add/Subtract/Multiply/Divide/Max/Min
+- same-shape `Int8`/`UInt8` binary Add/Subtract/Multiply/Divide/Max/Min when shader Int8 and 8-bit storage-buffer
+  features are enabled
 - same-shape `Float32` binary chains composed of supported binary ops, for example
   `Multiply(Add(lhs, rhs), tail)`, executed as multiple Vulkan-native kernels that reuse the public output buffer as the
   chain accumulator and, outside profile-event mode, submit the recorded command buffers as one synchronized batch
@@ -180,6 +182,6 @@ The current native Vulkan slice supports static-shape, single-subgraph kernels f
   `VulkanNativeGraphDeviceLocalRunInto/MLP(...)` rows use `VulkanBufferResidency::DeviceLocal` for module policy,
   inputs, outputs, and separated weights so mobile residency tradeoffs remain visible in comparison tables.
 
-Low-precision arithmetic beyond simple casts, production tiled reductions/softmax/normalization/matmul/multi-layer
-linear chains, tiled/shared-memory convolution, tiled/shared-memory kernels, and async queue integration
+Low-precision arithmetic beyond the current f16 elementwise and int8/uint8 binary bootstrap slices, production tiled
+reductions/softmax/normalization/matmul/multi-layer linear chains, tiled/shared-memory convolution, tiled/shared-memory kernels, and async queue integration
 remain follow-on production GPU-backend work rather than part of the current bootstrap.

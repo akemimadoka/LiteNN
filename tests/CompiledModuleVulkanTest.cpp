@@ -743,6 +743,23 @@ namespace
 		}
 	}
 
+	void ExpectInt8FeatureGateRejectsLoad(const CompiledModuleArtifact& artifact, Vulkan& device)
+	{
+		try
+		{
+			(void) artifact.Load(device);
+			FAIL() << "Expected int8 Vulkan artifact loading to require enabled device features";
+		}
+		catch (const std::runtime_error& ex)
+		{
+			const std::string message = ex.what();
+			EXPECT_TRUE(message.find("shaderInt8") != std::string::npos ||
+			            message.find("storageBuffer8BitAccess") != std::string::npos)
+			    << message;
+			EXPECT_NE(message.find("enabled=false"), std::string::npos);
+		}
+	}
+
 	struct BinaryCase
 	{
 		BinaryOp op;
@@ -889,6 +906,28 @@ TEST(CompiledModuleVulkanTest, GeneratesFloat16BinarySPIRVFromMLIR)
 	EXPECT_NE(generated.mlir.find("SPV_KHR_16bit_storage"), std::string::npos);
 }
 
+TEST(CompiledModuleVulkanTest, GeneratesInt8BinarySPIRVFromMLIR)
+{
+	const auto generated = VulkanNativeSameShapeBinarySPIRV(DataType::Int8, BinaryOp::Add, kElementCount);
+	EXPECT_FALSE(generated.words.empty());
+	EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.IAdd"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("i8"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("StorageBuffer8BitAccess"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("SPV_KHR_8bit_storage"), std::string::npos);
+}
+
+TEST(CompiledModuleVulkanTest, GeneratesUInt8BinaryMaxSPIRVFromMLIR)
+{
+	const auto generated = VulkanNativeSameShapeBinarySPIRV(DataType::UInt8, BinaryOp::Max, kElementCount);
+	EXPECT_FALSE(generated.words.empty());
+	EXPECT_NE(generated.mlir.find("spirv.module"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("spirv.GL.UMax"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("i8"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("StorageBuffer8BitAccess"), std::string::npos);
+	EXPECT_NE(generated.mlir.find("SPV_KHR_8bit_storage"), std::string::npos);
+}
+
 TEST(CompiledModuleVulkanTest, GeneratesSimpleUnarySPIRVFromMLIR)
 {
 	for (const auto& item : kUnaryCases)
@@ -1000,6 +1039,29 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForFloat16Add)
 	    VulkanNativeDeviceRequirement::ShaderFloat16));
 	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer16BitAccess));
+}
+
+TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForInt8Add)
+{
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kElementCount, DataType::Int8);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+	EXPECT_FALSE(artifact.Instructions().empty());
+
+	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
+	const auto generated = VulkanNativeSameShapeBinarySPIRV(DataType::Int8, BinaryOp::Add, kElementCount);
+	EXPECT_EQ(payload.spirv, generated.words);
+	EXPECT_NE(payload.featureSet.flags &
+	              (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::SameShapeElementwiseBinaryLowPrecision)),
+	          0ull);
+	ASSERT_EQ(payload.kernels.size(), 1u);
+	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, kElementCount * ElementByteSize(DataType::Int8));
+	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, kElementCount * ElementByteSize(DataType::Int8));
+	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, kElementCount * ElementByteSize(DataType::Int8));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
+	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
 }
 
 TEST(CompiledModuleVulkanTest, SerializesKernelRequirementMetadata)
@@ -1120,6 +1182,28 @@ TEST(CompiledModuleVulkanTest, ReportsNativeSupportForFloat16Add)
 	EXPECT_TRUE(report.supported);
 	EXPECT_NE(report.capability.find("same-shape f16 binary"), std::string::npos);
 	EXPECT_NE(report.capability.find("Add"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForInt8Add)
+{
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kElementCount, DataType::Int8);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("same-shape int8 binary"), std::string::npos);
+	EXPECT_NE(report.capability.find("Add"), std::string::npos);
+	EXPECT_TRUE(report.reason.empty());
+}
+
+TEST(CompiledModuleVulkanTest, ReportsNativeSupportForUInt8Max)
+{
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Max, kElementCount, DataType::UInt8);
+	const auto report = Compiler<Vulkan>::QueryNativeSupport(Detail::BuildExecutablePlanFromGraph(graph));
+
+	EXPECT_TRUE(report.supported);
+	EXPECT_NE(report.capability.find("same-shape uint8 binary"), std::string::npos);
+	EXPECT_NE(report.capability.find("Max"), std::string::npos);
 	EXPECT_TRUE(report.reason.empty());
 }
 
@@ -2208,6 +2292,27 @@ TEST(CompiledModuleVulkanTest, RejectsFloat16BinaryWhenDeviceFeaturesAreNotEnabl
 	ExpectFloat16FeatureGateRejectsLoad(artifact, device);
 }
 
+TEST(CompiledModuleVulkanTest, RejectsInt8BinaryWhenDeviceFeaturesAreNotEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (capabilities.shaderInt8Enabled && capabilities.storageBuffer8BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Int8 storage features are enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kElementCount, DataType::Int8);
+	const auto artifact = Compiler<Vulkan>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
+
+	ExpectInt8FeatureGateRejectsLoad(artifact, device);
+}
+
 TEST(CompiledModuleVulkanTest, RejectsFloat16UnaryWhenDeviceFeaturesAreNotEnabled)
 {
 	if (!IsVulkanDeviceAvailable())
@@ -2476,6 +2581,40 @@ TEST(CompiledModuleVulkanTest, RunsFloat16BinaryArithmeticWhenDeviceFeaturesAreE
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		EXPECT_NEAR(actual[i], expected[i], 1e-3f);
+	}
+}
+
+TEST(CompiledModuleVulkanTest, RunsInt8BinaryArithmeticWhenDeviceFeaturesAreEnabled)
+{
+	if (!IsVulkanDeviceAvailable())
+	{
+		GTEST_SKIP() << "No Vulkan compute device is available";
+	}
+
+	Vulkan device;
+	const auto capabilities = QueryVulkanDeviceCapabilities(device);
+	if (!capabilities.shaderInt8Enabled || !capabilities.storageBuffer8BitAccessEnabled)
+	{
+		GTEST_SKIP() << "Vulkan Int8 storage features are not enabled by the runtime";
+	}
+
+	const auto graph = BuildSimpleBinaryGraph(BinaryOp::Add, kElementCount, DataType::Int8);
+	auto module = Compiler<Vulkan>::Compile(Detail::BuildExecutablePlanFromGraph(graph), device);
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::VulkanNative);
+
+	std::array inputs{
+		Tensor<Vulkan>({ -4.0, -1.0, 2.0, 7.0 }, { 4 }, DataType::Int8, device),
+		Tensor<Vulkan>({ 1.0, 2.0, 3.0, -2.0 }, { 4 }, DataType::Int8, device),
+	};
+	auto outputs = module.RunTensors(std::span<const Tensor<Vulkan>>(inputs));
+	ASSERT_EQ(outputs.size(), 1);
+	EXPECT_EQ(outputs[0].DType(), DataType::Int8);
+
+	const auto actual = CopyToHostAsFloat32(outputs[0]);
+	const std::array expected{ -3.0f, 1.0f, 5.0f, 5.0f };
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		EXPECT_FLOAT_EQ(actual[i], expected[i]);
 	}
 }
 

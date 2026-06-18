@@ -6505,6 +6505,23 @@ namespace
 		return std::string(EnumToString<EnumToStringStyle::Unqualified>(mode));
 	}
 
+	std::string_view VulkanNativeShortDTypeName(DataType dtype)
+	{
+		switch (dtype)
+		{
+		case DataType::Float32:
+			return "f32";
+		case DataType::Float16:
+			return "f16";
+		case DataType::Int8:
+			return "int8";
+		case DataType::UInt8:
+			return "uint8";
+		default:
+			return DataTypeName(dtype);
+		}
+	}
+
 	std::vector<std::size_t> VulkanP0ReduceOutputShape(std::span<const std::size_t> inputShape, std::size_t axis)
 	{
 		std::vector<std::size_t> outputShape;
@@ -7870,7 +7887,7 @@ namespace
 			if (!VulkanNativeSupportsSameShapeBinary(lhsParam.dtype, binary->op))
 			{
 				return VulkanNativeUnsupported(
-				    std::format("Vulkan native binary slice requires Float32 or Float16 lhs/rhs/output, got {}",
+				    std::format("Vulkan native binary slice requires Float32, Float16, Int8, or UInt8 lhs/rhs/output, got {}",
 				                DataTypeName(lhsParam.dtype)));
 			}
 			if (lhsParam.shape != output.shape || rhsParam.shape != output.shape)
@@ -7886,7 +7903,7 @@ namespace
 				return shapeReport;
 			}
 			return VulkanNativeSupported(std::format("same-shape {} binary {}",
-			                                         output.dtype == DataType::Float16 ? "f16" : "f32",
+			                                         VulkanNativeShortDTypeName(output.dtype),
 			                                         VulkanNativeOpName(binary->op)));
 		}
 

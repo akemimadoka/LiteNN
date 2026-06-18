@@ -112,6 +112,11 @@ namespace LiteNN
 			return VulkanSPIRVScalarIsSignedInteger(dtype) || VulkanSPIRVScalarIsUnsignedInteger(dtype);
 		}
 
+		bool VulkanSPIRVScalarSupportsBinaryArithmetic(DataType dtype)
+		{
+			return VulkanSPIRVScalarIsFloat(dtype) || dtype == DataType::Int8 || dtype == DataType::UInt8;
+		}
+
 		mlir::spirv::VerCapExtAttr MakeVulkanShaderVCE(mlir::MLIRContext& context,
 		                                               std::span<const DataType> storageTypes)
 		{
@@ -432,28 +437,67 @@ namespace LiteNN
 				            .getValue();
 
 				    mlir::Value result;
-				    switch (op)
+				    if (VulkanSPIRVScalarIsFloat(dtype))
 				    {
-				    case BinaryOp::Add:
-					    result = bodyBuilder.create<mlir::spirv::FAddOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    case BinaryOp::Subtract:
-					    result = bodyBuilder.create<mlir::spirv::FSubOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    case BinaryOp::Multiply:
-					    result = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    case BinaryOp::Divide:
-					    result = bodyBuilder.create<mlir::spirv::FDivOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    case BinaryOp::Max:
-					    result = bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    case BinaryOp::Min:
-					    result = bodyBuilder.create<mlir::spirv::GLFMinOp>(loc, lhsValue, rhsValue).getResult();
-					    break;
-				    default:
-					    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape f32 binary op");
+					    switch (op)
+					    {
+					    case BinaryOp::Add:
+						    result = bodyBuilder.create<mlir::spirv::FAddOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Subtract:
+						    result = bodyBuilder.create<mlir::spirv::FSubOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Multiply:
+						    result = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Divide:
+						    result = bodyBuilder.create<mlir::spirv::FDivOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Max:
+						    result = bodyBuilder.create<mlir::spirv::GLFMaxOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Min:
+						    result = bodyBuilder.create<mlir::spirv::GLFMinOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    default:
+						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape floating binary op");
+					    }
+				    }
+				    else if (VulkanSPIRVScalarIsInteger(dtype))
+				    {
+					    switch (op)
+					    {
+					    case BinaryOp::Add:
+						    result = bodyBuilder.create<mlir::spirv::IAddOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Subtract:
+						    result = bodyBuilder.create<mlir::spirv::ISubOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Multiply:
+						    result = bodyBuilder.create<mlir::spirv::IMulOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Divide:
+						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
+						                 ? bodyBuilder.create<mlir::spirv::UDivOp>(loc, lhsValue, rhsValue).getResult()
+						                 : bodyBuilder.create<mlir::spirv::SDivOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Max:
+						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
+						                 ? bodyBuilder.create<mlir::spirv::GLUMaxOp>(loc, lhsValue, rhsValue).getResult()
+						                 : bodyBuilder.create<mlir::spirv::GLSMaxOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    case BinaryOp::Min:
+						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
+						                 ? bodyBuilder.create<mlir::spirv::GLUMinOp>(loc, lhsValue, rhsValue).getResult()
+						                 : bodyBuilder.create<mlir::spirv::GLSMinOp>(loc, lhsValue, rhsValue).getResult();
+						    break;
+					    default:
+						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape integer binary op");
+					    }
+				    }
+				    else
+				    {
+					    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape binary dtype");
 				    }
 
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
@@ -4082,7 +4126,7 @@ namespace LiteNN
 
 	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op)
 	{
-		if (dtype != DataType::Float32 && dtype != DataType::Float16)
+		if (!VulkanSPIRVScalarSupportsBinaryArithmetic(dtype))
 		{
 			return false;
 		}
@@ -4119,7 +4163,7 @@ namespace LiteNN
 		{
 			throw std::runtime_error("Unsupported Vulkan native same-shape binary op");
 		}
-		if (dtype != DataType::Float32 && dtype != DataType::Float16)
+		if (!VulkanSPIRVScalarSupportsBinaryArithmetic(dtype))
 		{
 			throw std::runtime_error("Unsupported Vulkan native same-shape binary dtype");
 		}
