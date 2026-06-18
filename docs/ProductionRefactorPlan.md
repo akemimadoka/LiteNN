@@ -48,7 +48,9 @@ requires them.
       CLI now exposes package-only import/load wording.
 - [x] Keep all old graph-archive or raw-Graph convenience paths out of public production APIs. The G14 guard covers
       removed graph archive names, raw `Graph&` overloads, unsafe graph access naming, and production example drift.
-- [ ] Add CI profiles for minimal runtime, importers, compiler/AOT, tools/examples, and optional GPU-enabled builds.
+- [x] Add CI profiles for minimal runtime, importers, compiler/AOT, tools/examples, and optional GPU-enabled builds.
+      `CMakePresets.json` defines the production profiles, `.github/workflows/ci.yml` runs the CPU/default matrix, and
+      `ci-optional-gpu` is available for self-hosted CUDA/Vulkan runners.
 
 Exit criteria:
 

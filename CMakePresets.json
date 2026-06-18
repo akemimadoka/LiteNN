@@ -33,6 +33,102 @@
       }
     },
     {
+      "name": "ci-minimal-runtime",
+      "displayName": "CI minimal runtime",
+      "description": "Smallest production runtime profile: core runtime, import-free public surface, no compiler or optional backends.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-minimal-runtime",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "OFF",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_ENABLE_VULKAN": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "OFF",
+        "LITENN_BUILD_TOOLS": "OFF"
+      }
+    },
+    {
+      "name": "ci-importers",
+      "displayName": "CI importers",
+      "description": "Importer and package profile: GGUF/Torch/safetensors tooling without MLIR codegen.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-importers",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "OFF",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_ENABLE_VULKAN": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "OFF",
+        "LITENN_BUILD_TOOLS": "ON"
+      }
+    },
+    {
+      "name": "ci-compiler-aot",
+      "displayName": "CI compiler/AOT",
+      "description": "Compiler and CPU AOT profile for package/runtime ABI validation.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-compiler-aot",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "ON",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_ENABLE_VULKAN": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "OFF",
+        "LITENN_BUILD_TOOLS": "OFF"
+      }
+    },
+    {
+      "name": "ci-tools-examples",
+      "displayName": "CI tools/examples",
+      "description": "Production examples and CLI tools profile, including manifest/package examples and carrier object loaders.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-tools-examples",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "ON",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_ENABLE_VULKAN": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "OFF",
+        "LITENN_BUILD_EXAMPLES": "ON",
+        "LITENN_BUILD_TOOLS": "ON"
+      }
+    },
+    {
+      "name": "ci-benchmarks",
+      "displayName": "CI benchmarks",
+      "description": "Benchmark/profile evidence profile used by the GitHub benchmark diff job.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-benchmarks",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "ON",
+        "LITENN_ENABLE_CUDA": "OFF",
+        "LITENN_ENABLE_VULKAN": "OFF",
+        "LITENN_BUILD_BENCHMARKS": "ON",
+        "LITENN_BUILD_EXAMPLES": "OFF",
+        "LITENN_BUILD_TOOLS": "OFF"
+      }
+    },
+    {
+      "name": "ci-optional-gpu",
+      "displayName": "CI optional GPU",
+      "description": "Opt-in GPU production profile for self-hosted runners with CUDA and Vulkan SDKs installed.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-optional-gpu",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LITENN_ENABLE_MLIR": "ON",
+        "LITENN_ENABLE_CUDA": "ON",
+        "LITENN_ENABLE_VULKAN": "ON",
+        "LITENN_BUILD_BENCHMARKS": "ON",
+        "LITENN_BUILD_EXAMPLES": "ON",
+        "LITENN_BUILD_TOOLS": "ON"
+      }
+    },
+    {
       "name": "android-arm64-vulkan-runtime",
       "displayName": "Android arm64 Vulkan runtime",
       "description": "Runtime-only Android arm64 build for apps that load host-compiled Vulkan-native artifacts.",
@@ -63,6 +159,30 @@
       "configurePreset": "debug"
     },
     {
+      "name": "ci-minimal-runtime",
+      "configurePreset": "ci-minimal-runtime"
+    },
+    {
+      "name": "ci-importers",
+      "configurePreset": "ci-importers"
+    },
+    {
+      "name": "ci-compiler-aot",
+      "configurePreset": "ci-compiler-aot"
+    },
+    {
+      "name": "ci-tools-examples",
+      "configurePreset": "ci-tools-examples"
+    },
+    {
+      "name": "ci-benchmarks",
+      "configurePreset": "ci-benchmarks"
+    },
+    {
+      "name": "ci-optional-gpu",
+      "configurePreset": "ci-optional-gpu"
+    },
+    {
       "name": "android-arm64-vulkan-runtime",
       "configurePreset": "android-arm64-vulkan-runtime"
     }
@@ -78,6 +198,48 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-minimal-runtime",
+      "configurePreset": "ci-minimal-runtime",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-importers",
+      "configurePreset": "ci-importers",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-compiler-aot",
+      "configurePreset": "ci-compiler-aot",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-tools-examples",
+      "configurePreset": "ci-tools-examples",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-benchmarks",
+      "configurePreset": "ci-benchmarks",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-optional-gpu",
+      "configurePreset": "ci-optional-gpu",
       "output": {
         "outputOnFailure": true
       }
