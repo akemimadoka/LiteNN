@@ -22,6 +22,18 @@ namespace LiteNN
 		SDXLGeneration,
 	};
 
+	enum class ProductionPath
+	{
+		CPUInterpreter,
+		CPUAOTSeparatedArtifact,
+		CUDANativeGraphReplay,
+		CUDACPUBridgeFallback,
+		VulkanNativeSeparatedArtifact,
+		VNextModelPackage,
+		ImporterManifest,
+		MobileSeparatedRuntime,
+	};
+
 	enum class ProductionSupportLevel
 	{
 		Production,
@@ -38,6 +50,31 @@ namespace LiteNN
 		ProductionSupportLevel level;
 		bool availableInBuild;
 		std::string_view policy;
+	};
+
+	struct ProductionPathABIDescriptor
+	{
+		ProductionPath path;
+		std::string_view name;
+		ProductionSupportArea area;
+		ProductionSupportLevel level;
+		bool availableInBuild;
+		std::string_view inputs;
+		std::string_view outputs;
+		std::string_view mutableState;
+		std::string_view externalTensors;
+		std::string_view ownership;
+		std::string_view alignment;
+		std::string_view checksum;
+		std::string_view fallbackPolicy;
+		bool usesMutableState;
+		bool supportsExternalTensors;
+		bool requiresCallerOwnedBuffers;
+		bool usesSeparatedRegions;
+		bool usesAlignmentMetadata;
+		bool usesChecksums;
+		bool allowsHostFallback;
+		bool requiresStableDevicePointers;
 	};
 
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
@@ -66,6 +103,30 @@ namespace LiteNN
 			return "training-aot";
 		case ProductionSupportArea::SDXLGeneration:
 			return "sdxl-generation";
+		}
+		return "unknown";
+	}
+
+	inline constexpr std::string_view ProductionPathName(ProductionPath path)
+	{
+		switch (path)
+		{
+		case ProductionPath::CPUInterpreter:
+			return "cpu-interpreter";
+		case ProductionPath::CPUAOTSeparatedArtifact:
+			return "cpu-aot-separated-artifact";
+		case ProductionPath::CUDANativeGraphReplay:
+			return "cuda-native-graph-replay";
+		case ProductionPath::CUDACPUBridgeFallback:
+			return "cuda-cpu-bridge-fallback";
+		case ProductionPath::VulkanNativeSeparatedArtifact:
+			return "vulkan-native-separated-artifact";
+		case ProductionPath::VNextModelPackage:
+			return "vnext-model-package";
+		case ProductionPath::ImporterManifest:
+			return "importer-manifest";
+		case ProductionPath::MobileSeparatedRuntime:
+			return "mobile-separated-runtime";
 		}
 		return "unknown";
 	}
@@ -174,6 +235,215 @@ namespace LiteNN
 			     "Unknown production support area." };
 	}
 
+	inline constexpr ProductionPathABIDescriptor QueryProductionPathABI(ProductionPath path)
+	{
+		switch (path)
+		{
+		case ProductionPath::CPUInterpreter:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::CPURuntime,
+				     ProductionSupportLevel::Production,
+				     true,
+				     "Host tensors are passed through the plan/native runtime entry point.",
+				     "Host tensors are returned or written through explicit output tensors.",
+				     "No hidden mutable state; callers model state as explicit tensors.",
+				     "Not an artifact boundary, so no external rodata/weight tensor binding.",
+				     "Caller owns Tensor storage; interpreter keeps no cross-call external pointers.",
+				     "Tensor allocator alignment only.",
+				     "No package checksum boundary.",
+				     "Reference path; no lower fallback.",
+				     false,
+				     false,
+				     true,
+				     false,
+				     false,
+				     false,
+				     false,
+				     false };
+		case ProductionPath::CPUAOTSeparatedArtifact:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::CPUAOT,
+				     ProductionBuildHasMLIR() ? ProductionSupportLevel::Production
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasMLIR(),
+				     "Entry-point tensors are bound by vNext metadata name/order.",
+				     "Outputs are explicit entry-point tensors; no implicit graph archive side channel.",
+				     "Runtime state is explicit in the artifact ABI or rejected.",
+				     "Constants, weights, rodata, and instruction regions are separate external bindings.",
+				     "Caller owns external regions for the module lifetime; runtime owns only decoded handles.",
+				     "Region alignment is described by separated artifact metadata.",
+				     "Metadata and external regions carry package checksums.",
+				     "No implicit fallback; unsupported nodes must fail during compile or load.",
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     false };
+		case ProductionPath::CUDANativeGraphReplay:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::CUDARuntime,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     "Device tensors are bound to a static-shape native CUDA schedule.",
+				     "Device output tensors must be pre-bound and pointer-stable across replay.",
+				     "Mutable state is limited to explicitly bound device tensors.",
+				     "External device buffers are supported when addresses remain stable.",
+				     "Caller owns device buffers and CUDA stream lifetime when an external stream is used.",
+				     "CUDA allocation alignment and kernel vectorization requirements are backend-owned.",
+				     "No package checksum boundary for raw native runtime replay.",
+				     "Reject unsupported graph replay constraints; do not silently drop to per-op launch.",
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     false,
+				     true };
+		case ProductionPath::CUDACPUBridgeFallback:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::CUDARuntime,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Experimental
+				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     "CUDA-capable subgraphs use device tensors; unsupported segments bind through host tensors.",
+				     "Outputs may cross device/host boundaries through explicit transfer records.",
+				     "Mutable state must be surfaced in the schedule before fallback is accepted.",
+				     "External tensor support is split by device/host segment ownership.",
+				     "Caller owns original tensors; bridge owns only explicit transfer temporaries.",
+				     "Device and host alignment requirements are recorded per segment.",
+				     "No unified checksum boundary until schedules and package ABI converge.",
+				     "Host fallback is allowed only when the schedule/profile records it visibly.",
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     true,
+				     false };
+		case ProductionPath::VulkanNativeSeparatedArtifact:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::VulkanRuntime,
+				     ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental
+				                                : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasVulkan(),
+				     "Static-shape tensors are bound through Vulkan native payload metadata.",
+				     "Outputs are explicit storage buffers with device capability checks.",
+				     "Mutable state is not production-stable beyond explicit buffers.",
+				     "Separated weights/rodata are supported for selected native payloads.",
+				     "Caller owns package regions; runtime owns Vulkan resources created from them.",
+				     "Storage buffer alignment is validated against device limits.",
+				     "Separated package regions carry checksums where vNext metadata is present.",
+				     "Unsupported device capabilities fail load/run instead of falling back invisibly.",
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     false };
+		case ProductionPath::VNextModelPackage:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::VNextPackaging,
+				     ProductionSupportLevel::Production,
+				     true,
+				     "Named graph/module inputs are part of the package manifest.",
+				     "Named graph/module outputs are part of the package manifest.",
+				     "State tensors must be declared as ABI-visible state slots.",
+				     "External constants, weights, rodata, and instructions are first-class regions.",
+				     "Package metadata names the owner and lifetime for every region.",
+				     "Alignment is declared per external region.",
+				     "Package metadata carries checksums for manifest and external regions.",
+				     "Fallback policy must be declared by the consuming runtime, not inferred by the package.",
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     false };
+		case ProductionPath::ImporterManifest:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::Importers,
+				     ProductionSupportLevel::Supported,
+				     true,
+				     "Importer manifests declare required model/config inputs before graph construction.",
+				     "Importer reports declare produced graph/package outputs.",
+				     "Importer-specific state must map to explicit package state slots.",
+				     "External tensors from safetensors/GGUF stay external until packaging chooses storage.",
+				     "Source tensor files remain caller-owned; importer owns decoded metadata and diagnostics.",
+				     "Source and target alignment are reported when they affect zero-copy or packing.",
+				     "Source tensor checksums are preserved when the source format provides them.",
+				     "Unsupported ops, layouts, dtypes, and quantization schemes are rejected with diagnostics.",
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     true,
+				     false,
+				     false };
+		case ProductionPath::MobileSeparatedRuntime:
+			return { path,
+				     ProductionPathName(path),
+				     ProductionSupportArea::MobileRuntime,
+				     ProductionSupportLevel::Experimental,
+				     true,
+				     "Mobile entry points use package-declared tensors and a constrained runtime profile.",
+				     "Outputs are explicit tensors; background transfers must be profile-visible.",
+				     "Mutable state is allowed only as package-declared state tensors.",
+				     "External regions are required to avoid monolithic mobile package loading.",
+				     "Application owns memory-mapped regions; runtime owns decoded lightweight handles.",
+				     "Region alignment must satisfy mobile filesystem, mmap, and backend limits.",
+				     "Manifest and external regions carry checksums before execution.",
+				     "Fallback is profile-defined; unavailable GPU features must fail or use an explicit CPU path.",
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     false };
+		}
+
+		return { path,
+			     ProductionPathName(path),
+			     ProductionSupportArea::VNextPackaging,
+			     ProductionSupportLevel::Unavailable,
+			     false,
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     "Unknown path.",
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false };
+	}
+
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()
 	{
 		return {
@@ -191,6 +461,20 @@ namespace LiteNN
 		};
 	}
 
+	inline std::vector<ProductionPathABIDescriptor> QueryProductionPathABIs()
+	{
+		return {
+			QueryProductionPathABI(ProductionPath::CPUInterpreter),
+			QueryProductionPathABI(ProductionPath::CPUAOTSeparatedArtifact),
+			QueryProductionPathABI(ProductionPath::CUDANativeGraphReplay),
+			QueryProductionPathABI(ProductionPath::CUDACPUBridgeFallback),
+			QueryProductionPathABI(ProductionPath::VulkanNativeSeparatedArtifact),
+			QueryProductionPathABI(ProductionPath::VNextModelPackage),
+			QueryProductionPathABI(ProductionPath::ImporterManifest),
+			QueryProductionPathABI(ProductionPath::MobileSeparatedRuntime),
+		};
+	}
+
 	inline std::vector<std::string> CollectProductionSupportDiagnostics()
 	{
 		std::vector<std::string> diagnostics;
@@ -201,6 +485,21 @@ namespace LiteNN
 				diagnostics.push_back(std::string(status.name) + " [" +
 				                      std::string(ProductionSupportLevelName(status.level)) + "]: " +
 				                      std::string(status.policy));
+			}
+		}
+		return diagnostics;
+	}
+
+	inline std::vector<std::string> CollectProductionPathABIDiagnostics()
+	{
+		std::vector<std::string> diagnostics;
+		for (const auto& descriptor : QueryProductionPathABIs())
+		{
+			if (descriptor.level != ProductionSupportLevel::Production || descriptor.allowsHostFallback)
+			{
+				diagnostics.push_back(std::string(descriptor.name) + " [" +
+				                      std::string(ProductionSupportLevelName(descriptor.level)) + "]: " +
+				                      std::string(descriptor.fallbackPolicy));
 			}
 		}
 		return diagnostics;
