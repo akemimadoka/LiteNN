@@ -838,7 +838,9 @@ Purpose: make LiteNN usable on mobile targets with constrained memory, predictab
 #### G11.2 Runtime Constraints
 
 - [ ] Add allocator hooks or arena-style allocation for predictable memory usage.
-- [ ] Add binary-size and model-size reporting for mobile builds.
+- [x] Add binary-size and model-size reporting for mobile builds: `scripts/mobile_size_report.py` scans mobile build
+      binaries and LiteNN model/package asset regions, then emits Markdown/JSON reports for CI artifacts or local
+      release baselines.
 - [ ] Add CPU feature detection for ARM NEON and future mobile GPU/NNAPI/CoreML delegation points.
 - [ ] Define unsupported features explicitly, such as CUDA-only paths and desktop object loading where unavailable.
 

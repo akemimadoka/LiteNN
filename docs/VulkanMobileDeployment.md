@@ -17,6 +17,16 @@ The preset expects `ANDROID_NDK_HOME` to point at an installed Android NDK. It i
 tests, tools, examples, and benchmarks because mobile apps should load host-compiled artifacts rather than compiling
 graphs on device.
 
+After building or packaging assets, record a binary/model size baseline with:
+
+```powershell
+python311 scripts/mobile_size_report.py `
+  --build-dir build-android-arm64-vulkan `
+  --assets-dir build/mobile-assets `
+  --markdown build/mobile_size_report.md `
+  --json build/mobile_size_report.json
+```
+
 The production mobile runtime should link `LiteNNCore` and `LiteNNVulkanRuntime`. Keep `LiteNNCompiler` out of the
 application package unless the app explicitly compiles graphs on device. The normal mobile flow is:
 
