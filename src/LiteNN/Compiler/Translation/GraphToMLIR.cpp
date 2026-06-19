@@ -822,8 +822,9 @@ namespace litenn
 			              std::map<std::size_t, Value>&)
 			{
 				throw std::runtime_error(
-				    "GraphToMLIR does not support dynamic QuantizeNode yet; run ConstFoldPass before CPU AOT when "
-				    "quantizing compile-time constants");
+				    "GraphToMLIR does not support dynamic QuantizeNode yet because affine quantization requires "
+				    "round-and-clamp semantics; run ConstFoldPass before CPU AOT when quantizing compile-time "
+				    "constants");
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const DequantizeNode& node,

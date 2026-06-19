@@ -303,6 +303,22 @@ namespace
 		return graph;
 	}
 
+	Graph BuildAffineQuantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -2);
+		const auto input = sg.AddParam(DataType::Float32, { 4 });
+		const auto quantized =
+		    sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::Int8, { 4 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "quantized" });
+		return graph;
+	}
+
 	Graph BuildGetRowsGraph()
 	{
 		Graph graph;
@@ -1478,6 +1494,23 @@ TEST(CompiledModuleTest, DynamicDequantizeAOTDiagnosticMentionsConstFold)
 	{
 		const std::string message = ex.what();
 		EXPECT_NE(message.find("dynamic DequantizeNode"), std::string::npos);
+		EXPECT_NE(message.find("ConstFoldPass"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, DynamicQuantizeAOTDiagnosticMentionsRoundClampAndConstFold)
+{
+	auto graph = BuildAffineQuantizeInputGraph();
+	try
+	{
+		(void) Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+		FAIL() << "Expected dynamic QuantizeNode compilation to fail";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("dynamic QuantizeNode"), std::string::npos);
+		EXPECT_NE(message.find("round-and-clamp"), std::string::npos);
 		EXPECT_NE(message.find("ConstFoldPass"), std::string::npos);
 	}
 }

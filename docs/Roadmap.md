@@ -118,7 +118,9 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
 - [x] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
       into supported compute dtypes when a backend has no native 4-bit kernel. The existing `DequantizeNode` now
       materializes packed-nibble block quantization in the interpreter and ConstFold path, and CPU AOT now has smoke
-      coverage for compiling ConstFolded packed-nibble dequantized constants.
+      coverage for compiling ConstFolded packed-nibble dequantized constants. CPU AOT also lowers dynamic affine
+      per-tensor `DequantizeNode`; dynamic `QuantizeNode` remains blocked on exact round-and-clamp lowering and is
+      intentionally not compiled through truncating casts.
 - [x] Add the first native quantized MatMul/Linear path for CPU direct execution over affine and packed-nibble weights.
       `EvalQuantizedMatMul` and `EvalQuantizedLinear` compute directly from quantized storage and are covered by parity
       tests against dequantize-plus-float execution.
