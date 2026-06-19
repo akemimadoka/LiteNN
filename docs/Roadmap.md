@@ -1403,9 +1403,13 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   `backward`, and `optimizer_step`.
   `VNextArtifactEntryRef` now supports optional function and source-subgraph execution references, and
   `BuildTrainStepVNextArtifactRef` maps `TrainStepPlan` forward/loss/backward/optimizer entries into package metadata.
-  The current loss entry is still source-level metadata, not an independently compiled loss kernel.
-- [ ] Teach the CPU AOT path to compile backward/loss subgraphs with stable tensor specs instead of wrapping only
+  Package round-trip coverage verifies that all train-step entries retain their execution references; the current loss
+  entry is still source-level metadata, not an independently compiled loss kernel.
+- [x] Teach the CPU AOT path to compile backward subgraphs with stable tensor specs instead of wrapping only
   `graph.Forward()`.
+  `CreateCompiledTrainBackwardRunner` builds and validates an explicit backward-entry plan before CPU AOT compilation.
+- [ ] Compile loss entries as independent CPU AOT kernels instead of computing softmax cross entropy and its gradient on
+  the host between forward and backward.
 - [ ] Add a CUDA AOT training path after CPU semantics are stable, including stream/workspace ownership and explicit
   synchronization points.
 - [ ] Preserve rodata/instruction separation for training artifacts, including mutable parameter/state binding rules.
@@ -1416,16 +1420,19 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   `TrainerOptions::executionPolicy` selects `Interpreter`, `AOT`, or `Auto`; AOT construction now runs
   `RequireTrainStepAOTReady` before compiled runner initialization so unsupported interpreter-local activation/tape state
   fails with an explicit train-step diagnostic.
-- [ ] Keep `Trainer<Device, Optimizer>` as the high-level API, but route production-capable paths through compiled
+- [x] Keep `Trainer<Device, Optimizer>` as the high-level API, but route production-capable paths through compiled
   train-step artifacts when available.
-- [ ] Keep a reference interpreter trainer for correctness checks, constant evaluation, and unsupported graph debugging.
+  AOT policy compiles forward/backward runners and CPU SGD/AdamW update runners; unsupported update combinations remain
+  explicit rather than silently changing the selected execution policy.
+- [x] Keep a reference interpreter trainer for correctness checks, constant evaluation, and unsupported graph debugging.
+  `TrainExecutionPolicy::Interpreter` continues to execute the same `TrainStepPlan` through `Runtime::Interpreter`.
 - [ ] Add examples that train the same small model through interpreter and AOT paths, then compare loss and updated weights.
 
 #### G13.4 Validation and Benchmarking
 
 - [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
-  Initial coverage: `Training.AOTAndInterpreterSGDStepMatchForScalarGraph` compares one SGD train step between the
-  interpreter trainer and CPU AOT trainer for a scalar graph. Linear/MLP/loss/AdamW parity still needs broader coverage.
+  Current coverage compares scalar SGD and two-step AdamW execution, including gradients, updated parameters, optimizer
+  step indices, and first/second moments. Linear/MLP and compiled-loss parity still need broader coverage.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
