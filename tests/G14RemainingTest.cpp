@@ -45,6 +45,27 @@ namespace
 		graph.SetBackward(graph.AddSubgraph(std::move(backwardAndUpdate)));
 		return graph;
 	}
+
+	Graph BuildTrainStepGraphWithInterpreterLocalBackwardState()
+	{
+		Graph graph;
+		const auto slot = graph.AddActivationSlot(TensorType::Dense(DataType::Float32, ShapeView{ 2 }));
+
+		Subgraph forward;
+		const auto input = forward.AddParam(DataType::Float32, { 2 });
+		forward.SetResults({ { input, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+		graph.SetInputNames({ "x" });
+		graph.SetOutputNames({ "y" });
+
+		Subgraph backward;
+		const auto backwardInput = backward.AddParam(DataType::Float32, { 2 });
+		const auto saved = backward.AddNode(SaveActivationNode{ { backwardInput, 0 }, slot },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		backward.SetResults({ { saved, 0 } });
+		graph.SetBackward(graph.AddSubgraph(std::move(backward)));
+		return graph;
+	}
 } // namespace
 
 TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
@@ -58,6 +79,23 @@ TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 	ASSERT_EQ(train.updates.size(), 1u);
 	EXPECT_EQ(train.updates[0].opKind, "SGDStepNode");
 	EXPECT_FALSE(train.runtimeStates.empty());
+	EXPECT_TRUE(Training::CollectTrainStepAOTReadinessDiagnostics(train).empty());
+	EXPECT_NO_THROW(Training::RequireTrainStepAOTReady(train));
+	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(train));
+}
+
+TEST(G14Remaining, TrainStepAOTReadinessRejectsInterpreterLocalActivationState)
+{
+	const auto graph = BuildTrainStepGraphWithInterpreterLocalBackwardState();
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph),
+	                                                Training::TrainExecutionPolicy::AOT, true);
+
+	const auto diagnostics = Training::CollectTrainStepAOTReadinessDiagnostics(train);
+	ASSERT_EQ(diagnostics.size(), 1u);
+	EXPECT_EQ(diagnostics[0].entryName, "backward");
+	EXPECT_EQ(diagnostics[0].opKind, "SaveActivationNode");
+	EXPECT_NE(diagnostics[0].message.find("interpreter-local"), std::string::npos);
+	EXPECT_THROW(Training::RequireTrainStepAOTReady(train), std::runtime_error);
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(train));
 }
 

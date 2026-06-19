@@ -1383,13 +1383,19 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 
 #### G13.1 Train-Step Graph Contract
 
-- [ ] Define an explicit train-step graph ABI: model inputs, targets/loss inputs, parameters, optimizer state, and updated
+- [x] Define an explicit train-step graph ABI: model inputs, targets/loss inputs, parameters, optimizer state, and updated
   parameters/state must be visible as graph inputs/outputs or bindable state.
+  `TrainStepPlan` records ABI bindings for saved activations, mutable parameters, gradients, optimizer state, loss inputs,
+  updated parameters, and updated optimizer state.
 - [ ] Remove hidden interpreter-only activation/tape dependencies from compiled training by representing saved activations
   as explicit values, explicit workspace buffers, or a documented recomputation strategy.
-- [ ] Decide whether the first compiled trainer emits one fused train-step artifact or separate forward/loss/backward/
+- [x] Decide whether the first compiled trainer emits one fused train-step artifact or separate forward/loss/backward/
   optimizer artifacts with a runtime scheduler.
-- [ ] Add validation diagnostics that reject AOT training when backward nodes still require interpreter-local state.
+  The current contract uses separate named artifact entries for `forward`, `loss`, `backward`, and each optimizer update,
+  so partial compilation can fail or fall back at entry granularity.
+- [x] Add validation diagnostics that reject AOT training when backward nodes still require interpreter-local state.
+  `CollectTrainStepAOTReadinessDiagnostics` and `RequireTrainStepAOTReady` reject activation/tape store nodes in
+  non-forward train-step entries until those states are represented through ABI bindings or recomputation.
 
 #### G13.2 Compiler and Runtime Support
 

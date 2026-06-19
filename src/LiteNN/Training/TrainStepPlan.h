@@ -86,6 +86,15 @@ namespace LiteNN::Training
 		std::vector<std::size_t> outputBindings;
 	};
 
+	struct TrainStepAOTReadinessDiagnostic
+	{
+		std::string entryName;
+		SubgraphId subgraph{};
+		NodeId node{};
+		std::string opKind;
+		std::string message;
+	};
+
 	struct TrainStepPlan
 	{
 		ExecutableModule module;
@@ -387,6 +396,96 @@ namespace LiteNN::Training
 		Runtime::ValidateRuntimeSchedule(train.schedule);
 		train.module = std::move(module);
 		return train;
+	}
+
+	inline bool IsInterpreterLocalTrainingStateNode(const NodeVariant& node)
+	{
+		return std::holds_alternative<SaveActivationNode>(node) || std::holds_alternative<LoadActivationNode>(node) ||
+		       std::holds_alternative<TapeSaveActivationNode>(node) ||
+		       std::holds_alternative<TapeLoadActivationNode>(node);
+	}
+
+	inline void
+	CollectTrainStepAOTReadinessDiagnosticsForSubgraph(const TrainStepPlan& plan, const TrainStepArtifactEntry& entry,
+	                                                   SubgraphId sourceSubgraph,
+	                                                   std::vector<TrainStepAOTReadinessDiagnostic>& diagnostics)
+	{
+		const auto subgraphIt =
+		    std::ranges::find_if(plan.module.plan.subgraphs, [&](const ExecutablePlanSubgraph& subgraph) {
+			    return subgraph.sourceSubgraph == sourceSubgraph;
+		    });
+		if (subgraphIt == plan.module.plan.subgraphs.end())
+		{
+			diagnostics.push_back({ .entryName = entry.name,
+			                        .subgraph = sourceSubgraph,
+			                        .message = "train-step entry references an unknown executable subgraph" });
+			return;
+		}
+		for (const auto& node : subgraphIt->nodes)
+		{
+			if (!IsInterpreterLocalTrainingStateNode(node.node))
+			{
+				continue;
+			}
+			diagnostics.push_back({
+			    .entryName = entry.name,
+			    .subgraph = subgraphIt->sourceSubgraph,
+			    .node = node.sourceNode,
+			    .opKind = node.opKind,
+			    .message = "AOT training cannot consume interpreter-local activation/tape state; represent saved "
+			               "activations as explicit TrainStep ABI runtime states or tensor bindings",
+			});
+		}
+	}
+
+	inline std::vector<TrainStepAOTReadinessDiagnostic>
+	CollectTrainStepAOTReadinessDiagnostics(const TrainStepPlan& plan)
+	{
+		std::vector<TrainStepAOTReadinessDiagnostic> diagnostics;
+		for (const auto& entry : plan.artifactEntries)
+		{
+			if (entry.kind == TrainStepArtifactEntryKind::Forward)
+			{
+				continue;
+			}
+			if (entry.function)
+			{
+				const auto function = *entry.function;
+				if (function >= plan.module.functions.size())
+				{
+					diagnostics.push_back({ .entryName = entry.name,
+					                        .message = "train-step entry references an unknown executable function" });
+					continue;
+				}
+				CollectTrainStepAOTReadinessDiagnosticsForSubgraph(plan, entry, plan.module.functions[function].body,
+				                                                   diagnostics);
+			}
+			if (entry.update)
+			{
+				if (*entry.update >= plan.updates.size())
+				{
+					diagnostics.push_back({ .entryName = entry.name,
+					                        .message = "train-step entry references an unknown optimizer update" });
+					continue;
+				}
+				CollectTrainStepAOTReadinessDiagnosticsForSubgraph(plan, entry, plan.updates[*entry.update].subgraph,
+				                                                   diagnostics);
+			}
+		}
+		return diagnostics;
+	}
+
+	inline void RequireTrainStepAOTReady(const TrainStepPlan& plan)
+	{
+		const auto diagnostics = CollectTrainStepAOTReadinessDiagnostics(plan);
+		if (diagnostics.empty())
+		{
+			return;
+		}
+		const auto& first = diagnostics.front();
+		throw std::runtime_error(std::format(
+		    "TrainStepPlan is not AOT-ready: entry '{}' subgraph {} node {} {}: {}", first.entryName, first.subgraph,
+		    first.node, first.opKind.empty() ? std::string("<unknown>") : first.opKind, first.message));
 	}
 
 	inline void ValidateTrainStepPlan(const TrainStepPlan& plan)
