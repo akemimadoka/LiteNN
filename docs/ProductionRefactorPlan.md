@@ -155,11 +155,20 @@ Exit criteria:
 
 ## Phase 5: Quantization and Low Precision
 
-- [ ] Keep scalar low precision and block-quantized storage as separate concepts.
-- [ ] Do not add byte-addressable fake `DataType` values for int4/fp4.
-- [ ] Define packed 4-bit storage through quantization/storage metadata first.
-- [ ] Implement CPU reference pack/unpack/dequantize before native kernels.
+- [x] Keep scalar low precision and block-quantized storage as separate concepts.
+      `DataType` remains the byte-addressable scalar dtype surface, while `QuantizationParams` describes affine, block,
+      packed-nibble, and external storage semantics.
+- [x] Do not add byte-addressable fake `DataType` values for int4/fp4.
+      Int4, UInt4, FP4E2M1, and FP4E3M0 are represented as `PackedNibbleFormat` storage metadata instead of scalar
+      dtype values.
+- [x] Define packed 4-bit storage through quantization/storage metadata first.
+      Packed nibble format, nibble order, scale layout, storage dtype, and logical element count are queryable through
+      quantization metadata and preserved by vNext package metadata.
+- [x] Implement CPU reference pack/unpack/dequantize before native kernels.
+      CPU reference helpers and graph/const-fold dequantization tests cover integer and float packed-nibble storage.
 - [ ] Add native quantized Linear/MatMul only after storage, package, and parity contracts are stable.
+      `QueryProductionQuantizationCapabilities()` now reports `NativeQuantizedLinearMatMul` as a deferred native-kernel
+      capability that requires parity and benchmark evidence.
 
 Exit criteria:
 

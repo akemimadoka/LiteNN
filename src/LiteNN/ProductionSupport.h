@@ -71,6 +71,17 @@ namespace LiteNN
 		QuantizedProjection,
 	};
 
+	enum class ProductionQuantizationCapability
+	{
+		ScalarLowPrecisionDataTypes,
+		AffineQuantizedTensors,
+		BlockQuantizedStorage,
+		PackedFourBitStorage,
+		CPUReferencePackUnpackDequantize,
+		VNextQuantizationMetadata,
+		NativeQuantizedLinearMatMul,
+	};
+
 	struct ProductionSupportStatus
 	{
 		ProductionSupportArea area;
@@ -151,6 +162,20 @@ namespace LiteNN
 		std::string_view fallbackPolicy;
 	};
 
+	struct ProductionQuantizationCapabilityDescriptor
+	{
+		ProductionQuantizationCapability capability;
+		std::string_view name;
+		ProductionSupportLevel level;
+		bool availableInBuild;
+		bool semanticFoundation;
+		bool nativeKernel;
+		bool requiresExternalMetadata;
+		std::string_view verifiedScope;
+		std::string_view productionGate;
+		std::string_view fallbackPolicy;
+	};
+
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
 	{
 		return EnumToString<EnumToStringStyle::Unqualified>(area);
@@ -172,6 +197,11 @@ namespace LiteNN
 	}
 
 	inline constexpr std::string_view ProductionCUDANativeCapabilityName(ProductionCUDANativeCapability capability)
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(capability);
+	}
+
+	inline constexpr std::string_view ProductionQuantizationCapabilityName(ProductionQuantizationCapability capability)
 	{
 		return EnumToString<EnumToStringStyle::Unqualified>(capability);
 	}
@@ -772,6 +802,113 @@ namespace LiteNN
 			     "Unknown CUDA native capability." };
 	}
 
+	inline constexpr ProductionQuantizationCapabilityDescriptor
+	QueryProductionQuantizationCapability(ProductionQuantizationCapability capability)
+	{
+		switch (capability)
+		{
+		case ProductionQuantizationCapability::ScalarLowPrecisionDataTypes:
+			return {
+				capability,
+				ProductionQuantizationCapabilityName(capability),
+				ProductionSupportLevel::Supported,
+				true,
+				true,
+				false,
+				false,
+				"Scalar FP16, BF16, FP8, signed integer, unsigned integer, and bool dtypes remain byte-addressable "
+				"DataType values.",
+				"Keep scalar dtypes separate from quantized tensor storage and package metadata.",
+				"Unsupported scalar dtype execution must reject or route through an explicit cast/dequantize path."
+			};
+		case ProductionQuantizationCapability::AffineQuantizedTensors:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     true,
+				     "Per-tensor, per-axis, and grouped affine quantization metadata plus CPU quantize/dequantize "
+				     "reference helpers.",
+				     "Preserve scale, zero-point, axis, group size, and storage dtype through graph/package metadata.",
+				     "Optimized kernels may consume the metadata later; correctness falls back to reference "
+				     "dequantize." };
+		case ProductionQuantizationCapability::BlockQuantizedStorage:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     true,
+				     "Block quantization metadata models storage formats such as scalar blocks and ggml-style block "
+				     "families without pretending they are scalar DataType values.",
+				     "Block storage must stay described by QuantizationParams and external storage metadata.",
+				     "Unsupported block formats must fail import/package validation or dequantize through a reference "
+				     "path." };
+		case ProductionQuantizationCapability::PackedFourBitStorage:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     true,
+				     "Packed nibble metadata covers Int4, UInt4, FP4E2M1, FP4E3M0, nibble order, scale layout, and "
+				     "logical element count.",
+				     "Do not add fake byte-addressable DataType values for int4/fp4; package them as storage metadata.",
+				     "Reference unpack/dequantize is the correctness path until native kernels opt in." };
+		case ProductionQuantizationCapability::CPUReferencePackUnpackDequantize:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     true,
+				     "CPU reference helpers pack integer/float 4-bit values, unpack integer 4-bit values, and "
+				     "dequantize packed nibbles deterministically.",
+				     "Keep reference behavior covered before adding optimized native kernels.",
+				     "Native kernels must match the reference helpers within dtype-specific tolerances." };
+		case ProductionQuantizationCapability::VNextQuantizationMetadata:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     true,
+				     "vNext package metadata preserves quantization scheme, granularity, packed nibble format, scale "
+				     "layout, and logical element count.",
+				     "Quantized packages must be inspectable and rebound before execution.",
+				     "Loaders must reject incomplete or inconsistent quantization metadata instead of guessing." };
+		case ProductionQuantizationCapability::NativeQuantizedLinearMatMul:
+			return { capability,
+				     ProductionQuantizationCapabilityName(capability),
+				     ProductionSupportLevel::Deferred,
+				     false,
+				     false,
+				     true,
+				     true,
+				     "Native quantized Linear/MatMul kernels are not part of the production profile yet.",
+				     "Requires stable storage/package contracts, golden parity, and benchmark evidence for target "
+				     "workloads.",
+				     "Until then, quantized models use reference dequantize plus existing float execution or fail "
+				     "explicitly when no path is available." };
+		}
+		return { capability,
+			     ProductionQuantizationCapabilityName(capability),
+			     ProductionSupportLevel::Unavailable,
+			     false,
+			     false,
+			     false,
+			     false,
+			     "Unknown quantization capability.",
+			     "Unknown quantization capability.",
+			     "Unknown quantization capability." };
+	}
+
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()
 	{
 		return {
@@ -816,6 +953,19 @@ namespace LiteNN
 			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::LowPrecisionMatMul),
 			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::Attention),
 			QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::QuantizedProjection),
+		};
+	}
+
+	inline std::vector<ProductionQuantizationCapabilityDescriptor> QueryProductionQuantizationCapabilities()
+	{
+		return {
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::ScalarLowPrecisionDataTypes),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::AffineQuantizedTensors),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::BlockQuantizedStorage),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::PackedFourBitStorage),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::CPUReferencePackUnpackDequantize),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::VNextQuantizationMetadata),
+			QueryProductionQuantizationCapability(ProductionQuantizationCapability::NativeQuantizedLinearMatMul),
 		};
 	}
 
@@ -873,6 +1023,21 @@ namespace LiteNN
 				diagnostics.push_back(std::string(capability.name) + " [" +
 				                      std::string(ProductionSupportLevelName(capability.level)) +
 				                      "]: " + std::string(capability.capabilityGate));
+			}
+		}
+		return diagnostics;
+	}
+
+	inline std::vector<std::string> CollectProductionQuantizationCapabilityDiagnostics()
+	{
+		std::vector<std::string> diagnostics;
+		for (const auto& capability : QueryProductionQuantizationCapabilities())
+		{
+			if (capability.level != ProductionSupportLevel::Supported || capability.nativeKernel)
+			{
+				diagnostics.push_back(std::string(capability.name) + " [" +
+				                      std::string(ProductionSupportLevelName(capability.level)) +
+				                      "]: " + std::string(capability.productionGate));
 			}
 		}
 		return diagnostics;

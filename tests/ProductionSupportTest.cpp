@@ -34,6 +34,13 @@ namespace
 		return std::ranges::any_of(
 		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
+
+	bool HasQuantizationCapabilityDiagnostic(std::string_view needle)
+	{
+		const auto diagnostics = CollectProductionQuantizationCapabilityDiagnostics();
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
+	}
 } // namespace
 
 TEST(ProductionSupportTest, ReportsProductionDeploymentCore)
@@ -193,4 +200,49 @@ TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
 	EXPECT_TRUE(quantizedProjection.highValueKernelPriority);
 	EXPECT_NE(quantizedProjection.level, ProductionSupportLevel::Supported);
 	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"));
+}
+
+TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
+{
+	const auto capabilities = QueryProductionQuantizationCapabilities();
+	EXPECT_GE(capabilities.size(), 7u);
+
+	const auto scalar =
+	    QueryProductionQuantizationCapability(ProductionQuantizationCapability::ScalarLowPrecisionDataTypes);
+	EXPECT_EQ(scalar.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(scalar.semanticFoundation);
+	EXPECT_FALSE(scalar.nativeKernel);
+	EXPECT_FALSE(scalar.requiresExternalMetadata);
+	EXPECT_TRUE(Contains(scalar.verifiedScope, "DataType"));
+	EXPECT_TRUE(Contains(scalar.productionGate, "separate"));
+
+	const auto packed = QueryProductionQuantizationCapability(ProductionQuantizationCapability::PackedFourBitStorage);
+	EXPECT_EQ(packed.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(packed.semanticFoundation);
+	EXPECT_FALSE(packed.nativeKernel);
+	EXPECT_TRUE(packed.requiresExternalMetadata);
+	EXPECT_TRUE(Contains(packed.verifiedScope, "Int4"));
+	EXPECT_TRUE(Contains(packed.verifiedScope, "FP4"));
+	EXPECT_TRUE(Contains(packed.productionGate, "fake"));
+
+	const auto reference =
+	    QueryProductionQuantizationCapability(ProductionQuantizationCapability::CPUReferencePackUnpackDequantize);
+	EXPECT_EQ(reference.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(reference.semanticFoundation);
+	EXPECT_FALSE(reference.nativeKernel);
+	EXPECT_TRUE(Contains(reference.verifiedScope, "pack"));
+	EXPECT_TRUE(Contains(reference.verifiedScope, "unpack"));
+	EXPECT_TRUE(Contains(reference.verifiedScope, "dequantize"));
+
+	const auto native =
+	    QueryProductionQuantizationCapability(ProductionQuantizationCapability::NativeQuantizedLinearMatMul);
+	EXPECT_EQ(native.level, ProductionSupportLevel::Deferred);
+	EXPECT_FALSE(native.availableInBuild);
+	EXPECT_FALSE(native.semanticFoundation);
+	EXPECT_TRUE(native.nativeKernel);
+	EXPECT_TRUE(native.requiresExternalMetadata);
+	EXPECT_TRUE(Contains(native.productionGate, "parity"));
+	EXPECT_TRUE(Contains(native.productionGate, "benchmark"));
+	EXPECT_TRUE(HasQuantizationCapabilityDiagnostic("NativeQuantizedLinearMatMul"));
+	EXPECT_FALSE(HasQuantizationCapabilityDiagnostic("PackedFourBitStorage"));
 }
