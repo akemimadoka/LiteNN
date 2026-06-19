@@ -1441,6 +1441,22 @@ TEST(CompiledModuleTest, CompilesConstFoldedPackedNibbleDequantize)
 	ExpectTensorNear(actual[0], expected[0]);
 }
 
+TEST(CompiledModuleTest, DynamicDequantizeAOTDiagnosticMentionsConstFold)
+{
+	auto graph = BuildPackedQuantizedConstantDequantizeGraph();
+	try
+	{
+		(void) Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+		FAIL() << "Expected dynamic DequantizeNode compilation to fail";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("dynamic DequantizeNode"), std::string::npos);
+		EXPECT_NE(message.find("ConstFoldPass"), std::string::npos);
+	}
+}
+
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
 {
 	const auto binary = std::vector<std::byte>{ std::byte{ 'p' }, std::byte{ 't' }, std::byte{ 'x' } };

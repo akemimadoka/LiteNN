@@ -821,14 +821,18 @@ namespace litenn
 			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 			              std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error("GraphToMLIR does not support QuantizeNode yet");
+				throw std::runtime_error(
+				    "GraphToMLIR does not support dynamic QuantizeNode yet; run ConstFoldPass before CPU AOT when "
+				    "quantizing compile-time constants");
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId, const DequantizeNode&, std::span<const OutputInfo>,
 			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
 			              std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error("GraphToMLIR does not support DequantizeNode yet");
+				throw std::runtime_error(
+				    "GraphToMLIR does not support dynamic DequantizeNode yet; run ConstFoldPass before CPU AOT when "
+				    "dequantizing compile-time constants");
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,
