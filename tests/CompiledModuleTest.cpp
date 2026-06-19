@@ -385,6 +385,22 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPerAxisAffineQuantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerAxisAffineQuantization(DataType::Int8, 1, { 0.5F, 0.25F, 2.0F }, { -1, 0, 2 });
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto quantized =
+		    sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::Int8, { 2, 3 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "quantized" });
+		return graph;
+	}
+
 	Graph BuildGetRowsGraph()
 	{
 		Graph graph;
@@ -1596,6 +1612,15 @@ TEST(CompiledModuleTest, CPUDynamicUInt8AffineQuantizeArtifactMatchesInterpreter
 	auto graph = BuildUInt8AffineQuantizeInputGraph();
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ -100.0, -0.25, 0.0, 12.75, 100.0 }, { 5 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUDynamicPerAxisAffineQuantizeArtifactMatchesInterpreter)
+{
+	auto graph = BuildPerAxisAffineQuantizeInputGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ -0.5, 0.125, 0.0, 1.0, -2.0, 8.0 }, { 2, 3 }, DataType::Float32));
 
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
