@@ -28,7 +28,7 @@ namespace
 		    "Usage: {} [--data DIR] [--train-limit N] [--test-limit N] [--epochs N] [--learning-rate X] [--seed N] "
 		    "[--object PATH]\n"
 		    "\n"
-		    "Trains with LiteNN Backward/SGD, then compiles the trained graph with AOT and reloads it.\n"
+		    "Trains with LiteNN CPU AOT forward/backward/SGD, then compiles and reloads the inference graph.\n"
 		    "Default data directory: {}\n\n",
 		    exe, std::filesystem::path(LITENN_MNIST_DEFAULT_DATA_DIR).string());
 		PrintCommonOptions();
@@ -86,9 +86,9 @@ namespace
 		const auto train = LoadTrainSplit(options.mnist);
 		const auto test = LoadTestSplit(options.mnist);
 
-		std::cout << std::format("Training linear softmax classifier with {} images\n", train.Count());
+		std::cout << std::format("Training linear softmax classifier with CPU AOT using {} images\n", train.Count());
 		auto trainingGraph = BuildTrainableMnistGraph(options.mnist.seed);
-		TrainMnistGraph(trainingGraph, train, options.mnist);
+		TrainMnistGraph(trainingGraph, train, options.mnist, Training::TrainExecutionPolicy::AOT);
 
 		auto inferenceGraph = BuildInferenceGraphFromTrainedVariables(trainingGraph);
 		if (options.mnist.saveModelPath)

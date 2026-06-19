@@ -5,11 +5,11 @@ training, and graph construction code:
 
 - `litenn_mnist_interpreter`: trains with `Runtime::Interpreter::RunBackward`
   and SGD, then evaluates with `Runtime::Interpreter`.
-- `litenn_mnist_aot`: trains the same graph with `RunBackward`, copies the
-  trained parameters into a forward-only inference graph, then compiles that
-  graph with `Compiler<CPU>::CompileArtifact`, optionally writes a carrier
-  object, loads the artifact into `CompiledModule<CPU>`, and evaluates the
-  loaded module.
+- `litenn_mnist_aot`: trains the same linear graph with compiled CPU AOT
+  forward/backward/SGD update runners, copies the trained parameters into a
+  forward-only inference graph, then compiles that graph with
+  `Compiler<CPU>::CompileArtifact`, optionally writes a carrier object, loads
+  the artifact into `CompiledModule<CPU>`, and evaluates the loaded module.
 
 The LiteNN graph is a trainable linear classifier:
 
@@ -19,7 +19,9 @@ logits = image @ weight + bias
 
 Graph construction uses `LiteNN::Layer::CreateLinear` / `AddLinear`. Training
 uses `LiteNN::Training::Trainer<CPU, Optimizer::SGD>`, `Optimizer::SoftmaxCrossEntropyWithLogits`,
-and `Optimizer::SGD`.
+and `Optimizer::SGD`. The interpreter executable selects
+`TrainExecutionPolicy::Interpreter`; the AOT executable selects
+`TrainExecutionPolicy::AOT`.
 Weight parameters are initialized with `LiteNN::Initializer::XavierUniform`,
 and bias parameters use `Initializer::Zeros`. The loss helper computes
 `dLoss/dLogits`, then `Trainer<CPU, Optimizer::SGD>` passes the gradient to the LiteNN backward graph:
@@ -81,7 +83,7 @@ Write a vNext package manifest after interpreter training:
 build\example\mnist\litenn_mnist_interpreter.exe --epochs 3 --train-limit 1000 --test-limit 1000 --save build\mnist.vnext.json
 ```
 
-AOT compile/load after training:
+CPU AOT training followed by AOT inference compile/load:
 
 ```powershell
 build\example\mnist\litenn_mnist_aot.exe --epochs 3 --train-limit 1000 --test-limit 1000

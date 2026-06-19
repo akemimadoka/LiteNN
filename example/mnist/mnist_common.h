@@ -302,11 +302,15 @@ namespace LiteNN::Examples::Mnist
 		return static_cast<int>(std::max_element(data, data + kDigitCount) - data);
 	}
 
-	inline void TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options)
+	inline void
+	TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options,
+	                Training::TrainExecutionPolicy executionPolicy = Training::TrainExecutionPolicy::Interpreter)
 	{
 		ModelGraph model(std::move(graph));
+		Training::TrainerOptions trainerOptions;
+		trainerOptions.executionPolicy = executionPolicy;
 		Training::Trainer<CPU, Optimizer::SGD> trainer(
-		    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }));
+		    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }), trainerOptions);
 
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)
 		{

@@ -1426,7 +1426,10 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   explicit rather than silently changing the selected execution policy.
 - [x] Keep a reference interpreter trainer for correctness checks, constant evaluation, and unsupported graph debugging.
   `TrainExecutionPolicy::Interpreter` continues to execute the same `TrainStepPlan` through `Runtime::Interpreter`.
-- [ ] Add examples that train the same small model through interpreter and AOT paths, then compare loss and updated weights.
+- [x] Train the same example model through explicit interpreter and AOT trainer policies.
+  `litenn_mnist_interpreter` and `litenn_mnist_aot` share the linear MNIST graph; the AOT example executes compiled
+  forward/backward/SGD updates before compiling and loading its inference artifact.
+- [ ] Add a single comparison example that reports interpreter/AOT loss drift and updated-weight drift in one run.
 
 #### G13.4 Validation and Benchmarking
 
