@@ -126,9 +126,15 @@ Exit criteria:
 
 GGUF / llama.cpp:
 
-- [ ] Support selected LLaMA-family model signatures as named profiles.
-- [ ] Reject unsupported llama.cpp ops and layouts with actionable diagnostics instead of chasing full operator parity.
-- [ ] Keep external llama.cpp golden validation as the acceptance criterion for new profiles.
+- [x] Support selected LLaMA-family model signatures as named profiles.
+      `QueryLLaMACompatibilityProfiles()` exposes tiny-fixture, LLaMA2-like causal LM, and LLaMA3-like causal LM
+      profile descriptors for GGUF tooling without promising broad llama.cpp parity.
+- [x] Reject unsupported llama.cpp ops and layouts with actionable diagnostics instead of chasing full operator parity.
+      `AnalyzeLLaMACompatibility()` reports blocking diagnostics for missing required tensors, unsupported RoPE variants,
+      invalid head/cache layout, and metadata that current lowering cannot execute safely.
+- [x] Keep external llama.cpp golden validation as the acceptance criterion for new profiles.
+      Production-selected LLaMA profiles explicitly require external llama.cpp golden logits before claiming model-family
+      acceptance; internal tiny fixtures remain regression coverage only.
 
 Torch / safetensors:
 

@@ -588,6 +588,57 @@ TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 	EXPECT_EQ(hyperparameters.QueryGroupsPerKVHead(), 1u);
 }
 
+TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
+{
+	const auto profiles = GGUF::QueryLLaMACompatibilityProfiles();
+	ASSERT_GE(profiles.size(), 3u);
+
+	const auto tiny = GGUF::QueryLLaMACompatibilityProfile(GGUF::LLaMACompatibilityProfileKind::TinyFixture);
+	EXPECT_EQ(tiny.name, "tiny-fixture");
+	EXPECT_FALSE(tiny.selectedProductionProfile);
+	EXPECT_TRUE(tiny.supportsPrefill);
+	EXPECT_TRUE(tiny.supportsDecode);
+	EXPECT_FALSE(tiny.requiresExternalLLaMACppGolden);
+
+	const auto llama2 = GGUF::QueryLLaMACompatibilityProfile(GGUF::LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM);
+	EXPECT_EQ(llama2.name, "llama2-like-causal-lm");
+	EXPECT_TRUE(llama2.selectedProductionProfile);
+	EXPECT_TRUE(llama2.supportsLinearRoPE);
+	EXPECT_FALSE(llama2.supportsYaRNOrLongRoPE);
+	EXPECT_TRUE(llama2.importsQuantizedWeightsByDequantizing);
+	EXPECT_TRUE(llama2.requiresExternalLLaMACppGolden);
+	EXPECT_NE(llama2.unsupportedPolicy.find("rejected"), std::string_view::npos);
+	EXPECT_NE(llama2.acceptancePolicy.find("llama.cpp golden"), std::string_view::npos);
+}
+
+TEST(GGUFLLaMACompatibility, AnalyzesTinyArchiveAgainstProductionProfile)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto report =
+	    GGUF::AnalyzeLLaMACompatibility(archive, GGUF::LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM);
+
+	EXPECT_TRUE(report.lowerable);
+	EXPECT_TRUE(report.externalGoldenRequired);
+	ASSERT_EQ(report.diagnostics.size(), 1u);
+	EXPECT_EQ(report.diagnostics[0].subject, "external-golden");
+	EXPECT_FALSE(report.diagnostics[0].blocking);
+	EXPECT_NE(report.diagnostics[0].message.find("llama.cpp golden logits"), std::string::npos);
+}
+
+TEST(GGUFLLaMACompatibility, ReportsUnsupportedRopeVariantAsBlockingDiagnostic)
+{
+	const auto archive =
+	    CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type", std::string("yarn"));
+	const auto report =
+	    GGUF::AnalyzeLLaMACompatibility(archive, GGUF::LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM);
+
+	EXPECT_FALSE(report.lowerable);
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return diagnostic.blocking && diagnostic.subject == "llama.rope.scaling.type" &&
+		       diagnostic.message.find("only executes none/linear") != std::string::npos;
+	}));
+}
+
 TEST(GGUFLLaMAHyperparameters, UsesExplicitKVHeadCountAndRopeBase)
 {
 	Graph graph;

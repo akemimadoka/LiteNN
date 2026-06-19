@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #ifndef LITENN_GGUFIMPORTER_H
 #define LITENN_GGUFIMPORTER_H
@@ -50,6 +53,49 @@ namespace LiteNN::GGUF
 		ImportSummary summary;
 	};
 
+	enum class LLaMACompatibilityProfileKind
+	{
+		TinyFixture,
+		LLaMA2LikeCausalLM,
+		LLaMA3LikeCausalLM,
+	};
+
+	struct LLaMACompatibilityProfileDescriptor
+	{
+		LLaMACompatibilityProfileKind kind;
+		std::string_view name;
+		std::string_view architecture;
+		bool selectedProductionProfile;
+		bool supportsPrefill;
+		bool supportsDecode;
+		bool supportsLinearRoPE;
+		bool supportsYaRNOrLongRoPE;
+		bool importsQuantizedWeightsByDequantizing;
+		bool requiresExternalLLaMACppGolden;
+		std::string_view supportedSignature;
+		std::string_view unsupportedPolicy;
+		std::string_view acceptancePolicy;
+	};
+
+	struct LLaMACompatibilityDiagnostic
+	{
+		std::string subject;
+		std::string message;
+		bool blocking{};
+	};
+
+	struct LLaMACompatibilityReport
+	{
+		LLaMACompatibilityProfileDescriptor profile;
+		bool lowerable{};
+		bool externalGoldenRequired{};
+		std::vector<LLaMACompatibilityDiagnostic> diagnostics;
+	};
+
+	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind);
+	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind);
+	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles();
+	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind);
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);

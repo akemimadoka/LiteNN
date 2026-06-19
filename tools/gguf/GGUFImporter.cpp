@@ -503,6 +503,189 @@ namespace LiteNN::GGUF
 		}
 	} // namespace
 
+	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind)
+	{
+		switch (kind)
+		{
+		case LLaMACompatibilityProfileKind::TinyFixture:
+			return "tiny-fixture";
+		case LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM:
+			return "llama2-like-causal-lm";
+		case LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM:
+			return "llama3-like-causal-lm";
+		}
+		return "unknown";
+	}
+
+	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind)
+	{
+		switch (kind)
+		{
+		case LLaMACompatibilityProfileKind::TinyFixture:
+			return { kind,
+				     LLaMACompatibilityProfileName(kind),
+				     "llama",
+				     false,
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     "Self-contained tiny LLaMA-family fixtures used for metadata, lowering, AOT, and deterministic "
+				     "logit regression tests.",
+				     "Unsupported metadata, tensor shapes, and quantization formats fail with importer/lowering "
+				     "diagnostics.",
+				     "Internal fixture parity is sufficient only for regression coverage, not production model "
+				     "acceptance." };
+		case LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM:
+			return { kind,
+				     LLaMACompatibilityProfileName(kind),
+				     "llama",
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     true,
+				     "LLaMA-family causal LM archives with static-shape prefill/decode, token_embd/output weights, "
+				     "RMSNorm, SwiGLU MLP, GQA/MQA head layout, none/linear RoPE, and ggml block weights "
+				     "dequantized during import.",
+				     "Unsupported llama.cpp ops, tensor layouts, RoPE variants, state ABI, or quantization formats are "
+				     "rejected instead of guessed.",
+				     "A new production profile requires external llama.cpp golden logits for prefill and decode plus "
+				     "dtype/quantization-specific tolerance." };
+		case LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM:
+			return { kind,
+				     LLaMACompatibilityProfileName(kind),
+				     "llama",
+				     true,
+				     true,
+				     true,
+				     true,
+				     false,
+				     true,
+				     true,
+				     "LLaMA-3-like causal LM archives that stay inside the same static causal-LM contract as the "
+				     "LLaMA2-like profile: GQA, RMSNorm, SwiGLU, tokenizer metadata preservation, and none/linear "
+				     "RoPE execution.",
+				     "YaRN/LongRoPE, sliding-window attention, mixture-of-experts, custom tokenizer runtime behavior, "
+				     "and unsupported block layouts remain blocking diagnostics.",
+				     "Acceptance requires external llama.cpp golden logits for representative prompt, prefill, and "
+				     "decode cases before claiming production support." };
+		}
+		return { kind,
+			     "unknown",
+			     "unknown",
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     false,
+			     true,
+			     "Unknown profile.",
+			     "Unknown profile.",
+			     "Unknown profile." };
+	}
+
+	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles()
+	{
+		return {
+			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::TinyFixture),
+			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM),
+			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM),
+		};
+	}
+
+	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind)
+	{
+		LLaMACompatibilityReport report{
+			.profile = QueryLLaMACompatibilityProfile(kind),
+			.lowerable = true,
+			.externalGoldenRequired = QueryLLaMACompatibilityProfile(kind).requiresExternalLLaMACppGolden,
+		};
+
+		const auto addDiagnostic = [&report](std::string subject, std::string message, bool blocking) {
+			if (blocking)
+			{
+				report.lowerable = false;
+			}
+			report.diagnostics.push_back({
+			    .subject = std::move(subject),
+			    .message = std::move(message),
+			    .blocking = blocking,
+			});
+		};
+
+		std::optional<LLaMAHyperparameters> hyperparameters;
+		try
+		{
+			hyperparameters = ParseLLaMAHyperparameters(archive);
+		}
+		catch (const std::exception& ex)
+		{
+			addDiagnostic("metadata", ex.what(), true);
+			return report;
+		}
+
+		if (hyperparameters->architecture != report.profile.architecture)
+		{
+			addDiagnostic("general.architecture",
+			              std::format("Profile '{}' expects architecture '{}', got '{}'", report.profile.name,
+			                          report.profile.architecture, hyperparameters->architecture),
+			              true);
+		}
+		if (hyperparameters->ropeScalingType != "none" && hyperparameters->ropeScalingType != "linear")
+		{
+			addDiagnostic(std::format("{}.rope.scaling.type", hyperparameters->architecture),
+			              std::format("Current LiteNN LLaMA lowering preserves '{}' metadata but only executes "
+			                          "none/linear RoPE scaling; use an external golden-gated profile before enabling "
+			                          "this variant.",
+			                          hyperparameters->ropeScalingType),
+			              true);
+		}
+		if (hyperparameters->ropeDimensionCount == 0 ||
+		    hyperparameters->ropeDimensionCount > hyperparameters->HeadDimension() ||
+		    (hyperparameters->ropeDimensionCount % 2) != 0)
+		{
+			addDiagnostic(std::format("{}.rope.dimension_count", hyperparameters->architecture),
+			              "RoPE dimension count must be an even value in [2, headDim] for current lowering.", true);
+		}
+
+		const auto requireTensor = [&](std::string name) {
+			if (!archive.FindVariable(name))
+			{
+				addDiagnostic(std::move(name), "Required LLaMA tensor is missing from the GGUF archive.", true);
+			}
+		};
+		requireTensor("token_embd.weight");
+		requireTensor("output_norm.weight");
+		for (std::size_t blockIndex = 0; blockIndex < hyperparameters->blockCount; ++blockIndex)
+		{
+			const auto prefix = std::format("blk.{}.", blockIndex);
+			requireTensor(prefix + "attn_norm.weight");
+			requireTensor(prefix + "attn_q.weight");
+			requireTensor(prefix + "attn_k.weight");
+			requireTensor(prefix + "attn_v.weight");
+			requireTensor(prefix + "attn_output.weight");
+			requireTensor(prefix + "ffn_norm.weight");
+			requireTensor(prefix + "ffn_gate.weight");
+			requireTensor(prefix + "ffn_up.weight");
+			requireTensor(prefix + "ffn_down.weight");
+		}
+
+		if (report.externalGoldenRequired)
+		{
+			addDiagnostic("external-golden",
+			              "Production acceptance requires external llama.cpp golden logits for matching prompt, "
+			              "prefill/decode shape, dtype, and quantization profile.",
+			              false);
+		}
+		return report;
+	}
+
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph)
 	{
 		const auto architecture = ReadStringValue(RequireMetadata(graph, "general.architecture"));
