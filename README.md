@@ -39,10 +39,18 @@ cmake --build build
 仓库使用根目录的 `.clang-format` 统一格式化所有已跟踪的 C/C++ 源码文件。手动格式化：
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/format_sources.ps1
+python scripts/format_sources.py
 ```
 
 clone 后 Git 不会自动安装仓库里的 hook 模板。需要在本地执行一次：
+
+Linux/macOS:
+
+```sh
+sh scripts/install_git_hooks.sh
+```
+
+Windows:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1
