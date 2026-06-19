@@ -30,6 +30,15 @@ namespace LiteNN
 		Threading,
 	};
 
+	enum class MobileVulkanProductionGate
+	{
+		GraphPartitioning,
+		ExplicitFallbackVisibility,
+		SeparatedArtifactRegions,
+		DeviceLocalMemoryPlanning,
+		MobileDeviceMatrix,
+	};
+
 	enum class MobileConstraintLevel
 	{
 		Supported,
@@ -51,6 +60,16 @@ namespace LiteNN
 		std::string_view name;
 		MobileConstraintLevel level;
 		std::string_view policy;
+	};
+
+	struct MobileVulkanProductionGateStatus
+	{
+		MobileVulkanProductionGate gate;
+		std::string_view name;
+		MobileConstraintLevel level;
+		bool requiredForBroadMobileGPU;
+		std::string_view evidence;
+		std::string_view missing;
 	};
 
 	inline constexpr std::string_view MobileFeatureName(MobileFeature feature)
@@ -95,6 +114,11 @@ namespace LiteNN
 		return EnumToString<EnumToStringStyle::Unqualified>(constraint);
 	}
 
+	inline constexpr std::string_view MobileVulkanProductionGateName(MobileVulkanProductionGate gate)
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(gate);
+	}
+
 	inline constexpr MobileConstraintStatus QueryMobileConstraintStatus(MobileConstraint constraint)
 	{
 		switch (constraint)
@@ -131,6 +155,65 @@ namespace LiteNN
 			     "Unknown mobile constraint." };
 	}
 
+	inline constexpr MobileVulkanProductionGateStatus
+	QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate gate)
+	{
+		switch (gate)
+		{
+		case MobileVulkanProductionGate::GraphPartitioning:
+			return {
+				gate,
+				MobileVulkanProductionGateName(gate),
+				MobileConstraintLevel::Supported,
+				true,
+				"Runtime placement builds backend partitions from executable plans and records explicit fallback "
+				"steps.",
+				"Coverage is still workload-dependent; unsupported ops must remain visible in placement diagnostics."
+			};
+		case MobileVulkanProductionGate::ExplicitFallbackVisibility:
+			return {
+				gate,
+				MobileVulkanProductionGateName(gate),
+				MobileConstraintLevel::Supported,
+				true,
+				"Runtime schedule profile records expose transfer/fallback rows instead of hiding CPU fallback inside "
+				"native backend labels.",
+				"Benchmark consumers must keep native and fallback rows separate."
+			};
+		case MobileVulkanProductionGate::SeparatedArtifactRegions:
+			return {
+				gate,
+				MobileVulkanProductionGateName(gate),
+				MobileConstraintLevel::Supported,
+				true,
+				"vNext packages and mobile feature policy prefer separated metadata/constants/weights/instructions "
+				"regions.",
+				"Mobile loaders still need platform-specific mmap/asset binding examples."
+			};
+		case MobileVulkanProductionGate::DeviceLocalMemoryPlanning:
+			return {
+				gate,
+				MobileVulkanProductionGateName(gate),
+				MobileConstraintLevel::Constrained,
+				true,
+				"Vulkan buffers can allocate device-local storage, but broad planning is not yet expressed as a stable "
+				"runtime/package contract.",
+				"Need device-local allocation classes, staging policy, alias legality, and per-device limit checks "
+				"before broad mobile GPU production support."
+			};
+		case MobileVulkanProductionGate::MobileDeviceMatrix:
+			return { gate,
+				     MobileVulkanProductionGateName(gate),
+				     MobileConstraintLevel::Constrained,
+				     true,
+				     "Desktop Vulkan tests cover selected native payload behavior.",
+				     "Need Android/iOS-adjacent Vulkan device matrix, storage/subgroup/timestamp/alignment probes, and "
+				     "skip/fail policy evidence." };
+		}
+		return { gate, MobileVulkanProductionGateName(gate),     MobileConstraintLevel::Unsupported,
+			     true, "Unknown mobile Vulkan production gate.", "Unknown mobile Vulkan production gate." };
+	}
+
 	inline std::vector<MobileFeatureStatus> QueryMobileFeatureStatuses()
 	{
 		return {
@@ -156,6 +239,17 @@ namespace LiteNN
 		};
 	}
 
+	inline std::vector<MobileVulkanProductionGateStatus> QueryMobileVulkanProductionGateStatuses()
+	{
+		return {
+			QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::GraphPartitioning),
+			QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::ExplicitFallbackVisibility),
+			QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::SeparatedArtifactRegions),
+			QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::DeviceLocalMemoryPlanning),
+			QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::MobileDeviceMatrix),
+		};
+	}
+
 	inline std::vector<std::string> CollectUnsupportedMobileFeatureDiagnostics()
 	{
 		std::vector<std::string> diagnostics;
@@ -177,6 +271,19 @@ namespace LiteNN
 			if (status.level != MobileConstraintLevel::Supported)
 			{
 				diagnostics.push_back(std::string(status.name) + ": " + std::string(status.policy));
+			}
+		}
+		return diagnostics;
+	}
+
+	inline std::vector<std::string> CollectMobileVulkanProductionGateDiagnostics()
+	{
+		std::vector<std::string> diagnostics;
+		for (const auto& status : QueryMobileVulkanProductionGateStatuses())
+		{
+			if (status.level != MobileConstraintLevel::Supported)
+			{
+				diagnostics.push_back(std::string(status.name) + ": " + std::string(status.missing));
 			}
 		}
 		return diagnostics;

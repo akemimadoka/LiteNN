@@ -15,6 +15,13 @@ namespace
 		return std::ranges::any_of(
 		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
+
+	bool ContainsVulkanGateDiagnostic(std::string_view needle)
+	{
+		const auto diagnostics = CollectMobileVulkanProductionGateDiagnostics();
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
+	}
 } // namespace
 
 TEST(MobileSupportTest, ReportsSupportedRuntimeFeatures)
@@ -54,4 +61,30 @@ TEST(MobileSupportTest, ReportsMobileConstraintPolicies)
 	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
 		return diagnostic.find("DynamicLoading") != std::string::npos;
 	}));
+}
+
+TEST(MobileSupportTest, ReportsVulkanProductionGates)
+{
+	const auto gates = QueryMobileVulkanProductionGateStatuses();
+	EXPECT_GE(gates.size(), 5u);
+
+	const auto partitioning = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::GraphPartitioning);
+	EXPECT_EQ(partitioning.level, MobileConstraintLevel::Supported);
+	EXPECT_TRUE(partitioning.requiredForBroadMobileGPU);
+	EXPECT_NE(std::string(partitioning.evidence).find("backend partitions"), std::string::npos);
+
+	const auto fallback = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::ExplicitFallbackVisibility);
+	EXPECT_EQ(fallback.level, MobileConstraintLevel::Supported);
+	EXPECT_NE(std::string(fallback.evidence).find("fallback"), std::string::npos);
+
+	const auto memory = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::DeviceLocalMemoryPlanning);
+	EXPECT_EQ(memory.level, MobileConstraintLevel::Constrained);
+	EXPECT_TRUE(memory.requiredForBroadMobileGPU);
+	EXPECT_NE(std::string(memory.missing).find("device-local allocation"), std::string::npos);
+
+	const auto matrix = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::MobileDeviceMatrix);
+	EXPECT_EQ(matrix.level, MobileConstraintLevel::Constrained);
+	EXPECT_TRUE(ContainsVulkanGateDiagnostic("DeviceLocalMemoryPlanning"));
+	EXPECT_TRUE(ContainsVulkanGateDiagnostic("MobileDeviceMatrix"));
+	EXPECT_FALSE(ContainsVulkanGateDiagnostic("GraphPartitioning"));
 }
