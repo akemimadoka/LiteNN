@@ -273,6 +273,65 @@ TEST(G14Remaining, BackendPlacementTransfersAreExplicitInScheduleProfile)
 	EXPECT_THROW(Runtime::ValidatePlacementPlan(invalidTransfer), std::runtime_error);
 }
 
+TEST(G14Remaining, PlacementTransfersCreateSyncStepsAndProfileSummary)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto cast = subgraph.AddNode(CastNode{ { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { cast, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("CastNode", {
+	                                            .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Native,
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .memorySpaces = { TensorMemorySpace::Host },
+	                                            .relativeCost = 0.01,
+	                                        });
+	constexpr std::array<std::string_view, 2> backends{ BackendCPUInterpreter, BackendCUDANative };
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry);
+	ASSERT_EQ(placement.transferSteps.size(), 1u);
+
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
+	Runtime::AppendPlacementTransferSteps(schedule, placement);
+	Runtime::AppendPlacementSyncSteps(schedule, placement);
+	ASSERT_FALSE(schedule.steps.empty());
+	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::Sync);
+	EXPECT_EQ(schedule.steps.back().backend, BackendCUDANative);
+	EXPECT_EQ(schedule.steps.back().fallbackBackend, BackendCPUInterpreter);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
+	for (auto& record : profileRecords)
+	{
+		if (record.kind == Runtime::RuntimeScheduleStepKind::Transfer)
+		{
+			record.wallTimeMs = 0.25;
+		}
+		if (record.kind == Runtime::RuntimeScheduleStepKind::Sync)
+		{
+			record.wallTimeMs = 0.05;
+			record.deviceTimeMs = 0.04;
+		}
+	}
+	const auto summary = Runtime::BuildRuntimeScheduleProfileSummary(profileRecords);
+	EXPECT_EQ(summary.transferSteps, 1u);
+	EXPECT_EQ(summary.syncSteps, 1u);
+	EXPECT_TRUE(summary.hasMeasuredTimings);
+	EXPECT_TRUE(std::ranges::any_of(summary.buckets, [](const Runtime::RuntimeScheduleProfileBucket& bucket) {
+		return bucket.kind == Runtime::RuntimeScheduleStepKind::Sync && bucket.hasWallTime && bucket.hasDeviceTime &&
+		       bucket.wallTimeMs > 0.0 && bucket.deviceTimeMs > 0.0;
+	}));
+
+	auto invalid = schedule;
+	ASSERT_FALSE(invalid.steps.empty());
+	invalid.steps.back().inputBuffers.clear();
+	EXPECT_THROW(Runtime::ValidateRuntimeSchedule(invalid), std::runtime_error);
+}
+
 TEST(G14Remaining, PlacementConstraintsSelectBackendsAndValidateDefaults)
 {
 	Graph graph;

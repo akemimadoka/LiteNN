@@ -127,6 +127,28 @@ namespace LiteNN::Runtime
 		std::optional<double> deviceTimeMs;
 	};
 
+	struct RuntimeScheduleProfileBucket
+	{
+		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
+		std::string label;
+		std::string backend;
+		std::size_t steps{};
+		double wallTimeMs{};
+		double deviceTimeMs{};
+		bool hasWallTime{};
+		bool hasDeviceTime{};
+	};
+
+	struct RuntimeScheduleProfileSummary
+	{
+		std::vector<RuntimeScheduleProfileBucket> buckets;
+		std::size_t dispatchSteps{};
+		std::size_t transferSteps{};
+		std::size_t syncSteps{};
+		std::size_t fallbackSteps{};
+		bool hasMeasuredTimings{};
+	};
+
 	struct RuntimeSchedule
 	{
 		ExecutableModule module;
@@ -477,6 +499,33 @@ namespace LiteNN::Runtime
 		}
 	}
 
+	inline bool BackendNeedsRuntimeSync(std::string_view backend) noexcept
+	{
+		return backend == BackendCUDANative || backend == BackendCUDABridge || backend == BackendVulkanNative ||
+		       backend == BackendVulkanBridge;
+	}
+
+	inline void AppendPlacementSyncSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
+	{
+		for (const auto& transfer : placement.transferSteps)
+		{
+			const auto sourceNeedsSync = BackendNeedsRuntimeSync(transfer.sourceBackend);
+			const auto targetNeedsSync = BackendNeedsRuntimeSync(transfer.targetBackend);
+			if (!sourceNeedsSync && !targetNeedsSync)
+			{
+				continue;
+			}
+			RuntimeScheduleStep step;
+			step.id = schedule.steps.size();
+			step.kind = RuntimeScheduleStepKind::Sync;
+			step.backend = targetNeedsSync ? transfer.targetBackend : transfer.sourceBackend;
+			step.fallbackBackend = targetNeedsSync ? transfer.sourceBackend : transfer.targetBackend;
+			step.inputBuffers.push_back(transfer.buffer);
+			step.outputBuffers.push_back(transfer.buffer);
+			schedule.steps.push_back(std::move(step));
+		}
+	}
+
 	inline std::vector<RuntimeTraceEvent> TraceRuntimeSchedule(const RuntimeSchedule& schedule)
 	{
 		std::vector<RuntimeTraceEvent> events;
@@ -502,6 +551,11 @@ namespace LiteNN::Runtime
 			else if (step.kind == RuntimeScheduleStepKind::Transfer)
 			{
 				message = std::format("transfer from {} to {} buffers={}", step.backend, step.fallbackBackend,
+				                      step.inputBuffers.size());
+			}
+			else if (step.kind == RuntimeScheduleStepKind::Sync)
+			{
+				message = std::format("sync {} with {} buffers={}", step.backend, step.fallbackBackend,
 				                      step.inputBuffers.size());
 			}
 			else
@@ -534,6 +588,10 @@ namespace LiteNN::Runtime
 		{
 			label = std::format("transfer:{}->{}", step.backend, step.fallbackBackend);
 		}
+		else if (step.kind == RuntimeScheduleStepKind::Sync)
+		{
+			label = std::format("sync:{}<->{}", step.backend, step.fallbackBackend);
+		}
 		else
 		{
 			label = std::format("{}:{}", RuntimeScheduleStepKindName(step.kind), step.backend);
@@ -556,6 +614,61 @@ namespace LiteNN::Runtime
 			records.push_back(MakeRuntimeScheduleProfileRecord(step));
 		}
 		return records;
+	}
+
+	inline void AccumulateRuntimeScheduleProfileBucket(RuntimeScheduleProfileSummary& summary,
+	                                                   const RuntimeScheduleProfileRecord& record)
+	{
+		const auto it = std::ranges::find_if(summary.buckets, [&](const RuntimeScheduleProfileBucket& bucket) {
+			return bucket.kind == record.kind && bucket.label == record.label && bucket.backend == record.backend;
+		});
+		auto& bucket = it == summary.buckets.end()
+		                   ? summary.buckets.emplace_back(RuntimeScheduleProfileBucket{
+		                         .kind = record.kind, .label = record.label, .backend = record.backend })
+		                   : *it;
+		++bucket.steps;
+		if (record.wallTimeMs)
+		{
+			bucket.wallTimeMs += *record.wallTimeMs;
+			bucket.hasWallTime = true;
+			summary.hasMeasuredTimings = true;
+		}
+		if (record.deviceTimeMs)
+		{
+			bucket.deviceTimeMs += *record.deviceTimeMs;
+			bucket.hasDeviceTime = true;
+			summary.hasMeasuredTimings = true;
+		}
+	}
+
+	inline RuntimeScheduleProfileSummary
+	BuildRuntimeScheduleProfileSummary(std::span<const RuntimeScheduleProfileRecord> records)
+	{
+		RuntimeScheduleProfileSummary summary;
+		for (const auto& record : records)
+		{
+			switch (record.kind)
+			{
+			case RuntimeScheduleStepKind::DispatchRegion:
+			case RuntimeScheduleStepKind::DispatchSegment:
+				++summary.dispatchSteps;
+				break;
+			case RuntimeScheduleStepKind::Transfer:
+				++summary.transferSteps;
+				break;
+			case RuntimeScheduleStepKind::Sync:
+				++summary.syncSteps;
+				break;
+			case RuntimeScheduleStepKind::Fallback:
+				++summary.fallbackSteps;
+				break;
+			case RuntimeScheduleStepKind::StateRead:
+			case RuntimeScheduleStepKind::StateWrite:
+				break;
+			}
+			AccumulateRuntimeScheduleProfileBucket(summary, record);
+		}
+		return summary;
 	}
 
 	inline void ValidateRuntimeSchedule(const RuntimeSchedule& schedule)
@@ -621,6 +734,17 @@ namespace LiteNN::Runtime
 				if (step.inputBuffers.empty() || step.outputBuffers.empty())
 				{
 					throw std::runtime_error("Runtime transfer step must name transferred buffers");
+				}
+			}
+			if (step.kind == RuntimeScheduleStepKind::Sync)
+			{
+				if (step.backend.empty())
+				{
+					throw std::runtime_error("Runtime sync step must name a synchronizing backend");
+				}
+				if (step.inputBuffers.empty() || step.outputBuffers.empty())
+				{
+					throw std::runtime_error("Runtime sync step must name synchronized buffers");
 				}
 			}
 			for (const auto buffer : step.inputBuffers)
