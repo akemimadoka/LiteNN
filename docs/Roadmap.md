@@ -691,7 +691,9 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
       Runtime package metadata now preserves `runtimeSegments`, `DispatchSegment` step links, and artifact-level
       `backendRequirements` entries generated from schedules with per-segment backend/capability/transfer-ABI strings.
 - [ ] Support loading heterogeneous artifacts from separated rodata/instruction regions.
-- [ ] Reject artifacts when a required backend/device capability is unavailable, with fallback policy documented.
+- [x] Reject artifacts when a required backend/device capability is unavailable, with fallback policy documented.
+      `ValidateVNextArtifactBackendRequirements` gates artifacts against the caller-provided backend/capability/transfer
+      ABI set, and requires both artifact and runtime policy to explicitly allow fallback.
 
 ### G8: E-Graph Optimization
 

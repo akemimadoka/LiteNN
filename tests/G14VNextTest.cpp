@@ -305,6 +305,66 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
 	EXPECT_THROW(ValidateVNextPackageManifest(invalid), std::runtime_error);
 }
 
+TEST(G14VNext, VNextArtifactBackendRequirementsRejectUnavailableCapabilities)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto output =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph));
+	ASSERT_FALSE(schedule.module.partitions.empty());
+	const auto scheduleBackend = schedule.module.partitions[0].backend;
+
+	VNextArtifactRef artifact;
+	artifact.name = "cpu_forward";
+	artifact.backend = scheduleBackend;
+	artifact.entries.push_back({ .name = "forward", .kind = VNextArtifactEntryKind::Forward, .function = 0 });
+	artifact.regions.push_back({ .name = "object",
+	                             .kind = ExternalBufferKind::ObjectFile,
+	                             .relativePath = "artifacts/cpu_forward.o",
+	                             .byteSize = 16,
+	                             .checksum = 11 });
+	artifact.backendRequirements = BuildVNextBackendRequirementsFromSchedule(schedule);
+	ASSERT_EQ(artifact.backendRequirements.size(), 1u);
+	artifact.backendRequirements[0].requiredCapabilities.push_back("op:UnaryOpNode");
+	artifact.backendRequirements[0].transferABI = "runtime-buffer-transfer-v1";
+
+	auto manifest = BuildVNextPackageManifest(std::move(schedule), { artifact });
+	const std::vector<VNextAvailableBackendRef> available{
+		{ .backend = scheduleBackend,
+		  .capabilities = { "runtime-schedule:dispatch-region", std::string("backend:") + scheduleBackend,
+		                    "op:UnaryOpNode" },
+		  .transferABIs = { "none", "runtime-buffer-transfer-v1" } },
+	};
+	EXPECT_NO_THROW(ValidateVNextArtifactBackendRequirements(manifest, available));
+
+	EXPECT_THROW(ValidateVNextArtifactBackendRequirements(manifest, std::span<const VNextAvailableBackendRef>{}),
+	             std::runtime_error);
+
+	auto missingCapability = available;
+	missingCapability[0].capabilities.pop_back();
+	EXPECT_THROW(ValidateVNextArtifactBackendRequirements(manifest, missingCapability), std::runtime_error);
+
+	auto missingTransferABI = available;
+	missingTransferABI[0].transferABIs = { "none" };
+	EXPECT_THROW(ValidateVNextArtifactBackendRequirements(manifest, missingTransferABI), std::runtime_error);
+
+	manifest.artifacts[0].backendRequirements[0].allowsFallback = true;
+	EXPECT_THROW(ValidateVNextArtifactBackendRequirements(manifest, available), std::runtime_error);
+	EXPECT_THROW(ValidateVNextArtifactBackendRequirements(
+	                 manifest, available, VNextBackendRequirementValidationOptions{ .allowArtifactFallback = true }),
+	             std::runtime_error);
+
+	auto fallbackAvailable = available;
+	fallbackAvailable[0].allowFallback = true;
+	EXPECT_NO_THROW(ValidateVNextArtifactBackendRequirements(
+	    manifest, fallbackAvailable, VNextBackendRequirementValidationOptions{ .allowArtifactFallback = true }));
+}
+
 TEST(G14VNext, VNextModelPackageRoundTripsLoRAAdapterManifest)
 {
 	const auto graph = BuildLinearAddGraphWithLoRAWeights();

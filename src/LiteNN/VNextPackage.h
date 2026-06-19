@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <format>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -197,6 +198,19 @@ namespace LiteNN
 		bool allowsFallback{};
 	};
 
+	struct VNextAvailableBackendRef
+	{
+		std::string backend;
+		std::vector<std::string> capabilities;
+		std::vector<std::string> transferABIs{ "none" };
+		bool allowFallback{};
+	};
+
+	struct VNextBackendRequirementValidationOptions
+	{
+		bool allowArtifactFallback{};
+	};
+
 	struct VNextArtifactRef
 	{
 		std::string name;
@@ -246,6 +260,8 @@ namespace LiteNN
 		std::vector<VNextAdapterRef> adapters;
 		std::vector<OpCoverageRow> opCoverage;
 	};
+
+	inline void ValidateVNextPackageManifest(const VNextPackageManifest& manifest);
 
 	struct VNextABIFamilySummary
 	{
@@ -385,6 +401,75 @@ namespace LiteNN
 			      .transferABI = "none" });
 		}
 		return requirements;
+	}
+
+	inline const VNextAvailableBackendRef*
+	FindVNextAvailableBackend(std::span<const VNextAvailableBackendRef> availableBackends, std::string_view backend)
+	{
+		const auto it = std::ranges::find_if(
+		    availableBackends, [&](const VNextAvailableBackendRef& available) { return available.backend == backend; });
+		return it == availableBackends.end() ? nullptr : &*it;
+	}
+
+	inline bool VNextBackendHasCapability(const VNextAvailableBackendRef& available, std::string_view capability)
+	{
+		return std::ranges::find(available.capabilities, capability) != available.capabilities.end();
+	}
+
+	inline bool VNextBackendSupportsTransferABI(const VNextAvailableBackendRef& available, std::string_view transferABI)
+	{
+		if (transferABI.empty())
+		{
+			return false;
+		}
+		if (transferABI == "none")
+		{
+			return true;
+		}
+		return std::ranges::find(available.transferABIs, transferABI) != available.transferABIs.end();
+	}
+
+	inline void ValidateVNextArtifactBackendRequirements(const VNextPackageManifest& manifest,
+	                                                     std::span<const VNextAvailableBackendRef> availableBackends,
+	                                                     VNextBackendRequirementValidationOptions options = {})
+	{
+		ValidateVNextPackageManifest(manifest);
+		for (const auto& artifact : manifest.artifacts)
+		{
+			for (const auto& requirement : artifact.backendRequirements)
+			{
+				const auto* available = FindVNextAvailableBackend(availableBackends, requirement.backend);
+				if (available == nullptr)
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name +
+					                         "' requires unavailable backend: " + requirement.backend);
+				}
+				if (requirement.allowsFallback && !options.allowArtifactFallback)
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' backend '" + requirement.backend +
+					                         "' allows fallback, but fallback is disabled");
+				}
+				if (requirement.allowsFallback && !available->allowFallback)
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' backend '" + requirement.backend +
+					                         "' allows fallback, but the selected backend does not");
+				}
+				for (const auto& capability : requirement.requiredCapabilities)
+				{
+					if (!VNextBackendHasCapability(*available, capability))
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name + "' backend '" +
+						                         requirement.backend +
+						                         "' is missing required capability: " + capability);
+					}
+				}
+				if (!VNextBackendSupportsTransferABI(*available, requirement.transferABI))
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' backend '" + requirement.backend +
+					                         "' does not support transfer ABI: " + requirement.transferABI);
+				}
+			}
+		}
 	}
 
 	inline VNextExternalTensorRef ToVNextExternalTensorRef(std::string name, const TensorStorageRef& storage)
