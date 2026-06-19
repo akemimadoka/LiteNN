@@ -93,7 +93,9 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	EXPECT_TRUE(std::ranges::contains(abi.bufferBindings, std::string("linear.bias")));
 	EXPECT_TRUE(std::ranges::contains(abi.tensorBindings, std::string("linear.bias")));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_forward:forward")));
-	EXPECT_TRUE(std::ranges::contains(abi.artifactEntryKinds, std::string("cpu_forward:forward:forward")));
+	EXPECT_TRUE(std::ranges::contains(
+	    abi.artifactEntryKinds,
+	    std::format("cpu_forward:forward:{}", VNextArtifactEntryKindName(VNextArtifactEntryKind::Forward))));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactRegions, std::string("cpu_forward:instructions")));
 }
 
@@ -200,8 +202,10 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleFallbackRecords)
 	const auto abi = DescribeVNextABIFamily(package.manifest);
 	EXPECT_TRUE(abi.hasFallbackRecords);
 	EXPECT_TRUE(abi.hasProfileRecords);
-	EXPECT_TRUE(std::ranges::contains(abi.runtimeStepRecords, std::format("{}:fallback:{}->{}", loadedFallback.id,
-	                                                                      BackendCUDANative, BackendCPUInterpreter)));
+	EXPECT_TRUE(std::ranges::contains(abi.runtimeStepRecords,
+	                                  std::format("{}:{}:{}->{}", loadedFallback.id,
+	                                              Runtime::RuntimeScheduleStepKindName(loadedFallback.kind),
+	                                              BackendCUDANative, BackendCPUInterpreter)));
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 }
 
