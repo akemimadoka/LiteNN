@@ -690,7 +690,10 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 - [x] Extend compiled artifact metadata with per-segment backend kind, required device capabilities, and transfer ABI.
       Runtime package metadata now preserves `runtimeSegments`, `DispatchSegment` step links, and artifact-level
       `backendRequirements` entries generated from schedules with per-segment backend/capability/transfer-ABI strings.
-- [ ] Support loading heterogeneous artifacts from separated rodata/instruction regions.
+- [x] Support loading heterogeneous artifacts from separated rodata/instruction regions.
+      `LoadVNextArtifactRegions` resolves artifact region files relative to the package path or an explicit base
+      directory, verifies declared size/checksum, and exposes named `rodata`/`metadata` plus `instructions` bytes for
+      backend-specific module loaders.
 - [x] Reject artifacts when a required backend/device capability is unavailable, with fallback policy documented.
       `ValidateVNextArtifactBackendRequirements` gates artifacts against the caller-provided backend/capability/transfer
       ABI set, and requires both artifact and runtime policy to explicitly allow fallback.

@@ -6,7 +6,9 @@
 #include <LiteNN/Serialization/ExternalWeights.h>
 #include <LiteNN/VNextPackage.h>
 
+#include <cstddef>
 #include <filesystem>
+#include <string_view>
 #include <vector>
 
 namespace LiteNN::Serialization
@@ -15,6 +17,21 @@ namespace LiteNN::Serialization
 	{
 		VNextPackageManifest manifest;
 		ExecutablePlan plan;
+		std::filesystem::path sourcePath;
+	};
+
+	struct VNextLoadedArtifactRegion
+	{
+		VNextArtifactRegionRef ref;
+		std::vector<std::byte> bytes;
+	};
+
+	struct VNextLoadedArtifactRegions
+	{
+		VNextArtifactRef artifact;
+		std::vector<VNextLoadedArtifactRegion> regions;
+
+		const VNextLoadedArtifactRegion* FindRegion(std::string_view name) const;
 	};
 
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
@@ -29,6 +46,11 @@ namespace LiteNN::Serialization
 	                                          const ExternalWeightSaveOptions& externalOptions = {});
 
 	VNextModelPackage LoadVNextModelPackage(const std::filesystem::path& path);
+	VNextLoadedArtifactRegions LoadVNextArtifactRegions(const VNextModelPackage& package,
+	                                                    std::string_view artifactName);
+	VNextLoadedArtifactRegions LoadVNextArtifactRegions(const VNextModelPackage& package,
+	                                                    const std::filesystem::path& baseDirectory,
+	                                                    std::string_view artifactName);
 } // namespace LiteNN::Serialization
 
 #endif

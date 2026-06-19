@@ -26,6 +26,54 @@ namespace LiteNN::Serialization
 			return static_cast<std::underlying_type_t<Enum>>(value);
 		}
 
+		std::uint64_t ChecksumBytes(std::span<const std::byte> bytes)
+		{
+			std::uint64_t hash = 1469598103934665603ull;
+			for (const auto byte : bytes)
+			{
+				hash ^= std::to_integer<std::uint8_t>(byte);
+				hash *= 1099511628211ull;
+			}
+			return hash;
+		}
+
+		std::vector<std::byte> ReadAllBytes(const std::filesystem::path& path)
+		{
+			std::ifstream in(path, std::ios::binary);
+			if (!in)
+			{
+				throw std::runtime_error("Failed to open LiteNN vNext artifact region: " + path.string());
+			}
+			in.seekg(0, std::ios::end);
+			const auto size = in.tellg();
+			if (size < 0)
+			{
+				throw std::runtime_error("Failed to determine LiteNN vNext artifact region size: " + path.string());
+			}
+			in.seekg(0, std::ios::beg);
+			std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+			if (!bytes.empty())
+			{
+				in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+			}
+			if (!in && !in.eof())
+			{
+				throw std::runtime_error("Failed to read LiteNN vNext artifact region: " + path.string());
+			}
+			return bytes;
+		}
+
+		std::filesystem::path ResolvePackageRelativePath(const std::filesystem::path& baseDirectory,
+		                                                 const std::string& relativePath)
+		{
+			const std::filesystem::path path(relativePath);
+			if (path.is_absolute())
+			{
+				return path;
+			}
+			return baseDirectory / path;
+		}
+
 		std::runtime_error JsonError(std::string_view label, simdjson::error_code error)
 		{
 			return std::runtime_error(std::string(label) + ": " + simdjson::error_message(error));
@@ -1540,9 +1588,68 @@ namespace LiteNN::Serialization
 		VNextModelPackage package;
 		package.manifest = ParseManifest(Member(rootObject, "manifest", "package.manifest"));
 		package.plan = ParsePlan(Member(rootObject, "plan", "package.plan"));
+		package.sourcePath = path;
 		BindExternalTensorFiles(package.plan, path);
 		ValidateVNextPackageManifest(package.manifest);
 		ValidateExecutablePlan(package.plan);
 		return package;
+	}
+
+	const VNextLoadedArtifactRegion* VNextLoadedArtifactRegions::FindRegion(std::string_view name) const
+	{
+		const auto it = std::ranges::find_if(
+		    regions, [&](const VNextLoadedArtifactRegion& region) { return region.ref.name == name; });
+		return it == regions.end() ? nullptr : &*it;
+	}
+
+	VNextLoadedArtifactRegions LoadVNextArtifactRegions(const VNextModelPackage& package, std::string_view artifactName)
+	{
+		if (package.sourcePath.empty())
+		{
+			throw std::runtime_error(
+			    "LiteNN vNext package source path is unknown; pass an explicit artifact base directory");
+		}
+		return LoadVNextArtifactRegions(package, package.sourcePath.parent_path(), artifactName);
+	}
+
+	VNextLoadedArtifactRegions LoadVNextArtifactRegions(const VNextModelPackage& package,
+	                                                    const std::filesystem::path& baseDirectory,
+	                                                    std::string_view artifactName)
+	{
+		const auto artifactIt = std::ranges::find_if(package.manifest.artifacts, [&](const VNextArtifactRef& artifact) {
+			return artifact.name == artifactName;
+		});
+		if (artifactIt == package.manifest.artifacts.end())
+		{
+			throw std::runtime_error("LiteNN vNext package has no artifact named: " + std::string(artifactName));
+		}
+
+		VNextLoadedArtifactRegions loaded;
+		loaded.artifact = *artifactIt;
+		loaded.regions.reserve(artifactIt->regions.size());
+		for (const auto& region : artifactIt->regions)
+		{
+			auto bytes = ReadAllBytes(ResolvePackageRelativePath(baseDirectory, region.relativePath));
+			if (region.byteSize != bytes.size())
+			{
+				throw std::runtime_error("LiteNN vNext artifact region '" + region.name + "' size mismatch");
+			}
+			if (region.checksum != 0 && ChecksumBytes(bytes) != region.checksum)
+			{
+				throw std::runtime_error("LiteNN vNext artifact region '" + region.name + "' checksum mismatch");
+			}
+			loaded.regions.push_back({ .ref = region, .bytes = std::move(bytes) });
+		}
+		if (loaded.FindRegion("rodata") == nullptr && loaded.FindRegion("metadata") == nullptr)
+		{
+			throw std::runtime_error("LiteNN vNext artifact '" + std::string(artifactName) +
+			                         "' has no rodata or metadata region");
+		}
+		if (loaded.FindRegion("instructions") == nullptr)
+		{
+			throw std::runtime_error("LiteNN vNext artifact '" + std::string(artifactName) +
+			                         "' has no instructions region");
+		}
+		return loaded;
 	}
 } // namespace LiteNN::Serialization

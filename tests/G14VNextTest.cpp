@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 
 using namespace LiteNN;
 
@@ -44,6 +46,26 @@ namespace
 		graph.SetVariableName(a, "linear.lora_A.default.weight");
 		graph.SetVariableName(b, "linear.lora_B.default.weight");
 		return graph;
+	}
+
+	std::uint64_t ChecksumBytesForTest(std::span<const std::byte> bytes)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+		for (const auto byte : bytes)
+		{
+			hash ^= std::to_integer<std::uint8_t>(byte);
+			hash *= 1099511628211ull;
+		}
+		return hash;
+	}
+
+	void WriteBytesForTest(const std::filesystem::path& path, std::span<const std::byte> bytes)
+	{
+		std::filesystem::create_directories(path.parent_path());
+		std::ofstream out(path, std::ios::binary);
+		ASSERT_TRUE(out) << path.string();
+		out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		ASSERT_TRUE(out) << path.string();
 	}
 } // namespace
 
@@ -164,6 +186,59 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 	EXPECT_EQ(package.plan.subgraphs[package.plan.forward].nodes[2].op.kind, "BinaryOpNode");
 	EXPECT_FALSE(package.plan.subgraphs[package.plan.forward].nodes[2].op.attributes.empty());
 	EXPECT_EQ(package.plan.outputs[0].name, "y");
+}
+
+TEST(G14VNext, VNextModelPackageLoadsSeparatedArtifactRegions)
+{
+	const auto graph = BuildLinearAddGraph();
+	auto module = Detail::BuildExecutableModuleFromGraph(graph);
+	const auto base = std::filesystem::temp_directory_path() / "litenn_vnext_region_package";
+	std::filesystem::remove_all(base);
+	std::filesystem::create_directories(base / "artifacts");
+
+	const std::vector<std::byte> rodata{ std::byte{ 0x4c }, std::byte{ 0x54 }, std::byte{ 0x4e }, std::byte{ 0x4e } };
+	const std::vector<std::byte> instructions{ std::byte{ 0x01 }, std::byte{ 0x02 }, std::byte{ 0x03 },
+		                                       std::byte{ 0x04 }, std::byte{ 0x05 } };
+	WriteBytesForTest(base / "artifacts" / "cpu_forward.rodata.bin", rodata);
+	WriteBytesForTest(base / "artifacts" / "cpu_forward.instructions.bin", instructions);
+
+	VNextArtifactRef artifact;
+	artifact.name = "cpu_forward";
+	artifact.backend = std::string(BackendCPUAOT);
+	artifact.entries.push_back({ .name = "forward", .kind = VNextArtifactEntryKind::Forward, .function = 0 });
+	artifact.regions.push_back({ .name = "rodata",
+	                             .kind = ExternalBufferKind::Rodata,
+	                             .relativePath = "artifacts/cpu_forward.rodata.bin",
+	                             .byteSize = rodata.size(),
+	                             .checksum = ChecksumBytesForTest(rodata) });
+	artifact.regions.push_back({ .name = "instructions",
+	                             .kind = ExternalBufferKind::ObjectFile,
+	                             .relativePath = "artifacts/cpu_forward.instructions.bin",
+	                             .byteSize = instructions.size(),
+	                             .checksum = ChecksumBytesForTest(instructions) });
+
+	const auto packagePath = base / "model.ltnn.json";
+	Serialization::SaveVNextModelPackage(module, packagePath, { artifact });
+	const auto package = Serialization::LoadVNextModelPackage(packagePath);
+	EXPECT_EQ(package.sourcePath, packagePath);
+
+	const auto loaded = Serialization::LoadVNextArtifactRegions(package, "cpu_forward");
+	ASSERT_EQ(loaded.regions.size(), 2u);
+	ASSERT_NE(loaded.FindRegion("rodata"), nullptr);
+	ASSERT_NE(loaded.FindRegion("instructions"), nullptr);
+	EXPECT_EQ(loaded.FindRegion("rodata")->bytes, rodata);
+	EXPECT_EQ(loaded.FindRegion("instructions")->bytes, instructions);
+
+	auto memoryPackage = package;
+	memoryPackage.sourcePath.clear();
+	EXPECT_THROW((void) Serialization::LoadVNextArtifactRegions(memoryPackage, "cpu_forward"), std::runtime_error);
+	EXPECT_NO_THROW((void) Serialization::LoadVNextArtifactRegions(memoryPackage, base, "cpu_forward"));
+
+	WriteBytesForTest(base / "artifacts" / "cpu_forward.instructions.bin",
+	                  std::span<const std::byte>{ rodata.data(), rodata.size() });
+	EXPECT_THROW((void) Serialization::LoadVNextArtifactRegions(package, "cpu_forward"), std::runtime_error);
+
+	std::filesystem::remove_all(base);
 }
 
 TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleFallbackRecords)
