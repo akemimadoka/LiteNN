@@ -139,9 +139,28 @@ namespace LiteNN::Runtime
 		bool hasDeviceTime{};
 	};
 
+	struct RuntimeScheduleDeviceProfile
+	{
+		std::string backend;
+		std::size_t dispatchSteps{};
+		std::size_t transferSteps{};
+		std::size_t syncSteps{};
+		std::size_t fallbackSteps{};
+		double dispatchWallTimeMs{};
+		double dispatchDeviceTimeMs{};
+		double transferWallTimeMs{};
+		double transferDeviceTimeMs{};
+		double syncWallTimeMs{};
+		double syncDeviceTimeMs{};
+		double fallbackWallTimeMs{};
+		double fallbackDeviceTimeMs{};
+		bool hasMeasuredTimings{};
+	};
+
 	struct RuntimeScheduleProfileSummary
 	{
 		std::vector<RuntimeScheduleProfileBucket> buckets;
+		std::vector<RuntimeScheduleDeviceProfile> devices;
 		std::size_t dispatchSteps{};
 		std::size_t transferSteps{};
 		std::size_t syncSteps{};
@@ -641,6 +660,73 @@ namespace LiteNN::Runtime
 		}
 	}
 
+	inline RuntimeScheduleDeviceProfile& EnsureRuntimeScheduleDeviceProfile(RuntimeScheduleProfileSummary& summary,
+	                                                                        std::string_view backend)
+	{
+		const auto it = std::ranges::find_if(
+		    summary.devices, [&](const RuntimeScheduleDeviceProfile& device) { return device.backend == backend; });
+		if (it != summary.devices.end())
+		{
+			return *it;
+		}
+		return summary.devices.emplace_back(RuntimeScheduleDeviceProfile{ .backend = std::string(backend) });
+	}
+
+	inline void AddRuntimeScheduleDeviceTiming(RuntimeScheduleDeviceProfile& device, RuntimeScheduleStepKind kind,
+	                                           const RuntimeScheduleProfileRecord& record)
+	{
+		const auto wallTime = record.wallTimeMs.value_or(0.0);
+		const auto deviceTime = record.deviceTimeMs.value_or(0.0);
+		if (record.wallTimeMs || record.deviceTimeMs)
+		{
+			device.hasMeasuredTimings = true;
+		}
+		switch (kind)
+		{
+		case RuntimeScheduleStepKind::DispatchRegion:
+		case RuntimeScheduleStepKind::DispatchSegment:
+			++device.dispatchSteps;
+			device.dispatchWallTimeMs += wallTime;
+			device.dispatchDeviceTimeMs += deviceTime;
+			break;
+		case RuntimeScheduleStepKind::Transfer:
+			++device.transferSteps;
+			device.transferWallTimeMs += wallTime;
+			device.transferDeviceTimeMs += deviceTime;
+			break;
+		case RuntimeScheduleStepKind::Sync:
+			++device.syncSteps;
+			device.syncWallTimeMs += wallTime;
+			device.syncDeviceTimeMs += deviceTime;
+			break;
+		case RuntimeScheduleStepKind::Fallback:
+			++device.fallbackSteps;
+			device.fallbackWallTimeMs += wallTime;
+			device.fallbackDeviceTimeMs += deviceTime;
+			break;
+		case RuntimeScheduleStepKind::StateRead:
+		case RuntimeScheduleStepKind::StateWrite:
+			break;
+		}
+	}
+
+	inline void AccumulateRuntimeScheduleDeviceProfile(RuntimeScheduleProfileSummary& summary,
+	                                                   const RuntimeScheduleProfileRecord& record)
+	{
+		if (!record.backend.empty())
+		{
+			AddRuntimeScheduleDeviceTiming(EnsureRuntimeScheduleDeviceProfile(summary, record.backend), record.kind,
+			                               record);
+		}
+		if ((record.kind == RuntimeScheduleStepKind::Transfer || record.kind == RuntimeScheduleStepKind::Sync ||
+		     record.kind == RuntimeScheduleStepKind::Fallback) &&
+		    !record.fallbackBackend.empty() && record.fallbackBackend != record.backend)
+		{
+			AddRuntimeScheduleDeviceTiming(EnsureRuntimeScheduleDeviceProfile(summary, record.fallbackBackend),
+			                               record.kind, record);
+		}
+	}
+
 	inline RuntimeScheduleProfileSummary
 	BuildRuntimeScheduleProfileSummary(std::span<const RuntimeScheduleProfileRecord> records)
 	{
@@ -667,6 +753,7 @@ namespace LiteNN::Runtime
 				break;
 			}
 			AccumulateRuntimeScheduleProfileBucket(summary, record);
+			AccumulateRuntimeScheduleDeviceProfile(summary, record);
 		}
 		return summary;
 	}

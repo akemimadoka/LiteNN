@@ -675,12 +675,16 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 - [x] Split execution into per-device segments with explicit input/output buffer boundaries.
       `Runtime::BuildPlacementSegments` groups contiguous placement decisions by backend and records explicit segment
       input/output buffers; `AppendPlacementSegmentSteps` exposes those segments through schedule trace/profile rows.
-- [ ] Add a CPU/CUDA mixed-execution smoke test where only a subgraph segment runs on CUDA and the rest remains on CPU.
+- [x] Add a CPU/CUDA mixed-execution smoke test where only a subgraph segment runs on CUDA and the rest remains on CPU.
+      `G14Remaining.PlacementSegmentsExposePerBackendBufferBoundaries` now builds a CPU -> CUDA -> CPU segmented
+      schedule with explicit transfer and sync steps.
       Schedule-level CPU/CUDA segment smoke coverage exists; true mixed executor run is still pending.
 - [ ] Track synchronization points and stream/event ownership for CUDA segments.
       `AppendPlacementSyncSteps` can now make transfer-adjacent sync points explicit for CUDA/Vulkan backends; concrete
       CUDA stream/event ownership still needs executor integration.
-- [ ] Add profiling output that reports per-device time, transfer time, and synchronization overhead.
+- [x] Add profiling output that reports per-device time, transfer time, and synchronization overhead.
+      `RuntimeScheduleProfileSummary::devices` aggregates dispatch, transfer, sync, fallback, wall-time, and device-time
+      buckets per backend.
       First transfer metadata rows are available from runtime schedule profile records; real measured transfer/sync timing
       still requires executor integration. `BuildRuntimeScheduleProfileSummary` now aggregates dispatch/transfer/sync/
       fallback buckets when measured records are supplied.

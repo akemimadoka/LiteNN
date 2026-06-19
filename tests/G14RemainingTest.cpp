@@ -320,6 +320,12 @@ TEST(G14Remaining, PlacementTransfersCreateSyncStepsAndProfileSummary)
 	const auto summary = Runtime::BuildRuntimeScheduleProfileSummary(profileRecords);
 	EXPECT_EQ(summary.transferSteps, 1u);
 	EXPECT_EQ(summary.syncSteps, 1u);
+	ASSERT_EQ(summary.devices.size(), 2u);
+	const auto cudaDevice =
+	    std::ranges::find_if(summary.devices, [](const auto& device) { return device.backend == BackendCUDANative; });
+	ASSERT_NE(cudaDevice, summary.devices.end());
+	EXPECT_EQ(cudaDevice->transferSteps, 1u);
+	EXPECT_EQ(cudaDevice->syncSteps, 1u);
 	EXPECT_TRUE(summary.hasMeasuredTimings);
 	EXPECT_TRUE(std::ranges::any_of(summary.buckets, [](const Runtime::RuntimeScheduleProfileBucket& bucket) {
 		return bucket.kind == Runtime::RuntimeScheduleStepKind::Sync && bucket.hasWallTime && bucket.hasDeviceTime &&
@@ -431,20 +437,44 @@ TEST(G14Remaining, PlacementSegmentsExposePerBackendBufferBoundaries)
 
 	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
 	Runtime::AppendPlacementSegmentSteps(schedule, placement);
+	Runtime::AppendPlacementTransferSteps(schedule, placement);
+	Runtime::AppendPlacementSyncSteps(schedule, placement);
 	ASSERT_GE(schedule.steps.size(), segments.size());
-	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::DispatchSegment);
+	EXPECT_TRUE(std::ranges::any_of(schedule.steps, [](const auto& step) {
+		return step.kind == Runtime::RuntimeScheduleStepKind::DispatchSegment;
+	}));
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	const auto trace = Runtime::TraceRuntimeSchedule(schedule);
 	ASSERT_FALSE(trace.empty());
-	EXPECT_NE(trace.back().message.find("dispatch segment"), std::string::npos);
+	EXPECT_TRUE(std::ranges::any_of(
+	    trace, [](const auto& event) { return event.message.find("dispatch segment") != std::string::npos; }));
 	const auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
 	ASSERT_EQ(profileRecords.size(), schedule.steps.size());
-	EXPECT_NE(profileRecords.back().label.find("segment"), std::string::npos);
+	EXPECT_TRUE(std::ranges::any_of(
+	    profileRecords, [](const auto& record) { return record.label.find("segment") != std::string::npos; }));
+	const auto summary = Runtime::BuildRuntimeScheduleProfileSummary(profileRecords);
+	EXPECT_EQ(summary.dispatchSteps, 4u);
+	EXPECT_EQ(summary.transferSteps, 2u);
+	EXPECT_EQ(summary.syncSteps, 2u);
+	const auto cpuDevice = std::ranges::find_if(
+	    summary.devices, [](const auto& device) { return device.backend == BackendCPUInterpreter; });
+	const auto cudaDevice =
+	    std::ranges::find_if(summary.devices, [](const auto& device) { return device.backend == BackendCUDANative; });
+	ASSERT_NE(cpuDevice, summary.devices.end());
+	ASSERT_NE(cudaDevice, summary.devices.end());
+	EXPECT_EQ(cpuDevice->dispatchSteps, 3u);
+	EXPECT_EQ(cudaDevice->dispatchSteps, 1u);
+	EXPECT_EQ(cpuDevice->transferSteps, 2u);
+	EXPECT_EQ(cudaDevice->transferSteps, 2u);
+	EXPECT_EQ(cpuDevice->syncSteps, 2u);
+	EXPECT_EQ(cudaDevice->syncSteps, 2u);
 
 	auto invalid = schedule;
-	ASSERT_FALSE(invalid.steps.empty());
-	invalid.steps.back().segment = invalid.segments.size();
+	const auto segmentStep = std::ranges::find_if(
+	    invalid.steps, [](const auto& step) { return step.kind == Runtime::RuntimeScheduleStepKind::DispatchSegment; });
+	ASSERT_NE(segmentStep, invalid.steps.end());
+	segmentStep->segment = invalid.segments.size();
 	EXPECT_THROW(Runtime::ValidateRuntimeSchedule(invalid), std::runtime_error);
 }
 
