@@ -239,6 +239,36 @@ namespace LiteNN::Runtime
 		{
 			throw std::runtime_error("PlacementPlan contains no node decisions");
 		}
+		for (const auto& step : placement.fallbackSteps)
+		{
+			if (step.requestedBackend.empty() || step.fallbackBackend.empty())
+			{
+				throw std::runtime_error("PlacementPlan fallback step must name requested and fallback backends");
+			}
+			for (const auto buffer : step.inputBuffers)
+			{
+				if (buffer >= placement.memory.buffers.size())
+				{
+					throw std::runtime_error("PlacementPlan fallback step references an invalid input buffer");
+				}
+			}
+			for (const auto buffer : step.outputBuffers)
+			{
+				if (buffer >= placement.memory.buffers.size())
+				{
+					throw std::runtime_error("PlacementPlan fallback step references an invalid output buffer");
+				}
+			}
+			const auto hasDecision = std::ranges::any_of(placement.decisions, [&](const PlacementDecision& decision) {
+				return decision.support == BackendSupportLevel::Fallback && decision.subgraph == step.subgraph &&
+				       decision.node == step.node && decision.backend == step.requestedBackend &&
+				       decision.fallback == step.fallbackBackend;
+			});
+			if (!hasDecision)
+			{
+				throw std::runtime_error("PlacementPlan fallback step has no matching fallback decision");
+			}
+		}
 		for (const auto& decision : placement.decisions)
 		{
 			if (decision.backend.empty())

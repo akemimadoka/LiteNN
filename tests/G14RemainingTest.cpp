@@ -192,6 +192,39 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	             std::runtime_error);
 }
 
+TEST(G14Remaining, MalformedPlacementFallbackStepsAreRejected)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 1 });
+	subgraph.SetResults({ { input, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("ParamRefNode", {
+	                                                .backend = std::string(BackendCUDANative),
+	                                                .support = BackendSupportLevel::Fallback,
+	                                                .fallback = std::string(BackendCPUInterpreter),
+	                                                .relativeCost = 1.0,
+	                                            });
+	constexpr std::array<std::string_view, 1> backends{ BackendCUDANative };
+	const auto valid = Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends, registry);
+	ASSERT_NO_THROW(Runtime::ValidatePlacementPlan(valid));
+	ASSERT_FALSE(valid.fallbackSteps.empty());
+
+	auto missingBackend = valid;
+	missingBackend.fallbackSteps[0].fallbackBackend.clear();
+	EXPECT_THROW(Runtime::ValidatePlacementPlan(missingBackend), std::runtime_error);
+
+	auto unmatchedBackend = valid;
+	unmatchedBackend.fallbackSteps[0].requestedBackend = std::string(BackendVulkanNative);
+	EXPECT_THROW(Runtime::ValidatePlacementPlan(unmatchedBackend), std::runtime_error);
+
+	auto invalidBuffer = valid;
+	invalidBuffer.fallbackSteps[0].outputBuffers.push_back(invalidBuffer.memory.buffers.size());
+	EXPECT_THROW(Runtime::ValidatePlacementPlan(invalidBuffer), std::runtime_error);
+}
+
 TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 {
 	auto manifest = Serialization::BuildImporterOwnedManifest("torch+safetensors", BuildTrainableGraph());
