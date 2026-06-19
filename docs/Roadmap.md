@@ -119,7 +119,7 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       into supported compute dtypes when a backend has no native 4-bit kernel. The existing `DequantizeNode` now
       materializes packed-nibble block quantization in the interpreter and ConstFold path, and CPU AOT now has smoke
       coverage for compiling ConstFolded packed-nibble dequantized constants. CPU AOT also lowers dynamic affine
-      per-tensor `DequantizeNode`; dynamic `QuantizeNode` remains blocked on exact round-and-clamp lowering and is
+      per-tensor/per-axis `DequantizeNode`; dynamic `QuantizeNode` remains blocked on exact round-and-clamp lowering and is
       intentionally not compiled through truncating casts.
 - [x] Add the first native quantized MatMul/Linear path for CPU direct execution over affine and packed-nibble weights.
       `EvalQuantizedMatMul` and `EvalQuantizedLinear` compute directly from quantized storage and are covered by parity
@@ -132,8 +132,8 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       shader path, then CPU AOT lowering.
       Direct dynamic `QuantizeNode` / `DequantizeNode` MLIR lowering remains part of this backend work; the current
       production route for constant packed quantized weights is ConstFold-before-compile, GraphToMLIR now lowers dynamic
-      affine per-tensor `DequantizeNode`, and diagnostics point users to `ConstFoldPass` for packed/per-axis cases that
-      are not yet dynamically lowered.
+      affine per-tensor/per-axis `DequantizeNode`, and diagnostics point users to `ConstFoldPass` for packed/grouped
+      cases that are not yet dynamically lowered.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [x] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.

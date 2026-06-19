@@ -374,6 +374,37 @@ namespace litenn
 				return op.getResult();
 			}
 
+			Value emitDenseConstant(DataType dtype, std::span<const std::size_t> shape, std::span<const double> values)
+			{
+				auto ownedShape = std::vector<std::size_t>(shape.begin(), shape.end());
+				Tensor<CPU> tensor(Uninitialized, ownedShape, dtype);
+				if (tensor.NumElements() != values.size())
+				{
+					throw std::runtime_error("MLIR dense constant element count does not match shape");
+				}
+				EnumDispatch(dtype, [&]<DataType TypeValue> {
+					using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+					auto* data = static_cast<T*>(tensor.UnsafeRawData());
+					for (std::size_t i = 0; i < values.size(); ++i)
+					{
+						data[i] = static_cast<T>(values[i]);
+					}
+				});
+				auto poly = tensor.CopyToDevice(PolymorphicDevice{ CPU{} });
+				auto attr = convertTensorToAttr(ctx_, poly);
+				auto op = builder_.create<ConstantOp>(builder_.getUnknownLoc(), attr.getType(), attr);
+				return op.getResult();
+			}
+
+			std::vector<std::size_t> quantizationAxisBroadcastShape(const QuantizationParams& params,
+			                                                        std::span<const std::size_t> outputShape) const
+			{
+				auto shape = std::vector<std::size_t>(outputShape.size(), std::size_t{ 1 });
+				const auto axis = QuantizationDetail::NormalizeAxis(params.axis, ShapeView{ outputShape });
+				shape[axis] = outputShape[axis];
+				return shape;
+			}
+
 			Value emitUnaryValue(LiteNN::UnaryOp opKind, Value input, DataType dtype,
 			                     std::span<const std::size_t> shape)
 			{
@@ -832,12 +863,14 @@ namespace litenn
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
 				if (node.params.scheme != QuantizationScheme::Affine ||
-				    node.params.granularity != QuantizationGranularity::PerTensor || node.params.scales.size() != 1 ||
-				    node.params.zeroPoints.size() > 1)
+				    (node.params.granularity != QuantizationGranularity::PerTensor &&
+				     node.params.granularity != QuantizationGranularity::PerAxis) ||
+				    (node.params.granularity == QuantizationGranularity::PerTensor && node.params.scales.size() != 1) ||
+				    (!node.params.zeroPoints.empty() && node.params.zeroPoints.size() != node.params.scales.size()))
 				{
 					throw std::runtime_error(
-					    "GraphToMLIR dynamic DequantizeNode currently supports affine per-tensor quantization only; "
-					    "run ConstFoldPass before CPU AOT when dequantizing compile-time constants");
+					    "GraphToMLIR dynamic DequantizeNode currently supports affine per-tensor/per-axis quantization "
+					    "only; run ConstFoldPass before CPU AOT when dequantizing compile-time constants");
 				}
 				if (!IsFloatingDataType(node.targetType))
 				{
@@ -846,16 +879,48 @@ namespace litenn
 				const auto& output = outputInfos[0];
 				auto input = getVal(valueMap, node.input);
 				auto casted = emitCastValue(input, node.targetType, output.shape);
-				const auto zeroPoint = node.params.zeroPoints.empty() ? 0 : node.params.zeroPoints[0];
-				if (zeroPoint != 0)
+				if (node.params.granularity == QuantizationGranularity::PerTensor)
 				{
-					auto zeroPointValue =
-					    emitFilledConstant(node.targetType, output.shape, static_cast<double>(zeroPoint));
+					const auto zeroPoint = node.params.zeroPoints.empty() ? 0 : node.params.zeroPoints[0];
+					if (zeroPoint != 0)
+					{
+						auto zeroPointValue =
+						    emitFilledConstant(node.targetType, output.shape, static_cast<double>(zeroPoint));
+						casted = emitBinaryValue(LiteNN::BinaryOp::Subtract, casted, zeroPointValue, node.targetType,
+						                         output.shape);
+					}
+					auto scale =
+					    emitFilledConstant(node.targetType, output.shape, static_cast<double>(node.params.scales[0]));
+					valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
+						                                 output.shape) };
+					return;
+				}
+
+				const auto broadcastShape = quantizationAxisBroadcastShape(node.params, output.shape);
+				if (node.params.scales.size() != ShapeView{ broadcastShape }.NumElements())
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR DequantizeNode per-axis scale count does not match output axis shape");
+				}
+				if (!node.params.zeroPoints.empty())
+				{
+					std::vector<double> zeroPoints;
+					zeroPoints.reserve(node.params.zeroPoints.size());
+					for (const auto zeroPoint : node.params.zeroPoints)
+					{
+						zeroPoints.push_back(static_cast<double>(zeroPoint));
+					}
+					auto zeroPointValue = emitDenseConstant(node.targetType, broadcastShape, zeroPoints);
 					casted = emitBinaryValue(LiteNN::BinaryOp::Subtract, casted, zeroPointValue, node.targetType,
 					                         output.shape);
 				}
-				auto scale =
-				    emitFilledConstant(node.targetType, output.shape, static_cast<double>(node.params.scales[0]));
+				std::vector<double> scales;
+				scales.reserve(node.params.scales.size());
+				for (const auto scale : node.params.scales)
+				{
+					scales.push_back(static_cast<double>(scale));
+				}
+				auto scale = emitDenseConstant(node.targetType, broadcastShape, scales);
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
 					                                 output.shape) };
 			}
