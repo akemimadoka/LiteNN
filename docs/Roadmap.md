@@ -1436,8 +1436,9 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 #### G13.4 Validation and Benchmarking
 
 - [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
-  Current coverage compares scalar SGD and two-step AdamW execution, including gradients, updated parameters, optimizer
-  step indices, and first/second moments. Linear/MLP and compiled-loss parity still need broader coverage.
+  Current coverage compares scalar SGD, batch Linear softmax cross entropy with SGD, and two-step AdamW execution,
+  including losses, forward outputs, gradients, updated parameters, optimizer step indices, and first/second moments.
+  MLP and compiled-loss parity still need broader coverage.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
   `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers

@@ -64,6 +64,34 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		return weightIndex;
 	}
+
+	struct BatchLinearModelIndices
+	{
+		std::size_t weight{};
+		std::size_t bias{};
+	};
+
+	BatchLinearModelIndices BuildBatchLinearClassifierModel(ModelGraph& model)
+	{
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto weightIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.25f, -0.5f, 0.75f, 0.125f }, { 2, 2 })));
+		const auto biasIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.1f, -0.2f }, { 1, 2 })));
+
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { weight, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto logits = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { logits, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "x" });
+		graph.SetOutputNames({ "logits" });
+		return { weightIndex, biasIndex };
+	}
 } // namespace
 
 TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
@@ -314,6 +342,62 @@ TEST(Training, AOTAndInterpreterAdamWStepsKeepOptimizerStateInParity)
 		            ReadFloat(interpreterTrainer.Optimizer().SecondMoment(0), 0), 1.0e-5f);
 		EXPECT_EQ(aotTrainer.Optimizer().StepIndex(), step);
 		EXPECT_EQ(interpreterTrainer.Optimizer().StepIndex(), step);
+	}
+}
+
+TEST(Training, AOTAndInterpreterSoftmaxCrossEntropyBatchLinearSGDMatch)
+{
+	ModelGraph interpreterModel;
+	const auto interpreterVariables = BuildBatchLinearClassifierModel(interpreterModel);
+	ModelGraph aotModel;
+	const auto aotVariables = BuildBatchLinearClassifierModel(aotModel);
+
+	Training::Trainer<CPU, Optimizer::SGD> interpreterTrainer(interpreterModel, Optimizer::SGD(0.05f));
+	Training::TrainerOptions aotOptions;
+	aotOptions.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::SGD> aotTrainer(aotModel, Optimizer::SGD(0.05f), aotOptions);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0f, 2.0f, -0.5f, 0.25f }, { 2, 2 }));
+	std::vector<std::size_t> targets = { 1, 0 };
+
+	const auto interpreterStep = interpreterTrainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+	const auto aotStep = aotTrainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+
+	EXPECT_NEAR(aotStep.loss, interpreterStep.loss, 1.0e-5);
+	ASSERT_EQ(aotStep.outputs.size(), interpreterStep.outputs.size());
+	ASSERT_EQ(aotStep.backwardResults.size(), interpreterStep.backwardResults.size());
+	for (std::size_t i = 0; i < aotStep.outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(aotStep.outputs[0], i), ReadFloat(interpreterStep.outputs[0], i), 1.0e-5f);
+	}
+	for (std::size_t resultIndex = 0; resultIndex < aotStep.backwardResults.size(); ++resultIndex)
+	{
+		ASSERT_EQ(aotStep.backwardResults[resultIndex].NumElements(),
+		          interpreterStep.backwardResults[resultIndex].NumElements());
+		for (std::size_t i = 0; i < aotStep.backwardResults[resultIndex].NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(aotStep.backwardResults[resultIndex], i),
+			            ReadFloat(interpreterStep.backwardResults[resultIndex], i), 1.0e-5f);
+		}
+	}
+	for (std::size_t i = 0; i < 4; ++i)
+	{
+		EXPECT_NEAR(ReadVariableGradFloat(aotModel.UnsafeMutableGraph(), aotVariables.weight, i),
+		            ReadVariableGradFloat(interpreterModel.UnsafeMutableGraph(), interpreterVariables.weight, i),
+		            1.0e-5f);
+		EXPECT_NEAR(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), aotVariables.weight, i),
+		            ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), interpreterVariables.weight, i),
+		            1.0e-5f);
+	}
+	for (std::size_t i = 0; i < 2; ++i)
+	{
+		EXPECT_NEAR(ReadVariableGradFloat(aotModel.UnsafeMutableGraph(), aotVariables.bias, i),
+		            ReadVariableGradFloat(interpreterModel.UnsafeMutableGraph(), interpreterVariables.bias, i),
+		            1.0e-5f);
+		EXPECT_NEAR(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), aotVariables.bias, i),
+		            ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), interpreterVariables.bias, i),
+		            1.0e-5f);
 	}
 }
 #endif
