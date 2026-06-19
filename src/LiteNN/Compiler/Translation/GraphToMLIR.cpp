@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -405,6 +406,35 @@ namespace litenn
 				return shape;
 			}
 
+			AffineMap buildBroadcastAffineMap(std::span<const std::size_t> inputShape,
+			                                  std::span<const std::size_t> resultShape)
+			{
+				const auto resultRank = static_cast<std::int64_t>(resultShape.size());
+				const auto inputRank = static_cast<std::int64_t>(inputShape.size());
+				const auto rankDiff = resultRank - inputRank;
+				if (rankDiff < 0)
+				{
+					throw std::runtime_error("MLIR broadcast input rank exceeds result rank");
+				}
+
+				SmallVector<AffineExpr> exprs;
+				exprs.reserve(inputShape.size());
+				for (std::int64_t i = 0; i < inputRank; ++i)
+				{
+					const auto resultDim = i + rankDiff;
+					if (inputShape[static_cast<std::size_t>(i)] == 1 &&
+					    resultShape[static_cast<std::size_t>(resultDim)] != 1)
+					{
+						exprs.push_back(getAffineConstantExpr(0, &ctx_));
+					}
+					else
+					{
+						exprs.push_back(getAffineDimExpr(resultDim, &ctx_));
+					}
+				}
+				return AffineMap::get(resultRank, 0, exprs, &ctx_);
+			}
+
 			Value emitQuantizationParameterConstant(const QuantizationParams& params, DataType dtype,
 			                                        std::span<const std::size_t> outputShape,
 			                                        std::span<const double> values)
@@ -432,6 +462,110 @@ namespace litenn
 					expanded[i] = values[QuantizationDetail::ScaleIndexForElement(params, shape, i)];
 				}
 				return emitDenseConstant(dtype, outputShape, expanded);
+			}
+
+			Value emitAffineQuantizeValue(Value input, const QuantizationParams& params, const OutputInfo& output)
+			{
+				if (params.scheme != QuantizationScheme::Affine ||
+				    (params.granularity != QuantizationGranularity::PerTensor &&
+				     params.granularity != QuantizationGranularity::PerAxis &&
+				     params.granularity != QuantizationGranularity::Grouped) ||
+				    (params.granularity == QuantizationGranularity::PerTensor && params.scales.size() != 1) ||
+				    (!params.zeroPoints.empty() && params.zeroPoints.size() != params.scales.size()))
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR dynamic QuantizeNode currently supports affine per-tensor/per-axis/grouped "
+					    "quantization only");
+				}
+				if (params.storageType != DataType::Int8 && params.storageType != DataType::UInt8)
+				{
+					throw std::runtime_error("GraphToMLIR dynamic QuantizeNode currently supports Int8/UInt8 storage");
+				}
+
+				Value scaleValue;
+				Value zeroPointValue;
+				std::vector<std::size_t> scaleShape;
+				std::vector<std::size_t> zeroPointShape;
+				if (params.granularity == QuantizationGranularity::PerTensor)
+				{
+					scaleShape = output.shape;
+					zeroPointShape = output.shape;
+					scaleValue =
+					    emitFilledConstant(DataType::Float32, scaleShape, static_cast<double>(params.scales[0]));
+					const auto zeroPoint = params.zeroPoints.empty() ? 0 : params.zeroPoints[0];
+					zeroPointValue =
+					    emitFilledConstant(DataType::Float32, zeroPointShape, static_cast<double>(zeroPoint));
+				}
+				else
+				{
+					std::vector<double> scales;
+					scales.reserve(params.scales.size());
+					for (const auto scale : params.scales)
+					{
+						scales.push_back(static_cast<double>(scale));
+					}
+					scaleShape = params.granularity == QuantizationGranularity::PerAxis
+					                 ? quantizationAxisBroadcastShape(params, output.shape)
+					                 : output.shape;
+					scaleValue = emitQuantizationParameterConstant(params, DataType::Float32, output.shape, scales);
+
+					if (params.zeroPoints.empty())
+					{
+						zeroPointShape = output.shape;
+						zeroPointValue = emitFilledConstant(DataType::Float32, zeroPointShape, 0.0);
+					}
+					else
+					{
+						std::vector<double> zeroPoints;
+						zeroPoints.reserve(params.zeroPoints.size());
+						for (const auto zeroPoint : params.zeroPoints)
+						{
+							zeroPoints.push_back(static_cast<double>(zeroPoint));
+						}
+						zeroPointShape = params.granularity == QuantizationGranularity::PerAxis
+						                     ? quantizationAxisBroadcastShape(params, output.shape)
+						                     : output.shape;
+						zeroPointValue =
+						    emitQuantizationParameterConstant(params, DataType::Float32, output.shape, zeroPoints);
+					}
+				}
+
+				const auto resultType = convertTensorType(ctx_, params.storageType, output.shape);
+				const auto outputMap =
+				    AffineMap::getMultiDimIdentityMap(static_cast<int64_t>(output.shape.size()), &ctx_);
+				const auto inputMap = outputMap;
+				const auto scaleMap = buildBroadcastAffineMap(scaleShape, output.shape);
+				const auto zeroPointMap = buildBroadcastAffineMap(zeroPointShape, output.shape);
+				auto emptyOut = builder_.create<tensor::EmptyOp>(builder_.getUnknownLoc(), resultType.getShape(),
+				                                                 resultType.getElementType());
+				SmallVector<utils::IteratorType> iterTypes(resultType.getRank(), utils::IteratorType::parallel);
+				const auto minValue = params.storageType == DataType::Int8
+				                          ? static_cast<double>(std::numeric_limits<std::int8_t>::min())
+				                          : static_cast<double>(std::numeric_limits<std::uint8_t>::min());
+				const auto maxValue = params.storageType == DataType::Int8
+				                          ? static_cast<double>(std::numeric_limits<std::int8_t>::max())
+				                          : static_cast<double>(std::numeric_limits<std::uint8_t>::max());
+				auto generic = builder_.create<linalg::GenericOp>(
+				    builder_.getUnknownLoc(), TypeRange{ resultType }, ValueRange{ input, scaleValue, zeroPointValue },
+				    ValueRange{ emptyOut }, SmallVector<AffineMap>{ inputMap, scaleMap, zeroPointMap, outputMap },
+				    iterTypes, [&](OpBuilder& b, Location loc, ValueRange args) {
+					    auto inputElemType = cast<RankedTensorType>(input.getType()).getElementType();
+					    auto scaled = b.create<arith::DivFOp>(loc, args[0], args[1]).getResult();
+					    auto rounded = b.create<math::RoundOp>(loc, scaled).getResult();
+					    auto shifted = b.create<arith::AddFOp>(loc, rounded, args[2]).getResult();
+					    auto minConst = b.create<arith::ConstantFloatOp>(loc, cast<FloatType>(inputElemType),
+					                                                     llvm::APFloat(static_cast<float>(minValue)));
+					    auto maxConst = b.create<arith::ConstantFloatOp>(loc, cast<FloatType>(inputElemType),
+					                                                     llvm::APFloat(static_cast<float>(maxValue)));
+					    auto clampedMin = b.create<arith::MaximumFOp>(loc, shifted, minConst).getResult();
+					    auto clamped = b.create<arith::MinimumFOp>(loc, clampedMin, maxConst).getResult();
+					    Value result =
+					        params.storageType == DataType::UInt8
+					            ? b.create<arith::FPToUIOp>(loc, resultType.getElementType(), clamped).getResult()
+					            : b.create<arith::FPToSIOp>(loc, resultType.getElementType(), clamped).getResult();
+					    b.create<linalg::YieldOp>(loc, result);
+				    });
+				return generic.getResult(0);
 			}
 
 			Value emitUnaryValue(LiteNN::UnaryOp opKind, Value input, DataType dtype,
@@ -877,14 +1011,14 @@ namespace litenn
 				valueMap[nodeId] = { op.getResult() };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const QuantizeNode&, std::span<const OutputInfo>,
-			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const QuantizeNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error(
-				    "GraphToMLIR does not support dynamic QuantizeNode yet because affine quantization requires "
-				    "round-and-clamp semantics; run ConstFoldPass before CPU AOT when quantizing compile-time "
-				    "constants");
+				const auto inputInfo = sg.GetOutputInfo(node.input);
+				auto input = getVal(valueMap, node.input);
+				auto computeInput = emitMaybeCastValue(input, inputInfo.dtype, DataType::Float32, outputInfos[0].shape);
+				valueMap[nodeId] = { emitAffineQuantizeValue(computeInput, node.params, outputInfos[0]) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const DequantizeNode& node,

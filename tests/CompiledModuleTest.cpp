@@ -60,7 +60,7 @@ namespace
 		ASSERT_EQ(actual.NumElements(), expected.NumElements());
 		for (std::size_t i = 0; i < actual.NumElements(); ++i)
 		{
-			EXPECT_NEAR(ReadFloat(actual, i), ReadFloat(expected, i), tolerance);
+			EXPECT_NEAR(ReadAsFloat(actual, i), ReadAsFloat(expected, i), tolerance);
 		}
 	}
 
@@ -344,6 +344,39 @@ namespace
 		const auto input = sg.AddParam(DataType::Float32, { 4 });
 		const auto quantized =
 		    sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::Int8, { 4 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "quantized" });
+		return graph;
+	}
+
+	Graph BuildUInt8AffineQuantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::UInt8, 0.5F, 128);
+		const auto input = sg.AddParam(DataType::Float32, { 5 });
+		const auto quantized =
+		    sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::UInt8, { 5 } } });
+		sg.SetResults({ { quantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "quantized" });
+		return graph;
+	}
+
+	Graph BuildGroupedAffineQuantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = GroupedAffineQuantization(DataType::Int8, 1, 2, { 0.5F, 0.25F, 2.0F, 1.0F, 0.125F, 4.0F },
+		                                        { -1, 0, 2, 3, -4, 1 });
+		const auto input = sg.AddParam(DataType::Float32, { 2, 5 });
+		const auto quantized =
+		    sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::Int8, { 2, 5 } } });
 		sg.SetResults({ { quantized, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -1549,21 +1582,32 @@ TEST(CompiledModuleTest, DynamicDequantizeAOTDiagnosticMentionsConstFold)
 	}
 }
 
-TEST(CompiledModuleTest, DynamicQuantizeAOTDiagnosticMentionsRoundClampAndConstFold)
+TEST(CompiledModuleTest, CPUDynamicAffineQuantizeArtifactMatchesInterpreter)
 {
 	auto graph = BuildAffineQuantizeInputGraph();
-	try
-	{
-		(void) Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
-		FAIL() << "Expected dynamic QuantizeNode compilation to fail";
-	}
-	catch (const std::runtime_error& ex)
-	{
-		const std::string message = ex.what();
-		EXPECT_NE(message.find("dynamic QuantizeNode"), std::string::npos);
-		EXPECT_NE(message.find("round-and-clamp"), std::string::npos);
-		EXPECT_NE(message.find("ConstFoldPass"), std::string::npos);
-	}
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ -0.5, -0.25, 0.125, 1.0 }, { 4 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUDynamicUInt8AffineQuantizeArtifactMatchesInterpreter)
+{
+	auto graph = BuildUInt8AffineQuantizeInputGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ -100.0, -0.25, 0.0, 12.75, 100.0 }, { 5 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUDynamicGroupedAffineQuantizeArtifactMatchesInterpreter)
+{
+	auto graph = BuildGroupedAffineQuantizeInputGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(
+	    Tensor<CPU>({ -0.5, 0.125, 0.0, 1.0, 9.0, 3.0, -2.0, 0.5, 0.875, -12.0 }, { 2, 5 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)

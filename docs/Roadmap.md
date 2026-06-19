@@ -120,8 +120,8 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       materializes packed-nibble block quantization in the interpreter and ConstFold path, and CPU AOT now has smoke
       coverage for compiling ConstFolded packed-nibble dequantized constants. CPU AOT also lowers dynamic affine
       per-tensor/per-axis/grouped `DequantizeNode`; grouped lowering is a correctness-first full-parameter expansion,
-      not a native quantized kernel. Dynamic `QuantizeNode` remains blocked on exact round-and-clamp lowering and is
-      intentionally not compiled through truncating casts.
+      not a native quantized kernel. CPU AOT lowers dynamic affine `QuantizeNode` with exact round-and-clamp semantics
+      for int8/uint8 storage; packed 4-bit quantization remains on the ConstFold/native-kernel path.
 - [x] Add the first native quantized MatMul/Linear path for CPU direct execution over affine and packed-nibble weights.
       `EvalQuantizedMatMul` and `EvalQuantizedLinear` compute directly from quantized storage and are covered by parity
       tests against dequantize-plus-float execution.
@@ -133,8 +133,8 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       shader path, then CPU AOT lowering.
       Direct dynamic `QuantizeNode` / `DequantizeNode` MLIR lowering remains part of this backend work; the current
       production route for constant packed quantized weights is ConstFold-before-compile, GraphToMLIR now lowers dynamic
-      affine per-tensor/per-axis/grouped `DequantizeNode`, and diagnostics point users to `ConstFoldPass` for packed
-      cases that are not yet dynamically lowered.
+      affine per-tensor/per-axis/grouped `QuantizeNode` and `DequantizeNode`, and diagnostics point users to
+      `ConstFoldPass` for packed cases that are not yet dynamically lowered.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [x] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
