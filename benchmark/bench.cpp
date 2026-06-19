@@ -3,6 +3,7 @@
 #include "CompilerOptionsEnv.h"
 
 #include <LiteNN.h>
+#include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Layer/LoRA.h>
@@ -20,6 +21,7 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -64,12 +66,36 @@ namespace
 	constexpr std::size_t kInputWidth = 784;
 	constexpr std::size_t kLoRAOutputWidth = 512;
 	constexpr std::size_t kLoRARank = 8;
+	constexpr float kQuantizedBenchmarkTolerance = 1.0e-5F;
 
 	struct GGMLLayerSpec
 	{
 		std::size_t inputWidth;
 		std::size_t outputWidth;
 		bool relu;
+	};
+
+	struct QuantizedLayerSpec
+	{
+		std::size_t inputWidth;
+		std::size_t outputWidth;
+		bool relu;
+	};
+
+	enum class QuantizedWeightKind
+	{
+		AffineInt8,
+		PackedInt4,
+		PackedFP4E2M1,
+	};
+
+	struct QuantizedLayer
+	{
+		Tensor<CPU> storage;
+		QuantizationParams params;
+		Tensor<CPU> dequantized;
+		Tensor<CPU> bias;
+		bool relu{};
 	};
 
 	constexpr std::array<GGMLLayerSpec, 1> kGGMLLinearLayers = {
@@ -85,6 +111,21 @@ namespace
 		GGMLLayerSpec{ 784, 512, true },
 		GGMLLayerSpec{ 512, 256, true },
 		GGMLLayerSpec{ 256, 10, false },
+	};
+
+	constexpr std::array<QuantizedLayerSpec, 1> kQuantizedLinearLayers = {
+		QuantizedLayerSpec{ 784, 10, false },
+	};
+
+	constexpr std::array<QuantizedLayerSpec, 2> kQuantizedMLP128Layers = {
+		QuantizedLayerSpec{ 784, 128, true },
+		QuantizedLayerSpec{ 128, 10, false },
+	};
+
+	constexpr std::array<QuantizedLayerSpec, 3> kQuantizedMLP512Layers = {
+		QuantizedLayerSpec{ 784, 512, true },
+		QuantizedLayerSpec{ 512, 256, true },
+		QuantizedLayerSpec{ 256, 10, false },
 	};
 
 	void SetThroughputCounters(benchmark::State& state, std::size_t batch);
@@ -204,6 +245,166 @@ namespace
 		std::vector<Tensor<CPU>> inputs;
 		inputs.emplace_back(Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, kInputWidth }));
 		return inputs;
+	}
+
+	float ReadF32(const Tensor<CPU>& tensor, std::size_t index)
+	{
+		return static_cast<const float*>(tensor.UnsafeRawData())[index];
+	}
+
+	std::vector<float> MakeRandomVector(std::size_t count, std::mt19937& rng, float minValue = -1.0F,
+	                                    float maxValue = 1.0F)
+	{
+		std::uniform_real_distribution<float> dist(minValue, maxValue);
+		std::vector<float> values(count);
+		for (auto& value : values)
+		{
+			value = dist(rng);
+		}
+		return values;
+	}
+
+	Tensor<CPU> MakeRandomTensor(std::span<const std::size_t> shape, std::mt19937& rng, float minValue = -1.0F,
+	                             float maxValue = 1.0F)
+	{
+		const auto values = MakeRandomVector(ShapeView{ shape }.NumElements(), rng, minValue, maxValue);
+		return Optimizer::MakeFloatTensor(std::span<const float>(values), ShapeView{ shape });
+	}
+
+	const char* QuantizedWeightKindName(QuantizedWeightKind kind)
+	{
+		switch (kind)
+		{
+		case QuantizedWeightKind::AffineInt8:
+			return "AffineInt8";
+		case QuantizedWeightKind::PackedInt4:
+			return "PackedInt4";
+		case QuantizedWeightKind::PackedFP4E2M1:
+			return "PackedFP4E2M1";
+		}
+		return "Unknown";
+	}
+
+	std::span<const QuantizedLayerSpec> GetQuantizedLayerSpecs(ModelKind kind)
+	{
+		switch (kind)
+		{
+		case ModelKind::Linear:
+			return kQuantizedLinearLayers;
+		case ModelKind::MLP128:
+			return kQuantizedMLP128Layers;
+		case ModelKind::MLP512:
+			return kQuantizedMLP512Layers;
+		}
+		throw std::invalid_argument("unsupported quantized benchmark model kind");
+	}
+
+	QuantizedLayer MakeQuantizedLayer(const QuantizedLayerSpec& spec, QuantizedWeightKind kind, std::mt19937& rng)
+	{
+		const std::array shape{ spec.inputWidth, spec.outputWidth };
+		const auto weight = MakeRandomTensor(shape, rng, -1.0F, 1.0F);
+		const auto bias = MakeRandomTensor(std::array{ std::size_t{ 1 }, spec.outputWidth }, rng, -0.25F, 0.25F);
+		switch (kind)
+		{
+		case QuantizedWeightKind::AffineInt8: {
+			const auto quantized = QuantizeAffine(weight, PerTensorAffineQuantization(DataType::Int8, 1.0F / 64.0F));
+			return { quantized.Storage(), quantized.Params(), DequantizeAffine(quantized), bias, spec.relu };
+		}
+		case QuantizedWeightKind::PackedInt4: {
+			const auto quantized = QuantizeAffine(weight, PerTensorAffineQuantization(DataType::Int8, 1.0F / 4.0F));
+			auto params =
+			    PackedNibbleQuantization(PackedNibbleFormat::Int4, { spec.inputWidth, spec.outputWidth }, 1.0F / 4.0F);
+			const auto packed = PackInteger4(quantized.Storage(), params);
+			return { packed, params, DequantizePackedNibble(packed, params), bias, spec.relu };
+		}
+		case QuantizedWeightKind::PackedFP4E2M1: {
+			auto params = PackedNibbleQuantization(PackedNibbleFormat::FP4E2M1, { spec.inputWidth, spec.outputWidth });
+			const auto packed = PackFloat4(weight, params);
+			return { packed, params, DequantizePackedNibble(packed, params), bias, spec.relu };
+		}
+		}
+		throw std::invalid_argument("unsupported quantized weight kind");
+	}
+
+	std::vector<QuantizedLayer> MakeQuantizedLayers(ModelKind modelKind, QuantizedWeightKind weightKind)
+	{
+		std::mt19937 rng(42);
+		std::vector<QuantizedLayer> layers;
+		for (const auto& spec : GetQuantizedLayerSpecs(modelKind))
+		{
+			layers.push_back(MakeQuantizedLayer(spec, weightKind, rng));
+		}
+		return layers;
+	}
+
+	void AddBiasAndOptionalReLU(Tensor<CPU>& value, const Tensor<CPU>& bias, bool relu)
+	{
+		auto* data = static_cast<float*>(value.UnsafeRawData());
+		const auto rows = value.Shape()[0];
+		const auto cols = value.Shape()[1];
+		for (std::size_t row = 0; row < rows; ++row)
+		{
+			for (std::size_t col = 0; col < cols; ++col)
+			{
+				auto& item = data[row * cols + col];
+				item += ReadF32(bias, col);
+				if (relu && item < 0.0F)
+				{
+					item = 0.0F;
+				}
+			}
+		}
+	}
+
+	void ApplyReLU(Tensor<CPU>& value)
+	{
+		auto* data = static_cast<float*>(value.UnsafeRawData());
+		for (std::size_t i = 0; i < value.NumElements(); ++i)
+		{
+			if (data[i] < 0.0F)
+			{
+				data[i] = 0.0F;
+			}
+		}
+	}
+
+	Tensor<CPU> RunNativeQuantizedModel(const Tensor<CPU>& input, const std::vector<QuantizedLayer>& layers)
+	{
+		Tensor<CPU> value = input;
+		for (const auto& layer : layers)
+		{
+			value = EvalQuantizedLinear(value, layer.storage, layer.params, &layer.bias);
+			if (layer.relu)
+			{
+				ApplyReLU(value);
+			}
+		}
+		return value;
+	}
+
+	Tensor<CPU> RunDequantizedReferenceModel(const Tensor<CPU>& input, const std::vector<QuantizedLayer>& layers)
+	{
+		Tensor<CPU> value = input;
+		for (const auto& layer : layers)
+		{
+			value = Detail::EvalBatchMatMul(value, layer.dequantized);
+			AddBiasAndOptionalReLU(value, layer.bias, layer.relu);
+		}
+		return value;
+	}
+
+	float MaxAbsError(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs)
+	{
+		if (lhs.Shape() != rhs.Shape() || lhs.DType() != DataType::Float32 || rhs.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("MaxAbsError requires matching Float32 tensors");
+		}
+		float maxError = 0.0F;
+		for (std::size_t i = 0; i < lhs.NumElements(); ++i)
+		{
+			maxError = std::max(maxError, std::fabs(ReadF32(lhs, i) - ReadF32(rhs, i)));
+		}
+		return maxError;
 	}
 
 	NodeId AddFloatConstant(Subgraph& sg, std::vector<float> values, std::vector<std::size_t> shape)
@@ -674,6 +875,70 @@ namespace
 			benchmark::DoNotOptimize(outputs);
 		}
 		SetThroughputCounters(state, batch);
+	}
+
+	void BMNativeQuantizedLinearRun(benchmark::State& state, ModelKind kind, std::size_t batch,
+	                                QuantizedWeightKind weightKind)
+	{
+		const auto layers = MakeQuantizedLayers(kind, weightKind);
+		const auto inputData = MakeInputData(batch);
+		const auto input = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, kInputWidth });
+		const auto expected = RunDequantizedReferenceModel(input, layers);
+		const auto actual = RunNativeQuantizedModel(input, layers);
+		const auto maxError = MaxAbsError(actual, expected);
+		if (maxError > kQuantizedBenchmarkTolerance)
+		{
+			state.SkipWithError(std::format("quantized native parity failed: max_abs_error={}", maxError).c_str());
+			return;
+		}
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto output = RunNativeQuantizedModel(input, layers);
+			benchmark::DoNotOptimize(output);
+		}
+
+		for (auto _ : state)
+		{
+			auto output = RunNativeQuantizedModel(input, layers);
+			benchmark::DoNotOptimize(output);
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["max_abs_error"] = benchmark::Counter(maxError, benchmark::Counter::kAvgIterations);
+	}
+
+	void BMDequantizedQuantizedLinearReferenceRun(benchmark::State& state, ModelKind kind, std::size_t batch,
+	                                              QuantizedWeightKind weightKind)
+	{
+		const auto layers = MakeQuantizedLayers(kind, weightKind);
+		const auto inputData = MakeInputData(batch);
+		const auto input = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, kInputWidth });
+		const auto expected = RunNativeQuantizedModel(input, layers);
+		const auto actual = RunDequantizedReferenceModel(input, layers);
+		const auto maxError = MaxAbsError(actual, expected);
+		if (maxError > kQuantizedBenchmarkTolerance)
+		{
+			state.SkipWithError(std::format("quantized reference parity failed: max_abs_error={}", maxError).c_str());
+			return;
+		}
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto output = RunDequantizedReferenceModel(input, layers);
+			benchmark::DoNotOptimize(output);
+		}
+
+		for (auto _ : state)
+		{
+			auto output = RunDequantizedReferenceModel(input, layers);
+			benchmark::DoNotOptimize(output);
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["max_abs_error"] = benchmark::Counter(maxError, benchmark::Counter::kAvgIterations);
 	}
 
 #ifdef LITENN_BENCH_HAS_AOT
@@ -2809,12 +3074,28 @@ namespace
 #ifdef LITENN_ENABLE_VULKAN
 		const bool vulkanDeviceAvailable = IsVulkanDeviceAvailable();
 #endif
+		constexpr std::array quantizedWeightKinds{
+			QuantizedWeightKind::AffineInt8,
+			QuantizedWeightKind::PackedInt4,
+			QuantizedWeightKind::PackedFP4E2M1,
+		};
 		for (const auto kind : kModelKinds)
 		{
 			for (const auto batch : kBatchSizes)
 			{
 				RegisterBenchmarkCase("Interpreter", kind, batch,
 				                      [=](benchmark::State& state) { BMInterpreter(state, kind, batch); });
+				for (const auto weightKind : quantizedWeightKinds)
+				{
+					RegisterBenchmarkCase(
+					    std::format("NativeQuantizedLinear/{}", QuantizedWeightKindName(weightKind)), kind, batch,
+					    [=](benchmark::State& state) { BMNativeQuantizedLinearRun(state, kind, batch, weightKind); });
+					RegisterBenchmarkCase(
+					    std::format("DequantizedQuantizedLinearReference/{}", QuantizedWeightKindName(weightKind)),
+					    kind, batch, [=](benchmark::State& state) {
+						    BMDequantizedQuantizedLinearReferenceRun(state, kind, batch, weightKind);
+					    });
+				}
 				for (const auto threadCount : kGGMLThreadCounts)
 				{
 					RegisterBenchmarkCase(

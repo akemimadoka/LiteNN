@@ -125,7 +125,11 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
       shader path, then CPU AOT lowering.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
-- [ ] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
+- [x] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
+      `litenn_bench` now registers `NativeQuantizedLinear/<format>` and
+      `DequantizedQuantizedLinearReference/<format>` rows for affine int8, packed int4, and packed FP4E2M1
+      Linear/MLP workloads. Each row reports `max_abs_error` against the opposite execution path so benchmark output
+      carries the parity signal needed before choosing CUDA/Vulkan native quantized kernels.
 
 ### G2: llama.cpp / GGUF Compatibility
 
@@ -617,6 +621,9 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       `CompilerOptions::cpuAOTAffinityPolicy` defaults to no pinning, while benchmark/profile entry points can opt into
       compact worker pinning for local measurements.
 - [x] Extend `litenn_profile` with first-class CPU AOT instruction stats instead of relying on manual objdump report synthesis.
+- [x] Extend `litenn_profile` with CPU AOT parallel-helper selection counters.
+      The profile report now prints layer shapes, estimated FLOPs, selected helper thread counts, sidecar-vs-MLIR gate
+      reasons, and an emitted-object symbol check for `litenn_cpu_matmul_bias_relu_parallel_f32`.
 - [x] Extend `litenn_profile` with CUDA launch breakdowns.
 
 Completed notes:

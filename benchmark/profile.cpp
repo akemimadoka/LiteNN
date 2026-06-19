@@ -29,12 +29,14 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -345,6 +347,30 @@ struct CaseInstructionStats
 	InstructionStats stats;
 };
 
+struct CPUAOTLayerSelection
+{
+	std::size_t m{};
+	std::size_t k{};
+	std::size_t n{};
+	std::uint64_t flops{};
+	std::size_t selectedThreads{ 1 };
+	std::string reason;
+};
+
+struct CPUAOTParallelSelection
+{
+	std::string name;
+	std::size_t batch{};
+	std::size_t configuredThreads{};
+	std::size_t fusedLayerCount{};
+	std::size_t parallelLayerCount{};
+	std::uint64_t totalFlops{};
+	bool predictedSidecar{};
+	bool objectUsesSidecar{};
+	std::string gate;
+	std::vector<CPUAOTLayerSelection> layers;
+};
+
 class ScopedEnvVar
 {
 public:
@@ -511,6 +537,173 @@ static bool ContainsAny(std::string_view line, std::span<const std::string_view>
 		}
 	}
 	return false;
+}
+
+static std::uint64_t SaturatingMul(std::uint64_t lhs, std::uint64_t rhs)
+{
+	if (lhs == 0 || rhs == 0)
+	{
+		return 0;
+	}
+	if (lhs > std::numeric_limits<std::uint64_t>::max() / rhs)
+	{
+		return std::numeric_limits<std::uint64_t>::max();
+	}
+	return lhs * rhs;
+}
+
+static std::uint64_t SaturatingAdd(std::uint64_t lhs, std::uint64_t rhs)
+{
+	if (lhs > std::numeric_limits<std::uint64_t>::max() - rhs)
+	{
+		return std::numeric_limits<std::uint64_t>::max();
+	}
+	return lhs + rhs;
+}
+
+static std::size_t ResolveProfileCPUAOTThreadCount(const CompilerOptions& options)
+{
+	if (options.cpuAOTThreadCount != 0)
+	{
+		return options.cpuAOTThreadCount;
+	}
+	const auto hardware = std::thread::hardware_concurrency();
+	return hardware == 0 ? 1 : hardware;
+}
+
+static bool ProfileSidecarLayerGate(std::uint64_t m, std::uint64_t k, std::uint64_t n, std::uint64_t flops)
+{
+	constexpr std::uint64_t kMinLayerFlops = 1ull << 26;
+	constexpr std::uint64_t kMaxRowsBeforePackedMLIR = 256;
+	constexpr std::uint64_t kMinOutputColumns = 64;
+	return flops >= kMinLayerFlops && m <= kMaxRowsBeforePackedMLIR && k >= 64 && n >= kMinOutputColumns;
+}
+
+static bool ObjectBytesContain(std::span<const std::byte> bytes, std::string_view needle)
+{
+	if (needle.empty() || bytes.size() < needle.size())
+	{
+		return false;
+	}
+	const auto* raw = reinterpret_cast<const char*>(bytes.data());
+	for (std::size_t i = 0; i + needle.size() <= bytes.size(); ++i)
+	{
+		if (std::string_view(raw + i, needle.size()) == needle)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static CPUAOTParallelSelection AnalyzeCPUAOTParallelSelection(const std::string& name, std::size_t batch,
+                                                              const Graph& graph, const CompilerOptions& options)
+{
+	CPUAOTParallelSelection result{
+		.name = name,
+		.batch = batch,
+		.configuredThreads = ResolveProfileCPUAOTThreadCount(options),
+		.gate = "not a supported fused linear chain",
+	};
+	if (result.configuredThreads <= 1)
+	{
+		result.gate = "thread_count<=1";
+		return result;
+	}
+	if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
+	    graph.SubgraphCount() == 0)
+	{
+		result.gate = "graph has backward/tape/activation state or no forward subgraph";
+		return result;
+	}
+	const auto& subgraph = graph.GetSubgraph(graph.Forward());
+	if (subgraph.Results().size() != 1)
+	{
+		result.gate = "requires exactly one forward result";
+		return result;
+	}
+	const bool forceSidecarShapeGate = options.cpuAOTParallelMinFlops <= 1;
+	for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+	{
+		const auto& entry = subgraph.GetNodeEntry(nodeId);
+		const auto* fused = std::get_if<FusedOpNode>(&entry.node);
+		if (fused == nullptr ||
+		    (fused->pattern != FusionPattern::MatMulBiasAdd && fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
+		    fused->args.size() < 3 || entry.outputInfos.empty())
+		{
+			continue;
+		}
+		const auto lhsOutput = fused->args[0];
+		const auto rhsOutput = fused->args[1];
+		if (lhsOutput.node >= subgraph.NodeCount() || rhsOutput.node >= subgraph.NodeCount())
+		{
+			continue;
+		}
+		const auto& lhsEntry = subgraph.GetNodeEntry(lhsOutput.node);
+		const auto& rhsEntry = subgraph.GetNodeEntry(rhsOutput.node);
+		if (lhsOutput.port >= lhsEntry.outputInfos.size() || rhsOutput.port >= rhsEntry.outputInfos.size())
+		{
+			continue;
+		}
+		const auto& lhsInfo = lhsEntry.outputInfos[lhsOutput.port];
+		const auto& rhsInfo = rhsEntry.outputInfos[rhsOutput.port];
+		const auto& outInfo = entry.outputInfos[0];
+		if (lhsInfo.dtype != DataType::Float32 || rhsInfo.dtype != DataType::Float32 ||
+		    outInfo.dtype != DataType::Float32 || lhsInfo.shape.size() != 2 || rhsInfo.shape.size() != 2 ||
+		    outInfo.shape.size() != 2)
+		{
+			continue;
+		}
+		const auto m = static_cast<std::uint64_t>(outInfo.shape[0]);
+		const auto k = static_cast<std::uint64_t>(lhsInfo.shape[1]);
+		const auto n = static_cast<std::uint64_t>(outInfo.shape[1]);
+		const auto flops = SaturatingMul(SaturatingMul(SaturatingMul(m, k), n), 2);
+		CPUAOTLayerSelection layer{
+			.m = outInfo.shape[0],
+			.k = lhsInfo.shape[1],
+			.n = outInfo.shape[1],
+			.flops = flops,
+			.selectedThreads = 1,
+			.reason = "single-thread: layer gate rejected",
+		};
+		if (!forceSidecarShapeGate && m > 256)
+		{
+			layer.reason = "chain rejected: m>256 keeps packed MLIR fallback";
+			result.layers.push_back(std::move(layer));
+			result.totalFlops = SaturatingAdd(result.totalFlops, flops);
+			++result.fusedLayerCount;
+			result.gate = "m>256";
+			return result;
+		}
+		if (forceSidecarShapeGate || ProfileSidecarLayerGate(m, k, n, flops))
+		{
+			layer.selectedThreads = result.configuredThreads;
+			layer.reason = forceSidecarShapeGate ? "parallel: forced by cpuAOTParallelMinFlops<=1"
+			                                     : "parallel: layer gate accepted";
+			++result.parallelLayerCount;
+		}
+		result.layers.push_back(std::move(layer));
+		result.totalFlops = SaturatingAdd(result.totalFlops, flops);
+		++result.fusedLayerCount;
+	}
+	if (result.fusedLayerCount == 0)
+	{
+		result.gate = "no fused MatMulBiasAdd/ReLU layers";
+		return result;
+	}
+	if (result.parallelLayerCount == 0)
+	{
+		result.gate = "no layer selected more than one helper thread";
+		return result;
+	}
+	if (result.totalFlops < options.cpuAOTParallelMinFlops)
+	{
+		result.gate = "total_flops below cpuAOTParallelMinFlops";
+		return result;
+	}
+	result.predictedSidecar = true;
+	result.gate = "sidecar predicted";
+	return result;
 }
 
 static void AccumulateInstructionLine(InstructionStats& stats, std::string_view line)
@@ -1288,6 +1481,8 @@ int main(int argc, char** argv)
 
 	std::vector<CaseInstructionStats> instructionStats;
 	instructionStats.reserve(cases.size());
+	std::vector<CPUAOTParallelSelection> cpuAOTSelections;
+	cpuAOTSelections.reserve(cases.size());
 
 	std::cout << std::format("{:<14} {:>8} {:>10} {:>12} {:>12} {:>10} {:>12} {:>7} {:>7} {:>8}\n", "Case", "Batch",
 	                         "Compile/ms", "Run/ms", "RunInto/ms", "Alloc/us", "Speedup", "FMAps", "VecLd", "StackVec");
@@ -1299,13 +1494,17 @@ int main(int argc, char** argv)
 		std::mt19937 rng(0);
 		Graph g = c.build(batch, rng);
 		Optimize(g);
+		auto compilerOptions = LiteNNBenchCompilerOptionsFromEnvironment();
+		auto cpuAOTSelection = AnalyzeCPUAOTParallelSelection(c.name, batch, g, compilerOptions);
 
 		// Time compile
 		auto cs = Clock::now();
-		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(g),
-		                                       LiteNNBenchCompilerOptionsFromEnvironment());
+		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(g), compilerOptions);
 		auto ce = Clock::now();
 		const double compileMs = clk::duration<double, std::milli>(ce - cs).count();
+		cpuAOTSelection.objectUsesSidecar =
+		    ObjectBytesContain(compiled.Instructions(), "litenn_cpu_matmul_bias_relu_parallel_f32");
+		cpuAOTSelections.push_back(std::move(cpuAOTSelection));
 
 		// Write the *raw* compiled object (the JIT-loaded code) for disassembly.
 		// Note: WriteObjectFile() emits a "carrier" wrapper, not the executable code.
@@ -1382,6 +1581,25 @@ int main(int argc, char** argv)
 		    s.scatter, s.vectorLoad, s.scalarMove, s.broadcast, s.stackVectorOp);
 	}
 	std::cout << "\nAssembly files are written beside the object files when objdump succeeds.\n";
+
+	std::cout << "\nCPU AOT parallel selection\n";
+	std::cout << std::format("{:<14} {:>8} {:>7} {:>7} {:>9} {:>10} {:>9} {:>8} {}\n", "Case", "Batch", "Threads",
+	                         "Layers", "Parallel", "TotalFLOPs", "Predicted", "Object", "Gate");
+	std::cout << std::string(112, '-') << "\n";
+	for (const auto& row : cpuAOTSelections)
+	{
+		std::cout << std::format("{:<14} {:>8} {:>7} {:>7} {:>9} {:>10} {:>9} {:>8} {}\n", row.name, row.batch,
+		                         row.configuredThreads, row.fusedLayerCount, row.parallelLayerCount, row.totalFlops,
+		                         row.predictedSidecar ? "sidecar" : "mlir", row.objectUsesSidecar ? "sidecar" : "mlir",
+		                         row.gate);
+		for (std::size_t i = 0; i < row.layers.size(); ++i)
+		{
+			const auto& layer = row.layers[i];
+			std::cout << std::format("  layer {:<2} shape=({}x{}x{}) flops={} threads={} {}\n", i, layer.m, layer.k,
+			                         layer.n, layer.flops, layer.selectedThreads, layer.reason);
+		}
+	}
+	std::cout << "Predicted mirrors the public shape/thread gate; Object is detected from the emitted object symbol.\n";
 
 	std::cout << "\nCUDA launch breakdowns\n";
 #ifdef LITENN_ENABLE_CUDA

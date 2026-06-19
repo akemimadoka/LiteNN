@@ -134,9 +134,12 @@ beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP s
   - Evaluation: local Windows `MLP(784->512->256->10)/batch:128` sidecar-helper runs with
     `LITENN_CPU_AOT_THREADS=16` and `LITENN_CPU_AOT_PARALLEL_MIN_FLOPS=1` did not improve with compact affinity; the
     measured real time regressed versus no affinity. Keep affinity opt-in until topology-aware policies are available.
-- [ ] Add profile counters for helper layer shapes and selected grain/thread counts.
-  - Requirement: profile output should explain whether a benchmark used MLIR fallback or the parallel sidecar helper,
-    and why.
+- [x] Add profile counters for helper layer shapes and selected grain/thread counts.
+  - Implementation: `litenn_profile` now prints a CPU AOT parallel-selection table with fused layer count, selected
+    parallel layer count, total FLOPs, per-layer `m/k/n`, selected helper threads, gate reason, and an emitted-object
+    symbol check showing whether `litenn_cpu_matmul_bias_relu_parallel_f32` was actually used.
+  - Boundary: this closes observability for the current sidecar helper; moving the work into optimized MLIR/LLVM
+    lowering or a production GEMM backend remains open below.
 - [ ] Move the parallel work into the optimized MLIR/LLVM lowering path or a production GEMM backend.
   - Requirement: the sidecar helper is acceptable as a first intra-op landing, but it does not preserve the MLIR
     packed/zmm microkernel and should not become the long-term CPU kernel architecture.
