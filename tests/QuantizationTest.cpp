@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
+#include <LiteNN/ComputePrimitives.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/ModelIO.h>
@@ -15,6 +16,17 @@ namespace
 	float ReadFloat(const Tensor<CPU>& tensor, std::size_t index)
 	{
 		return static_cast<const float*>(tensor.UnsafeRawData())[index];
+	}
+
+	void ExpectTensorNear(const Tensor<CPU>& actual, const Tensor<CPU>& expected, float tolerance = 1.0e-5F)
+	{
+		ASSERT_EQ(actual.Shape(), expected.Shape());
+		ASSERT_EQ(actual.DType(), DataType::Float32);
+		ASSERT_EQ(expected.DType(), DataType::Float32);
+		for (std::size_t i = 0; i < actual.NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(actual, i), ReadFloat(expected, i), tolerance) << "index=" << i;
+		}
 	}
 } // namespace
 
@@ -194,6 +206,69 @@ TEST(Quantization, PackedFP4E3M0UsesPowerOfTwoGridAndScale)
 	EXPECT_FLOAT_EQ(ReadFloat(dequantized, 3), 4.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(dequantized, 4), 16.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(dequantized, 5), -4.0F);
+}
+
+TEST(Quantization, NativeAffineQuantizedMatMulMatchesDequantizedReference)
+{
+	const Tensor<CPU> lhs({ 1.0, 2.0, -1.0, 0.5 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> rhs({ 0.5, -1.0, 2.0, 1.5, -0.5, 0.25 }, { 2, 3 }, DataType::Float32);
+	const auto params = PerAxisAffineQuantization(DataType::Int8, 1, { 0.5F, 0.25F, 0.25F }, { 0, 0, 0 });
+
+	const auto quantized = QuantizeAffine(rhs, params);
+	const auto actual = EvalQuantizedMatMul(lhs, quantized.Storage(), quantized.Params());
+	const auto expected = Detail::EvalBatchMatMul(lhs, DequantizeAffine(quantized));
+
+	ExpectTensorNear(actual, expected);
+}
+
+TEST(Quantization, NativePackedInt4QuantizedMatMulMatchesDequantizedReference)
+{
+	const Tensor<CPU> lhs({ 1.0, -2.0, 0.5, 3.0 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> rhsNibbles({ 1.0, -2.0, 3.0, 0.0, -1.0, 2.0 }, { 2, 3 }, DataType::Int8);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 2, 3 }, 0.5F);
+
+	const auto packed = PackInteger4(rhsNibbles, params);
+	const auto actual = EvalQuantizedMatMul(lhs, packed, params);
+	const auto expected = Detail::EvalBatchMatMul(lhs, DequantizePackedNibble(packed, params));
+
+	ExpectTensorNear(actual, expected);
+}
+
+TEST(Quantization, NativePackedFP4QuantizedLinearAddsBias)
+{
+	const Tensor<CPU> input({ 1.0, 0.5, -2.0, 3.0 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> rhs({ 0.5, 1.5, -6.0, 3.0 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> bias({ 0.25, -0.5 }, { 2 }, DataType::Float32);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::FP4E2M1, { 2, 2 });
+
+	const auto packed = PackFloat4(rhs, params);
+	auto expected = Detail::EvalBatchMatMul(input, DequantizePackedNibble(packed, params));
+	auto* expectedData = static_cast<float*>(expected.UnsafeRawData());
+	for (std::size_t row = 0; row < expected.Shape()[0]; ++row)
+	{
+		for (std::size_t col = 0; col < expected.Shape()[1]; ++col)
+		{
+			expectedData[row * expected.Shape()[1] + col] += ReadFloat(bias, col);
+		}
+	}
+
+	const auto actual = EvalQuantizedLinear(input, packed, params, &bias);
+
+	ExpectTensorNear(actual, expected);
+}
+
+TEST(Quantization, NativeQuantizedMatMulRejectsInvalidShapes)
+{
+	const Tensor<CPU> lhs({ 1.0, 2.0 }, { 2 }, DataType::Float32);
+	const Tensor<CPU> rhs({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32);
+	const auto quantized = QuantizeAffine(rhs, PerTensorAffineQuantization(DataType::Int8, 0.5F));
+
+	EXPECT_THROW((void) EvalQuantizedMatMul(lhs, quantized.Storage(), quantized.Params()), std::runtime_error);
+
+	const Tensor<CPU> validLhs({ 1.0, 2.0 }, { 1, 2 }, DataType::Float32);
+	auto badParams = quantized.Params();
+	badParams.expressedShape = { 3, 2 };
+	EXPECT_THROW((void) EvalQuantizedMatMul(validLhs, quantized.Storage(), badParams), std::runtime_error);
 }
 
 TEST(Quantization, RejectsInvalidScaleCount)

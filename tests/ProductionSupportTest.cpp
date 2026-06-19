@@ -243,13 +243,17 @@ TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
 
 	const auto native =
 	    QueryProductionQuantizationCapability(ProductionQuantizationCapability::NativeQuantizedLinearMatMul);
-	EXPECT_EQ(native.level, ProductionSupportLevel::Deferred);
-	EXPECT_FALSE(native.availableInBuild);
+	EXPECT_EQ(native.level, ProductionSupportLevel::Experimental);
+	EXPECT_TRUE(native.availableInBuild);
 	EXPECT_FALSE(native.semanticFoundation);
 	EXPECT_TRUE(native.nativeKernel);
 	EXPECT_TRUE(native.requiresExternalMetadata);
-	EXPECT_TRUE(Contains(native.productionGate, "parity"));
-	EXPECT_TRUE(Contains(native.productionGate, "benchmark"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "CPU direct"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "affine"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "packed-nibble"));
+	EXPECT_TRUE(Contains(native.productionGate, "CUDA"));
+	EXPECT_TRUE(Contains(native.productionGate, "Vulkan"));
+	EXPECT_TRUE(Contains(native.productionGate, "benchmarks"));
 	EXPECT_TRUE(HasQuantizationCapabilityDiagnostic("NativeQuantizedLinearMatMul"));
 	EXPECT_FALSE(HasQuantizationCapabilityDiagnostic("PackedFourBitStorage"));
 }

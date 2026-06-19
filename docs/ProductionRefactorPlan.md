@@ -181,9 +181,11 @@ Exit criteria:
       quantization metadata and preserved by vNext package metadata.
 - [x] Implement CPU reference pack/unpack/dequantize before native kernels.
       CPU reference helpers and graph/const-fold dequantization tests cover integer and float packed-nibble storage.
-- [ ] Add native quantized Linear/MatMul only after storage, package, and parity contracts are stable.
-      `QueryProductionQuantizationCapabilities()` now reports `NativeQuantizedLinearMatMul` as a deferred native-kernel
-      capability that requires parity and benchmark evidence.
+- [x] Add native quantized Linear/MatMul only after storage, package, and parity contracts are stable.
+      `EvalQuantizedMatMul` and `EvalQuantizedLinear` now provide a CPU direct native path for affine and packed-nibble
+      quantized weights, with parity tests against dequantize-plus-float execution. `QueryProductionQuantizationCapabilities()`
+      reports `NativeQuantizedLinearMatMul` as experimental because CUDA/Vulkan/AOT lowering, broader block formats, and
+      packed-weight benchmark evidence remain future throughput work.
 
 Exit criteria:
 

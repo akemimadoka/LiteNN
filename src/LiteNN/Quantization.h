@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -372,6 +373,43 @@ namespace LiteNN
 			const auto sign = (bits & 0x08U) != 0 ? -1.0F : 1.0F;
 			const auto values = FP4PositiveValues(format);
 			return sign * values[bits & 0x07U];
+		}
+
+		inline float DecodePackedNibble(std::uint8_t nibble, const QuantizationParams& params)
+		{
+			const auto scale = params.scales.empty() ? 1.0F : params.scales[0];
+			const auto zeroPoint = params.zeroPoints.empty() ? 0 : params.zeroPoints[0];
+			if (IsIntegerPackedNibbleFormat(params.packedFormat))
+			{
+				std::int32_t value = nibble;
+				if (params.packedFormat == PackedNibbleFormat::Int4 && (nibble & 0x08U) != 0)
+				{
+					value -= 16;
+				}
+				return (static_cast<float>(value) - static_cast<float>(zeroPoint)) * scale;
+			}
+			if (IsFloatPackedNibbleFormat(params.packedFormat))
+			{
+				return FP4BitsToFloat32(nibble, params.packedFormat) * scale;
+			}
+			throw std::runtime_error("Unsupported packed nibble format");
+		}
+
+		inline float DecodePackedNibbleElement(const Tensor<CPU>& storage, const QuantizationParams& params,
+		                                       std::size_t elementIndex)
+		{
+			const auto byteIndex = elementIndex / 2;
+			if (byteIndex >= storage.NumElements())
+			{
+				throw std::runtime_error("Packed nibble element index is out of storage range");
+			}
+			const auto byte = static_cast<const std::uint8_t*>(storage.UnsafeRawData())[byteIndex];
+			const auto low = static_cast<std::uint8_t>(byte & 0x0f);
+			const auto high = static_cast<std::uint8_t>((byte >> 4) & 0x0f);
+			const auto even = (elementIndex % 2) == 0;
+			const auto nibble =
+			    params.packedOrder == PackedNibbleOrder::LowThenHigh ? (even ? low : high) : (even ? high : low);
+			return DecodePackedNibble(nibble, params);
 		}
 	} // namespace QuantizationDetail
 
@@ -839,49 +877,166 @@ namespace LiteNN
 		}
 		const std::vector<std::size_t> outputShape{ params.expressedShape };
 		Tensor<CPU> output(Uninitialized, outputShape, targetType);
-		const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
-		const auto scale = params.scales.empty() ? 1.0F : params.scales[0];
-		const auto zeroPoint = params.zeroPoints.empty() ? 0 : params.zeroPoints[0];
 
 		EnumDispatch(targetType, [&]<DataType TargetTypeValue> {
 			if constexpr (IsFloatingDataType(TargetTypeValue))
 			{
 				using TargetT = typename DeviceTraits<CPU>::template DataTypeMapping<TargetTypeValue>;
 				auto* dst = static_cast<TargetT*>(output.UnsafeRawData());
-				const auto decode = [&](std::uint8_t nibble) {
-					if (IsIntegerPackedNibbleFormat(params.packedFormat))
-					{
-						std::int32_t value = nibble;
-						if (params.packedFormat == PackedNibbleFormat::Int4 && (nibble & 0x08U) != 0)
-						{
-							value -= 16;
-						}
-						return (static_cast<float>(value) - static_cast<float>(zeroPoint)) * scale;
-					}
-					if (IsFloatPackedNibbleFormat(params.packedFormat))
-					{
-						return QuantizationDetail::FP4BitsToFloat32(nibble, params.packedFormat) * scale;
-					}
-					throw std::runtime_error("Unsupported packed nibble format");
-				};
-				for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
+				for (std::size_t i = 0; i < output.NumElements(); ++i)
 				{
-					const auto low = static_cast<std::uint8_t>(src[byte] & 0x0f);
-					const auto high = static_cast<std::uint8_t>((src[byte] >> 4) & 0x0f);
-					const auto first = params.packedOrder == PackedNibbleOrder::LowThenHigh ? low : high;
-					const auto second = params.packedOrder == PackedNibbleOrder::LowThenHigh ? high : low;
-					const auto write = [&](std::size_t index, std::uint8_t nibble) {
-						if (index < output.NumElements())
-						{
-							dst[index] = static_cast<TargetT>(decode(nibble));
-						}
-					};
-					write(byte * 2, first);
-					write(byte * 2 + 1, second);
+					dst[i] = static_cast<TargetT>(QuantizationDetail::DecodePackedNibbleElement(storage, params, i));
 				}
 			}
 		});
 		return output;
+	}
+
+	inline std::vector<std::size_t> QuantizedMatMulOutputShape(ShapeView lhsShape, const QuantizationParams& rhsParams,
+	                                                           ShapeView rhsStorageShape)
+	{
+		if (lhsShape.NumDim() != 2)
+		{
+			throw std::runtime_error("Quantized MatMul currently requires rank-2 lhs");
+		}
+		const auto rhsShape = rhsParams.expressedShape.empty()
+		                          ? rhsStorageShape.Dims
+		                          : std::span<const std::size_t>{ rhsParams.expressedShape };
+		if (rhsShape.size() != 2)
+		{
+			throw std::runtime_error("Quantized MatMul currently requires rank-2 quantized rhs expressed shape");
+		}
+		if (lhsShape[1] != rhsShape[0])
+		{
+			throw std::runtime_error("Quantized MatMul inner dimensions do not match");
+		}
+		return { lhsShape[0], rhsShape[1] };
+	}
+
+	inline float ReadAffineQuantizedElementAsFloat(const Tensor<CPU>& storage, const QuantizationParams& params,
+	                                               std::size_t elementIndex)
+	{
+		if (elementIndex >= storage.NumElements())
+		{
+			throw std::runtime_error("Affine quantized element index is out of range");
+		}
+		const auto scaleIndex = QuantizationDetail::ScaleIndexForElement(params, storage.Shape(), elementIndex);
+		const auto zeroPoint = QuantizationDetail::ZeroPointAt(params, scaleIndex);
+		if (storage.DType() == DataType::Int8)
+		{
+			const auto value = static_cast<const std::int8_t*>(storage.UnsafeRawData())[elementIndex];
+			return (static_cast<float>(value) - static_cast<float>(zeroPoint)) * params.scales[scaleIndex];
+		}
+		if (storage.DType() == DataType::UInt8)
+		{
+			const auto value = static_cast<const std::uint8_t*>(storage.UnsafeRawData())[elementIndex];
+			return (static_cast<float>(value) - static_cast<float>(zeroPoint)) * params.scales[scaleIndex];
+		}
+		throw std::runtime_error("Affine quantized MatMul currently supports Int8 and UInt8 storage");
+	}
+
+	inline float ReadQuantizedElementAsFloat(const Tensor<CPU>& storage, const QuantizationParams& params,
+	                                         std::size_t elementIndex)
+	{
+		if (params.scheme == QuantizationScheme::Affine)
+		{
+			return ReadAffineQuantizedElementAsFloat(storage, params, elementIndex);
+		}
+		if (params.scheme == QuantizationScheme::Block && IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+		{
+			const auto expressedElements = ShapeView{ params.expressedShape }.NumElements();
+			if (elementIndex >= expressedElements)
+			{
+				throw std::runtime_error("Packed quantized element index is out of range");
+			}
+			return QuantizationDetail::DecodePackedNibbleElement(storage, params, elementIndex);
+		}
+		throw std::runtime_error("Native quantized MatMul currently supports affine and packed-nibble weights only");
+	}
+
+	inline Tensor<CPU> EvalQuantizedMatMul(const Tensor<CPU>& lhs, const Tensor<CPU>& rhsStorage,
+	                                       const QuantizationParams& rhsParams, DataType outputType = DataType::Float32)
+	{
+		if (!IsFloatingDataType(lhs.DType()))
+		{
+			throw std::runtime_error("Quantized MatMul lhs must be floating-point");
+		}
+		if (!IsFloatingDataType(outputType))
+		{
+			throw std::runtime_error("Quantized MatMul output type must be floating-point");
+		}
+		ValidateQuantizationParams(rhsParams, rhsStorage.Shape(), rhsStorage.DType());
+
+		const auto outputShape = QuantizedMatMulOutputShape(lhs.Shape(), rhsParams, rhsStorage.Shape());
+		Tensor<CPU> result(Uninitialized, outputShape, outputType);
+		const auto lhsF32 = QuantizationDetail::CopyToFloat32(lhs);
+		const auto* lhsPtr = static_cast<const float*>(lhsF32.UnsafeRawData());
+		const auto m = outputShape[0];
+		const auto k = lhs.Shape()[1];
+		const auto n = outputShape[1];
+
+		EnumDispatch(outputType, [&]<DataType OutputTypeValue> {
+			if constexpr (IsFloatingDataType(OutputTypeValue))
+			{
+				using OutputT = typename DeviceTraits<CPU>::template DataTypeMapping<OutputTypeValue>;
+				auto* dst = static_cast<OutputT*>(result.UnsafeRawData());
+				for (std::size_t row = 0; row < m; ++row)
+				{
+					for (std::size_t col = 0; col < n; ++col)
+					{
+						double acc = 0.0;
+						for (std::size_t kk = 0; kk < k; ++kk)
+						{
+							acc +=
+							    static_cast<double>(lhsPtr[row * k + kk]) *
+							    static_cast<double>(ReadQuantizedElementAsFloat(rhsStorage, rhsParams, kk * n + col));
+						}
+						dst[row * n + col] = static_cast<OutputT>(acc);
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalQuantizedLinear(const Tensor<CPU>& input, const Tensor<CPU>& weightStorage,
+	                                       const QuantizationParams& weightParams, const Tensor<CPU>* bias = nullptr,
+	                                       DataType outputType = DataType::Float32)
+	{
+		auto result = EvalQuantizedMatMul(input, weightStorage, weightParams, outputType);
+		if (bias == nullptr)
+		{
+			return result;
+		}
+		if (bias->DType() != outputType)
+		{
+			throw std::runtime_error("Quantized Linear bias dtype must match output dtype");
+		}
+		const auto n = result.Shape()[1];
+		const auto biasShape = bias->Shape();
+		const auto biasIsVector = biasShape.NumDim() == 1 && biasShape[0] == n;
+		const auto biasIsRow = biasShape.NumDim() == 2 && biasShape[0] == 1 && biasShape[1] == n;
+		if (!biasIsVector && !biasIsRow)
+		{
+			throw std::runtime_error("Quantized Linear bias shape must be {N} or {1, N}");
+		}
+
+		EnumDispatch(outputType, [&]<DataType OutputTypeValue> {
+			if constexpr (IsFloatingDataType(OutputTypeValue))
+			{
+				using OutputT = typename DeviceTraits<CPU>::template DataTypeMapping<OutputTypeValue>;
+				auto* dst = static_cast<OutputT*>(result.UnsafeRawData());
+				const auto* biasPtr = static_cast<const OutputT*>(bias->UnsafeRawData());
+				for (std::size_t row = 0; row < result.Shape()[0]; ++row)
+				{
+					for (std::size_t col = 0; col < n; ++col)
+					{
+						dst[row * n + col] = static_cast<OutputT>(dst[row * n + col] + biasPtr[col]);
+					}
+				}
+			}
+		});
+		return result;
 	}
 } // namespace LiteNN
 

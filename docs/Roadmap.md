@@ -118,8 +118,11 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
 - [x] Add graph/runtime conversion nodes or typed lowering rules that can materialize int4/fp4/block-quantized weights
       into supported compute dtypes when a backend has no native 4-bit kernel. The existing `DequantizeNode` now
       materializes packed-nibble block quantization in the interpreter and ConstFold path.
-- [ ] Add native quantized MatMul/Linear paths in priority order: CPU reference, CUDA/cuBLASLt or custom kernels,
-      Vulkan shader path, then CPU AOT lowering.
+- [x] Add the first native quantized MatMul/Linear path for CPU direct execution over affine and packed-nibble weights.
+      `EvalQuantizedMatMul` and `EvalQuantizedLinear` compute directly from quantized storage and are covered by parity
+      tests against dequantize-plus-float execution.
+- [ ] Add accelerated native quantized MatMul/Linear paths in priority order: CUDA/cuBLASLt or custom kernels, Vulkan
+      shader path, then CPU AOT lowering.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [ ] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.

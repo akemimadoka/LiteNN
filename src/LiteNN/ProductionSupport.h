@@ -917,16 +917,17 @@ namespace LiteNN
 		case ProductionQuantizationCapability::NativeQuantizedLinearMatMul:
 			return { capability,
 				     ProductionQuantizationCapabilityName(capability),
-				     ProductionSupportLevel::Deferred,
-				     false,
+				     ProductionSupportLevel::Experimental,
+				     true,
 				     false,
 				     true,
 				     true,
-				     "Native quantized Linear/MatMul kernels are not part of the production profile yet.",
-				     "Requires stable storage/package contracts, golden parity, and benchmark evidence for target "
-				     "workloads.",
-				     "Until then, quantized models use reference dequantize plus existing float execution or fail "
-				     "explicitly when no path is available." };
+				     "CPU direct quantized MatMul/Linear covers affine and packed-nibble weight storage with parity "
+				     "tests against dequantize-plus-float execution.",
+				     "CUDA/Vulkan/AOT lowering, broader GGML block formats, packed-weight benchmarks, and "
+				     "workload-specific tolerances are still required before production throughput claims.",
+				     "Unsupported quantized formats still fail explicitly or use reference dequantize plus existing "
+				     "float execution when the caller chooses that path." };
 		}
 		return { capability,
 			     ProductionQuantizationCapabilityName(capability),
