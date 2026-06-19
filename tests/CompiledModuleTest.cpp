@@ -5,6 +5,7 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Layer/LoRA.h>
+#include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/ModelIO.h>
@@ -264,6 +265,25 @@ namespace
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
 		graph.SetOutputNames({ "packed_uint4_weight" });
+		return graph;
+	}
+
+	Graph BuildPackedQuantizedConstantDequantizeGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params =
+		    PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8, PackedNibbleOrder::HighThenLow);
+		Tensor<CPU> storage({ 0xf1, 0x02 }, { 2 }, DataType::UInt8);
+		const auto quantized =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 2 } } });
+		const auto dequantized = sg.AddNode(DequantizeNode{ { quantized, 0 }, params, DataType::Float32 },
+		                                    { OutputInfo{ DataType::Float32, { 3 } } });
+		sg.SetResults({ { dequantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetOutputNames({ "dequantized_weight" });
 		return graph;
 	}
 
@@ -1403,6 +1423,22 @@ TEST(CompiledModuleTest, PreservesPackedNibbleQuantizationMetadataInCompiledSign
 	EXPECT_NE(dump.find("format=PackedNibble"), std::string::npos);
 	EXPECT_NE(dump.find("packed=UInt4"), std::string::npos);
 	EXPECT_NE(dump.find("order=HighThenLow"), std::string::npos);
+}
+
+TEST(CompiledModuleTest, CompilesConstFoldedPackedNibbleDequantize)
+{
+	auto sourceGraph = BuildPackedQuantizedConstantDequantizeGraph();
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(sourceGraph), {});
+
+	auto compiledGraph = sourceGraph;
+	ConstFoldPass{}.Run(compiledGraph);
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(compiledGraph));
+	const auto actual = compiled.RunTensors({});
+
+	ASSERT_EQ(actual.size(), 1u);
+	ASSERT_EQ(expected.size(), 1u);
+	ExpectTensorNear(actual[0], expected[0]);
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)
