@@ -405,6 +405,35 @@ namespace litenn
 				return shape;
 			}
 
+			Value emitQuantizationParameterConstant(const QuantizationParams& params, DataType dtype,
+			                                        std::span<const std::size_t> outputShape,
+			                                        std::span<const double> values)
+			{
+				if (params.granularity == QuantizationGranularity::PerAxis)
+				{
+					const auto broadcastShape = quantizationAxisBroadcastShape(params, outputShape);
+					if (values.size() != ShapeView{ broadcastShape }.NumElements())
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR DequantizeNode per-axis parameter count does not match output axis shape");
+					}
+					return emitDenseConstant(dtype, broadcastShape, values);
+				}
+
+				const auto shape = ShapeView{ outputShape };
+				if (values.size() != QuantizationDetail::ExpectedScaleCount(params, shape))
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR DequantizeNode grouped parameter count does not match output shape");
+				}
+				std::vector<double> expanded(shape.NumElements());
+				for (std::size_t i = 0; i < expanded.size(); ++i)
+				{
+					expanded[i] = values[QuantizationDetail::ScaleIndexForElement(params, shape, i)];
+				}
+				return emitDenseConstant(dtype, outputShape, expanded);
+			}
+
 			Value emitUnaryValue(LiteNN::UnaryOp opKind, Value input, DataType dtype,
 			                     std::span<const std::size_t> shape)
 			{
@@ -864,13 +893,14 @@ namespace litenn
 			{
 				if (node.params.scheme != QuantizationScheme::Affine ||
 				    (node.params.granularity != QuantizationGranularity::PerTensor &&
-				     node.params.granularity != QuantizationGranularity::PerAxis) ||
+				     node.params.granularity != QuantizationGranularity::PerAxis &&
+				     node.params.granularity != QuantizationGranularity::Grouped) ||
 				    (node.params.granularity == QuantizationGranularity::PerTensor && node.params.scales.size() != 1) ||
 				    (!node.params.zeroPoints.empty() && node.params.zeroPoints.size() != node.params.scales.size()))
 				{
 					throw std::runtime_error(
-					    "GraphToMLIR dynamic DequantizeNode currently supports affine per-tensor/per-axis quantization "
-					    "only; run ConstFoldPass before CPU AOT when dequantizing compile-time constants");
+					    "GraphToMLIR dynamic DequantizeNode currently supports affine per-tensor/per-axis/grouped "
+					    "quantization only; run ConstFoldPass before CPU AOT when dequantizing compile-time constants");
 				}
 				if (!IsFloatingDataType(node.targetType))
 				{
@@ -896,12 +926,6 @@ namespace litenn
 					return;
 				}
 
-				const auto broadcastShape = quantizationAxisBroadcastShape(node.params, output.shape);
-				if (node.params.scales.size() != ShapeView{ broadcastShape }.NumElements())
-				{
-					throw std::runtime_error(
-					    "GraphToMLIR DequantizeNode per-axis scale count does not match output axis shape");
-				}
 				if (!node.params.zeroPoints.empty())
 				{
 					std::vector<double> zeroPoints;
@@ -910,7 +934,8 @@ namespace litenn
 					{
 						zeroPoints.push_back(static_cast<double>(zeroPoint));
 					}
-					auto zeroPointValue = emitDenseConstant(node.targetType, broadcastShape, zeroPoints);
+					auto zeroPointValue =
+					    emitQuantizationParameterConstant(node.params, node.targetType, output.shape, zeroPoints);
 					casted = emitBinaryValue(LiteNN::BinaryOp::Subtract, casted, zeroPointValue, node.targetType,
 					                         output.shape);
 				}
@@ -920,7 +945,7 @@ namespace litenn
 				{
 					scales.push_back(static_cast<double>(scale));
 				}
-				auto scale = emitDenseConstant(node.targetType, broadcastShape, scales);
+				auto scale = emitQuantizationParameterConstant(node.params, node.targetType, output.shape, scales);
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
 					                                 output.shape) };
 			}

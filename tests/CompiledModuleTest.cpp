@@ -319,6 +319,23 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGroupedAffineDequantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = GroupedAffineQuantization(DataType::Int8, 1, 2, { 0.5F, 0.25F, 2.0F, 1.0F, 0.125F, 4.0F },
+		                                        { -1, 0, 2, 3, -4, 1 });
+		const auto input = sg.AddParam(DataType::Int8, { 2, 5 });
+		const auto dequantized = sg.AddNode(DequantizeNode{ { input, 0 }, params, DataType::Float32 },
+		                                    { OutputInfo{ DataType::Float32, { 2, 5 } } });
+		sg.SetResults({ { dequantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "quantized" });
+		graph.SetOutputNames({ "dequantized" });
+		return graph;
+	}
+
 	Graph BuildAffineQuantizeInputGraph()
 	{
 		Graph graph;
@@ -1503,6 +1520,15 @@ TEST(CompiledModuleTest, CPUDynamicPerAxisAffineDequantizeArtifactMatchesInterpr
 	auto graph = BuildPerAxisAffineDequantizeInputGraph();
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ -1.0, 0.0, 2.0, 3.0, -4.0, 7.0 }, { 2, 3 }, DataType::Int8));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUDynamicGroupedAffineDequantizeArtifactMatchesInterpreter)
+{
+	auto graph = BuildGroupedAffineDequantizeInputGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ -1.0, 0.0, 2.0, 3.0, 5.0, 3.0, -4.0, 1.0, 7.0, -2.0 }, { 2, 5 }, DataType::Int8));
 
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
