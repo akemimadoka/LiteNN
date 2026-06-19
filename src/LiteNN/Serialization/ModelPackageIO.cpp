@@ -738,8 +738,25 @@ namespace LiteNN::Serialization
 					}
 					out << "{\"name\":";
 					JsonString(out, entry.name);
-					out << ",\"kind\":" << EnumValue(entry.kind) << ",\"function\":" << entry.function
-					    << ",\"requiredStateBindings\":";
+					out << ",\"kind\":" << EnumValue(entry.kind) << ",\"function\":";
+					if (entry.function)
+					{
+						out << *entry.function;
+					}
+					else
+					{
+						out << "null";
+					}
+					out << ",\"sourceSubgraph\":";
+					if (entry.sourceSubgraph)
+					{
+						out << *entry.sourceSubgraph;
+					}
+					else
+					{
+						out << "null";
+					}
+					out << ",\"requiredStateBindings\":";
 					StringListJson(out, entry.requiredStateBindings);
 					out << ",\"requiredBufferBindings\":";
 					StringListJson(out, entry.requiredBufferBindings);
@@ -1414,19 +1431,28 @@ namespace LiteNN::Serialization
 				for (const auto entryItem : AsArray(Member(a, "entries", "artifact.entries"), "artifact.entries"))
 				{
 					const auto entryObject = AsObject(entryItem, "artifact.entries");
-					artifact.entries.push_back({
-					    .name = AsString(Member(entryObject, "name", "artifact.entry.name"), "artifact.entry.name"),
-					    .kind = static_cast<VNextArtifactEntryKind>(
-					        AsUInt(Member(entryObject, "kind", "artifact.entry.kind"), "artifact.entry.kind")),
-					    .function = static_cast<FunctionId>(AsUInt(
-					        Member(entryObject, "function", "artifact.entry.function"), "artifact.entry.function")),
-					    .requiredStateBindings = StringList(
-					        Member(entryObject, "requiredStateBindings", "artifact.entry.requiredStateBindings"),
-					        "artifact.entry.requiredStateBindings"),
-					    .requiredBufferBindings = StringList(
-					        Member(entryObject, "requiredBufferBindings", "artifact.entry.requiredBufferBindings"),
-					        "artifact.entry.requiredBufferBindings"),
-					});
+					VNextArtifactEntryRef entry;
+					entry.name = AsString(Member(entryObject, "name", "artifact.entry.name"), "artifact.entry.name");
+					entry.kind = static_cast<VNextArtifactEntryKind>(
+					    AsUInt(Member(entryObject, "kind", "artifact.entry.kind"), "artifact.entry.kind"));
+					const auto function = Member(entryObject, "function", "artifact.entry.function");
+					if (!function.is_null())
+					{
+						entry.function = static_cast<FunctionId>(AsUInt(function, "artifact.entry.function"));
+					}
+					if (const auto sourceSubgraph = FindMember(entryObject, "sourceSubgraph");
+					    sourceSubgraph && !sourceSubgraph->is_null())
+					{
+						entry.sourceSubgraph =
+						    static_cast<SubgraphId>(AsUInt(*sourceSubgraph, "artifact.entry.sourceSubgraph"));
+					}
+					entry.requiredStateBindings =
+					    StringList(Member(entryObject, "requiredStateBindings", "artifact.entry.requiredStateBindings"),
+					               "artifact.entry.requiredStateBindings");
+					entry.requiredBufferBindings = StringList(
+					    Member(entryObject, "requiredBufferBindings", "artifact.entry.requiredBufferBindings"),
+					    "artifact.entry.requiredBufferBindings");
+					artifact.entries.push_back(std::move(entry));
 				}
 				for (const auto regionItem : AsArray(Member(a, "regions", "artifact.regions"), "artifact.regions"))
 				{

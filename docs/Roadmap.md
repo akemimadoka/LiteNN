@@ -1399,8 +1399,11 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 
 #### G13.2 Compiler and Runtime Support
 
-- [ ] Extend compiled module metadata so artifacts can expose multiple named entry points such as `forward`, `loss`,
+- [x] Extend compiled module metadata so artifacts can expose multiple named entry points such as `forward`, `loss`,
   `backward`, and `optimizer_step`.
+  `VNextArtifactEntryRef` now supports optional function and source-subgraph execution references, and
+  `BuildTrainStepVNextArtifactRef` maps `TrainStepPlan` forward/loss/backward/optimizer entries into package metadata.
+  The current loss entry is still source-level metadata, not an independently compiled loss kernel.
 - [ ] Teach the CPU AOT path to compile backward/loss subgraphs with stable tensor specs instead of wrapping only
   `graph.Forward()`.
 - [ ] Add a CUDA AOT training path after CPU semantics are stable, including stream/workspace ownership and explicit

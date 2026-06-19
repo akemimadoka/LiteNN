@@ -165,6 +165,53 @@ TEST(G14Remaining, TrainStepPlanExposesNamedArtifactEntries)
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(train));
 }
 
+TEST(G14Remaining, TrainStepPlanBuildsVNextArtifactEntries)
+{
+	const auto graph = BuildTrainableGraph();
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph),
+	                                                Training::TrainExecutionPolicy::AOT, true);
+
+	const auto artifact = Training::BuildTrainStepVNextArtifactRef(train, "cpu_train_step", std::string(BackendCPUAOT));
+	ASSERT_EQ(artifact.entries.size(), train.artifactEntries.size());
+	const auto findEntry = [&](std::string_view name) -> const VNextArtifactEntryRef* {
+		for (const auto& entry : artifact.entries)
+		{
+			if (entry.name == name)
+			{
+				return &entry;
+			}
+		}
+		return nullptr;
+	};
+
+	const auto* forward = findEntry("forward");
+	ASSERT_NE(forward, nullptr);
+	EXPECT_EQ(forward->kind, VNextArtifactEntryKind::Forward);
+	ASSERT_TRUE(forward->function.has_value());
+	EXPECT_TRUE(forward->sourceSubgraph.has_value());
+
+	const auto* loss = findEntry("loss");
+	ASSERT_NE(loss, nullptr);
+	EXPECT_EQ(loss->kind, VNextArtifactEntryKind::Loss);
+	EXPECT_FALSE(loss->function.has_value());
+	EXPECT_EQ(loss->sourceSubgraph, train.module.functions[train.forwardFunction].body);
+
+	ASSERT_EQ(train.updates.size(), 1u);
+	const auto* update = findEntry(train.updates[0].name);
+	ASSERT_NE(update, nullptr);
+	EXPECT_EQ(update->kind, VNextArtifactEntryKind::OptimizerStep);
+	EXPECT_TRUE(update->function.has_value());
+	EXPECT_EQ(update->sourceSubgraph, train.updates[0].subgraph);
+
+	const auto manifest = BuildVNextPackageManifest(train.module, std::vector<VNextArtifactRef>{ artifact });
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(manifest));
+	const auto abi = DescribeVNextABIFamily(manifest);
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:forward")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:loss")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:backward")));
+	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:" + train.updates[0].name)));
+}
+
 TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 {
 	const auto graph = BuildTrainableGraph();

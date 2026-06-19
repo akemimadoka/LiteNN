@@ -4,6 +4,7 @@
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Misc.h>
 #include <LiteNN/Runtime/Scheduler.h>
+#include <LiteNN/VNextPackage.h>
 
 #include <cstddef>
 #include <format>
@@ -486,6 +487,73 @@ namespace LiteNN::Training
 		throw std::runtime_error(std::format(
 		    "TrainStepPlan is not AOT-ready: entry '{}' subgraph {} node {} {}: {}", first.entryName, first.subgraph,
 		    first.node, first.opKind.empty() ? std::string("<unknown>") : first.opKind, first.message));
+	}
+
+	inline VNextArtifactEntryKind ToVNextArtifactEntryKind(TrainStepArtifactEntryKind kind) noexcept
+	{
+		switch (kind)
+		{
+		case TrainStepArtifactEntryKind::Forward:
+			return VNextArtifactEntryKind::Forward;
+		case TrainStepArtifactEntryKind::Loss:
+			return VNextArtifactEntryKind::Loss;
+		case TrainStepArtifactEntryKind::Backward:
+			return VNextArtifactEntryKind::Backward;
+		case TrainStepArtifactEntryKind::OptimizerUpdate:
+			return VNextArtifactEntryKind::OptimizerStep;
+		}
+		return VNextArtifactEntryKind::BackendSpecific;
+	}
+
+	inline std::optional<FunctionId> FindTrainStepFunctionForSourceSubgraph(const TrainStepPlan& plan,
+	                                                                        SubgraphId sourceSubgraph)
+	{
+		const auto it = std::ranges::find_if(
+		    plan.module.functions, [&](const ExecutableFunction& function) { return function.body == sourceSubgraph; });
+		if (it == plan.module.functions.end())
+		{
+			return std::nullopt;
+		}
+		return it->id;
+	}
+
+	inline VNextArtifactRef BuildTrainStepVNextArtifactRef(const TrainStepPlan& plan, std::string artifactName,
+	                                                       std::string backend)
+	{
+		VNextArtifactRef artifact;
+		artifact.name = std::move(artifactName);
+		artifact.backend = std::move(backend);
+		artifact.entries.reserve(plan.artifactEntries.size());
+		for (const auto& entry : plan.artifactEntries)
+		{
+			VNextArtifactEntryRef ref;
+			ref.name = entry.name;
+			ref.kind = ToVNextArtifactEntryKind(entry.kind);
+			ref.function = entry.function;
+			if (ref.function)
+			{
+				ref.sourceSubgraph = plan.module.functions[*ref.function].body;
+			}
+			if (entry.update && *entry.update < plan.updates.size())
+			{
+				ref.sourceSubgraph = plan.updates[*entry.update].subgraph;
+				if (!ref.function)
+				{
+					ref.function = FindTrainStepFunctionForSourceSubgraph(plan, *ref.sourceSubgraph);
+				}
+			}
+			else if (entry.kind == TrainStepArtifactEntryKind::Loss &&
+			         plan.forwardFunction < plan.module.functions.size())
+			{
+				ref.sourceSubgraph = plan.module.functions[plan.forwardFunction].body;
+			}
+			if (!ref.sourceSubgraph && ref.function)
+			{
+				ref.sourceSubgraph = plan.module.functions[*ref.function].body;
+			}
+			artifact.entries.push_back(std::move(ref));
+		}
+		return artifact;
 	}
 
 	inline void ValidateTrainStepPlan(const TrainStepPlan& plan)

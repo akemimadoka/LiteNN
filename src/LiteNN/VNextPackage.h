@@ -184,7 +184,8 @@ namespace LiteNN
 	{
 		std::string name;
 		VNextArtifactEntryKind kind{ VNextArtifactEntryKind::BackendSpecific };
-		FunctionId function{};
+		std::optional<FunctionId> function;
+		std::optional<SubgraphId> sourceSubgraph;
 		std::vector<std::string> requiredStateBindings;
 		std::vector<std::string> requiredBufferBindings;
 	};
@@ -825,10 +826,25 @@ namespace LiteNN
 					throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
 					                         "' has an unknown entry kind");
 				}
-				if (entry.function >= manifest.functions.size())
+				if (!entry.function && !entry.sourceSubgraph)
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+					                         "' must reference a function or source subgraph");
+				}
+				if (entry.function && *entry.function >= manifest.functions.size())
 				{
 					throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
 					                         "' references an unknown function");
+				}
+				if (entry.sourceSubgraph)
+				{
+					const auto found = std::ranges::any_of(
+					    manifest.regions, [&](const auto& region) { return region.subgraph == *entry.sourceSubgraph; });
+					if (!found)
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
+						                         "' references an unknown source subgraph");
+					}
 				}
 				for (const auto& stateName : entry.requiredStateBindings)
 				{
@@ -850,10 +866,6 @@ namespace LiteNN
 						                         "' requires missing buffer binding: " + bufferName);
 					}
 				}
-			}
-			if (artifact.regions.empty())
-			{
-				throw std::runtime_error("vNext artifact '" + artifact.name + "' has no regions");
 			}
 			for (const auto& region : artifact.regions)
 			{
