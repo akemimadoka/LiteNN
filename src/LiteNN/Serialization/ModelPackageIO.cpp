@@ -343,6 +343,19 @@ namespace LiteNN::Serialization
 			out << '}';
 		}
 
+		void RuntimeExecutionSegmentJson(std::ostream& out, const Runtime::RuntimeExecutionSegment& segment)
+		{
+			out << "{\"id\":" << segment.id << ",\"subgraph\":" << segment.subgraph << ",\"backend\":";
+			JsonString(out, segment.backend);
+			out << ",\"nodes\":";
+			NumberList(out, segment.nodes);
+			out << ",\"inputBuffers\":";
+			NumberList(out, segment.inputBuffers);
+			out << ",\"outputBuffers\":";
+			NumberList(out, segment.outputBuffers);
+			out << '}';
+		}
+
 		void AdapterRefJson(std::ostream& out, const VNextAdapterRef& adapter)
 		{
 			out << "{\"targetName\":";
@@ -546,7 +559,16 @@ namespace LiteNN::Serialization
 			}
 			out << "],\"memory\":";
 			MemoryJson(out, manifest.memory);
-			out << ",\"runtimeSteps\":[";
+			out << ",\"runtimeSegments\":[";
+			for (std::size_t i = 0; i < manifest.runtimeSegments.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				RuntimeExecutionSegmentJson(out, manifest.runtimeSegments[i]);
+			}
+			out << "],\"runtimeSteps\":[";
 			for (std::size_t i = 0; i < manifest.runtimeSteps.size(); ++i)
 			{
 				const auto& step = manifest.runtimeSteps[i];
@@ -557,6 +579,15 @@ namespace LiteNN::Serialization
 				out << "{\"id\":" << step.id << ",\"kind\":" << EnumValue(step.kind)
 				    << ",\"function\":" << step.function << ",\"region\":" << step.region << ",\"backend\":";
 				JsonString(out, step.backend);
+				out << ",\"segment\":";
+				if (step.segment)
+				{
+					out << *step.segment;
+				}
+				else
+				{
+					out << "null";
+				}
 				out << ",\"fallbackBackend\":";
 				JsonString(out, step.fallbackBackend);
 				out << ",\"inputBuffers\":";
@@ -1029,6 +1060,20 @@ namespace LiteNN::Serialization
 			return binding;
 		}
 
+		Runtime::RuntimeExecutionSegment ParseRuntimeExecutionSegment(simdjson::dom::element value,
+		                                                              std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			return {
+				.id = static_cast<std::size_t>(AsUInt(Member(object, "id", label), label)),
+				.subgraph = static_cast<SubgraphId>(AsUInt(Member(object, "subgraph", label), label)),
+				.backend = AsString(Member(object, "backend", label), label),
+				.nodes = SizeList(Member(object, "nodes", label), label),
+				.inputBuffers = SizeList(Member(object, "inputBuffers", label), label),
+				.outputBuffers = SizeList(Member(object, "outputBuffers", label), label),
+			};
+		}
+
 		Runtime::RuntimeStateBinding ParseRuntimeStateBinding(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -1207,25 +1252,36 @@ namespace LiteNN::Serialization
 				manifest.bufferBindings.push_back(ParseRuntimeBufferBinding(item, "manifest.bufferBindings"));
 			}
 			for (const auto item :
+			     AsArray(Member(object, "runtimeSegments", "manifest.runtimeSegments"), "manifest.runtimeSegments"))
+			{
+				manifest.runtimeSegments.push_back(ParseRuntimeExecutionSegment(item, "manifest.runtimeSegments"));
+			}
+			for (const auto item :
 			     AsArray(Member(object, "runtimeSteps", "manifest.runtimeSteps"), "manifest.runtimeSteps"))
 			{
 				const auto step = AsObject(item, "manifest.runtimeSteps");
-				manifest.runtimeSteps.push_back({
-				    .id = static_cast<std::size_t>(AsUInt(Member(step, "id", "runtimeStep.id"), "runtimeStep.id")),
-				    .kind = static_cast<Runtime::RuntimeScheduleStepKind>(
-				        AsUInt(Member(step, "kind", "runtimeStep.kind"), "runtimeStep.kind")),
-				    .function = static_cast<FunctionId>(
-				        AsUInt(Member(step, "function", "runtimeStep.function"), "runtimeStep.function")),
-				    .region = static_cast<RegionId>(
-				        AsUInt(Member(step, "region", "runtimeStep.region"), "runtimeStep.region")),
-				    .backend = AsString(Member(step, "backend", "runtimeStep.backend"), "runtimeStep.backend"),
-				    .fallbackBackend = AsString(Member(step, "fallbackBackend", "runtimeStep.fallbackBackend"),
-				                                "runtimeStep.fallbackBackend"),
-				    .inputBuffers =
-				        SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"), "runtimeStep.inputBuffers"),
-				    .outputBuffers = SizeList(Member(step, "outputBuffers", "runtimeStep.outputBuffers"),
-				                              "runtimeStep.outputBuffers"),
-				});
+				Runtime::RuntimeScheduleStep runtimeStep{
+					.id = static_cast<std::size_t>(AsUInt(Member(step, "id", "runtimeStep.id"), "runtimeStep.id")),
+					.kind = static_cast<Runtime::RuntimeScheduleStepKind>(
+					    AsUInt(Member(step, "kind", "runtimeStep.kind"), "runtimeStep.kind")),
+					.function = static_cast<FunctionId>(
+					    AsUInt(Member(step, "function", "runtimeStep.function"), "runtimeStep.function")),
+					.region = static_cast<RegionId>(
+					    AsUInt(Member(step, "region", "runtimeStep.region"), "runtimeStep.region")),
+					.backend = AsString(Member(step, "backend", "runtimeStep.backend"), "runtimeStep.backend"),
+					.fallbackBackend = AsString(Member(step, "fallbackBackend", "runtimeStep.fallbackBackend"),
+					                            "runtimeStep.fallbackBackend"),
+					.inputBuffers =
+					    SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"), "runtimeStep.inputBuffers"),
+					.outputBuffers = SizeList(Member(step, "outputBuffers", "runtimeStep.outputBuffers"),
+					                          "runtimeStep.outputBuffers"),
+				};
+				const auto segment = Member(step, "segment", "runtimeStep.segment");
+				if (!segment.is_null())
+				{
+					runtimeStep.segment = static_cast<std::size_t>(AsUInt(segment, "runtimeStep.segment"));
+				}
+				manifest.runtimeSteps.push_back(std::move(runtimeStep));
 			}
 			for (const auto item : AsArray(Member(object, "tensors", "manifest.tensors"), "manifest.tensors"))
 			{

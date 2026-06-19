@@ -4,6 +4,7 @@
 #include <LiteNNImporters.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -207,6 +208,71 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleFallbackRecords)
 	                                              Runtime::RuntimeScheduleStepKindName(loadedFallback.kind),
 	                                              BackendCUDANative, BackendCPUInterpreter)));
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
+TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto cast = subgraph.AddNode(CastNode{ { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto negated =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { cast, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { negated, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("CastNode", {
+	                                            .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Native,
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .memorySpaces = { TensorMemorySpace::Host },
+	                                            .relativeCost = 0.01,
+	                                        });
+	constexpr std::array<std::string_view, 2> backends{ BackendCPUInterpreter, BackendCUDANative };
+	Runtime::PlacementOptions options;
+	options.defaultBackend = std::string(BackendCPUInterpreter);
+	options.valueConstraints.push_back({ .subgraph = graph.Forward(),
+	                                     .value = { cast, 0 },
+	                                     .backend = std::string(BackendCUDANative),
+	                                     .reason = "package a heterogeneous schedule segment" });
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry, options);
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
+	Runtime::AppendPlacementSegmentSteps(schedule, placement);
+	ASSERT_FALSE(schedule.segments.empty());
+	ASSERT_EQ(schedule.segments.size(), 3u);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_schedule_segments_roundtrip.json";
+	Serialization::SaveVNextModelPackage(schedule, path);
+	{
+		std::ifstream inputFile(path, std::ios::binary);
+		const std::string json((std::istreambuf_iterator<char>(inputFile)), std::istreambuf_iterator<char>());
+		EXPECT_NE(json.find("\"runtimeSegments\""), std::string::npos);
+		EXPECT_NE(json.find("\"segment\""), std::string::npos);
+		EXPECT_NE(json.find(BackendCUDANative), std::string::npos);
+	}
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(package.manifest.runtimeSegments.size(), 3u);
+	const auto& cudaSegment = package.manifest.runtimeSegments[1];
+	EXPECT_EQ(cudaSegment.backend, BackendCUDANative);
+	EXPECT_EQ(cudaSegment.nodes, (std::vector<NodeId>{ cast }));
+	EXPECT_FALSE(cudaSegment.inputBuffers.empty());
+	EXPECT_FALSE(cudaSegment.outputBuffers.empty());
+	ASSERT_FALSE(package.manifest.runtimeSteps.empty());
+	const auto segmentStepIt = std::ranges::find_if(package.manifest.runtimeSteps, [](const auto& step) {
+		return step.kind == Runtime::RuntimeScheduleStepKind::DispatchSegment;
+	});
+	ASSERT_NE(segmentStepIt, package.manifest.runtimeSteps.end());
+	ASSERT_TRUE(segmentStepIt->segment.has_value());
+	EXPECT_LT(*segmentStepIt->segment, package.manifest.runtimeSegments.size());
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+	const auto abi = DescribeVNextABIFamily(package.manifest);
+	EXPECT_TRUE(abi.hasRuntimeSegments);
+	EXPECT_FALSE(abi.runtimeSegments.empty());
 }
 
 TEST(G14VNext, VNextModelPackageRoundTripsLoRAAdapterManifest)

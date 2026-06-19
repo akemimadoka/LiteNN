@@ -684,6 +684,8 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 #### G7.3 AOT and Artifact Support
 
 - [ ] Extend compiled artifact metadata with per-segment backend kind, required device capabilities, and transfer ABI.
+      Runtime package metadata now preserves `runtimeSegments` and `DispatchSegment` step links; per-segment required
+      device capability metadata still needs to be attached to compiled artifacts.
 - [ ] Support loading heterogeneous artifacts from separated rodata/instruction regions.
 - [ ] Reject artifacts when a required backend/device capability is unavailable, with fallback policy documented.
 

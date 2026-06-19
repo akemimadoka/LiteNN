@@ -229,6 +229,7 @@ namespace LiteNN
 		MemoryPlan memory;
 		std::vector<Runtime::RuntimeStateBinding> runtimeStates;
 		std::vector<RuntimeBufferBinding> bufferBindings;
+		std::vector<Runtime::RuntimeExecutionSegment> runtimeSegments;
 		std::vector<Runtime::RuntimeScheduleStep> runtimeSteps;
 		std::vector<VNextExternalTensorRef> tensors;
 		std::vector<VNextArtifactRef> artifacts;
@@ -241,6 +242,7 @@ namespace LiteNN
 		VNextVersionSet versions;
 		std::vector<std::string> functions;
 		std::vector<std::string> runtimeStates;
+		std::vector<std::string> runtimeSegments;
 		std::vector<std::string> runtimeStepRecords;
 		std::vector<std::string> bufferBindings;
 		std::vector<std::string> tensorBindings;
@@ -248,6 +250,7 @@ namespace LiteNN
 		std::vector<std::string> artifactEntryKinds;
 		std::vector<std::string> artifactRegions;
 		bool hasRuntimeSchedule{};
+		bool hasRuntimeSegments{};
 		bool hasExternalTensorBindings{};
 		bool hasArtifactMetadata{};
 		bool hasFallbackRecords{};
@@ -260,6 +263,7 @@ namespace LiteNN
 		VNextABIFamilySummary summary;
 		summary.versions = manifest.versions;
 		summary.hasRuntimeSchedule = !manifest.runtimeSteps.empty();
+		summary.hasRuntimeSegments = !manifest.runtimeSegments.empty();
 		summary.hasExternalTensorBindings = !manifest.tensors.empty();
 		summary.hasArtifactMetadata = !manifest.artifacts.empty();
 		summary.hasFallbackRecords = std::ranges::any_of(manifest.runtimeSteps, [](const auto& step) {
@@ -280,6 +284,14 @@ namespace LiteNN
 		for (const auto& state : manifest.runtimeStates)
 		{
 			summary.runtimeStates.push_back(state.name);
+		}
+
+		summary.runtimeSegments.reserve(manifest.runtimeSegments.size());
+		for (const auto& segment : manifest.runtimeSegments)
+		{
+			summary.runtimeSegments.push_back(std::format("{}:{}:nodes={}:inputs={}:outputs={}", segment.id,
+			                                              segment.backend, segment.nodes.size(),
+			                                              segment.inputBuffers.size(), segment.outputBuffers.size()));
 		}
 
 		summary.runtimeStepRecords.reserve(manifest.runtimeSteps.size());
@@ -354,6 +366,7 @@ namespace LiteNN
 		manifest.memory = std::move(schedule.memory);
 		manifest.runtimeStates = std::move(schedule.states);
 		manifest.bufferBindings = std::move(schedule.bufferBindings);
+		manifest.runtimeSegments = std::move(schedule.segments);
 		manifest.runtimeSteps = std::move(schedule.steps);
 		manifest.artifacts = std::move(artifacts);
 		manifest.adapters = std::move(adapters);
@@ -462,6 +475,38 @@ namespace LiteNN
 				throw std::runtime_error(std::format("vNext memory buffer {} has mismatched id", i));
 			}
 		}
+		for (std::size_t i = 0; i < manifest.runtimeSegments.size(); ++i)
+		{
+			const auto& segment = manifest.runtimeSegments[i];
+			if (segment.id != i)
+			{
+				throw std::runtime_error(std::format("vNext runtime segment {} has mismatched id {}", i, segment.id));
+			}
+			if (segment.backend.empty())
+			{
+				throw std::runtime_error(std::format("vNext runtime segment {} has empty backend", i));
+			}
+			if (segment.nodes.empty())
+			{
+				throw std::runtime_error(std::format("vNext runtime segment {} has no nodes", i));
+			}
+			for (const auto buffer : segment.inputBuffers)
+			{
+				if (buffer >= manifest.memory.buffers.size())
+				{
+					throw std::runtime_error(
+					    std::format("vNext runtime segment {} references invalid input buffer", i));
+				}
+			}
+			for (const auto buffer : segment.outputBuffers)
+			{
+				if (buffer >= manifest.memory.buffers.size())
+				{
+					throw std::runtime_error(
+					    std::format("vNext runtime segment {} references invalid output buffer", i));
+				}
+			}
+		}
 		for (std::size_t i = 0; i < manifest.runtimeSteps.size(); ++i)
 		{
 			const auto& step = manifest.runtimeSteps[i];
@@ -479,6 +524,19 @@ namespace LiteNN
 				if (step.backend.empty())
 				{
 					throw std::runtime_error(std::format("vNext runtime dispatch step {} has empty backend", i));
+				}
+			}
+			if (step.kind == Runtime::RuntimeScheduleStepKind::DispatchSegment)
+			{
+				if (!step.segment || *step.segment >= manifest.runtimeSegments.size())
+				{
+					throw std::runtime_error(std::format("vNext runtime step {} references unknown segment", i));
+				}
+				const auto& segment = manifest.runtimeSegments[*step.segment];
+				if (step.backend != segment.backend || step.inputBuffers != segment.inputBuffers ||
+				    step.outputBuffers != segment.outputBuffers)
+				{
+					throw std::runtime_error(std::format("vNext runtime step {} does not match segment metadata", i));
 				}
 			}
 			if (step.kind == Runtime::RuntimeScheduleStepKind::Fallback)
