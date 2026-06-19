@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -302,7 +303,13 @@ namespace LiteNN::Examples::Mnist
 		return static_cast<int>(std::max_element(data, data + kDigitCount) - data);
 	}
 
-	inline void
+	struct TrainingSummary
+	{
+		double averageLoss{};
+		double accuracy{};
+	};
+
+	inline TrainingSummary
 	TrainMnistGraph(Graph& graph, const MnistSplit& train, const Options& options,
 	                Training::TrainExecutionPolicy executionPolicy = Training::TrainExecutionPolicy::Interpreter)
 	{
@@ -312,6 +319,7 @@ namespace LiteNN::Examples::Mnist
 		Training::Trainer<CPU, Optimizer::SGD> trainer(
 		    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = options.learningRate }), trainerOptions);
 
+		TrainingSummary summary;
 		for (std::size_t epoch = 0; epoch < options.epochs; ++epoch)
 		{
 			double totalLoss = 0.0;
@@ -334,12 +342,39 @@ namespace LiteNN::Examples::Mnist
 				totalLoss += step.loss;
 			}
 
-			const auto accuracy = 100.0 * static_cast<double>(correct) / static_cast<double>(train.Count());
-			const auto averageLoss = totalLoss / static_cast<double>(train.Count());
+			summary.accuracy = 100.0 * static_cast<double>(correct) / static_cast<double>(train.Count());
+			summary.averageLoss = totalLoss / static_cast<double>(train.Count());
 			std::cout << std::format("epoch {}/{}: loss={:.4f}, train_accuracy={:.2f}%\n", epoch + 1, options.epochs,
-			                         averageLoss, accuracy);
+			                         summary.averageLoss, summary.accuracy);
 		}
 		graph = model.UnsafeTakeGraph();
+		return summary;
+	}
+
+	inline double MaxVariableDifference(const Graph& lhs, const Graph& rhs)
+	{
+		if (lhs.VariableCount() != rhs.VariableCount())
+		{
+			throw std::runtime_error("Cannot compare MNIST graphs with different variable counts");
+		}
+		double maximum = 0.0;
+		for (std::size_t variableIndex = 0; variableIndex < lhs.VariableCount(); ++variableIndex)
+		{
+			const auto lhsTensor = lhs.GetVariable(variableIndex)->Data().CopyToDevice(CPU{});
+			const auto rhsTensor = rhs.GetVariable(variableIndex)->Data().CopyToDevice(CPU{});
+			if (lhsTensor.DType() != DataType::Float32 || rhsTensor.DType() != DataType::Float32 ||
+			    lhsTensor.NumElements() != rhsTensor.NumElements())
+			{
+				throw std::runtime_error("Cannot compare incompatible MNIST variables");
+			}
+			const auto* lhsData = static_cast<const float*>(lhsTensor.UnsafeRawData());
+			const auto* rhsData = static_cast<const float*>(rhsTensor.UnsafeRawData());
+			for (std::size_t element = 0; element < lhsTensor.NumElements(); ++element)
+			{
+				maximum = std::max(maximum, std::abs(static_cast<double>(lhsData[element] - rhsData[element])));
+			}
+		}
+		return maximum;
 	}
 
 	inline void PrintLogits(const Tensor<CPU>& logits)

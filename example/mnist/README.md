@@ -89,6 +89,12 @@ CPU AOT training followed by AOT inference compile/load:
 build\example\mnist\litenn_mnist_aot.exe --epochs 3 --train-limit 1000 --test-limit 1000
 ```
 
+Train an interpreter reference and report loss, accuracy, and updated-weight drift against AOT:
+
+```powershell
+build\example\mnist\litenn_mnist_aot.exe --epochs 1 --train-limit 100 --test-limit 100 --compare-interpreter
+```
+
 Write a carrier object while running the AOT example:
 
 ```powershell
