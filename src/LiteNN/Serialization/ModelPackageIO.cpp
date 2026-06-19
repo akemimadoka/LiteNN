@@ -115,6 +115,16 @@ namespace LiteNN::Serialization
 			return number;
 		}
 
+		bool AsBool(simdjson::dom::element value, std::string_view label)
+		{
+			bool flag{};
+			if (const auto error = value.get_bool().get(flag))
+			{
+				throw JsonError(label, error);
+			}
+			return flag;
+		}
+
 		void JsonString(std::ostream& out, std::string_view value)
 		{
 			out << '"';
@@ -369,6 +379,26 @@ namespace LiteNN::Serialization
 			    << ",\"dtype\":" << EnumValue(adapter.dtype) << ",\"mergeMode\":";
 			JsonString(out, adapter.mergeMode);
 			out << '}';
+		}
+
+		void BackendRequirementJson(std::ostream& out, const VNextBackendRequirementRef& requirement)
+		{
+			out << "{\"segment\":";
+			if (requirement.segment)
+			{
+				out << *requirement.segment;
+			}
+			else
+			{
+				out << "null";
+			}
+			out << ",\"backend\":";
+			JsonString(out, requirement.backend);
+			out << ",\"requiredCapabilities\":";
+			StringListJson(out, requirement.requiredCapabilities);
+			out << ",\"transferABI\":";
+			JsonString(out, requirement.transferABI);
+			out << ",\"allowsFallback\":" << (requirement.allowsFallback ? "true" : "false") << '}';
 		}
 
 		void PlanJson(std::ostream& out, const ExecutablePlan& plan)
@@ -684,6 +714,15 @@ namespace LiteNN::Serialization
 						out << ',';
 					}
 					TensorRefJson(out, a.externalTensors[j]);
+				}
+				out << "],\"backendRequirements\":[";
+				for (std::size_t j = 0; j < a.backendRequirements.size(); ++j)
+				{
+					if (j != 0)
+					{
+						out << ',';
+					}
+					BackendRequirementJson(out, a.backendRequirements[j]);
 				}
 				out << "]}";
 			}
@@ -1109,6 +1148,22 @@ namespace LiteNN::Serialization
 			return adapter;
 		}
 
+		VNextBackendRequirementRef ParseBackendRequirementRef(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			VNextBackendRequirementRef requirement;
+			const auto segment = Member(object, "segment", label);
+			if (!segment.is_null())
+			{
+				requirement.segment = static_cast<std::size_t>(AsUInt(segment, label));
+			}
+			requirement.backend = AsString(Member(object, "backend", label), label);
+			requirement.requiredCapabilities = StringList(Member(object, "requiredCapabilities", label), label);
+			requirement.transferABI = AsString(Member(object, "transferABI", label), label);
+			requirement.allowsFallback = AsBool(Member(object, "allowsFallback", label), label);
+			return requirement;
+		}
+
 		ExecutablePlan ParsePlan(simdjson::dom::element value)
 		{
 			const auto object = AsObject(value, "plan");
@@ -1335,6 +1390,13 @@ namespace LiteNN::Serialization
 				     AsArray(Member(a, "externalTensors", "artifact.externalTensors"), "artifact.externalTensors"))
 				{
 					artifact.externalTensors.push_back(ParseTensorRef(tensorItem, "artifact.externalTensors"));
+				}
+				for (const auto requirementItem :
+				     AsArray(Member(a, "backendRequirements", "artifact.backendRequirements"),
+				             "artifact.backendRequirements"))
+				{
+					artifact.backendRequirements.push_back(
+					    ParseBackendRequirementRef(requirementItem, "artifact.backendRequirements"));
 				}
 				manifest.artifacts.push_back(std::move(artifact));
 			}

@@ -240,17 +240,33 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
 	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry, options);
 	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
 	Runtime::AppendPlacementSegmentSteps(schedule, placement);
+	Runtime::AppendPlacementTransferSteps(schedule, placement);
+	Runtime::AppendPlacementSyncSteps(schedule, placement);
 	ASSERT_FALSE(schedule.segments.empty());
 	ASSERT_EQ(schedule.segments.size(), 3u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
+	VNextArtifactRef artifact;
+	artifact.name = "heterogeneous_forward";
+	artifact.backend = "heterogeneous";
+	artifact.entries.push_back({ .name = "forward", .kind = VNextArtifactEntryKind::Forward, .function = 0 });
+	artifact.regions.push_back({ .name = "instructions",
+	                             .kind = ExternalBufferKind::ObjectFile,
+	                             .relativePath = "artifacts/heterogeneous_forward.bin",
+	                             .byteSize = 1,
+	                             .checksum = 7 });
+	artifact.backendRequirements = BuildVNextBackendRequirementsFromSchedule(schedule);
+	ASSERT_EQ(artifact.backendRequirements.size(), schedule.segments.size());
+
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_schedule_segments_roundtrip.json";
-	Serialization::SaveVNextModelPackage(schedule, path);
+	Serialization::SaveVNextModelPackage(schedule, path, { artifact });
 	{
 		std::ifstream inputFile(path, std::ios::binary);
 		const std::string json((std::istreambuf_iterator<char>(inputFile)), std::istreambuf_iterator<char>());
 		EXPECT_NE(json.find("\"runtimeSegments\""), std::string::npos);
 		EXPECT_NE(json.find("\"segment\""), std::string::npos);
+		EXPECT_NE(json.find("\"backendRequirements\""), std::string::npos);
+		EXPECT_NE(json.find("\"runtime-buffer-transfer-v1\""), std::string::npos);
 		EXPECT_NE(json.find(BackendCUDANative), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
@@ -270,9 +286,23 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
 	ASSERT_TRUE(segmentStepIt->segment.has_value());
 	EXPECT_LT(*segmentStepIt->segment, package.manifest.runtimeSegments.size());
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
+	ASSERT_EQ(package.manifest.artifacts[0].backendRequirements.size(), 3u);
+	EXPECT_EQ(package.manifest.artifacts[0].backendRequirements[1].backend, BackendCUDANative);
+	ASSERT_TRUE(package.manifest.artifacts[0].backendRequirements[1].segment.has_value());
+	EXPECT_EQ(*package.manifest.artifacts[0].backendRequirements[1].segment, cudaSegment.id);
+	EXPECT_EQ(package.manifest.artifacts[0].backendRequirements[1].transferABI, "runtime-buffer-transfer-v1");
+	EXPECT_TRUE(std::ranges::contains(package.manifest.artifacts[0].backendRequirements[1].requiredCapabilities,
+	                                  std::string("backend:") + std::string(BackendCUDANative)));
 	const auto abi = DescribeVNextABIFamily(package.manifest);
 	EXPECT_TRUE(abi.hasRuntimeSegments);
+	EXPECT_TRUE(abi.hasBackendRequirements);
 	EXPECT_FALSE(abi.runtimeSegments.empty());
+	EXPECT_FALSE(abi.backendRequirements.empty());
+
+	auto invalid = package.manifest;
+	invalid.artifacts[0].backendRequirements[1].segment = invalid.runtimeSegments.size();
+	EXPECT_THROW(ValidateVNextPackageManifest(invalid), std::runtime_error);
 }
 
 TEST(G14VNext, VNextModelPackageRoundTripsLoRAAdapterManifest)

@@ -188,6 +188,15 @@ namespace LiteNN
 		std::vector<std::string> requiredBufferBindings;
 	};
 
+	struct VNextBackendRequirementRef
+	{
+		std::optional<std::size_t> segment;
+		std::string backend;
+		std::vector<std::string> requiredCapabilities;
+		std::string transferABI{ "none" };
+		bool allowsFallback{};
+	};
+
 	struct VNextArtifactRef
 	{
 		std::string name;
@@ -195,6 +204,7 @@ namespace LiteNN
 		std::vector<VNextArtifactEntryRef> entries;
 		std::vector<VNextArtifactRegionRef> regions;
 		std::vector<VNextExternalTensorRef> externalTensors;
+		std::vector<VNextBackendRequirementRef> backendRequirements;
 	};
 
 	struct VNextAdapterRef
@@ -249,10 +259,12 @@ namespace LiteNN
 		std::vector<std::string> artifactEntries;
 		std::vector<std::string> artifactEntryKinds;
 		std::vector<std::string> artifactRegions;
+		std::vector<std::string> backendRequirements;
 		bool hasRuntimeSchedule{};
 		bool hasRuntimeSegments{};
 		bool hasExternalTensorBindings{};
 		bool hasArtifactMetadata{};
+		bool hasBackendRequirements{};
 		bool hasFallbackRecords{};
 		bool hasTransferRecords{};
 		bool hasProfileRecords{};
@@ -266,6 +278,8 @@ namespace LiteNN
 		summary.hasRuntimeSegments = !manifest.runtimeSegments.empty();
 		summary.hasExternalTensorBindings = !manifest.tensors.empty();
 		summary.hasArtifactMetadata = !manifest.artifacts.empty();
+		summary.hasBackendRequirements = std::ranges::any_of(
+		    manifest.artifacts, [](const auto& artifact) { return !artifact.backendRequirements.empty(); });
 		summary.hasFallbackRecords = std::ranges::any_of(manifest.runtimeSteps, [](const auto& step) {
 			return step.kind == Runtime::RuntimeScheduleStepKind::Fallback;
 		});
@@ -330,9 +344,47 @@ namespace LiteNN
 			{
 				summary.artifactRegions.push_back(artifact.name + ":" + region.name);
 			}
+			for (const auto& requirement : artifact.backendRequirements)
+			{
+				summary.backendRequirements.push_back(
+				    std::format("{}:{}:segment={}:caps={}:transfer={}", artifact.name, requirement.backend,
+				                requirement.segment ? std::to_string(*requirement.segment) : std::string("none"),
+				                requirement.requiredCapabilities.size(), requirement.transferABI));
+			}
 		}
 
 		return summary;
+	}
+
+	inline std::vector<VNextBackendRequirementRef>
+	BuildVNextBackendRequirementsFromSchedule(const Runtime::RuntimeSchedule& schedule)
+	{
+		const auto hasTransferABI = std::ranges::any_of(schedule.steps, [](const auto& step) {
+			return step.kind == Runtime::RuntimeScheduleStepKind::Transfer ||
+			       step.kind == Runtime::RuntimeScheduleStepKind::Sync;
+		});
+		std::vector<VNextBackendRequirementRef> requirements;
+		requirements.reserve(schedule.segments.empty() ? schedule.module.partitions.size() : schedule.segments.size());
+		for (const auto& segment : schedule.segments)
+		{
+			requirements.push_back(
+			    { .segment = segment.id,
+			      .backend = segment.backend,
+			      .requiredCapabilities = { "runtime-schedule:dispatch-segment", "backend:" + segment.backend },
+			      .transferABI = hasTransferABI ? "runtime-buffer-transfer-v1" : "none" });
+		}
+		if (!requirements.empty())
+		{
+			return requirements;
+		}
+		for (const auto& partition : schedule.module.partitions)
+		{
+			requirements.push_back(
+			    { .backend = partition.backend,
+			      .requiredCapabilities = { "runtime-schedule:dispatch-region", "backend:" + partition.backend },
+			      .transferABI = "none" });
+		}
+		return requirements;
 	}
 
 	inline VNextExternalTensorRef ToVNextExternalTensorRef(std::string name, const TensorStorageRef& storage)
@@ -731,6 +783,37 @@ namespace LiteNN
 				if (region.byteSize == 0)
 				{
 					throw std::runtime_error("vNext artifact '" + artifact.name + "' has a zero-sized region");
+				}
+			}
+			for (const auto& requirement : artifact.backendRequirements)
+			{
+				if (requirement.backend.empty())
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' has an empty backend requirement");
+				}
+				if (requirement.requiredCapabilities.empty())
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' backend requirement for '" +
+					                         requirement.backend + "' has no required capabilities");
+				}
+				if (requirement.transferABI.empty())
+				{
+					throw std::runtime_error("vNext artifact '" + artifact.name + "' backend requirement for '" +
+					                         requirement.backend + "' has empty transfer ABI");
+				}
+				if (requirement.segment)
+				{
+					if (*requirement.segment >= manifest.runtimeSegments.size())
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name +
+						                         "' backend requirement references an unknown runtime segment");
+					}
+					const auto& segment = manifest.runtimeSegments[*requirement.segment];
+					if (segment.backend != requirement.backend)
+					{
+						throw std::runtime_error("vNext artifact '" + artifact.name +
+						                         "' backend requirement backend does not match runtime segment");
+					}
 				}
 			}
 		}
