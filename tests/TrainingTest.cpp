@@ -28,6 +28,27 @@ namespace
 		const auto tensor = graph.GetVariable(variableIndex)->Grad().CopyToDevice(CPU{});
 		return ReadFloat(tensor, elementIndex);
 	}
+
+	void BuildInterpreterLocalBackwardStateModel(ModelGraph& model)
+	{
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto slot = graph.AddActivationSlot(TensorType::Dense(DataType::Float32, ShapeView{ 2 }));
+
+		Subgraph forward;
+		const auto input = forward.AddParam(DataType::Float32, { 2 });
+		forward.SetResults({ { input, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+		graph.SetInputNames({ "x" });
+		graph.SetOutputNames({ "y" });
+
+		Subgraph backward;
+		const auto backwardInput = backward.AddParam(DataType::Float32, { 2 });
+		[[maybe_unused]] const auto outputGradient = backward.AddParam(DataType::Float32, { 2 });
+		const auto saved = backward.AddNode(SaveActivationNode{ { backwardInput, 0 }, slot },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		backward.SetResults({ { saved, 0 } });
+		graph.SetBackward(graph.AddSubgraph(std::move(backward)));
+	}
 } // namespace
 
 TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
@@ -100,6 +121,16 @@ TEST(Training, TrainerExposesParameterSetAndStateDict)
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 42.0f);
 	trainer.LoadStateDict(state);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 3.0f);
+}
+
+TEST(Training, AOTPolicyRejectsInterpreterLocalBackwardStateBeforeRunnerInitialization)
+{
+	ModelGraph model;
+	BuildInterpreterLocalBackwardStateModel(model);
+
+	Training::TrainerOptions options;
+	options.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	EXPECT_THROW((Training::Trainer<CPU, Optimizer::SGD>(model, Optimizer::SGD(0.1f), options)), std::runtime_error);
 }
 
 #ifdef LITENN_ENABLE_TRAINING_AOT

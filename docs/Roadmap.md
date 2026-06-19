@@ -1409,7 +1409,10 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 
 #### G13.3 Trainer API
 
-- [ ] Add a trainer execution policy such as `Interpreter`, `AOT`, and `Auto`, with clear fallback/error behavior.
+- [x] Add a trainer execution policy such as `Interpreter`, `AOT`, and `Auto`, with clear fallback/error behavior.
+  `TrainerOptions::executionPolicy` selects `Interpreter`, `AOT`, or `Auto`; AOT construction now runs
+  `RequireTrainStepAOTReady` before compiled runner initialization so unsupported interpreter-local activation/tape state
+  fails with an explicit train-step diagnostic.
 - [ ] Keep `Trainer<Device, Optimizer>` as the high-level API, but route production-capable paths through compiled
   train-step artifacts when available.
 - [ ] Keep a reference interpreter trainer for correctness checks, constant evaluation, and unsupported graph debugging.

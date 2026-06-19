@@ -67,6 +67,7 @@ namespace LiteNN::Training
 			ValidateTrainStepPlan(trainStepPlan_);
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
 			{
+				RequireTrainStepAOTReady(trainStepPlan_);
 				InitializeCompiledForwardRunner();
 				InitializeCompiledOptimizerUpdateRunners();
 			}
