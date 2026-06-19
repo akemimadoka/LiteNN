@@ -1446,6 +1446,8 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   full-step rows intentionally surface the current `LoadActivationNode` readiness diagnostic until G13.1 removes hidden
   activation/tape state from compiled training.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
+  `TrainCPUAOT/FullStep` reports `compile_ms` as a setup counter while the benchmark timer covers train-step latency.
+  Memory/workspace and automated numerical-drift benchmark reporting remain open.
 
 ### G14: vNext Breaking Architecture
 

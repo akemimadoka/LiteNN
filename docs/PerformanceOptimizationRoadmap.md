@@ -255,12 +255,13 @@ Status: implemented on 2026-05-16.
   - Implementation: `TrainCPUAOT/FullStep/MNIST-Linear` runs through `Trainer` with `TrainExecutionPolicy::AOT`.
     MLP full-step rows are registered but report the current `LoadActivationNode` readiness diagnostic until saved
     activation/tape state is represented through explicit G13.1 train-step ABI bindings or recomputation.
+  - Metric split: the row reports `compile_ms` as a setup counter, while the benchmark timer measures train-step latency.
 
 P5 validation spot check:
 
 | Benchmark | Real time |
 | --- | ---: |
-| `TrainCPUAOT/FullStep/MNIST-Linear/batch:32` | `337 ms` Debug smoke |
+| `TrainCPUAOT/FullStep/MNIST-Linear/batch:32` | `321 ms` Debug smoke; `compile_ms=389` |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP128/batch:512` | `17.84 ms` |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP512/batch:512` | `86.18 ms` |
 | `TrainCUDANative/Forward/MNIST-MLP128/batch:512` | `0.188 ms` |

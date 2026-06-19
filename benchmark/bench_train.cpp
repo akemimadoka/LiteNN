@@ -20,6 +20,7 @@
 #endif
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
@@ -420,8 +421,12 @@ namespace
 
 		try
 		{
+			const auto compileStart = std::chrono::steady_clock::now();
 			Training::Trainer<CPU, Optimizer::SGD> trainer(
 			    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }), options);
+			const auto compileEnd = std::chrono::steady_clock::now();
+			const auto compileMs = std::chrono::duration<double, std::milli>(compileEnd - compileStart).count();
+			state.counters["compile_ms"] = benchmark::Counter(compileMs, benchmark::Counter::kAvgThreads);
 
 			for (int i = 0; i < kWarmupIterations; ++i)
 			{
