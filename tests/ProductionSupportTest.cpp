@@ -41,6 +41,13 @@ namespace
 		return std::ranges::any_of(
 		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
+
+	bool HasSDXLCapabilityDiagnostic(std::string_view needle)
+	{
+		const auto diagnostics = CollectProductionSDXLCapabilityDiagnostics();
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
+	}
 } // namespace
 
 TEST(ProductionSupportTest, ReportsProductionDeploymentCore)
@@ -245,4 +252,39 @@ TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
 	EXPECT_TRUE(Contains(native.productionGate, "benchmark"));
 	EXPECT_TRUE(HasQuantizationCapabilityDiagnostic("NativeQuantizedLinearMatMul"));
 	EXPECT_FALSE(HasQuantizationCapabilityDiagnostic("PackedFourBitStorage"));
+}
+
+TEST(ProductionSupportTest, ReportsSDXLAsImporterAndStressTarget)
+{
+	const auto capabilities = QueryProductionSDXLCapabilities();
+	EXPECT_GE(capabilities.size(), 8u);
+
+	const auto manifest = QueryProductionSDXLCapability(ProductionSDXLCapability::TorchManifestDiffusionOps);
+	EXPECT_EQ(manifest.level, ProductionSupportLevel::Supported);
+	EXPECT_TRUE(manifest.importerOrStressTarget);
+	EXPECT_FALSE(manifest.productionGenerationGate);
+	EXPECT_FALSE(manifest.blocksVNextProductionProfile);
+	EXPECT_TRUE(Contains(manifest.verifiedScope, "fixed-shape SDXL"));
+
+	const auto denoiser = QueryProductionSDXLCapability(ProductionSDXLCapability::CompiledDenoiserSmoke);
+	EXPECT_EQ(denoiser.availableInBuild, ProductionBuildHasMLIR());
+	EXPECT_EQ(denoiser.level, ProductionSupportLevel::Experimental);
+	EXPECT_TRUE(denoiser.importerOrStressTarget);
+	EXPECT_FALSE(denoiser.productionGenerationGate);
+	EXPECT_TRUE(Contains(denoiser.fallbackPolicy, "pipeline validation"));
+	EXPECT_TRUE(HasSDXLCapabilityDiagnostic("CompiledDenoiserSmoke"));
+
+	const auto prompt = QueryProductionSDXLCapability(ProductionSDXLCapability::NativePromptConditioning);
+	EXPECT_EQ(prompt.level, ProductionSupportLevel::Deferred);
+	EXPECT_TRUE(prompt.productionGenerationGate);
+	EXPECT_FALSE(prompt.blocksVNextProductionProfile);
+	EXPECT_TRUE(Contains(prompt.missingBeforeProduction, "tokenizer"));
+	EXPECT_TRUE(HasSDXLCapabilityDiagnostic("NativePromptConditioning"));
+
+	const auto fullImage = QueryProductionSDXLCapability(ProductionSDXLCapability::ProductionPromptToImage);
+	EXPECT_EQ(fullImage.level, ProductionSupportLevel::Deferred);
+	EXPECT_TRUE(fullImage.productionGenerationGate);
+	EXPECT_FALSE(fullImage.blocksVNextProductionProfile);
+	EXPECT_TRUE(Contains(fullImage.fallbackPolicy, "Do not block vNext"));
+	EXPECT_TRUE(HasSDXLCapabilityDiagnostic("ProductionPromptToImage"));
 }

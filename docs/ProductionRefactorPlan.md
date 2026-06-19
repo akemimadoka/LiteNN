@@ -153,9 +153,14 @@ Torch / safetensors:
 
 SDXL:
 
-- [ ] Treat SDXL as a large-model importer and memory-policy stress target until tokenizer, text encoders, UNet, VAE,
+- [x] Treat SDXL as a large-model importer and memory-policy stress target until tokenizer, text encoders, UNet, VAE,
       scheduler, and reference-image validation are all production-gated.
-- [ ] Do not let SDXL completeness block the vNext production profile.
+      `QueryProductionSDXLCapabilities()` reports Torch manifest diffusion ops, external-weight packaging, compiled
+      denoiser smoke, Euler sampler harness, and VAE decode stress as importer/stress capabilities; native prompt
+      conditioning, 1024 reference-image parity, and production prompt-to-image remain deferred generation gates.
+- [x] Do not let SDXL completeness block the vNext production profile.
+      SDXL production-generation gates explicitly set `blocksVNextProductionProfile=false`, keeping full SDXL quality
+      parity in the long-term validation queue rather than on the vNext package/AOT critical path.
 
 Exit criteria:
 

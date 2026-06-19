@@ -82,6 +82,18 @@ namespace LiteNN
 		NativeQuantizedLinearMatMul,
 	};
 
+	enum class ProductionSDXLCapability
+	{
+		TorchManifestDiffusionOps,
+		ExternalWeightPackaging,
+		CompiledDenoiserSmoke,
+		EulerSamplerHarness,
+		VAEDecodeStress,
+		NativePromptConditioning,
+		ReferenceImageParity1024,
+		ProductionPromptToImage,
+	};
+
 	struct ProductionSupportStatus
 	{
 		ProductionSupportArea area;
@@ -176,6 +188,20 @@ namespace LiteNN
 		std::string_view fallbackPolicy;
 	};
 
+	struct ProductionSDXLCapabilityDescriptor
+	{
+		ProductionSDXLCapability capability;
+		std::string_view name;
+		ProductionSupportLevel level;
+		bool availableInBuild;
+		bool importerOrStressTarget;
+		bool productionGenerationGate;
+		bool blocksVNextProductionProfile;
+		std::string_view verifiedScope;
+		std::string_view missingBeforeProduction;
+		std::string_view fallbackPolicy;
+	};
+
 	inline constexpr std::string_view ProductionSupportAreaName(ProductionSupportArea area)
 	{
 		return EnumToString<EnumToStringStyle::Unqualified>(area);
@@ -202,6 +228,11 @@ namespace LiteNN
 	}
 
 	inline constexpr std::string_view ProductionQuantizationCapabilityName(ProductionQuantizationCapability capability)
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(capability);
+	}
+
+	inline constexpr std::string_view ProductionSDXLCapabilityName(ProductionSDXLCapability capability)
 	{
 		return EnumToString<EnumToStringStyle::Unqualified>(capability);
 	}
@@ -909,6 +940,123 @@ namespace LiteNN
 			     "Unknown quantization capability." };
 	}
 
+	inline constexpr ProductionSDXLCapabilityDescriptor
+	QueryProductionSDXLCapability(ProductionSDXLCapability capability)
+	{
+		switch (capability)
+		{
+		case ProductionSDXLCapability::TorchManifestDiffusionOps:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     false,
+				     "Torch manifest import covers fixed-shape SDXL diffusion foundation ops and tiny parity fixtures.",
+				     "Broader PyTorch/diffusers graph coverage must remain manifest-driven and fixture-backed.",
+				     "Unsupported manifest ops must fail with importer diagnostics instead of guessing architecture." };
+		case ProductionSDXLCapability::ExternalWeightPackaging:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Supported,
+				     true,
+				     true,
+				     false,
+				     false,
+				     "SDXL import/compile flows can use external weight regions and separated image-region artifacts.",
+				     "Large-model package consumers still need workload-specific memory and artifact budget checks.",
+				     "Oversized manifests should preflight and fail before expensive import/compile work." };
+		case ProductionSDXLCapability::CompiledDenoiserSmoke:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Experimental,
+				     ProductionBuildHasMLIR(),
+				     true,
+				     false,
+				     false,
+				     "Fixed-shape UNet smoke denoiser paths exercise LiteNN import, CPU AOT compile/load, and finite "
+				     "output checks.",
+				     "Full checkpoint coverage, compile budget, and native CUDA/Vulkan lowering remain outside the "
+				     "production promise.",
+				     "Use smoke output as pipeline validation, not semantic image-quality acceptance." };
+		case ProductionSDXLCapability::EulerSamplerHarness:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Experimental,
+				     true,
+				     true,
+				     false,
+				     false,
+				     "Example-owned Euler sampler orchestration binds latent, timestep, conditioning, CFG, and VAE "
+				     "handoff outside the graph.",
+				     "Schedulers remain an example/runtime contract until model-level diffusion ABI and parity tests "
+				     "are production-gated.",
+				     "Keep scheduler ownership explicit; do not hide denoise-loop state inside importer output." };
+		case ProductionSDXLCapability::VAEDecodeStress:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Experimental,
+				     ProductionBuildHasMLIR(),
+				     true,
+				     false,
+				     false,
+				     "VAE decode is used as a memory-policy stress target with tiling/fallback diagnostics and PNG "
+				     "handoff helpers.",
+				     "1024x1024 quality parity still requires reference comparison artifacts and stable native "
+				     "coverage.",
+				     "Use finite/statistical diagnostics before treating decoded images as valid generation output." };
+		case ProductionSDXLCapability::NativePromptConditioning:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Deferred,
+				     false,
+				     false,
+				     true,
+				     false,
+				     "Native tokenizer, text encoder execution, pooled embeddings, and SDXL conditioning graph "
+				     "ownership are not production-supported yet.",
+				     "Requires tokenizer assets, CLIP/OpenCLIP text encoders, prompt/negative prompt batching, and "
+				     "golden conditioning parity.",
+				     "Use external conditioning export bridges until native prompt conditioning is implemented." };
+		case ProductionSDXLCapability::ReferenceImageParity1024:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Deferred,
+				     false,
+				     false,
+				     true,
+				     false,
+				     "Fixed-seed 1024x1024 reference image parity is not part of the current production profile.",
+				     "Requires archived reference runtime artifacts, tensor/image stats comparison, and acceptable "
+				     "semantic image validation.",
+				     "Keep 1024x1024 SDXL quality parity in the long-term validation queue." };
+		case ProductionSDXLCapability::ProductionPromptToImage:
+			return { capability,
+				     ProductionSDXLCapabilityName(capability),
+				     ProductionSupportLevel::Deferred,
+				     false,
+				     false,
+				     true,
+				     false,
+				     "End-to-end prompt-to-image generation remains a demonstration/stress path rather than a "
+				     "production feature.",
+				     "Requires native conditioning, full UNet/VAE parity, scheduler parity, memory policy, and native "
+				     "backend performance evidence.",
+				     "Do not block vNext CPU AOT/package production profile on full SDXL image generation." };
+		}
+		return { capability,
+			     ProductionSDXLCapabilityName(capability),
+			     ProductionSupportLevel::Unavailable,
+			     false,
+			     false,
+			     true,
+			     false,
+			     "Unknown SDXL capability.",
+			     "Unknown SDXL capability.",
+			     "Unknown SDXL capability." };
+	}
+
 	inline std::vector<ProductionSupportStatus> QueryProductionSupportStatuses()
 	{
 		return {
@@ -966,6 +1114,20 @@ namespace LiteNN
 			QueryProductionQuantizationCapability(ProductionQuantizationCapability::CPUReferencePackUnpackDequantize),
 			QueryProductionQuantizationCapability(ProductionQuantizationCapability::VNextQuantizationMetadata),
 			QueryProductionQuantizationCapability(ProductionQuantizationCapability::NativeQuantizedLinearMatMul),
+		};
+	}
+
+	inline std::vector<ProductionSDXLCapabilityDescriptor> QueryProductionSDXLCapabilities()
+	{
+		return {
+			QueryProductionSDXLCapability(ProductionSDXLCapability::TorchManifestDiffusionOps),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::ExternalWeightPackaging),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::CompiledDenoiserSmoke),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::EulerSamplerHarness),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::VAEDecodeStress),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::NativePromptConditioning),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::ReferenceImageParity1024),
+			QueryProductionSDXLCapability(ProductionSDXLCapability::ProductionPromptToImage),
 		};
 	}
 
@@ -1038,6 +1200,21 @@ namespace LiteNN
 				diagnostics.push_back(std::string(capability.name) + " [" +
 				                      std::string(ProductionSupportLevelName(capability.level)) +
 				                      "]: " + std::string(capability.productionGate));
+			}
+		}
+		return diagnostics;
+	}
+
+	inline std::vector<std::string> CollectProductionSDXLCapabilityDiagnostics()
+	{
+		std::vector<std::string> diagnostics;
+		for (const auto& capability : QueryProductionSDXLCapabilities())
+		{
+			if (capability.level != ProductionSupportLevel::Supported || capability.productionGenerationGate)
+			{
+				diagnostics.push_back(std::string(capability.name) + " [" +
+				                      std::string(ProductionSupportLevelName(capability.level)) +
+				                      "]: " + std::string(capability.missingBeforeProduction));
 			}
 		}
 		return diagnostics;
