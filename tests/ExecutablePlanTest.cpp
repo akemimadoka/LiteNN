@@ -25,6 +25,47 @@ namespace
 		graph.SetOutputNames({ "y" });
 		return graph;
 	}
+
+	Graph BuildTwoInputAddGraph()
+	{
+		Graph graph;
+		Subgraph subgraph;
+		const auto lhs = subgraph.AddParam(DataType::Float32, { 2, 2 });
+		const auto rhs = subgraph.AddParam(DataType::Float32, { 2, 2 });
+		const auto add = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
+		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		subgraph.SetResults({ { add, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ "sum" });
+		return graph;
+	}
+
+	void ForcePlanToDeviceMemory(ExecutablePlan& plan)
+	{
+		for (auto& input : plan.inputs)
+		{
+			input.type.memorySpace = TensorMemorySpace::Device;
+		}
+		for (auto& output : plan.outputs)
+		{
+			output.type.memorySpace = TensorMemorySpace::Device;
+		}
+		for (auto& subgraph : plan.subgraphs)
+		{
+			for (auto& param : subgraph.params)
+			{
+				param.memorySpace = TensorMemorySpace::Device;
+			}
+			for (auto& node : subgraph.nodes)
+			{
+				for (auto& output : node.outputs)
+				{
+					output.memorySpace = TensorMemorySpace::Device;
+				}
+			}
+		}
+	}
 } // namespace
 
 TEST(ExecutablePlanTest, BuildsPlanFromGraphSnapshot)
@@ -154,4 +195,51 @@ TEST(ExecutablePlanTest, ReportsBackendUnsupportedOpsBeforeLowering)
 	EXPECT_EQ(issues[0].support, BackendSupportLevel::Unsupported);
 	EXPECT_EQ(issues[0].fallback, BackendCPUInterpreter);
 	EXPECT_THROW(RequireExecutablePlanBackendSupport(plan, BackendCPUAOT), std::runtime_error);
+}
+
+TEST(ExecutablePlanTest, BuildsHostVisibleDeviceLocalMemoryPlanForHostGraph)
+{
+	const auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
+	const auto memory = BuildMemoryPlan(plan);
+	const auto deviceMemory = BuildDeviceLocalMemoryPlan(memory);
+
+	EXPECT_NO_THROW(ValidateDeviceLocalMemoryPlan(memory, deviceMemory));
+	EXPECT_FALSE(deviceMemory.requiresDeviceLocalAllocator);
+	EXPECT_FALSE(deviceMemory.requiresStagingAllocator);
+	EXPECT_EQ(deviceMemory.deviceLocalBytes, 0u);
+	EXPECT_EQ(deviceMemory.stagingSteps.size(), 0u);
+	ASSERT_EQ(deviceMemory.buffers.size(), memory.buffers.size());
+	for (const auto& buffer : deviceMemory.buffers)
+	{
+		EXPECT_FALSE(buffer.requiresDeviceLocal);
+		EXPECT_FALSE(buffer.requiresHostStaging);
+	}
+}
+
+TEST(ExecutablePlanTest, BuildsDeviceLocalMemoryPlanWithOutputStaging)
+{
+	auto plan = Detail::BuildExecutablePlanFromGraph(BuildTwoInputAddGraph());
+	ForcePlanToDeviceMemory(plan);
+	ValidateExecutablePlan(plan);
+
+	const auto memory = BuildMemoryPlan(plan);
+	const auto deviceMemory = BuildDeviceLocalMemoryPlan(memory);
+	EXPECT_NO_THROW(ValidateDeviceLocalMemoryPlan(memory, deviceMemory));
+
+	EXPECT_TRUE(deviceMemory.requiresDeviceLocalAllocator);
+	EXPECT_TRUE(deviceMemory.requiresStagingAllocator);
+	EXPECT_GT(deviceMemory.deviceLocalBytes, 0u);
+	EXPECT_FALSE(deviceMemory.stagingSteps.empty());
+
+	const auto hasDownload = std::ranges::any_of(deviceMemory.stagingSteps, [](const DeviceMemoryStagingStep& step) {
+		return step.direction == DeviceMemoryStagingDirection::Download &&
+		       step.reason.find("public device-local output") != std::string::npos;
+	});
+	EXPECT_TRUE(hasDownload);
+
+	const auto hasDeviceLocalWorkspace =
+	    std::ranges::any_of(deviceMemory.buffers, [](const DeviceMemoryBufferPlan& buffer) {
+		    return buffer.kind == MemoryBufferKind::Workspace && buffer.requiresDeviceLocal;
+	    });
+	EXPECT_TRUE(hasDeviceLocalWorkspace);
 }

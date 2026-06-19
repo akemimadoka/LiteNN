@@ -191,16 +191,15 @@ namespace LiteNN
 				"Mobile loaders still need platform-specific mmap/asset binding examples."
 			};
 		case MobileVulkanProductionGate::DeviceLocalMemoryPlanning:
-			return {
-				gate,
-				MobileVulkanProductionGateName(gate),
-				MobileConstraintLevel::Constrained,
-				true,
-				"Vulkan buffers can allocate device-local storage, but broad planning is not yet expressed as a stable "
-				"runtime/package contract.",
-				"Need device-local allocation classes, staging policy, alias legality, and per-device limit checks "
-				"before broad mobile GPU production support."
-			};
+			return { gate,
+				     MobileVulkanProductionGateName(gate),
+				     MobileConstraintLevel::Supported,
+				     true,
+				     "MemoryPlan exposes a DeviceLocalMemoryPlan with device-local allocation classes, upload/download "
+				     "staging steps, and validation against the canonical buffer plan.",
+				     "Backend allocators still need to consume the plan with per-device limit checks before broad "
+				     "mobile GPU "
+				     "production support." };
 		case MobileVulkanProductionGate::MobileDeviceMatrix:
 			return { gate,
 				     MobileVulkanProductionGateName(gate),

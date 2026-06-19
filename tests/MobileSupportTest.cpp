@@ -78,13 +78,13 @@ TEST(MobileSupportTest, ReportsVulkanProductionGates)
 	EXPECT_NE(std::string(fallback.evidence).find("fallback"), std::string::npos);
 
 	const auto memory = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::DeviceLocalMemoryPlanning);
-	EXPECT_EQ(memory.level, MobileConstraintLevel::Constrained);
+	EXPECT_EQ(memory.level, MobileConstraintLevel::Supported);
 	EXPECT_TRUE(memory.requiredForBroadMobileGPU);
-	EXPECT_NE(std::string(memory.missing).find("device-local allocation"), std::string::npos);
+	EXPECT_NE(std::string(memory.evidence).find("DeviceLocalMemoryPlan"), std::string::npos);
 
 	const auto matrix = QueryMobileVulkanProductionGateStatus(MobileVulkanProductionGate::MobileDeviceMatrix);
 	EXPECT_EQ(matrix.level, MobileConstraintLevel::Constrained);
-	EXPECT_TRUE(ContainsVulkanGateDiagnostic("DeviceLocalMemoryPlanning"));
+	EXPECT_FALSE(ContainsVulkanGateDiagnostic("DeviceLocalMemoryPlanning"));
 	EXPECT_TRUE(ContainsVulkanGateDiagnostic("MobileDeviceMatrix"));
 	EXPECT_FALSE(ContainsVulkanGateDiagnostic("GraphPartitioning"));
 }

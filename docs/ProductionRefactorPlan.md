@@ -110,10 +110,11 @@ CUDA:
 
 Vulkan/mobile:
 
-- [ ] Finish graph partitioning and device-local memory planning before claiming broad mobile GPU production support.
+- [x] Finish graph partitioning and device-local memory planning before claiming broad mobile GPU production support.
       `QueryMobileVulkanProductionGateStatuses()` now records graph partitioning, explicit fallback visibility, and
-      separated artifact regions as available gates, while device-local memory planning and mobile device-matrix
-      validation remain constrained blockers for broad mobile GPU production claims.
+      separated artifact regions as available gates. `BuildDeviceLocalMemoryPlan()` adds device-local allocation classes,
+      upload/download staging steps, and validation over `MemoryPlan`; broad mobile GPU production claims still require
+      backend allocator consumption plus mobile device-matrix validation.
 - [x] Keep desktop Vulkan and mobile Vulkan as separate support profiles.
       `ProductionBackendProfile::VulkanDesktopNative` and `VulkanMobileConstrained` report different scope, fallback,
       and capability policies.

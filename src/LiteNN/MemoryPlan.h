@@ -22,6 +22,22 @@ namespace LiteNN
 		Constant
 	};
 
+	enum class DeviceMemoryAllocationKind
+	{
+		HostVisible,
+		DeviceLocal,
+		Unified,
+		ExternalDevice,
+		ExternalHost,
+		ConstantDeviceLocal
+	};
+
+	enum class DeviceMemoryStagingDirection
+	{
+		Upload,
+		Download
+	};
+
 	struct MemoryValueLifetime
 	{
 		SubgraphId subgraph{};
@@ -60,6 +76,37 @@ namespace LiteNN
 		std::size_t persistentBytes{};
 		std::size_t externalBytes{};
 		std::size_t constantBytes{};
+	};
+
+	struct DeviceMemoryStagingStep
+	{
+		std::size_t buffer{};
+		DeviceMemoryStagingDirection direction{ DeviceMemoryStagingDirection::Upload };
+		std::size_t byteSize{};
+		std::string reason;
+	};
+
+	struct DeviceMemoryBufferPlan
+	{
+		std::size_t buffer{};
+		DeviceMemoryAllocationKind allocation{ DeviceMemoryAllocationKind::HostVisible };
+		TensorMemorySpace memorySpace{ TensorMemorySpace::Host };
+		MemoryBufferKind kind{ MemoryBufferKind::Workspace };
+		std::size_t byteSize{};
+		std::size_t alignment{ 1 };
+		bool requiresDeviceLocal{};
+		bool requiresHostStaging{};
+	};
+
+	struct DeviceLocalMemoryPlan
+	{
+		std::vector<DeviceMemoryBufferPlan> buffers;
+		std::vector<DeviceMemoryStagingStep> stagingSteps;
+		std::size_t deviceLocalBytes{};
+		std::size_t hostVisibleBytes{};
+		std::size_t stagingBytes{};
+		bool requiresDeviceLocalAllocator{};
+		bool requiresStagingAllocator{};
 	};
 
 	inline bool MemoryLifetimesOverlap(const MemoryValueLifetime& lhs, const MemoryValueLifetime& rhs) noexcept
@@ -254,6 +301,157 @@ namespace LiteNN
 			}
 		}
 		return nullptr;
+	}
+
+	inline bool MemoryBufferIsPublicOutput(const MemoryPlan& plan, std::size_t buffer)
+	{
+		for (const auto& assignment : plan.assignments)
+		{
+			if (assignment.buffer == buffer && assignment.lifetime.publicOutput)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	inline bool MemoryBufferIsGraphInput(const MemoryPlan& plan, std::size_t buffer)
+	{
+		for (const auto& assignment : plan.assignments)
+		{
+			if (assignment.buffer != buffer)
+			{
+				continue;
+			}
+			if (assignment.lifetime.firstUse == assignment.lifetime.value.node)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	inline DeviceMemoryAllocationKind DeviceAllocationForBuffer(const MemoryBuffer& buffer)
+	{
+		switch (buffer.memorySpace)
+		{
+		case TensorMemorySpace::Host:
+		case TensorMemorySpace::External:
+			return buffer.kind == MemoryBufferKind::External ? DeviceMemoryAllocationKind::ExternalHost
+			                                                 : DeviceMemoryAllocationKind::HostVisible;
+		case TensorMemorySpace::Unified:
+			return DeviceMemoryAllocationKind::Unified;
+		case TensorMemorySpace::Constant:
+			return DeviceMemoryAllocationKind::ConstantDeviceLocal;
+		case TensorMemorySpace::Device:
+			if (buffer.kind == MemoryBufferKind::External)
+			{
+				return DeviceMemoryAllocationKind::ExternalDevice;
+			}
+			if (buffer.kind == MemoryBufferKind::Constant)
+			{
+				return DeviceMemoryAllocationKind::ConstantDeviceLocal;
+			}
+			return DeviceMemoryAllocationKind::DeviceLocal;
+		}
+		return DeviceMemoryAllocationKind::HostVisible;
+	}
+
+	inline DeviceLocalMemoryPlan BuildDeviceLocalMemoryPlan(const MemoryPlan& memoryPlan)
+	{
+		DeviceLocalMemoryPlan devicePlan;
+		devicePlan.buffers.reserve(memoryPlan.buffers.size());
+		for (const auto& buffer : memoryPlan.buffers)
+		{
+			const auto allocation = DeviceAllocationForBuffer(buffer);
+			const auto requiresDeviceLocal = allocation == DeviceMemoryAllocationKind::DeviceLocal ||
+			                                 allocation == DeviceMemoryAllocationKind::ConstantDeviceLocal;
+			const auto needsUpload =
+			    requiresDeviceLocal &&
+			    (buffer.kind == MemoryBufferKind::Constant || buffer.kind == MemoryBufferKind::Persistent ||
+			     (buffer.kind == MemoryBufferKind::External && MemoryBufferIsGraphInput(memoryPlan, buffer.id)));
+			const auto needsDownload = requiresDeviceLocal && MemoryBufferIsPublicOutput(memoryPlan, buffer.id);
+			const auto requiresHostStaging = needsUpload || needsDownload;
+
+			devicePlan.buffers.push_back({
+			    .buffer = buffer.id,
+			    .allocation = allocation,
+			    .memorySpace = buffer.memorySpace,
+			    .kind = buffer.kind,
+			    .byteSize = buffer.byteSize,
+			    .alignment = buffer.alignment,
+			    .requiresDeviceLocal = requiresDeviceLocal,
+			    .requiresHostStaging = requiresHostStaging,
+			});
+
+			if (requiresDeviceLocal)
+			{
+				devicePlan.deviceLocalBytes += buffer.byteSize;
+				devicePlan.requiresDeviceLocalAllocator = true;
+			}
+			else
+			{
+				devicePlan.hostVisibleBytes += buffer.byteSize;
+			}
+			if (needsUpload)
+			{
+				devicePlan.stagingSteps.push_back({ .buffer = buffer.id,
+				                                    .direction = DeviceMemoryStagingDirection::Upload,
+				                                    .byteSize = buffer.byteSize,
+				                                    .reason = "device-local buffer requires host-to-device staging" });
+				devicePlan.stagingBytes += buffer.byteSize;
+				devicePlan.requiresStagingAllocator = true;
+			}
+			if (needsDownload)
+			{
+				devicePlan.stagingSteps.push_back(
+				    { .buffer = buffer.id,
+				      .direction = DeviceMemoryStagingDirection::Download,
+				      .byteSize = buffer.byteSize,
+				      .reason = "public device-local output requires device-to-host staging" });
+				devicePlan.stagingBytes += buffer.byteSize;
+				devicePlan.requiresStagingAllocator = true;
+			}
+		}
+		return devicePlan;
+	}
+
+	inline void ValidateDeviceLocalMemoryPlan(const MemoryPlan& memoryPlan, const DeviceLocalMemoryPlan& devicePlan)
+	{
+		if (devicePlan.buffers.size() != memoryPlan.buffers.size())
+		{
+			throw std::runtime_error("DeviceLocalMemoryPlan buffer count does not match MemoryPlan");
+		}
+		for (std::size_t i = 0; i < devicePlan.buffers.size(); ++i)
+		{
+			const auto& planned = devicePlan.buffers[i];
+			const auto& source = memoryPlan.buffers[i];
+			if (planned.buffer != source.id)
+			{
+				throw std::runtime_error(
+				    std::format("DeviceLocalMemoryPlan buffer {} has mismatched id {}", i, planned.buffer));
+			}
+			if (planned.byteSize != source.byteSize || planned.alignment != source.alignment ||
+			    planned.memorySpace != source.memorySpace || planned.kind != source.kind)
+			{
+				throw std::runtime_error("DeviceLocalMemoryPlan buffer metadata does not match MemoryPlan");
+			}
+		}
+		for (const auto& step : devicePlan.stagingSteps)
+		{
+			if (step.buffer >= memoryPlan.buffers.size())
+			{
+				throw std::runtime_error("DeviceLocalMemoryPlan staging step references an out-of-range buffer");
+			}
+			if (step.byteSize != memoryPlan.buffers[step.buffer].byteSize)
+			{
+				throw std::runtime_error("DeviceLocalMemoryPlan staging byte size does not match buffer size");
+			}
+			if (step.reason.empty())
+			{
+				throw std::runtime_error("DeviceLocalMemoryPlan staging step requires a reason");
+			}
+		}
 	}
 
 	inline void ValidateMemoryPlan(const ExecutablePlan& executablePlan, const MemoryPlan& memoryPlan)
