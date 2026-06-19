@@ -93,6 +93,7 @@ namespace
 	{
 		Tensor<CPU> storage;
 		QuantizationParams params;
+		PreparedQuantizedLinearWeight prepared;
 		Tensor<CPU> dequantized;
 		Tensor<CPU> bias;
 		bool relu{};
@@ -308,19 +309,28 @@ namespace
 		{
 		case QuantizedWeightKind::AffineInt8: {
 			const auto quantized = QuantizeAffine(weight, PerTensorAffineQuantization(DataType::Int8, 1.0F / 64.0F));
-			return { quantized.Storage(), quantized.Params(), DequantizeAffine(quantized), bias, spec.relu };
+			const auto storage = quantized.Storage();
+			const auto params = quantized.Params();
+			return { storage, params,   PrepareQuantizedLinearWeight(storage, params), DequantizeAffine(quantized),
+				     bias,    spec.relu };
 		}
 		case QuantizedWeightKind::PackedInt4: {
 			const auto quantized = QuantizeAffine(weight, PerTensorAffineQuantization(DataType::Int8, 1.0F / 4.0F));
 			auto params =
 			    PackedNibbleQuantization(PackedNibbleFormat::Int4, { spec.inputWidth, spec.outputWidth }, 1.0F / 4.0F);
 			const auto packed = PackInteger4(quantized.Storage(), params);
-			return { packed, params, DequantizePackedNibble(packed, params), bias, spec.relu };
+			return {
+				packed, params,   PrepareQuantizedLinearWeight(packed, params), DequantizePackedNibble(packed, params),
+				bias,   spec.relu
+			};
 		}
 		case QuantizedWeightKind::PackedFP4E2M1: {
 			auto params = PackedNibbleQuantization(PackedNibbleFormat::FP4E2M1, { spec.inputWidth, spec.outputWidth });
 			const auto packed = PackFloat4(weight, params);
-			return { packed, params, DequantizePackedNibble(packed, params), bias, spec.relu };
+			return {
+				packed, params,   PrepareQuantizedLinearWeight(packed, params), DequantizePackedNibble(packed, params),
+				bias,   spec.relu
+			};
 		}
 		}
 		throw std::invalid_argument("unsupported quantized weight kind");
@@ -374,6 +384,20 @@ namespace
 		for (const auto& layer : layers)
 		{
 			value = EvalQuantizedLinear(value, layer.storage, layer.params, &layer.bias);
+			if (layer.relu)
+			{
+				ApplyReLU(value);
+			}
+		}
+		return value;
+	}
+
+	Tensor<CPU> RunPreparedQuantizedModel(const Tensor<CPU>& input, const std::vector<QuantizedLayer>& layers)
+	{
+		Tensor<CPU> value = input;
+		for (const auto& layer : layers)
+		{
+			value = EvalPreparedQuantizedLinear(value, layer.prepared, &layer.bias);
 			if (layer.relu)
 			{
 				ApplyReLU(value);
@@ -901,6 +925,38 @@ namespace
 		for (auto _ : state)
 		{
 			auto output = RunNativeQuantizedModel(input, layers);
+			benchmark::DoNotOptimize(output);
+			benchmark::ClobberMemory();
+		}
+
+		SetThroughputCounters(state, batch);
+		state.counters["max_abs_error"] = benchmark::Counter(maxError, benchmark::Counter::kAvgIterations);
+	}
+
+	void BMPreparedQuantizedLinearRun(benchmark::State& state, ModelKind kind, std::size_t batch,
+	                                  QuantizedWeightKind weightKind)
+	{
+		const auto layers = MakeQuantizedLayers(kind, weightKind);
+		const auto inputData = MakeInputData(batch);
+		const auto input = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, kInputWidth });
+		const auto expected = RunDequantizedReferenceModel(input, layers);
+		const auto actual = RunPreparedQuantizedModel(input, layers);
+		const auto maxError = MaxAbsError(actual, expected);
+		if (maxError > kQuantizedBenchmarkTolerance)
+		{
+			state.SkipWithError(std::format("prepared quantized parity failed: max_abs_error={}", maxError).c_str());
+			return;
+		}
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto output = RunPreparedQuantizedModel(input, layers);
+			benchmark::DoNotOptimize(output);
+		}
+
+		for (auto _ : state)
+		{
+			auto output = RunPreparedQuantizedModel(input, layers);
 			benchmark::DoNotOptimize(output);
 			benchmark::ClobberMemory();
 		}
@@ -3090,6 +3146,9 @@ namespace
 					RegisterBenchmarkCase(
 					    std::format("NativeQuantizedLinear/{}", QuantizedWeightKindName(weightKind)), kind, batch,
 					    [=](benchmark::State& state) { BMNativeQuantizedLinearRun(state, kind, batch, weightKind); });
+					RegisterBenchmarkCase(
+					    std::format("PreparedQuantizedLinear/{}", QuantizedWeightKindName(weightKind)), kind, batch,
+					    [=](benchmark::State& state) { BMPreparedQuantizedLinearRun(state, kind, batch, weightKind); });
 					RegisterBenchmarkCase(
 					    std::format("DequantizedQuantizedLinearReference/{}", QuantizedWeightKindName(weightKind)),
 					    kind, batch, [=](benchmark::State& state) {

@@ -167,6 +167,10 @@ Conclusion: intra-op parallelism is now implemented and guarded, but the present
 local CPU case modestly. The next CPU performance step should parallelize the optimized lowering itself or call a
 production GEMM backend.
 
+Quantized validation note: `litenn_bench` now separates direct per-element weight decode,
+`PreparedQuantizedLinear/<format>` execution, and dequantized reference execution. This makes repeated int4/fp4 weight
+decode visible before investing in native packed microkernels.
+
 ## P3: CPU Kernel Refinement
 
 Goal: continue smaller single-thread improvements after parallelism lands.

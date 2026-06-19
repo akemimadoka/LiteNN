@@ -121,15 +121,19 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
 - [x] Add the first native quantized MatMul/Linear path for CPU direct execution over affine and packed-nibble weights.
       `EvalQuantizedMatMul` and `EvalQuantizedLinear` compute directly from quantized storage and are covered by parity
       tests against dequantize-plus-float execution.
+- [x] Add a reusable CPU prepared-weight path for quantized Linear workloads.
+      `PrepareQuantizedLinearWeight` materializes affine or packed-nibble weights once into a reusable float32 payload,
+      and `EvalPreparedQuantizedLinear` avoids repeated per-run weight decode while preserving parity with the direct
+      quantized reference path.
 - [ ] Add accelerated native quantized MatMul/Linear paths in priority order: CUDA/cuBLASLt or custom kernels, Vulkan
       shader path, then CPU AOT lowering.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [x] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.
       `litenn_bench` now registers `NativeQuantizedLinear/<format>` and
-      `DequantizedQuantizedLinearReference/<format>` rows for affine int8, packed int4, and packed FP4E2M1
-      Linear/MLP workloads. Each row reports `max_abs_error` against the opposite execution path so benchmark output
-      carries the parity signal needed before choosing CUDA/Vulkan native quantized kernels.
+      `PreparedQuantizedLinear/<format>` / `DequantizedQuantizedLinearReference/<format>` rows for affine int8, packed
+      int4, and packed FP4E2M1 Linear/MLP workloads. Each row reports `max_abs_error` against the opposite execution
+      path so benchmark output carries the parity signal needed before choosing CUDA/Vulkan native quantized kernels.
 
 ### G2: llama.cpp / GGUF Compatibility
 

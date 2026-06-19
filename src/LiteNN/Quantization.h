@@ -954,6 +954,150 @@ namespace LiteNN
 		throw std::runtime_error("Native quantized MatMul currently supports affine and packed-nibble weights only");
 	}
 
+	struct PreparedQuantizedLinearWeight
+	{
+		Tensor<CPU> dequantizedWeight;
+		std::size_t inputWidth{};
+		std::size_t outputWidth{};
+		QuantizationParams sourceParams;
+		DataType sourceStorageType{ DataType::Float32 };
+	};
+
+	inline PreparedQuantizedLinearWeight PrepareQuantizedLinearWeight(const Tensor<CPU>& weightStorage,
+	                                                                  const QuantizationParams& weightParams)
+	{
+		ValidateQuantizationParams(weightParams, weightStorage.Shape(), weightStorage.DType());
+		const auto storageShape = weightStorage.Shape();
+		const auto expressedShape = weightParams.expressedShape.empty()
+		                                ? std::span<const std::size_t>{ storageShape.Dims }
+		                                : std::span<const std::size_t>{ weightParams.expressedShape };
+		if (expressedShape.size() != 2)
+		{
+			throw std::runtime_error("Prepared quantized Linear weight requires rank-2 expressed shape");
+		}
+
+		if (weightParams.scheme == QuantizationScheme::Affine)
+		{
+			return {
+				.dequantizedWeight = DequantizeAffine(weightStorage, weightParams, DataType::Float32),
+				.inputWidth = expressedShape[0],
+				.outputWidth = expressedShape[1],
+				.sourceParams = weightParams,
+				.sourceStorageType = weightStorage.DType(),
+			};
+		}
+		if (weightParams.scheme == QuantizationScheme::Block &&
+		    IsPackedNibbleQuantizedBlockFormat(weightParams.blockFormat))
+		{
+			return {
+				.dequantizedWeight = DequantizePackedNibble(weightStorage, weightParams, DataType::Float32),
+				.inputWidth = expressedShape[0],
+				.outputWidth = expressedShape[1],
+				.sourceParams = weightParams,
+				.sourceStorageType = weightStorage.DType(),
+			};
+		}
+		throw std::runtime_error("Prepared quantized Linear currently supports affine and packed-nibble weights only");
+	}
+
+	inline Tensor<CPU> EvalPreparedQuantizedMatMul(const Tensor<CPU>& lhs, const PreparedQuantizedLinearWeight& weight,
+	                                               DataType outputType = DataType::Float32)
+	{
+		if (!IsFloatingDataType(lhs.DType()))
+		{
+			throw std::runtime_error("Prepared quantized MatMul lhs must be floating-point");
+		}
+		if (!IsFloatingDataType(outputType))
+		{
+			throw std::runtime_error("Prepared quantized MatMul output type must be floating-point");
+		}
+		const auto lhsShape = lhs.Shape();
+		if (lhsShape.NumDim() != 2)
+		{
+			throw std::runtime_error("Prepared quantized MatMul currently requires rank-2 lhs");
+		}
+		if (lhsShape[1] != weight.inputWidth)
+		{
+			throw std::runtime_error("Prepared quantized MatMul inner dimensions do not match");
+		}
+		if (weight.dequantizedWeight.DType() != DataType::Float32 ||
+		    weight.dequantizedWeight.Shape() != ShapeView{ { weight.inputWidth, weight.outputWidth } })
+		{
+			throw std::runtime_error("Prepared quantized MatMul weight payload is invalid");
+		}
+
+		Tensor<CPU> result(Uninitialized, { lhsShape[0], weight.outputWidth }, outputType);
+		const auto lhsF32 = QuantizationDetail::CopyToFloat32(lhs);
+		const auto* lhsPtr = static_cast<const float*>(lhsF32.UnsafeRawData());
+		const auto* rhsPtr = static_cast<const float*>(weight.dequantizedWeight.UnsafeRawData());
+		const auto m = lhsShape[0];
+		const auto k = weight.inputWidth;
+		const auto n = weight.outputWidth;
+
+		EnumDispatch(outputType, [&]<DataType OutputTypeValue> {
+			if constexpr (IsFloatingDataType(OutputTypeValue))
+			{
+				using OutputT = typename DeviceTraits<CPU>::template DataTypeMapping<OutputTypeValue>;
+				auto* dst = static_cast<OutputT*>(result.UnsafeRawData());
+				for (std::size_t row = 0; row < m; ++row)
+				{
+					for (std::size_t col = 0; col < n; ++col)
+					{
+						double acc = 0.0;
+						for (std::size_t kk = 0; kk < k; ++kk)
+						{
+							acc +=
+							    static_cast<double>(lhsPtr[row * k + kk]) * static_cast<double>(rhsPtr[kk * n + col]);
+						}
+						dst[row * n + col] = static_cast<OutputT>(acc);
+					}
+				}
+			}
+		});
+		return result;
+	}
+
+	inline Tensor<CPU> EvalPreparedQuantizedLinear(const Tensor<CPU>& input,
+	                                               const PreparedQuantizedLinearWeight& weight,
+	                                               const Tensor<CPU>* bias = nullptr,
+	                                               DataType outputType = DataType::Float32)
+	{
+		auto result = EvalPreparedQuantizedMatMul(input, weight, outputType);
+		if (bias == nullptr)
+		{
+			return result;
+		}
+		if (bias->DType() != outputType)
+		{
+			throw std::runtime_error("Prepared quantized Linear bias dtype must match output dtype");
+		}
+		const auto n = result.Shape()[1];
+		const auto biasShape = bias->Shape();
+		const auto biasIsVector = biasShape.NumDim() == 1 && biasShape[0] == n;
+		const auto biasIsRow = biasShape.NumDim() == 2 && biasShape[0] == 1 && biasShape[1] == n;
+		if (!biasIsVector && !biasIsRow)
+		{
+			throw std::runtime_error("Prepared quantized Linear bias shape must be {N} or {1, N}");
+		}
+
+		EnumDispatch(outputType, [&]<DataType OutputTypeValue> {
+			if constexpr (IsFloatingDataType(OutputTypeValue))
+			{
+				using OutputT = typename DeviceTraits<CPU>::template DataTypeMapping<OutputTypeValue>;
+				auto* dst = static_cast<OutputT*>(result.UnsafeRawData());
+				const auto* biasPtr = static_cast<const OutputT*>(bias->UnsafeRawData());
+				for (std::size_t row = 0; row < result.Shape()[0]; ++row)
+				{
+					for (std::size_t col = 0; col < n; ++col)
+					{
+						dst[row * n + col] = static_cast<OutputT>(dst[row * n + col] + biasPtr[col]);
+					}
+				}
+			}
+		});
+		return result;
+	}
+
 	inline Tensor<CPU> EvalQuantizedMatMul(const Tensor<CPU>& lhs, const Tensor<CPU>& rhsStorage,
 	                                       const QuantizationParams& rhsParams, DataType outputType = DataType::Float32)
 	{

@@ -257,6 +257,34 @@ TEST(Quantization, NativePackedFP4QuantizedLinearAddsBias)
 	ExpectTensorNear(actual, expected);
 }
 
+TEST(Quantization, PreparedQuantizedLinearReusesDecodedPackedWeight)
+{
+	const Tensor<CPU> input({ 1.0, 0.5, -2.0, 3.0 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> rhs({ 0.5, 1.5, -6.0, 3.0 }, { 2, 2 }, DataType::Float32);
+	const Tensor<CPU> bias({ 0.25, -0.5 }, { 2 }, DataType::Float32);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::FP4E2M1, { 2, 2 });
+	const auto packed = PackFloat4(rhs, params);
+
+	const auto prepared = PrepareQuantizedLinearWeight(packed, params);
+	const auto actual = EvalPreparedQuantizedLinear(input, prepared, &bias);
+	const auto expected = EvalQuantizedLinear(input, packed, params, &bias);
+
+	EXPECT_EQ(prepared.inputWidth, 2);
+	EXPECT_EQ(prepared.outputWidth, 2);
+	EXPECT_EQ(prepared.sourceStorageType, DataType::UInt8);
+	ExpectTensorNear(actual, expected);
+}
+
+TEST(Quantization, PreparedQuantizedLinearRejectsShapeMismatch)
+{
+	const Tensor<CPU> input({ 1.0, 2.0, 3.0 }, { 1, 3 }, DataType::Float32);
+	const Tensor<CPU> rhs({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32);
+	const auto quantized = QuantizeAffine(rhs, PerTensorAffineQuantization(DataType::Int8, 0.5F));
+	const auto prepared = PrepareQuantizedLinearWeight(quantized.Storage(), quantized.Params());
+
+	EXPECT_THROW((void) EvalPreparedQuantizedLinear(input, prepared), std::runtime_error);
+}
+
 TEST(Quantization, NativeQuantizedMatMulRejectsInvalidShapes)
 {
 	const Tensor<CPU> lhs({ 1.0, 2.0 }, { 2 }, DataType::Float32);
