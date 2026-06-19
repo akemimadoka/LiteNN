@@ -668,6 +668,12 @@ namespace LiteNN::Serialization
 				}
 				out << ",\"fallbackBackend\":";
 				JsonString(out, step.fallbackBackend);
+				out << ",\"streamOwner\":";
+				JsonString(out, step.streamOwner);
+				out << ",\"eventOwner\":";
+				JsonString(out, step.eventOwner);
+				out << ",\"syncScope\":";
+				JsonString(out, step.syncScope);
 				out << ",\"inputBuffers\":";
 				NumberList(out, step.inputBuffers);
 				out << ",\"outputBuffers\":";
@@ -1374,6 +1380,11 @@ namespace LiteNN::Serialization
 					.backend = AsString(Member(step, "backend", "runtimeStep.backend"), "runtimeStep.backend"),
 					.fallbackBackend = AsString(Member(step, "fallbackBackend", "runtimeStep.fallbackBackend"),
 					                            "runtimeStep.fallbackBackend"),
+					.streamOwner =
+					    AsString(Member(step, "streamOwner", "runtimeStep.streamOwner"), "runtimeStep.streamOwner"),
+					.eventOwner =
+					    AsString(Member(step, "eventOwner", "runtimeStep.eventOwner"), "runtimeStep.eventOwner"),
+					.syncScope = AsString(Member(step, "syncScope", "runtimeStep.syncScope"), "runtimeStep.syncScope"),
 					.inputBuffers =
 					    SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"), "runtimeStep.inputBuffers"),
 					.outputBuffers = SizeList(Member(step, "outputBuffers", "runtimeStep.outputBuffers"),

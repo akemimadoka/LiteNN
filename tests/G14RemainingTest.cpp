@@ -302,6 +302,9 @@ TEST(G14Remaining, PlacementTransfersCreateSyncStepsAndProfileSummary)
 	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::Sync);
 	EXPECT_EQ(schedule.steps.back().backend, BackendCUDANative);
 	EXPECT_EQ(schedule.steps.back().fallbackBackend, BackendCPUInterpreter);
+	EXPECT_EQ(schedule.steps.back().streamOwner, "cuda-default-stream");
+	EXPECT_EQ(schedule.steps.back().eventOwner, "cuda-runtime-event");
+	EXPECT_EQ(schedule.steps.back().syncScope, "transfer-boundary");
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
@@ -336,6 +339,11 @@ TEST(G14Remaining, PlacementTransfersCreateSyncStepsAndProfileSummary)
 	ASSERT_FALSE(invalid.steps.empty());
 	invalid.steps.back().inputBuffers.clear();
 	EXPECT_THROW(Runtime::ValidateRuntimeSchedule(invalid), std::runtime_error);
+
+	auto missingOwnership = schedule;
+	ASSERT_FALSE(missingOwnership.steps.empty());
+	missingOwnership.steps.back().streamOwner.clear();
+	EXPECT_THROW(Runtime::ValidateRuntimeSchedule(missingOwnership), std::runtime_error);
 }
 
 TEST(G14Remaining, PlacementConstraintsSelectBackendsAndValidateDefaults)
@@ -449,10 +457,18 @@ TEST(G14Remaining, PlacementSegmentsExposePerBackendBufferBoundaries)
 	ASSERT_FALSE(trace.empty());
 	EXPECT_TRUE(std::ranges::any_of(
 	    trace, [](const auto& event) { return event.message.find("dispatch segment") != std::string::npos; }));
+	EXPECT_TRUE(std::ranges::any_of(trace, [](const auto& event) {
+		return event.kind == Runtime::RuntimeScheduleStepKind::Sync && event.streamOwner == "cuda-default-stream" &&
+		       event.eventOwner == "cuda-runtime-event";
+	}));
 	const auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
 	ASSERT_EQ(profileRecords.size(), schedule.steps.size());
 	EXPECT_TRUE(std::ranges::any_of(
 	    profileRecords, [](const auto& record) { return record.label.find("segment") != std::string::npos; }));
+	EXPECT_TRUE(std::ranges::any_of(profileRecords, [](const auto& record) {
+		return record.kind == Runtime::RuntimeScheduleStepKind::Sync && record.streamOwner == "cuda-default-stream" &&
+		       record.syncScope == "transfer-boundary";
+	}));
 	const auto summary = Runtime::BuildRuntimeScheduleProfileSummary(profileRecords);
 	EXPECT_EQ(summary.dispatchSteps, 4u);
 	EXPECT_EQ(summary.transferSteps, 2u);

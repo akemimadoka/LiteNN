@@ -342,6 +342,10 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
 		EXPECT_NE(json.find("\"segment\""), std::string::npos);
 		EXPECT_NE(json.find("\"backendRequirements\""), std::string::npos);
 		EXPECT_NE(json.find("\"runtime-buffer-transfer-v1\""), std::string::npos);
+		EXPECT_NE(json.find("\"streamOwner\""), std::string::npos);
+		EXPECT_NE(json.find("\"cuda-default-stream\""), std::string::npos);
+		EXPECT_NE(json.find("\"eventOwner\""), std::string::npos);
+		EXPECT_NE(json.find("\"cuda-runtime-event\""), std::string::npos);
 		EXPECT_NE(json.find(BackendCUDANative), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
@@ -360,6 +364,13 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleSegments)
 	ASSERT_NE(segmentStepIt, package.manifest.runtimeSteps.end());
 	ASSERT_TRUE(segmentStepIt->segment.has_value());
 	EXPECT_LT(*segmentStepIt->segment, package.manifest.runtimeSegments.size());
+	const auto syncStepIt = std::ranges::find_if(package.manifest.runtimeSteps, [](const auto& step) {
+		return step.kind == Runtime::RuntimeScheduleStepKind::Sync;
+	});
+	ASSERT_NE(syncStepIt, package.manifest.runtimeSteps.end());
+	EXPECT_EQ(syncStepIt->streamOwner, "cuda-default-stream");
+	EXPECT_EQ(syncStepIt->eventOwner, "cuda-runtime-event");
+	EXPECT_EQ(syncStepIt->syncScope, "transfer-boundary");
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
 	ASSERT_EQ(package.manifest.artifacts[0].backendRequirements.size(), 3u);

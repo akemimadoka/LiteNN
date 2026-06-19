@@ -101,6 +101,9 @@ namespace LiteNN::Runtime
 		std::optional<std::size_t> segment;
 		std::string backend;
 		std::string fallbackBackend;
+		std::string streamOwner;
+		std::string eventOwner;
+		std::string syncScope;
 		std::vector<std::size_t> inputBuffers;
 		std::vector<std::size_t> outputBuffers;
 	};
@@ -111,6 +114,9 @@ namespace LiteNN::Runtime
 		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
 		std::string backend;
 		std::string fallbackBackend;
+		std::string streamOwner;
+		std::string eventOwner;
+		std::string syncScope;
 		std::string message;
 	};
 
@@ -120,6 +126,9 @@ namespace LiteNN::Runtime
 		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
 		std::string backend;
 		std::string fallbackBackend;
+		std::string streamOwner;
+		std::string eventOwner;
+		std::string syncScope;
 		std::vector<std::size_t> inputBuffers;
 		std::vector<std::size_t> outputBuffers;
 		std::string label;
@@ -524,6 +533,32 @@ namespace LiteNN::Runtime
 		       backend == BackendVulkanBridge;
 	}
 
+	inline std::string RuntimeStreamOwnerForBackend(std::string_view backend)
+	{
+		if (backend == BackendCUDANative || backend == BackendCUDABridge)
+		{
+			return "cuda-default-stream";
+		}
+		if (backend == BackendVulkanNative || backend == BackendVulkanBridge)
+		{
+			return "vulkan-command-queue";
+		}
+		return {};
+	}
+
+	inline std::string RuntimeEventOwnerForBackend(std::string_view backend)
+	{
+		if (backend == BackendCUDANative || backend == BackendCUDABridge)
+		{
+			return "cuda-runtime-event";
+		}
+		if (backend == BackendVulkanNative || backend == BackendVulkanBridge)
+		{
+			return "vulkan-runtime-fence";
+		}
+		return {};
+	}
+
 	inline void AppendPlacementSyncSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
 	{
 		for (const auto& transfer : placement.transferSteps)
@@ -539,6 +574,9 @@ namespace LiteNN::Runtime
 			step.kind = RuntimeScheduleStepKind::Sync;
 			step.backend = targetNeedsSync ? transfer.targetBackend : transfer.sourceBackend;
 			step.fallbackBackend = targetNeedsSync ? transfer.sourceBackend : transfer.targetBackend;
+			step.streamOwner = RuntimeStreamOwnerForBackend(step.backend);
+			step.eventOwner = RuntimeEventOwnerForBackend(step.backend);
+			step.syncScope = "transfer-boundary";
 			step.inputBuffers.push_back(transfer.buffer);
 			step.outputBuffers.push_back(transfer.buffer);
 			schedule.steps.push_back(std::move(step));
@@ -574,8 +612,9 @@ namespace LiteNN::Runtime
 			}
 			else if (step.kind == RuntimeScheduleStepKind::Sync)
 			{
-				message = std::format("sync {} with {} buffers={}", step.backend, step.fallbackBackend,
-				                      step.inputBuffers.size());
+				message = std::format("sync {} with {} buffers={} stream={} event={} scope={}", step.backend,
+				                      step.fallbackBackend, step.inputBuffers.size(), step.streamOwner, step.eventOwner,
+				                      step.syncScope);
 			}
 			else
 			{
@@ -587,6 +626,9 @@ namespace LiteNN::Runtime
 			                   .kind = step.kind,
 			                   .backend = step.backend,
 			                   .fallbackBackend = step.fallbackBackend,
+			                   .streamOwner = step.streamOwner,
+			                   .eventOwner = step.eventOwner,
+			                   .syncScope = step.syncScope,
 			                   .message = std::move(message) });
 		}
 		return events;
@@ -619,6 +661,9 @@ namespace LiteNN::Runtime
 			     .kind = step.kind,
 			     .backend = step.backend,
 			     .fallbackBackend = step.fallbackBackend,
+			     .streamOwner = step.streamOwner,
+			     .eventOwner = step.eventOwner,
+			     .syncScope = step.syncScope,
 			     .inputBuffers = step.inputBuffers,
 			     .outputBuffers = step.outputBuffers,
 			     .label = std::move(label) };
@@ -828,6 +873,11 @@ namespace LiteNN::Runtime
 				if (step.backend.empty())
 				{
 					throw std::runtime_error("Runtime sync step must name a synchronizing backend");
+				}
+				if (BackendNeedsRuntimeSync(step.backend) &&
+				    (step.streamOwner.empty() || step.eventOwner.empty() || step.syncScope.empty()))
+				{
+					throw std::runtime_error("Runtime sync step must record stream/event ownership");
 				}
 				if (step.inputBuffers.empty() || step.outputBuffers.empty())
 				{
