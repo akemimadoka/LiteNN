@@ -1421,6 +1421,8 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 #### G13.4 Validation and Benchmarking
 
 - [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
+  Initial coverage: `Training.AOTAndInterpreterSGDStepMatchForScalarGraph` compares one SGD train step between the
+  interpreter trainer and CPU AOT trainer for a scalar graph. Linear/MLP/loss/AdamW parity still needs broader coverage.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.

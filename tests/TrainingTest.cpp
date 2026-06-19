@@ -49,6 +49,21 @@ namespace
 		backward.SetResults({ { saved, 0 } });
 		graph.SetBackward(graph.AddSubgraph(std::move(backward)));
 	}
+
+	std::size_t BuildScalarMultiplyModel(ModelGraph& model)
+	{
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 3.0f }, { 1 })));
+
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 1 });
+		const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
+		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
+		                          { OutputInfo{ DataType::Float32, { 1 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		return weightIndex;
+	}
 } // namespace
 
 TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
@@ -178,6 +193,37 @@ TEST(Training, AOTPolicyRunsForwardBackwardAndRefreshesUpdatedWeights)
 	EXPECT_FLOAT_EQ(ReadFloat(secondStep.backwardResults[0], 0), 5.2f);
 	EXPECT_FLOAT_EQ(ReadFloat(secondStep.backwardResults[1], 0), 4.0f);
 	EXPECT_FLOAT_EQ(ReadVariableDataFloat(graph, weightIndex, 0), 2.2f);
+}
+
+TEST(Training, AOTAndInterpreterSGDStepMatchForScalarGraph)
+{
+	ModelGraph interpreterModel;
+	const auto interpreterWeight = BuildScalarMultiplyModel(interpreterModel);
+	ModelGraph aotModel;
+	const auto aotWeight = BuildScalarMultiplyModel(aotModel);
+
+	Training::Trainer<CPU, Optimizer::SGD> interpreterTrainer(interpreterModel, Optimizer::SGD(0.1f));
+	Training::TrainerOptions aotOptions;
+	aotOptions.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::SGD> aotTrainer(aotModel, Optimizer::SGD(0.1f), aotOptions);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+
+	const auto interpreterStep = interpreterTrainer.Step(inputs, outputGradients);
+	const auto aotStep = aotTrainer.Step(inputs, outputGradients);
+
+	ASSERT_EQ(aotStep.outputs.size(), interpreterStep.outputs.size());
+	ASSERT_EQ(aotStep.backwardResults.size(), interpreterStep.backwardResults.size());
+	EXPECT_FLOAT_EQ(ReadFloat(aotStep.outputs[0], 0), ReadFloat(interpreterStep.outputs[0], 0));
+	EXPECT_FLOAT_EQ(ReadFloat(aotStep.backwardResults[0], 0), ReadFloat(interpreterStep.backwardResults[0], 0));
+	EXPECT_FLOAT_EQ(ReadFloat(aotStep.backwardResults[1], 0), ReadFloat(interpreterStep.backwardResults[1], 0));
+	EXPECT_FLOAT_EQ(ReadVariableGradFloat(aotModel.UnsafeMutableGraph(), aotWeight, 0),
+	                ReadVariableGradFloat(interpreterModel.UnsafeMutableGraph(), interpreterWeight, 0));
+	EXPECT_FLOAT_EQ(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), aotWeight, 0),
+	                ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), interpreterWeight, 0));
 }
 
 TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
