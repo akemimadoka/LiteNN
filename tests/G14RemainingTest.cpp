@@ -144,6 +144,66 @@ TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
 	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
 }
 
+TEST(G14Remaining, CostModelRanksCPUAOTCUDANativeAndInterpreterFallback)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 8 });
+	const auto negated =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { input, 0 } }, { OutputInfo{ DataType::Float32, { 8 } } });
+	subgraph.SetResults({ { negated, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	for (std::string_view kind : { "ParamRefNode", "UnaryOpNode" })
+	{
+		registry.RegisterCapability(kind, {
+		                                      .backend = std::string(BackendCPUAOT),
+		                                      .support = BackendSupportLevel::Native,
+		                                      .layouts = { TensorLayoutKind::RowMajor },
+		                                      .memorySpaces = { TensorMemorySpace::Host },
+		                                      .relativeCost = 0.20,
+		                                  });
+		registry.RegisterCapability(kind, {
+		                                      .backend = std::string(BackendCUDABridge),
+		                                      .support = BackendSupportLevel::Fallback,
+		                                      .layouts = { TensorLayoutKind::RowMajor },
+		                                      .memorySpaces = { TensorMemorySpace::Host },
+		                                      .fallback = std::string(BackendCPUInterpreter),
+		                                      .relativeCost = 0.05,
+		                                  });
+	}
+	registry.RegisterCapability("UnaryOpNode", {
+	                                               .backend = std::string(BackendCUDANative),
+	                                               .support = BackendSupportLevel::Native,
+	                                               .layouts = { TensorLayoutKind::RowMajor },
+	                                               .memorySpaces = { TensorMemorySpace::Host },
+	                                               .relativeCost = 0.01,
+	                                           });
+	constexpr std::array<std::string_view, 4> backends{ BackendCPUInterpreter, BackendCPUAOT, BackendCUDANative,
+		                                                BackendCUDABridge };
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry);
+	ASSERT_EQ(placement.decisions.size(), 2u);
+	EXPECT_EQ(placement.decisions[0].backend, BackendCPUAOT);
+	EXPECT_EQ(placement.decisions[0].support, BackendSupportLevel::Native);
+	EXPECT_EQ(placement.decisions[1].backend, BackendCUDANative);
+	EXPECT_EQ(placement.decisions[1].support, BackendSupportLevel::Native);
+	EXPECT_TRUE(placement.fallbackSteps.empty());
+	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
+
+	constexpr std::array<std::string_view, 1> fallbackOnly{ BackendCUDABridge };
+	const auto fallbackPlacement = Runtime::BuildPlacementPlan(plan, fallbackOnly, registry);
+	ASSERT_EQ(fallbackPlacement.decisions.size(), 2u);
+	EXPECT_EQ(fallbackPlacement.decisions[0].support, BackendSupportLevel::Fallback);
+	EXPECT_EQ(fallbackPlacement.decisions[0].fallback, BackendCPUInterpreter);
+	ASSERT_EQ(fallbackPlacement.fallbackSteps.size(), 2u);
+
+	Runtime::PlacementOptions rejectFallback;
+	rejectFallback.fallbackPolicy = Runtime::PlacementFallbackPolicy::RejectFallback;
+	EXPECT_THROW((void) Runtime::BuildPlacementPlan(plan, fallbackOnly, registry, rejectFallback), std::runtime_error);
+}
+
 TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 {
 	Graph graph;

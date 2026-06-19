@@ -739,10 +739,10 @@ from existing const-fold/fusion passes.
 - [x] Add NN-specific rewrites: matmul+bias+activation fusion, reshape/permute/broadcast canonicalization, and redundant copy removal.
       （已完成：reshape no-op/compose、permute identity/compose、broadcast no-op/compose；
       matmul+bias+activation fusion remains owned by `FusionPass` until an e-graph cost model can choose it explicitly.）
-- [ ] Add backend-aware cost models for CPU AOT, CUDA native, and interpreter fallback.
-      （当前阻塞：需要 backend-calibrated latency/throughput data、layout/transfer/workspace memory model、
-      numerical-safety policy, and an extractor that can choose between fused/decomposed/materialized alternatives
-      rather than only applying local deterministic simplifications。）
+- [x] Add backend-aware cost models for CPU AOT, CUDA native, and interpreter fallback.
+      （已完成：placement cost model uses backend capability relative cost, transfer/fallback penalties, layout/dtype
+      penalties, workspace pressure, and explicit fallback policy; regression coverage ranks CPU AOT, CUDA native, and
+      interpreter fallback paths. E-graph fused/decomposed extraction remains future aggressive-saturation work.）
 - [x] Add numerical-safety flags so aggressive rewrites can be disabled for strict reproducibility.
       （已完成：`EGraphOptions::allowUnsafeFloatingRewrites` defaults to false; floating commutativity/associativity
       is not broadly applied under strict mode.）
