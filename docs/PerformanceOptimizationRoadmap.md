@@ -243,19 +243,24 @@ Goal: make training bottlenecks visible before optimizing them.
 
 Status: implemented on 2026-05-16.
 
-- [x] Add `bench_train.cpp` for MNIST MLP-128 and MLP-512.
-  - Implementation: `litenn_bench_train` covers synthetic MNIST-shaped MLP-128 and MLP-512 batches.
+- [x] Add `bench_train.cpp` for MNIST Linear, MLP-128, and MLP-512.
+  - Implementation: `litenn_bench_train` covers synthetic MNIST-shaped Linear, MLP-128, and MLP-512 batches.
 - [x] Report forward, backward, optimizer step, and full step timings separately.
   - Implementation: `TrainCPUInterpreter/{Forward,Backward,OptimizerStep,FullStep}` benchmark families.
 - [x] Track CPU AOT T1/T16, CUDA CPU fallback, and CUDA native variants independently.
   - Implementation: training forward baselines are registered as `TrainCPUAOT`, `TrainCPUAOTT1`,
     `TrainCPUAOTT16`, `TrainCUDACPUFallback`, and `TrainCUDANative`; CUDA CPU fallback uses
     `LITENN_CUDA_DISABLE_NATIVE_AOT=1` to keep the bridge measurable after native coverage expanded.
+- [x] Add a CPU AOT trainer full-step row for the current compiled-training subset.
+  - Implementation: `TrainCPUAOT/FullStep/MNIST-Linear` runs through `Trainer` with `TrainExecutionPolicy::AOT`.
+    MLP full-step rows are registered but report the current `LoadActivationNode` readiness diagnostic until saved
+    activation/tape state is represented through explicit G13.1 train-step ABI bindings or recomputation.
 
 P5 validation spot check:
 
 | Benchmark | Real time |
 | --- | ---: |
+| `TrainCPUAOT/FullStep/MNIST-Linear/batch:32` | `337 ms` Debug smoke |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP128/batch:512` | `17.84 ms` |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP512/batch:512` | `86.18 ms` |
 | `TrainCUDANative/Forward/MNIST-MLP128/batch:512` | `0.188 ms` |

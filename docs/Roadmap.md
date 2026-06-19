@@ -1440,6 +1440,10 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   step indices, and first/second moments. Linear/MLP and compiled-loss parity still need broader coverage.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
+  `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers
+  `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. The Linear AOT full-step row executes today; MLP AOT
+  full-step rows intentionally surface the current `LoadActivationNode` readiness diagnostic until G13.1 removes hidden
+  activation/tape state from compiled training.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
 
 ### G14: vNext Breaking Architecture

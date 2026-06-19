@@ -22,6 +22,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <format>
 #include <optional>
 #include <random>
@@ -38,6 +39,7 @@ namespace
 
 	enum class TrainModelKind : std::size_t
 	{
+		Linear,
 		MLP128,
 		MLP512,
 	};
@@ -48,9 +50,11 @@ namespace
 		std::span<const std::size_t> hiddenSizes;
 	};
 
+	constexpr std::array<std::size_t, 0> kLinearHidden = {};
 	constexpr std::array<std::size_t, 1> kMLP128Hidden = { 128 };
 	constexpr std::array<std::size_t, 2> kMLP512Hidden = { 512, 256 };
-	constexpr std::array<TrainModelKind, 2> kTrainModelKinds = {
+	constexpr std::array<TrainModelKind, 3> kTrainModelKinds = {
+		TrainModelKind::Linear,
 		TrainModelKind::MLP128,
 		TrainModelKind::MLP512,
 	};
@@ -59,7 +63,8 @@ namespace
 
 	const TrainModelSpec& GetTrainModelSpec(TrainModelKind kind)
 	{
-		static constexpr std::array<TrainModelSpec, 2> specs = {
+		static constexpr std::array<TrainModelSpec, 3> specs = {
+			TrainModelSpec{ "MNIST-Linear", kLinearHidden },
 			TrainModelSpec{ "MNIST-MLP128", kMLP128Hidden },
 			TrainModelSpec{ "MNIST-MLP512", kMLP512Hidden },
 		};
@@ -401,6 +406,45 @@ namespace
 		BMTrainCPUAOTForwardConfigured(state, kind, batch, "16");
 	}
 
+	void BMTrainCPUAOTFullStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+	{
+		ModelGraph model(BuildTrainingGraph(kind, batch));
+		const auto inputData = MakeInputData(batch);
+		const auto targets = MakeTargets(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		Training::TrainerOptions options{
+			.buildBackwardIfMissing = false,
+			.executionPolicy = Training::TrainExecutionPolicy::AOT,
+			.aotBackendAvailable = true,
+		};
+
+		try
+		{
+			Training::Trainer<CPU, Optimizer::SGD> trainer(
+			    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }), options);
+
+			for (int i = 0; i < kWarmupIterations; ++i)
+			{
+				auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+				benchmark::DoNotOptimize(result.loss);
+			}
+
+			for (auto _ : state)
+			{
+				auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+				benchmark::DoNotOptimize(result.loss);
+				benchmark::DoNotOptimize(result.outputs);
+				benchmark::DoNotOptimize(result.backwardResults);
+				benchmark::ClobberMemory();
+			}
+			SetThroughputCounters(state, batch);
+		}
+		catch (const std::exception& ex)
+		{
+			state.SkipWithError(std::format("CPU AOT trainer is not available for this graph: {}", ex.what()).c_str());
+		}
+	}
+
 #ifdef LITENN_ENABLE_CUDA
 	std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module)
 	{
@@ -529,6 +573,8 @@ namespace
 				                       [=](benchmark::State& state) { BMTrainCPUAOTForwardT1(state, kind, batch); });
 				RegisterTrainBenchmark("TrainCPUAOTT16", "Forward", kind, batch,
 				                       [=](benchmark::State& state) { BMTrainCPUAOTForwardT16(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUAOT", "FullStep", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUAOTFullStep(state, kind, batch); });
 				RegisterTrainBenchmark("TrainCUDACPUFallback", "Forward", kind, batch, [=](benchmark::State& state) {
 					BMTrainCUDACPUFallbackForward(state, kind, batch);
 				});
