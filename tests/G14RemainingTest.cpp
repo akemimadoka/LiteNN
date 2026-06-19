@@ -273,6 +273,65 @@ TEST(G14Remaining, BackendPlacementTransfersAreExplicitInScheduleProfile)
 	EXPECT_THROW(Runtime::ValidatePlacementPlan(invalidTransfer), std::runtime_error);
 }
 
+TEST(G14Remaining, PlacementConstraintsSelectBackendsAndValidateDefaults)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto cast = subgraph.AddNode(CastNode{ { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { cast, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("CastNode", {
+	                                            .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Native,
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .memorySpaces = { TensorMemorySpace::Host },
+	                                            .relativeCost = 0.01,
+	                                        });
+	constexpr std::array<std::string_view, 2> backends{ BackendCPUInterpreter, BackendCUDANative };
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+
+	Runtime::PlacementOptions cpuDefault;
+	cpuDefault.defaultBackend = std::string(BackendCPUInterpreter);
+	const auto cpuPlacement = Runtime::BuildPlacementPlan(plan, backends, registry, cpuDefault);
+	ASSERT_EQ(cpuPlacement.decisions.size(), 2u);
+	for (const auto& decision : cpuPlacement.decisions)
+	{
+		EXPECT_EQ(decision.backend, BackendCPUInterpreter);
+	}
+	EXPECT_TRUE(cpuPlacement.transferSteps.empty());
+	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(cpuPlacement));
+
+	Runtime::PlacementOptions constrained;
+	constrained.defaultBackend = std::string(BackendCPUInterpreter);
+	constrained.valueConstraints.push_back({ .subgraph = graph.Forward(),
+	                                         .value = { cast, 0 },
+	                                         .backend = std::string(BackendCUDANative),
+	                                         .reason = "force result on CUDA for heterogeneous smoke" });
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry, constrained);
+	const auto castDecision = std::ranges::find_if(
+	    placement.decisions, [&](const Runtime::PlacementDecision& decision) { return decision.node == cast; });
+	ASSERT_NE(castDecision, placement.decisions.end());
+	EXPECT_EQ(castDecision->backend, BackendCUDANative);
+	ASSERT_EQ(placement.transferSteps.size(), 1u);
+	EXPECT_EQ(placement.transferSteps[0].targetBackend, BackendCUDANative);
+	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
+
+	auto tampered = placement;
+	ASSERT_FALSE(tampered.valueConstraints.empty());
+	tampered.valueConstraints[0].backend = std::string(BackendCPUInterpreter);
+	EXPECT_THROW(Runtime::ValidatePlacementPlan(tampered), std::runtime_error);
+
+	Runtime::PlacementOptions missingBackend;
+	missingBackend.nodeConstraints.push_back({ .subgraph = graph.Forward(),
+	                                           .node = cast,
+	                                           .backend = std::string(BackendVulkanNative),
+	                                           .reason = "not in candidate list" });
+	EXPECT_THROW((void) Runtime::BuildPlacementPlan(plan, backends, registry, missingBackend), std::runtime_error);
+}
+
 TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 {
 	auto manifest = Serialization::BuildImporterOwnedManifest("torch+safetensors", BuildTrainableGraph());

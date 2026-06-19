@@ -657,12 +657,18 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 
 #### G7.1 Device Placement Contract
 
-- [ ] Add graph-level device-placement metadata for params, variables, intermediate values, and results.
-- [ ] Define automatic placement defaults: keep current single-device behavior when no placement metadata is present.
+- [x] Add graph-level device-placement metadata for params, variables, intermediate values, and results.
+      `PlacementOptions` now accepts node/value constraints that higher-level graph metadata can lower into, covering
+      params, variables, intermediate values, and results through their executable `NodeOutput` producer.
+- [x] Define automatic placement defaults: keep current single-device behavior when no placement metadata is present.
+      `PlacementOptions::defaultBackend` keeps unconstrained plans on one requested backend, while an empty default
+      preserves the existing cost-model behavior.
 - [x] Add explicit copy/transfer edges or runtime transfer plans instead of hiding cross-device moves inside arbitrary nodes.
       `PlacementPlan` now records backend-to-backend transfer steps when a node consumes a value produced by another
       backend, and `RuntimeSchedule` can append those transfer steps with trace/profile labels.
-- [ ] Validate placement consistency, unsupported device ops, and illegal host/device aliasing with actionable diagnostics.
+- [x] Validate placement consistency, unsupported device ops, and illegal host/device aliasing with actionable diagnostics.
+      Placement option validation rejects missing nodes/values, non-candidate backends, conflicting constraints, and
+      unsatisfied node/value placement decisions; memory planning continues to reject hidden memory-space copies.
 
 #### G7.2 Runtime Scheduling
 
