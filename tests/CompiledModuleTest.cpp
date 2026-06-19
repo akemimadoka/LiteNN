@@ -287,6 +287,22 @@ namespace
 		return graph;
 	}
 
+	Graph BuildAffineDequantizeInputGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -2);
+		const auto input = sg.AddParam(DataType::Int8, { 4 });
+		const auto dequantized = sg.AddNode(DequantizeNode{ { input, 0 }, params, DataType::Float32 },
+		                                    { OutputInfo{ DataType::Float32, { 4 } } });
+		sg.SetResults({ { dequantized, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "quantized" });
+		graph.SetOutputNames({ "dequantized" });
+		return graph;
+	}
+
 	Graph BuildGetRowsGraph()
 	{
 		Graph graph;
@@ -1439,6 +1455,15 @@ TEST(CompiledModuleTest, CompilesConstFoldedPackedNibbleDequantize)
 	ASSERT_EQ(actual.size(), 1u);
 	ASSERT_EQ(expected.size(), 1u);
 	ExpectTensorNear(actual[0], expected[0]);
+}
+
+TEST(CompiledModuleTest, CPUDynamicAffineDequantizeArtifactMatchesInterpreter)
+{
+	auto graph = BuildAffineDequantizeInputGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ -2.0, -1.0, 2.0, 6.0 }, { 4 }, DataType::Int8));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
 
 TEST(CompiledModuleTest, DynamicDequantizeAOTDiagnosticMentionsConstFold)

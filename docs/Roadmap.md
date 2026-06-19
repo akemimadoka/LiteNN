@@ -129,8 +129,9 @@ metadata, but does not yet expose scalar int4/fp4 element dtypes or native 4-bit
 - [ ] Add accelerated native quantized MatMul/Linear paths in priority order: CUDA/cuBLASLt or custom kernels, Vulkan
       shader path, then CPU AOT lowering.
       Direct dynamic `QuantizeNode` / `DequantizeNode` MLIR lowering remains part of this backend work; the current
-      production route for constant quantized weights is ConstFold-before-compile, and GraphToMLIR diagnostics now
-      point users to `ConstFoldPass` when dynamic quantize/dequantize lowering is encountered.
+      production route for constant packed quantized weights is ConstFold-before-compile, GraphToMLIR now lowers dynamic
+      affine per-tensor `DequantizeNode`, and diagnostics point users to `ConstFoldPass` for packed/per-axis cases that
+      are not yet dynamically lowered.
 - [x] Preserve packed 4-bit storage and quantization metadata across vNext packages, separated rodata/weights, compiled
       signatures, and dump/diagnostic output.
 - [x] Add benchmark rows and parity tolerances for int4/fp4/block-quantized Linear/MLP/LLM projection workloads.

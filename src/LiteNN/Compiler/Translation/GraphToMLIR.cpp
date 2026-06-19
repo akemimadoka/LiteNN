@@ -826,13 +826,37 @@ namespace litenn
 				    "quantizing compile-time constants");
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const DequantizeNode&, std::span<const OutputInfo>,
-			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView&, NodeId nodeId, const DequantizeNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error(
-				    "GraphToMLIR does not support dynamic DequantizeNode yet; run ConstFoldPass before CPU AOT when "
-				    "dequantizing compile-time constants");
+				if (node.params.scheme != QuantizationScheme::Affine ||
+				    node.params.granularity != QuantizationGranularity::PerTensor || node.params.scales.size() != 1 ||
+				    node.params.zeroPoints.size() > 1)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR dynamic DequantizeNode currently supports affine per-tensor quantization only; "
+					    "run ConstFoldPass before CPU AOT when dequantizing compile-time constants");
+				}
+				if (!IsFloatingDataType(node.targetType))
+				{
+					throw std::runtime_error("GraphToMLIR DequantizeNode target type must be floating-point");
+				}
+				const auto& output = outputInfos[0];
+				auto input = getVal(valueMap, node.input);
+				auto casted = emitCastValue(input, node.targetType, output.shape);
+				const auto zeroPoint = node.params.zeroPoints.empty() ? 0 : node.params.zeroPoints[0];
+				if (zeroPoint != 0)
+				{
+					auto zeroPointValue =
+					    emitFilledConstant(node.targetType, output.shape, static_cast<double>(zeroPoint));
+					casted = emitBinaryValue(LiteNN::BinaryOp::Subtract, casted, zeroPointValue, node.targetType,
+					                         output.shape);
+				}
+				auto scale =
+				    emitFilledConstant(node.targetType, output.shape, static_cast<double>(node.params.scales[0]));
+				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
+					                                 output.shape) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,
