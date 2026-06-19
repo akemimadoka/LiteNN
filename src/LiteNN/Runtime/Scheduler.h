@@ -310,6 +310,21 @@ namespace LiteNN::Runtime
 		}
 	}
 
+	inline void AppendPlacementTransferSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
+	{
+		for (const auto& transfer : placement.transferSteps)
+		{
+			RuntimeScheduleStep step;
+			step.id = schedule.steps.size();
+			step.kind = RuntimeScheduleStepKind::Transfer;
+			step.backend = transfer.sourceBackend;
+			step.fallbackBackend = transfer.targetBackend;
+			step.inputBuffers.push_back(transfer.buffer);
+			step.outputBuffers.push_back(transfer.buffer);
+			schedule.steps.push_back(std::move(step));
+		}
+	}
+
 	inline std::vector<RuntimeTraceEvent> TraceRuntimeSchedule(const RuntimeSchedule& schedule)
 	{
 		std::vector<RuntimeTraceEvent> events;
@@ -325,6 +340,11 @@ namespace LiteNN::Runtime
 			{
 				message = std::format("fallback from {} to {} inputBuffers={} outputBuffers={}", step.backend,
 				                      step.fallbackBackend, step.inputBuffers.size(), step.outputBuffers.size());
+			}
+			else if (step.kind == RuntimeScheduleStepKind::Transfer)
+			{
+				message = std::format("transfer from {} to {} buffers={}", step.backend, step.fallbackBackend,
+				                      step.inputBuffers.size());
 			}
 			else
 			{
@@ -347,6 +367,10 @@ namespace LiteNN::Runtime
 		if (step.kind == RuntimeScheduleStepKind::Fallback)
 		{
 			label = std::format("fallback:{}->{}", step.backend, step.fallbackBackend);
+		}
+		else if (step.kind == RuntimeScheduleStepKind::Transfer)
+		{
+			label = std::format("transfer:{}->{}", step.backend, step.fallbackBackend);
 		}
 		else
 		{
@@ -403,6 +427,17 @@ namespace LiteNN::Runtime
 				if (step.backend.empty() || step.fallbackBackend.empty())
 				{
 					throw std::runtime_error("Runtime fallback step must name requested and fallback backends");
+				}
+			}
+			if (step.kind == RuntimeScheduleStepKind::Transfer)
+			{
+				if (step.backend.empty() || step.fallbackBackend.empty())
+				{
+					throw std::runtime_error("Runtime transfer step must name source and target backends");
+				}
+				if (step.inputBuffers.empty() || step.outputBuffers.empty())
+				{
+					throw std::runtime_error("Runtime transfer step must name transferred buffers");
 				}
 			}
 			for (const auto buffer : step.inputBuffers)

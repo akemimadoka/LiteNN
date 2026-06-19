@@ -659,7 +659,9 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 
 - [ ] Add graph-level device-placement metadata for params, variables, intermediate values, and results.
 - [ ] Define automatic placement defaults: keep current single-device behavior when no placement metadata is present.
-- [ ] Add explicit copy/transfer edges or runtime transfer plans instead of hiding cross-device moves inside arbitrary nodes.
+- [x] Add explicit copy/transfer edges or runtime transfer plans instead of hiding cross-device moves inside arbitrary nodes.
+      `PlacementPlan` now records backend-to-backend transfer steps when a node consumes a value produced by another
+      backend, and `RuntimeSchedule` can append those transfer steps with trace/profile labels.
 - [ ] Validate placement consistency, unsupported device ops, and illegal host/device aliasing with actionable diagnostics.
 
 #### G7.2 Runtime Scheduling
@@ -668,6 +670,8 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 - [ ] Add a CPU/CUDA mixed-execution smoke test where only a subgraph segment runs on CUDA and the rest remains on CPU.
 - [ ] Track synchronization points and stream/event ownership for CUDA segments.
 - [ ] Add profiling output that reports per-device time, transfer time, and synchronization overhead.
+      First transfer metadata rows are available from runtime schedule profile records; real measured transfer/sync timing
+      still requires executor integration.
 
 #### G7.3 AOT and Artifact Support
 

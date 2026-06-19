@@ -53,12 +53,22 @@ namespace LiteNN::Runtime
 		std::vector<std::size_t> outputBuffers;
 	};
 
+	struct PlacementTransferStep
+	{
+		SubgraphId subgraph{};
+		NodeOutput value{};
+		std::string sourceBackend;
+		std::string targetBackend;
+		std::size_t buffer{};
+	};
+
 	struct PlacementPlan
 	{
 		ExecutablePlan plan;
 		MemoryPlan memory;
 		std::vector<PlacementDecision> decisions;
 		std::vector<PlacementFallbackStep> fallbackSteps;
+		std::vector<PlacementTransferStep> transferSteps;
 		std::vector<ExecutablePartition> partitions;
 		std::vector<OpCoverageRow> coverage;
 	};
@@ -207,6 +217,42 @@ namespace LiteNN::Runtime
 			}
 		}
 
+		const auto findDecision = [&](SubgraphId subgraph, NodeId node) -> const PlacementDecision* {
+			const auto it = std::ranges::find_if(placement.decisions, [&](const PlacementDecision& decision) {
+				return decision.subgraph == subgraph && decision.node == node;
+			});
+			return it == placement.decisions.end() ? nullptr : &*it;
+		};
+		for (const auto& subgraph : plan.subgraphs)
+		{
+			for (const auto& node : subgraph.nodes)
+			{
+				const auto* consumer = findDecision(subgraph.sourceSubgraph, node.sourceNode);
+				if (consumer == nullptr)
+				{
+					continue;
+				}
+				for (const auto input : node.inputs)
+				{
+					const auto* producer = findDecision(subgraph.sourceSubgraph, input.node);
+					if (producer == nullptr || producer->backend == consumer->backend)
+					{
+						continue;
+					}
+					const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, input);
+					if (assignment == nullptr)
+					{
+						throw std::runtime_error("Placement transfer input has no memory assignment");
+					}
+					placement.transferSteps.push_back({ .subgraph = subgraph.sourceSubgraph,
+					                                    .value = input,
+					                                    .sourceBackend = producer->backend,
+					                                    .targetBackend = consumer->backend,
+					                                    .buffer = assignment->buffer });
+				}
+			}
+		}
+
 		for (const auto backend : candidateBackends)
 		{
 			ExecutablePartition partition;
@@ -267,6 +313,53 @@ namespace LiteNN::Runtime
 			if (!hasDecision)
 			{
 				throw std::runtime_error("PlacementPlan fallback step has no matching fallback decision");
+			}
+		}
+		for (const auto& step : placement.transferSteps)
+		{
+			if (step.sourceBackend.empty() || step.targetBackend.empty())
+			{
+				throw std::runtime_error("PlacementPlan transfer step must name source and target backends");
+			}
+			if (step.sourceBackend == step.targetBackend)
+			{
+				throw std::runtime_error("PlacementPlan transfer step cannot target the same backend");
+			}
+			if (step.buffer >= placement.memory.buffers.size())
+			{
+				throw std::runtime_error("PlacementPlan transfer step references an invalid buffer");
+			}
+			const auto hasProducer = std::ranges::any_of(placement.decisions, [&](const PlacementDecision& decision) {
+				return decision.subgraph == step.subgraph && decision.node == step.value.node &&
+				       decision.backend == step.sourceBackend;
+			});
+			const auto hasConsumer = std::ranges::any_of(placement.decisions, [&](const PlacementDecision& decision) {
+				if (decision.subgraph != step.subgraph || decision.backend != step.targetBackend)
+				{
+					return false;
+				}
+				const auto subgraphIt = std::ranges::find_if(placement.plan.subgraphs, [&](const auto& subgraph) {
+					return subgraph.sourceSubgraph == decision.subgraph;
+				});
+				if (subgraphIt == placement.plan.subgraphs.end())
+				{
+					return false;
+				}
+				const auto nodeIt = std::ranges::find_if(subgraphIt->nodes, [&](const ExecutablePlanNode& node) {
+					return node.sourceNode == decision.node;
+				});
+				if (nodeIt == subgraphIt->nodes.end())
+				{
+					return false;
+				}
+				const auto& node = *nodeIt;
+				return std::ranges::any_of(node.inputs, [&](const NodeOutput input) {
+					return input.node == step.value.node && input.port == step.value.port;
+				});
+			});
+			if (!hasProducer || !hasConsumer)
+			{
+				throw std::runtime_error("PlacementPlan transfer step has no matching producer or consumer decision");
 			}
 		}
 		for (const auto& decision : placement.decisions)

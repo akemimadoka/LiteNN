@@ -225,6 +225,54 @@ TEST(G14Remaining, MalformedPlacementFallbackStepsAreRejected)
 	EXPECT_THROW(Runtime::ValidatePlacementPlan(invalidBuffer), std::runtime_error);
 }
 
+TEST(G14Remaining, BackendPlacementTransfersAreExplicitInScheduleProfile)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto cast = subgraph.AddNode(CastNode{ { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { cast, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("CastNode", {
+	                                            .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Native,
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .memorySpaces = { TensorMemorySpace::Host },
+	                                            .relativeCost = 0.01,
+	                                        });
+	constexpr std::array<std::string_view, 2> backends{ BackendCPUInterpreter, BackendCUDANative };
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry);
+
+	ASSERT_EQ(placement.transferSteps.size(), 1u);
+	EXPECT_EQ(placement.transferSteps[0].sourceBackend, BackendCPUInterpreter);
+	EXPECT_EQ(placement.transferSteps[0].targetBackend, BackendCUDANative);
+	EXPECT_NO_THROW(Runtime::ValidatePlacementPlan(placement));
+
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
+	Runtime::AppendPlacementTransferSteps(schedule, placement);
+	ASSERT_FALSE(schedule.steps.empty());
+	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::Transfer);
+	EXPECT_EQ(schedule.steps.back().backend, BackendCPUInterpreter);
+	EXPECT_EQ(schedule.steps.back().fallbackBackend, BackendCUDANative);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	const auto trace = Runtime::TraceRuntimeSchedule(schedule);
+	ASSERT_FALSE(trace.empty());
+	EXPECT_EQ(trace.back().kind, Runtime::RuntimeScheduleStepKind::Transfer);
+	EXPECT_NE(trace.back().message.find("transfer from"), std::string::npos);
+	const auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
+	ASSERT_EQ(profileRecords.size(), schedule.steps.size());
+	EXPECT_EQ(profileRecords.back().kind, Runtime::RuntimeScheduleStepKind::Transfer);
+	EXPECT_NE(profileRecords.back().label.find("transfer"), std::string::npos);
+
+	auto invalidTransfer = placement;
+	invalidTransfer.transferSteps[0].buffer = invalidTransfer.memory.buffers.size();
+	EXPECT_THROW(Runtime::ValidatePlacementPlan(invalidTransfer), std::runtime_error);
+}
+
 TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 {
 	auto manifest = Serialization::BuildImporterOwnedManifest("torch+safetensors", BuildTrainableGraph());
