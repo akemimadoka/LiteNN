@@ -346,8 +346,7 @@ namespace LiteNN::Runtime
 		std::string label;
 		if (step.kind == RuntimeScheduleStepKind::Fallback)
 		{
-			label =
-			    std::format("{}:{}->{}", RuntimeScheduleStepKindName(step.kind), step.backend, step.fallbackBackend);
+			label = std::format("fallback:{}->{}", step.backend, step.fallbackBackend);
 		}
 		else
 		{
