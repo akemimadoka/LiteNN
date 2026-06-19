@@ -21,9 +21,9 @@ namespace LiteNN::Serialization
 		constexpr std::string_view kFormat = "litenn.model.vnext";
 
 		template <typename Enum>
-		std::uint32_t EnumValue(Enum value)
+		constexpr auto EnumValue(Enum value)
 		{
-			return static_cast<std::uint32_t>(value);
+			return static_cast<std::underlying_type_t<Enum>>(value);
 		}
 
 		std::runtime_error JsonError(std::string_view label, simdjson::error_code error)

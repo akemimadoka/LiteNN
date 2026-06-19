@@ -6,6 +6,7 @@
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -112,6 +113,19 @@ namespace LiteNN
 		}
 
 		return *result;
+	}
+
+	template <typename Enum>
+	constexpr std::optional<Enum> TryParseUnqualifiedEnum(std::string_view value)
+	{
+		template for (constexpr auto enumerator : std::define_static_array(std::meta::enumerators_of(^^Enum)))
+		{
+			if (std::meta::identifier_of(enumerator) == value)
+			{
+				return [:enumerator:];
+			}
+		}
+		return std::nullopt;
 	}
 
 	struct ShapeView
