@@ -672,7 +672,9 @@ buffer ownership explicit, and compiled artifacts loadable without interpreter-o
 
 #### G7.2 Runtime Scheduling
 
-- [ ] Split execution into per-device segments with explicit input/output buffer boundaries.
+- [x] Split execution into per-device segments with explicit input/output buffer boundaries.
+      `Runtime::BuildPlacementSegments` groups contiguous placement decisions by backend and records explicit segment
+      input/output buffers; `AppendPlacementSegmentSteps` exposes those segments through schedule trace/profile rows.
 - [ ] Add a CPU/CUDA mixed-execution smoke test where only a subgraph segment runs on CUDA and the rest remains on CPU.
 - [ ] Track synchronization points and stream/event ownership for CUDA segments.
 - [ ] Add profiling output that reports per-device time, transfer time, and synchronization overhead.

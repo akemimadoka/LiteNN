@@ -5,6 +5,7 @@
 #include <LiteNN/MemoryPlan.h>
 #include <LiteNN/Misc.h>
 #include <LiteNN/Runtime/Placement.h>
+#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace LiteNN::Runtime
@@ -76,7 +78,18 @@ namespace LiteNN::Runtime
 		Sync,
 		Fallback,
 		StateRead,
-		StateWrite
+		StateWrite,
+		DispatchSegment
+	};
+
+	struct RuntimeExecutionSegment
+	{
+		std::size_t id{};
+		SubgraphId subgraph{};
+		std::string backend;
+		std::vector<NodeId> nodes;
+		std::vector<std::size_t> inputBuffers;
+		std::vector<std::size_t> outputBuffers;
 	};
 
 	struct RuntimeScheduleStep
@@ -85,6 +98,7 @@ namespace LiteNN::Runtime
 		RuntimeScheduleStepKind kind{ RuntimeScheduleStepKind::DispatchRegion };
 		FunctionId function{};
 		RegionId region{};
+		std::optional<std::size_t> segment;
 		std::string backend;
 		std::string fallbackBackend;
 		std::vector<std::size_t> inputBuffers;
@@ -119,6 +133,7 @@ namespace LiteNN::Runtime
 		MemoryPlan memory;
 		std::vector<RuntimeStateBinding> states;
 		std::vector<RuntimeBufferBinding> bufferBindings;
+		std::vector<RuntimeExecutionSegment> segments;
 		std::vector<RuntimeScheduleStep> steps;
 	};
 
@@ -295,6 +310,143 @@ namespace LiteNN::Runtime
 		return schedule;
 	}
 
+	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)
+	{
+		if (std::ranges::find(buffers, buffer) == buffers.end())
+		{
+			buffers.push_back(buffer);
+		}
+	}
+
+	inline const PlacementDecision* FindPlacementDecision(const PlacementPlan& placement, SubgraphId subgraph,
+	                                                      NodeId node)
+	{
+		const auto it = std::ranges::find_if(placement.decisions, [&](const PlacementDecision& decision) {
+			return decision.subgraph == subgraph && decision.node == node;
+		});
+		return it == placement.decisions.end() ? nullptr : &*it;
+	}
+
+	inline bool SegmentContainsNode(const RuntimeExecutionSegment& segment, NodeId node)
+	{
+		return std::ranges::find(segment.nodes, node) != segment.nodes.end();
+	}
+
+	inline bool ValueHasConsumerOutsideSegment(const ExecutablePlanSubgraph& subgraph,
+	                                           const RuntimeExecutionSegment& segment, NodeOutput value)
+	{
+		if (std::ranges::find(subgraph.results, value) != subgraph.results.end())
+		{
+			return true;
+		}
+		for (const auto& node : subgraph.nodes)
+		{
+			for (const auto input : node.inputs)
+			{
+				if (input == value && !SegmentContainsNode(segment, node.sourceNode))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	inline void FinalizePlacementSegment(RuntimeExecutionSegment& segment, const PlacementPlan& placement,
+	                                     const ExecutablePlanSubgraph& subgraph)
+	{
+		for (const auto nodeId : segment.nodes)
+		{
+			const auto* node = FindPlanNode(subgraph, nodeId);
+			if (node == nullptr)
+			{
+				throw std::runtime_error("Runtime placement segment references an unknown node");
+			}
+			for (const auto input : node->inputs)
+			{
+				if (SegmentContainsNode(segment, input.node))
+				{
+					continue;
+				}
+				if (const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, input))
+				{
+					AppendUniqueBuffer(segment.inputBuffers, assignment->buffer);
+				}
+			}
+			for (std::size_t outputIndex = 0; outputIndex < node->outputs.size(); ++outputIndex)
+			{
+				const auto output = NodeOutput{ node->sourceNode, outputIndex };
+				if (!ValueHasConsumerOutsideSegment(subgraph, segment, output))
+				{
+					continue;
+				}
+				if (const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, output))
+				{
+					AppendUniqueBuffer(segment.outputBuffers, assignment->buffer);
+				}
+			}
+		}
+	}
+
+	inline std::vector<RuntimeExecutionSegment> BuildPlacementSegments(const PlacementPlan& placement)
+	{
+		std::vector<RuntimeExecutionSegment> segments;
+		for (const auto& subgraph : placement.plan.subgraphs)
+		{
+			std::optional<RuntimeExecutionSegment> current;
+			for (const auto& node : subgraph.nodes)
+			{
+				const auto* decision = FindPlacementDecision(placement, subgraph.sourceSubgraph, node.sourceNode);
+				if (decision == nullptr)
+				{
+					throw std::runtime_error("Runtime placement segment builder found a node without placement");
+				}
+				if (current && current->backend != decision->backend)
+				{
+					FinalizePlacementSegment(*current, placement, subgraph);
+					segments.push_back(std::move(*current));
+					current.reset();
+				}
+				if (!current)
+				{
+					current = RuntimeExecutionSegment{ .id = segments.size(),
+						                               .subgraph = subgraph.sourceSubgraph,
+						                               .backend = decision->backend };
+				}
+				current->nodes.push_back(node.sourceNode);
+			}
+			if (current)
+			{
+				FinalizePlacementSegment(*current, placement, subgraph);
+				segments.push_back(std::move(*current));
+			}
+		}
+		for (std::size_t i = 0; i < segments.size(); ++i)
+		{
+			segments[i].id = i;
+		}
+		return segments;
+	}
+
+	inline void AppendPlacementSegmentSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
+	{
+		const auto baseSegmentId = schedule.segments.size();
+		auto segments = BuildPlacementSegments(placement);
+		for (auto& segment : segments)
+		{
+			segment.id += baseSegmentId;
+			RuntimeScheduleStep step;
+			step.id = schedule.steps.size();
+			step.kind = RuntimeScheduleStepKind::DispatchSegment;
+			step.segment = segment.id;
+			step.backend = segment.backend;
+			step.inputBuffers = segment.inputBuffers;
+			step.outputBuffers = segment.outputBuffers;
+			schedule.segments.push_back(std::move(segment));
+			schedule.steps.push_back(std::move(step));
+		}
+	}
+
 	inline void AppendPlacementFallbackSteps(RuntimeSchedule& schedule, const PlacementPlan& placement)
 	{
 		for (const auto& fallback : placement.fallbackSteps)
@@ -336,6 +488,12 @@ namespace LiteNN::Runtime
 			{
 				message = std::format("dispatch region {} function {} on {}", step.region, step.function, step.backend);
 			}
+			else if (step.kind == RuntimeScheduleStepKind::DispatchSegment)
+			{
+				message =
+				    std::format("dispatch segment {} on {} inputBuffers={} outputBuffers={}", step.segment.value_or(0),
+				                step.backend, step.inputBuffers.size(), step.outputBuffers.size());
+			}
 			else if (step.kind == RuntimeScheduleStepKind::Fallback)
 			{
 				message = std::format("fallback from {} to {} inputBuffers={} outputBuffers={}", step.backend,
@@ -367,6 +525,10 @@ namespace LiteNN::Runtime
 		if (step.kind == RuntimeScheduleStepKind::Fallback)
 		{
 			label = std::format("fallback:{}->{}", step.backend, step.fallbackBackend);
+		}
+		else if (step.kind == RuntimeScheduleStepKind::DispatchSegment)
+		{
+			label = std::format("segment:{}:{}", step.segment.value_or(0), step.backend);
 		}
 		else if (step.kind == RuntimeScheduleStepKind::Transfer)
 		{
@@ -420,6 +582,27 @@ namespace LiteNN::Runtime
 				if (step.backend.empty())
 				{
 					throw std::runtime_error("Runtime dispatch step has empty backend");
+				}
+			}
+			if (step.kind == RuntimeScheduleStepKind::DispatchSegment)
+			{
+				if (!step.segment || *step.segment >= schedule.segments.size())
+				{
+					throw std::runtime_error("Runtime segment dispatch step references an unknown segment");
+				}
+				if (step.backend.empty())
+				{
+					throw std::runtime_error("Runtime segment dispatch step has empty backend");
+				}
+				const auto& segment = schedule.segments[*step.segment];
+				if (segment.backend != step.backend || segment.inputBuffers != step.inputBuffers ||
+				    segment.outputBuffers != step.outputBuffers)
+				{
+					throw std::runtime_error("Runtime segment dispatch step does not match segment metadata");
+				}
+				if (segment.nodes.empty())
+				{
+					throw std::runtime_error("Runtime segment dispatch step has no nodes");
 				}
 			}
 			if (step.kind == RuntimeScheduleStepKind::Fallback)

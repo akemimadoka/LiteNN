@@ -332,6 +332,63 @@ TEST(G14Remaining, PlacementConstraintsSelectBackendsAndValidateDefaults)
 	EXPECT_THROW((void) Runtime::BuildPlacementPlan(plan, backends, registry, missingBackend), std::runtime_error);
 }
 
+TEST(G14Remaining, PlacementSegmentsExposePerBackendBufferBoundaries)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 2 });
+	const auto cast = subgraph.AddNode(CastNode{ { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto negated =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { cast, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	subgraph.SetResults({ { negated, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	auto registry = BuildDefaultOpSchemaRegistry();
+	registry.RegisterCapability("CastNode", {
+	                                            .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Native,
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .memorySpaces = { TensorMemorySpace::Host },
+	                                            .relativeCost = 0.01,
+	                                        });
+	constexpr std::array<std::string_view, 2> backends{ BackendCPUInterpreter, BackendCUDANative };
+	Runtime::PlacementOptions options;
+	options.defaultBackend = std::string(BackendCPUInterpreter);
+	options.valueConstraints.push_back({ .subgraph = graph.Forward(),
+	                                     .value = { cast, 0 },
+	                                     .backend = std::string(BackendCUDANative),
+	                                     .reason = "isolate a CUDA middle segment" });
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry, options);
+	const auto segments = Runtime::BuildPlacementSegments(placement);
+
+	ASSERT_EQ(segments.size(), 3u);
+	EXPECT_EQ(segments[0].backend, BackendCPUInterpreter);
+	EXPECT_EQ(segments[1].backend, BackendCUDANative);
+	EXPECT_EQ(segments[2].backend, BackendCPUInterpreter);
+	EXPECT_EQ(segments[1].nodes, (std::vector<NodeId>{ cast }));
+	EXPECT_FALSE(segments[1].inputBuffers.empty());
+	EXPECT_FALSE(segments[1].outputBuffers.empty());
+
+	auto schedule = Runtime::BuildRuntimeSchedule(BuildExecutableModule(plan));
+	Runtime::AppendPlacementSegmentSteps(schedule, placement);
+	ASSERT_GE(schedule.steps.size(), segments.size());
+	EXPECT_EQ(schedule.steps.back().kind, Runtime::RuntimeScheduleStepKind::DispatchSegment);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	const auto trace = Runtime::TraceRuntimeSchedule(schedule);
+	ASSERT_FALSE(trace.empty());
+	EXPECT_NE(trace.back().message.find("dispatch segment"), std::string::npos);
+	const auto profileRecords = Runtime::BuildRuntimeScheduleProfileRecords(schedule);
+	ASSERT_EQ(profileRecords.size(), schedule.steps.size());
+	EXPECT_NE(profileRecords.back().label.find("segment"), std::string::npos);
+
+	auto invalid = schedule;
+	ASSERT_FALSE(invalid.steps.empty());
+	invalid.steps.back().segment = invalid.segments.size();
+	EXPECT_THROW(Runtime::ValidateRuntimeSchedule(invalid), std::runtime_error);
+}
+
 TEST(G14Remaining, ImportManifestTargetsModelGraphAndReportsDiagnostics)
 {
 	auto manifest = Serialization::BuildImporterOwnedManifest("torch+safetensors", BuildTrainableGraph());
