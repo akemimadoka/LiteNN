@@ -27,8 +27,8 @@ namespace
 		Subgraph sg;
 		const auto lhs = sg.AddParam(dtype, { elementCount });
 		const auto rhs = sg.AddParam(dtype, { elementCount });
-		const auto out = sg.AddNode(BinaryOpNode{ op, { lhs, 0 }, { rhs, 0 } },
-		                            { OutputInfo{ dtype, { elementCount } } });
+		const auto out =
+		    sg.AddNode(BinaryOpNode{ op, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ dtype, { elementCount } } });
 		sg.SetResults({ { out, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -517,14 +517,12 @@ namespace
 	Graph BuildMixedShapeLinearChainGraph(bool runFusion = true)
 	{
 		Graph graph;
-		const auto weight0Index = graph.AddVariable(Variable::Create(Tensor<CPU>(
-		    { 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0 }, { 3, 4 },
-		    DataType::Float32)));
+		const auto weight0Index = graph.AddVariable(Variable::Create(
+		    Tensor<CPU>({ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0 }, { 3, 4 }, DataType::Float32)));
 		const auto bias0Index =
 		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0, -10.0, 1.0, 0.0 }, { 1, 4 }, DataType::Float32)));
-		const auto weight1Index =
-		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 2.0 }, { 4, 2 },
-		                                       DataType::Float32)));
+		const auto weight1Index = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 2.0 }, { 4, 2 }, DataType::Float32)));
 		const auto bias1Index =
 		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -1.0 }, { 1, 2 }, DataType::Float32)));
 		graph.SetVariableName(weight0Index, "mixed_weight0");
@@ -1077,8 +1075,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForInt8Add)
 	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, kElementCount * ElementByteSize(DataType::Int8));
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, kElementCount * ElementByteSize(DataType::Int8));
 	EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, kElementCount * ElementByteSize(DataType::Int8));
-	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
-	    VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_TRUE(
+	    payload.kernels[0].requirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
 	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
 }
@@ -1746,8 +1744,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForInt8Unary)
 	ASSERT_EQ(payload.kernels.size(), 1u);
 	EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, kElementCount * ElementByteSize(DataType::Int8));
 	EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, kElementCount * ElementByteSize(DataType::Int8));
-	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
-	    VulkanNativeDeviceRequirement::ShaderInt8));
+	EXPECT_TRUE(
+	    payload.kernels[0].requirements.deviceRequirements.HasRequirement(VulkanNativeDeviceRequirement::ShaderInt8));
 	EXPECT_TRUE(payload.kernels[0].requirements.deviceRequirements.HasRequirement(
 	    VulkanNativeDeviceRequirement::StorageBuffer8BitAccess));
 }
@@ -1997,9 +1995,8 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForNormalization)
 	EXPECT_EQ(artifact.Backend(), CompiledModuleBackend::VulkanNative);
 
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
-	const auto generated =
-	    VulkanNativeAxisNormalizationF32SPIRV(NormalizationMode::LayerNorm, std::array<std::size_t, 2>{ 2, 3 }, 1,
-	                                          1e-5);
+	const auto generated = VulkanNativeAxisNormalizationF32SPIRV(NormalizationMode::LayerNorm,
+	                                                             std::array<std::size_t, 2>{ 2, 3 }, 1, 1e-5);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_TRUE(payload.featureSet.CheckIsValid());
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::NormalizationF32)),
@@ -2843,8 +2840,8 @@ TEST(CompiledModuleVulkanTest, RejectsPublicAsyncVulkanNativeRun)
 		Tensor<Vulkan>({ 10.0, 20.0, 30.0, 40.0 }, { 4 }, DataType::Float32, device),
 		Tensor<Vulkan>({ 100.0, 200.0, 300.0, 400.0 }, { 4 }, DataType::Float32, device),
 	};
-	EXPECT_THROW((void)module.RunTensors(std::span<const Tensor<Vulkan>>(inputs),
-	                                     CompiledModuleVulkanRunOptions{ .synchronize = false }),
+	EXPECT_THROW((void) module.RunTensors(std::span<const Tensor<Vulkan>>(inputs),
+	                                      CompiledModuleVulkanRunOptions{ .synchronize = false }),
 	             std::runtime_error);
 }
 

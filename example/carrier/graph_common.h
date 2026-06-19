@@ -24,7 +24,7 @@ namespace LiteNN::Examples::Carrier
 		const auto lhs = sg.AddParam(DataType::Float32, { 2, 2 });
 		const auto rhs = sg.AddParam(DataType::Float32, { 2, 2 });
 		const auto sum = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
-		                           { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                            { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { sum, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -60,15 +60,11 @@ namespace LiteNN::Examples::Carrier
 	inline void PrintRunSummary(std::string_view mode, const CompiledModule<CPU>& module,
 	                            std::span<const Tensor<CPU>> outputs)
 	{
-		std::cout << std::format(
-		    "{} carrier load succeeded: inputs=[{}, {}], output {} = [{}, {}, {}, {}]\n",
-		    mode,
-		    module.InputSpecs().empty() ? "?" : module.InputSpecs()[0].name,
-		    module.InputSpecs().size() < 2 ? "?" : module.InputSpecs()[1].name,
-		    module.OutputSpecs().empty() ? "?" : module.OutputSpecs()[0].name,
-		    ReadFloat(outputs[0], 0),
-		    ReadFloat(outputs[0], 1),
-		    ReadFloat(outputs[0], 2),
-		    ReadFloat(outputs[0], 3));
+		std::cout << std::format("{} carrier load succeeded: inputs=[{}, {}], output {} = [{}, {}, {}, {}]\n", mode,
+		                         module.InputSpecs().empty() ? "?" : module.InputSpecs()[0].name,
+		                         module.InputSpecs().size() < 2 ? "?" : module.InputSpecs()[1].name,
+		                         module.OutputSpecs().empty() ? "?" : module.OutputSpecs()[0].name,
+		                         ReadFloat(outputs[0], 0), ReadFloat(outputs[0], 1), ReadFloat(outputs[0], 2),
+		                         ReadFloat(outputs[0], 3));
 	}
 } // namespace LiteNN::Examples::Carrier

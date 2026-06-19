@@ -576,8 +576,9 @@ namespace LiteNN
 		}
 
 		template <Device D>
-		static std::shared_ptr<Variable> CreateQuantized(Tensor<D> storage, QuantizationParams quantization,
-		                                                 VariableGradStorage gradStorage = VariableGradStorage::Allocate)
+		static std::shared_ptr<Variable>
+		CreateQuantized(Tensor<D> storage, QuantizationParams quantization,
+		                VariableGradStorage gradStorage = VariableGradStorage::Allocate)
 		{
 			if constexpr (std::same_as<D, PolymorphicDevice>)
 			{
@@ -587,8 +588,8 @@ namespace LiteNN
 			else
 			{
 				return std::shared_ptr<Variable>(
-				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }), std::move(quantization),
-				                 gradStorage));
+				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }),
+				                 std::move(quantization), gradStorage));
 			}
 		}
 
@@ -665,7 +666,6 @@ namespace LiteNN
 		    : Variable(data.CopyToDevice(PolymorphicDevice{ data.CurDevice() }), gradStorage)
 		{
 		}
-
 	};
 
 	// 前向/反向共享的激活值存储槽位

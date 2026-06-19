@@ -494,8 +494,7 @@ namespace
 					const auto initInt = kind == ReduceOpKind::Max
 					                         ? APInt::getSignedMinValue(intTy.getWidth()).getSExtValue()
 					                         : APInt::getSignedMaxValue(intTy.getWidth()).getSExtValue();
-					initVal = rewriter.create<arith::ConstantIntOp>(
-					    loc, elemType, initInt);
+					initVal = rewriter.create<arith::ConstantIntOp>(loc, elemType, initInt);
 				}
 			}
 			else

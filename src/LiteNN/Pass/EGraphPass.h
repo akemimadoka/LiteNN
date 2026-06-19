@@ -56,8 +56,8 @@ namespace LiteNN
 			out << "  hitLimit: " << (hitLimit ? "true" : "false") << '\n';
 			for (const auto& event : events)
 			{
-				out << "  sg" << event.subgraph << ":n" << event.node << " " << event.rule << ": "
-				    << event.before << " -> " << event.after << '\n';
+				out << "  sg" << event.subgraph << ":n" << event.node << " " << event.rule << ": " << event.before
+				    << " -> " << event.after << '\n';
 			}
 			return out.str();
 		}
@@ -148,7 +148,9 @@ namespace LiteNN
 	class EGraphPass : public Detail::GraphMutationPass
 	{
 	public:
-		explicit EGraphPass(EGraphOptions options = {}) : options_(std::move(options)) {}
+		explicit EGraphPass(EGraphOptions options = {}) : options_(std::move(options))
+		{
+		}
 
 		void Run(Graph& graph) override
 		{
@@ -337,10 +339,9 @@ namespace LiteNN
 				                  std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
 				                  std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
 				                  std::same_as<T, PadNode> || std::same_as<T, ScanNode> ||
-				                  std::same_as<T, Im2ColNode> ||
-				                  std::same_as<T, Pool2DNode> || std::same_as<T, UpsampleNode> ||
-				                  std::same_as<T, ArgsortNode> || std::same_as<T, SaveActivationNode> ||
-				                  std::same_as<T, TapeSaveActivationNode>)
+				                  std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+				                  std::same_as<T, UpsampleNode> || std::same_as<T, ArgsortNode> ||
+				                  std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode>)
 				    {
 					    fn(n.input);
 				    }
@@ -485,10 +486,8 @@ namespace LiteNN
 					    }
 				    }
 				    else if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                       std::same_as<T, QuantizedConstantNode> ||
-				                       std::same_as<T, VariableRefNode> ||
-				                       std::same_as<T, LoadActivationNode> ||
-				                       std::same_as<T, TapeLoadActivationNode>)
+				                       std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                       std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
 				    {
 					    // no inputs
 				    }
@@ -583,13 +582,15 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
-					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
-					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+					    return SSMScanNode{
+						    remap(n.state), remap(n.dt), remap(n.a),
+						    remap(n.b),     remap(n.c),  n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt
+					    };
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
-					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
-					                        remap(n.timeDecay), remap(n.timeFirst) };
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
+						                    remap(n.timeFirst) };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -606,9 +607,12 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    return NormalizationNode{ remap(n.input),
-					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
-					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                              n.mode, n.axis, n.groupCount, n.epsilon };
+						                          n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+						                          n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                          n.mode,
+						                          n.axis,
+						                          n.groupCount,
+						                          n.epsilon };
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
@@ -628,38 +632,60 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
-					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
-					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
-					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+					    return SGDStepNode{ remap(n.parameter),
+						                    remap(n.gradient),
+						                    n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+						                    n.learningRate,
+						                    n.momentum,
+						                    n.weightDecay,
+						                    n.nesterov };
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
-					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
-					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
-					                          n.epsilon, n.weightDecay, n.step };
+					    return AdamWStepNode{ remap(n.parameter),
+						                      remap(n.gradient),
+						                      remap(n.firstMoment),
+						                      remap(n.secondMoment),
+						                      n.learningRate,
+						                      n.beta1,
+						                      n.beta2,
+						                      n.epsilon,
+						                      n.weightDecay,
+						                      n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
-					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
-					                       n.lowPads, n.highPads };
+					    return Im2ColNode{
+						    remap(n.input), n.kernelShape, n.strides, n.dilations, n.lowPads, n.highPads
+					    };
 				    }
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
-					    return Conv2DNode{ remap(n.input), remap(n.weight),
-					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+					    return Conv2DNode{ remap(n.input),
+						                   remap(n.weight),
+						                   n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                   n.strides,
+						                   n.dilations,
+						                   n.lowPads,
+						                   n.highPads,
+						                   n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
-					    return ConvTranspose2DNode{ remap(n.input), remap(n.weight),
-					                                n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                                n.strides, n.dilations, n.lowPads, n.highPads,
-					                                n.outputPads, n.groupCount };
+					    return ConvTranspose2DNode{ remap(n.input),
+						                            remap(n.weight),
+						                            n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                            n.strides,
+						                            n.dilations,
+						                            n.lowPads,
+						                            n.highPads,
+						                            n.outputPads,
+						                            n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
-					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
-					                       n.lowPads, n.highPads, n.countIncludePad };
+					    return Pool2DNode{ remap(n.input), n.mode,     n.kernelShape,    n.strides,
+						                   n.lowPads,      n.highPads, n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
@@ -742,8 +768,8 @@ namespace LiteNN
 			});
 		}
 
-		static std::string TermKey(std::string_view op, std::span<const std::size_t> children,
-		                           const OutputInfo& info, std::string_view attrs = {})
+		static std::string TermKey(std::string_view op, std::span<const std::size_t> children, const OutputInfo& info,
+		                           std::string_view attrs = {})
 		{
 			std::ostringstream out;
 			out << op << '(';
@@ -871,8 +897,8 @@ namespace LiteNN
 				return false;
 			}
 
-			nodeClass[nodeId] = egraph.AddTerm({ TermKey(NodeTermName(entry.node), children, info, attrs),
-			                                     children, info });
+			nodeClass[nodeId] =
+			    egraph.AddTerm({ TermKey(NodeTermName(entry.node), children, info, attrs), children, info });
 			return true;
 		}
 
@@ -882,9 +908,8 @@ namespace LiteNN
 			++lastReport_.rewrites;
 		}
 
-		bool SetReplacement(SubgraphId sgId, NodeId nodeId, NodeOutput target, std::string rule,
-		                    std::string before, std::string after,
-		                    std::vector<std::optional<NodeOutput>>& replacements)
+		bool SetReplacement(SubgraphId sgId, NodeId nodeId, NodeOutput target, std::string rule, std::string before,
+		                    std::string after, std::vector<std::optional<NodeOutput>>& replacements)
 		{
 			const auto resolved = Resolve(target, replacements);
 			if (resolved.node == nodeId && resolved.port == 0)
@@ -896,8 +921,8 @@ namespace LiteNN
 			return true;
 		}
 
-		bool SetRewrite(SubgraphId sgId, NodeId nodeId, NodeVariant rewrite, std::string rule,
-		                std::string before, std::string after, std::vector<std::optional<NodeVariant>>& rewrites)
+		bool SetRewrite(SubgraphId sgId, NodeId nodeId, NodeVariant rewrite, std::string rule, std::string before,
+		                std::string after, std::vector<std::optional<NodeVariant>>& rewrites)
 		{
 			rewrites[nodeId].emplace(std::move(rewrite));
 			AddEvent(sgId, nodeId, std::move(rule), std::move(before), std::move(after));
@@ -948,8 +973,8 @@ namespace LiteNN
 							{
 								egraph.Union(*nodeClass[nodeId], *nodeClass[lhs.node]);
 							}
-							changed |= SetReplacement(sgId, nodeId, lhs, "add-zero-rhs", NodeKey(nodeId), OutputKey(lhs),
-							                          replacements);
+							changed |= SetReplacement(sgId, nodeId, lhs, "add-zero-rhs", NodeKey(nodeId),
+							                          OutputKey(lhs), replacements);
 							continue;
 						}
 						if (lhsCPU && IsZeroTensor(*lhsCPU) && SameInfo(rhsInfo, outInfo))
@@ -958,8 +983,8 @@ namespace LiteNN
 							{
 								egraph.Union(*nodeClass[nodeId], *nodeClass[rhs.node]);
 							}
-							changed |= SetReplacement(sgId, nodeId, rhs, "add-zero-lhs", NodeKey(nodeId), OutputKey(rhs),
-							                          replacements);
+							changed |= SetReplacement(sgId, nodeId, rhs, "add-zero-lhs", NodeKey(nodeId),
+							                          OutputKey(rhs), replacements);
 							continue;
 						}
 					}
@@ -1056,14 +1081,14 @@ namespace LiteNN
 						{
 							egraph.Union(*nodeClass[nodeId], *nodeClass[input.node]);
 						}
-						changed |= SetReplacement(sgId, nodeId, input, "reshape-noop", NodeKey(nodeId), OutputKey(input),
-						                          replacements);
+						changed |= SetReplacement(sgId, nodeId, input, "reshape-noop", NodeKey(nodeId),
+						                          OutputKey(input), replacements);
 						continue;
 					}
 					if (const auto* inner = std::get_if<ReshapeNode>(&sg.GetNodeEntry(input.node).node))
 					{
-						changed |= SetRewrite(sgId, nodeId, ReshapeNode{ Resolve(inner->input, replacements),
-						                                                 reshape->targetShape },
+						changed |= SetRewrite(sgId, nodeId,
+						                      ReshapeNode{ Resolve(inner->input, replacements), reshape->targetShape },
 						                      "reshape-compose", OutputKey(input), OutputKey(inner->input), rewrites);
 					}
 				}
@@ -1087,14 +1112,14 @@ namespace LiteNN
 						if (IsIdentityPermutation(combined))
 						{
 							const auto target = Resolve(inner->input, replacements);
-							changed |= SetReplacement(sgId, nodeId, target, "permute-compose-identity",
-							                          NodeKey(nodeId), OutputKey(target), replacements);
+							changed |= SetReplacement(sgId, nodeId, target, "permute-compose-identity", NodeKey(nodeId),
+							                          OutputKey(target), replacements);
 						}
 						else
 						{
-							changed |= SetRewrite(sgId, nodeId, PermuteNode{ Resolve(inner->input, replacements),
-							                                                  std::move(combined) },
-							                      "permute-compose", OutputKey(input), OutputKey(inner->input), rewrites);
+							changed |= SetRewrite(
+							    sgId, nodeId, PermuteNode{ Resolve(inner->input, replacements), std::move(combined) },
+							    "permute-compose", OutputKey(input), OutputKey(inner->input), rewrites);
 						}
 					}
 				}
@@ -1118,9 +1143,9 @@ namespace LiteNN
 						const auto& innerInputInfo = sg.GetOutputInfo(innerInput);
 						if (CanBroadcastTrailing(innerInputInfo.shape, broadcast->targetShape))
 						{
-							changed |= SetRewrite(sgId, nodeId,
-							                      BroadcastToNode{ innerInput, broadcast->targetShape },
-							                      "broadcast-compose", OutputKey(input), OutputKey(innerInput), rewrites);
+							changed |=
+							    SetRewrite(sgId, nodeId, BroadcastToNode{ innerInput, broadcast->targetShape },
+							               "broadcast-compose", OutputKey(input), OutputKey(innerInput), rewrites);
 						}
 					}
 				}
@@ -1128,8 +1153,7 @@ namespace LiteNN
 			return changed;
 		}
 
-		void RebuildSubgraph(Graph& graph, SubgraphId sgId,
-		                     const std::vector<std::optional<NodeOutput>>& replacements,
+		void RebuildSubgraph(Graph& graph, SubgraphId sgId, const std::vector<std::optional<NodeOutput>>& replacements,
 		                     const std::vector<std::optional<NodeVariant>>& rewrites)
 		{
 			const auto& sg = graph.GetSubgraph(sgId);
@@ -1159,7 +1183,8 @@ namespace LiteNN
 
 			for (NodeId oldId = 0; oldId < nodeCount; ++oldId)
 			{
-				if (!alive[oldId] || replacements[oldId] || std::holds_alternative<ParamRefNode>(sg.GetNodeEntry(oldId).node))
+				if (!alive[oldId] || replacements[oldId] ||
+				    std::holds_alternative<ParamRefNode>(sg.GetNodeEntry(oldId).node))
 				{
 					continue;
 				}
@@ -1180,8 +1205,7 @@ namespace LiteNN
 			graph.GetSubgraph(sgId) = std::move(newSg);
 		}
 
-		bool ProcessSubgraphIteration(Graph& graph, SubgraphId sgId,
-		                              std::chrono::steady_clock::time_point startTime)
+		bool ProcessSubgraphIteration(Graph& graph, SubgraphId sgId, std::chrono::steady_clock::time_point startTime)
 		{
 			const auto& sg = graph.GetSubgraph(sgId);
 			if (sg.NodeCount() > options_.maxTerms)

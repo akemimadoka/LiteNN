@@ -58,7 +58,8 @@ namespace LiteNN::Training
 				auto& parameter = variable->Data();
 				set.entries_.push_back({
 				    .name = graph.VariableName(i).empty() ? std::format("parameter.{}", i) : graph.VariableName(i),
-				    .type = TensorType::Dense(parameter.DType(), parameter.Shape(), ParameterMemorySpace(parameter.CurDevice())),
+				    .type = TensorType::Dense(parameter.DType(), parameter.Shape(),
+				                              ParameterMemorySpace(parameter.CurDevice())),
 				    .parameter = &parameter,
 				    .gradient = &variable->Grad(),
 				});
@@ -130,9 +131,8 @@ namespace LiteNN::Training
 		state.parameters.reserve(parameters.Size());
 		for (const auto& entry : parameters.Entries())
 		{
-			state.parameters.push_back({ .name = entry.name,
-			                             .type = entry.type,
-			                             .value = entry.Parameter().CopyToDevice(CPU{}) });
+			state.parameters.push_back(
+			    { .name = entry.name, .type = entry.type, .value = entry.Parameter().CopyToDevice(CPU{}) });
 		}
 		return state;
 	}
@@ -151,9 +151,9 @@ namespace LiteNN::Training
 				throw std::runtime_error("StateDict parameter type mismatch: " + binding.name);
 			}
 			auto& parameter = binding.Parameter();
-			DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(), parameter.UnsafeRawData(),
-			                                             entry->value.DType(), entry->value.UnsafeRawData(),
-			                                             entry->value.NumElements());
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
+			                                             parameter.UnsafeRawData(), entry->value.DType(),
+			                                             entry->value.UnsafeRawData(), entry->value.NumElements());
 		}
 	}
 } // namespace LiteNN::Training

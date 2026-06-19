@@ -16,7 +16,7 @@ namespace
 		const auto lhs = subgraph.AddParam(DataType::Float32, { 2, 2 });
 		const auto rhs = subgraph.AddParam(DataType::Float32, { 2, 2 });
 		const auto sum = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } },
-		                                 { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		subgraph.SetResults({ { sum, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 		graph.SetInputNames({ "lhs", "rhs" });
@@ -27,8 +27,8 @@ namespace
 	Graph BuildExternalLinearGraph()
 	{
 		Graph graph;
-		const auto weightIndex = graph.AddVariable(Variable::Create(
-		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25 }, { 3, 2 }, DataType::Float32)));
+		const auto weightIndex = graph.AddVariable(
+		    Variable::Create(Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25 }, { 3, 2 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "projection.weight");
 
 		Subgraph subgraph;
@@ -38,9 +38,8 @@ namespace
 		const auto product = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 		                                      { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto biasTensor = Tensor<CPU>({ 0.1, -0.2 }, { 1, 2 }, DataType::Float32);
-		const auto bias = subgraph.AddNode(
-		    ConstantNode{ biasTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-		    { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto bias = subgraph.AddNode(ConstantNode{ biasTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                   { OutputInfo{ DataType::Float32, { 1, 2 } } });
 		const auto sum = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { product, 0 }, { bias, 0 } },
 		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		subgraph.SetResults({ { sum, 0 } });
@@ -53,7 +52,8 @@ namespace
 
 TEST(CompilerDumpTest, DumpsInputDialectMlir)
 {
-	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()), Debug::MLIRDumpStage::InputDialect);
+	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()),
+	                            Debug::MLIRDumpStage::InputDialect);
 
 	EXPECT_NE(dump.find("litenn.func @subgraph_0"), std::string::npos);
 	EXPECT_NE(dump.find("litenn.binary"), std::string::npos);
@@ -61,7 +61,8 @@ TEST(CompilerDumpTest, DumpsInputDialectMlir)
 
 TEST(CompilerDumpTest, DumpsLoweredMlir)
 {
-	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()), Debug::MLIRDumpStage::AfterLowering);
+	auto dump = Debug::DumpMLIR(Detail::BuildExecutablePlanFromGraph(BuildSimpleAddGraph()),
+	                            Debug::MLIRDumpStage::AfterLowering);
 
 	EXPECT_EQ(dump.find("litenn.binary"), std::string::npos);
 	EXPECT_NE(dump.find("func.func"), std::string::npos);
@@ -87,7 +88,8 @@ TEST(CompilerDumpTest, DumpsSeparatedArtifactExternalTensorMetadata)
 	options.cpuAOTParallelMinFlops = 1;
 	options.enableCPUAOTExternalRegions = true;
 
-	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildExternalLinearGraph()), options);
+	auto artifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildExternalLinearGraph()), options);
 	auto separated = artifact.SeparateRodata();
 	auto dump = Debug::DumpCompiledModuleMetadata(separated);
 

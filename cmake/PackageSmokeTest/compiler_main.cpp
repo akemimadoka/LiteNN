@@ -2,9 +2,9 @@
 
 int main()
 {
-    LiteNN::CompiledModuleImage image{};
-    LiteNN::CompiledModuleArtifact artifact{};
-    (void)image;
-    (void)artifact;
-    return 0;
+	LiteNN::CompiledModuleImage image{};
+	LiteNN::CompiledModuleArtifact artifact{};
+	(void) image;
+	(void) artifact;
+	return 0;
 }

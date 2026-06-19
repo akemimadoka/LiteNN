@@ -65,10 +65,11 @@ namespace LiteNN::Runtime
 
 	inline bool CapabilitySupportsType(const BackendCapability& capability, const TensorType& type)
 	{
-		const auto dtypeSupported = capability.dtypes.empty() ||
-		                            std::ranges::find(capability.dtypes, type.dtype) != capability.dtypes.end();
-		const auto layoutSupported = capability.layouts.empty() ||
-		                             std::ranges::find(capability.layouts, type.layout.kind) != capability.layouts.end();
+		const auto dtypeSupported =
+		    capability.dtypes.empty() || std::ranges::find(capability.dtypes, type.dtype) != capability.dtypes.end();
+		const auto layoutSupported =
+		    capability.layouts.empty() ||
+		    std::ranges::find(capability.layouts, type.layout.kind) != capability.layouts.end();
 		const auto memorySupported =
 		    capability.memorySpaces.empty() ||
 		    std::ranges::find(capability.memorySpaces, type.memorySpace) != capability.memorySpaces.end();
@@ -105,10 +106,9 @@ namespace LiteNN::Runtime
 	}
 
 	inline PlacementDecision ChoosePlacementForNode(const ExecutablePlanNode& node, const MemoryPlan& memory,
-	                                               std::span<const std::string_view> candidateBackends,
-	                                               const OpSchemaRegistry& registry,
-	                                               const CostModelWeights& weights,
-	                                               PlacementFallbackPolicy fallbackPolicy)
+	                                                std::span<const std::string_view> candidateBackends,
+	                                                const OpSchemaRegistry& registry, const CostModelWeights& weights,
+	                                                PlacementFallbackPolicy fallbackPolicy)
 	{
 		const auto& schema = registry.Require(node.opKind);
 		PlacementDecision best{ .node = node.sourceNode,
@@ -160,13 +160,11 @@ namespace LiteNN::Runtime
 		return best;
 	}
 
-	inline PlacementPlan BuildPlacementPlan(ExecutablePlan plan,
-	                                        std::span<const std::string_view> candidateBackends =
-	                                            std::span<const std::string_view>{ DefaultBackendNames },
-	                                        const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
-	                                        CostModelWeights weights = {},
-	                                        PlacementFallbackPolicy fallbackPolicy =
-	                                            PlacementFallbackPolicy::AllowExplicitFallback)
+	inline PlacementPlan BuildPlacementPlan(
+	    ExecutablePlan plan,
+	    std::span<const std::string_view> candidateBackends = std::span<const std::string_view>{ DefaultBackendNames },
+	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(), CostModelWeights weights = {},
+	    PlacementFallbackPolicy fallbackPolicy = PlacementFallbackPolicy::AllowExplicitFallback)
 	{
 		ValidateExecutablePlan(plan, registry);
 		PlacementPlan placement;
@@ -178,8 +176,8 @@ namespace LiteNN::Runtime
 		{
 			for (const auto& node : subgraph.nodes)
 			{
-				auto decision =
-				    ChoosePlacementForNode(node, placement.memory, candidateBackends, registry, weights, fallbackPolicy);
+				auto decision = ChoosePlacementForNode(node, placement.memory, candidateBackends, registry, weights,
+				                                       fallbackPolicy);
 				decision.subgraph = subgraph.sourceSubgraph;
 				if (decision.support == BackendSupportLevel::Fallback)
 				{
@@ -189,15 +187,16 @@ namespace LiteNN::Runtime
 						                        .fallbackBackend = decision.fallback };
 					for (const auto input : node.inputs)
 					{
-						if (const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, input))
+						if (const auto* assignment =
+						        FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph, input))
 						{
 							step.inputBuffers.push_back(assignment->buffer);
 						}
 					}
 					for (std::size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
 					{
-						if (const auto* assignment = FindMemoryAssignment(
-						        placement.memory, subgraph.sourceSubgraph, { node.sourceNode, outputIndex }))
+						if (const auto* assignment = FindMemoryAssignment(placement.memory, subgraph.sourceSubgraph,
+						                                                  { node.sourceNode, outputIndex }))
 						{
 							step.outputBuffers.push_back(assignment->buffer);
 						}

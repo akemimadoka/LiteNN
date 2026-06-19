@@ -36,8 +36,8 @@ namespace LiteNN::Layer
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		auto outputShape = PermutedShape(info.shape, permutation);
-		const auto result = subgraph.AddNode(PermuteNode{ input, std::move(permutation) },
-		                                     { OutputInfo{ info.dtype, outputShape } });
+		const auto result =
+		    subgraph.AddNode(PermuteNode{ input, std::move(permutation) }, { OutputInfo{ info.dtype, outputShape } });
 		return { result, 0 };
 	}
 

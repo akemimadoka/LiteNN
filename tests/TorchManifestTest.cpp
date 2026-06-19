@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNNImporters.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/TorchManifest.h>
+#include <LiteNNImporters.h>
 
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
@@ -116,9 +116,10 @@ namespace
 			AppendValue(payload, 42.0F);
 		}
 
-		const auto header = includeExtra
-		                        ? R"({"linear.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[0,24]},"linear.bias":{"dtype":"F32","shape":[2],"data_offsets":[24,32]},"unused.weight":{"dtype":"F32","shape":[1],"data_offsets":[32,36]}})"
-		                        : R"({"linear.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[0,24]},"linear.bias":{"dtype":"F32","shape":[2],"data_offsets":[24,32]}})";
+		const auto header =
+		    includeExtra
+		        ? R"({"linear.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[0,24]},"linear.bias":{"dtype":"F32","shape":[2],"data_offsets":[24,32]},"unused.weight":{"dtype":"F32","shape":[1],"data_offsets":[32,36]}})"
+		        : R"({"linear.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[0,24]},"linear.bias":{"dtype":"F32","shape":[2],"data_offsets":[24,32]}})";
 		return Serialization::SafetensorsArchive::Load(BuildSafetensors(header, std::move(payload)));
 	}
 
@@ -152,38 +153,37 @@ namespace
 	Serialization::SafetensorsArchive BuildCompositeDiffusionArchive()
 	{
 		const std::array<FloatTensorSpec, 26> specs{ {
-		    { "res.norm1.weight", { 1 }, { 1.0F } },
-		    { "res.norm1.bias", { 1 }, { 0.0F } },
-		    { "res.norm2.weight", { 1 }, { 1.0F } },
-		    { "res.norm2.bias", { 1 }, { 0.0F } },
-		    { "res.conv1.weight", { 1, 1, 1, 1 }, { 0.0F } },
-		    { "res.conv1.bias", { 1 }, { 0.0F } },
-		    { "res.conv2.weight", { 1, 1, 1, 1 }, { 0.0F } },
-		    { "res.conv2.bias", { 1 }, { 0.0F } },
-		    { "ff.up.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "ff.up.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "ff.down.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "ff.down.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "attn.q.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "attn.q.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "attn.k.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "attn.k.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "attn.v.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "attn.v.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "attn.out.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-		    { "attn.out.bias", { 2 }, { 0.0F, 0.0F } },
-		    { "vae.conv.weight", { 1, 1, 1, 1 }, { 0.0F } },
-		    { "vae.conv.bias", { 1 }, { 1.0F } },
-		    { "vae.norm.weight", { 1 }, { 1.0F } },
-		    { "vae.norm.bias", { 1 }, { 0.0F } },
-		    { "vae.deconv.weight", { 1, 1, 1, 1 }, { 0.0F } },
-		    { "vae.deconv.bias", { 1 }, { 1.0F } },
+			{ "res.norm1.weight", { 1 }, { 1.0F } },
+			{ "res.norm1.bias", { 1 }, { 0.0F } },
+			{ "res.norm2.weight", { 1 }, { 1.0F } },
+			{ "res.norm2.bias", { 1 }, { 0.0F } },
+			{ "res.conv1.weight", { 1, 1, 1, 1 }, { 0.0F } },
+			{ "res.conv1.bias", { 1 }, { 0.0F } },
+			{ "res.conv2.weight", { 1, 1, 1, 1 }, { 0.0F } },
+			{ "res.conv2.bias", { 1 }, { 0.0F } },
+			{ "ff.up.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "ff.up.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "ff.down.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "ff.down.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "attn.q.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "attn.q.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "attn.k.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "attn.k.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "attn.v.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "attn.v.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "attn.out.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+			{ "attn.out.bias", { 2 }, { 0.0F, 0.0F } },
+			{ "vae.conv.weight", { 1, 1, 1, 1 }, { 0.0F } },
+			{ "vae.conv.bias", { 1 }, { 1.0F } },
+			{ "vae.norm.weight", { 1 }, { 1.0F } },
+			{ "vae.norm.bias", { 1 }, { 0.0F } },
+			{ "vae.deconv.weight", { 1, 1, 1, 1 }, { 0.0F } },
+			{ "vae.deconv.bias", { 1 }, { 1.0F } },
 		} };
 		return BuildFloatArchive(specs);
 	}
 
-	std::string BuildLinearManifest(std::string_view weightDType = "F32",
-	                                std::string_view weightShape = "[3,2]",
+	std::string BuildLinearManifest(std::string_view weightDType = "F32", std::string_view weightShape = "[3,2]",
 	                                std::string_view weightSource = "linear.weight",
 	                                std::string_view weightLayout = "torch_linear_weight",
 	                                std::string_view weightSourceShape = "[2,3]")
@@ -192,9 +192,10 @@ namespace
   "format":"litenn.torch_manifest.v1",
   "inputs":[{"name":"x","dtype":"torch.float32","shape":[2,3]}],
   "tensors":[
-    {"name":"fc.weight","source":")") + std::string(weightSource) + R"(","dtype":")" +
-		       std::string(weightDType) + R"(","source_shape":)" + std::string(weightSourceShape) + R"(,"layout":")" +
-		       std::string(weightLayout) + R"(","shape":)" + std::string(weightShape) + R"(},
+    {"name":"fc.weight","source":")") +
+		       std::string(weightSource) + R"(","dtype":")" + std::string(weightDType) + R"(","source_shape":)" +
+		       std::string(weightSourceShape) + R"(,"layout":")" + std::string(weightLayout) + R"(","shape":)" +
+		       std::string(weightShape) + R"(},
     {"name":"fc.bias","source":"linear.bias","dtype":"F32","source_shape":[2],"layout":"torch_bias_1d","shape":[1,2]}
   ],
   "nodes":[
@@ -339,13 +340,16 @@ namespace
 
 	std::array<Tensor<CPU>, 1> MakeInputs()
 	{
-		return {
-			Tensor<CPU>({
-			                1.0, -2.0, 0.5,
-			                0.0, 3.0, -1.0,
-			            },
-			            { 2, 3 })
-		};
+		return { Tensor<CPU>(
+			{
+			    1.0,
+			    -2.0,
+			    0.5,
+			    0.0,
+			    3.0,
+			    -1.0,
+			},
+			{ 2, 3 }) };
 	}
 
 	void ExpectPyTorchLinearReluGolden(const Tensor<CPU>& output)
@@ -364,7 +368,7 @@ namespace
 	{
 		try
 		{
-			(void)Serialization::ImportTorchManifest(manifest, archive);
+			(void) Serialization::ImportTorchManifest(manifest, archive);
 			FAIL() << "expected manifest import to throw";
 		}
 		catch (const std::runtime_error& ex)
@@ -378,27 +382,20 @@ namespace
 TEST(TorchManifest, ReportsSupportedMappingsAndDTypeAliases)
 {
 	const auto mappings = Serialization::SupportedTorchManifestOpMappings();
-	const auto hasLinear = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "linear";
-	});
-	const auto hasLayerNorm = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "layer_norm";
-	});
-	const auto hasConv2D = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "conv2d";
-	});
-	const auto hasGroupNorm = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "group_norm";
-	});
-	const auto hasConcat = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "concat";
-	});
-	const auto hasGEGLU = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "geglu_feed_forward";
-	});
-	const auto hasSpatialTransformer = std::ranges::any_of(mappings, [](const auto& mapping) {
-		return mapping.torchOp == "spatial_transformer_2d";
-	});
+	const auto hasLinear =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "linear"; });
+	const auto hasLayerNorm =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "layer_norm"; });
+	const auto hasConv2D =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "conv2d"; });
+	const auto hasGroupNorm =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "group_norm"; });
+	const auto hasConcat =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "concat"; });
+	const auto hasGEGLU =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "geglu_feed_forward"; });
+	const auto hasSpatialTransformer =
+	    std::ranges::any_of(mappings, [](const auto& mapping) { return mapping.torchOp == "spatial_transformer_2d"; });
 	EXPECT_TRUE(hasLinear);
 	EXPECT_TRUE(hasLayerNorm);
 	EXPECT_TRUE(hasConv2D);
@@ -418,11 +415,23 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 	ASSERT_EQ(result.model.UnsafeGraphView().VariableCount(), 2u);
 	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.weight").has_value());
 	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.bias").has_value());
-	EXPECT_FALSE(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->HasGradStorage());
-	EXPECT_FALSE(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->HasGradStorage());
-	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->Data().Shape().ToOwned(),
+	EXPECT_FALSE(result.model.UnsafeGraphView()
+	                 .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))
+	                 ->HasGradStorage());
+	EXPECT_FALSE(result.model.UnsafeGraphView()
+	                 .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))
+	                 ->HasGradStorage());
+	EXPECT_EQ(result.model.UnsafeGraphView()
+	              .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))
+	              ->Data()
+	              .Shape()
+	              .ToOwned(),
 	          (std::vector<std::size_t>{ 3, 2 }));
-	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->Data().Shape().ToOwned(),
+	EXPECT_EQ(result.model.UnsafeGraphView()
+	              .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))
+	              ->Data()
+	              .Shape()
+	              .ToOwned(),
 	          (std::vector<std::size_t>{ 1, 2 }));
 	EXPECT_EQ(result.model.UnsafeGraphView().InputSignature()[0].name, "x");
 	EXPECT_EQ(result.model.UnsafeGraphView().OutputSignature()[0].name, "relu_linear");
@@ -432,7 +441,8 @@ TEST(TorchManifest, ImportsTorchLinearReluManifestAndRunsGolden)
 
 	auto inputs = MakeInputs();
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ExpectPyTorchLinearReluGolden(outputs[0]);
 
@@ -488,13 +498,22 @@ TEST(TorchManifest, ConvertsManifestTensorTargetDType)
 	auto result = Serialization::ImportTorchManifest(manifest, archive);
 	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.weight").has_value());
 	ASSERT_TRUE(result.model.UnsafeGraphView().FindVariable("fc.bias").has_value());
-	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))->Data().DType(), DataType::Float32);
-	EXPECT_EQ(result.model.UnsafeGraphView().GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))->Data().DType(), DataType::Float32);
+	EXPECT_EQ(result.model.UnsafeGraphView()
+	              .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.weight"))
+	              ->Data()
+	              .DType(),
+	          DataType::Float32);
+	EXPECT_EQ(result.model.UnsafeGraphView()
+	              .GetVariable(*result.model.UnsafeGraphView().FindVariable("fc.bias"))
+	              ->Data()
+	              .DType(),
+	          DataType::Float32);
 	EXPECT_GE(result.report.foldedConstants.size(), 2u);
 
 	std::array<Tensor<CPU>, 1> inputs{ Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }, DataType::Float32) };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 4.25F, 1e-5F);
@@ -517,7 +536,8 @@ TEST(TorchManifest, ImportsDiffusionFoundationOps)
 		Tensor<CPU>({ 10.0 }, { 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 1, 6, 6 }));
 	EXPECT_EQ(outputs[1].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 4 }));
@@ -557,7 +577,8 @@ TEST(TorchManifest, ImportsConcatOp)
 		Tensor<CPU>({ 3.0 }, { 1, 1 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	ASSERT_EQ(outputs[0].Shape().ToOwned(), (std::vector<std::size_t>{ 1, 3 }));
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 1.0F, 1e-5F);
@@ -568,10 +589,10 @@ TEST(TorchManifest, ImportsConcatOp)
 TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
 {
 	const std::array<FloatTensorSpec, 4> specs{ {
-	    { "proj.weight", { 2, 4 }, { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F } },
-	    { "proj.bias", { 4 }, { 0.0F, 0.0F, 1.0F, 1.0F } },
-	    { "down.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
-	    { "down.bias", { 2 }, { 0.0F, 0.0F } },
+		{ "proj.weight", { 2, 4 }, { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F } },
+		{ "proj.bias", { 4 }, { 0.0F, 0.0F, 1.0F, 1.0F } },
+		{ "down.weight", { 2, 2 }, { 1.0F, 0.0F, 0.0F, 1.0F } },
+		{ "down.bias", { 2 }, { 0.0F, 0.0F } },
 	} };
 	const auto archive = BuildFloatArchive(specs);
 	const auto manifest = R"({
@@ -610,7 +631,8 @@ TEST(TorchManifest, ImportsSliceAndGEGLUFeedForward)
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 2u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	constexpr float pi = 3.14159265358979323846F;
@@ -731,7 +753,8 @@ TEST(TorchManifest, ImportsSpatialTransformer2DComposite)
 		Tensor<CPU>({ 0.5, -0.5 }, { 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 	EXPECT_NEAR(ReadFloat(outputs[0], 0), 2.0F, 1e-5F);
 	EXPECT_NEAR(ReadFloat(outputs[0], 1), 3.0F, 1e-5F);
@@ -756,7 +779,8 @@ TEST(TorchManifest, ImportsSDXLCompositePatternsWithTinyParityFixture)
 		Tensor<CPU>({ 2.0, 3.0 }, { 1, 1, 1, 2 }),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()), std::span<const Tensor<CPU>>(inputs));
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(result.model.UnsafeGraphView()),
+	                                            std::span<const Tensor<CPU>>(inputs));
 	ASSERT_EQ(outputs.size(), 4u);
 
 	const std::array<float, 4> expectedResidual{ 1.0F, -2.0F, 3.0F, -4.0F };

@@ -32,7 +32,7 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("RWKVWKV time parameters must be floating-point tensors");
 			}
-			(void)::LiteNN::Detail::BroadcastToShape(info.shape, keyInfo.shape);
+			(void) ::LiteNN::Detail::BroadcastToShape(info.shape, keyInfo.shape);
 		}
 		const auto result = subgraph.AddNode(RWKVWKVNode{ key, value, receptance, timeDecay, timeFirst },
 		                                     { OutputInfo{ keyInfo.dtype, keyInfo.shape } });

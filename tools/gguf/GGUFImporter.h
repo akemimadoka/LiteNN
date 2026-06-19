@@ -52,8 +52,7 @@ namespace LiteNN::GGUF
 
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
-	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath,
-	                                const std::filesystem::path& outputPath);
+	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);
 } // namespace LiteNN::GGUF
 
 #endif

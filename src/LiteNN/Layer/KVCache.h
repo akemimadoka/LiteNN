@@ -16,7 +16,7 @@ namespace LiteNN::Layer
 	namespace Detail
 	{
 		inline OutputInfo ConcatInfo(const OutputInfo& lhs, const OutputInfo& rhs, std::size_t axis,
-		                            std::string_view label)
+		                             std::string_view label)
 		{
 			if (lhs.dtype != rhs.dtype)
 			{
@@ -48,7 +48,7 @@ namespace LiteNN::Layer
 		}
 
 		inline OutputInfo SliceInfo(const OutputInfo& input, std::size_t axis, std::size_t start, std::size_t length,
-		                           std::string_view label)
+		                            std::string_view label)
 		{
 			if (axis >= input.shape.size())
 			{
@@ -65,7 +65,7 @@ namespace LiteNN::Layer
 		}
 
 		inline void ValidateKVPair(const OutputInfo& keys, const OutputInfo& values, std::size_t axis,
-		                          std::string_view label)
+		                           std::string_view label)
 		{
 			if (keys.shape.size() != values.shape.size())
 			{
@@ -83,7 +83,7 @@ namespace LiteNN::Layer
 	} // namespace Detail
 
 	inline KVCachePair AddKVCacheAppend(Subgraph& subgraph, KVCachePair cache, KVCachePair appended,
-	                                  std::size_t axis = 0)
+	                                    std::size_t axis = 0)
 	{
 		const auto cacheKeys = subgraph.GetOutputInfo(cache.keys);
 		const auto cacheValues = subgraph.GetOutputInfo(cache.values);
@@ -102,7 +102,7 @@ namespace LiteNN::Layer
 	}
 
 	inline KVCachePair AddKVCacheView(Subgraph& subgraph, KVCachePair cache, std::size_t start, std::size_t length,
-	                                std::size_t axis = 0)
+	                                  std::size_t axis = 0)
 	{
 		const auto keyInfo = subgraph.GetOutputInfo(cache.keys);
 		const auto valueInfo = subgraph.GetOutputInfo(cache.values);
@@ -111,13 +111,12 @@ namespace LiteNN::Layer
 		const auto slicedKeyInfo = Detail::SliceInfo(keyInfo, axis, start, length, "KV cache key view");
 		const auto slicedValueInfo = Detail::SliceInfo(valueInfo, axis, start, length, "KV cache value view");
 
-		const auto keys =
-		    subgraph.AddNode(SliceNode{ cache.keys, axis, start, length }, { std::move(slicedKeyInfo) });
+		const auto keys = subgraph.AddNode(SliceNode{ cache.keys, axis, start, length }, { std::move(slicedKeyInfo) });
 		const auto values =
 		    subgraph.AddNode(SliceNode{ cache.values, axis, start, length }, { std::move(slicedValueInfo) });
 		return { { keys, 0 }, { values, 0 } };
 	}
-	
+
 } // namespace LiteNN::Layer
 
 #endif

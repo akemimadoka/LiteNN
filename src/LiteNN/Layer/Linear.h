@@ -31,7 +31,8 @@ namespace LiteNN::Layer
 
 	inline void ValidateLinearBias(const Tensor<CPU>& bias, std::size_t outFeatures, DataType dtype)
 	{
-		if (bias.DType() != dtype || bias.Shape().NumDim() != 2 || bias.Shape()[0] != 1 || bias.Shape()[1] != outFeatures)
+		if (bias.DType() != dtype || bias.Shape().NumDim() != 2 || bias.Shape()[0] != 1 ||
+		    bias.Shape()[1] != outFeatures)
 		{
 			throw std::runtime_error("Linear bias must have shape [1, outFeatures] and the same dtype as weight");
 		}
@@ -81,14 +82,14 @@ namespace LiteNN::Layer
 		const auto inputInfo = subgraph.GetOutputInfo(input);
 		if (inputInfo.dtype != layer.dtype || inputInfo.shape.size() != 2 || inputInfo.shape[1] != layer.inFeatures)
 		{
-			throw std::runtime_error(std::format("Linear input must have shape [batch, {}] and matching dtype",
-			                                    layer.inFeatures));
+			throw std::runtime_error(
+			    std::format("Linear input must have shape [batch, {}] and matching dtype", layer.inFeatures));
 		}
 
 		const std::vector<std::size_t> weightShape{ layer.inFeatures, layer.outFeatures };
 		const std::vector<std::size_t> outputShape{ inputInfo.shape[0], layer.outFeatures };
-		const auto weight = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
-		                                     { OutputInfo{ layer.dtype, weightShape } });
+		const auto weight =
+		    subgraph.AddNode(VariableRefNode{ layer.weightVariable }, { OutputInfo{ layer.dtype, weightShape } });
 		const auto matmul = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, { weight, 0 } },
 		                                     { OutputInfo{ layer.dtype, outputShape } });
 		if (!layer.biasVariable)

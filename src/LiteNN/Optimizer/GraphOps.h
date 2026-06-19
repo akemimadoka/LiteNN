@@ -13,8 +13,7 @@ namespace LiteNN::Optimizer
 {
 	inline std::vector<NodeOutput> AddSGDStep(Subgraph& subgraph, NodeOutput parameter, NodeOutput gradient,
 	                                          std::optional<NodeOutput> velocity, double learningRate,
-	                                          double momentum = 0.0, double weightDecay = 0.0,
-	                                          bool nesterov = false)
+	                                          double momentum = 0.0, double weightDecay = 0.0, bool nesterov = false)
 	{
 		const auto parameterInfo = subgraph.GetOutputInfo(parameter);
 		const auto gradientInfo = subgraph.GetOutputInfo(gradient);
@@ -53,10 +52,9 @@ namespace LiteNN::Optimizer
 	}
 
 	inline std::vector<NodeOutput> AddAdamWStep(Subgraph& subgraph, NodeOutput parameter, NodeOutput gradient,
-	                                           NodeOutput firstMoment, NodeOutput secondMoment,
-	                                           double learningRate = 1e-3, double beta1 = 0.9,
-	                                           double beta2 = 0.999, double epsilon = 1e-8,
-	                                           double weightDecay = 0.01, std::size_t step = 1)
+	                                            NodeOutput firstMoment, NodeOutput secondMoment,
+	                                            double learningRate = 1e-3, double beta1 = 0.9, double beta2 = 0.999,
+	                                            double epsilon = 1e-8, double weightDecay = 0.01, std::size_t step = 1)
 	{
 		const auto parameterInfo = subgraph.GetOutputInfo(parameter);
 		const auto gradientInfo = subgraph.GetOutputInfo(gradient);
@@ -68,14 +66,15 @@ namespace LiteNN::Optimizer
 			throw std::runtime_error("AdamWStep currently supports Float32 tensors only");
 		}
 		::LiteNN::Detail::ValidateOptimizerStepShape(parameterInfo.shape, gradientInfo.shape, "AdamWStep gradient");
-		::LiteNN::Detail::ValidateOptimizerStepShape(parameterInfo.shape, firstMomentInfo.shape, "AdamWStep firstMoment");
-		::LiteNN::Detail::ValidateOptimizerStepShape(parameterInfo.shape, secondMomentInfo.shape, "AdamWStep secondMoment");
-		const auto node = subgraph.AddNode(
-		    AdamWStepNode{ parameter, gradient, firstMoment, secondMoment, learningRate, beta1, beta2, epsilon,
-		                   weightDecay, step },
-		    { OutputInfo{ DataType::Float32, parameterInfo.shape },
-		      OutputInfo{ DataType::Float32, parameterInfo.shape },
-		      OutputInfo{ DataType::Float32, parameterInfo.shape } });
+		::LiteNN::Detail::ValidateOptimizerStepShape(parameterInfo.shape, firstMomentInfo.shape,
+		                                             "AdamWStep firstMoment");
+		::LiteNN::Detail::ValidateOptimizerStepShape(parameterInfo.shape, secondMomentInfo.shape,
+		                                             "AdamWStep secondMoment");
+		const auto node = subgraph.AddNode(AdamWStepNode{ parameter, gradient, firstMoment, secondMoment, learningRate,
+		                                                  beta1, beta2, epsilon, weightDecay, step },
+		                                   { OutputInfo{ DataType::Float32, parameterInfo.shape },
+		                                     OutputInfo{ DataType::Float32, parameterInfo.shape },
+		                                     OutputInfo{ DataType::Float32, parameterInfo.shape } });
 		return { NodeOutput{ node, 0 }, NodeOutput{ node, 1 }, NodeOutput{ node, 2 } };
 	}
 } // namespace LiteNN::Optimizer

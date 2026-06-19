@@ -10,8 +10,7 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddBroadcastTo(Subgraph& subgraph, NodeOutput input,
-	                                 std::span<const std::size_t> targetShape)
+	inline NodeOutput AddBroadcastTo(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> targetShape)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		auto target = std::vector<std::size_t>(targetShape.begin(), targetShape.end());

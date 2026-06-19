@@ -6,8 +6,8 @@
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
-#include <LiteNN/Serialization/ModelPackageIO.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
 #include <array>
@@ -96,13 +96,12 @@ namespace
 		}
 	}
 
-	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
-	                           std::initializer_list<std::size_t> shape)
+	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values, std::initializer_list<std::size_t> shape)
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
 		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.UnsafeRawData(), DataType::Int32, values.begin(),
-		                              values.size());
+		                               values.size());
 		return tensor;
 	}
 
@@ -110,8 +109,8 @@ namespace
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Float32, device);
-		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Float32, tensor.UnsafeRawData(), DataType::Float32, values.data(),
-		                              values.size());
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Float32, tensor.UnsafeRawData(), DataType::Float32,
+		                               values.data(), values.size());
 		return tensor;
 	}
 
@@ -131,7 +130,7 @@ namespace
 	}
 
 	void AddTensor(gguf_context* gguf, ggml_context* ggml, ggml_type type, std::string_view name,
-	              std::span<const std::int64_t> dims, const void* data)
+	               std::span<const std::int64_t> dims, const void* data)
 	{
 		auto* tensor = ggml_new_tensor(ggml, type, static_cast<int>(dims.size()), dims.data());
 		if (!tensor)
@@ -171,8 +170,7 @@ namespace
 		AddTensor(gguf.get(), ggml.get(), GGML_TYPE_F32, "token_embd.weight", embeddingShape, embedding.data());
 
 		const std::array<std::uint8_t, 18> q4Payload = {
-			0x10, 0x00, 0x22, 0x44, 0x66, 0x88, 0xaa, 0xcc, 0xee,
-			0x11, 0x33, 0x55, 0x77, 0x99, 0xbb, 0xdd, 0xff, 0x7f,
+			0x10, 0x00, 0x22, 0x44, 0x66, 0x88, 0xaa, 0xcc, 0xee, 0x11, 0x33, 0x55, 0x77, 0x99, 0xbb, 0xdd, 0xff, 0x7f,
 		};
 		const std::array<std::int64_t, 1> q4Shape = { 32 };
 		AddTensor(gguf.get(), ggml.get(), GGML_TYPE_Q4_0, "blk.0.attn_q.weight", q4Shape, q4Payload.data());
@@ -232,66 +230,43 @@ namespace
 		    { "llama.rope.freq_base", 10000.0 },
 		});
 
-		AddNamedVariable(graph, "token_embd.weight", Tensor<CPU>({ 1.0f, 0.0f, 0.0f,
-		                                                          0.0f, 1.0f, 0.0f,
-		                                                          0.0f, 0.0f, 1.0f,
-		                                                          0.0f, 0.0f, 0.0f },
-		                                                         { 4, 3 }));
+		AddNamedVariable(
+		    graph, "token_embd.weight",
+		    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f }, { 4, 3 }));
 		AddNamedVariable(graph, "output_norm.weight", Tensor<CPU>({ 1.0f, 1.0f, 1.0f, 1.0f }, { 1, 4 }));
-		AddNamedVariable(graph, "output.weight", Tensor<CPU>({ 1.0f, 0.0f, 0.0f,
-		                                                      0.0f, 1.0f, 0.0f,
-		                                                      0.0f, 0.0f, 1.0f,
-		                                                      0.0f, 0.0f, 0.0f },
-		                                                     { 4, 3 }));
+		AddNamedVariable(
+		    graph, "output.weight",
+		    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f }, { 4, 3 }));
 
 		AddNamedVariable(graph, "blk.0.attn_norm.weight", Tensor<CPU>({ 1.0f, 1.0f, 1.0f, 1.0f }, { 1, 4 }));
 		AddNamedVariable(graph, "blk.0.ffn_norm.weight", Tensor<CPU>({ 1.0f, 1.0f, 1.0f, 1.0f }, { 1, 4 }));
-		AddNamedVariable(graph, "blk.0.attn_q.weight", Tensor<CPU>(
-		                                                { 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f },
-		                                                { 4, 4 }));
-		AddNamedVariable(graph, "blk.0.attn_k.weight", Tensor<CPU>(
-		                                                { 0.0f, 0.0f,
-		                                                  0.0f, 0.0f,
-		                                                  0.0f, 0.0f,
-		                                                  0.0f, 0.0f },
-		                                                { 4, 2 }));
-		AddNamedVariable(graph, "blk.0.attn_v.weight", Tensor<CPU>(
-		                                                { 0.0f, 0.0f,
-		                                                  0.0f, 0.0f,
-		                                                  0.0f, 0.0f,
-		                                                  0.0f, 0.0f },
-		                                                { 4, 2 }));
-		AddNamedVariable(graph, "blk.0.attn_output.weight", Tensor<CPU>(
-		                                                     { 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                       0.0f, 0.0f, 0.0f, 0.0f,
-		                                                       0.0f, 0.0f, 0.0f, 0.0f,
-		                                                       0.0f, 0.0f, 0.0f, 0.0f },
-		                                                     { 4, 4 }));
-		AddNamedVariable(graph, "blk.0.ffn_gate.weight", Tensor<CPU>(
-		                                                  { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
-		                                                  { 4, 8 }));
-		AddNamedVariable(graph, "blk.0.ffn_up.weight", Tensor<CPU>(
-		                                                { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
-		                                                { 4, 8 }));
-		AddNamedVariable(graph, "blk.0.ffn_down.weight", Tensor<CPU>(
-		                                                  { 0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f,
-		                                                    0.0f, 0.0f, 0.0f, 0.0f },
-		                                                  { 8, 4 }));
+		AddNamedVariable(graph, "blk.0.attn_q.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f },
+		                             { 4, 4 }));
+		AddNamedVariable(graph, "blk.0.attn_k.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 4, 2 }));
+		AddNamedVariable(graph, "blk.0.attn_v.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 4, 2 }));
+		AddNamedVariable(graph, "blk.0.attn_output.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f },
+		                             { 4, 4 }));
+		AddNamedVariable(graph, "blk.0.ffn_gate.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+		                             { 4, 8 }));
+		AddNamedVariable(graph, "blk.0.ffn_up.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+		                             { 4, 8 }));
+		AddNamedVariable(graph, "blk.0.ffn_down.weight",
+		                 Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+		                               0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+		                             { 8, 4 }));
 		return graph;
 	}
 
@@ -329,14 +304,20 @@ namespace
 
 		AddNamedVariable(graph, "blk.0.attn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
 		AddNamedVariable(graph, "blk.0.ffn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
-		AddNamedVariable(graph, "blk.0.attn_q.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
-		AddNamedVariable(graph, "blk.0.attn_k.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
-		AddNamedVariable(graph, "blk.0.attn_v.weight", MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_q.weight",
+		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_k.weight",
+		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_v.weight",
+		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
 		AddNamedVariable(graph, "blk.0.attn_output.weight",
-		                MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
-		AddNamedVariable(graph, "blk.0.ffn_gate.weight", MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
-		AddNamedVariable(graph, "blk.0.ffn_up.weight", MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
-		AddNamedVariable(graph, "blk.0.ffn_down.weight", MakeFloatTensor(zeros64x32, { kFeedForwardLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.ffn_gate.weight",
+		                 MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		AddNamedVariable(graph, "blk.0.ffn_up.weight",
+		                 MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		AddNamedVariable(graph, "blk.0.ffn_down.weight",
+		                 MakeFloatTensor(zeros64x32, { kFeedForwardLength, kEmbeddingLength }));
 		return graph;
 	}
 
@@ -382,8 +363,8 @@ namespace
 	bool IsQ80QuantizationTarget(std::string_view name)
 	{
 		return name == "blk.0.attn_q.weight" || name == "blk.0.attn_k.weight" || name == "blk.0.attn_v.weight" ||
-		       name == "blk.0.attn_output.weight" || name == "blk.0.ffn_gate.weight" ||
-		       name == "blk.0.ffn_up.weight" || name == "blk.0.ffn_down.weight";
+		       name == "blk.0.attn_output.weight" || name == "blk.0.ffn_gate.weight" || name == "blk.0.ffn_up.weight" ||
+		       name == "blk.0.ffn_down.weight";
 	}
 
 	bool ShouldQuantizeQ80Weight(std::string_view name, const Variable& variable)
@@ -406,7 +387,8 @@ namespace
 			const auto& variable = *archive.GetVariable(i);
 			const auto name = archive.VariableName(i);
 			const auto shouldQuantize = ShouldQuantizeQ80Weight(name, variable);
-			const auto index = copy.AddVariable(shouldQuantize ? QuantizeQ80Variable(variable) : archive.GetVariable(i));
+			const auto index =
+			    copy.AddVariable(shouldQuantize ? QuantizeQ80Variable(variable) : archive.GetVariable(i));
 			copy.SetVariableName(index, name);
 		}
 		return copy;
@@ -510,7 +492,8 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(tokenTypeList[1], 3);
 	EXPECT_EQ(tokenTypeList[2], 3);
 
-	ASSERT_EQ(imported.model.UnsafeGraphView().GetVariable(0)->Data().Shape().ToOwned(), std::vector<std::size_t>({ 3, 2 }));
+	ASSERT_EQ(imported.model.UnsafeGraphView().GetVariable(0)->Data().Shape().ToOwned(),
+	          std::vector<std::size_t>({ 3, 2 }));
 	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 0), 1.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 1), 2.0F);
 	EXPECT_FLOAT_EQ(ReadFloat(imported.model.UnsafeGraphView().GetVariable(0)->Data(), 2), 3.0F);
@@ -704,9 +687,7 @@ TEST(GGUFLLaMADecoderBlock, LowersNamedArchiveBlockAndActsAsIdentityWithZeroProj
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	Runtime::Interpreter<CPU> interpreter;
-	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f,
-	                                                   5.0f, 6.0f, 7.0f, 8.0f },
-	                                                  { 2, 4 }) };
+	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, { 2, 4 }) };
 	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	for (std::size_t i = 0; i < 8; ++i)
@@ -761,8 +742,7 @@ TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenPrefillLogits)
 
 	const float expectedScalar = 1.0f / std::sqrt(0.25f + 1.0e-6f);
 	const std::array<float, 6> goldenLogits = {
-		expectedScalar, 0.0f, 0.0f,
-		0.0f, expectedScalar, 0.0f,
+		expectedScalar, 0.0f, 0.0f, 0.0f, expectedScalar, 0.0f,
 	};
 	ExpectTensorNear(outputs[0], goldenLogits, GGUF::GetLLaMAParityTolerance(DataType::Float32));
 }
@@ -788,11 +768,23 @@ TEST(GGUFLLaMACausalLM, FallsBackToTokenEmbeddingWhenOutputWeightIsMissing)
 TEST(GGUFLLaMACausalLM, TransposesImportedNonSquareLinearWeightsIntoLiteNNLayout)
 {
 	auto archive = CopyArchiveExcludingVariables(BuildTinyLLaMAArchive(), { "output.weight" });
-	AddNamedVariable(archive, "output.weight", Tensor<CPU>({
-		1.0f, 2.0f, 3.0f, 4.0f,
-		5.0f, 6.0f, 7.0f, 8.0f,
-		9.0f, 10.0f, 11.0f, 12.0f,
-	}, { 3, 4 }));
+	AddNamedVariable(archive, "output.weight",
+	                 Tensor<CPU>(
+	                     {
+	                         1.0f,
+	                         2.0f,
+	                         3.0f,
+	                         4.0f,
+	                         5.0f,
+	                         6.0f,
+	                         7.0f,
+	                         8.0f,
+	                         9.0f,
+	                         10.0f,
+	                         11.0f,
+	                         12.0f,
+	                     },
+	                     { 3, 4 }));
 
 	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2);
 	const auto outputWeightIndex = lowered.FindVariable("output.weight");
@@ -804,10 +796,7 @@ TEST(GGUFLLaMACausalLM, TransposesImportedNonSquareLinearWeightsIntoLiteNNLayout
 	EXPECT_EQ(loweredWeight.Shape()[1], 3u);
 
 	const std::array<float, 12> expected = {
-		1.0f, 5.0f, 9.0f,
-		2.0f, 6.0f, 10.0f,
-		3.0f, 7.0f, 11.0f,
-		4.0f, 8.0f, 12.0f,
+		1.0f, 5.0f, 9.0f, 2.0f, 6.0f, 10.0f, 3.0f, 7.0f, 11.0f, 4.0f, 8.0f, 12.0f,
 	};
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
@@ -962,8 +951,8 @@ TEST(GGUFLLaMACausalLM, CompilesDecodeGraphToCPUArtifactAndMatchesInterpreter)
 
 TEST(GGUFLLaMACausalLM, LowersLinearRopeScaling)
 {
-	auto archive = CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type",
-	                                               std::string("linear"));
+	auto archive =
+	    CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type", std::string("linear"));
 	archive = CopyArchiveWithMetadataOverride(archive, "llama.rope.scaling.factor", 2.0);
 	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 2, 1);
 
@@ -976,8 +965,8 @@ TEST(GGUFLLaMACausalLM, LowersLinearRopeScaling)
 
 TEST(GGUFLLaMACausalLM, RejectsUnsupportedRopeScalingTypeWithActionableDiagnostic)
 {
-	const auto archive = CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type",
-	                                                     std::string("yarn"));
+	const auto archive =
+	    CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "llama.rope.scaling.type", std::string("yarn"));
 	try
 	{
 		static_cast<void>(GGUF::LowerLLaMACausalLM(archive, 1));
@@ -1044,7 +1033,8 @@ TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)
 	Runtime::Interpreter<CPU> interpreter;
 	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
 	const auto plainOutputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(plainLowered), inputs);
-	const auto quantizedOutputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(quantizedLowered), inputs);
+	const auto quantizedOutputs =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(quantizedLowered), inputs);
 	ASSERT_EQ(plainOutputs.size(), 1u);
 	ASSERT_EQ(quantizedOutputs.size(), 1u);
 	ASSERT_EQ(plainOutputs[0].NumElements(), quantizedOutputs[0].NumElements());

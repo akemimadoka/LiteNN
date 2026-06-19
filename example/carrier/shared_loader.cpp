@@ -19,19 +19,19 @@ namespace
 	public:
 		explicit DynamicLibrary(const std::filesystem::path& path)
 		{
-	#if defined(_WIN32)
+#if defined(_WIN32)
 			handle_ = LoadLibraryW(path.c_str());
 			if (!handle_)
 			{
 				throw std::runtime_error(std::format("Failed to open shared library {}", path.string()));
 			}
-	#else
+#else
 			handle_ = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
 			if (!handle_)
 			{
 				throw std::runtime_error(std::format("Failed to open shared library {}: {}", path.string(), dlerror()));
 			}
-	#endif
+#endif
 		}
 
 		DynamicLibrary(const DynamicLibrary&) = delete;
@@ -39,29 +39,29 @@ namespace
 
 		~DynamicLibrary()
 		{
-	#if defined(_WIN32)
+#if defined(_WIN32)
 			if (handle_)
 			{
 				FreeLibrary(handle_);
 			}
-	#else
+#else
 			if (handle_)
 			{
 				dlclose(handle_);
 			}
-	#endif
+#endif
 		}
 
 		const void* Lookup(std::string_view name) const
 		{
-	#if defined(_WIN32)
+#if defined(_WIN32)
 			auto* address = reinterpret_cast<const void*>(GetProcAddress(handle_, std::string(name).c_str()));
 			if (!address)
 			{
 				throw std::runtime_error(std::format("Missing exported symbol {}", name));
 			}
 			return address;
-	#else
+#else
 			dlerror();
 			auto* address = dlsym(handle_, std::string(name).c_str());
 			if (!address)
@@ -69,15 +69,15 @@ namespace
 				throw std::runtime_error(std::format("Missing exported symbol {}: {}", name, dlerror()));
 			}
 			return address;
-	#endif
+#endif
 		}
 
 	private:
-	#if defined(_WIN32)
+#if defined(_WIN32)
 		HMODULE handle_{};
-	#else
+#else
 		void* handle_{};
-	#endif
+#endif
 	};
 
 	std::filesystem::path DefaultLibraryPath(const char* argv0)

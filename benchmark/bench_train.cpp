@@ -33,514 +33,516 @@
 
 using namespace LiteNN;
 
-namespace {
-
-enum class TrainModelKind : std::size_t
+namespace
 {
-	MLP128,
-	MLP512,
-};
 
-struct TrainModelSpec
-{
-	std::string_view name;
-	std::span<const std::size_t> hiddenSizes;
-};
-
-constexpr std::array<std::size_t, 1> kMLP128Hidden = { 128 };
-constexpr std::array<std::size_t, 2> kMLP512Hidden = { 512, 256 };
-constexpr std::array<TrainModelKind, 2> kTrainModelKinds = {
-	TrainModelKind::MLP128,
-	TrainModelKind::MLP512,
-};
-constexpr std::array<std::size_t, 3> kTrainBatchSizes = { 32, 128, 512 };
-constexpr int kWarmupIterations = 5;
-
-const TrainModelSpec& GetTrainModelSpec(TrainModelKind kind)
-{
-	static constexpr std::array<TrainModelSpec, 2> specs = {
-		TrainModelSpec{ "MNIST-MLP128", kMLP128Hidden },
-		TrainModelSpec{ "MNIST-MLP512", kMLP512Hidden },
+	enum class TrainModelKind : std::size_t
+	{
+		MLP128,
+		MLP512,
 	};
-	return specs[static_cast<std::size_t>(kind)];
-}
 
-Layer::LinearLayer CreateLinear(ModelBuilder& builder, std::size_t inputSize, std::size_t outputSize, std::mt19937& rng)
-{
-	return Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ inputSize, outputSize }, rng),
-	    Initializer::Zeros({ 1, outputSize }));
-}
-
-Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& rng)
-{
-	const auto& spec = GetTrainModelSpec(kind);
-	ModelBuilder builder;
-	Graph& graph = builder.UnsafeMutableGraph();
-	std::vector<Layer::LinearLayer> layers;
-	std::size_t inputSize = 784;
-	for (const auto hiddenSize : spec.hiddenSizes)
+	struct TrainModelSpec
 	{
-		layers.push_back(CreateLinear(builder, inputSize, hiddenSize, rng));
-		inputSize = hiddenSize;
-	}
-	layers.push_back(CreateLinear(builder, inputSize, 10, rng));
+		std::string_view name;
+		std::span<const std::size_t> hiddenSizes;
+	};
 
-	Subgraph forward;
-	NodeOutput value{ forward.AddParam(DataType::Float32, { batch, 784 }), 0 };
-	for (std::size_t i = 0; i + 1 < layers.size(); ++i)
+	constexpr std::array<std::size_t, 1> kMLP128Hidden = { 128 };
+	constexpr std::array<std::size_t, 2> kMLP512Hidden = { 512, 256 };
+	constexpr std::array<TrainModelKind, 2> kTrainModelKinds = {
+		TrainModelKind::MLP128,
+		TrainModelKind::MLP512,
+	};
+	constexpr std::array<std::size_t, 3> kTrainBatchSizes = { 32, 128, 512 };
+	constexpr int kWarmupIterations = 5;
+
+	const TrainModelSpec& GetTrainModelSpec(TrainModelKind kind)
 	{
-		value = Layer::AddReLU(forward, Layer::AddLinear(forward, layers[i], value));
+		static constexpr std::array<TrainModelSpec, 2> specs = {
+			TrainModelSpec{ "MNIST-MLP128", kMLP128Hidden },
+			TrainModelSpec{ "MNIST-MLP512", kMLP512Hidden },
+		};
+		return specs[static_cast<std::size_t>(kind)];
 	}
-	forward.SetResults({ Layer::AddLinear(forward, layers.back(), value) });
-	graph.SetForward(graph.AddSubgraph(std::move(forward)));
-	graph.SetInputNames({ "image" });
-	graph.SetOutputNames({ "logits" });
-	return builder.UnsafeTakeGraph();
-}
 
-void OptimizeInferenceGraph(Graph& graph)
-{
-	InlinePass{}.Run(graph);
-	ConstFoldPass{}.Run(graph);
-	FusionPass{}.Run(graph);
-}
-
-Graph BuildTrainingGraph(TrainModelKind kind, std::size_t batch)
-{
-	std::mt19937 rng(42);
-	auto graph = BuildMNISTMLPGraph(kind, batch, rng);
-	AutogradPass{}.Run(graph);
-	return graph;
-}
-
-Graph BuildInferenceGraph(TrainModelKind kind, std::size_t batch)
-{
-	std::mt19937 rng(42);
-	auto graph = BuildMNISTMLPGraph(kind, batch, rng);
-	OptimizeInferenceGraph(graph);
-	return graph;
-}
-
-std::vector<float> MakeInputData(std::size_t batch)
-{
-	std::mt19937 rng(7);
-	std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-	std::vector<float> data(batch * 784);
-	for (auto& value : data)
+	Layer::LinearLayer CreateLinear(ModelBuilder& builder, std::size_t inputSize, std::size_t outputSize,
+	                                std::mt19937& rng)
 	{
-		value = dist(rng);
+		return Layer::CreateLinear(builder, Initializer::XavierUniform({ inputSize, outputSize }, rng),
+		                           Initializer::Zeros({ 1, outputSize }));
 	}
-	return data;
-}
 
-std::vector<std::size_t> MakeTargets(std::size_t batch)
-{
-	std::vector<std::size_t> targets(batch);
-	for (std::size_t i = 0; i < batch; ++i)
+	Graph BuildMNISTMLPGraph(TrainModelKind kind, std::size_t batch, std::mt19937& rng)
 	{
-		targets[i] = i % 10;
-	}
-	return targets;
-}
+		const auto& spec = GetTrainModelSpec(kind);
+		ModelBuilder builder;
+		Graph& graph = builder.UnsafeMutableGraph();
+		std::vector<Layer::LinearLayer> layers;
+		std::size_t inputSize = 784;
+		for (const auto hiddenSize : spec.hiddenSizes)
+		{
+			layers.push_back(CreateLinear(builder, inputSize, hiddenSize, rng));
+			inputSize = hiddenSize;
+		}
+		layers.push_back(CreateLinear(builder, inputSize, 10, rng));
 
-std::vector<Tensor<CPU>> MakeCPUInputs(const std::vector<float>& inputData, std::size_t batch)
-{
-	std::vector<Tensor<CPU>> inputs;
-	inputs.push_back(Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, 784 }));
-	return inputs;
-}
+		Subgraph forward;
+		NodeOutput value{ forward.AddParam(DataType::Float32, { batch, 784 }), 0 };
+		for (std::size_t i = 0; i + 1 < layers.size(); ++i)
+		{
+			value = Layer::AddReLU(forward, Layer::AddLinear(forward, layers[i], value));
+		}
+		forward.SetResults({ Layer::AddLinear(forward, layers.back(), value) });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+		graph.SetInputNames({ "image" });
+		graph.SetOutputNames({ "logits" });
+		return builder.UnsafeTakeGraph();
+	}
+
+	void OptimizeInferenceGraph(Graph& graph)
+	{
+		InlinePass{}.Run(graph);
+		ConstFoldPass{}.Run(graph);
+		FusionPass{}.Run(graph);
+	}
+
+	Graph BuildTrainingGraph(TrainModelKind kind, std::size_t batch)
+	{
+		std::mt19937 rng(42);
+		auto graph = BuildMNISTMLPGraph(kind, batch, rng);
+		AutogradPass{}.Run(graph);
+		return graph;
+	}
+
+	Graph BuildInferenceGraph(TrainModelKind kind, std::size_t batch)
+	{
+		std::mt19937 rng(42);
+		auto graph = BuildMNISTMLPGraph(kind, batch, rng);
+		OptimizeInferenceGraph(graph);
+		return graph;
+	}
+
+	std::vector<float> MakeInputData(std::size_t batch)
+	{
+		std::mt19937 rng(7);
+		std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+		std::vector<float> data(batch * 784);
+		for (auto& value : data)
+		{
+			value = dist(rng);
+		}
+		return data;
+	}
+
+	std::vector<std::size_t> MakeTargets(std::size_t batch)
+	{
+		std::vector<std::size_t> targets(batch);
+		for (std::size_t i = 0; i < batch; ++i)
+		{
+			targets[i] = i % 10;
+		}
+		return targets;
+	}
+
+	std::vector<Tensor<CPU>> MakeCPUInputs(const std::vector<float>& inputData, std::size_t batch)
+	{
+		std::vector<Tensor<CPU>> inputs;
+		inputs.push_back(Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, 784 }));
+		return inputs;
+	}
 
 #ifdef LITENN_ENABLE_CUDA
-std::vector<Tensor<CUDA>> MakeCUDAInputs(const std::vector<float>& inputData, std::size_t batch)
-{
-	std::vector<Tensor<CUDA>> inputs;
-	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, 784 });
-	inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
-	return inputs;
-}
+	std::vector<Tensor<CUDA>> MakeCUDAInputs(const std::vector<float>& inputData, std::size_t batch)
+	{
+		std::vector<Tensor<CUDA>> inputs;
+		auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(inputData), { batch, 784 });
+		inputs.push_back(cpuInput.CopyToDevice(CUDA{}));
+		return inputs;
+	}
 #endif
 
-void SetThroughputCounters(benchmark::State& state, std::size_t batch)
-{
-	state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(batch));
-	state.counters["samples_per_second"] = benchmark::Counter(
-	    static_cast<double>(batch), benchmark::Counter::kIsIterationInvariantRate);
-}
-
-class ScopedEnvVar
-{
-public:
-	ScopedEnvVar(const char* name, const char* value) : name_(name)
+	void SetThroughputCounters(benchmark::State& state, std::size_t batch)
 	{
-		if (const char* oldValue = std::getenv(name))
-		{
-			oldValue_ = oldValue;
-		}
-		Set(value);
+		state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(batch));
+		state.counters["samples_per_second"] =
+		    benchmark::Counter(static_cast<double>(batch), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
-	~ScopedEnvVar()
+	class ScopedEnvVar
 	{
-		if (oldValue_.empty())
+	public:
+		ScopedEnvVar(const char* name, const char* value) : name_(name)
 		{
-			Unset();
+			if (const char* oldValue = std::getenv(name))
+			{
+				oldValue_ = oldValue;
+			}
+			Set(value);
 		}
-		else
+
+		~ScopedEnvVar()
 		{
-			Set(oldValue_.c_str());
+			if (oldValue_.empty())
+			{
+				Unset();
+			}
+			else
+			{
+				Set(oldValue_.c_str());
+			}
 		}
-	}
 
-	ScopedEnvVar(const ScopedEnvVar&) = delete;
-	ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+		ScopedEnvVar(const ScopedEnvVar&) = delete;
+		ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
 
-private:
-	void Set(const char* value) const
-	{
+	private:
+		void Set(const char* value) const
+		{
 #ifdef _WIN32
-		_putenv_s(name_, value);
+			_putenv_s(name_, value);
 #else
-		setenv(name_, value, 1);
+			setenv(name_, value, 1);
 #endif
-	}
+		}
 
-	void Unset() const
-	{
+		void Unset() const
+		{
 #ifdef _WIN32
-		_putenv_s(name_, "");
+			_putenv_s(name_, "");
 #else
-		unsetenv(name_);
+			unsetenv(name_);
 #endif
+		}
+
+		const char* name_{};
+		std::string oldValue_;
+	};
+
+	std::vector<Tensor<CPU>> MakeBackwardInputs(std::span<const Tensor<CPU>> forwardInputs,
+	                                            std::span<const Tensor<CPU>> outputGradients)
+	{
+		std::vector<Tensor<CPU>> backwardInputs;
+		backwardInputs.reserve(forwardInputs.size() + outputGradients.size());
+		for (const auto& input : forwardInputs)
+		{
+			backwardInputs.push_back(input);
+		}
+		for (const auto& gradient : outputGradients)
+		{
+			backwardInputs.push_back(gradient);
+		}
+		return backwardInputs;
 	}
 
-	const char* name_{};
-	std::string oldValue_;
-};
-
-std::vector<Tensor<CPU>> MakeBackwardInputs(std::span<const Tensor<CPU>> forwardInputs,
-                                            std::span<const Tensor<CPU>> outputGradients)
-{
-	std::vector<Tensor<CPU>> backwardInputs;
-	backwardInputs.reserve(forwardInputs.size() + outputGradients.size());
-	for (const auto& input : forwardInputs)
+	void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 	{
-		backwardInputs.push_back(input);
+		ModelGraph model(BuildTrainingGraph(kind, batch));
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto inputData = MakeInputData(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		Runtime::Interpreter<CPU> interpreter;
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+			benchmark::DoNotOptimize(outputs);
+		}
+
+		for (auto _ : state)
+		{
+			auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+			benchmark::DoNotOptimize(outputs);
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
 	}
-	for (const auto& gradient : outputGradients)
-	{
-		backwardInputs.push_back(gradient);
-	}
-	return backwardInputs;
-}
 
-void BMTrainCPUForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	ModelGraph model(BuildTrainingGraph(kind, batch));
-	Graph& graph = model.UnsafeMutableGraph();
-	const auto inputData = MakeInputData(batch);
-	auto inputs = MakeCPUInputs(inputData, batch);
-	Runtime::Interpreter<CPU> interpreter;
-
-	for (int i = 0; i < kWarmupIterations; ++i)
+	void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 	{
+		ModelGraph model(BuildTrainingGraph(kind, batch));
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto inputData = MakeInputData(batch);
+		const auto targets = MakeTargets(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		Runtime::Interpreter<CPU> interpreter;
 		auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
-		benchmark::DoNotOptimize(outputs);
+		auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
+		std::vector<Tensor<CPU>> outputGradients;
+		outputGradients.push_back(std::move(lossGradient.gradient));
+		auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
+			benchmark::DoNotOptimize(backwardResults);
+		}
+
+		for (auto _ : state)
+		{
+			auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
+			benchmark::DoNotOptimize(backwardResults);
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
 	}
 
-	for (auto _ : state)
+	void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 	{
+		ModelGraph model(BuildTrainingGraph(kind, batch));
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto inputData = MakeInputData(batch);
+		const auto targets = MakeTargets(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		Runtime::Interpreter<CPU> interpreter;
 		auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
-		benchmark::DoNotOptimize(outputs);
-		benchmark::ClobberMemory();
-	}
-	SetThroughputCounters(state, batch);
-}
-
-void BMTrainCPUBackward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	ModelGraph model(BuildTrainingGraph(kind, batch));
-	Graph& graph = model.UnsafeMutableGraph();
-	const auto inputData = MakeInputData(batch);
-	const auto targets = MakeTargets(batch);
-	auto inputs = MakeCPUInputs(inputData, batch);
-	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
-	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
-	std::vector<Tensor<CPU>> outputGradients;
-	outputGradients.push_back(std::move(lossGradient.gradient));
-	auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
-
-	for (int i = 0; i < kWarmupIterations; ++i)
-	{
+		auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
+		std::vector<Tensor<CPU>> outputGradients;
+		outputGradients.push_back(std::move(lossGradient.gradient));
+		auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
 		auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
-		benchmark::DoNotOptimize(backwardResults);
+		const auto inputGradientCount = Optimizer::InferInputGradientCount(graph);
+		auto parameters = Training::ParameterSet::BindGraph(graph);
+		Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = 1.0e-3f });
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			optimizer.Step(parameters, backwardResults, inputGradientCount);
+		}
+
+		for (auto _ : state)
+		{
+			optimizer.Step(parameters, backwardResults, inputGradientCount);
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
 	}
 
-	for (auto _ : state)
+	void BMTrainCPUFullStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 	{
-		auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
-		benchmark::DoNotOptimize(backwardResults);
-		benchmark::ClobberMemory();
+		ModelGraph model(BuildTrainingGraph(kind, batch));
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto inputData = MakeInputData(batch);
+		const auto targets = MakeTargets(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		Training::Trainer<CPU, Optimizer::SGD> trainer(model,
+		                                               Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }),
+		                                               Training::TrainerOptions{ .buildBackwardIfMissing = false });
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+			benchmark::DoNotOptimize(result.loss);
+		}
+
+		for (auto _ : state)
+		{
+			auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+			benchmark::DoNotOptimize(result.loss);
+			benchmark::DoNotOptimize(result.outputs);
+			benchmark::DoNotOptimize(result.backwardResults);
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
 	}
-	SetThroughputCounters(state, batch);
-}
-
-void BMTrainCPUOptimizerStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	ModelGraph model(BuildTrainingGraph(kind, batch));
-	Graph& graph = model.UnsafeMutableGraph();
-	const auto inputData = MakeInputData(batch);
-	const auto targets = MakeTargets(batch);
-	auto inputs = MakeCPUInputs(inputData, batch);
-	Runtime::Interpreter<CPU> interpreter;
-	auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
-	auto lossGradient = Optimizer::SoftmaxCrossEntropyWithLogitsBatch(outputs[0], targets);
-	std::vector<Tensor<CPU>> outputGradients;
-	outputGradients.push_back(std::move(lossGradient.gradient));
-	auto backwardInputs = MakeBackwardInputs(inputs, outputGradients);
-	auto backwardResults = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
-	const auto inputGradientCount = Optimizer::InferInputGradientCount(graph);
-	auto parameters = Training::ParameterSet::BindGraph(graph);
-	Optimizer::SGD optimizer(Optimizer::SGDOptions{ .learningRate = 1.0e-3f });
-
-	for (int i = 0; i < kWarmupIterations; ++i)
-	{
-		optimizer.Step(parameters, backwardResults, inputGradientCount);
-	}
-
-	for (auto _ : state)
-	{
-		optimizer.Step(parameters, backwardResults, inputGradientCount);
-		benchmark::ClobberMemory();
-	}
-	SetThroughputCounters(state, batch);
-}
-
-void BMTrainCPUFullStep(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	ModelGraph model(BuildTrainingGraph(kind, batch));
-	Graph& graph = model.UnsafeMutableGraph();
-	const auto inputData = MakeInputData(batch);
-	const auto targets = MakeTargets(batch);
-	auto inputs = MakeCPUInputs(inputData, batch);
-	Training::Trainer<CPU, Optimizer::SGD> trainer(
-	    model, Optimizer::SGD(Optimizer::SGDOptions{ .learningRate = 1.0e-3f }),
-	    Training::TrainerOptions{ .buildBackwardIfMissing = false });
-
-	for (int i = 0; i < kWarmupIterations; ++i)
-	{
-		auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
-		benchmark::DoNotOptimize(result.loss);
-	}
-
-	for (auto _ : state)
-	{
-		auto result = trainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
-		benchmark::DoNotOptimize(result.loss);
-		benchmark::DoNotOptimize(result.outputs);
-		benchmark::DoNotOptimize(result.backwardResults);
-		benchmark::ClobberMemory();
-	}
-	SetThroughputCounters(state, batch);
-}
 
 #ifdef LITENN_TRAIN_BENCH_HAS_AOT
-std::vector<Tensor<CPU>> AllocateCPUOutputs(const CompiledModule<CPU>& module)
-{
-	std::vector<Tensor<CPU>> outputs;
-	for (const auto& spec : module.OutputSpecs())
+	std::vector<Tensor<CPU>> AllocateCPUOutputs(const CompiledModule<CPU>& module)
 	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
-	}
-	return outputs;
-}
-
-void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind, std::size_t batch,
-                                    const char* threadCount)
-{
-	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
-	if (threadCount != nullptr)
-	{
-		options.cpuAOTThreadCount = static_cast<std::size_t>(std::stoull(threadCount));
+		std::vector<Tensor<CPU>> outputs;
+		for (const auto& spec : module.OutputSpecs())
+		{
+			outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CPU{});
+		}
+		return outputs;
 	}
 
-	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph), options);
-	const auto inputData = MakeInputData(batch);
-	auto inputs = MakeCPUInputs(inputData, batch);
-	auto outputs = AllocateCPUOutputs(module);
-
-	for (int i = 0; i < kWarmupIterations; ++i)
+	void BMTrainCPUAOTForwardConfigured(benchmark::State& state, TrainModelKind kind, std::size_t batch,
+	                                    const char* threadCount)
 	{
-		module.RunTensorsInto(inputs, outputs);
+		auto options = LiteNNBenchCompilerOptionsFromEnvironment();
+		if (threadCount != nullptr)
+		{
+			options.cpuAOTThreadCount = static_cast<std::size_t>(std::stoull(threadCount));
+		}
+
+		auto graph = BuildInferenceGraph(kind, batch);
+		auto module = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph), options);
+		const auto inputData = MakeInputData(batch);
+		auto inputs = MakeCPUInputs(inputData, batch);
+		auto outputs = AllocateCPUOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(inputs, outputs);
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(inputs, outputs);
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
 	}
 
-	for (auto _ : state)
+	void BMTrainCPUAOTForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
 	{
-		module.RunTensorsInto(inputs, outputs);
-		benchmark::DoNotOptimize(outputs.data());
-		benchmark::ClobberMemory();
+		BMTrainCPUAOTForwardConfigured(state, kind, batch, nullptr);
 	}
-	SetThroughputCounters(state, batch);
-}
 
-void BMTrainCPUAOTForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, nullptr);
-}
+	void BMTrainCPUAOTForwardT1(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+	{
+		BMTrainCPUAOTForwardConfigured(state, kind, batch, "1");
+	}
 
-void BMTrainCPUAOTForwardT1(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, "1");
-}
-
-void BMTrainCPUAOTForwardT16(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	BMTrainCPUAOTForwardConfigured(state, kind, batch, "16");
-}
+	void BMTrainCPUAOTForwardT16(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+	{
+		BMTrainCPUAOTForwardConfigured(state, kind, batch, "16");
+	}
 
 #ifdef LITENN_ENABLE_CUDA
-std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module)
-{
-	std::vector<Tensor<CUDA>> outputs;
-	for (const auto& spec : module.OutputSpecs())
+	std::vector<Tensor<CUDA>> AllocateCUDAOutputs(const CompiledModule<CUDA>& module)
 	{
-		outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
-	}
-	return outputs;
-}
-
-void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	if (!IsCUDADeviceAvailable())
-	{
-		state.SkipWithError("CUDA device is not available");
-		return;
-	}
-
-	auto graph = BuildInferenceGraph(kind, batch);
-	auto options = LiteNNBenchCompilerOptionsFromEnvironment();
-	options.enableCUDANativeAOT = false;
-	auto module = Compiler<CUDA>::Compile(
-	    Detail::BuildExecutablePlanFromGraph(graph), CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow },
-	    options);
-	if (module.Backend() != CompiledModuleBackend::CPUNative)
-	{
-		state.SkipWithError("expected CUDA CPU fallback backend");
-		return;
-	}
-
-	const auto inputData = MakeInputData(batch);
-	auto inputs = MakeCUDAInputs(inputData, batch);
-	auto outputs = AllocateCUDAOutputs(module);
-
-	for (int i = 0; i < kWarmupIterations; ++i)
-	{
-		module.RunTensorsInto(inputs, outputs);
-	}
-
-	for (auto _ : state)
-	{
-		module.RunTensorsInto(inputs, outputs);
-		benchmark::DoNotOptimize(outputs.data());
-		benchmark::ClobberMemory();
-	}
-	SetThroughputCounters(state, batch);
-}
-
-void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
-{
-	if (!IsCUDADeviceAvailable())
-	{
-		state.SkipWithError("CUDA device is not available");
-		return;
-	}
-
-	auto graph = BuildInferenceGraph(kind, batch);
-	auto module = Compiler<CUDA>::Compile(Detail::BuildExecutablePlanFromGraph(graph), CUDA{}, LiteNNBenchCompilerOptionsFromEnvironment());
-	if (module.Backend() != CompiledModuleBackend::CUDANative)
-	{
-		state.SkipWithError("expected CUDA native backend");
-		return;
-	}
-
-	const auto inputData = MakeInputData(batch);
-	auto inputs = MakeCUDAInputs(inputData, batch);
-	auto outputs = AllocateCUDAOutputs(module);
-
-	for (int i = 0; i < kWarmupIterations; ++i)
-	{
-		module.RunTensorsInto(inputs, outputs);
-	}
-
-	for (auto _ : state)
-	{
-		module.RunTensorsInto(inputs, outputs);
-		benchmark::DoNotOptimize(outputs.data());
-		benchmark::ClobberMemory();
-	}
-	SetThroughputCounters(state, batch);
-}
-#else
-void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind, std::size_t)
-{
-	state.SkipWithError("LiteNN benchmark build has no CUDA support");
-}
-
-void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind, std::size_t)
-{
-	state.SkipWithError("LiteNN benchmark build has no CUDA support");
-}
-#endif
-#endif
-
-template <typename Fn>
-void RegisterTrainBenchmark(std::string_view backend, std::string_view phase,
-                            TrainModelKind kind, std::size_t batch, Fn&& fn)
-{
-	const auto& spec = GetTrainModelSpec(kind);
-	auto* benchmarkCase = benchmark::RegisterBenchmark(
-	    std::format("{}/{}/{}/batch:{}", backend, phase, spec.name, batch),
-	    std::forward<Fn>(fn));
-	benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
-}
-
-void RegisterTrainBenchmarks()
-{
-	for (const auto kind : kTrainModelKinds)
-	{
-		for (const auto batch : kTrainBatchSizes)
+		std::vector<Tensor<CUDA>> outputs;
+		for (const auto& spec : module.OutputSpecs())
 		{
-			RegisterTrainBenchmark("TrainCPUInterpreter", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUForward(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUInterpreter", "Backward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUBackward(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUInterpreter", "OptimizerStep", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUOptimizerStep(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUInterpreter", "FullStep", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUFullStep(state, kind, batch); });
+			outputs.emplace_back(Uninitialized, ShapeView{ spec.type.StaticShape() }, spec.type.dtype, CUDA{});
+		}
+		return outputs;
+	}
+
+	void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+	{
+		if (!IsCUDADeviceAvailable())
+		{
+			state.SkipWithError("CUDA device is not available");
+			return;
+		}
+
+		auto graph = BuildInferenceGraph(kind, batch);
+		auto options = LiteNNBenchCompilerOptionsFromEnvironment();
+		options.enableCUDANativeAOT = false;
+		auto module = Compiler<CUDA>::Compile(
+		    Detail::BuildExecutablePlanFromGraph(graph),
+		    CUDA{ .deviceIndex = 0, .hostFallbackPolicy = CUDAHostFallbackPolicy::Allow }, options);
+		if (module.Backend() != CompiledModuleBackend::CPUNative)
+		{
+			state.SkipWithError("expected CUDA CPU fallback backend");
+			return;
+		}
+
+		const auto inputData = MakeInputData(batch);
+		auto inputs = MakeCUDAInputs(inputData, batch);
+		auto outputs = AllocateCUDAOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(inputs, outputs);
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(inputs, outputs);
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
+	}
+
+	void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind kind, std::size_t batch)
+	{
+		if (!IsCUDADeviceAvailable())
+		{
+			state.SkipWithError("CUDA device is not available");
+			return;
+		}
+
+		auto graph = BuildInferenceGraph(kind, batch);
+		auto module = Compiler<CUDA>::Compile(Detail::BuildExecutablePlanFromGraph(graph), CUDA{},
+		                                      LiteNNBenchCompilerOptionsFromEnvironment());
+		if (module.Backend() != CompiledModuleBackend::CUDANative)
+		{
+			state.SkipWithError("expected CUDA native backend");
+			return;
+		}
+
+		const auto inputData = MakeInputData(batch);
+		auto inputs = MakeCUDAInputs(inputData, batch);
+		auto outputs = AllocateCUDAOutputs(module);
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			module.RunTensorsInto(inputs, outputs);
+		}
+
+		for (auto _ : state)
+		{
+			module.RunTensorsInto(inputs, outputs);
+			benchmark::DoNotOptimize(outputs.data());
+			benchmark::ClobberMemory();
+		}
+		SetThroughputCounters(state, batch);
+	}
+#else
+	void BMTrainCUDACPUFallbackForward(benchmark::State& state, TrainModelKind, std::size_t)
+	{
+		state.SkipWithError("LiteNN benchmark build has no CUDA support");
+	}
+
+	void BMTrainCUDANativeForward(benchmark::State& state, TrainModelKind, std::size_t)
+	{
+		state.SkipWithError("LiteNN benchmark build has no CUDA support");
+	}
+#endif
+#endif
+
+	template <typename Fn>
+	void RegisterTrainBenchmark(std::string_view backend, std::string_view phase, TrainModelKind kind,
+	                            std::size_t batch, Fn&& fn)
+	{
+		const auto& spec = GetTrainModelSpec(kind);
+		auto* benchmarkCase = benchmark::RegisterBenchmark(
+		    std::format("{}/{}/{}/batch:{}", backend, phase, spec.name, batch), std::forward<Fn>(fn));
+		benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
+	}
+
+	void RegisterTrainBenchmarks()
+	{
+		for (const auto kind : kTrainModelKinds)
+		{
+			for (const auto batch : kTrainBatchSizes)
+			{
+				RegisterTrainBenchmark("TrainCPUInterpreter", "Forward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUForward(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUInterpreter", "Backward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUBackward(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUInterpreter", "OptimizerStep", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUOptimizerStep(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUInterpreter", "FullStep", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUFullStep(state, kind, batch); });
 
 #ifdef LITENN_TRAIN_BENCH_HAS_AOT
-			RegisterTrainBenchmark("TrainCPUAOT", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUAOTForward(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUAOTT1", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUAOTForwardT1(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCPUAOTT16", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCPUAOTForwardT16(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCUDACPUFallback", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCUDACPUFallbackForward(state, kind, batch); });
-			RegisterTrainBenchmark("TrainCUDANative", "Forward", kind, batch,
-			    [=](benchmark::State& state) { BMTrainCUDANativeForward(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUAOT", "Forward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUAOTForward(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUAOTT1", "Forward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUAOTForwardT1(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCPUAOTT16", "Forward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCPUAOTForwardT16(state, kind, batch); });
+				RegisterTrainBenchmark("TrainCUDACPUFallback", "Forward", kind, batch, [=](benchmark::State& state) {
+					BMTrainCUDACPUFallbackForward(state, kind, batch);
+				});
+				RegisterTrainBenchmark("TrainCUDANative", "Forward", kind, batch,
+				                       [=](benchmark::State& state) { BMTrainCUDANativeForward(state, kind, batch); });
 #endif
+			}
 		}
 	}
-}
 
-const bool kRegisteredTrainBenchmarks = [] {
-	RegisterTrainBenchmarks();
-	return true;
-}();
+	const bool kRegisteredTrainBenchmarks = [] {
+		RegisterTrainBenchmarks();
+		return true;
+	}();
 
 } // namespace
 

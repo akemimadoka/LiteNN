@@ -1,7 +1,6 @@
 #pragma once
 
 #include <LiteNN.h>
-#include <LiteNNImporters.h>
 #include <LiteNN/Initializer/Initializer.h>
 #include <LiteNN/Layer/Linear.h>
 #include <LiteNN/Optimizer/Loss.h>
@@ -10,6 +9,7 @@
 #include <LiteNN/Pass/ForwardOnlyPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Training/Trainer.h>
+#include <LiteNNImporters.h>
 
 #include <algorithm>
 #include <array>
@@ -90,10 +90,8 @@ namespace LiteNN::Examples::Mnist
 		{
 			throw std::runtime_error("Unexpected end of IDX file");
 		}
-		return (static_cast<std::uint32_t>(bytes[0]) << 24) |
-		       (static_cast<std::uint32_t>(bytes[1]) << 16) |
-		       (static_cast<std::uint32_t>(bytes[2]) << 8) |
-		       static_cast<std::uint32_t>(bytes[3]);
+		return (static_cast<std::uint32_t>(bytes[0]) << 24) | (static_cast<std::uint32_t>(bytes[1]) << 16) |
+		       (static_cast<std::uint32_t>(bytes[2]) << 8) | static_cast<std::uint32_t>(bytes[3]);
 	}
 
 	inline std::filesystem::path ResolveMnistFile(const std::filesystem::path& dataDir,
@@ -120,8 +118,8 @@ namespace LiteNN::Examples::Mnist
 		return file;
 	}
 
-	inline std::vector<float> LoadImages(const std::filesystem::path& path, std::size_t& count,
-	                                     std::size_t& rows, std::size_t& cols, std::size_t limit)
+	inline std::vector<float> LoadImages(const std::filesystem::path& path, std::size_t& count, std::size_t& rows,
+	                                     std::size_t& cols, std::size_t limit)
 	{
 		auto file = OpenBinary(path);
 		const auto magic = ReadBigEndianU32(file);
@@ -144,9 +142,8 @@ namespace LiteNN::Examples::Mnist
 		}
 
 		std::vector<float> images(raw.size());
-		std::ranges::transform(raw, images.begin(), [](unsigned char pixel) {
-			return static_cast<float>(pixel) / 255.0f;
-		});
+		std::ranges::transform(raw, images.begin(),
+		                       [](unsigned char pixel) { return static_cast<float>(pixel) / 255.0f; });
 		return images;
 	}
 
@@ -249,24 +246,20 @@ namespace LiteNN::Examples::Mnist
 	}
 
 	// 构建两层 MLP 训练图：input(784) → Linear(hiddenSize) → ReLU → Linear(10)
-	inline Graph BuildTrainableMlpGraph(std::uint32_t seed = 42,
-	                                    std::size_t hiddenSize = kMlpDefaultHiddenSize)
+	inline Graph BuildTrainableMlpGraph(std::uint32_t seed = 42, std::size_t hiddenSize = kMlpDefaultHiddenSize)
 	{
 		std::mt19937 rng(seed);
 
 		ModelBuilder builder;
 		Graph& graph = builder.UnsafeMutableGraph();
-		const auto hidden = Layer::CreateLinear(
-		    builder, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
-		    Initializer::Zeros({ 1, hiddenSize }));
-		const auto output = Layer::CreateLinear(
-		    builder, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
-		    Initializer::Zeros({ 1, kDigitCount }));
+		const auto hidden = Layer::CreateLinear(builder, Initializer::XavierUniform({ kMnistPixels, hiddenSize }, rng),
+		                                        Initializer::Zeros({ 1, hiddenSize }));
+		const auto output = Layer::CreateLinear(builder, Initializer::XavierUniform({ hiddenSize, kDigitCount }, rng),
+		                                        Initializer::Zeros({ 1, kDigitCount }));
 
 		if (hidden.weightVariable != kMlpHiddenWeightIdx || !hidden.biasVariable ||
-		    *hidden.biasVariable != kMlpHiddenBiasIdx ||
-		    output.weightVariable != kMlpOutputWeightIdx || !output.biasVariable ||
-		    *output.biasVariable != kMlpOutputBiasIdx)
+		    *hidden.biasVariable != kMlpHiddenBiasIdx || output.weightVariable != kMlpOutputWeightIdx ||
+		    !output.biasVariable || *output.biasVariable != kMlpOutputBiasIdx)
 		{
 			throw std::runtime_error("Unexpected MLP variable layout");
 		}
@@ -339,8 +332,8 @@ namespace LiteNN::Examples::Mnist
 
 			const auto accuracy = 100.0 * static_cast<double>(correct) / static_cast<double>(train.Count());
 			const auto averageLoss = totalLoss / static_cast<double>(train.Count());
-			std::cout << std::format("epoch {}/{}: loss={:.4f}, train_accuracy={:.2f}%\n",
-			                         epoch + 1, options.epochs, averageLoss, accuracy);
+			std::cout << std::format("epoch {}/{}: loss={:.4f}, train_accuracy={:.2f}%\n", epoch + 1, options.epochs,
+			                         averageLoss, accuracy);
 		}
 		graph = model.UnsafeTakeGraph();
 	}
@@ -458,18 +451,17 @@ namespace LiteNN::Examples::Mnist
 
 	inline void PrintCommonOptions()
 	{
-		std::cout <<
-		    "Common options:\n"
-		    "  --data <dir>          Directory containing MNIST IDX files.\n"
-		    "  --train-limit <n>     Maximum training images used with Backward/SGD. Default: 1000.\n"
-		    "  --test-limit <n>      Maximum test images evaluated. Default: 1000.\n"
-		    "  --epochs <n>          Training epochs. Default: 3.\n"
-		    "  --learning-rate <x>   SGD learning rate. Default: 0.05.\n"
-		    "  --seed <n>            Parameter initializer seed. Default: 42.\n"
-		    "  --show-samples <n>    Print the first n predictions and logits.\n"
-		    "  --hidden-size <n>     Use a 2-layer MLP with this hidden size (0 = linear). Default: 0.\n"
-		    "  --save <path>         Save the trained inference model to this path.\n"
-		    "  --load <path>         Skip training, load inference model from this path.\n";
+		std::cout << "Common options:\n"
+		             "  --data <dir>          Directory containing MNIST IDX files.\n"
+		             "  --train-limit <n>     Maximum training images used with Backward/SGD. Default: 1000.\n"
+		             "  --test-limit <n>      Maximum test images evaluated. Default: 1000.\n"
+		             "  --epochs <n>          Training epochs. Default: 3.\n"
+		             "  --learning-rate <x>   SGD learning rate. Default: 0.05.\n"
+		             "  --seed <n>            Parameter initializer seed. Default: 42.\n"
+		             "  --show-samples <n>    Print the first n predictions and logits.\n"
+		             "  --hidden-size <n>     Use a 2-layer MLP with this hidden size (0 = linear). Default: 0.\n"
+		             "  --save <path>         Save the trained inference model to this path.\n"
+		             "  --load <path>         Skip training, load inference model from this path.\n";
 	}
 
 	inline void PrintAccuracy(std::size_t correct, std::size_t total)

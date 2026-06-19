@@ -39,7 +39,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoUnaryOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData());
+			DeviceTraits<CPU>::DoUnaryOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                             input.UnsafeRawData());
 			return result;
 		}
 
@@ -48,8 +49,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoBinaryOp(device, op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(), lhs.UnsafeRawData(),
-			                              rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
+			DeviceTraits<CPU>::DoBinaryOp(device, op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(),
+			                              lhs.UnsafeRawData(), rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
 			return result;
 		}
 
@@ -58,7 +59,7 @@ namespace LiteNN
 			CPU device;
 			Tensor<CPU> result(Uninitialized, input.Shape(), targetType, device);
 			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), targetType,
-			                            result.UnsafeRawData());
+			                             result.UnsafeRawData());
 			return result;
 		}
 
@@ -77,7 +78,8 @@ namespace LiteNN
 		{
 			if (params.scheme != QuantizationScheme::Affine)
 			{
-				if (params.scheme != QuantizationScheme::Block || !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+				if (params.scheme != QuantizationScheme::Block ||
+				    !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
 				{
 					throw std::runtime_error("ConstFoldPass only folds affine and packed nibble DequantizeNode");
 				}
@@ -91,8 +93,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoReduceOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
-			                              axis);
+			DeviceTraits<CPU>::DoReduceOp(device, op, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                              input.UnsafeRawData(), axis);
 			return result;
 		}
 
@@ -100,18 +102,18 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), outInfo.dtype,
-			                            result.UnsafeRawData());
+			DeviceTraits<CPU>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(),
+			                             outInfo.dtype, result.UnsafeRawData());
 			return result;
 		}
 
 		static Tensor<CPU> EvalPermute(const Tensor<CPU>& input, const std::vector<std::size_t>& permutation,
-		                              const OutputInfo& outInfo)
+		                               const OutputInfo& outInfo)
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
-			                              ShapeView{ permutation });
+			DeviceTraits<CPU>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                               input.UnsafeRawData(), ShapeView{ permutation });
 			return result;
 		}
 
@@ -131,7 +133,7 @@ namespace LiteNN
 		}
 
 		static Tensor<CPU> EvalScatter(const Tensor<CPU>& data, const Tensor<CPU>& indices, const Tensor<CPU>& updates,
-		                              const ScatterNode& node)
+		                               const ScatterNode& node)
 		{
 			return Detail::EvalScatter(data, indices, updates, node.axis, node.mode);
 		}
@@ -142,14 +144,13 @@ namespace LiteNN
 		}
 
 		static Tensor<CPU> EvalSSMScan(const Tensor<CPU>& state, const Tensor<CPU>& dt, const Tensor<CPU>& a,
-		                              const Tensor<CPU>& b, const Tensor<CPU>& c, const Tensor<CPU>* d)
+		                               const Tensor<CPU>& b, const Tensor<CPU>& c, const Tensor<CPU>* d)
 		{
 			return Detail::EvalSSMScan(state, dt, a, b, c, d);
 		}
 
-		static Tensor<CPU> EvalRWKVWKV(const Tensor<CPU>& key, const Tensor<CPU>& value,
-		                              const Tensor<CPU>& receptance, const Tensor<CPU>& timeDecay,
-		                              const Tensor<CPU>& timeFirst)
+		static Tensor<CPU> EvalRWKVWKV(const Tensor<CPU>& key, const Tensor<CPU>& value, const Tensor<CPU>& receptance,
+		                               const Tensor<CPU>& timeDecay, const Tensor<CPU>& timeFirst)
 		{
 			return Detail::EvalRWKVWKV(key, value, receptance, timeDecay, timeFirst);
 		}
@@ -171,10 +172,9 @@ namespace LiteNN
 		}
 
 		static Tensor<CPU> EvalNormalization(const Tensor<CPU>& input, const Tensor<CPU>* scale,
-		                                    const Tensor<CPU>* bias, const NormalizationNode& node)
+		                                     const Tensor<CPU>* bias, const NormalizationNode& node)
 		{
-			return Detail::EvalNormalization(input, scale, bias, node.mode, node.axis, node.groupCount,
-			                                 node.epsilon);
+			return Detail::EvalNormalization(input, scale, bias, node.mode, node.axis, node.groupCount, node.epsilon);
 		}
 
 		static Tensor<CPU> EvalBatchMatMul(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs)
@@ -199,28 +199,28 @@ namespace LiteNN
 
 		static Tensor<CPU> EvalIm2Col(const Tensor<CPU>& input, const Im2ColNode& node)
 		{
-			return Detail::EvalIm2Col(input, node.kernelShape, node.strides, node.dilations,
-			                          node.lowPads, node.highPads);
+			return Detail::EvalIm2Col(input, node.kernelShape, node.strides, node.dilations, node.lowPads,
+			                          node.highPads);
 		}
 
-		static Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
-		                              const Tensor<CPU>* bias, const Conv2DNode& node)
+		static Tensor<CPU> EvalConv2D(const Tensor<CPU>& input, const Tensor<CPU>& weight, const Tensor<CPU>* bias,
+		                              const Conv2DNode& node)
 		{
-			return Detail::EvalConv2D(input, weight, bias, node.strides, node.dilations,
-			                          node.lowPads, node.highPads, node.groupCount);
+			return Detail::EvalConv2D(input, weight, bias, node.strides, node.dilations, node.lowPads, node.highPads,
+			                          node.groupCount);
 		}
 
 		static Tensor<CPU> EvalConvTranspose2D(const Tensor<CPU>& input, const Tensor<CPU>& weight,
 		                                       const Tensor<CPU>* bias, const ConvTranspose2DNode& node)
 		{
-			return Detail::EvalConvTranspose2D(input, weight, bias, node.strides, node.dilations,
-			                                   node.lowPads, node.highPads, node.outputPads, node.groupCount);
+			return Detail::EvalConvTranspose2D(input, weight, bias, node.strides, node.dilations, node.lowPads,
+			                                   node.highPads, node.outputPads, node.groupCount);
 		}
 
 		static Tensor<CPU> EvalPool2D(const Tensor<CPU>& input, const Pool2DNode& node)
 		{
-			return Detail::EvalPool2D(input, node.mode, node.kernelShape, node.strides,
-			                          node.lowPads, node.highPads, node.countIncludePad);
+			return Detail::EvalPool2D(input, node.mode, node.kernelShape, node.strides, node.lowPads, node.highPads,
+			                          node.countIncludePad);
 		}
 
 		static Tensor<CPU> EvalUpsample(const Tensor<CPU>& input, const UpsampleNode& node)
@@ -241,8 +241,8 @@ namespace LiteNN
 				srcPtrs.push_back(t.UnsafeRawData());
 				srcShapes.push_back(t.Shape());
 			}
-			DeviceTraits<CPU>::DoConcatOp(device, result.UnsafeRawData(), outInfo.dtype, srcPtrs.data(), srcShapes.data(),
-			                              srcPtrs.size(), node.axis);
+			DeviceTraits<CPU>::DoConcatOp(device, result.UnsafeRawData(), outInfo.dtype, srcPtrs.data(),
+			                              srcShapes.data(), srcPtrs.size(), node.axis);
 			return result;
 		}
 
@@ -250,8 +250,8 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoSliceOp(device, result.UnsafeRawData(), outInfo.dtype, input.Shape(), input.UnsafeRawData(),
-			                             node.axis, node.start, node.length);
+			DeviceTraits<CPU>::DoSliceOp(device, result.UnsafeRawData(), outInfo.dtype, input.Shape(),
+			                             input.UnsafeRawData(), node.axis, node.start, node.length);
 			return result;
 		}
 
@@ -259,8 +259,9 @@ namespace LiteNN
 		{
 			CPU device;
 			Tensor<CPU> result(Uninitialized, outInfo.shape, outInfo.dtype, device);
-			DeviceTraits<CPU>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(), data.UnsafeRawData(),
-			                              indices.DType(), indices.Shape(), indices.UnsafeRawData());
+			DeviceTraits<CPU>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(),
+			                               data.UnsafeRawData(), indices.DType(), indices.Shape(),
+			                               indices.UnsafeRawData());
 			return result;
 		}
 
@@ -322,7 +323,8 @@ namespace LiteNN
 
 		// ---- 获取节点输入的 const 值 ----
 
-		static const Tensor<CPU>& GetConstValue(const std::vector<std::optional<Tensor<CPU>>>& constValues, NodeOutput output)
+		static const Tensor<CPU>& GetConstValue(const std::vector<std::optional<Tensor<CPU>>>& constValues,
+		                                        NodeOutput output)
 		{
 			return *constValues[output.node];
 		}
@@ -395,13 +397,15 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
-					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
-					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+					    return SSMScanNode{
+						    remap(n.state), remap(n.dt), remap(n.a),
+						    remap(n.b),     remap(n.c),  n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt
+					    };
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
-					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
-					                        remap(n.timeDecay), remap(n.timeFirst) };
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
+						                    remap(n.timeFirst) };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -418,9 +422,12 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    return NormalizationNode{ remap(n.input),
-					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
-					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                              n.mode, n.axis, n.groupCount, n.epsilon };
+						                          n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+						                          n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                          n.mode,
+						                          n.axis,
+						                          n.groupCount,
+						                          n.epsilon };
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
@@ -440,45 +447,60 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
-					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
-					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
-					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+					    return SGDStepNode{ remap(n.parameter),
+						                    remap(n.gradient),
+						                    n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+						                    n.learningRate,
+						                    n.momentum,
+						                    n.weightDecay,
+						                    n.nesterov };
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
-					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
-					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
-					                          n.epsilon, n.weightDecay, n.step };
+					    return AdamWStepNode{ remap(n.parameter),
+						                      remap(n.gradient),
+						                      remap(n.firstMoment),
+						                      remap(n.secondMoment),
+						                      n.learningRate,
+						                      n.beta1,
+						                      n.beta2,
+						                      n.epsilon,
+						                      n.weightDecay,
+						                      n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
-					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
-					                       n.lowPads, n.highPads };
+					    return Im2ColNode{
+						    remap(n.input), n.kernelShape, n.strides, n.dilations, n.lowPads, n.highPads
+					    };
 				    }
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
-					    return Conv2DNode{ remap(n.input), remap(n.weight),
-					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+					    return Conv2DNode{ remap(n.input),
+						                   remap(n.weight),
+						                   n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                   n.strides,
+						                   n.dilations,
+						                   n.lowPads,
+						                   n.highPads,
+						                   n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
-					    return ConvTranspose2DNode{
-					        remap(n.input),
-					        remap(n.weight),
-					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					        n.strides,
-					        n.dilations,
-					        n.lowPads,
-					        n.highPads,
-					        n.outputPads,
-					        n.groupCount
-					    };
+					    return ConvTranspose2DNode{ remap(n.input),
+						                            remap(n.weight),
+						                            n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                            n.strides,
+						                            n.dilations,
+						                            n.lowPads,
+						                            n.highPads,
+						                            n.outputPads,
+						                            n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
-					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
-					                       n.lowPads, n.highPads, n.countIncludePad };
+					    return Pool2DNode{ remap(n.input), n.mode,     n.kernelShape,    n.strides,
+						                   n.lowPads,      n.highPads, n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
@@ -586,9 +608,7 @@ namespace LiteNN
 			std::visit(
 			    [&](const auto& node) {
 				    using T = std::decay_t<decltype(node)>;
-				    auto markInput = [&](NodeOutput input) {
-					    MarkReachable(sg, input.node, alive, isConst);
-				    };
+				    auto markInput = [&](NodeOutput input) { MarkReachable(sg, input.node, alive, isConst); };
 				    if constexpr (std::same_as<T, UnaryOpNode>)
 				    {
 					    markInput(node.input);
@@ -1007,11 +1027,11 @@ namespace LiteNN
 						        isConst[node.timeDecay.node] && isConst[node.timeFirst.node])
 						    {
 							    isConst[nodeId] = true;
-							    constValues[nodeId] =
-							        EvalRWKVWKV(GetConstValue(constValues, node.key), GetConstValue(constValues, node.value),
-							                    GetConstValue(constValues, node.receptance),
-							                    GetConstValue(constValues, node.timeDecay),
-							                    GetConstValue(constValues, node.timeFirst));
+							    constValues[nodeId] = EvalRWKVWKV(GetConstValue(constValues, node.key),
+							                                      GetConstValue(constValues, node.value),
+							                                      GetConstValue(constValues, node.receptance),
+							                                      GetConstValue(constValues, node.timeDecay),
+							                                      GetConstValue(constValues, node.timeFirst));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
@@ -1028,9 +1048,8 @@ namespace LiteNN
 						    if (isConst[node.logits.node] && isConst[node.labels.node])
 						    {
 							    isConst[nodeId] = true;
-							    constValues[nodeId] =
-							        EvalCrossEntropyLoss(GetConstValue(constValues, node.logits),
-							                             GetConstValue(constValues, node.labels));
+							    constValues[nodeId] = EvalCrossEntropyLoss(GetConstValue(constValues, node.logits),
+							                                               GetConstValue(constValues, node.labels));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
@@ -1038,10 +1057,9 @@ namespace LiteNN
 						    if (isConst[node.grad.node] && isConst[node.logits.node] && isConst[node.labels.node])
 						    {
 							    isConst[nodeId] = true;
-							    constValues[nodeId] =
-							        EvalCrossEntropyLossBackward(GetConstValue(constValues, node.grad),
-							                                     GetConstValue(constValues, node.logits),
-							                                     GetConstValue(constValues, node.labels));
+							    constValues[nodeId] = EvalCrossEntropyLossBackward(
+							        GetConstValue(constValues, node.grad), GetConstValue(constValues, node.logits),
+							        GetConstValue(constValues, node.labels));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, NormalizationNode>)
@@ -1082,7 +1100,8 @@ namespace LiteNN
 						    if (isConst[node.timesteps.node])
 						    {
 							    isConst[nodeId] = true;
-							    constValues[nodeId] = EvalTimestepEmbedding(GetConstValue(constValues, node.timesteps), node);
+							    constValues[nodeId] =
+							        EvalTimestepEmbedding(GetConstValue(constValues, node.timesteps), node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, SolveTriNode>)
@@ -1091,11 +1110,10 @@ namespace LiteNN
 						    {
 							    isConst[nodeId] = true;
 							    constValues[nodeId] = EvalSolveTri(GetConstValue(constValues, node.a),
-							                                        GetConstValue(constValues, node.b), node);
+							                                       GetConstValue(constValues, node.b), node);
 						    }
 					    }
-					    else if constexpr (std::same_as<T, SGDStepNode> ||
-					                      std::same_as<T, AdamWStepNode>)
+					    else if constexpr (std::same_as<T, SGDStepNode> || std::same_as<T, AdamWStepNode>)
 					    {
 						    // Optimizer step nodes may have multiple outputs and represent state
 						    // transitions, so the current single-output const-fold table leaves
@@ -1111,31 +1129,27 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, Conv2DNode>)
 					    {
-						    const auto allConst =
-						        isConst[node.input.node] && isConst[node.weight.node] &&
-						        (!node.bias || isConst[node.bias->node]);
+						    const auto allConst = isConst[node.input.node] && isConst[node.weight.node] &&
+						                          (!node.bias || isConst[node.bias->node]);
 						    if (allConst)
 						    {
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    const auto& weight = GetConstValue(constValues, node.weight);
-							    const auto* bias =
-							        node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
+							    const auto* bias = node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
 							    constValues[nodeId] = EvalConv2D(input, weight, bias, node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 					    {
-						    const auto allConst =
-						        isConst[node.input.node] && isConst[node.weight.node] &&
-						        (!node.bias || isConst[node.bias->node]);
+						    const auto allConst = isConst[node.input.node] && isConst[node.weight.node] &&
+						                          (!node.bias || isConst[node.bias->node]);
 						    if (allConst)
 						    {
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    const auto& weight = GetConstValue(constValues, node.weight);
-							    const auto* bias =
-							        node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
+							    const auto* bias = node.bias ? &GetConstValue(constValues, *node.bias) : nullptr;
 							    constValues[nodeId] = EvalConvTranspose2D(input, weight, bias, node);
 						    }
 					    }
@@ -1199,7 +1213,8 @@ namespace LiteNN
 					    {
 						    // MulMatId currently only runs through the interpreter execution path.
 					    }
-					    // CallNode, CondNode, FusedOpNode, WhileNode, TapeSaveActivationNode, TapeLoadActivationNode: 不折叠
+					    // CallNode, CondNode, FusedOpNode, WhileNode, TapeSaveActivationNode, TapeLoadActivationNode:
+					    // 不折叠
 				    },
 				    entry.node);
 			}
@@ -1410,8 +1425,8 @@ namespace LiteNN
 				else
 				{
 					auto remapped = RemapNodeInputs(entry.node, remapOutput);
-					auto newId = newSg.AddNode(std::move(remapped),
-					                           { entry.outputInfos.begin(), entry.outputInfos.end() });
+					auto newId =
+					    newSg.AddNode(std::move(remapped), { entry.outputInfos.begin(), entry.outputInfos.end() });
 					nodeMap[oldId] = newId;
 				}
 			}

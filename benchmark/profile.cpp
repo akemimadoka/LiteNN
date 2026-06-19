@@ -22,8 +22,8 @@
 #include <LiteNN/Pass/InlinePass.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -44,9 +44,8 @@ static Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	const auto fc = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 784, 10 }, rng),
-	    Initializer::Zeros({ 1, 10 }));
+	const auto fc =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 784, 10 }, rng), Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
 	fwd.SetResults({ Layer::AddLinear(fwd, fc, { in, 0 }) });
@@ -58,12 +57,10 @@ static Graph BuildMLP128(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	const auto h1 = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 784, 128 }, rng),
-	    Initializer::Zeros({ 1, 128 }));
-	const auto h2 = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 128, 10 }, rng),
-	    Initializer::Zeros({ 1, 10 }));
+	const auto h1 =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 784, 128 }, rng), Initializer::Zeros({ 1, 128 }));
+	const auto h2 =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 128, 10 }, rng), Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
@@ -76,15 +73,12 @@ static Graph BuildMLP512(std::size_t batch, std::mt19937& rng)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	const auto h1 = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 784, 512 }, rng),
-	    Initializer::Zeros({ 1, 512 }));
-	const auto h2 = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 512, 256 }, rng),
-	    Initializer::Zeros({ 1, 256 }));
-	const auto h3 = Layer::CreateLinear(builder,
-	    Initializer::XavierUniform({ 256, 10 }, rng),
-	    Initializer::Zeros({ 1, 10 }));
+	const auto h1 =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 784, 512 }, rng), Initializer::Zeros({ 1, 512 }));
+	const auto h2 =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 512, 256 }, rng), Initializer::Zeros({ 1, 256 }));
+	const auto h3 =
+	    Layer::CreateLinear(builder, Initializer::XavierUniform({ 256, 10 }, rng), Initializer::Zeros({ 1, 10 }));
 	Subgraph fwd;
 	const auto in = fwd.AddParam(DataType::Float32, { batch, 784 });
 	const auto a1 = Layer::AddReLU(fwd, Layer::AddLinear(fwd, h1, { in, 0 }));
@@ -149,8 +143,7 @@ static Graph BuildMixedElementwiseDAGProfileGraph(std::size_t batch, std::mt1993
 	const auto tail = sg.AddParam(DataType::Float32, shape);
 	const auto added =
 	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, shape } });
-	const auto abs =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, shape } });
+	const auto abs = sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { added, 0 } }, { OutputInfo{ DataType::Float32, shape } });
 	const auto out = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { abs, 0 }, { tail, 0 } },
 	                            { OutputInfo{ DataType::Float32, shape } });
 	sg.SetResults({ { out, 0 } });
@@ -195,8 +188,7 @@ static Graph BuildReduceProfileGraph(ReduceOp op, std::size_t batch)
 	Subgraph sg;
 	const std::vector<std::size_t> inputShape{ batch, 784 };
 	const auto input = sg.AddParam(DataType::Float32, inputShape);
-	const auto out =
-	    sg.AddNode(ReduceOpNode{ op, { input, 0 }, 1 }, { OutputInfo{ DataType::Float32, { batch } } });
+	const auto out = sg.AddNode(ReduceOpNode{ op, { input, 0 }, 1 }, { OutputInfo{ DataType::Float32, { batch } } });
 	sg.SetResults({ { out, 0 } });
 	graph.AddSubgraph(std::move(sg));
 	graph.SetForward(0);
@@ -469,7 +461,8 @@ static bool IsObjdumpFunctionHeader(std::string_view line)
 	{
 		++pos;
 	}
-	return pos > begin && line.find('<', pos) != std::string_view::npos && line.find(">:", pos) != std::string_view::npos;
+	return pos > begin && line.find('<', pos) != std::string_view::npos &&
+	       line.find(">:", pos) != std::string_view::npos;
 }
 
 static std::string ObjdumpFunctionName(std::string_view line)
@@ -527,20 +520,47 @@ static void AccumulateInstructionLine(InstructionStats& stats, std::string_view 
 	if (packedFma)
 	{
 		++stats.packedFMA;
-		if (lower.find("zmm") != std::string::npos) ++stats.zmmPackedFMA;
-		if (lower.find("ymm") != std::string::npos) ++stats.ymmPackedFMA;
-		if (lower.find("xmm") != std::string::npos) ++stats.xmmPackedFMA;
+		if (lower.find("zmm") != std::string::npos)
+		{
+			++stats.zmmPackedFMA;
+		}
+		if (lower.find("ymm") != std::string::npos)
+		{
+			++stats.ymmPackedFMA;
+		}
+		if (lower.find("xmm") != std::string::npos)
+		{
+			++stats.xmmPackedFMA;
+		}
 	}
 	if (lower.find("vfmadd") != std::string::npos && lower.find("ss") != std::string::npos)
 	{
 		++stats.scalarFMA;
 	}
-	if (lower.find("gather") != std::string::npos) ++stats.gather;
-	if (lower.find("scatter") != std::string::npos) ++stats.scatter;
-	if (lower.find("vmovups") != std::string::npos || lower.find("vmovaps") != std::string::npos) ++stats.vectorLoad;
-	if (lower.find("vmovss") != std::string::npos) ++stats.scalarMove;
-	if (lower.find("vbroadcast") != std::string::npos) ++stats.broadcast;
-	if (lower.find("prefetch") != std::string::npos) ++stats.prefetch;
+	if (lower.find("gather") != std::string::npos)
+	{
+		++stats.gather;
+	}
+	if (lower.find("scatter") != std::string::npos)
+	{
+		++stats.scatter;
+	}
+	if (lower.find("vmovups") != std::string::npos || lower.find("vmovaps") != std::string::npos)
+	{
+		++stats.vectorLoad;
+	}
+	if (lower.find("vmovss") != std::string::npos)
+	{
+		++stats.scalarMove;
+	}
+	if (lower.find("vbroadcast") != std::string::npos)
+	{
+		++stats.broadcast;
+	}
+	if (lower.find("prefetch") != std::string::npos)
+	{
+		++stats.prefetch;
+	}
 
 	constexpr std::string_view kVectorOps[] = { "vmov", "vadd", "vmul", "vfmadd" };
 	const bool stackReference = lower.find("[rsp") != std::string::npos || lower.find("[rbp") != std::string::npos;
@@ -562,9 +582,9 @@ static InstructionStats AnalyzeObjectInstructions(const std::filesystem::path& o
 	const char* objdumpEnv = std::getenv("LITENN_OBJDUMP");
 	const std::string objdump = objdumpEnv ? objdumpEnv : "objdump";
 	const auto errPath = asmPath.string() + ".err";
-	const auto command = std::format("{} -d -M intel {} > {} 2> {}",
-	    QuoteProgramForShell(objdump), QuoteForShell(objectPath.string()), QuoteForShell(asmPath.string()),
-	    QuoteForShell(errPath));
+	const auto command =
+	    std::format("{} -d -M intel {} > {} 2> {}", QuoteProgramForShell(objdump), QuoteForShell(objectPath.string()),
+	                QuoteForShell(asmPath.string()), QuoteForShell(errPath));
 	if (std::system(command.c_str()) != 0)
 	{
 		return { .message = std::format("objdump failed; set LITENN_OBJDUMP or inspect {}", errPath) };
@@ -602,8 +622,9 @@ static InstructionStats AnalyzeObjectInstructions(const std::filesystem::path& o
 		}
 	}
 
-	InstructionStats stats{ .available = true, .message = "ok",
-	                        .function = ObjdumpFunctionName(lines[*start]), .lines = end - *start };
+	InstructionStats stats{
+		.available = true, .message = "ok", .function = ObjdumpFunctionName(lines[*start]), .lines = end - *start
+	};
 	for (std::size_t i = *start; i < end; ++i)
 	{
 		AccumulateInstructionLine(stats, lines[i]);
@@ -611,38 +632,44 @@ static InstructionStats AnalyzeObjectInstructions(const std::filesystem::path& o
 	return stats;
 }
 
-static Timing TimedRun(const CompiledModule<CPU>& module,
-                       std::span<const Tensor<CPU>> inputs,
-                       std::size_t batch)
+static Timing TimedRun(const CompiledModule<CPU>& module, std::span<const Tensor<CPU>> inputs, std::size_t batch)
 {
-	for (int i = 0; i < 5; ++i) (void)module.RunTensors(inputs);
+	for (int i = 0; i < 5; ++i)
+	{
+		(void) module.RunTensors(inputs);
+	}
 	auto t0 = Clock::now();
-	(void)module.RunTensors(inputs);
+	(void) module.RunTensors(inputs);
 	auto t1 = Clock::now();
 	const double probeMs = clk::duration<double, std::milli>(t1 - t0).count();
-	const auto iters = static_cast<std::size_t>(
-	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
+	const auto iters = static_cast<std::size_t>(std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
 	auto a = Clock::now();
-	for (std::size_t i = 0; i < iters; ++i) (void)module.RunTensors(inputs);
+	for (std::size_t i = 0; i < iters; ++i)
+	{
+		(void) module.RunTensors(inputs);
+	}
 	auto b = Clock::now();
 	const double total = clk::duration<double, std::milli>(b - a).count();
 	return { total / iters, batch * iters / (total * 1e-3) };
 }
 
-static Timing TimedRunTensorsInto(const CompiledModule<CPU>& module,
-                           std::span<const Tensor<CPU>> inputs,
-                           std::span<Tensor<CPU>> outputs,
-                           std::size_t batch)
+static Timing TimedRunTensorsInto(const CompiledModule<CPU>& module, std::span<const Tensor<CPU>> inputs,
+                                  std::span<Tensor<CPU>> outputs, std::size_t batch)
 {
-	for (int i = 0; i < 5; ++i) module.RunTensorsInto(inputs, outputs);
+	for (int i = 0; i < 5; ++i)
+	{
+		module.RunTensorsInto(inputs, outputs);
+	}
 	auto t0 = Clock::now();
 	module.RunTensorsInto(inputs, outputs);
 	auto t1 = Clock::now();
 	const double probeMs = clk::duration<double, std::milli>(t1 - t0).count();
-	const auto iters = static_cast<std::size_t>(
-	    std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
+	const auto iters = static_cast<std::size_t>(std::clamp(2000.0 / std::max(probeMs, 0.001), 10.0, 2000.0));
 	auto a = Clock::now();
-	for (std::size_t i = 0; i < iters; ++i) module.RunTensorsInto(inputs, outputs);
+	for (std::size_t i = 0; i < iters; ++i)
+	{
+		module.RunTensorsInto(inputs, outputs);
+	}
 	auto b = Clock::now();
 	const double total = clk::duration<double, std::milli>(b - a).count();
 	return { total / iters, batch * iters / (total * 1e-3) };
@@ -660,7 +687,10 @@ static double TimedOnceMs(Fn&& fn)
 template <typename Fn>
 static Timing TimedRepeated(Fn&& fn, std::size_t batch, double targetMs = 500.0)
 {
-	for (int i = 0; i < 5; ++i) std::forward<Fn>(fn)();
+	for (int i = 0; i < 5; ++i)
+	{
+		std::forward<Fn>(fn)();
+	}
 	const double probeMs = std::max(TimedOnceMs(fn), 0.001);
 	const auto iters = static_cast<std::size_t>(std::clamp(targetMs / probeMs, 10.0, 2000.0));
 	auto begin = Clock::now();
@@ -677,7 +707,7 @@ struct Case
 {
 	std::string name;
 	Graph (*build)(std::size_t, std::mt19937&);
-	std::vector<std::size_t> outShape;  // single-output models
+	std::vector<std::size_t> outShape; // single-output models
 };
 
 #ifdef LITENN_ENABLE_CUDA
@@ -761,7 +791,8 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		CompiledModuleArtifact artifact;
 		{
 			auto begin = Clock::now();
-			artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), LiteNNBenchCompilerOptionsFromEnvironment());
+			artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph),
+			                                           LiteNNBenchCompilerOptionsFromEnvironment());
 			auto end = Clock::now();
 			result.compileMs = clk::duration<double, std::milli>(end - begin).count();
 		}
@@ -799,9 +830,9 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		auto outputs = AllocateCUDAProfileOutputs(module);
 		const auto runInto = [&](bool enableGraphReplay) {
 			module.RunTensorsInto(std::span<const Tensor<CUDA>>(inputs), std::span<Tensor<CUDA>>(outputs),
-			                      CompiledModuleCUDARunOptions{
-			                          .graphReplay = enableGraphReplay ? CUDAGraphReplayMode::Enabled
-			                                                           : CUDAGraphReplayMode::Disabled });
+			                      CompiledModuleCUDARunOptions{ .graphReplay = enableGraphReplay
+			                                                                       ? CUDAGraphReplayMode::Enabled
+			                                                                       : CUDAGraphReplayMode::Disabled });
 		};
 
 		{
@@ -876,9 +907,7 @@ static VulkanProfileInputs MakeVulkanProfileInputs(std::size_t batch)
 	}
 	auto cpuInput = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
 	std::vector<Tensor<Vulkan>> inputs;
-	const auto uploadMs = TimedOnceMs([&] {
-		inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{}));
-	});
+	const auto uploadMs = TimedOnceMs([&] { inputs.emplace_back(cpuInput.CopyToDevice(Vulkan{})); });
 	return { .tensors = std::move(inputs), .uploadMs = uploadMs };
 }
 
@@ -985,8 +1014,8 @@ static double SumVulkanGpuMs(std::span<const CompiledModuleVulkanProfileEvent> e
 static bool AllVulkanGpuTimestampsAvailable(std::span<const CompiledModuleVulkanProfileEvent> events)
 {
 	return !events.empty() && std::ranges::all_of(events, [](const CompiledModuleVulkanProfileEvent& event) {
-		       return event.gpuTimestampAvailable;
-	       });
+		return event.gpuTimestampAvailable;
+	});
 }
 
 static std::size_t SumVulkanWorkspaceBytes(const VulkanNativeInstructionPayload& payload)
@@ -1080,11 +1109,10 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const VulkanProfileCase& prof
 
 static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 {
-	return ProfileVulkanLaunches(
-	    VulkanProfileCase{ .name = profileCase.name,
-	                       .build = profileCase.build,
-	                       .batch = profileCase.outShape[0],
-	                       .makeInputs = MakeVulkanProfileInputs });
+	return ProfileVulkanLaunches(VulkanProfileCase{ .name = profileCase.name,
+	                                                .build = profileCase.build,
+	                                                .batch = profileCase.outShape[0],
+	                                                .makeInputs = MakeVulkanProfileInputs });
 }
 
 static std::string CsvEscape(std::string_view value)
@@ -1108,123 +1136,127 @@ static std::string CsvEscape(std::string_view value)
 	return escaped;
 }
 
-static void WriteVulkanProfileCsv(const std::filesystem::path& path,
-                                  std::span<const VulkanLaunchBreakdown> rows)
+static void WriteVulkanProfileCsv(const std::filesystem::path& path, std::span<const VulkanLaunchBreakdown> rows)
 {
 	std::ofstream out(path);
 	if (!out)
 	{
 		throw std::runtime_error(std::format("Failed to open Vulkan profile CSV '{}'", path.string()));
 	}
-	out << "case,batch,backend,target,kernels,external_tensors,workspace_tensors,workspace_bytes,compile_ms,load_ms,upload_ms,first_run_ms,"
+	out << "case,batch,backend,target,kernels,external_tensors,workspace_tensors,workspace_bytes,compile_ms,load_ms,"
+	       "upload_ms,first_run_ms,"
 	       "mean_run_ms,last_dispatch_wall_ms,gpu_timestamp_available,gpu_time_ms,download_ms,status\n";
 	for (const auto& row : rows)
 	{
-		out << CsvEscape(row.name) << ','
-		    << row.batch << ','
-		    << CsvEscape(row.backend) << ','
-		    << CsvEscape(row.target) << ','
-		    << row.kernelCount << ','
-		    << row.externalTensorCount << ','
-		    << row.workspaceTensorCount << ','
-		    << row.workspaceBytes << ','
-		    << row.compileMs << ','
-		    << row.loadMs << ','
-		    << row.inputUploadMs << ','
-		    << row.firstMs << ','
-		    << row.meanMs << ','
-		    << row.lastDispatchMs << ','
-		    << (row.gpuTimestampAvailable ? "true" : "false") << ','
-		    << row.lastGpuMs << ','
-		    << row.outputDownloadMs << ','
-		    << CsvEscape(row.message) << '\n';
+		out << CsvEscape(row.name) << ',' << row.batch << ',' << CsvEscape(row.backend) << ',' << CsvEscape(row.target)
+		    << ',' << row.kernelCount << ',' << row.externalTensorCount << ',' << row.workspaceTensorCount << ','
+		    << row.workspaceBytes << ',' << row.compileMs << ',' << row.loadMs << ',' << row.inputUploadMs << ','
+		    << row.firstMs << ',' << row.meanMs << ',' << row.lastDispatchMs << ','
+		    << (row.gpuTimestampAvailable ? "true" : "false") << ',' << row.lastGpuMs << ',' << row.outputDownloadMs
+		    << ',' << CsvEscape(row.message) << '\n';
 	}
 }
 #endif
 
-namespace {
-
-struct ProfileCLIOptions
+namespace
 {
-	std::filesystem::path outDir = std::filesystem::current_path() / "profile_out";
-	bool showHelp = false;
-};
 
-static bool HasPrefix(std::string_view value, std::string_view prefix)
-{
-	return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
-}
-
-static void PrintProfileUsage(std::ostream& os)
-{
-	os << "Usage: litenn_profile [--out-dir <dir>] [out_dir]\n"
-	   << "\n"
-	   << "Options:\n"
-	   << "  --out-dir <dir>   Directory for raw object files, assembly, and CSV profile output.\n"
-	   << "  --out-dir=<dir>   Same as --out-dir <dir>.\n"
-	   << "  -h, --help        Show this help text.\n"
-	   << "\n"
-	   << "The positional out_dir form is retained for existing scripts.\n";
-}
-
-static ProfileCLIOptions ParseProfileCLIOptions(int argc, char** argv)
-{
-	ProfileCLIOptions options;
-	bool outDirSet = false;
-
-	for (int i = 1; i < argc; ++i)
+	struct ProfileCLIOptions
 	{
-		const std::string_view arg(argv[i] ? argv[i] : "");
-		if (arg == "-h" || arg == "--help")
-		{
-			options.showHelp = true;
-			continue;
-		}
+		std::filesystem::path outDir = std::filesystem::current_path() / "profile_out";
+		bool showHelp = false;
+	};
 
-		if (arg == "--out-dir")
-		{
-			if (outDirSet)
-				throw std::runtime_error("--out-dir was specified more than once");
-			if (i + 1 >= argc || std::string_view(argv[i + 1] ? argv[i + 1] : "").empty())
-				throw std::runtime_error("--out-dir requires a non-empty path");
-			options.outDir = std::filesystem::path(argv[++i]);
-			outDirSet = true;
-			continue;
-		}
-
-		constexpr std::string_view kOutDirPrefix = "--out-dir=";
-		if (HasPrefix(arg, kOutDirPrefix))
-		{
-			if (outDirSet)
-				throw std::runtime_error("--out-dir was specified more than once");
-			const auto value = arg.substr(kOutDirPrefix.size());
-			if (value.empty())
-				throw std::runtime_error("--out-dir requires a non-empty path");
-			options.outDir = std::filesystem::path(std::string(value));
-			outDirSet = true;
-			continue;
-		}
-
-		if (!arg.empty() && arg.front() == '-')
-			throw std::runtime_error(std::format("Unknown argument '{}'", arg));
-
-		if (outDirSet)
-			throw std::runtime_error(std::format("Unexpected positional argument '{}'", arg));
-		options.outDir = std::filesystem::path(argv[i]);
-		outDirSet = true;
+	static bool HasPrefix(std::string_view value, std::string_view prefix)
+	{
+		return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 	}
 
-	return options;
-}
+	static void PrintProfileUsage(std::ostream& os)
+	{
+		os << "Usage: litenn_profile [--out-dir <dir>] [out_dir]\n"
+		   << "\n"
+		   << "Options:\n"
+		   << "  --out-dir <dir>   Directory for raw object files, assembly, and CSV profile output.\n"
+		   << "  --out-dir=<dir>   Same as --out-dir <dir>.\n"
+		   << "  -h, --help        Show this help text.\n"
+		   << "\n"
+		   << "The positional out_dir form is retained for existing scripts.\n";
+	}
+
+	static ProfileCLIOptions ParseProfileCLIOptions(int argc, char** argv)
+	{
+		ProfileCLIOptions options;
+		bool outDirSet = false;
+
+		for (int i = 1; i < argc; ++i)
+		{
+			const std::string_view arg(argv[i] ? argv[i] : "");
+			if (arg == "-h" || arg == "--help")
+			{
+				options.showHelp = true;
+				continue;
+			}
+
+			if (arg == "--out-dir")
+			{
+				if (outDirSet)
+				{
+					throw std::runtime_error("--out-dir was specified more than once");
+				}
+				if (i + 1 >= argc || std::string_view(argv[i + 1] ? argv[i + 1] : "").empty())
+				{
+					throw std::runtime_error("--out-dir requires a non-empty path");
+				}
+				options.outDir = std::filesystem::path(argv[++i]);
+				outDirSet = true;
+				continue;
+			}
+
+			constexpr std::string_view kOutDirPrefix = "--out-dir=";
+			if (HasPrefix(arg, kOutDirPrefix))
+			{
+				if (outDirSet)
+				{
+					throw std::runtime_error("--out-dir was specified more than once");
+				}
+				const auto value = arg.substr(kOutDirPrefix.size());
+				if (value.empty())
+				{
+					throw std::runtime_error("--out-dir requires a non-empty path");
+				}
+				options.outDir = std::filesystem::path(std::string(value));
+				outDirSet = true;
+				continue;
+			}
+
+			if (!arg.empty() && arg.front() == '-')
+			{
+				throw std::runtime_error(std::format("Unknown argument '{}'", arg));
+			}
+
+			if (outDirSet)
+			{
+				throw std::runtime_error(std::format("Unexpected positional argument '{}'", arg));
+			}
+			options.outDir = std::filesystem::path(argv[i]);
+			outDirSet = true;
+		}
+
+		return options;
+	}
 
 } // namespace
 
 int main(int argc, char** argv)
 {
 	ProfileCLIOptions cliOptions;
-	try {
+	try
+	{
 		cliOptions = ParseProfileCLIOptions(argc, argv);
-	} catch (const std::exception& e) {
+	}
+	catch (const std::exception& e)
+	{
 		std::cerr << "litenn_profile: " << e.what() << "\n\n";
 		PrintProfileUsage(std::cerr);
 		return 2;
@@ -1241,30 +1273,24 @@ int main(int argc, char** argv)
 
 	std::cout << "LiteNN AOT Profile Report\n";
 	std::cout << "Object files written to: " << outDir.string() << "\n";
-	std::cout << "Instruction stats use objdump; set LITENN_OBJDUMP to override or LITENN_PROFILE_SKIP_OBJDUMP=1 to skip.\n";
+	std::cout
+	    << "Instruction stats use objdump; set LITENN_OBJDUMP to override or LITENN_PROFILE_SKIP_OBJDUMP=1 to skip.\n";
 	std::cout << std::string(116, '=') << "\n";
 
 	std::vector<Case> cases = {
-	    { "linear_b1",   BuildLinear,  { 1,   10  } },
-	    { "linear_b32",  BuildLinear,  { 32,  10  } },
-	    { "linear_b128", BuildLinear,  { 128, 10  } },
-	    { "linear_b512", BuildLinear,  { 512, 10  } },
-	    { "mlp128_b1",   BuildMLP128,  { 1,   10  } },
-	    { "mlp128_b32",  BuildMLP128,  { 32,  10  } },
-	    { "mlp128_b128", BuildMLP128,  { 128, 10  } },
-	    { "mlp128_b512", BuildMLP128,  { 512, 10  } },
-	    { "mlp512_b1",   BuildMLP512,  { 1,   10  } },
-	    { "mlp512_b32",  BuildMLP512,  { 32,  10  } },
-	    { "mlp512_b128", BuildMLP512,  { 128, 10  } },
-	    { "mlp512_b512", BuildMLP512,  { 512, 10  } },
+		{ "linear_b1", BuildLinear, { 1, 10 } },     { "linear_b32", BuildLinear, { 32, 10 } },
+		{ "linear_b128", BuildLinear, { 128, 10 } }, { "linear_b512", BuildLinear, { 512, 10 } },
+		{ "mlp128_b1", BuildMLP128, { 1, 10 } },     { "mlp128_b32", BuildMLP128, { 32, 10 } },
+		{ "mlp128_b128", BuildMLP128, { 128, 10 } }, { "mlp128_b512", BuildMLP128, { 512, 10 } },
+		{ "mlp512_b1", BuildMLP512, { 1, 10 } },     { "mlp512_b32", BuildMLP512, { 32, 10 } },
+		{ "mlp512_b128", BuildMLP512, { 128, 10 } }, { "mlp512_b512", BuildMLP512, { 512, 10 } },
 	};
 
 	std::vector<CaseInstructionStats> instructionStats;
 	instructionStats.reserve(cases.size());
 
-	std::cout << std::format("{:<14} {:>8} {:>10} {:>12} {:>12} {:>10} {:>12} {:>7} {:>7} {:>8}\n",
-	    "Case", "Batch", "Compile/ms", "Run/ms", "RunInto/ms",
-	    "Alloc/us", "Speedup", "FMAps", "VecLd", "StackVec");
+	std::cout << std::format("{:<14} {:>8} {:>10} {:>12} {:>12} {:>10} {:>12} {:>7} {:>7} {:>8}\n", "Case", "Batch",
+	                         "Compile/ms", "Run/ms", "RunInto/ms", "Alloc/us", "Speedup", "FMAps", "VecLd", "StackVec");
 	std::cout << std::string(116, '-') << "\n";
 
 	for (const auto& c : cases)
@@ -1276,27 +1302,31 @@ int main(int argc, char** argv)
 
 		// Time compile
 		auto cs = Clock::now();
-		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(g), LiteNNBenchCompilerOptionsFromEnvironment());
+		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(g),
+		                                       LiteNNBenchCompilerOptionsFromEnvironment());
 		auto ce = Clock::now();
 		const double compileMs = clk::duration<double, std::milli>(ce - cs).count();
 
 		// Write the *raw* compiled object (the JIT-loaded code) for disassembly.
 		// Note: WriteObjectFile() emits a "carrier" wrapper, not the executable code.
 		const auto statsBeforeWrite = instructionStats.size();
-		try {
+		try
+		{
 			const auto bytes = compiled.Instructions();
 			const auto objectPath = outDir / (c.name + ".o");
 			std::ofstream f(objectPath, std::ios::binary);
-			f.write(reinterpret_cast<const char*>(bytes.data()),
-			        static_cast<std::streamsize>(bytes.size()));
+			f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 			f.close();
 			if (!f)
 			{
 				throw std::runtime_error(std::format("failed to write {}", objectPath.string()));
 			}
-			instructionStats.push_back({ c.name, outDir / (c.name + ".s"),
-			                             AnalyzeObjectInstructions(objectPath, outDir / (c.name + ".s")) });
-		} catch (...) {}
+			instructionStats.push_back(
+			    { c.name, outDir / (c.name + ".s"), AnalyzeObjectInstructions(objectPath, outDir / (c.name + ".s")) });
+		}
+		catch (...)
+		{
+		}
 		if (instructionStats.size() == statsBeforeWrite)
 		{
 			instructionStats.push_back({ c.name, outDir / (c.name + ".s"), { .message = "object write failed" } });
@@ -1306,15 +1336,18 @@ int main(int argc, char** argv)
 		std::mt19937 rng2(0);
 		std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 		std::vector<float> data(batch * 784);
-		for (auto& v : data) v = dist(rng2);
+		for (auto& v : data)
+		{
+			v = dist(rng2);
+		}
 		auto in = Optimizer::MakeFloatTensor(std::span<const float>(data), { batch, 784 });
-		std::vector<Tensor<CPU>> inputs; inputs.emplace_back(std::move(in));
+		std::vector<Tensor<CPU>> inputs;
+		inputs.emplace_back(std::move(in));
 		std::vector<Tensor<CPU>> outputs;
-		outputs.emplace_back(Uninitialized,
-		    ShapeView{ std::vector<std::size_t>{ batch, c.outShape[1] } },
-		    DataType::Float32, CPU{});
+		outputs.emplace_back(Uninitialized, ShapeView{ std::vector<std::size_t>{ batch, c.outShape[1] } },
+		                     DataType::Float32, CPU{});
 
-		const auto tRun     = TimedRun(compiled, inputs, batch);
+		const auto tRun = TimedRun(compiled, inputs, batch);
 		const auto tRunInto = TimedRunTensorsInto(compiled, inputs, outputs, batch);
 
 		const double allocUs = (tRun.meanMs - tRunInto.meanMs) * 1000.0;
@@ -1324,16 +1357,16 @@ int main(int argc, char** argv)
 		const auto packedFMA = stats.available ? std::format("{}", stats.packedFMA) : "n/a";
 		const auto vectorLoad = stats.available ? std::format("{}", stats.vectorLoad) : "n/a";
 		const auto stackVectorOp = stats.available ? std::format("{}", stats.stackVectorOp) : "n/a";
-		std::cout << std::format("{:<14} {:>8} {:>9.2f}ms {:>10.4f}ms {:>10.4f}ms {:>8.2f}us {:>10.2f}x {:>7} {:>7} {:>8}\n",
-		    c.name, batch, compileMs, tRun.meanMs, tRunInto.meanMs, allocUs, speedup,
-		    packedFMA, vectorLoad, stackVectorOp);
+		std::cout << std::format(
+		    "{:<14} {:>8} {:>9.2f}ms {:>10.4f}ms {:>10.4f}ms {:>8.2f}us {:>10.2f}x {:>7} {:>7} {:>8}\n", c.name, batch,
+		    compileMs, tRun.meanMs, tRunInto.meanMs, allocUs, speedup, packedFMA, vectorLoad, stackVectorOp);
 	}
 
 	std::cout << std::string(116, '=') << "\n";
 	std::cout << "\nInstruction stats for subgraph_0, falling back to the first function when needed\n";
 	std::cout << std::format("{:<14} {:<16} {:>7} {:>7} {:>7} {:>5} {:>5} {:>5} {:>7} {:>7} {:>7} {:>8} {:>7} {:>7}\n",
-	    "Case", "Function", "Lines", "FMAps", "FMAss", "zmm", "ymm", "xmm", "Gather", "Scatter", "VecLd",
-	    "ScalarMv", "Bcast", "StackV");
+	                         "Case", "Function", "Lines", "FMAps", "FMAss", "zmm", "ymm", "xmm", "Gather", "Scatter",
+	                         "VecLd", "ScalarMv", "Bcast", "StackV");
 	std::cout << std::string(132, '-') << "\n";
 	for (const auto& row : instructionStats)
 	{
@@ -1343,10 +1376,10 @@ int main(int argc, char** argv)
 			std::cout << std::format("{:<14} {:<16} {}\n", row.name, "-", s.message);
 			continue;
 		}
-		std::cout << std::format("{:<14} {:<16} {:>7} {:>7} {:>7} {:>5} {:>5} {:>5} {:>7} {:>7} {:>7} {:>8} {:>7} {:>7}\n",
-		    row.name, s.function, s.lines, s.packedFMA, s.scalarFMA, s.zmmPackedFMA, s.ymmPackedFMA,
-		    s.xmmPackedFMA, s.gather, s.scatter, s.vectorLoad, s.scalarMove,
-		    s.broadcast, s.stackVectorOp);
+		std::cout << std::format(
+		    "{:<14} {:<16} {:>7} {:>7} {:>7} {:>5} {:>5} {:>5} {:>7} {:>7} {:>7} {:>8} {:>7} {:>7}\n", row.name,
+		    s.function, s.lines, s.packedFMA, s.scalarFMA, s.zmmPackedFMA, s.ymmPackedFMA, s.xmmPackedFMA, s.gather,
+		    s.scatter, s.vectorLoad, s.scalarMove, s.broadcast, s.stackVectorOp);
 	}
 	std::cout << "\nAssembly files are written beside the object files when objdump succeeds.\n";
 
@@ -1363,21 +1396,25 @@ int main(int argc, char** argv)
 	else
 	{
 		std::cout << std::format(
-		    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>10} {:>10} {}\n",
-		    "Case", "Batch", "Backend", "Binary", "Kernels", "Lib", "PTX", "Workspace", "Compile",
-		    "Load", "Native1", "NativeAvg", "Graph1", "GraphAvg", "Status");
+		    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>10} {:>10} {}\n", "Case",
+		    "Batch", "Backend", "Binary", "Kernels", "Lib", "PTX", "Workspace", "Compile", "Load", "Native1",
+		    "NativeAvg", "Graph1", "GraphAvg", "Status");
 		std::cout << std::string(170, '-') << "\n";
 		for (const auto& c : cases)
 		{
 			const auto row = ProfileCUDALaunches(c);
-			std::cout << std::format(
-			    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms {:>10.4f}ms {:>9.4f}ms {:>8.4f}ms {:>8.4f}ms {}\n",
-			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.binaryKind.empty() ? "-" : row.binaryKind,
-			    row.kernelCount, row.libraryKernelCount, row.ptxKernelCount, row.workspaceBytes,
-			    row.compileMs, row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs, row.message);
+			std::cout << std::format("{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms "
+			                         "{:>10.4f}ms {:>9.4f}ms {:>8.4f}ms {:>8.4f}ms {}\n",
+			                         row.name, row.batch, row.backend.empty() ? "-" : row.backend,
+			                         row.binaryKind.empty() ? "-" : row.binaryKind, row.kernelCount,
+			                         row.libraryKernelCount, row.ptxKernelCount, row.workspaceBytes, row.compileMs,
+			                         row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs,
+			                         row.message);
 		}
-		std::cout << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
-		std::cout << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with graphReplay=Enabled.\n";
+		std::cout
+		    << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
+		std::cout
+		    << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with graphReplay=Enabled.\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";
@@ -1505,22 +1542,24 @@ int main(int argc, char** argv)
 			  .batch = 512,
 			  .makeInputs = MakeVulkanProfileInputs },
 		};
-		std::cout << std::format(
-		    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>11} {:>12} {:>10} {:>10} {}\n",
-		    "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "WS", "WSBytes", "Compile", "Load", "Upload",
-		    "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download", "Status");
+		std::cout << std::format("{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} "
+		                         "{:>11} {:>12} {:>10} {:>10} {}\n",
+		                         "Case", "Batch", "Backend", "Target", "Kernels", "Ext", "WS", "WSBytes", "Compile",
+		                         "Load", "Upload", "FirstRun", "MeanRun", "LastDispatch", "GPUTime", "Download",
+		                         "Status");
 		std::cout << std::string(198, '-') << "\n";
 		std::vector<VulkanLaunchBreakdown> vulkanRows;
 		vulkanRows.reserve(cases.size() + vulkanOnlyCases.size());
 		const auto printVulkanRow = [](const VulkanLaunchBreakdown& row) {
 			const std::string gpuTime =
 			    row.gpuTimestampAvailable ? std::format("{:.4f}ms", row.lastGpuMs) : std::string("n/a");
-			std::cout << std::format(
-			    "{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms {:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
-			    row.name, row.batch, row.backend.empty() ? "-" : row.backend, row.target.empty() ? "-" : row.target,
-			    row.kernelCount, row.externalTensorCount, row.workspaceTensorCount, row.workspaceBytes, row.compileMs,
-			    row.loadMs, row.inputUploadMs, row.firstMs, row.meanMs, row.lastDispatchMs, gpuTime,
-			    row.outputDownloadMs, row.message);
+			std::cout << std::format("{:<14} {:>8} {:<13} {:<10} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms "
+			                         "{:>8.4f}ms {:>10.4f}ms {:>9.4f}ms {:>10.4f}ms {:>10} {:>8.4f}ms {}\n",
+			                         row.name, row.batch, row.backend.empty() ? "-" : row.backend,
+			                         row.target.empty() ? "-" : row.target, row.kernelCount, row.externalTensorCount,
+			                         row.workspaceTensorCount, row.workspaceBytes, row.compileMs, row.loadMs,
+			                         row.inputUploadMs, row.firstMs, row.meanMs, row.lastDispatchMs, gpuTime,
+			                         row.outputDownloadMs, row.message);
 		};
 		for (const auto& c : cases)
 		{

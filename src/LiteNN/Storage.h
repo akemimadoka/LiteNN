@@ -3,9 +3,9 @@
 
 #include <LiteNN/Quantization.h>
 #include <LiteNN/TensorType.h>
-#include <format>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -175,11 +175,11 @@ namespace LiteNN
 		}
 		if (!binding.strides.empty() && binding.strides.size() != binding.type.Rank())
 		{
-			throw std::runtime_error(std::format("Runtime buffer binding '{}' has {} strides for rank {}",
-			                                    binding.name, binding.strides.size(), binding.type.Rank()));
+			throw std::runtime_error(std::format("Runtime buffer binding '{}' has {} strides for rank {}", binding.name,
+			                                     binding.strides.size(), binding.type.Rank()));
 		}
-		if (const auto logicalBytes = binding.type.ByteSize(); logicalBytes && binding.byteSize != 0 &&
-		                                                     *logicalBytes > binding.byteSize)
+		if (const auto logicalBytes = binding.type.ByteSize();
+		    logicalBytes && binding.byteSize != 0 && *logicalBytes > binding.byteSize)
 		{
 			throw std::runtime_error("Runtime buffer binding byte size is smaller than its tensor type: " +
 			                         binding.name);

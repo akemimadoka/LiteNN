@@ -34,7 +34,8 @@ static std::vector<float> QuantizeAsFloat32(std::span<const float> values, DataT
 {
 	Tensor<CPU> quantized(Uninitialized, { values.size() }, dataType);
 	CPU cpu;
-	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.UnsafeRawData(), DataType::Float32, values.data(), values.size());
+	DeviceTraits<CPU>::CopyFromCPU(cpu, dataType, quantized.UnsafeRawData(), DataType::Float32, values.data(),
+	                               values.size());
 	return ReadAsFloat32(quantized);
 }
 
@@ -76,13 +77,13 @@ static std::vector<float> ConvertCUDADeviceToFloat32(std::span<const float> valu
 	DeviceTraits<CUDA>::ConvertTo(device, dataType, quantized.UnsafeRawData(), values.size(), DataType::Float32,
 	                              converted.UnsafeRawData());
 	std::vector<float> result(values.size());
-	DeviceTraits<CUDA>::CopyToCPU(device, DataType::Float32, converted.UnsafeRawData(), values.size(), DataType::Float32,
-	                              result.data());
+	DeviceTraits<CUDA>::CopyToCPU(device, DataType::Float32, converted.UnsafeRawData(), values.size(),
+	                              DataType::Float32, result.data());
 	return result;
 }
 
-static std::vector<float> HighPrecisionMatMulReference(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs,
-	                                                    std::size_t m, std::size_t k, std::size_t n)
+static std::vector<float> HighPrecisionMatMulReference(const Tensor<CPU>& lhs, const Tensor<CPU>& rhs, std::size_t m,
+                                                       std::size_t k, std::size_t n)
 {
 	const auto lhsValues = ReadAsFloat32(lhs);
 	const auto rhsValues = ReadAsFloat32(rhs);
@@ -132,7 +133,7 @@ TEST(CUDADevice, HostFallbackRequiresExplicitPolicy)
 
 	Tensor<CPU> cpuTensor({ 1, 2, 3, 4 }, { 2, 2 });
 	auto strict = cpuTensor.CopyToDevice(CUDA{});
-	EXPECT_THROW((void)(strict + strict), std::runtime_error);
+	EXPECT_THROW((void) (strict + strict), std::runtime_error);
 
 	const auto fallbackDevice = CUDAWithHostFallback();
 	auto fallback = cpuTensor.CopyToDevice(fallbackDevice);
@@ -190,12 +191,8 @@ TEST(CUDADevice, LowPrecisionCapabilitiesAreReported)
 	EXPECT_NE(summary.find("nativeConvert"), std::string::npos);
 
 	const std::array lowPrecisionTypes{
-		DataType::Float16,
-		DataType::BFloat16,
-		DataType::Float8E4M3,
-		DataType::Float8E5M2,
-		DataType::Int8,
-		DataType::UInt8,
+		DataType::Float16,    DataType::BFloat16, DataType::Float8E4M3,
+		DataType::Float8E5M2, DataType::Int8,     DataType::UInt8,
 	};
 	const auto baselineNativeConversionAvailable = CUDASupportsNativeConversion(DataType::Float32, DataType::Float16);
 	const auto expectedNativeConversion = [&](DataType dataType) {
@@ -223,20 +220,15 @@ TEST(CUDADevice, LowPrecisionConversionPathsMatchCPUReference)
 	}
 
 	const std::array dataTypes{
-		DataType::Float16,
-		DataType::BFloat16,
-		DataType::Float8E4M3,
-		DataType::Float8E5M2,
-		DataType::Int8,
-		DataType::UInt8,
+		DataType::Float16,    DataType::BFloat16, DataType::Float8E4M3,
+		DataType::Float8E5M2, DataType::Int8,     DataType::UInt8,
 	};
 	for (const auto dataType : dataTypes)
 	{
-		const std::vector<float> sourceValues = dataType == DataType::UInt8
-		                                          ? std::vector<float>{ 0.0F, 1.0F, 2.0F, 3.0F, 7.0F }
-		                                          : dataType == DataType::Int8
-		                                              ? std::vector<float>{ -5.0F, -1.0F, 0.0F, 3.0F, 7.0F }
-		                                              : std::vector<float>{ -2.25F, -1.0F, 0.0F, 1.5F, 3.75F };
+		const std::vector<float> sourceValues =
+		    dataType == DataType::UInt8  ? std::vector<float>{ 0.0F, 1.0F, 2.0F, 3.0F, 7.0F }
+		    : dataType == DataType::Int8 ? std::vector<float>{ -5.0F, -1.0F, 0.0F, 3.0F, 7.0F }
+		                                 : std::vector<float>{ -2.25F, -1.0F, 0.0F, 1.5F, 3.75F };
 		const auto expected = QuantizeAsFloat32(sourceValues, dataType);
 		const auto roundTrip = RoundTripFloat32ThroughCUDA(sourceValues, dataType);
 		const auto converted = ConvertCUDADeviceToFloat32(sourceValues, dataType);
@@ -245,10 +237,10 @@ TEST(CUDADevice, LowPrecisionConversionPathsMatchCPUReference)
 		ASSERT_EQ(converted.size(), expected.size());
 		for (auto i = 0uz; i < expected.size(); ++i)
 		{
-			EXPECT_FLOAT_EQ(roundTrip[i], expected[i]) << "roundTrip dtype=" << DataTypeName(dataType)
-			                                         << ", index=" << i;
-			EXPECT_FLOAT_EQ(converted[i], expected[i]) << "deviceConvert dtype=" << DataTypeName(dataType)
-			                                          << ", index=" << i;
+			EXPECT_FLOAT_EQ(roundTrip[i], expected[i])
+			    << "roundTrip dtype=" << DataTypeName(dataType) << ", index=" << i;
+			EXPECT_FLOAT_EQ(converted[i], expected[i])
+			    << "deviceConvert dtype=" << DataTypeName(dataType) << ", index=" << i;
 		}
 	}
 }
@@ -333,12 +325,10 @@ TEST(CUDADevice, Int8MatMulMatchesHighPrecisionQuantizedReference)
 	constexpr auto k = 32uz;
 	constexpr auto n = 16uz;
 	const std::array testCases{
-		std::pair{ DataType::Int8,
-		           std::pair{ RepeatingValues(m * k, { -1.0, 0.0, 1.0, 2.0 }),
-		                      RepeatingValues(k * n, { 1.0, -1.0, 0.0, 2.0 }) } },
-		std::pair{ DataType::UInt8,
-		           std::pair{ RepeatingValues(m * k, { 0.0, 1.0, 2.0, 3.0 }),
-		                      RepeatingValues(k * n, { 1.0, 0.0, 2.0, 1.0 }) } },
+		std::pair{ DataType::Int8, std::pair{ RepeatingValues(m * k, { -1.0, 0.0, 1.0, 2.0 }),
+		                                      RepeatingValues(k * n, { 1.0, -1.0, 0.0, 2.0 }) } },
+		std::pair{ DataType::UInt8, std::pair{ RepeatingValues(m * k, { 0.0, 1.0, 2.0, 3.0 }),
+		                                       RepeatingValues(k * n, { 1.0, 0.0, 2.0, 1.0 }) } },
 	};
 
 	std::size_t executedCases = 0;
@@ -412,7 +402,7 @@ TEST(CUDADevice, ReportsInvalidDeviceIndex)
 	try
 	{
 		Tensor<CUDA> tensor(Uninitialized, { 1 }, DataType::Float32, CUDA{ .deviceIndex = invalidDevice });
-		(void)tensor;
+		(void) tensor;
 		FAIL() << "expected invalid CUDA device allocation to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -511,7 +501,7 @@ TEST(CUDADevice, DriverModuleReportsInvalidImageDiagnostics)
 	try
 	{
 		CUDADriverModule module(CUDA{}, bytes);
-		(void)module;
+		(void) module;
 		FAIL() << "expected invalid CUDA module image to throw";
 	}
 	catch (const std::runtime_error& ex)
@@ -542,7 +532,7 @@ TEST(CUDADevice, DriverModuleReportsUnsupportedTargetDiagnostics)
 	try
 	{
 		CUDADriverModule module(CUDA{}, bytes);
-		(void)module;
+		(void) module;
 		FAIL() << "expected unsupported CUDA module target to throw";
 	}
 	catch (const std::runtime_error& ex)

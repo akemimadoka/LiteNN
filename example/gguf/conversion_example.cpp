@@ -54,7 +54,7 @@ namespace
 	}
 
 	void AddTensor(gguf_context* gguf, ggml_context* ggml, ggml_type type, std::string_view name,
-	              std::span<const std::int64_t> dims, const void* data)
+	               std::span<const std::int64_t> dims, const void* data)
 	{
 		auto* tensor = ggml_new_tensor(ggml, type, static_cast<int>(dims.size()), dims.data());
 		if (!tensor)
@@ -104,9 +104,7 @@ namespace
 		gguf_set_arr_str(gguf.get(), "tokenizer.ggml.tokens", tokens, 3);
 
 		const std::array<float, kEmbedding * kVocab> embedding = {
-			1.0F, 0.0F, 0.0F, 0.0F,
-			0.0F, 1.0F, 0.0F, 0.0F,
-			0.0F, 0.0F, 1.0F, 0.0F,
+			1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
 		};
 		AddTensor(gguf.get(), ggml.get(), GGML_TYPE_F32, "token_embd.weight",
 		          std::array<std::int64_t, 2>{ kEmbedding, kVocab }, embedding.data());
@@ -161,12 +159,15 @@ int main(int argc, char** argv)
 		const auto decodePath = outputDir / "tiny_llama.decode.vnext.json";
 
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(ggufPath);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), archivePath);
+		LiteNN::Serialization::SaveVNextModelPackage(
+		    LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), archivePath);
 
 		auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), 2);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered), loweredPath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(lowered),
+		                                             loweredPath);
 		auto decode = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, 1, 1);
-		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(decode), decodePath);
+		LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(decode),
+		                                             decodePath);
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
 		LiteNN::CPU cpu;
@@ -193,14 +194,14 @@ int main(int argc, char** argv)
 		const auto decodeOutputs =
 		    interpreter.RunForward(LiteNN::Detail::BuildExecutablePlanFromGraph(decode), decodeInputs);
 
-		std::cout << "Imported " << imported.summary.tensorCount << " tensors and "
-		          << imported.summary.metadataCount << " metadata entries\n";
+		std::cout << "Imported " << imported.summary.tensorCount << " tensors and " << imported.summary.metadataCount
+		          << " metadata entries\n";
 		std::cout << "Archive vNext package: " << archivePath.string() << '\n';
 		std::cout << "Lowered prefill vNext package: " << loweredPath.string() << '\n';
 		std::cout << "Lowered decode vNext package: " << decodePath.string() << '\n';
 		std::cout << "Logits shape: [" << outputs[0].Shape()[0] << ", " << outputs[0].Shape()[1] << "]\n";
-		std::cout << "Decode updated key shape: [" << decodeOutputs[1].Shape()[0] << ", "
-		          << decodeOutputs[1].Shape()[1] << ", " << decodeOutputs[1].Shape()[2] << "]\n";
+		std::cout << "Decode updated key shape: [" << decodeOutputs[1].Shape()[0] << ", " << decodeOutputs[1].Shape()[1]
+		          << ", " << decodeOutputs[1].Shape()[2] << "]\n";
 		return 0;
 	}
 	catch (const std::exception& ex)

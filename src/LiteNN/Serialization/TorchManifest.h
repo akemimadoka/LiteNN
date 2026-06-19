@@ -48,8 +48,7 @@ namespace LiteNN::Serialization
 	std::optional<DataType> TryMapTorchManifestDataType(std::string_view dtype);
 	DataType MapTorchManifestDataType(std::string_view dtype);
 
-	TorchManifestImportResult ImportTorchManifest(std::string_view manifestJson,
-	                                              const SafetensorsArchive& archive,
+	TorchManifestImportResult ImportTorchManifest(std::string_view manifestJson, const SafetensorsArchive& archive,
 	                                              const TorchManifestImportOptions& options = {});
 	TorchManifestImportResult LoadTorchManifest(const std::filesystem::path& manifestPath,
 	                                            const std::filesystem::path& safetensorsPath,

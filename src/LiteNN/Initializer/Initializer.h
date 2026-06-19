@@ -140,7 +140,7 @@ namespace LiteNN::Initializer
 	                                  DataType dtype = DataType::Float32)
 	{
 		const auto [fanIn, fanOut] = ComputeFanInFanOut(shape);
-		(void)fanOut;
+		(void) fanOut;
 		const auto gain = std::sqrt(2.0 / (1.0 + negativeSlope * negativeSlope));
 		const auto bound = gain * std::sqrt(3.0 / static_cast<double>(fanIn));
 		return Uniform(shape, -bound, bound, rng, dtype);
@@ -151,7 +151,7 @@ namespace LiteNN::Initializer
 	                                 DataType dtype = DataType::Float32)
 	{
 		const auto [fanIn, fanOut] = ComputeFanInFanOut(shape);
-		(void)fanOut;
+		(void) fanOut;
 		const auto gain = std::sqrt(2.0 / (1.0 + negativeSlope * negativeSlope));
 		const auto stddev = gain / std::sqrt(static_cast<double>(fanIn));
 		return Normal(shape, 0.0, stddev, rng, dtype);

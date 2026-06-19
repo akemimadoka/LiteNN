@@ -15,8 +15,7 @@ namespace
 
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(DataType::Float32, { 2, 2 });
-		const auto bias =
-		    subgraph.AddNode(VariableRefNode{ variable }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto bias = subgraph.AddNode(VariableRefNode{ variable }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto add = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { input, 0 }, { bias, 0 } },
 		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		subgraph.SetResults({ { add, 0 } });

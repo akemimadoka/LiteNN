@@ -32,7 +32,7 @@ namespace LiteNN::Layer
 	} // namespace Detail
 
 	inline NodeOutput AddArange(Subgraph& subgraph, DataType dtype, std::size_t length, double start = 0.0,
-	                           double step = 1.0)
+	                            double step = 1.0)
 	{
 		const auto constant = Detail::MakeArangeTensor(length, dtype, start, step);
 		const auto node = Detail::AddConstant(subgraph, constant);
@@ -40,7 +40,7 @@ namespace LiteNN::Layer
 	}
 
 	inline SubgraphId BuildArange(ModelBuilder& builder, DataType dtype, std::size_t length, double start = 0.0,
-	                             double step = 1.0)
+	                              double step = 1.0)
 	{
 		Subgraph subgraph;
 		const auto result = AddArange(subgraph, dtype, length, start, step);

@@ -38,7 +38,7 @@ TEST(TensorTypeTest, RepresentsSymbolicAndDynamicDimensions)
 	EXPECT_FALSE(type.NumElements().has_value());
 	EXPECT_EQ(type.layout.kind, TensorLayoutKind::Torch);
 	EXPECT_EQ(type.layout.tag, "torch");
-	EXPECT_THROW((void)type.StaticShape(), std::runtime_error);
+	EXPECT_THROW((void) type.StaticShape(), std::runtime_error);
 }
 
 TEST(StorageTest, DescribesExternalWeightRegions)
@@ -80,8 +80,8 @@ TEST(GraphTypeTest, AcceptsTensorTypeConstructionAndReportsTypeSignatures)
 	const auto dense = TensorType::Dense(DataType::Float32, ShapeView{ 2, 4 });
 	const auto input = subgraph.AddParam(dense);
 	const std::array<TensorType, 1> outputTypes{ dense };
-	const auto neg = subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { input, 0 } },
-	                                  std::span<const TensorType>{ outputTypes });
+	const auto neg =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { input, 0 } }, std::span<const TensorType>{ outputTypes });
 	subgraph.SetResults({ { neg, 0 } });
 
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));

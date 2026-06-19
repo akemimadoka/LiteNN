@@ -89,8 +89,8 @@ TEST(ConcatSlice, ConcatForward_ThreeInputs)
 	const auto a = sg.AddParam(DataType::Float32, { 1, 2 });
 	const auto b = sg.AddParam(DataType::Float32, { 1, 2 });
 	const auto c = sg.AddParam(DataType::Float32, { 1, 2 });
-	const auto y = sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 }, { c, 0 } }, 0 },
-	                           { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto y =
+	    sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 }, { c, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -176,8 +176,7 @@ TEST(ConcatSlice, ConcatSlice_RoundTrip)
 	Subgraph sg;
 	const auto a = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto b = sg.AddParam(DataType::Float32, { 3, 3 });
-	const auto cat =
-	    sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 5, 3 } } });
+	const auto cat = sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 5, 3 } } });
 	const auto y = sg.AddNode(SliceNode{ { cat, 0 }, 0, 0, 2 }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -288,8 +287,8 @@ TEST(ConcatSlice, ConcatGrad_ThreeInputs)
 	const auto a = sg.AddParam(DataType::Float32, { 1, 3 });
 	const auto b = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto c = sg.AddParam(DataType::Float32, { 1, 3 });
-	const auto y = sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 }, { c, 0 } }, 0 },
-	                           { OutputInfo{ DataType::Float32, { 4, 3 } } });
+	const auto y =
+	    sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 }, { c, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 4, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -306,7 +305,7 @@ TEST(ConcatSlice, ConcatGrad_ThreeInputs)
 	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 4> bwdInputs = { std::move(tensorA), std::move(tensorB), std::move(tensorC),
-		                                      std::move(gradOut) };
+		                                     std::move(gradOut) };
 	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(bwdResults.size(), 3);
@@ -440,9 +439,9 @@ TEST(ConcatSlice, ConstFold_Slice)
 	Graph graph;
 
 	Subgraph sg;
-	const auto x = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto x =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	const auto y = sg.AddNode(SliceNode{ { x, 0 }, 0, 1, 1 }, { OutputInfo{ DataType::Float32, { 1, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -473,8 +472,8 @@ TEST(ConcatSlice, InlinePass_ConcatInCallee)
 	Subgraph calleeSg;
 	const auto ca = calleeSg.AddParam(DataType::Float32, { 2 });
 	const auto cb = calleeSg.AddParam(DataType::Float32, { 2 });
-	const auto cConcat = calleeSg.AddNode(ConcatNode{ { { ca, 0 }, { cb, 0 } }, 0 },
-	                                       { OutputInfo{ DataType::Float32, { 4 } } });
+	const auto cConcat =
+	    calleeSg.AddNode(ConcatNode{ { { ca, 0 }, { cb, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 4 } } });
 	calleeSg.SetResults({ { cConcat, 0 } });
 	const auto calleeId = graph.AddSubgraph(std::move(calleeSg));
 

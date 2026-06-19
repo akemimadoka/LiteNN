@@ -25,15 +25,15 @@ namespace
 	void PrintUsage(std::string_view exe)
 	{
 		std::cout << std::format(
-		    "Usage: {} [--data DIR] [--train-limit N] [--test-limit N] [--epochs N] [--learning-rate X] [--seed N] [--object PATH]\n"
+		    "Usage: {} [--data DIR] [--train-limit N] [--test-limit N] [--epochs N] [--learning-rate X] [--seed N] "
+		    "[--object PATH]\n"
 		    "\n"
 		    "Trains with LiteNN Backward/SGD, then compiles the trained graph with AOT and reloads it.\n"
 		    "Default data directory: {}\n\n",
 		    exe, std::filesystem::path(LITENN_MNIST_DEFAULT_DATA_DIR).string());
 		PrintCommonOptions();
-		std::cout <<
-		    "AOT options:\n"
-		    "  --object <path>       Also write a carrier object with rodata/instruction symbols.\n";
+		std::cout << "AOT options:\n"
+		             "  --object <path>       Also write a carrier object with rodata/instruction symbols.\n";
 	}
 
 	AotOptions ParseArgs(int argc, char** argv)
@@ -64,7 +64,8 @@ namespace
 	CompiledModule<CPU> CompileAndLoadFromArtifact(const Graph& graph, const AotOptions& options)
 	{
 		std::cout << "Compiling graph with LiteNN AOT\n";
-		auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), CompilerOptions::Defaults());
+		auto artifact =
+		    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), CompilerOptions::Defaults());
 
 		if (options.writeObject)
 		{

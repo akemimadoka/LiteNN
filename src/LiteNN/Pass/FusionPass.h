@@ -34,8 +34,8 @@ namespace LiteNN
 		{
 			FusionPattern pattern;
 			std::vector<NodeId> fusedNodeIds;       // 拓扑序
-			std::vector<NodeOutput> externalInputs;  // 去重，按发现顺序
-			NodeId outputNodeId;                     // 融合区域的最后节点
+			std::vector<NodeOutput> externalInputs; // 去重，按发现顺序
+			NodeId outputNodeId;                    // 融合区域的最后节点
 		};
 
 		// ---- 逐元素操作判定 ----
@@ -360,8 +360,7 @@ namespace LiteNN
 				const auto& entry = sg.GetNodeEntry(nodeId);
 
 				// 优先匹配 MatMulBiasAdd
-				if (auto* bin = std::get_if<BinaryOpNode>(&entry.node);
-				    bin && bin->op == BinaryOp::MatMul)
+				if (auto* bin = std::get_if<BinaryOpNode>(&entry.node); bin && bin->op == BinaryOp::MatMul)
 				{
 					if (auto c = TryMatchMatMulBiasAdd(sg, ci, nodeId, *bin, alreadyFused))
 					{
@@ -392,8 +391,8 @@ namespace LiteNN
 		}
 
 		static std::optional<FusionCandidate> TryMatchMatMulBiasAdd(const Subgraph& sg, const ConsumerInfo& ci,
-		                                                             NodeId matmulId, const BinaryOpNode& matmul,
-		                                                             const std::set<NodeId>& alreadyFused)
+		                                                            NodeId matmulId, const BinaryOpNode& matmul,
+		                                                            const std::set<NodeId>& alreadyFused)
 		{
 			auto key = NodeOutputKey{ matmulId, 0 };
 			auto countIt = ci.counts.find(key);
@@ -522,8 +521,8 @@ namespace LiteNN
 			return std::nullopt;
 		}
 
-		static std::optional<NodeId> TryMatchReLUConsumer(const Subgraph& sg, const ConsumerInfo& ci,
-		                                                   NodeId addId, const std::set<NodeId>& alreadyFused)
+		static std::optional<NodeId> TryMatchReLUConsumer(const Subgraph& sg, const ConsumerInfo& ci, NodeId addId,
+		                                                  const std::set<NodeId>& alreadyFused)
 		{
 			const auto key = NodeOutputKey{ addId, 0 };
 			const auto countIt = ci.counts.find(key);
@@ -552,8 +551,8 @@ namespace LiteNN
 		}
 
 		static std::optional<FusionCandidate> TryMatchElementWiseChain(const Subgraph& sg, const ConsumerInfo& ci,
-		                                                                NodeId startId,
-		                                                                const std::set<NodeId>& alreadyFused)
+		                                                               NodeId startId,
+		                                                               const std::set<NodeId>& alreadyFused)
 		{
 			std::vector<NodeId> chain;
 			chain.push_back(startId);
@@ -653,8 +652,7 @@ namespace LiteNN
 
 		// ---- Body 子图构建 ----
 
-		static SubgraphId BuildBodySubgraph(Graph& graph, const Subgraph& originalSg,
-		                                     const FusionCandidate& candidate)
+		static SubgraphId BuildBodySubgraph(Graph& graph, const Subgraph& originalSg, const FusionCandidate& candidate)
 		{
 			Subgraph body;
 			std::set<NodeId> fusedSet(candidate.fusedNodeIds.begin(), candidate.fusedNodeIds.end());
@@ -687,8 +685,7 @@ namespace LiteNN
 			{
 				const auto& entry = originalSg.GetNodeEntry(nodeId);
 				auto remapped = RemapNodeInputs(entry.node, remapInput);
-				auto newId = body.AddNode(std::move(remapped),
-				                          { entry.outputInfos.begin(), entry.outputInfos.end() });
+				auto newId = body.AddNode(std::move(remapped), { entry.outputInfos.begin(), entry.outputInfos.end() });
 				internalMap[nodeId] = newId;
 			}
 
@@ -764,13 +761,15 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
-					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
-					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+					    return SSMScanNode{
+						    remap(n.state), remap(n.dt), remap(n.a),
+						    remap(n.b),     remap(n.c),  n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt
+					    };
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
-					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
-					                        remap(n.timeDecay), remap(n.timeFirst) };
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
+						                    remap(n.timeFirst) };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -787,9 +786,12 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    return NormalizationNode{ remap(n.input),
-					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
-					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                              n.mode, n.axis, n.groupCount, n.epsilon };
+						                          n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+						                          n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                          n.mode,
+						                          n.axis,
+						                          n.groupCount,
+						                          n.epsilon };
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
@@ -809,45 +811,60 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
-					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
-					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
-					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+					    return SGDStepNode{ remap(n.parameter),
+						                    remap(n.gradient),
+						                    n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+						                    n.learningRate,
+						                    n.momentum,
+						                    n.weightDecay,
+						                    n.nesterov };
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
-					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
-					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
-					                          n.epsilon, n.weightDecay, n.step };
+					    return AdamWStepNode{ remap(n.parameter),
+						                      remap(n.gradient),
+						                      remap(n.firstMoment),
+						                      remap(n.secondMoment),
+						                      n.learningRate,
+						                      n.beta1,
+						                      n.beta2,
+						                      n.epsilon,
+						                      n.weightDecay,
+						                      n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
-					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
-					                       n.lowPads, n.highPads };
+					    return Im2ColNode{
+						    remap(n.input), n.kernelShape, n.strides, n.dilations, n.lowPads, n.highPads
+					    };
 				    }
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
-					    return Conv2DNode{ remap(n.input), remap(n.weight),
-					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+					    return Conv2DNode{ remap(n.input),
+						                   remap(n.weight),
+						                   n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                   n.strides,
+						                   n.dilations,
+						                   n.lowPads,
+						                   n.highPads,
+						                   n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
-					    return ConvTranspose2DNode{
-					        remap(n.input),
-					        remap(n.weight),
-					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					        n.strides,
-					        n.dilations,
-					        n.lowPads,
-					        n.highPads,
-					        n.outputPads,
-					        n.groupCount
-					    };
+					    return ConvTranspose2DNode{ remap(n.input),
+						                            remap(n.weight),
+						                            n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                            n.strides,
+						                            n.dilations,
+						                            n.lowPads,
+						                            n.highPads,
+						                            n.outputPads,
+						                            n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
-					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
-					                       n.lowPads, n.highPads, n.countIncludePad };
+					    return Pool2DNode{ remap(n.input), n.mode,     n.kernelShape,    n.strides,
+						                   n.lowPads,      n.highPads, n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
@@ -989,9 +1006,8 @@ namespace LiteNN
 					}
 
 					const auto& outputInfos = entry.outputInfos;
-					nodeMap[oldId] = newSg.AddNode(
-					    FusedOpNode{ candidate.pattern, bodyId, std::move(remappedArgs) },
-					    { outputInfos.begin(), outputInfos.end() });
+					nodeMap[oldId] = newSg.AddNode(FusedOpNode{ candidate.pattern, bodyId, std::move(remappedArgs) },
+					                               { outputInfos.begin(), outputInfos.end() });
 					continue;
 				}
 
@@ -1010,12 +1026,10 @@ namespace LiteNN
 				}
 
 				// 普通非融合节点：重映射输入后复制
-				auto remapFn = [&](NodeOutput output) -> NodeOutput {
-					return { nodeMap[output.node], output.port };
-				};
+				auto remapFn = [&](NodeOutput output) -> NodeOutput { return { nodeMap[output.node], output.port }; };
 				auto remapped = RemapNodeInputs(entry.node, remapFn);
-				nodeMap[oldId] = newSg.AddNode(std::move(remapped),
-				                               { entry.outputInfos.begin(), entry.outputInfos.end() });
+				nodeMap[oldId] =
+				    newSg.AddNode(std::move(remapped), { entry.outputInfos.begin(), entry.outputInfos.end() });
 			}
 
 			// 重映射结果

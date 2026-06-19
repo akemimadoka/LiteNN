@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Pass/AutogradPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelIO.h>
 
 #include <filesystem>
 #include <fstream>
@@ -38,8 +38,7 @@ namespace
 	Graph BuildLinearGraph()
 	{
 		Graph graph;
-		const auto weightIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 })));
+		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 })));
 		const auto biasIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 })));
 
 		Subgraph sg;

@@ -8,7 +8,7 @@
 namespace litenn
 {
 
-std::unique_ptr<mlir::Pass> createLowerLiteNNPass();
+	std::unique_ptr<mlir::Pass> createLowerLiteNNPass();
 
 } // namespace litenn
 

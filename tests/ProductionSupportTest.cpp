@@ -17,25 +17,22 @@ namespace
 	bool HasProductionDiagnostic(std::string_view needle)
 	{
 		const auto diagnostics = CollectProductionSupportDiagnostics();
-		return std::ranges::any_of(diagnostics, [&](const std::string& diagnostic) {
-			return diagnostic.find(needle) != std::string::npos;
-		});
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
 
 	bool HasProductionABIDiagnostic(std::string_view needle)
 	{
 		const auto diagnostics = CollectProductionPathABIDiagnostics();
-		return std::ranges::any_of(diagnostics, [&](const std::string& diagnostic) {
-			return diagnostic.find(needle) != std::string::npos;
-		});
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
 
 	bool HasCUDANativeCapabilityDiagnostic(std::string_view needle)
 	{
 		const auto diagnostics = CollectProductionCUDANativeCapabilityDiagnostics();
-		return std::ranges::any_of(diagnostics, [&](const std::string& diagnostic) {
-			return diagnostic.find(needle) != std::string::npos;
-		});
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
 } // namespace
 
@@ -53,24 +50,23 @@ TEST(ProductionSupportTest, ReportsBuildDependentBackends)
 {
 	const auto cpuAOT = QueryProductionSupportStatus(ProductionSupportArea::CPUAOT);
 	EXPECT_EQ(cpuAOT.availableInBuild, ProductionBuildHasMLIR());
-	EXPECT_EQ(cpuAOT.level, ProductionBuildHasMLIR() ? ProductionSupportLevel::Production
-	                                                 : ProductionSupportLevel::Unavailable);
+	EXPECT_EQ(cpuAOT.level,
+	          ProductionBuildHasMLIR() ? ProductionSupportLevel::Production : ProductionSupportLevel::Unavailable);
 
 	const auto cuda = QueryProductionSupportStatus(ProductionSupportArea::CUDARuntime);
 	EXPECT_EQ(cuda.availableInBuild, ProductionBuildHasCUDA());
-	EXPECT_EQ(cuda.level, ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-	                                               : ProductionSupportLevel::Unavailable);
+	EXPECT_EQ(cuda.level,
+	          ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable);
 
 	const auto vulkan = QueryProductionSupportStatus(ProductionSupportArea::VulkanRuntime);
 	EXPECT_EQ(vulkan.availableInBuild, ProductionBuildHasVulkan());
-	EXPECT_EQ(vulkan.level, ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental
-	                                                   : ProductionSupportLevel::Unavailable);
+	EXPECT_EQ(vulkan.level,
+	          ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental : ProductionSupportLevel::Unavailable);
 }
 
 TEST(ProductionSupportTest, ReportsDeferredLongTailWork)
 {
-	EXPECT_EQ(QueryProductionSupportStatus(ProductionSupportArea::TrainingAOT).level,
-	          ProductionSupportLevel::Deferred);
+	EXPECT_EQ(QueryProductionSupportStatus(ProductionSupportArea::TrainingAOT).level, ProductionSupportLevel::Deferred);
 	EXPECT_EQ(QueryProductionSupportStatus(ProductionSupportArea::SDXLGeneration).level,
 	          ProductionSupportLevel::Deferred);
 
@@ -166,8 +162,8 @@ TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
 
 	const auto graphReplay = QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::GraphReplay);
 	EXPECT_EQ(graphReplay.availableInBuild, ProductionBuildHasCUDA());
-	EXPECT_EQ(graphReplay.level, ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-	                                                       : ProductionSupportLevel::Unavailable);
+	EXPECT_EQ(graphReplay.level,
+	          ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable);
 	EXPECT_TRUE(graphReplay.requiresCUDADevice);
 	EXPECT_TRUE(graphReplay.requiresRuntimeDeviceProbe);
 	EXPECT_TRUE(graphReplay.requiresStablePointers);

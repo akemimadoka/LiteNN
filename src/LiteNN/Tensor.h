@@ -392,8 +392,8 @@ namespace LiteNN
 				throw std::runtime_error(resultType.error());
 			}
 			Tensor result(Uninitialized, *resultShape, *resultType, device_);
-			DeviceTraits<D>::DoBinaryOp(device_, BinaryOp::Add, result.UnsafeRawData(), dtype_, Shape(), data_, other.dtype_,
-			                            other.Shape(), other.data_);
+			DeviceTraits<D>::DoBinaryOp(device_, BinaryOp::Add, result.UnsafeRawData(), dtype_, Shape(), data_,
+			                            other.dtype_, other.Shape(), other.data_);
 			return result;
 		}
 
@@ -483,8 +483,8 @@ namespace LiteNN
 				throw std::runtime_error(resultType.error());
 			}
 			Tensor result(Uninitialized, *resultShape, *resultType, device_);
-			DeviceTraits<D>::DoBinaryOp(device_, BinaryOp::Less, result.UnsafeRawData(), dtype_, Shape(), data_, other.dtype_,
-			                            other.Shape(), other.data_);
+			DeviceTraits<D>::DoBinaryOp(device_, BinaryOp::Less, result.UnsafeRawData(), dtype_, Shape(), data_,
+			                            other.dtype_, other.Shape(), other.data_);
 			return result;
 		}
 
@@ -537,7 +537,8 @@ namespace LiteNN
 		constexpr Tensor operator!() const
 		{
 			Tensor result(Shape(), DType(), device_);
-			DeviceTraits<D>::DoUnaryOp(device_, UnaryOp::LogicalNegation, result.UnsafeRawData(), dtype_, Shape(), data_);
+			DeviceTraits<D>::DoUnaryOp(device_, UnaryOp::LogicalNegation, result.UnsafeRawData(), dtype_, Shape(),
+			                           data_);
 			return result;
 		}
 
@@ -646,8 +647,8 @@ namespace LiteNN
 			}
 			else if constexpr (std::same_as<D, CPU>)
 			{
-				DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.UnsafeRawData(), dtype_, data_,
-				                                       NumElements());
+				DeviceTraits<OtherDevice>::CopyFromCPU(result.CurDevice(), dtype_, result.UnsafeRawData(), dtype_,
+				                                       data_, NumElements());
 			}
 			else
 			{

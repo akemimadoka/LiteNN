@@ -63,7 +63,8 @@ namespace LiteNN::Optimizer
 				{
 					const auto regularizedGradient = grad[i] + options_.weightDecay * data[i];
 					velocity[i] = options_.momentum * velocity[i] + regularizedGradient;
-					const auto update = options_.nesterov ? regularizedGradient + options_.momentum * velocity[i] : velocity[i];
+					const auto update =
+					    options_.nesterov ? regularizedGradient + options_.momentum * velocity[i] : velocity[i];
 					data[i] -= options_.learningRate * update;
 				}
 			}

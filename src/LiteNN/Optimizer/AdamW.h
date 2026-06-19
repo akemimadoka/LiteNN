@@ -50,15 +50,13 @@ namespace LiteNN::Optimizer
 				const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 				Detail::ValidateVariableGradient(variable, gradient, variableIndex);
 
-				auto cpuResults = LiteNN::Detail::EvalAdamWStep(variable.CopyToDevice(CPU{}), gradient,
-				                                                *firstMoment_[variableIndex],
-				                                                *secondMoment_[variableIndex],
-				                                                options_.learningRate, options_.beta1,
-				                                                options_.beta2, options_.epsilon,
-				                                                options_.weightDecay, step_);
-				DeviceTraits<PolymorphicDevice>::CopyFromCPU(variable.CurDevice(), variable.DType(), variable.UnsafeRawData(),
-				                                             cpuResults[0].DType(), cpuResults[0].UnsafeRawData(),
-				                                             cpuResults[0].NumElements());
+				auto cpuResults =
+				    LiteNN::Detail::EvalAdamWStep(variable.CopyToDevice(CPU{}), gradient, *firstMoment_[variableIndex],
+				                                  *secondMoment_[variableIndex], options_.learningRate, options_.beta1,
+				                                  options_.beta2, options_.epsilon, options_.weightDecay, step_);
+				DeviceTraits<PolymorphicDevice>::CopyFromCPU(
+				    variable.CurDevice(), variable.DType(), variable.UnsafeRawData(), cpuResults[0].DType(),
+				    cpuResults[0].UnsafeRawData(), cpuResults[0].NumElements());
 				firstMoment_[variableIndex] = std::move(cpuResults[1]);
 				secondMoment_[variableIndex] = std::move(cpuResults[2]);
 			}
@@ -124,8 +122,7 @@ namespace LiteNN::Optimizer
 			{
 				throw std::runtime_error("AdamW learningRate must be greater than zero");
 			}
-			if (!(options_.beta1 >= 0.0f && options_.beta1 < 1.0f && options_.beta2 >= 0.0f &&
-			      options_.beta2 < 1.0f))
+			if (!(options_.beta1 >= 0.0f && options_.beta1 < 1.0f && options_.beta2 >= 0.0f && options_.beta2 < 1.0f))
 			{
 				throw std::runtime_error("AdamW beta values must be in [0, 1)");
 			}

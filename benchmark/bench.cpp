@@ -144,14 +144,13 @@ namespace
 		const auto base =
 		    Layer::CreateLinear(builder, Initializer::XavierUniform({ kInputWidth, kLoRAOutputWidth }, rng),
 		                        Initializer::Zeros({ 1, kLoRAOutputWidth }));
-		const auto adapter = Layer::CreateLinearLoRA(
-		    builder,
-		    Layer::LoRAAdapterMetadata{ .targetName = "linear",
-			                            .rank = kLoRARank,
-			                            .alpha = static_cast<float>(kLoRARank),
-			                            .dtype = DataType::Float32 },
-		    Initializer::XavierUniform({ kInputWidth, kLoRARank }, rng),
-		    Initializer::XavierUniform({ kLoRARank, kLoRAOutputWidth }, rng));
+		const auto adapter = Layer::CreateLinearLoRA(builder,
+		                                             Layer::LoRAAdapterMetadata{ .targetName = "linear",
+		                                                                         .rank = kLoRARank,
+		                                                                         .alpha = static_cast<float>(kLoRARank),
+		                                                                         .dtype = DataType::Float32 },
+		                                             Initializer::XavierUniform({ kInputWidth, kLoRARank }, rng),
+		                                             Initializer::XavierUniform({ kLoRARank, kLoRAOutputWidth }, rng));
 		const auto active = merged ? Layer::MergeLinearLoRA(graph, base, adapter) : base;
 
 		Subgraph fwd;
@@ -765,9 +764,9 @@ namespace
 		const auto inputData = MakeInputData(batch);
 		auto inputs = MakeCUDAInputs(inputData, batch);
 		auto outputs = AllocateCUDAOutputs(module);
-		const CompiledModuleCUDARunOptions runOptions{
-			.graphReplay = enableGraphReplay ? CUDAGraphReplayMode::Enabled : CUDAGraphReplayMode::Disabled
-		};
+		const CompiledModuleCUDARunOptions runOptions{ .graphReplay = enableGraphReplay
+			                                                              ? CUDAGraphReplayMode::Enabled
+			                                                              : CUDAGraphReplayMode::Disabled };
 
 		for (int i = 0; i < kWarmupIterations; ++i)
 		{
@@ -2079,8 +2078,9 @@ namespace
 		    benchmark::Counter(static_cast<double>(flops), benchmark::Counter::kIsIterationInvariantRate);
 	}
 
-	void BMVulkanNativeGraphMLPRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch,
-	                                          VulkanBufferResidency residency = VulkanBufferResidency::HostVisibleCoherent)
+	void
+	BMVulkanNativeGraphMLPRunTensorsInto(benchmark::State& state, ModelKind kind, std::size_t batch,
+	                                     VulkanBufferResidency residency = VulkanBufferResidency::HostVisibleCoherent)
 	{
 		auto graph = BuildVulkanMLPVariableGraph(kind, batch);
 		Vulkan device;
@@ -2860,8 +2860,8 @@ namespace
 					});
 					RegisterBenchmarkCase("VulkanNativeGraphDeviceLocalRunInto", kind, batch,
 					                      [=](benchmark::State& state) {
-						                      BMVulkanNativeGraphMLPRunTensorsInto(
-						                          state, kind, batch, VulkanBufferResidency::DeviceLocal);
+						                      BMVulkanNativeGraphMLPRunTensorsInto(state, kind, batch,
+						                                                           VulkanBufferResidency::DeviceLocal);
 					                      });
 					if (kind == ModelKind::MLP128)
 					{

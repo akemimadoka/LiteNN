@@ -66,7 +66,8 @@ namespace LiteNN::Optimizer
 	{
 		if (logits.DType() != DataType::Float32 || logits.Shape().Dims.size() != 2)
 		{
-			throw std::runtime_error("SoftmaxCrossEntropyWithLogitsBatch expects a Float32 [batch, classes] logits tensor");
+			throw std::runtime_error(
+			    "SoftmaxCrossEntropyWithLogitsBatch expects a Float32 [batch, classes] logits tensor");
 		}
 
 		const auto batchSize = logits.Shape().Dims[0];
@@ -105,7 +106,8 @@ namespace LiteNN::Optimizer
 
 			for (std::size_t col = 0; col < classCount; ++col)
 			{
-				const auto probability = static_cast<float>(std::exp(static_cast<double>(rowData[col] - maxLogit)) / sumExp);
+				const auto probability =
+				    static_cast<float>(std::exp(static_cast<double>(rowData[col] - maxLogit)) / sumExp);
 				gradient[rowOffset + col] = probability * invBatch;
 			}
 

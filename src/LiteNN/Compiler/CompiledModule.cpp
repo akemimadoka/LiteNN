@@ -7686,9 +7686,9 @@ namespace
 				}
 				if (!VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op))
 				{
-					return VulkanNativeUnsupported(
-					    std::format("Vulkan native unary slice requires Float32/Float16 or Int8 Negate/Abs input/output, got {}",
-					                DataTypeName(input.dtype)));
+					return VulkanNativeUnsupported(std::format(
+					    "Vulkan native unary slice requires Float32/Float16 or Int8 Negate/Abs input/output, got {}",
+					    DataTypeName(input.dtype)));
 				}
 				if (input.shape != output.shape)
 				{
@@ -7701,9 +7701,8 @@ namespace
 				{
 					return shapeReport;
 				}
-				return VulkanNativeSupported(std::format("same-shape {} unary {}",
-				                                         VulkanNativeShortDTypeName(output.dtype),
-				                                         VulkanNativeOpName(unary->op)));
+				return VulkanNativeSupported(std::format(
+				    "same-shape {} unary {}", VulkanNativeShortDTypeName(output.dtype), VulkanNativeOpName(unary->op)));
 			}
 
 			if (const auto* cast = std::get_if<CastNode>(&resultEntry.node))
@@ -8077,9 +8076,9 @@ namespace
 			}
 			if (!VulkanNativeSupportsSameShapeBinary(lhsParam.dtype, binary->op))
 			{
-				return VulkanNativeUnsupported(
-				    std::format("Vulkan native binary slice requires Float32, Float16, Int8, or UInt8 lhs/rhs/output, got {}",
-				                DataTypeName(lhsParam.dtype)));
+				return VulkanNativeUnsupported(std::format(
+				    "Vulkan native binary slice requires Float32, Float16, Int8, or UInt8 lhs/rhs/output, got {}",
+				    DataTypeName(lhsParam.dtype)));
 			}
 			if (lhsParam.shape != output.shape || rhsParam.shape != output.shape)
 			{
@@ -8093,9 +8092,8 @@ namespace
 			{
 				return shapeReport;
 			}
-			return VulkanNativeSupported(std::format("same-shape {} binary {}",
-			                                         VulkanNativeShortDTypeName(output.dtype),
-			                                         VulkanNativeOpName(binary->op)));
+			return VulkanNativeSupported(std::format(
+			    "same-shape {} binary {}", VulkanNativeShortDTypeName(output.dtype), VulkanNativeOpName(binary->op)));
 		}
 
 		return VulkanNativeUnsupported(std::format(
@@ -11741,7 +11739,8 @@ void CompiledModule<CUDA>::RunTensorsInto(std::span<const Tensor<CUDA>> inputs, 
 		}
 		if (RequestsCUDAGraphReplay(options) && !CanUseCUDAGraphReplay(options))
 		{
-			throw std::runtime_error("CUDA graph replay requires synchronized execution on the module-owned default stream");
+			throw std::runtime_error(
+			    "CUDA graph replay requires synchronized execution on the module-owned default stream");
 		}
 		if (CanUseCUDAGraphReplay(options))
 		{

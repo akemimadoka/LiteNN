@@ -26,8 +26,7 @@ TEST(PermuteNode, Forward_Transpose2D)
 	Graph graph;
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0 } },
-	                          { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -52,13 +51,15 @@ TEST(PermuteNode, Forward_Permute3D)
 	Graph graph;
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3, 4 });
-	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 2, 0, 1 } },
-	                          { OutputInfo{ DataType::Float32, { 4, 2, 3 } } });
+	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 2, 0, 1 } }, { OutputInfo{ DataType::Float32, { 4, 2, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	std::vector<double> data(24);
-	for (std::size_t i = 0; i < 24; ++i) data[i] = static_cast<double>(i);
+	for (std::size_t i = 0; i < 24; ++i)
+	{
+		data[i] = static_cast<double>(i);
+	}
 	Tensor<CPU> input(std::span<const double>(data), { 2, 3, 4 });
 	std::array<Tensor<CPU>, 1> inputs = { std::move(input) };
 
@@ -89,8 +90,7 @@ TEST(PermuteNode, Forward_Identity)
 	Graph graph;
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 0, 1 } },
-	                          { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 0, 1 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -138,8 +138,7 @@ TEST(PermuteNode, Backward_Transpose2D)
 	Graph graph;
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0 } },
-	                          { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -149,7 +148,7 @@ TEST(PermuteNode, Backward_Transpose2D)
 	Runtime::Interpreter<CPU> interp;
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
-	(void)interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
+	(void) interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
@@ -176,11 +175,10 @@ TEST(PermuteNode, ConstFold_Transpose)
 {
 	Graph graph;
 	Subgraph sg;
-	const auto c = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2, 3 } } });
-	const auto y = sg.AddNode(PermuteNode{ { c, 0 }, { 1, 0 } },
-	                          { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto c =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto y = sg.AddNode(PermuteNode{ { c, 0 }, { 1, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

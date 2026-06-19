@@ -66,20 +66,20 @@ namespace LiteNN::Serialization
 		return manifest;
 	}
 
-	inline void AddImportBackendDiagnostics(ImporterOwnedManifest& manifest,
-	                                        std::span<const std::string_view> backends =
-	                                            std::span<const std::string_view>{ DefaultBackendNames },
-	                                        const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	inline void AddImportBackendDiagnostics(
+	    ImporterOwnedManifest& manifest,
+	    std::span<const std::string_view> backends = std::span<const std::string_view>{ DefaultBackendNames },
+	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		const auto plan = BuildExecutablePlan(manifest.model, registry);
 		for (const auto backend : backends)
 		{
 			for (const auto& issue : CollectExecutablePlanBackendIssues(plan, backend, registry, false))
 			{
-				manifest.diagnostics.push_back(MakeImportDiagnostic(
-				    ImportDiagnosticKind::UnsupportedBackendCapability,
-				    std::format("{}:{}:{}", issue.subgraph, issue.node, issue.opKind),
-				    std::format("backend '{}' cannot lower op '{}'", backend, issue.opKind)));
+				manifest.diagnostics.push_back(
+				    MakeImportDiagnostic(ImportDiagnosticKind::UnsupportedBackendCapability,
+				                         std::format("{}:{}:{}", issue.subgraph, issue.node, issue.opKind),
+				                         std::format("backend '{}' cannot lower op '{}'", backend, issue.opKind)));
 			}
 		}
 	}
@@ -92,8 +92,7 @@ namespace LiteNN::Serialization
 		{
 			manifest.diagnostics.push_back(MakeImportDiagnostic(
 			    ImportDiagnosticKind::CompatibilityOp,
-			    std::format("{}:{}:{}", diagnostic.subgraph, diagnostic.node, diagnostic.opKind),
-			    diagnostic.message));
+			    std::format("{}:{}:{}", diagnostic.subgraph, diagnostic.node, diagnostic.opKind), diagnostic.message));
 		}
 	}
 

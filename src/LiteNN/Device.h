@@ -21,58 +21,57 @@ namespace LiteNN
 	struct DeviceTraits;
 
 	template <typename T>
-	concept Device =
-	    requires(T& device, const T& constDevice, DataType type, std::size_t size, ShapeView shape, void* ptr,
-	             void* dst, const void* src1, const void* src2, DataType indexType, ShapeView indexShape,
-	             UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
-		    // TODO: 无法过编译，猜测是因为无法表达 type 是一个 constexpr 参数的问题
-		    // typename DeviceTraits<T>::template DataTypeMapping<type>;
+	concept Device = requires(T& device, const T& constDevice, DataType type, std::size_t size, ShapeView shape,
+	                          void* ptr, void* dst, const void* src1, const void* src2, DataType indexType,
+	                          ShapeView indexShape, UnaryOp unaryOp, BinaryOp binaryOp, ReduceOp reduceOp) {
+		// TODO: 无法过编译，猜测是因为无法表达 type 是一个 constexpr 参数的问题
+		// typename DeviceTraits<T>::template DataTypeMapping<type>;
 
-		    { DeviceTraits<T>::Name() } -> std::same_as<std::string_view>;
-		    { DeviceTraits<T>::Info(constDevice) } -> std::same_as<std::string_view>;
+		{ DeviceTraits<T>::Name() } -> std::same_as<std::string_view>;
+		{ DeviceTraits<T>::Info(constDevice) } -> std::same_as<std::string_view>;
 
-		    // 基础分配操作
-		    // 分配的存储默认未初始化
-		    // size 参数表示分配的元素数量（而非字节大小），调用者需要根据 type
-		    // 来计算实际的字节大小
-		    { DeviceTraits<T>::Allocate(device, type, size) } -> std::same_as<void*>;
-		    { DeviceTraits<T>::Deallocate(device, ptr, type, size) } -> std::same_as<void>;
-		    { DeviceTraits<T>::ZeroFill(device, ptr, type, size) } -> std::same_as<void>;
-		    // TODO: 当前没有考虑 stride 的情况，后续可以增加带 stride
-		    // 参数的版本，现在需要调用者自己重复调用多次来实现
-		    { DeviceTraits<T>::CopyToCPU(device, type, src1, size, type, dst) } -> std::same_as<void>;
-		    { DeviceTraits<T>::CopyFromCPU(device, type, dst, type, src1, size) } -> std::same_as<void>;
-		    { DeviceTraits<T>::ConvertTo(device, type, src1, size, type, dst) } -> std::same_as<void>;
+		// 基础分配操作
+		// 分配的存储默认未初始化
+		// size 参数表示分配的元素数量（而非字节大小），调用者需要根据 type
+		// 来计算实际的字节大小
+		{ DeviceTraits<T>::Allocate(device, type, size) } -> std::same_as<void*>;
+		{ DeviceTraits<T>::Deallocate(device, ptr, type, size) } -> std::same_as<void>;
+		{ DeviceTraits<T>::ZeroFill(device, ptr, type, size) } -> std::same_as<void>;
+		// TODO: 当前没有考虑 stride 的情况，后续可以增加带 stride
+		// 参数的版本，现在需要调用者自己重复调用多次来实现
+		{ DeviceTraits<T>::CopyToCPU(device, type, src1, size, type, dst) } -> std::same_as<void>;
+		{ DeviceTraits<T>::CopyFromCPU(device, type, dst, type, src1, size) } -> std::same_as<void>;
+		{ DeviceTraits<T>::ConvertTo(device, type, src1, size, type, dst) } -> std::same_as<void>;
 
-		    // TODO: 分离到 DeviceExecutor
-		    // dst = unaryOp(src)
-		    // dst 需要预先分配好内存，且类型和 shape 由 UnaryOpTraits 决定
-		    { DeviceTraits<T>::DoUnaryOp(device, unaryOp, dst, type, shape, src1) } -> std::same_as<void>;
-		    // dst = binaryOp(src1, src2)
-		    // dst 需要预先分配好内存，且类型和 shape 由 BinaryOpTraits 决定
-		    {
-			    DeviceTraits<T>::DoBinaryOp(device, binaryOp, dst, type, shape, src1, type, shape, src2)
-		    } -> std::same_as<void>;
-		    // dst = reduceOp(src, axis)
-		    // dst 需要预先分配好内存，且类型和 shape 由 ReduceOpTraits 决定
-		    { DeviceTraits<T>::DoReduceOp(device, reduceOp, dst, type, shape, src1, size) } -> std::same_as<void>;
-		    // dst = concat(srcs..., axis)
-		    // srcPtrs 和 srcShapes 分别是各输入数据指针和 shape 的数组
-		    {
-			    DeviceTraits<T>::DoConcatOp(device, dst, type, (const void* const*)nullptr,
-			                               (const ShapeView*)nullptr, size, size)
-		    } -> std::same_as<void>;
-		    // dst = slice(src, axis, start, length)
-		    { DeviceTraits<T>::DoSliceOp(device, dst, type, shape, src1, size, size, size) } -> std::same_as<void>;
-		    // dst = get_rows(data, indices)
-		    {
-			    DeviceTraits<T>::DoGetRowsOp(device, dst, type, shape, src1, indexType, indexShape, src2)
-		    } -> std::same_as<void>;
-		    // dst = permute(src, permutation)
-		    // permutation[d] 给出输出 axis d 对应的输入 axis（与 numpy/torch 一致）。
-		    // dst.shape[d] == src.shape[permutation[d]]
-		    { DeviceTraits<T>::DoPermuteOp(device, dst, type, shape, src1, shape) } -> std::same_as<void>;
-	    };
+		// TODO: 分离到 DeviceExecutor
+		// dst = unaryOp(src)
+		// dst 需要预先分配好内存，且类型和 shape 由 UnaryOpTraits 决定
+		{ DeviceTraits<T>::DoUnaryOp(device, unaryOp, dst, type, shape, src1) } -> std::same_as<void>;
+		// dst = binaryOp(src1, src2)
+		// dst 需要预先分配好内存，且类型和 shape 由 BinaryOpTraits 决定
+		{
+			DeviceTraits<T>::DoBinaryOp(device, binaryOp, dst, type, shape, src1, type, shape, src2)
+		} -> std::same_as<void>;
+		// dst = reduceOp(src, axis)
+		// dst 需要预先分配好内存，且类型和 shape 由 ReduceOpTraits 决定
+		{ DeviceTraits<T>::DoReduceOp(device, reduceOp, dst, type, shape, src1, size) } -> std::same_as<void>;
+		// dst = concat(srcs..., axis)
+		// srcPtrs 和 srcShapes 分别是各输入数据指针和 shape 的数组
+		{
+			DeviceTraits<T>::DoConcatOp(device, dst, type, (const void* const*) nullptr, (const ShapeView*) nullptr,
+			                            size, size)
+		} -> std::same_as<void>;
+		// dst = slice(src, axis, start, length)
+		{ DeviceTraits<T>::DoSliceOp(device, dst, type, shape, src1, size, size, size) } -> std::same_as<void>;
+		// dst = get_rows(data, indices)
+		{
+			DeviceTraits<T>::DoGetRowsOp(device, dst, type, shape, src1, indexType, indexShape, src2)
+		} -> std::same_as<void>;
+		// dst = permute(src, permutation)
+		// permutation[d] 给出输出 axis d 对应的输入 axis（与 numpy/torch 一致）。
+		// dst.shape[d] == src.shape[permutation[d]]
+		{ DeviceTraits<T>::DoPermuteOp(device, dst, type, shape, src1, shape) } -> std::same_as<void>;
+	};
 
 	// 擦除了类型的 Device
 	// TODO: 无法实现 DataTypeMapping，考虑拆分到返回类型特征的函数里
@@ -152,14 +151,14 @@ namespace LiteNN
 			                        DataType type2, ShapeView shape2, const void* src2) = 0;
 			virtual void DoReduceOp(ReduceOp reduceOp, void* dst, DataType type, ShapeView shape, const void* src,
 			                        std::size_t axis) = 0;
-			virtual void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs,
-			                        const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) = 0;
-			virtual void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
-			                       std::size_t axis, std::size_t start, std::size_t length) = 0;
+			virtual void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs, const ShapeView* srcShapes,
+			                        std::size_t inputCount, std::size_t axis) = 0;
+			virtual void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src, std::size_t axis,
+			                       std::size_t start, std::size_t length) = 0;
 			virtual void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
-			                        DataType indexType, ShapeView indexShape, const void* indices) = 0;
+			                         DataType indexType, ShapeView indexShape, const void* indices) = 0;
 			virtual void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
-			                        ShapeView permutation) = 0;
+			                         ShapeView permutation) = 0;
 			virtual bool IsSameDevice(const Interface& other) const = 0;
 		};
 
@@ -228,23 +227,23 @@ namespace LiteNN
 			{
 				DeviceTraits<D>::DoReduceOp(device_, reduceOp, dst, type, shape, src, axis);
 			}
-			void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs,
-			                const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis) override
+			void DoConcatOp(void* dst, DataType type, const void* const* srcPtrs, const ShapeView* srcShapes,
+			                std::size_t inputCount, std::size_t axis) override
 			{
 				DeviceTraits<D>::DoConcatOp(device_, dst, type, srcPtrs, srcShapes, inputCount, axis);
 			}
-			void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src,
-			               std::size_t axis, std::size_t start, std::size_t length) override
+			void DoSliceOp(void* dst, DataType type, ShapeView srcShape, const void* src, std::size_t axis,
+			               std::size_t start, std::size_t length) override
 			{
 				DeviceTraits<D>::DoSliceOp(device_, dst, type, srcShape, src, axis, start, length);
 			}
-			void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data,
-			                DataType indexType, ShapeView indexShape, const void* indices) override
+			void DoGetRowsOp(void* dst, DataType dataType, ShapeView dataShape, const void* data, DataType indexType,
+			                 ShapeView indexShape, const void* indices) override
 			{
 				DeviceTraits<D>::DoGetRowsOp(device_, dst, dataType, dataShape, data, indexType, indexShape, indices);
 			}
 			void DoPermuteOp(void* dst, DataType type, ShapeView srcShape, const void* src,
-			                ShapeView permutation) override
+			                 ShapeView permutation) override
 			{
 				DeviceTraits<D>::DoPermuteOp(device_, dst, type, srcShape, src, permutation);
 			}
@@ -300,9 +299,9 @@ namespace LiteNN
 		static void DoSliceOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 		                      std::size_t axis, std::size_t start, std::size_t length);
 		static void DoGetRowsOp(PolymorphicDevice& device, void* dst, DataType dataType, ShapeView dataShape,
-		                       const void* data, DataType indexType, ShapeView indexShape, const void* indices);
+		                        const void* data, DataType indexType, ShapeView indexShape, const void* indices);
 		static void DoPermuteOp(PolymorphicDevice& device, void* dst, DataType type, ShapeView srcShape,
-		                       const void* src, ShapeView permutation);
+		                        const void* src, ShapeView permutation);
 	};
 
 	struct CPUAllocator
@@ -914,7 +913,7 @@ namespace LiteNN
 		}
 
 		static constexpr void DoConcatOp(CPU& device, void* dst, DataType type, const void* const* srcPtrs,
-		                                  const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis)
+		                                 const ShapeView* srcShapes, std::size_t inputCount, std::size_t axis)
 		{
 			EnumDispatch(type, [&]<DataType TypeValue> {
 				using T = DataTypeMapping<TypeValue>;
@@ -947,7 +946,7 @@ namespace LiteNN
 		}
 
 		static constexpr void DoSliceOp(CPU& device, void* dst, DataType type, ShapeView srcShape, const void* src,
-		                                 std::size_t axis, std::size_t start, std::size_t length)
+		                                std::size_t axis, std::size_t start, std::size_t length)
 		{
 			assert(axis < srcShape.NumDim());
 			assert(start + length <= srcShape[axis]);
@@ -1038,13 +1037,13 @@ namespace LiteNN
 		}
 
 		static void DoPermuteOp(CPU& device, void* dst, DataType type, ShapeView srcShape, const void* src,
-		                       ShapeView permutation)
+		                        ShapeView permutation)
 		{
 			const auto rank = srcShape.NumDim();
 			if (permutation.NumDim() != rank)
 			{
-				throw std::runtime_error(std::format(
-				    "Permute permutation rank {} does not match input rank {}", permutation.NumDim(), rank));
+				throw std::runtime_error(std::format("Permute permutation rank {} does not match input rank {}",
+				                                     permutation.NumDim(), rank));
 			}
 			if (rank == 0)
 			{

@@ -29,8 +29,8 @@ TEST(AutogradRegression, BroadcastAddReducesParamGradientToOriginalShape)
 
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto bias = sg.AddParam(DataType::Float32, { 1, 3 });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { bias, 0 } },
-	                          { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { bias, 0 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -41,7 +41,7 @@ TEST(AutogradRegression, BroadcastAddReducesParamGradientToOriginalShape)
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
 	fwdInputs.emplace_back(Tensor<CPU>({ 10, 20, 30 }, { 1, 3 }));
-	(void)interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
+	(void) interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }));
@@ -79,9 +79,8 @@ TEST(AutogradRegression, VariableGradientsAreReturnedAfterInputGradientsInVariab
 	const auto w0Ref = sg.AddNode(VariableRefNode{ w0Idx }, { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto base0 = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { w0Ref, 0 } },
 	                              { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto two = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 2 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto two = sg.AddNode(ConstantNode{ Tensor<CPU>({ 2 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                            { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto term0 = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { two, 0 }, { base0, 0 } },
 	                              { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { term1, 0 }, { term0, 0 } },
@@ -95,7 +94,7 @@ TEST(AutogradRegression, VariableGradientsAreReturnedAfterInputGradientsInVariab
 	Runtime::Interpreter<CPU> interpreter;
 	std::vector<Tensor<CPU>> fwdInputs;
 	fwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
-	(void)interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
+	(void) interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::vector<Tensor<CPU>> bwdInputs;
 	bwdInputs.emplace_back(Tensor<CPU>({ 3 }, { 1 }));
@@ -115,13 +114,12 @@ TEST(AutogradRegression, MultipleOutputGradientsAccumulateIntoSharedInput)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 1 });
-	const auto square = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { x, 0 } },
-	                               { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto three = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { three, 0 } },
-	                                { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto square =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { x, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto three = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                              { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto shifted =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { three, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 	sg.SetResults({ { square, 0 }, { shifted, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

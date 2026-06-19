@@ -8,10 +8,9 @@
 
 namespace LiteNN
 {
-	using ModelMetadataValue = std::variant<std::int64_t, std::uint64_t, double, bool, std::string,
-	                                       std::vector<std::int64_t>, std::vector<std::uint64_t>,
-	                                       std::vector<double>, std::vector<bool>,
-	                                       std::vector<std::string>>;
+	using ModelMetadataValue =
+	    std::variant<std::int64_t, std::uint64_t, double, bool, std::string, std::vector<std::int64_t>,
+	                 std::vector<std::uint64_t>, std::vector<double>, std::vector<bool>, std::vector<std::string>>;
 
 	struct ModelMetadataEntry
 	{

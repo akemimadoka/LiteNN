@@ -21,13 +21,13 @@ namespace
 		const std::string_view symbolPrefix = argv[2];
 		std::filesystem::create_directories(outputPath.parent_path());
 
-		auto artifact =
-		    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildCarrierExampleGraph()), CompilerOptions::Defaults());
+		auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildCarrierExampleGraph()),
+		                                               CompilerOptions::Defaults());
 		artifact.WriteObjectFile(outputPath, symbolPrefix);
 
-		std::cout << std::format(
-		    "Wrote carrier object {} (rodata={} bytes, instructions={} bytes, prefix={})\n",
-		    outputPath.string(), artifact.Rodata().size(), artifact.Instructions().size(), symbolPrefix);
+		std::cout << std::format("Wrote carrier object {} (rodata={} bytes, instructions={} bytes, prefix={})\n",
+		                         outputPath.string(), artifact.Rodata().size(), artifact.Instructions().size(),
+		                         symbolPrefix);
 		return 0;
 	}
 } // namespace

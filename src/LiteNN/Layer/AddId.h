@@ -42,23 +42,23 @@ namespace LiteNN::Compatibility::GGML
 		const auto flatCount = usedExperts * tokenCount;
 
 		const auto bTranspose = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, b },
-		                                        { OutputInfo{ bInfo.dtype, { bInfo.shape[1], bInfo.shape[0] } } });
-		const auto flatIds = subgraph.AddNode(ReshapeNode{ ids, { flatCount } },
-		                                     { OutputInfo{ idsInfo.dtype, { flatCount } } });
+		                                         { OutputInfo{ bInfo.dtype, { bInfo.shape[1], bInfo.shape[0] } } });
+		const auto flatIds =
+		    subgraph.AddNode(ReshapeNode{ ids, { flatCount } }, { OutputInfo{ idsInfo.dtype, { flatCount } } });
 		const auto gathered = subgraph.AddNode(GetRowsNode{ { bTranspose, 0 }, { flatIds, 0 } },
-		                                      { OutputInfo{ bInfo.dtype, { flatCount, embd } } });
+		                                       { OutputInfo{ bInfo.dtype, { flatCount, embd } } });
 		const auto gatheredTranspose = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, { gathered, 0 } },
-		                                               { OutputInfo{ bInfo.dtype, { embd, flatCount } } });
+		                                                { OutputInfo{ bInfo.dtype, { embd, flatCount } } });
 		const auto gatheredReshaped = subgraph.AddNode(ReshapeNode{ { gatheredTranspose, 0 }, aInfo.shape },
-		                                              { OutputInfo{ aInfo.dtype, aInfo.shape } });
+		                                               { OutputInfo{ aInfo.dtype, aInfo.shape } });
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, a, { gatheredReshaped, 0 } },
-		                                    { OutputInfo{ aInfo.dtype, aInfo.shape } });
+		                                     { OutputInfo{ aInfo.dtype, aInfo.shape } });
 
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildAddId(ModelBuilder& builder, DataType dtype, ShapeView aShape, ShapeView bShape, DataType idsType,
-	                            ShapeView idsShape)
+	inline SubgraphId BuildAddId(ModelBuilder& builder, DataType dtype, ShapeView aShape, ShapeView bShape,
+	                             DataType idsType, ShapeView idsShape)
 	{
 		Subgraph subgraph;
 		const auto a = subgraph.AddParam(dtype, aShape.ToOwned());

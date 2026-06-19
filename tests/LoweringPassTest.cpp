@@ -5,8 +5,8 @@
 
 #include "Dialect/LiteNNDialect.h"
 #include "Dialect/LiteNNOps.h"
-#include "Translation/GraphToMLIR.h"
 #include "Pass/LowerLiteNNPass.h"
+#include "Translation/GraphToMLIR.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -25,329 +25,318 @@ using namespace LiteNN;
 namespace
 {
 
-class LoweringPassTest : public ::testing::Test
-{
-protected:
-    void SetUp() override
-    {
-        ctx_.disableMultithreading();
+	class LoweringPassTest : public ::testing::Test
+	{
+	protected:
+		void SetUp() override
+		{
+			ctx_.disableMultithreading();
 
-        ctx_.loadDialect<
-            litenn::LiteNNDialect,
-            mlir::arith::ArithDialect,
-            mlir::bufferization::BufferizationDialect,
-            mlir::func::FuncDialect,
-            mlir::linalg::LinalgDialect,
-            mlir::math::MathDialect,
-            mlir::memref::MemRefDialect,
-            mlir::scf::SCFDialect,
-            mlir::tensor::TensorDialect>();
-    }
+			ctx_.loadDialect<litenn::LiteNNDialect, mlir::arith::ArithDialect,
+			                 mlir::bufferization::BufferizationDialect, mlir::func::FuncDialect,
+			                 mlir::linalg::LinalgDialect, mlir::math::MathDialect, mlir::memref::MemRefDialect,
+			                 mlir::scf::SCFDialect, mlir::tensor::TensorDialect>();
+		}
 
-    // Translate graph, run the lowering pass, return the module.
-    mlir::OwningOpRef<mlir::ModuleOp> translateAndLower(const Graph& graph)
-    {
-        auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx_);
-        if (!module)
-            return {};
+		// Translate graph, run the lowering pass, return the module.
+		mlir::OwningOpRef<mlir::ModuleOp> translateAndLower(const Graph& graph)
+		{
+			auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx_);
+			if (!module)
+			{
+				return {};
+			}
 
-        mlir::PassManager pm(&ctx_);
-        pm.addPass(litenn::createLowerLiteNNPass());
-        if (mlir::failed(pm.run(*module)))
-            return {};
+			mlir::PassManager pm(&ctx_);
+			pm.addPass(litenn::createLowerLiteNNPass());
+			if (mlir::failed(pm.run(*module)))
+			{
+				return {};
+			}
 
-        return module;
-    }
+			return module;
+		}
 
-    // Assert no litenn.* ops remain in the module.
-    static void expectNoLiteNNOps(mlir::ModuleOp mod)
-    {
-        bool found = false;
-        mod->walk([&](mlir::Operation* op) {
-            if (op->getName().getDialectNamespace() == "litenn")
-                found = true;
-        });
-        EXPECT_FALSE(found) << "Module still contains litenn ops after lowering";
-    }
+		// Assert no litenn.* ops remain in the module.
+		static void expectNoLiteNNOps(mlir::ModuleOp mod)
+		{
+			bool found = false;
+			mod->walk([&](mlir::Operation* op) {
+				if (op->getName().getDialectNamespace() == "litenn")
+				{
+					found = true;
+				}
+			});
+			EXPECT_FALSE(found) << "Module still contains litenn ops after lowering";
+		}
 
-    mlir::MLIRContext ctx_;
-};
+		mlir::MLIRContext ctx_;
+	};
 
-TEST_F(LoweringPassTest, SimpleAdd)
-{
-    Graph graph;
-    Subgraph sg;
-    const auto a = sg.AddParam(DataType::Float32, { 2, 2 });
-    const auto b = sg.AddParam(DataType::Float32, { 2, 2 });
-    const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } },
-                              { OutputInfo{ DataType::Float32, { 2, 2 } } });
-    sg.SetResults({ { y, 0 } });
-    const auto fwdId = graph.AddSubgraph(std::move(sg));
-    graph.SetForward(fwdId);
+	TEST_F(LoweringPassTest, SimpleAdd)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto a = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto b = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } },
+		                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { y, 0 } });
+		const auto fwdId = graph.AddSubgraph(std::move(sg));
+		graph.SetForward(fwdId);
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    // Should contain linalg.generic for elementwise add
-    bool hasLinalgGeneric = false;
-    module->walk([&](mlir::linalg::GenericOp) { hasLinalgGeneric = true; });
-    EXPECT_TRUE(hasLinalgGeneric) << "Expected linalg.generic from elementwise Add";
-}
+		// Should contain linalg.generic for elementwise add
+		bool hasLinalgGeneric = false;
+		module->walk([&](mlir::linalg::GenericOp) { hasLinalgGeneric = true; });
+		EXPECT_TRUE(hasLinalgGeneric) << "Expected linalg.generic from elementwise Add";
+	}
 
-TEST_F(LoweringPassTest, MatMulWithVariable)
-{
-    Graph graph;
+	TEST_F(LoweringPassTest, MatMulWithVariable)
+	{
+		Graph graph;
 
-    auto w = Variable::Create(Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
-    const auto wIdx = graph.AddVariable(std::move(w));
+		auto w = Variable::Create(Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
+		const auto wIdx = graph.AddVariable(std::move(w));
 
-    Subgraph sg;
-    const auto x = sg.AddParam(DataType::Float32, { 1, 2 });
-    const auto wRef = sg.AddNode(VariableRefNode{ wIdx }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
-    const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { wRef, 0 } },
-                              { OutputInfo{ DataType::Float32, { 1, 2 } } });
-    sg.SetResults({ { y, 0 } });
-    graph.AddSubgraph(std::move(sg));
-    graph.SetForward(0);
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 1, 2 });
+		const auto wRef = sg.AddNode(VariableRefNode{ wIdx }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { wRef, 0 } },
+		                          { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    // MatMul lowers to linalg.generic in M,K,N order for better CPU codegen.
-    bool hasMatmulGeneric = false;
-    module->walk([&](mlir::linalg::GenericOp generic) {
-        const auto iterators = generic.getIteratorTypesArray();
-        hasMatmulGeneric = hasMatmulGeneric ||
-            (iterators.size() == 3 &&
-             iterators[0] == mlir::utils::IteratorType::parallel &&
-             iterators[1] == mlir::utils::IteratorType::reduction &&
-             iterators[2] == mlir::utils::IteratorType::parallel);
-    });
-    EXPECT_TRUE(hasMatmulGeneric) << "Expected linalg.generic M,K,N from MatMul";
+		// MatMul lowers to linalg.generic in M,K,N order for better CPU codegen.
+		bool hasMatmulGeneric = false;
+		module->walk([&](mlir::linalg::GenericOp generic) {
+			const auto iterators = generic.getIteratorTypesArray();
+			hasMatmulGeneric =
+			    hasMatmulGeneric || (iterators.size() == 3 && iterators[0] == mlir::utils::IteratorType::parallel &&
+			                         iterators[1] == mlir::utils::IteratorType::reduction &&
+			                         iterators[2] == mlir::utils::IteratorType::parallel);
+		});
+		EXPECT_TRUE(hasMatmulGeneric) << "Expected linalg.generic M,K,N from MatMul";
 
-    bool hasGlobal = false;
-    module->walk([&](mlir::memref::GlobalOp) { hasGlobal = true; });
-    EXPECT_TRUE(hasGlobal) << "Expected memref.global from Variable";
-}
+		bool hasGlobal = false;
+		module->walk([&](mlir::memref::GlobalOp) { hasGlobal = true; });
+		EXPECT_TRUE(hasGlobal) << "Expected memref.global from Variable";
+	}
 
-TEST_F(LoweringPassTest, FusedMatMulBiasAddLowersWithoutSeparateAddLoop)
-{
-    Graph graph;
-    Subgraph sg;
-    const auto x = sg.AddParam(DataType::Float32, { 4, 8 });
-    const auto w = sg.AddParam(DataType::Float32, { 8, 16 });
-    const auto b = sg.AddParam(DataType::Float32, { 1, 16 });
-    const auto mm = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
-                               { OutputInfo{ DataType::Float32, { 4, 16 } } });
-    const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { mm, 0 }, { b, 0 } },
-                              { OutputInfo{ DataType::Float32, { 4, 16 } } });
-    sg.SetResults({ { y, 0 } });
-    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	TEST_F(LoweringPassTest, FusedMatMulBiasAddLowersWithoutSeparateAddLoop)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 4, 8 });
+		const auto w = sg.AddParam(DataType::Float32, { 8, 16 });
+		const auto b = sg.AddParam(DataType::Float32, { 1, 16 });
+		const auto mm = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
+		                           { OutputInfo{ DataType::Float32, { 4, 16 } } });
+		const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { mm, 0 }, { b, 0 } },
+		                          { OutputInfo{ DataType::Float32, { 4, 16 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-    FusionPass{}.Run(graph);
+		FusionPass{}.Run(graph);
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    int rank2ParallelGenerics = 0;
-    int rank3ReductionGenerics = 0;
-    module->walk([&](mlir::linalg::GenericOp generic) {
-        auto parentFunc = generic->getParentOfType<mlir::func::FuncOp>();
-        if (!parentFunc || parentFunc.getSymName() != "subgraph_0")
-            return;
+		int rank2ParallelGenerics = 0;
+		int rank3ReductionGenerics = 0;
+		module->walk([&](mlir::linalg::GenericOp generic) {
+			auto parentFunc = generic->getParentOfType<mlir::func::FuncOp>();
+			if (!parentFunc || parentFunc.getSymName() != "subgraph_0")
+			{
+				return;
+			}
 
-        const auto iterators = generic.getIteratorTypesArray();
-        if (iterators.size() == 2 &&
-            iterators[0] == mlir::utils::IteratorType::parallel &&
-            iterators[1] == mlir::utils::IteratorType::parallel)
-        {
-            ++rank2ParallelGenerics;
-        }
-        if (iterators.size() == 3 &&
-            iterators[0] == mlir::utils::IteratorType::parallel &&
-            iterators[1] == mlir::utils::IteratorType::reduction &&
-            iterators[2] == mlir::utils::IteratorType::parallel)
-        {
-            ++rank3ReductionGenerics;
-        }
-    });
+			const auto iterators = generic.getIteratorTypesArray();
+			if (iterators.size() == 2 && iterators[0] == mlir::utils::IteratorType::parallel &&
+			    iterators[1] == mlir::utils::IteratorType::parallel)
+			{
+				++rank2ParallelGenerics;
+			}
+			if (iterators.size() == 3 && iterators[0] == mlir::utils::IteratorType::parallel &&
+			    iterators[1] == mlir::utils::IteratorType::reduction &&
+			    iterators[2] == mlir::utils::IteratorType::parallel)
+			{
+				++rank3ReductionGenerics;
+			}
+		});
 
-    EXPECT_EQ(rank2ParallelGenerics, 1) << "Expected only bias initialization, not a separate Add loop";
-    EXPECT_EQ(rank3ReductionGenerics, 1) << "Expected fused M,K,N matmul accumulation";
-}
+		EXPECT_EQ(rank2ParallelGenerics, 1) << "Expected only bias initialization, not a separate Add loop";
+		EXPECT_EQ(rank3ReductionGenerics, 1) << "Expected fused M,K,N matmul accumulation";
+	}
 
-TEST_F(LoweringPassTest, PermuteNode)
-{
-    Graph graph;
-    Subgraph sg;
-    const auto x = sg.AddParam(DataType::Float32, { 2, 3, 4 });
-    const auto y = sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0, 2 } },
-                              { OutputInfo{ DataType::Float32, { 3, 2, 4 } } });
-    sg.SetResults({ { y, 0 } });
-    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	TEST_F(LoweringPassTest, PermuteNode)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 2, 3, 4 });
+		const auto y =
+		    sg.AddNode(PermuteNode{ { x, 0 }, { 1, 0, 2 } }, { OutputInfo{ DataType::Float32, { 3, 2, 4 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    bool hasRank3Generic = false;
-    module->walk([&](mlir::linalg::GenericOp generic) {
-        hasRank3Generic = hasRank3Generic || generic.getIteratorTypesArray().size() == 3;
-    });
-    EXPECT_TRUE(hasRank3Generic) << "Expected linalg.generic from PermuteNode";
-}
+		bool hasRank3Generic = false;
+		module->walk([&](mlir::linalg::GenericOp generic) {
+			hasRank3Generic = hasRank3Generic || generic.getIteratorTypesArray().size() == 3;
+		});
+		EXPECT_TRUE(hasRank3Generic) << "Expected linalg.generic from PermuteNode";
+	}
 
-TEST_F(LoweringPassTest, BroadcastToNode)
-{
-    Graph graph;
-    Subgraph sg;
-    const auto x = sg.AddParam(DataType::Float32, { 1, 3 });
-    const auto y = sg.AddNode(BroadcastToNode{ { x, 0 }, { 2, 3 } },
-                              { OutputInfo{ DataType::Float32, { 2, 3 } } });
-    sg.SetResults({ { y, 0 } });
-    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	TEST_F(LoweringPassTest, BroadcastToNode)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 1, 3 });
+		const auto y = sg.AddNode(BroadcastToNode{ { x, 0 }, { 2, 3 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    bool hasRank2Generic = false;
-    module->walk([&](mlir::linalg::GenericOp generic) {
-        hasRank2Generic = hasRank2Generic || generic.getIteratorTypesArray().size() == 2;
-    });
-    EXPECT_TRUE(hasRank2Generic) << "Expected linalg.generic from BroadcastToNode";
-}
+		bool hasRank2Generic = false;
+		module->walk([&](mlir::linalg::GenericOp generic) {
+			hasRank2Generic = hasRank2Generic || generic.getIteratorTypesArray().size() == 2;
+		});
+		EXPECT_TRUE(hasRank2Generic) << "Expected linalg.generic from BroadcastToNode";
+	}
 
-TEST_F(LoweringPassTest, SoftmaxNode)
-{
-    Graph graph;
-    Subgraph sg;
-    const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
-    const auto y = sg.AddNode(SoftmaxNode{ { x, 0 }, 1 },
-                              { OutputInfo{ DataType::Float32, { 2, 3 } } });
-    sg.SetResults({ { y, 0 } });
-    graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	TEST_F(LoweringPassTest, SoftmaxNode)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto y = sg.AddNode(SoftmaxNode{ { x, 0 }, 1 }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		sg.SetResults({ { y, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    int reduceCount = 0;
-    bool hasExp = false;
-    module->walk([&](mlir::linalg::ReduceOp) { ++reduceCount; });
-    module->walk([&](mlir::math::ExpOp) { hasExp = true; });
-    EXPECT_GE(reduceCount, 2) << "Expected max and sum reductions from SoftmaxNode";
-    EXPECT_TRUE(hasExp) << "Expected math.exp from SoftmaxNode";
-}
+		int reduceCount = 0;
+		bool hasExp = false;
+		module->walk([&](mlir::linalg::ReduceOp) { ++reduceCount; });
+		module->walk([&](mlir::math::ExpOp) { hasExp = true; });
+		EXPECT_GE(reduceCount, 2) << "Expected max and sum reductions from SoftmaxNode";
+		EXPECT_TRUE(hasExp) << "Expected math.exp from SoftmaxNode";
+	}
 
-TEST_F(LoweringPassTest, CondNode)
-{
-    Graph graph;
+	TEST_F(LoweringPassTest, CondNode)
+	{
+		Graph graph;
 
-    // Then branch: y = x * 2
-    Subgraph thenSg;
-    const auto thenX = thenSg.AddParam(DataType::Float32, { 2 });
-    auto twoTensor = Tensor<CPU>({ 2.0f, 2.0f }, { 2 }, DataType::Float32);
-    const auto thenTwo =
-        thenSg.AddNode(ConstantNode{ twoTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-                       { OutputInfo{ DataType::Float32, { 2 } } });
-    const auto thenMul =
-        thenSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { thenX, 0 }, { thenTwo, 0 } },
-                       { OutputInfo{ DataType::Float32, { 2 } } });
-    thenSg.SetResults({ { thenMul, 0 } });
-    const auto thenId = graph.AddSubgraph(std::move(thenSg));
+		// Then branch: y = x * 2
+		Subgraph thenSg;
+		const auto thenX = thenSg.AddParam(DataType::Float32, { 2 });
+		auto twoTensor = Tensor<CPU>({ 2.0f, 2.0f }, { 2 }, DataType::Float32);
+		const auto thenTwo = thenSg.AddNode(ConstantNode{ twoTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto thenMul = thenSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { thenX, 0 }, { thenTwo, 0 } },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		thenSg.SetResults({ { thenMul, 0 } });
+		const auto thenId = graph.AddSubgraph(std::move(thenSg));
 
-    // Else branch: y = x + 1
-    Subgraph elseSg;
-    const auto elseX = elseSg.AddParam(DataType::Float32, { 2 });
-    auto oneTensor = Tensor<CPU>({ 1.0f, 1.0f }, { 2 }, DataType::Float32);
-    const auto elseOne =
-        elseSg.AddNode(ConstantNode{ oneTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-                       { OutputInfo{ DataType::Float32, { 2 } } });
-    const auto elseAdd =
-        elseSg.AddNode(BinaryOpNode{ BinaryOp::Add, { elseX, 0 }, { elseOne, 0 } },
-                       { OutputInfo{ DataType::Float32, { 2 } } });
-    elseSg.SetResults({ { elseAdd, 0 } });
-    const auto elseId = graph.AddSubgraph(std::move(elseSg));
+		// Else branch: y = x + 1
+		Subgraph elseSg;
+		const auto elseX = elseSg.AddParam(DataType::Float32, { 2 });
+		auto oneTensor = Tensor<CPU>({ 1.0f, 1.0f }, { 2 }, DataType::Float32);
+		const auto elseOne = elseSg.AddNode(ConstantNode{ oneTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto elseAdd = elseSg.AddNode(BinaryOpNode{ BinaryOp::Add, { elseX, 0 }, { elseOne, 0 } },
+		                                    { OutputInfo{ DataType::Float32, { 2 } } });
+		elseSg.SetResults({ { elseAdd, 0 } });
+		const auto elseId = graph.AddSubgraph(std::move(elseSg));
 
-    // Main: cond ? then(x) : else(x)
-    Subgraph mainSg;
-    const auto cond = mainSg.AddParam(DataType::Bool, { 1 });
-    const auto x = mainSg.AddParam(DataType::Float32, { 2 });
-    const auto condNode =
-        mainSg.AddNode(CondNode{ { cond, 0 }, thenId, elseId, { { x, 0 } } },
-                       { OutputInfo{ DataType::Float32, { 2 } } });
-    mainSg.SetResults({ { condNode, 0 } });
-    const auto mainId = graph.AddSubgraph(std::move(mainSg));
-    graph.SetForward(mainId);
+		// Main: cond ? then(x) : else(x)
+		Subgraph mainSg;
+		const auto cond = mainSg.AddParam(DataType::Bool, { 1 });
+		const auto x = mainSg.AddParam(DataType::Float32, { 2 });
+		const auto condNode = mainSg.AddNode(CondNode{ { cond, 0 }, thenId, elseId, { { x, 0 } } },
+		                                     { OutputInfo{ DataType::Float32, { 2 } } });
+		mainSg.SetResults({ { condNode, 0 } });
+		const auto mainId = graph.AddSubgraph(std::move(mainSg));
+		graph.SetForward(mainId);
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    // Should contain scf.if
-    bool hasScfIf = false;
-    module->walk([&](mlir::scf::IfOp) { hasScfIf = true; });
-    EXPECT_TRUE(hasScfIf) << "Expected scf.if from CondNode";
-}
+		// Should contain scf.if
+		bool hasScfIf = false;
+		module->walk([&](mlir::scf::IfOp) { hasScfIf = true; });
+		EXPECT_TRUE(hasScfIf) << "Expected scf.if from CondNode";
+	}
 
-TEST_F(LoweringPassTest, WhileNode)
-{
-    Graph graph;
+	TEST_F(LoweringPassTest, WhileNode)
+	{
+		Graph graph;
 
-    // Cond: x < 100
-    Subgraph condSg;
-    const auto condX = condSg.AddParam(DataType::Float32, { 1 });
-    auto hundredTensor = Tensor<CPU>({ 100.0f }, { 1 }, DataType::Float32);
-    const auto hundred =
-        condSg.AddNode(ConstantNode{ hundredTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-                       { OutputInfo{ DataType::Float32, { 1 } } });
-    const auto lt = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { condX, 0 }, { hundred, 0 } },
-                                   { OutputInfo{ DataType::Bool, { 1 } } });
-    condSg.SetResults({ { lt, 0 } });
-    const auto condId = graph.AddSubgraph(std::move(condSg));
+		// Cond: x < 100
+		Subgraph condSg;
+		const auto condX = condSg.AddParam(DataType::Float32, { 1 });
+		auto hundredTensor = Tensor<CPU>({ 100.0f }, { 1 }, DataType::Float32);
+		const auto hundred = condSg.AddNode(ConstantNode{ hundredTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                    { OutputInfo{ DataType::Float32, { 1 } } });
+		const auto lt = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { condX, 0 }, { hundred, 0 } },
+		                               { OutputInfo{ DataType::Bool, { 1 } } });
+		condSg.SetResults({ { lt, 0 } });
+		const auto condId = graph.AddSubgraph(std::move(condSg));
 
-    // Body: x = x * 2
-    Subgraph bodySg;
-    const auto bodyX = bodySg.AddParam(DataType::Float32, { 1 });
-    auto twoTensor = Tensor<CPU>({ 2.0f }, { 1 }, DataType::Float32);
-    const auto two =
-        bodySg.AddNode(ConstantNode{ twoTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
-                       { OutputInfo{ DataType::Float32, { 1 } } });
-    const auto mul = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bodyX, 0 }, { two, 0 } },
-                                    { OutputInfo{ DataType::Float32, { 1 } } });
-    bodySg.SetResults({ { mul, 0 } });
-    const auto bodyId = graph.AddSubgraph(std::move(bodySg));
+		// Body: x = x * 2
+		Subgraph bodySg;
+		const auto bodyX = bodySg.AddParam(DataType::Float32, { 1 });
+		auto twoTensor = Tensor<CPU>({ 2.0f }, { 1 }, DataType::Float32);
+		const auto two = bodySg.AddNode(ConstantNode{ twoTensor.CopyToDevice(PolymorphicDevice{ CPU{} }) },
+		                                { OutputInfo{ DataType::Float32, { 1 } } });
+		const auto mul = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bodyX, 0 }, { two, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 1 } } });
+		bodySg.SetResults({ { mul, 0 } });
+		const auto bodyId = graph.AddSubgraph(std::move(bodySg));
 
-    // Main: while(x < 100) x = x * 2
-    Subgraph mainSg;
-    const auto initX = mainSg.AddParam(DataType::Float32, { 1 });
-    const auto whileNode =
-        mainSg.AddNode(WhileNode{ condId, bodyId, { { initX, 0 } } },
-                       { OutputInfo{ DataType::Float32, { 1 } } });
-    mainSg.SetResults({ { whileNode, 0 } });
-    const auto mainId = graph.AddSubgraph(std::move(mainSg));
-    graph.SetForward(mainId);
+		// Main: while(x < 100) x = x * 2
+		Subgraph mainSg;
+		const auto initX = mainSg.AddParam(DataType::Float32, { 1 });
+		const auto whileNode =
+		    mainSg.AddNode(WhileNode{ condId, bodyId, { { initX, 0 } } }, { OutputInfo{ DataType::Float32, { 1 } } });
+		mainSg.SetResults({ { whileNode, 0 } });
+		const auto mainId = graph.AddSubgraph(std::move(mainSg));
+		graph.SetForward(mainId);
 
-    auto module = translateAndLower(graph);
-    ASSERT_TRUE(module);
-    EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
-    expectNoLiteNNOps(*module);
+		auto module = translateAndLower(graph);
+		ASSERT_TRUE(module);
+		EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
+		expectNoLiteNNOps(*module);
 
-    // Should contain scf.while
-    bool hasScfWhile = false;
-    module->walk([&](mlir::scf::WhileOp) { hasScfWhile = true; });
-    EXPECT_TRUE(hasScfWhile) << "Expected scf.while from WhileNode";
-}
+		// Should contain scf.while
+		bool hasScfWhile = false;
+		module->walk([&](mlir::scf::WhileOp) { hasScfWhile = true; });
+		EXPECT_TRUE(hasScfWhile) << "Expected scf.while from WhileNode";
+	}
 
 } // namespace

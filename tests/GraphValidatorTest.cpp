@@ -14,8 +14,8 @@ TEST(GraphValidator, AcceptsSimpleValidGraph)
 	Graph graph;
 	Subgraph subgraph;
 	const auto x = subgraph.AddParam(DataType::Float32, { 2, 2 });
-	const auto y = subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } },
-	                                { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto y =
+	    subgraph.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	subgraph.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
@@ -39,8 +39,8 @@ TEST(GraphValidator, RejectsIncorrectBinaryOutputMetadata)
 	Subgraph subgraph;
 	const auto a = subgraph.AddParam(DataType::Float32, { 2, 2 });
 	const auto b = subgraph.AddParam(DataType::Float32, { 2, 2 });
-	const auto y = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } },
-	                                { OutputInfo{ DataType::Float32, { 4 } } });
+	const auto y =
+	    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { a, 0 }, { b, 0 } }, { OutputInfo{ DataType::Float32, { 4 } } });
 	subgraph.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
@@ -62,9 +62,8 @@ TEST(GraphValidator, UsesOpSchemaForNodeArityDiagnostics)
 {
 	Graph graph;
 	Subgraph subgraph;
-	const auto malformed =
-	    subgraph.AddNode(ParamRefNode{ 0 },
-	                     { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
+	const auto malformed = subgraph.AddNode(
+	    ParamRefNode{ 0 }, { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
 	subgraph.SetResults({ { malformed, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
@@ -92,8 +91,8 @@ TEST(GraphValidator, RejectsCallSignatureMismatch)
 
 	Subgraph caller;
 	const auto callerInput = caller.AddParam(DataType::Float32, { 2 });
-	const auto call = caller.AddNode(CallNode{ calleeId, { { callerInput, 0 } } },
-	                                 { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto call =
+	    caller.AddNode(CallNode{ calleeId, { { callerInput, 0 } } }, { OutputInfo{ DataType::Float32, { 3 } } });
 	caller.SetResults({ { call, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(caller)));
 
@@ -114,7 +113,7 @@ TEST(GraphValidator, RejectsRuntimeInputMismatch)
 
 	try
 	{
-		(void)interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+		(void) interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 		FAIL() << "expected runtime input validation to throw";
 	}
 	catch (const std::runtime_error& ex)

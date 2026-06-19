@@ -18,7 +18,7 @@ namespace LiteNN::Layer
 	};
 
 	inline void ValidateSwiGLUMLP(const LinearLayer& gateProjection, const LinearLayer& upProjection,
-	                             const LinearLayer& downProjection)
+	                              const LinearLayer& downProjection)
 	{
 		if (gateProjection.dtype != upProjection.dtype || gateProjection.dtype != downProjection.dtype)
 		{
@@ -68,9 +68,9 @@ namespace LiteNN::Layer
 		const auto gate = AddLinear(subgraph, layer.gateProjection, input);
 		const auto gateActivated = AddSiLU(subgraph, gate);
 		const auto up = AddLinear(subgraph, layer.upProjection, input);
-		const auto gated = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, gateActivated, up },
-		                                   { OutputInfo{ layer.gateProjection.dtype,
-		                                                 { subgraph.GetOutputInfo(gateActivated).shape } } });
+		const auto gated = subgraph.AddNode(
+		    BinaryOpNode{ BinaryOp::Multiply, gateActivated, up },
+		    { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gateActivated).shape } } });
 		return AddLinear(subgraph, layer.downProjection, { gated, 0 });
 	}
 
@@ -80,7 +80,8 @@ namespace LiteNN::Layer
 		{
 			ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
 			Subgraph subgraph;
-			const auto input = subgraph.AddParam(layer.gateProjection.dtype, { batchSize, layer.gateProjection.inFeatures });
+			const auto input =
+			    subgraph.AddParam(layer.gateProjection.dtype, { batchSize, layer.gateProjection.inFeatures });
 			const auto result = AddSwiGLUMLP(subgraph, layer, { input, 0 });
 			subgraph.SetResults({ result });
 			return graph.AddSubgraph(std::move(subgraph));

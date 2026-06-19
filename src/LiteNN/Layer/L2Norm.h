@@ -40,8 +40,8 @@ namespace LiteNN::Layer
 			reducedShape.push_back(1);
 		}
 
-		const auto squared =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, input }, { OutputInfo{ info.dtype, info.shape } });
+		const auto squared = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, input, input },
+		                                      { OutputInfo{ info.dtype, info.shape } });
 		const auto summed = subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, { squared, 0 }, axis },
 		                                     { OutputInfo{ info.dtype, reducedShape } });
 		const auto summedBroadcast = subgraph.AddNode(ReshapeNode{ { summed, 0 }, broadcastShape },
@@ -53,18 +53,19 @@ namespace LiteNN::Layer
 			const auto epsConst =
 			    Detail::AddConstant(subgraph, Detail::MakeFilledTensor(broadcastShape, info.dtype, eps));
 			const auto withEps = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, normSquared, { epsConst, 0 } },
-			                                     { OutputInfo{ info.dtype, broadcastShape } });
+			                                      { OutputInfo{ info.dtype, broadcastShape } });
 			normSquared = { withEps, 0 };
 		}
 
-		const auto norm = subgraph.AddNode(UnaryOpNode{ UnaryOp::Sqrt, normSquared },
-		                                   { OutputInfo{ info.dtype, broadcastShape } });
+		const auto norm =
+		    subgraph.AddNode(UnaryOpNode{ UnaryOp::Sqrt, normSquared }, { OutputInfo{ info.dtype, broadcastShape } });
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, input, { norm, 0 } },
 		                                     { OutputInfo{ info.dtype, info.shape } });
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildL2Norm(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis, double eps = 0.0)
+	inline SubgraphId BuildL2Norm(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis,
+	                              double eps = 0.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());

@@ -64,7 +64,7 @@ TEST(FusionPass, MatMulBiasAdd)
 
 	// y = matmul + b
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -114,7 +114,7 @@ TEST(FusionPass, MatMulBiasAddSwapped)
 
 	// 注意: b + matmul（交换顺序）
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { b, 0 }, { matmul, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -154,9 +154,8 @@ TEST(FusionPass, MatMulBiasAddReLU)
 	const auto w = sg.AddParam(DataType::Float32, { 3, 16 });
 	const auto b = sg.AddParam(DataType::Float32, { 1, 16 });
 
-	const auto matmul =
-	    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
-	               { OutputInfo{ DataType::Float32, { 2, 16 } } });
+	const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 2, 16 } } });
 	const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
 	                            { OutputInfo{ DataType::Float32, { 2, 16 } } });
 	const auto zeroTensor = Tensor<CPU>({ 0.0 }, { 1 });
@@ -221,9 +220,9 @@ TEST(FusionPass, MatMulMultiConsumerNoFusion)
 
 	// matmul 被两个节点消费
 	const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                            { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	const auto mul = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { matmul, 0 }, { b, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                            { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { add, 0 }, { mul, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -289,9 +288,9 @@ TEST(FusionPass, ElementWiseChainLonger)
 	const auto d = sg.AddParam(DataType::Float32, { 2, 2 });
 
 	const auto mul = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { c, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
-	const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { mul, 0 }, { d, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                            { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto add =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { mul, 0 }, { d, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	const auto absNode =
 	    sg.AddNode(UnaryOpNode{ UnaryOp::Abs, { add, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
@@ -340,7 +339,7 @@ TEST(FusionPass, AfterAutogradPass)
 	const auto matmul =
 	    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -357,9 +356,9 @@ TEST(FusionPass, AfterAutogradPass)
 		const auto wRef = sgRef.AddNode(VariableRefNode{ 0 }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 		const auto bRef = sgRef.AddParam(DataType::Float32, { 1, 2 });
 		const auto mmRef = sgRef.AddNode(BinaryOpNode{ BinaryOp::MatMul, { xRef, 0 }, { wRef, 0 } },
-		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
-		const auto yRef = sgRef.AddNode(BinaryOpNode{ BinaryOp::Add, { mmRef, 0 }, { bRef, 0 } },
 		                                 { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto yRef = sgRef.AddNode(BinaryOpNode{ BinaryOp::Add, { mmRef, 0 }, { bRef, 0 } },
+		                                { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sgRef.SetResults({ { yRef, 0 } });
 		const auto fwdRefId = graphRef.AddSubgraph(std::move(sgRef));
 		graphRef.SetForward(fwdRefId);

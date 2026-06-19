@@ -53,10 +53,10 @@ namespace
 		const auto one = AddConstant(sg, ones, matrixShape);
 		const auto added = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } },
 		                              { OutputInfo{ DataType::Float32, { 2, 2 } } });
-		const auto neg1 = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { added, 0 } },
-		                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
-		const auto neg2 = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { neg1, 0 } },
-		                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto neg1 =
+		    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { added, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto neg2 =
+		    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { neg1, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto flat = sg.AddNode(ReshapeNode{ { neg2, 0 }, { 4 } }, { OutputInfo{ DataType::Float32, { 4 } } });
 		const auto matrix =
 		    sg.AddNode(ReshapeNode{ { flat, 0 }, { 2, 2 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
@@ -106,11 +106,13 @@ TEST(EGraphPass, EliminatesPureRedundancyAndExplainsRewrites)
 	auto graph = BuildRedundantPureGraph();
 	const auto input = MakeInput();
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
 
 	EGraphPass pass;
 	pass.Run(graph);
-	const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
+	const auto actual =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(input));
 
 	ExpectOutputsNear(actual, expected);
 	EXPECT_EQ(graph.GetSubgraph(graph.Forward()).NodeCount(), 1u);
@@ -147,8 +149,10 @@ TEST(EGraphPass, PreservesNumericsOnRandomizedInputs)
 			Tensor<CPU>(yValues, { 2, 2 }, DataType::Float32),
 		};
 		Runtime::Interpreter<CPU> interpreter;
-		const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(originalInputs));
-		const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(optimized), std::span<const Tensor<CPU>>(optimizedInputs));
+		const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph),
+		                                             std::span<const Tensor<CPU>>(originalInputs));
+		const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(optimized),
+		                                           std::span<const Tensor<CPU>>(optimizedInputs));
 		ExpectOutputsNear(actual, expected);
 	}
 }

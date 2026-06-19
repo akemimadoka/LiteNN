@@ -324,8 +324,8 @@ namespace LiteNN
 			}
 			Tensor<CPU> converted(Uninitialized, tensor.Shape(), DataType::Float32);
 			CPU cpu;
-			DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(), DataType::Float32,
-			                             converted.UnsafeRawData());
+			DeviceTraits<CPU>::ConvertTo(cpu, tensor.DType(), tensor.UnsafeRawData(), tensor.NumElements(),
+			                             DataType::Float32, converted.UnsafeRawData());
 			return converted;
 		}
 
@@ -443,7 +443,8 @@ namespace LiteNN
 			break;
 		}
 		case QuantizationScheme::Block:
-			if (!IsGGMLQuantizedBlockFormat(params.blockFormat) && !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
+			if (!IsGGMLQuantizedBlockFormat(params.blockFormat) &&
+			    !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
 			{
 				throw std::runtime_error("Block quantization requires a non-scalar block format");
 			}
@@ -482,7 +483,8 @@ namespace LiteNN
 				}
 				if (params.blockScaleLayout != BlockScaleLayout::None && !params.scales.empty())
 				{
-					throw std::runtime_error("Packed nibble quantization cannot use both inline scales and blockScaleLayout");
+					throw std::runtime_error(
+					    "Packed nibble quantization cannot use both inline scales and blockScaleLayout");
 				}
 				const auto expectedBytes =
 				    QuantizationDetail::CeilDiv(ShapeView{ params.expressedShape }.NumElements(), std::size_t{ 2 });
@@ -523,8 +525,9 @@ namespace LiteNN
 		};
 	}
 
-	inline QuantizationParams PackedNibbleQuantization(PackedNibbleFormat format, std::vector<std::size_t> expressedShape,
-	                                                   float scale = 1.0F, std::int32_t zeroPoint = 0,
+	inline QuantizationParams PackedNibbleQuantization(PackedNibbleFormat format,
+	                                                   std::vector<std::size_t> expressedShape, float scale = 1.0F,
+	                                                   std::int32_t zeroPoint = 0,
 	                                                   PackedNibbleOrder order = PackedNibbleOrder::LowThenHigh,
 	                                                   DataType expressedType = DataType::Float32)
 	{
@@ -687,7 +690,8 @@ namespace LiteNN
 		{
 			params.expressedShape = source.Shape().ToOwned();
 		}
-		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(), std::size_t{ 2 }) };
+		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(),
+			                                                                    std::size_t{ 2 }) };
 		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
 
@@ -731,8 +735,8 @@ namespace LiteNN
 			const auto first = readNibble(byte * 2) & 0x0f;
 			const auto second = byte * 2 + 1 < source.NumElements() ? (readNibble(byte * 2 + 1) & 0x0f) : 0;
 			dst[byte] = params.packedOrder == PackedNibbleOrder::LowThenHigh
-			              ? static_cast<std::uint8_t>(first | (second << 4))
-			              : static_cast<std::uint8_t>((first << 4) | second);
+			                ? static_cast<std::uint8_t>(first | (second << 4))
+			                : static_cast<std::uint8_t>((first << 4) | second);
 		}
 		return storage;
 	}
@@ -754,7 +758,8 @@ namespace LiteNN
 		{
 			params.expressedShape = source.Shape().ToOwned();
 		}
-		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(), std::size_t{ 2 }) };
+		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(),
+			                                                                    std::size_t{ 2 }) };
 		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
 
@@ -769,12 +774,13 @@ namespace LiteNN
 		for (std::size_t byte = 0; byte < storage.NumElements(); ++byte)
 		{
 			const auto first = QuantizationDetail::Float32ToFP4Bits(src[byte * 2] / scale, params.packedFormat);
-			const auto second = byte * 2 + 1 < source.NumElements()
-			                      ? QuantizationDetail::Float32ToFP4Bits(src[byte * 2 + 1] / scale, params.packedFormat)
-			                      : std::uint8_t{ 0 };
+			const auto second =
+			    byte * 2 + 1 < source.NumElements()
+			        ? QuantizationDetail::Float32ToFP4Bits(src[byte * 2 + 1] / scale, params.packedFormat)
+			        : std::uint8_t{ 0 };
 			dst[byte] = params.packedOrder == PackedNibbleOrder::LowThenHigh
-			              ? static_cast<std::uint8_t>(first | (second << 4))
-			              : static_cast<std::uint8_t>((first << 4) | second);
+			                ? static_cast<std::uint8_t>(first | (second << 4))
+			                : static_cast<std::uint8_t>((first << 4) | second);
 		}
 		return storage;
 	}
@@ -803,9 +809,9 @@ namespace LiteNN
 				}
 				if (params.packedFormat == PackedNibbleFormat::Int4)
 				{
-					const auto signedValue =
-					    (nibble & 0x08U) != 0 ? static_cast<std::int8_t>(static_cast<int>(nibble) - 16)
-					                         : static_cast<std::int8_t>(nibble);
+					const auto signedValue = (nibble & 0x08U) != 0
+					                             ? static_cast<std::int8_t>(static_cast<int>(nibble) - 16)
+					                             : static_cast<std::int8_t>(nibble);
 					static_cast<std::int8_t*>(output.UnsafeRawData())[index] = signedValue;
 				}
 				else

@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelIO.h>
 
 #include <filesystem>
 #include <initializer_list>
@@ -61,12 +61,11 @@ namespace
 		const auto deconvInput = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
 		const auto deconvWeight = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
 
-		const auto im2col = Layer::AddIm2Col(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 0, 0 },
-		                                     { 0, 0 });
+		const auto im2col = Layer::AddIm2Col(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
 		const auto conv = Layer::AddConv2D(subgraph, { input, 0 }, { convWeight, 0 }, NodeOutput{ convBias, 0 });
 		const auto maxPool = Layer::AddMaxPool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
-		const auto avgPool = Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 0, 0 },
-		                                             { 0, 0 }, false);
+		const auto avgPool =
+		    Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 0, 0 }, { 0, 0 }, false);
 		const auto deconv = Layer::AddConvTranspose2D(subgraph, { deconvInput, 0 }, { deconvWeight, 0 });
 		const auto nearest = Layer::AddNearestUpsample2D(subgraph, { deconvInput, 0 }, { 4, 4 });
 		const auto bilinear = Layer::AddBilinearUpsample2D(subgraph, { deconvInput, 0 }, { 3, 3 }, true);
@@ -79,18 +78,11 @@ namespace
 	std::vector<Tensor<CPU>> MakeG54Inputs()
 	{
 		std::vector<Tensor<CPU>> inputs;
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F,
-		                                  4.0F, 5.0F, 6.0F,
-		                                  7.0F, 8.0F, 9.0F },
-		                                { 1, 1, 3, 3 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F, 9.0F }, { 1, 1, 3, 3 }));
 		inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F }, { 1, 1, 2, 2 }));
 		inputs.emplace_back(Tensor<CPU>({ 10.0F }, { 1 }));
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F,
-		                                  3.0F, 4.0F },
-		                                { 1, 1, 2, 2 }));
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 1.0F,
-		                                  1.0F, 1.0F },
-		                                { 1, 1, 2, 2 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F }, { 1, 1, 2, 2 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 1.0F, 1.0F, 1.0F }, { 1, 1, 2, 2 }));
 		return inputs;
 	}
 } // namespace
@@ -104,10 +96,8 @@ TEST(ConvolutionPoolingNode, Im2ColConv2DAndPoolExecute)
 	ASSERT_EQ(outputs.size(), 8u);
 
 	ExpectShape(outputs[0].Shape(), { 1, 4, 4 });
-	ExpectTensorNear(outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F,
-	                               2.0F, 3.0F, 5.0F, 6.0F,
-	                               4.0F, 5.0F, 7.0F, 8.0F,
-	                               5.0F, 6.0F, 8.0F, 9.0F });
+	ExpectTensorNear(
+	    outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F, 2.0F, 3.0F, 5.0F, 6.0F, 4.0F, 5.0F, 7.0F, 8.0F, 5.0F, 6.0F, 8.0F, 9.0F });
 
 	ExpectShape(outputs[1].Shape(), { 1, 1, 2, 2 });
 	ExpectTensorNear(outputs[1], { 16.0F, 18.0F, 22.0F, 24.0F });
@@ -119,20 +109,14 @@ TEST(ConvolutionPoolingNode, Im2ColConv2DAndPoolExecute)
 	ExpectTensorNear(outputs[3], { 3.0F, 4.0F, 6.0F, 7.0F });
 
 	ExpectShape(outputs[4].Shape(), { 1, 1, 3, 3 });
-	ExpectTensorNear(outputs[4], { 1.0F, 3.0F, 2.0F,
-	                               4.0F, 10.0F, 6.0F,
-	                               3.0F, 7.0F, 4.0F });
+	ExpectTensorNear(outputs[4], { 1.0F, 3.0F, 2.0F, 4.0F, 10.0F, 6.0F, 3.0F, 7.0F, 4.0F });
 
 	ExpectShape(outputs[5].Shape(), { 1, 1, 4, 4 });
-	ExpectTensorNear(outputs[5], { 1.0F, 1.0F, 2.0F, 2.0F,
-	                               1.0F, 1.0F, 2.0F, 2.0F,
-	                               3.0F, 3.0F, 4.0F, 4.0F,
-	                               3.0F, 3.0F, 4.0F, 4.0F });
+	ExpectTensorNear(
+	    outputs[5], { 1.0F, 1.0F, 2.0F, 2.0F, 1.0F, 1.0F, 2.0F, 2.0F, 3.0F, 3.0F, 4.0F, 4.0F, 3.0F, 3.0F, 4.0F, 4.0F });
 
 	ExpectShape(outputs[6].Shape(), { 1, 1, 3, 3 });
-	ExpectTensorNear(outputs[6], { 1.0F, 1.5F, 2.0F,
-	                               2.0F, 2.5F, 3.0F,
-	                               3.0F, 3.5F, 4.0F });
+	ExpectTensorNear(outputs[6], { 1.0F, 1.5F, 2.0F, 2.0F, 2.5F, 3.0F, 3.0F, 3.5F, 4.0F });
 
 	ExpectShape(outputs[7].Shape(), { 1, 1, 2, 2 });
 	ExpectTensorNear(outputs[7], { 1.0F, 2.0F, 3.0F, 4.0F }, 1e-4F);
@@ -144,23 +128,20 @@ TEST(ConvolutionPoolingNode, GroupedConv2DExecutesPerGroup)
 	Subgraph subgraph;
 	const auto input = subgraph.AddParam(DataType::Float32, { 1, 2, 2, 2 });
 	const auto weight = subgraph.AddParam(DataType::Float32, { 2, 1, 1, 1 });
-	const auto conv = Layer::AddConv2D(subgraph, { input, 0 }, { weight, 0 }, std::nullopt,
-	                                   { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 }, 2);
+	const auto conv = Layer::AddConv2D(subgraph, { input, 0 }, { weight, 0 }, std::nullopt, { 1, 1 }, { 1, 1 },
+	                                   { 0, 0 }, { 0, 0 }, 2);
 	subgraph.SetResults({ conv });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 	Validation::ValidateGraph(graph);
 
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F,
-	                                  10.0F, 12.0F, 14.0F, 16.0F },
-	                                { 1, 2, 2, 2 }));
+	inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F, 10.0F, 12.0F, 14.0F, 16.0F }, { 1, 2, 2, 2 }));
 	inputs.emplace_back(Tensor<CPU>({ 2.0F, 3.0F }, { 2, 1, 1, 1 }));
 	const auto outputs = RunGraph(graph, std::move(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
 
 	ExpectShape(outputs[0].Shape(), { 1, 2, 2, 2 });
-	ExpectTensorNear(outputs[0], { 2.0F, 4.0F, 6.0F, 8.0F,
-	                               30.0F, 36.0F, 42.0F, 48.0F });
+	ExpectTensorNear(outputs[0], { 2.0F, 4.0F, 6.0F, 8.0F, 30.0F, 36.0F, 42.0F, 48.0F });
 }
 
 TEST(ConvolutionPoolingNode, AveragePoolPaddingControlsDenominator)
@@ -168,10 +149,10 @@ TEST(ConvolutionPoolingNode, AveragePoolPaddingControlsDenominator)
 	Graph graph;
 	Subgraph subgraph;
 	const auto input = subgraph.AddParam(DataType::Float32, { 1, 1, 2, 2 });
-	const auto excludePad = Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 },
-	                                                { 1, 1 }, false);
-	const auto includePad = Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 },
-	                                                { 1, 1 }, true);
+	const auto excludePad =
+	    Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, false);
+	const auto includePad =
+	    Layer::AddAveragePool2D(subgraph, { input, 0 }, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, true);
 	subgraph.SetResults({ excludePad, includePad });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 	Validation::ValidateGraph(graph);
@@ -182,38 +163,25 @@ TEST(ConvolutionPoolingNode, AveragePoolPaddingControlsDenominator)
 	ASSERT_EQ(outputs.size(), 2u);
 
 	ExpectShape(outputs[0].Shape(), { 1, 1, 3, 3 });
-	ExpectTensorNear(outputs[0], { 1.0F, 1.5F, 2.0F,
-	                               2.0F, 2.5F, 3.0F,
-	                               3.0F, 3.5F, 4.0F });
+	ExpectTensorNear(outputs[0], { 1.0F, 1.5F, 2.0F, 2.0F, 2.5F, 3.0F, 3.0F, 3.5F, 4.0F });
 
 	ExpectShape(outputs[1].Shape(), { 1, 1, 3, 3 });
-	ExpectTensorNear(outputs[1], { 0.25F, 0.75F, 0.5F,
-	                               1.0F, 2.5F, 1.5F,
-	                               0.75F, 1.75F, 1.0F });
+	ExpectTensorNear(outputs[1], { 0.25F, 0.75F, 0.5F, 1.0F, 2.5F, 1.5F, 0.75F, 1.75F, 1.0F });
 }
 
 TEST(ConvolutionPoolingNode, ConstFoldHandlesG54Nodes)
 {
 	Graph graph;
 	Subgraph subgraph;
-	const auto input = AddFloatConstant(subgraph,
-	                                    { 1.0F, 2.0F, 3.0F,
-	                                      4.0F, 5.0F, 6.0F,
-	                                      7.0F, 8.0F, 9.0F },
-	                                    { 1, 1, 3, 3 });
+	const auto input =
+	    AddFloatConstant(subgraph, { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F, 9.0F }, { 1, 1, 3, 3 });
 	const auto im2col = Layer::AddIm2Col(subgraph, input, { 2, 2 }, { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
 	const auto weight = AddFloatConstant(subgraph, { 1.0F, 0.0F, 0.0F, 1.0F }, { 1, 1, 2, 2 });
 	const auto bias = AddFloatConstant(subgraph, { 10.0F }, { 1 });
 	const auto conv = Layer::AddConv2D(subgraph, input, weight, bias);
 	const auto maxPool = Layer::AddMaxPool2D(subgraph, input, { 2, 2 }, { 1, 1 }, { 0, 0 }, { 0, 0 });
-	const auto deconvInput = AddFloatConstant(subgraph,
-	                                          { 1.0F, 2.0F,
-	                                            3.0F, 4.0F },
-	                                          { 1, 1, 2, 2 });
-	const auto deconvWeight = AddFloatConstant(subgraph,
-	                                           { 1.0F, 1.0F,
-	                                             1.0F, 1.0F },
-	                                           { 1, 1, 2, 2 });
+	const auto deconvInput = AddFloatConstant(subgraph, { 1.0F, 2.0F, 3.0F, 4.0F }, { 1, 1, 2, 2 });
+	const auto deconvWeight = AddFloatConstant(subgraph, { 1.0F, 1.0F, 1.0F, 1.0F }, { 1, 1, 2, 2 });
 	const auto deconv = Layer::AddConvTranspose2D(subgraph, deconvInput, deconvWeight);
 	const auto nearest = Layer::AddNearestUpsample2D(subgraph, deconvInput, { 4, 4 });
 	subgraph.SetResults({ im2col, conv, maxPool, deconv, nearest });
@@ -231,17 +199,11 @@ TEST(ConvolutionPoolingNode, ConstFoldHandlesG54Nodes)
 
 	const auto outputs = RunGraph(graph, {});
 	ASSERT_EQ(outputs.size(), 5u);
-	ExpectTensorNear(outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F,
-	                               2.0F, 3.0F, 5.0F, 6.0F,
-	                               4.0F, 5.0F, 7.0F, 8.0F,
-	                               5.0F, 6.0F, 8.0F, 9.0F });
+	ExpectTensorNear(
+	    outputs[0], { 1.0F, 2.0F, 4.0F, 5.0F, 2.0F, 3.0F, 5.0F, 6.0F, 4.0F, 5.0F, 7.0F, 8.0F, 5.0F, 6.0F, 8.0F, 9.0F });
 	ExpectTensorNear(outputs[1], { 16.0F, 18.0F, 22.0F, 24.0F });
 	ExpectTensorNear(outputs[2], { 5.0F, 6.0F, 8.0F, 9.0F });
-	ExpectTensorNear(outputs[3], { 1.0F, 3.0F, 2.0F,
-	                               4.0F, 10.0F, 6.0F,
-	                               3.0F, 7.0F, 4.0F });
-	ExpectTensorNear(outputs[4], { 1.0F, 1.0F, 2.0F, 2.0F,
-	                               1.0F, 1.0F, 2.0F, 2.0F,
-	                               3.0F, 3.0F, 4.0F, 4.0F,
-	                               3.0F, 3.0F, 4.0F, 4.0F });
+	ExpectTensorNear(outputs[3], { 1.0F, 3.0F, 2.0F, 4.0F, 10.0F, 6.0F, 3.0F, 7.0F, 4.0F });
+	ExpectTensorNear(
+	    outputs[4], { 1.0F, 1.0F, 2.0F, 2.0F, 1.0F, 1.0F, 2.0F, 2.0F, 3.0F, 3.0F, 4.0F, 4.0F, 3.0F, 3.0F, 4.0F, 4.0F });
 }

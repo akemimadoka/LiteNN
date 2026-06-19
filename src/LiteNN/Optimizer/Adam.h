@@ -51,8 +51,8 @@ namespace LiteNN::Optimizer
 				{
 					const auto regularizedGradient = grad[i] + options_.weightDecay * data[i];
 					firstMoment[i] = options_.beta1 * firstMoment[i] + (1.0f - options_.beta1) * regularizedGradient;
-					secondMoment[i] =
-					    options_.beta2 * secondMoment[i] + (1.0f - options_.beta2) * regularizedGradient * regularizedGradient;
+					secondMoment[i] = options_.beta2 * secondMoment[i] +
+					                  (1.0f - options_.beta2) * regularizedGradient * regularizedGradient;
 
 					const auto mHat = firstMoment[i] / beta1Correction;
 					const auto vHat = secondMoment[i] / beta2Correction;

@@ -48,9 +48,8 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("FlashAttnExt transpose expects a 2D tensor");
 			}
-			const auto transpose = subgraph.AddNode(
-			    UnaryOpNode{ UnaryOp::Transpose, input },
-			    { OutputInfo{ info.dtype, { info.shape[1], info.shape[0] } } });
+			const auto transpose = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, input },
+			                                        { OutputInfo{ info.dtype, { info.shape[1], info.shape[0] } } });
 			return { transpose, 0 };
 		}
 
@@ -98,7 +97,7 @@ namespace LiteNN::Layer
 	} // namespace Detail
 
 	inline NodeOutput AddFlashAttnExt(Subgraph& subgraph, NodeOutput queries, NodeOutput keys, NodeOutput values,
-	                                 const FlashAttnExtOptions& options = {})
+	                                  const FlashAttnExtOptions& options = {})
 	{
 		const auto queryInfo = subgraph.GetOutputInfo(queries);
 		if (queryInfo.shape.size() != 2)
@@ -124,9 +123,9 @@ namespace LiteNN::Layer
 		}
 
 		const auto transposedKeys = Detail::AddTranspose2D(subgraph, typedKeys);
-		const auto scores = subgraph.AddNode(
-		    BinaryOpNode{ BinaryOp::MatMul, queries, transposedKeys },
-		    { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], keyInfo.shape[0] } } });
+		const auto scores =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, queries, transposedKeys },
+		                     { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], keyInfo.shape[0] } } });
 		NodeOutput scoreOutput{ scores, 0 };
 
 		if (options.scale != 1.0 || options.logitSoftcap != 0.0)
@@ -144,7 +143,8 @@ namespace LiteNN::Layer
 		{
 			auto mask = Detail::CastIfNeeded(subgraph, *options.mask, queryInfo.dtype);
 			const auto maskInfo = subgraph.GetOutputInfo(mask);
-			if (maskInfo.shape.size() != 2 || maskInfo.shape[0] != queryInfo.shape[0] || maskInfo.shape[1] != keyInfo.shape[0])
+			if (maskInfo.shape.size() != 2 || maskInfo.shape[0] != queryInfo.shape[0] ||
+			    maskInfo.shape[1] != keyInfo.shape[0])
 			{
 				throw std::runtime_error("FlashAttnExt mask must be 2D with shape [queryLength, keyLength]");
 			}
@@ -154,8 +154,7 @@ namespace LiteNN::Layer
 				    subgraph, mask, Detail::ComputeALiBiSlope(options.headIndex, options.headCount, options.maxBias));
 			}
 			const auto scoreInfo = subgraph.GetOutputInfo(scoreOutput);
-			const auto maskedScores =
-			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, scoreOutput, mask }, { scoreInfo });
+			const auto maskedScores = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, scoreOutput, mask }, { scoreInfo });
 			scoreOutput = { maskedScores, 0 };
 		}
 		else if (options.maxBias > 0.0)
@@ -165,8 +164,8 @@ namespace LiteNN::Layer
 
 		if (options.causal)
 		{
-			scoreOutput = AddCausalMask(subgraph, scoreOutput, -1.0e9, options.keyPositionOffset,
-			                            options.queryPositionOffset);
+			scoreOutput =
+			    AddCausalMask(subgraph, scoreOutput, -1.0e9, options.keyPositionOffset, options.queryPositionOffset);
 		}
 
 		std::optional<NodeOutput> typedSinks;
@@ -174,8 +173,8 @@ namespace LiteNN::Layer
 		{
 			typedSinks = Detail::CastIfNeeded(subgraph, *options.sinks, queryInfo.dtype);
 			const auto sinkInfo = subgraph.GetOutputInfo(*typedSinks);
-			const auto elementCount = std::accumulate(
-			    sinkInfo.shape.begin(), sinkInfo.shape.end(), 1uz, [](std::size_t lhs, std::size_t rhs) { return lhs * rhs; });
+			const auto elementCount = std::accumulate(sinkInfo.shape.begin(), sinkInfo.shape.end(), 1uz,
+			                                          [](std::size_t lhs, std::size_t rhs) { return lhs * rhs; });
 			if (elementCount != 1)
 			{
 				throw std::runtime_error("FlashAttnExt sinks must be a scalar tensor");
@@ -184,47 +183,44 @@ namespace LiteNN::Layer
 
 		const auto scoreInfo = subgraph.GetOutputInfo(scoreOutput);
 		NodeOutput maxScores{ subgraph.AddNode(ReduceOpNode{ ReduceOp::Max, scoreOutput, 1 },
-		                                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
-		                     0 };
+			                                   { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
+			                  0 };
 		if (typedSinks)
 		{
-			const auto maxWithSink = subgraph.AddNode(
-			    BinaryOpNode{ BinaryOp::Max, maxScores, *typedSinks },
-			    { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
+			const auto maxWithSink = subgraph.AddNode(BinaryOpNode{ BinaryOp::Max, maxScores, *typedSinks },
+			                                          { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
 			maxScores = { maxWithSink, 0 };
 		}
 
 		const std::vector<std::size_t> broadcastRowShape{ scoreInfo.shape[0], 1 };
-		const auto maxScores2D = subgraph.AddNode(
-		    ReshapeNode{ maxScores, broadcastRowShape }, { OutputInfo{ scoreInfo.dtype, broadcastRowShape } });
-		const auto shiftedScores = subgraph.AddNode(
-		    BinaryOpNode{ BinaryOp::Subtract, scoreOutput, { maxScores2D, 0 } }, { scoreInfo });
+		const auto maxScores2D = subgraph.AddNode(ReshapeNode{ maxScores, broadcastRowShape },
+		                                          { OutputInfo{ scoreInfo.dtype, broadcastRowShape } });
+		const auto shiftedScores =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, scoreOutput, { maxScores2D, 0 } }, { scoreInfo });
 		const auto expScores = subgraph.AddNode(UnaryOpNode{ UnaryOp::Exp, { shiftedScores, 0 } }, { scoreInfo });
 
-		NodeOutput denominator{
-		    subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, { expScores, 0 }, 1 },
-		                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
-		    0 };
+		NodeOutput denominator{ subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, { expScores, 0 }, 1 },
+			                                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
+			                    0 };
 		if (typedSinks)
 		{
-			const auto sinkShift = subgraph.AddNode(
-			    BinaryOpNode{ BinaryOp::Subtract, *typedSinks, maxScores },
-			    { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
+			const auto sinkShift = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, *typedSinks, maxScores },
+			                                        { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
 			const auto sinkExp = subgraph.AddNode(UnaryOpNode{ UnaryOp::Exp, { sinkShift, 0 } },
-			                                    { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
-			const auto correctedDenominator = subgraph.AddNode(
-			    BinaryOpNode{ BinaryOp::Add, denominator, { sinkExp, 0 } },
-			    { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
+			                                      { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
+			const auto correctedDenominator =
+			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, denominator, { sinkExp, 0 } },
+			                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
 			denominator = { correctedDenominator, 0 };
 		}
 
-		const auto denominator2D = subgraph.AddNode(
-		    ReshapeNode{ denominator, broadcastRowShape }, { OutputInfo{ scoreInfo.dtype, broadcastRowShape } });
-		const auto probabilities = subgraph.AddNode(
-		    BinaryOpNode{ BinaryOp::Divide, { expScores, 0 }, { denominator2D, 0 } }, { scoreInfo });
-		const auto attended = subgraph.AddNode(
-		    BinaryOpNode{ BinaryOp::MatMul, { probabilities, 0 }, typedValues },
-		    { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], valueInfo.shape[1] } } });
+		const auto denominator2D = subgraph.AddNode(ReshapeNode{ denominator, broadcastRowShape },
+		                                            { OutputInfo{ scoreInfo.dtype, broadcastRowShape } });
+		const auto probabilities =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, { expScores, 0 }, { denominator2D, 0 } }, { scoreInfo });
+		const auto attended =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, { probabilities, 0 }, typedValues },
+		                     { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], valueInfo.shape[1] } } });
 		return { attended, 0 };
 	}
 } // namespace LiteNN::Layer

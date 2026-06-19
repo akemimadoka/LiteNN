@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+if command -v pwsh >/dev/null 2>&1; then
+	POWERSHELL=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+	POWERSHELL=powershell
+else
+	echo "LiteNN pre-commit hook requires pwsh or powershell to run scripts/format_sources.ps1." >&2
+	exit 1
+fi
+
+STAGED_FILE="$(mktemp)"
+trap 'rm -f "$STAGED_FILE"' EXIT
+git diff --cached --name-only -z --diff-filter=ACMR > "$STAGED_FILE"
+
+"$POWERSHELL" -NoProfile -ExecutionPolicy Bypass -File scripts/format_sources.ps1
+
+if [ -s "$STAGED_FILE" ]; then
+	xargs -0 git add -- < "$STAGED_FILE"
+fi

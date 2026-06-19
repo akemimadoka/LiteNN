@@ -53,13 +53,12 @@ namespace
 		const auto firstMoment = subgraph.AddParam(DataType::Float32, { 2 });
 		const auto secondMoment = subgraph.AddParam(DataType::Float32, { 2 });
 
-		const auto sgd = Optimizer::AddSGDStep(subgraph, { parameter, 0 }, { gradient, 0 },
-		                                       std::nullopt, 0.5, 0.0, 0.1);
-		const auto sgdMomentum = Optimizer::AddSGDStep(subgraph, { parameter, 0 }, { gradient, 0 },
-		                                               NodeOutput{ velocity, 0 }, 0.1, 0.9);
-		const auto adamw = Optimizer::AddAdamWStep(subgraph, { parameter, 0 }, { gradient, 0 },
-		                                           { firstMoment, 0 }, { secondMoment, 0 },
-		                                           0.1, 0.9, 0.999, 1e-8, 0.01, 1);
+		const auto sgd =
+		    Optimizer::AddSGDStep(subgraph, { parameter, 0 }, { gradient, 0 }, std::nullopt, 0.5, 0.0, 0.1);
+		const auto sgdMomentum =
+		    Optimizer::AddSGDStep(subgraph, { parameter, 0 }, { gradient, 0 }, NodeOutput{ velocity, 0 }, 0.1, 0.9);
+		const auto adamw = Optimizer::AddAdamWStep(subgraph, { parameter, 0 }, { gradient, 0 }, { firstMoment, 0 },
+		                                           { secondMoment, 0 }, 0.1, 0.9, 0.999, 1e-8, 0.01, 1);
 
 		subgraph.SetResults({ sgd[0], sgdMomentum[0], sgdMomentum[1], adamw[0], adamw[1], adamw[2] });
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));

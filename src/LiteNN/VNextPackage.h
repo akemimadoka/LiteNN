@@ -77,8 +77,7 @@ namespace LiteNN
 			return { area, VNextVersionComponent::Manifest,
 				     "JSON manifest keys, required sections, or package layout shape changed" };
 		case VNextABIChangeArea::OpSemantics:
-			return { area, VNextVersionComponent::OpSet,
-				     "Executable op semantics or required op attributes changed" };
+			return { area, VNextVersionComponent::OpSet, "Executable op semantics or required op attributes changed" };
 		case VNextABIChangeArea::DTypeSemantics:
 			return { area, VNextVersionComponent::DTypeSet,
 				     "Data type encoding, precision behavior, or dtype availability changed" };
@@ -286,8 +285,8 @@ namespace LiteNN
 		summary.runtimeStepRecords.reserve(manifest.runtimeSteps.size());
 		for (const auto& step : manifest.runtimeSteps)
 		{
-			auto record = std::format("{}:{}:{}", step.id, Runtime::RuntimeScheduleStepKindName(step.kind),
-			                          step.backend);
+			auto record =
+			    std::format("{}:{}:{}", step.id, Runtime::RuntimeScheduleStepKindName(step.kind), step.backend);
 			if (!step.fallbackBackend.empty())
 			{
 				record += "->" + step.fallbackBackend;
@@ -312,9 +311,8 @@ namespace LiteNN
 			for (const auto& entry : artifact.entries)
 			{
 				summary.artifactEntries.push_back(artifact.name + ":" + entry.name);
-				summary.artifactEntryKinds.push_back(std::format("{}:{}:{}",
-				                                                artifact.name, entry.name,
-				                                                VNextArtifactEntryKindName(entry.kind)));
+				summary.artifactEntryKinds.push_back(
+				    std::format("{}:{}:{}", artifact.name, entry.name, VNextArtifactEntryKindName(entry.kind)));
 			}
 			for (const auto& region : artifact.regions)
 			{
@@ -340,10 +338,11 @@ namespace LiteNN
 			     .rebindPolicy = storage.region.rebindPolicy };
 	}
 
-	inline VNextPackageManifest BuildVNextPackageManifest(
-	    Runtime::RuntimeSchedule schedule, std::vector<VNextArtifactRef> artifacts = {},
-	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
-	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	inline VNextPackageManifest BuildVNextPackageManifest(Runtime::RuntimeSchedule schedule,
+	                                                      std::vector<VNextArtifactRef> artifacts = {},
+	                                                      VNextPackageLayout layout = {},
+	                                                      std::vector<VNextAdapterRef> adapters = {},
+	                                                      const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		ValidateExecutablePlan(schedule.module.plan, registry);
 		Runtime::ValidateRuntimeSchedule(schedule);
@@ -369,24 +368,26 @@ namespace LiteNN
 		return manifest;
 	}
 
-	inline VNextPackageManifest BuildVNextPackageManifest(
-	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts = {},
-	    VNextPackageLayout layout = {}, std::vector<VNextAdapterRef> adapters = {},
-	    std::vector<Runtime::RuntimeStateBinding> runtimeStates = {},
-	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	inline VNextPackageManifest BuildVNextPackageManifest(const ExecutableModule& module,
+	                                                      std::vector<VNextArtifactRef> artifacts = {},
+	                                                      VNextPackageLayout layout = {},
+	                                                      std::vector<VNextAdapterRef> adapters = {},
+	                                                      std::vector<Runtime::RuntimeStateBinding> runtimeStates = {},
+	                                                      const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		auto schedule = Runtime::BuildRuntimeSchedule(module, std::move(runtimeStates));
 		return BuildVNextPackageManifest(std::move(schedule), std::move(artifacts), std::move(layout),
 		                                 std::move(adapters), registry);
 	}
 
-	inline VNextPackageManifest BuildVNextPackageManifest(
-	    const ExecutableModule& module, std::vector<VNextArtifactRef> artifacts,
-	    VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters,
-	    const OpSchemaRegistry& registry)
+	inline VNextPackageManifest BuildVNextPackageManifest(const ExecutableModule& module,
+	                                                      std::vector<VNextArtifactRef> artifacts,
+	                                                      VNextPackageLayout layout,
+	                                                      std::vector<VNextAdapterRef> adapters,
+	                                                      const OpSchemaRegistry& registry)
 	{
-		return BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout),
-		                                 std::move(adapters), {}, registry);
+		return BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout), std::move(adapters), {},
+		                                 registry);
 	}
 
 	inline void ValidateVNextPackageManifest(const VNextPackageManifest& manifest)
@@ -472,7 +473,8 @@ namespace LiteNN
 			{
 				if (step.function >= manifest.functions.size() || step.region >= manifest.regions.size())
 				{
-					throw std::runtime_error(std::format("vNext runtime step {} references unknown dispatch target", i));
+					throw std::runtime_error(
+					    std::format("vNext runtime step {} references unknown dispatch target", i));
 				}
 				if (step.backend.empty())
 				{
@@ -528,8 +530,7 @@ namespace LiteNN
 			}
 			if (const auto stateBytes = state.type.ByteSize(); stateBytes && *stateBytes > buffer.byteSize)
 			{
-				throw std::runtime_error("vNext runtime state binding is larger than its memory buffer: " +
-				                         state.name);
+				throw std::runtime_error("vNext runtime state binding is larger than its memory buffer: " + state.name);
 			}
 		}
 		for (const auto& binding : manifest.bufferBindings)
@@ -579,8 +580,8 @@ namespace LiteNN
 			}
 			if (adapter.kind != "linear-lora")
 			{
-				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has unsupported kind: " +
-				                         adapter.kind);
+				throw std::runtime_error("vNext adapter '" + adapter.targetName +
+				                         "' has unsupported kind: " + adapter.kind);
 			}
 			if (adapter.aTensor >= manifest.tensors.size() || adapter.bTensor >= manifest.tensors.size())
 			{
@@ -600,8 +601,8 @@ namespace LiteNN
 			}
 			if (adapter.mergeMode != "unmerged" && adapter.mergeMode != "merged")
 			{
-				throw std::runtime_error("vNext adapter '" + adapter.targetName + "' has unsupported merge mode: " +
-				                         adapter.mergeMode);
+				throw std::runtime_error("vNext adapter '" + adapter.targetName +
+				                         "' has unsupported merge mode: " + adapter.mergeMode);
 			}
 		}
 		for (const auto& artifact : manifest.artifacts)
@@ -636,9 +637,8 @@ namespace LiteNN
 				}
 				for (const auto& stateName : entry.requiredStateBindings)
 				{
-					const auto found = std::ranges::any_of(manifest.runtimeStates, [&](const auto& state) {
-						return state.name == stateName;
-					});
+					const auto found = std::ranges::any_of(manifest.runtimeStates,
+					                                       [&](const auto& state) { return state.name == stateName; });
 					if (!found)
 					{
 						throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +
@@ -647,9 +647,8 @@ namespace LiteNN
 				}
 				for (const auto& bufferName : entry.requiredBufferBindings)
 				{
-					const auto found = std::ranges::any_of(manifest.bufferBindings, [&](const auto& binding) {
-						return binding.name == bufferName;
-					});
+					const auto found = std::ranges::any_of(
+					    manifest.bufferBindings, [&](const auto& binding) { return binding.name == bufferName; });
 					if (!found)
 					{
 						throw std::runtime_error("vNext artifact '" + artifact.name + "' entry '" + entry.name +

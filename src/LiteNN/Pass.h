@@ -96,20 +96,24 @@ namespace LiteNN
 			virtual std::vector<TransformInvalidation> Invalidates() const
 			{
 				return { TransformInvalidation::GraphTopology, TransformInvalidation::TypeFacts,
-				         TransformInvalidation::ExecutablePlan };
+					     TransformInvalidation::ExecutablePlan };
 			}
 			virtual void Run(Graph& graph) = 0;
 		};
 	} // namespace Detail
 
 	struct ModelGraphTransformStage
-	{};
+	{
+	};
 	struct ModelToExecutablePlanTransformStage
-	{};
+	{
+	};
 	struct ExecutablePlanTransformStage
-	{};
+	{
+	};
 	struct BackendPlanTransformStage
-	{};
+	{
+	};
 
 	template <typename Stage>
 	struct TransformStageTraits;
@@ -209,9 +213,9 @@ namespace LiteNN
 		steps.push_back(std::move(step));
 	}
 
-	inline TransformResult<ModelGraph> RunModelGraphPassPipeline(
-	    ModelGraph model, std::span<Detail::GraphMutationPass* const> passes,
-	    const TransformPipelineOptions& options = {})
+	inline TransformResult<ModelGraph> RunModelGraphPassPipeline(ModelGraph model,
+	                                                             std::span<Detail::GraphMutationPass* const> passes,
+	                                                             const TransformPipelineOptions& options = {})
 	{
 		std::vector<TransformStepMetadata> steps;
 		for (Detail::GraphMutationPass* pass : passes)
@@ -237,9 +241,9 @@ namespace LiteNN
 		return { .value = std::move(model), .steps = std::move(steps) };
 	}
 
-	inline TransformResult<ExecutablePlan> RunModelToExecutablePlanPipeline(
-	    ModelGraph model, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
-	    const TransformPipelineOptions& options = {})
+	inline TransformResult<ExecutablePlan>
+	RunModelToExecutablePlanPipeline(ModelGraph model, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
+	                                 const TransformPipelineOptions& options = {})
 	{
 		if (options.validateAfterEachStep)
 		{
@@ -252,23 +256,22 @@ namespace LiteNN
 			ValidateExecutablePlan(plan, registry);
 		}
 		std::vector<TransformStepMetadata> steps;
-		EmitTransformStep(steps,
-		                  { .stage = TransformStageKind::ModelGraphToExecutablePlan,
-		                    .passName = "BuildExecutablePlan",
-		                    .invalidates = { TransformInvalidation::ExecutablePlan,
-		                                     TransformInvalidation::MemoryPlan,
-		                                     TransformInvalidation::BackendPlacement,
-		                                     TransformInvalidation::CodegenCache },
-		                    .before = before,
-		                    .after = CollectTransformStats(plan) },
-		                  options);
+		EmitTransformStep(
+		    steps,
+		    { .stage = TransformStageKind::ModelGraphToExecutablePlan,
+		      .passName = "BuildExecutablePlan",
+		      .invalidates = { TransformInvalidation::ExecutablePlan, TransformInvalidation::MemoryPlan,
+		                       TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
+		      .before = before,
+		      .after = CollectTransformStats(plan) },
+		    options);
 		return { .value = std::move(plan), .steps = std::move(steps) };
 	}
 
-	inline TransformResult<ExecutablePlan> RunExecutablePlanPipeline(
-	    ExecutablePlan plan, std::span<const NamedExecutablePlanTransform> transforms,
-	    const TransformPipelineOptions& options = {},
-	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	inline TransformResult<ExecutablePlan>
+	RunExecutablePlanPipeline(ExecutablePlan plan, std::span<const NamedExecutablePlanTransform> transforms,
+	                          const TransformPipelineOptions& options = {},
+	                          const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		std::vector<TransformStepMetadata> steps;
 		for (const auto& transform : transforms)
@@ -297,8 +300,7 @@ namespace LiteNN
 	inline TransformResult<BackendPlan> RunExecutablePlanToBackendPlanPipeline(
 	    ExecutablePlan plan,
 	    std::span<const std::string_view> candidateBackends = std::span<const std::string_view>{ DefaultBackendNames },
-	    const TransformPipelineOptions& options = {},
-	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	    const TransformPipelineOptions& options = {}, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		const auto before = CollectTransformStats(plan);
 		if (options.validateAfterEachStep)
@@ -313,14 +315,14 @@ namespace LiteNN
 			backendPlan.candidateBackends.emplace_back(backend);
 		}
 		std::vector<TransformStepMetadata> steps;
-		EmitTransformStep(steps,
-		                  { .stage = TransformStageKind::ExecutablePlanToBackendPlan,
-		                    .passName = "BuildBackendPlan",
-		                    .invalidates = { TransformInvalidation::BackendPlacement,
-		                                     TransformInvalidation::CodegenCache },
-		                    .before = before,
-		                    .after = CollectTransformStats(backendPlan) },
-		                  options);
+		EmitTransformStep(
+		    steps,
+		    { .stage = TransformStageKind::ExecutablePlanToBackendPlan,
+		      .passName = "BuildBackendPlan",
+		      .invalidates = { TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
+		      .before = before,
+		      .after = CollectTransformStats(backendPlan) },
+		    options);
 		return { .value = std::move(backendPlan), .steps = std::move(steps) };
 	}
 } // namespace LiteNN

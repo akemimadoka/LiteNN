@@ -34,9 +34,11 @@ namespace LiteNN
 			{ "interpreter-reference", VNextRuleSeverity::Warning,
 			  "Interpreter remains the reference/debug path; production execution should consume executable plans" },
 			{ "graph-entrypoints", VNextRuleSeverity::Warning,
-			  "runtime/compiler entry points should consume ModelGraph, ExecutablePlan, or ExecutableModule contracts" },
+			  "runtime/compiler entry points should consume ModelGraph, ExecutablePlan, or ExecutableModule "
+			  "contracts" },
 			{ "schema-serialization", VNextRuleSeverity::Warning,
-			  "serializer knowledge of raw NodeVariant layout is temporary until schema-driven op serialization lands" },
+			  "serializer knowledge of raw NodeVariant layout is temporary until schema-driven op serialization "
+			  "lands" },
 			{ "backend-shortcuts", VNextRuleSeverity::Warning,
 			  "CPU/CUDA shortcuts should move into capability, cost, layout, or artifact metadata" },
 			{ "builder-helper-contract", VNextRuleSeverity::Warning,
@@ -58,7 +60,7 @@ namespace LiteNN
 					break;
 				}
 			}
-			(void)hasMultiOutput;
+			(void) hasMultiOutput;
 		}
 		if (manifest)
 		{

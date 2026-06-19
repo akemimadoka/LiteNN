@@ -43,16 +43,16 @@ namespace LiteNN::Layer
 		tailShape[axis] = tailLength;
 
 		const auto head = subgraph.AddNode(SliceNode{ input, axis, headStart, headLength },
-		                                  { OutputInfo{ info.dtype, std::move(headShape) } });
+		                                   { OutputInfo{ info.dtype, std::move(headShape) } });
 		const auto tail = subgraph.AddNode(SliceNode{ input, axis, 0, tailLength },
-		                                  { OutputInfo{ info.dtype, std::move(tailShape) } });
+		                                   { OutputInfo{ info.dtype, std::move(tailShape) } });
 		const auto rolled = subgraph.AddNode(ConcatNode{ { { head, 0 }, { tail, 0 } }, axis },
-		                                    { OutputInfo{ info.dtype, info.shape } });
+		                                     { OutputInfo{ info.dtype, info.shape } });
 		return { rolled, 0 };
 	}
 
 	inline SubgraphId BuildRoll(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t axis,
-	                           std::ptrdiff_t shift)
+	                            std::ptrdiff_t shift)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());

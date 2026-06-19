@@ -81,10 +81,8 @@ namespace LiteNN::Serialization
 		std::vector<ModelMetadataEntry> metadata_;
 	};
 
-	Graph ImportSafetensorsVariables(const SafetensorsArchive& archive,
-	                                 const SafetensorsImportOptions& options = {});
-	Graph LoadSafetensorsVariables(const std::filesystem::path& path,
-	                               const SafetensorsImportOptions& options = {});
+	Graph ImportSafetensorsVariables(const SafetensorsArchive& archive, const SafetensorsImportOptions& options = {});
+	Graph LoadSafetensorsVariables(const std::filesystem::path& path, const SafetensorsImportOptions& options = {});
 	ImporterOwnedManifest ImportSafetensorsVariablesManifest(const SafetensorsArchive& archive,
 	                                                         const SafetensorsImportOptions& options = {});
 	SafetensorsLoRAImportResult ImportLinearLoRAAdapters(Graph& graph, const SafetensorsArchive& archive,

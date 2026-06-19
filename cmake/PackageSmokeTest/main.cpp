@@ -2,7 +2,7 @@
 
 int main()
 {
-    LiteNN::Graph graph;
-    (void)graph;
-    return 0;
+	LiteNN::Graph graph;
+	(void) graph;
+	return 0;
 }

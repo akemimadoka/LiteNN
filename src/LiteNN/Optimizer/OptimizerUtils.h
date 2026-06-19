@@ -1,8 +1,8 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Training/StateDict.h>
 
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <span>
 #include <stdexcept>
@@ -39,8 +39,7 @@ namespace LiteNN::Optimizer::Detail
 	}
 
 	inline void ValidateBackwardResults(const Training::ParameterSet& parameters,
-	                                    std::span<const Tensor<CPU>> backwardResults,
-	                                    std::size_t inputGradientCount)
+	                                    std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount)
 	{
 		if (backwardResults.size() < inputGradientCount + parameters.Size())
 		{
@@ -60,13 +59,13 @@ namespace LiteNN::Optimizer::Detail
 		{
 			throw std::runtime_error(std::format(
 			    "Unexpected gradient for variable {}: variable dtype={}, elements={}; gradient dtype={}, elements={}",
-			    variableIndex, static_cast<int>(variable.DType()), variable.NumElements(), static_cast<int>(gradient.DType()),
-			    gradient.NumElements()));
+			    variableIndex, static_cast<int>(variable.DType()), variable.NumElements(),
+			    static_cast<int>(gradient.DType()), gradient.NumElements()));
 		}
 	}
 
-	inline const Tensor<CPU>& VariableGradient(std::span<const Tensor<CPU>> backwardResults, std::size_t inputGradientCount,
-	                                          std::size_t variableIndex)
+	inline const Tensor<CPU>& VariableGradient(std::span<const Tensor<CPU>> backwardResults,
+	                                           std::size_t inputGradientCount, std::size_t variableIndex)
 	{
 		return backwardResults[inputGradientCount + variableIndex];
 	}
@@ -106,8 +105,9 @@ namespace LiteNN::Optimizer
 			auto& targetGrad = parameters[variableIndex].Gradient();
 			const auto& gradient = Detail::VariableGradient(backwardResults, inputGradientCount, variableIndex);
 			Detail::ValidateVariableGradient(variable, gradient, variableIndex);
-			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(), targetGrad.UnsafeRawData(),
-			                                             gradient.DType(), gradient.UnsafeRawData(), gradient.NumElements());
+			DeviceTraits<PolymorphicDevice>::CopyFromCPU(targetGrad.CurDevice(), targetGrad.DType(),
+			                                             targetGrad.UnsafeRawData(), gradient.DType(),
+			                                             gradient.UnsafeRawData(), gradient.NumElements());
 		}
 	}
 

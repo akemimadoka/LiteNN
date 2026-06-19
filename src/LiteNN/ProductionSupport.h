@@ -235,9 +235,11 @@ namespace LiteNN
 				     "Importers are manifest/package producers; safetensors is tensor storage, not architecture "
 				     "discovery." };
 		case ProductionSupportArea::VNextPackaging:
-			return { area, ProductionSupportAreaName(area), ProductionSupportLevel::Production, true,
-				     "vNext package metadata is the production model/package format; old graph archive compatibility is "
-				     "not a production path." };
+			return {
+				area, ProductionSupportAreaName(area), ProductionSupportLevel::Production, true,
+				"vNext package metadata is the production model/package format; old graph archive compatibility is "
+				"not a production path."
+			};
 		case ProductionSupportArea::SeparatedArtifacts:
 			return { area, ProductionSupportAreaName(area), ProductionSupportLevel::Production, true,
 				     "Separated metadata, constants, weights, and instructions are the production artifact ABI for "
@@ -315,8 +317,7 @@ namespace LiteNN
 			return { path,
 				     ProductionPathName(path),
 				     ProductionSupportArea::CUDARuntime,
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     "Device tensors are bound to a static-shape native CUDA schedule.",
 				     "Device output tensors must be pre-bound and pointer-stable across replay.",
@@ -471,8 +472,7 @@ namespace LiteNN
 			     false };
 	}
 
-	inline constexpr ProductionBackendProfileDescriptor QueryProductionBackendProfile(
-	    ProductionBackendProfile profile)
+	inline constexpr ProductionBackendProfileDescriptor QueryProductionBackendProfile(ProductionBackendProfile profile)
 	{
 		switch (profile)
 		{
@@ -494,41 +494,43 @@ namespace LiteNN
 				     "Not intended to be the peak-throughput production kernel strategy.",
 				     "Always available; failures are graph/runtime validation errors, not device skips." };
 		case ProductionBackendProfile::CPUAOTSeparatedArtifact:
-			return { profile,
-				     ProductionBackendProfileName(profile),
-				     ProductionPath::CPUAOTSeparatedArtifact,
-				     ProductionSupportArea::CPUAOT,
-				     ProductionBuildHasMLIR() ? ProductionSupportLevel::Production
-				                              : ProductionSupportLevel::Unavailable,
-				     ProductionBuildHasMLIR(),
-				     false,
-				     true,
-				     false,
-				     false,
-				     false,
-				     true,
-				     false,
-				     "Reference deployment profile for CPU AOT packages with separated rodata/weights/instructions.",
-				     "External CPU kernel-library strategy is still undecided.",
-				     "Unavailable MLIR/compiler support must fail configure/build or route to interpreter explicitly." };
+			return {
+				profile,
+				ProductionBackendProfileName(profile),
+				ProductionPath::CPUAOTSeparatedArtifact,
+				ProductionSupportArea::CPUAOT,
+				ProductionBuildHasMLIR() ? ProductionSupportLevel::Production : ProductionSupportLevel::Unavailable,
+				ProductionBuildHasMLIR(),
+				false,
+				true,
+				false,
+				false,
+				false,
+				true,
+				false,
+				"Reference deployment profile for CPU AOT packages with separated rodata/weights/instructions.",
+				"External CPU kernel-library strategy is still undecided.",
+				"Unavailable MLIR/compiler support must fail configure/build or route to interpreter explicitly."
+			};
 		case ProductionBackendProfile::CUDANativeGraphReplay:
-			return { profile,
-				     ProductionBackendProfileName(profile),
-				     ProductionPath::CUDANativeGraphReplay,
-				     ProductionSupportArea::CUDARuntime,
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
-				     ProductionBuildHasCUDA(),
-				     false,
-				     true,
-				     false,
-				     true,
-				     true,
-				     true,
-				     false,
-				     "Static-shape native CUDA execution with pointer-stable graph replay.",
-				     "Kernel coverage still needs high-value Linear/MatMul, normalization, attention, and quantized paths.",
-				     "Unsupported replay constraints fail loudly instead of silently switching execution mode." };
+			return {
+				profile,
+				ProductionBackendProfileName(profile),
+				ProductionPath::CUDANativeGraphReplay,
+				ProductionSupportArea::CUDARuntime,
+				ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
+				ProductionBuildHasCUDA(),
+				false,
+				true,
+				false,
+				true,
+				true,
+				true,
+				false,
+				"Static-shape native CUDA execution with pointer-stable graph replay.",
+				"Kernel coverage still needs high-value Linear/MatMul, normalization, attention, and quantized paths.",
+				"Unsupported replay constraints fail loudly instead of silently switching execution mode."
+			};
 		case ProductionBackendProfile::CUDACPUBridgeFallback:
 			return { profile,
 				     ProductionBackendProfileName(profile),
@@ -548,40 +550,43 @@ namespace LiteNN
 				     "Not a production-performance claim until transfer/fallback rows are separated in benchmarks.",
 				     "Host fallback is allowed only when schedule/profile records expose the fallback step." };
 		case ProductionBackendProfile::VulkanDesktopNative:
-			return { profile,
-				     ProductionBackendProfileName(profile),
-				     ProductionPath::VulkanNativeSeparatedArtifact,
-				     ProductionSupportArea::VulkanRuntime,
-				     ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental
-				                                : ProductionSupportLevel::Unavailable,
-				     ProductionBuildHasVulkan(),
-				     false,
-				     true,
-				     false,
-				     true,
-				     true,
-				     true,
-				     false,
-				     "Desktop Vulkan native payloads for selected static-shape workloads.",
-				     "Graph partitioning and a clearer device-local memory planner remain before broader production claims.",
-				     "Missing storage, subgroup, timestamp, or alignment capabilities must skip or fail explicitly." };
+			return {
+				profile,
+				ProductionBackendProfileName(profile),
+				ProductionPath::VulkanNativeSeparatedArtifact,
+				ProductionSupportArea::VulkanRuntime,
+				ProductionBuildHasVulkan() ? ProductionSupportLevel::Experimental : ProductionSupportLevel::Unavailable,
+				ProductionBuildHasVulkan(),
+				false,
+				true,
+				false,
+				true,
+				true,
+				true,
+				false,
+				"Desktop Vulkan native payloads for selected static-shape workloads.",
+				"Graph partitioning and a clearer device-local memory planner remain before broader production claims.",
+				"Missing storage, subgroup, timestamp, or alignment capabilities must skip or fail explicitly."
+			};
 		case ProductionBackendProfile::VulkanMobileConstrained:
-			return { profile,
-				     ProductionBackendProfileName(profile),
-				     ProductionPath::MobileSeparatedRuntime,
-				     ProductionSupportArea::MobileRuntime,
-				     ProductionSupportLevel::Experimental,
-				     ProductionBuildHasVulkan(),
-				     false,
-				     false,
-				     true,
-				     true,
-				     true,
-				     true,
-				     true,
-				     "Constrained mobile runtime profile using vNext packages and Vulkan-oriented explicit capabilities.",
-				     "Needs mobile device matrix, memory-mapping policy, and device-local allocation planning.",
-				     "Unavailable mobile GPU features must skip/fail explicitly or use a declared CPU path." };
+			return {
+				profile,
+				ProductionBackendProfileName(profile),
+				ProductionPath::MobileSeparatedRuntime,
+				ProductionSupportArea::MobileRuntime,
+				ProductionSupportLevel::Experimental,
+				ProductionBuildHasVulkan(),
+				false,
+				false,
+				true,
+				true,
+				true,
+				true,
+				true,
+				"Constrained mobile runtime profile using vNext packages and Vulkan-oriented explicit capabilities.",
+				"Needs mobile device matrix, memory-mapping policy, and device-local allocation planning.",
+				"Unavailable mobile GPU features must skip/fail explicitly or use a declared CPU path."
+			};
 		}
 		return { profile,
 			     ProductionBackendProfileName(profile),
@@ -613,18 +618,17 @@ namespace LiteNN
 			     "evidence before they enter the production profile." };
 	}
 
-	inline constexpr ProductionCUDANativeCapabilityDescriptor QueryProductionCUDANativeCapability(
-	    ProductionCUDANativeCapability capability)
+	inline constexpr ProductionCUDANativeCapabilityDescriptor
+	QueryProductionCUDANativeCapability(ProductionCUDANativeCapability capability)
 	{
-		const auto unavailableLevel = ProductionBuildHasCUDA() ? ProductionSupportLevel::Deferred
-		                                                       : ProductionSupportLevel::Unavailable;
+		const auto unavailableLevel =
+		    ProductionBuildHasCUDA() ? ProductionSupportLevel::Deferred : ProductionSupportLevel::Unavailable;
 		switch (capability)
 		{
 		case ProductionCUDANativeCapability::StaticShapeDeviceTensorABI:
 			return { capability,
 				     ProductionCUDANativeCapabilityName(capability),
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     true,
 				     true,
@@ -637,8 +641,7 @@ namespace LiteNN
 		case ProductionCUDANativeCapability::GraphReplay:
 			return { capability,
 				     ProductionCUDANativeCapabilityName(capability),
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     true,
 				     true,
@@ -651,8 +654,7 @@ namespace LiteNN
 		case ProductionCUDANativeCapability::ElementwiseF32:
 			return { capability,
 				     ProductionCUDANativeCapabilityName(capability),
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     true,
 				     true,
@@ -666,8 +668,7 @@ namespace LiteNN
 		case ProductionCUDANativeCapability::LinearChainF32:
 			return { capability,
 				     ProductionCUDANativeCapabilityName(capability),
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     true,
 				     true,
@@ -683,8 +684,7 @@ namespace LiteNN
 		case ProductionCUDANativeCapability::ConcatSliceF32:
 			return { capability,
 				     ProductionCUDANativeCapabilityName(capability),
-				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported
-				                              : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
 				     ProductionBuildHasCUDA(),
 				     true,
 				     true,
@@ -741,20 +741,22 @@ namespace LiteNN
 				     "Unsupported dtype/device pairs must remain explicit fallback or rejection cases." };
 		case ProductionCUDANativeCapability::Attention:
 		case ProductionCUDANativeCapability::QuantizedProjection:
-			return { capability,
-				     ProductionCUDANativeCapabilityName(capability),
-				     unavailableLevel,
-				     ProductionBuildHasCUDA(),
-				     true,
-				     true,
-				     false,
-				     true,
-				     false,
-				     capability == ProductionCUDANativeCapability::Attention
-				         ? "Production attention kernels are not yet part of the verified CUDA native profile."
-				         : "Native quantized projection kernels are not yet part of the verified CUDA native profile.",
-				     "Requires explicit kernel implementation, device capability checks, and benchmark/parity evidence.",
-				     "Until implemented, these workloads must not be advertised as CUDA native production support." };
+			return {
+				capability,
+				ProductionCUDANativeCapabilityName(capability),
+				unavailableLevel,
+				ProductionBuildHasCUDA(),
+				true,
+				true,
+				false,
+				true,
+				false,
+				capability == ProductionCUDANativeCapability::Attention
+				    ? "Production attention kernels are not yet part of the verified CUDA native profile."
+				    : "Native quantized projection kernels are not yet part of the verified CUDA native profile.",
+				"Requires explicit kernel implementation, device capability checks, and benchmark/parity evidence.",
+				"Until implemented, these workloads must not be advertised as CUDA native production support."
+			};
 		}
 		return { capability,
 			     ProductionCUDANativeCapabilityName(capability),
@@ -839,8 +841,8 @@ namespace LiteNN
 			if (status.level != ProductionSupportLevel::Production)
 			{
 				diagnostics.push_back(std::string(status.name) + " [" +
-				                      std::string(ProductionSupportLevelName(status.level)) + "]: " +
-				                      std::string(status.policy));
+				                      std::string(ProductionSupportLevelName(status.level)) +
+				                      "]: " + std::string(status.policy));
 			}
 		}
 		return diagnostics;
@@ -854,8 +856,8 @@ namespace LiteNN
 			if (descriptor.level != ProductionSupportLevel::Production || descriptor.allowsHostFallback)
 			{
 				diagnostics.push_back(std::string(descriptor.name) + " [" +
-				                      std::string(ProductionSupportLevelName(descriptor.level)) + "]: " +
-				                      std::string(descriptor.fallbackPolicy));
+				                      std::string(ProductionSupportLevelName(descriptor.level)) +
+				                      "]: " + std::string(descriptor.fallbackPolicy));
 			}
 		}
 		return diagnostics;
@@ -869,8 +871,8 @@ namespace LiteNN
 			if (capability.level != ProductionSupportLevel::Supported || capability.allowsHostFallback)
 			{
 				diagnostics.push_back(std::string(capability.name) + " [" +
-				                      std::string(ProductionSupportLevelName(capability.level)) + "]: " +
-				                      std::string(capability.capabilityGate));
+				                      std::string(ProductionSupportLevelName(capability.level)) +
+				                      "]: " + std::string(capability.capabilityGate));
 			}
 		}
 		return diagnostics;

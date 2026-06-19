@@ -57,8 +57,7 @@ namespace
 		return ConstantNode{ tensor.CopyToDevice(PolymorphicDevice{ CPU{} }) };
 	}
 
-	double ExpectedCrossEntropy(std::span<const double> logits, std::span<const double> labels,
-	                            std::size_t classCount)
+	double ExpectedCrossEntropy(std::span<const double> logits, std::span<const double> labels, std::size_t classCount)
 	{
 		const auto rows = logits.size() / classCount;
 		double total = 0.0;
@@ -76,8 +75,7 @@ namespace
 			const auto logSumExp = std::log(sumExp) + static_cast<double>(maxLogit);
 			for (auto col = 0uz; col < classCount; ++col)
 			{
-				total -= static_cast<double>(labelsRow[col]) *
-				         (static_cast<double>(logitsRow[col]) - logSumExp);
+				total -= static_cast<double>(labelsRow[col]) * (static_cast<double>(logitsRow[col]) - logSumExp);
 			}
 		}
 		return total / static_cast<double>(rows);
@@ -94,7 +92,7 @@ namespace
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 		return graph;
 	}
-}
+} // namespace
 
 TEST(LossNode, CrossEntropyLossMatchesGGMLStyleSoftLabels)
 {
@@ -133,8 +131,7 @@ TEST(LossNode, CrossEntropyBackwardMatchesSoftmaxMinusLabels)
 	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
 
 	const std::vector<float> expected = {
-	    0.0900306f, 0.244728f, -0.334759f,
-	    0.415241f, -0.505272f, 0.0900306f,
+		0.0900306f, 0.244728f, -0.334759f, 0.415241f, -0.505272f, 0.0900306f,
 	};
 	ASSERT_EQ(outputs[0].NumElements(), expected.size());
 	for (auto i = 0uz; i < expected.size(); ++i)

@@ -100,20 +100,28 @@ namespace LiteNN
 		switch (constraint)
 		{
 		case MobileConstraint::CXXStandardLibrary:
-			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Supported,
-				     "LiteNNCore uses the C++ standard library directly; mobile builds must use the platform NDK/libc++ "
-				     "profile and keep exception/RTTI policy consistent across the app." };
+			return {
+				constraint, MobileConstraintName(constraint), MobileConstraintLevel::Supported,
+				"LiteNNCore uses the C++ standard library directly; mobile builds must use the platform NDK/libc++ "
+				"profile and keep exception/RTTI policy consistent across the app."
+			};
 		case MobileConstraint::Filesystem:
-			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
-				     "Filesystem APIs are allowed in host tools and desktop loaders; production mobile inference should "
-				     "prefer borrowed separated regions from app assets or memory-mapped packages." };
+			return {
+				constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
+				"Filesystem APIs are allowed in host tools and desktop loaders; production mobile inference should "
+				"prefer borrowed separated regions from app assets or memory-mapped packages."
+			};
 		case MobileConstraint::Reflection:
-			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
-				     "The public headers currently use C++ reflection-enabled builds; mobile runtime presets must pin a "
-				     "toolchain that supports the same language mode or compile a reduced runtime surface." };
+			return {
+				constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
+				"The public headers currently use C++ reflection-enabled builds; mobile runtime presets must pin a "
+				"toolchain that supports the same language mode or compile a reduced runtime surface."
+			};
 		case MobileConstraint::DynamicLoading:
-			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Unsupported,
-				     "Desktop shared-library carrier loading is outside the mobile ABI; use separated artifact regions." };
+			return {
+				constraint, MobileConstraintName(constraint), MobileConstraintLevel::Unsupported,
+				"Desktop shared-library carrier loading is outside the mobile ABI; use separated artifact regions."
+			};
 		case MobileConstraint::Threading:
 			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
 				     "Threading is permitted only through caller-owned policy; mobile runtime code should avoid hidden "

@@ -28,27 +28,49 @@ namespace LiteNN::Serialization
 	std::optional<DataType> TryMapSafetensorsDataType(std::string_view dtype)
 	{
 		if (dtype == "F64")
+		{
 			return DataType::Float64;
+		}
 		if (dtype == "F32")
+		{
 			return DataType::Float32;
+		}
 		if (dtype == "F16")
+		{
 			return DataType::Float16;
+		}
 		if (dtype == "BF16")
+		{
 			return DataType::BFloat16;
+		}
 		if (dtype == "F8_E4M3")
+		{
 			return DataType::Float8E4M3;
+		}
 		if (dtype == "F8_E5M2")
+		{
 			return DataType::Float8E5M2;
+		}
 		if (dtype == "I64")
+		{
 			return DataType::Int64;
+		}
 		if (dtype == "I32")
+		{
 			return DataType::Int32;
+		}
 		if (dtype == "I8")
+		{
 			return DataType::Int8;
+		}
 		if (dtype == "U8")
+		{
 			return DataType::UInt8;
+		}
 		if (dtype == "BOOL")
+		{
 			return DataType::Bool;
+		}
 		return std::nullopt;
 	}
 
@@ -170,8 +192,7 @@ namespace LiteNN::Serialization
 			return std::nullopt;
 		}
 
-		simdjson::dom::element RequireMember(simdjson::dom::object object, std::string_view key,
-		                                     std::string_view label)
+		simdjson::dom::element RequireMember(simdjson::dom::object object, std::string_view key, std::string_view label)
 		{
 			if (auto member = FindMember(object, key))
 			{
@@ -198,15 +219,13 @@ namespace LiteNN::Serialization
 			return shape;
 		}
 
-		std::pair<std::size_t, std::size_t> ParseOffsets(simdjson::dom::element value,
-		                                                 std::string_view tensorName)
+		std::pair<std::size_t, std::size_t> ParseOffsets(simdjson::dom::element value, std::string_view tensorName)
 		{
 			const auto array = RequireArray(value, std::string("data_offsets for ") + std::string(tensorName));
 			std::vector<std::size_t> offsets;
 			for (auto offsetValue : array)
 			{
-				offsets.push_back(CheckedToSize(RequireUInt(offsetValue, "data_offsets value"),
-				                                "data_offsets value"));
+				offsets.push_back(CheckedToSize(RequireUInt(offsetValue, "data_offsets value"), "data_offsets value"));
 			}
 			if (offsets.size() != 2)
 			{
@@ -261,8 +280,7 @@ namespace LiteNN::Serialization
 			return size;
 		}
 
-		std::vector<std::byte> ReadFileRange(const std::filesystem::path& path,
-		                                     std::uint64_t offset,
+		std::vector<std::byte> ReadFileRange(const std::filesystem::path& path, std::uint64_t offset,
 		                                     std::size_t byteCount)
 		{
 			std::ifstream in(path, std::ios::binary);
@@ -378,8 +396,7 @@ namespace LiteNN::Serialization
 				SafetensorsArchive archive;
 				archive.backingPath_ = path;
 				archive.payloadOffset_ = payloadOffset;
-				ParseHeader(archive, RequireObject(root, "header"),
-				            static_cast<std::size_t>(fileSize) - payloadOffset);
+				ParseHeader(archive, RequireObject(root, "header"), static_cast<std::size_t>(fileSize) - payloadOffset);
 				return archive;
 			}
 
@@ -424,8 +441,7 @@ namespace LiteNN::Serialization
 					{
 						throw std::runtime_error("Safetensors metadata contains duplicate key: " + key);
 					}
-					archive.metadata_.push_back(
-					    { key, std::string(RequireString(field.value, "__metadata__ value")) });
+					archive.metadata_.push_back({ key, std::string(RequireString(field.value, "__metadata__ value")) });
 				}
 			}
 
@@ -517,8 +533,7 @@ namespace LiteNN::Serialization
 		{
 			throw std::runtime_error("Safetensors archive has no in-memory payload or backing file");
 		}
-		tensorReadBuffer_ = Detail::ReadFileRange(backingPath_, payloadOffset_ + tensor.dataBegin,
-		                                          tensor.ByteSize());
+		tensorReadBuffer_ = Detail::ReadFileRange(backingPath_, payloadOffset_ + tensor.dataBegin, tensor.ByteSize());
 		return tensorReadBuffer_;
 	}
 
@@ -675,15 +690,15 @@ namespace LiteNN::Serialization
 			}
 			const auto rank = a.Shape()[1];
 			const auto alpha = options.defaultAlpha == 0.0f ? static_cast<float>(rank) : options.defaultAlpha;
-			result.adapters.push_back(Layer::CreateLinearLoRA(
-			    graph,
-			    Layer::LoRAAdapterMetadata{ .targetName = entry.targetName,
-			                                .adapterName = entry.adapterName,
-			                                .rank = rank,
-			                                .alpha = alpha,
-			                                .dtype = a.DType(),
-			                                .mergeMode = Layer::LoRAMergeMode::Unmerged },
-			    std::move(a), std::move(b)));
+			result.adapters.push_back(
+			    Layer::CreateLinearLoRA(graph,
+			                            Layer::LoRAAdapterMetadata{ .targetName = entry.targetName,
+			                                                        .adapterName = entry.adapterName,
+			                                                        .rank = rank,
+			                                                        .alpha = alpha,
+			                                                        .dtype = a.DType(),
+			                                                        .mergeMode = Layer::LoRAMergeMode::Unmerged },
+			                            std::move(a), std::move(b)));
 		}
 		return result;
 	}

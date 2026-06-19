@@ -19,8 +19,8 @@ namespace LiteNN::Compatibility::GGML
 			return (multiple - extent % multiple) % multiple;
 		}
 
-		inline NodeOutput AddSlice(Subgraph& subgraph, NodeOutput input, std::size_t axis,
-		                           std::size_t start, std::size_t length)
+		inline NodeOutput AddSlice(Subgraph& subgraph, NodeOutput input, std::size_t axis, std::size_t start,
+		                           std::size_t length)
 		{
 			const auto info = subgraph.GetOutputInfo(input);
 			if (axis >= info.shape.size() || start + length > info.shape[axis])
@@ -64,12 +64,13 @@ namespace LiteNN::Compatibility::GGML
 		const std::vector<std::size_t> splitShape{ channels, windowsWide, windowSize, windowsHigh, windowSize, batch };
 		const auto split = Layer::AddReshape(subgraph, padded, splitShape);
 		const auto partitioned = Layer::AddPermute(subgraph, split, { 0uz, 2uz, 4uz, 1uz, 3uz, 5uz });
-		const std::vector<std::size_t> outputShape{ channels, windowSize, windowSize, windowsWide * windowsHigh * batch };
+		const std::vector<std::size_t> outputShape{ channels, windowSize, windowSize,
+			                                        windowsWide * windowsHigh * batch };
 		return Layer::AddReshape(subgraph, partitioned, outputShape);
 	}
 
-	inline NodeOutput AddWindowUnpartition(Subgraph& subgraph, NodeOutput input, std::size_t width,
-	                                      std::size_t height, std::size_t windowSize)
+	inline NodeOutput AddWindowUnpartition(Subgraph& subgraph, NodeOutput input, std::size_t width, std::size_t height,
+	                                       std::size_t windowSize)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		if (info.dtype != DataType::Float32)
@@ -95,8 +96,8 @@ namespace LiteNN::Compatibility::GGML
 		const auto windowCount = windowsWide * windowsHigh;
 		if (info.shape[3] % windowCount != 0)
 		{
-			throw std::runtime_error(std::format("WindowUnpartition input has {} windows, not divisible by {}",
-			                               info.shape[3], windowCount));
+			throw std::runtime_error(
+			    std::format("WindowUnpartition input has {} windows, not divisible by {}", info.shape[3], windowCount));
 		}
 		const auto batch = info.shape[3] / windowCount;
 

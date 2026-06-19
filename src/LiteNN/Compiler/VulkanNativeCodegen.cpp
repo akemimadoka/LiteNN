@@ -396,11 +396,12 @@ namespace LiteNN
 			return "Binary"s + EnumToString<EnumToStringStyle::Unqualified>(op);
 		}
 
-		mlir::spirv::FuncOp EmitSameShapeBinaryFunction(
-		    mlir::OpBuilder& moduleBuilder, mlir::Location loc, DataType dtype, BinaryOp op,
-		    llvm::StringRef entryPoint, std::uint32_t elementCount, mlir::spirv::GlobalVariableOp lhs,
-		    mlir::spirv::GlobalVariableOp rhs, mlir::spirv::GlobalVariableOp out,
-		    mlir::spirv::GlobalVariableOp globalInvocationId)
+		mlir::spirv::FuncOp EmitSameShapeBinaryFunction(mlir::OpBuilder& moduleBuilder, mlir::Location loc,
+		                                                DataType dtype, BinaryOp op, llvm::StringRef entryPoint,
+		                                                std::uint32_t elementCount, mlir::spirv::GlobalVariableOp lhs,
+		                                                mlir::spirv::GlobalVariableOp rhs,
+		                                                mlir::spirv::GlobalVariableOp out,
+		                                                mlir::spirv::GlobalVariableOp globalInvocationId)
 		{
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
 			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, entryPoint, funcType);
@@ -413,18 +414,18 @@ namespace LiteNN
 			    loc, inBounds,
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto valueType = SPIRVScalarType(bodyBuilder, dtype);
-				    auto lhsValue =
-				        bodyBuilder
-				            .create<mlir::spirv::LoadOp>(
-				                loc, valueType, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, lhs, index),
-				                nullptr, nullptr)
-				            .getValue();
-				    auto rhsValue =
-				        bodyBuilder
-				            .create<mlir::spirv::LoadOp>(
-				                loc, valueType, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, rhs, index),
-				                nullptr, nullptr)
-				            .getValue();
+				    auto lhsValue = bodyBuilder
+				                        .create<mlir::spirv::LoadOp>(
+				                            loc, valueType,
+				                            EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, lhs, index),
+				                            nullptr, nullptr)
+				                        .getValue();
+				    auto rhsValue = bodyBuilder
+				                        .create<mlir::spirv::LoadOp>(
+				                            loc, valueType,
+				                            EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, rhs, index),
+				                            nullptr, nullptr)
+				                        .getValue();
 
 				    mlir::Value result;
 				    if (VulkanSPIRVScalarIsFloat(dtype))
@@ -472,14 +473,16 @@ namespace LiteNN
 						                 : bodyBuilder.create<mlir::spirv::SDivOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    case BinaryOp::Max:
-						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
-						                 ? bodyBuilder.create<mlir::spirv::GLUMaxOp>(loc, lhsValue, rhsValue).getResult()
-						                 : bodyBuilder.create<mlir::spirv::GLSMaxOp>(loc, lhsValue, rhsValue).getResult();
+						    result =
+						        VulkanSPIRVScalarIsUnsignedInteger(dtype)
+						            ? bodyBuilder.create<mlir::spirv::GLUMaxOp>(loc, lhsValue, rhsValue).getResult()
+						            : bodyBuilder.create<mlir::spirv::GLSMaxOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    case BinaryOp::Min:
-						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
-						                 ? bodyBuilder.create<mlir::spirv::GLUMinOp>(loc, lhsValue, rhsValue).getResult()
-						                 : bodyBuilder.create<mlir::spirv::GLSMinOp>(loc, lhsValue, rhsValue).getResult();
+						    result =
+						        VulkanSPIRVScalarIsUnsignedInteger(dtype)
+						            ? bodyBuilder.create<mlir::spirv::GLUMinOp>(loc, lhsValue, rhsValue).getResult()
+						            : bodyBuilder.create<mlir::spirv::GLSMinOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    default:
 						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape integer binary op");
@@ -499,10 +502,11 @@ namespace LiteNN
 			return func;
 		}
 
-		mlir::spirv::FuncOp EmitSameShapeUnaryFunction(
-		    mlir::OpBuilder& moduleBuilder, mlir::Location loc, DataType dtype, UnaryOp op,
-		    llvm::StringRef entryPoint, std::uint32_t elementCount, mlir::spirv::GlobalVariableOp input,
-		    mlir::spirv::GlobalVariableOp out, mlir::spirv::GlobalVariableOp globalInvocationId)
+		mlir::spirv::FuncOp EmitSameShapeUnaryFunction(mlir::OpBuilder& moduleBuilder, mlir::Location loc,
+		                                               DataType dtype, UnaryOp op, llvm::StringRef entryPoint,
+		                                               std::uint32_t elementCount, mlir::spirv::GlobalVariableOp input,
+		                                               mlir::spirv::GlobalVariableOp out,
+		                                               mlir::spirv::GlobalVariableOp globalInvocationId)
 		{
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
 			auto func = moduleBuilder.create<mlir::spirv::FuncOp>(loc, entryPoint, funcType);
@@ -515,12 +519,12 @@ namespace LiteNN
 			    loc, inBounds,
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto valueType = SPIRVScalarType(bodyBuilder, dtype);
-				    auto inputValue =
-				        bodyBuilder
-				            .create<mlir::spirv::LoadOp>(
-				                loc, valueType, EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, input, index),
-				                nullptr, nullptr)
-				            .getValue();
+				    auto inputValue = bodyBuilder
+				                          .create<mlir::spirv::LoadOp>(loc, valueType,
+				                                                       EmitStorageBufferElementPointer(
+				                                                           bodyBuilder, loc, valueType, input, index),
+				                                                       nullptr, nullptr)
+				                          .getValue();
 
 				    mlir::Value result;
 				    if (VulkanSPIRVScalarIsFloat(dtype))
@@ -580,9 +584,9 @@ namespace LiteNN
 			return func;
 		}
 
-		mlir::OwningOpRef<mlir::spirv::ModuleOp>
-		BuildSameShapeUnarySPIRVModule(DataType dtype, UnaryOp op, std::uint32_t elementCount,
-		                               mlir::MLIRContext& context)
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeUnarySPIRVModule(DataType dtype, UnaryOp op,
+		                                                                        std::uint32_t elementCount,
+		                                                                        mlir::MLIRContext& context)
 		{
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -630,9 +634,9 @@ namespace LiteNN
 			return BuildSameShapeUnarySPIRVModule(DataType::Float32, op, elementCount, context);
 		}
 
-		mlir::OwningOpRef<mlir::spirv::ModuleOp>
-		BuildSameShapeBinarySPIRVModule(DataType dtype, BinaryOp op, std::uint32_t elementCount,
-		                                mlir::MLIRContext& context)
+		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildSameShapeBinarySPIRVModule(DataType dtype, BinaryOp op,
+		                                                                         std::uint32_t elementCount,
+		                                                                         mlir::MLIRContext& context)
 		{
 			mlir::OpBuilder builder(&context);
 			const auto loc = mlir::UnknownLoc::get(&context);
@@ -811,7 +815,8 @@ namespace LiteNN
 
 			if (mlir::failed(mlir::verify(module)))
 			{
-				throw std::runtime_error("Generated Vulkan native MLIR SPIR-V elementwise DAG module verification failed");
+				throw std::runtime_error(
+				    "Generated Vulkan native MLIR SPIR-V elementwise DAG module verification failed");
 			}
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
@@ -1017,7 +1022,7 @@ namespace LiteNN
 
 		mlir::OwningOpRef<mlir::spirv::ModuleOp>
 		BuildMatMulBiasF32SPIRVModule(std::span<const VulkanNativeMatMulBiasF32KernelSpec> specs,
-		                               mlir::MLIRContext& context)
+		                              mlir::MLIRContext& context)
 		{
 			if (specs.empty())
 			{
@@ -1087,20 +1092,19 @@ namespace LiteNN
 						    auto biasRowBase = bodyBuilder.create<mlir::spirv::IMulOp>(loc, row, nValue).getResult();
 						    biasIndex = bodyBuilder.create<mlir::spirv::IAddOp>(loc, biasRowBase, col).getResult();
 					    }
-					    auto sum =
-					        bodyBuilder
-					            .create<mlir::spirv::LoadOp>(
-					                loc, bodyBuilder.getF32Type(),
-					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, bias, biasIndex), nullptr,
-					                nullptr)
-					            .getValue();
+					    auto sum = bodyBuilder
+					                   .create<mlir::spirv::LoadOp>(
+					                       loc, bodyBuilder.getF32Type(),
+					                       EmitF32StorageBufferElementPointer(bodyBuilder, loc, bias, biasIndex),
+					                       nullptr, nullptr)
+					                   .getValue();
 
 					    for (std::uint32_t kk = 0; kk < spec.k; ++kk)
 					    {
-						    auto lhsIndex = bodyBuilder
-						                        .create<mlir::spirv::IAddOp>(loc, rowBase,
-						                                                      EmitI32Constant(bodyBuilder, loc, kk))
-						                        .getResult();
+						    auto lhsIndex =
+						        bodyBuilder
+						            .create<mlir::spirv::IAddOp>(loc, rowBase, EmitI32Constant(bodyBuilder, loc, kk))
+						            .getResult();
 						    auto rhsIndex = bodyBuilder
 						                        .create<mlir::spirv::IAddOp>(
 						                            loc, EmitI32Constant(bodyBuilder, loc, kk * spec.n), col)
@@ -1123,8 +1127,7 @@ namespace LiteNN
 					    if (spec.relu)
 					    {
 						    sum = bodyBuilder
-						              .create<mlir::spirv::GLFMaxOp>(loc, sum,
-						                                              EmitF32Constant(bodyBuilder, loc, 0.0f))
+						              .create<mlir::spirv::GLFMaxOp>(loc, sum, EmitF32Constant(bodyBuilder, loc, 0.0f))
 						              .getResult();
 					    }
 
@@ -2581,8 +2584,9 @@ namespace LiteNN
 				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, rowIndex, inner).getResult();
 				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, rowIndex, inner).getResult();
 				auto outerAxis = b.create<mlir::spirv::IMulOp>(loc, outerIndex, axisValue).getResult();
-				return b.create<mlir::spirv::IAddOp>(
-				            loc, b.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(), innerIndex)
+				return b
+				    .create<mlir::spirv::IAddOp>(loc, b.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(),
+				                                 innerIndex)
 				    .getResult();
 			};
 			const auto emitRowIndexFromElement = [&](mlir::OpBuilder& b, mlir::Value elementIndex) {
@@ -2590,8 +2594,9 @@ namespace LiteNN
 				auto span = EmitI32Constant(b, loc, axisSpan);
 				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, elementIndex, span).getResult();
 				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, elementIndex, inner).getResult();
-				return b.create<mlir::spirv::IAddOp>(
-				            loc, b.create<mlir::spirv::IMulOp>(loc, outerIndex, inner).getResult(), innerIndex)
+				return b
+				    .create<mlir::spirv::IAddOp>(loc, b.create<mlir::spirv::IMulOp>(loc, outerIndex, inner).getResult(),
+				                                 innerIndex)
 				    .getResult();
 			};
 			const auto emitEntryPoint = [&](mlir::spirv::FuncOp func) {
@@ -2605,8 +2610,7 @@ namespace LiteNN
 			};
 
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
-			auto rowMaxFunc = moduleBuilder.create<mlir::spirv::FuncOp>(
-			    loc, SoftmaxRowMaxF32KernelName(), funcType);
+			auto rowMaxFunc = moduleBuilder.create<mlir::spirv::FuncOp>(loc, SoftmaxRowMaxF32KernelName(), funcType);
 			auto* entry = moduleBuilder.createBlock(&rowMaxFunc.getBody());
 			moduleBuilder.setInsertionPointToStart(entry);
 			auto rowIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
@@ -2643,15 +2647,14 @@ namespace LiteNN
 					    }
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
-				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax, rowIndex), maxValue,
-				        nullptr, nullptr);
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax, rowIndex), maxValue, nullptr,
+				        nullptr);
 			    },
 			    moduleBuilder);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
 			emitEntryPoint(rowMaxFunc);
 
-			auto rowSumFunc = moduleBuilder.create<mlir::spirv::FuncOp>(
-			    loc, SoftmaxRowSumF32KernelName(), funcType);
+			auto rowSumFunc = moduleBuilder.create<mlir::spirv::FuncOp>(loc, SoftmaxRowSumF32KernelName(), funcType);
 			entry = moduleBuilder.createBlock(&rowSumFunc.getBody());
 			moduleBuilder.setInsertionPointToStart(entry);
 			rowIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
@@ -2689,8 +2692,8 @@ namespace LiteNN
 					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, expValue).getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
-				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowSum, rowIndex), sum,
-				        nullptr, nullptr);
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowSum, rowIndex), sum, nullptr,
+				        nullptr);
 			    },
 			    moduleBuilder);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
@@ -2706,11 +2709,10 @@ namespace LiteNN
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto rowIndexForElement = emitRowIndexFromElement(bodyBuilder, outputIndex);
 				    auto maxValue = bodyBuilder
-				                        .create<mlir::spirv::LoadOp>(
-				                            loc, bodyBuilder.getF32Type(),
-				                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax,
-				                                                               rowIndexForElement),
-				                            nullptr, nullptr)
+				                        .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+				                                                     EmitF32StorageBufferElementPointer(
+				                                                         bodyBuilder, loc, rowMax, rowIndexForElement),
+				                                                     nullptr, nullptr)
 				                        .getValue();
 				    auto sum = bodyBuilder
 				                   .create<mlir::spirv::LoadOp>(
@@ -2742,9 +2744,10 @@ namespace LiteNN
 			return mlir::OwningOpRef<mlir::spirv::ModuleOp>(module);
 		}
 
-		mlir::OwningOpRef<mlir::spirv::ModuleOp> BuildAxisNormalizationF32SPIRVModule(
-		    NormalizationMode mode, std::span<const std::size_t> inputShape, std::size_t axis, double epsilon,
-		    bool hasScale, bool hasBias, mlir::MLIRContext& context)
+		mlir::OwningOpRef<mlir::spirv::ModuleOp>
+		BuildAxisNormalizationF32SPIRVModule(NormalizationMode mode, std::span<const std::size_t> inputShape,
+		                                     std::size_t axis, double epsilon, bool hasScale, bool hasBias,
+		                                     mlir::MLIRContext& context)
 		{
 			if (mode != NormalizationMode::LayerNorm && mode != NormalizationMode::RMSNorm)
 			{
@@ -2807,8 +2810,9 @@ namespace LiteNN
 				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, rowIndex, inner).getResult();
 				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, rowIndex, inner).getResult();
 				auto outerAxis = b.create<mlir::spirv::IMulOp>(loc, outerIndex, axisValue).getResult();
-				return b.create<mlir::spirv::IAddOp>(
-				            loc, b.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(), innerIndex)
+				return b
+				    .create<mlir::spirv::IAddOp>(loc, b.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(),
+				                                 innerIndex)
 				    .getResult();
 			};
 			const auto emitRowIndexFromElement = [&](mlir::OpBuilder& b, mlir::Value elementIndex) {
@@ -2816,8 +2820,9 @@ namespace LiteNN
 				auto span = EmitI32Constant(b, loc, axisSpan);
 				auto outerIndex = b.create<mlir::spirv::UDivOp>(loc, elementIndex, span).getResult();
 				auto innerIndex = b.create<mlir::spirv::UModOp>(loc, elementIndex, inner).getResult();
-				return b.create<mlir::spirv::IAddOp>(
-				            loc, b.create<mlir::spirv::IMulOp>(loc, outerIndex, inner).getResult(), innerIndex)
+				return b
+				    .create<mlir::spirv::IAddOp>(loc, b.create<mlir::spirv::IMulOp>(loc, outerIndex, inner).getResult(),
+				                                 innerIndex)
 				    .getResult();
 			};
 			const auto emitEntryPoint = [&](mlir::spirv::FuncOp func) {
@@ -2854,8 +2859,8 @@ namespace LiteNN
 			};
 
 			auto funcType = moduleBuilder.getFunctionType(mlir::TypeRange{}, mlir::TypeRange{});
-			auto statsFunc = moduleBuilder.create<mlir::spirv::FuncOp>(
-			    loc, AxisNormalizationStatsF32KernelName(mode), funcType);
+			auto statsFunc =
+			    moduleBuilder.create<mlir::spirv::FuncOp>(loc, AxisNormalizationStatsF32KernelName(mode), funcType);
 			auto* entry = moduleBuilder.createBlock(&statsFunc.getBody());
 			moduleBuilder.setInsertionPointToStart(entry);
 			auto rowIndex = EmitGlobalInvocationIndex(moduleBuilder, loc, globalInvocationId);
@@ -2871,8 +2876,8 @@ namespace LiteNN
 					    {
 						    mean = bodyBuilder
 						               .create<mlir::spirv::FAddOp>(
-						                   loc, mean, loadInput(bodyBuilder, emitMemberOffset(bodyBuilder, base,
-						                                                                    reduceIndex)))
+						                   loc, mean,
+						                   loadInput(bodyBuilder, emitMemberOffset(bodyBuilder, base, reduceIndex)))
 						               .getResult();
 					    }
 					    mean = bodyBuilder
@@ -2889,9 +2894,8 @@ namespace LiteNN
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < reductionSize; ++reduceIndex)
 				    {
 					    auto value = loadInput(bodyBuilder, emitMemberOffset(bodyBuilder, base, reduceIndex));
-					    auto centered = layerNorm
-					                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult()
-					                        : value;
+					    auto centered =
+					        layerNorm ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult() : value;
 					    auto squared = bodyBuilder.create<mlir::spirv::FMulOp>(loc, centered, centered).getResult();
 					    variance = bodyBuilder.create<mlir::spirv::FAddOp>(loc, variance, squared).getResult();
 				    }
@@ -2909,8 +2913,8 @@ namespace LiteNN
 				                                  .getResult())
 				                     .getResult();
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
-				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowDenom, rowIndex), denom,
-				        nullptr, nullptr);
+				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowDenom, rowIndex), denom, nullptr,
+				        nullptr);
 			    },
 			    moduleBuilder);
 			moduleBuilder.create<mlir::spirv::ReturnOp>(loc);
@@ -2930,32 +2934,30 @@ namespace LiteNN
 				    mlir::Value centered = current;
 				    if (layerNorm)
 				    {
-					    auto mean = bodyBuilder
-					                    .create<mlir::spirv::LoadOp>(
-					                        loc, bodyBuilder.getF32Type(),
-					                        EmitF32StorageBufferElementPointer(bodyBuilder, loc, *rowMean,
-					                                                           rowIndexForElement),
-					                        nullptr, nullptr)
-					                    .getValue();
+					    auto mean =
+					        bodyBuilder
+					            .create<mlir::spirv::LoadOp>(
+					                loc, bodyBuilder.getF32Type(),
+					                EmitF32StorageBufferElementPointer(bodyBuilder, loc, *rowMean, rowIndexForElement),
+					                nullptr, nullptr)
+					            .getValue();
 					    centered = bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult();
 				    }
 				    auto denom = bodyBuilder
-				                     .create<mlir::spirv::LoadOp>(
-				                         loc, bodyBuilder.getF32Type(),
-				                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowDenom,
-				                                                            rowIndexForElement),
-				                         nullptr, nullptr)
+				                     .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+				                                                  EmitF32StorageBufferElementPointer(
+				                                                      bodyBuilder, loc, rowDenom, rowIndexForElement),
+				                                                  nullptr, nullptr)
 				                     .getValue();
 				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
 				    if (scale)
 				    {
 					    auto axisIndex = emitAxisIndexFromElement(bodyBuilder, outputIndex);
 					    auto scaleValue = bodyBuilder
-					                          .create<mlir::spirv::LoadOp>(
-					                              loc, bodyBuilder.getF32Type(),
-					                              EmitF32StorageBufferElementPointer(bodyBuilder, loc, *scale,
-					                                                                 axisIndex),
-					                              nullptr, nullptr)
+					                          .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+					                                                       EmitF32StorageBufferElementPointer(
+					                                                           bodyBuilder, loc, *scale, axisIndex),
+					                                                       nullptr, nullptr)
 					                          .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FMulOp>(loc, normalized, scaleValue).getResult();
 				    }
@@ -2965,8 +2967,7 @@ namespace LiteNN
 					    auto biasValue = bodyBuilder
 					                         .create<mlir::spirv::LoadOp>(
 					                             loc, bodyBuilder.getF32Type(),
-					                             EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias,
-					                                                                axisIndex),
+					                             EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, axisIndex),
 					                             nullptr, nullptr)
 					                         .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FAddOp>(loc, normalized, biasValue).getResult();
@@ -3602,7 +3603,7 @@ namespace LiteNN
 
 		VulkanNativeGeneratedSPIRV
 		SerializeSameShapeElementwiseF32DAGSPIRV(std::span<const VulkanNativeElementwiseF32KernelOp> ops,
-		                                        std::uint32_t elementCount)
+		                                         std::uint32_t elementCount)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
@@ -3638,7 +3639,8 @@ namespace LiteNN
 			options.emitDebugInfo = false;
 			if (mlir::failed(mlir::spirv::serialize(module.get(), binary, options)))
 			{
-				throw std::runtime_error("Failed to serialize generated Vulkan native MLIR SPIR-V elementwise DAG module");
+				throw std::runtime_error(
+				    "Failed to serialize generated Vulkan native MLIR SPIR-V elementwise DAG module");
 			}
 
 			return VulkanNativeGeneratedSPIRV{
@@ -3788,14 +3790,14 @@ namespace LiteNN
 
 		VulkanNativeGeneratedSPIRV SerializeAxisNormalizationF32SPIRV(NormalizationMode mode,
 		                                                              std::span<const std::size_t> inputShape,
-		                                                              std::size_t axis, double epsilon,
-		                                                              bool hasScale, bool hasBias)
+		                                                              std::size_t axis, double epsilon, bool hasScale,
+		                                                              bool hasBias)
 		{
 			mlir::MLIRContext context;
 			context.getOrLoadDialect<mlir::spirv::SPIRVDialect>();
 
-			auto module = BuildAxisNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, hasScale, hasBias,
-			                                                   context);
+			auto module =
+			    BuildAxisNormalizationF32SPIRVModule(mode, inputShape, axis, epsilon, hasScale, hasBias, context);
 			ValidateVulkanShaderModule(module.get(), 2);
 
 			std::string mlirText;
@@ -4100,8 +4102,7 @@ namespace LiteNN
 		return VulkanNativeSameShapeUnarySPIRV(DataType::Float32, op, elementCount);
 	}
 
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op,
-	                                                           std::uint32_t elementCount)
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op, std::uint32_t elementCount)
 	{
 		if (!VulkanNativeSupportsSameShapeUnary(dtype, op))
 		{
@@ -4153,8 +4154,7 @@ namespace LiteNN
 		return VulkanNativeSameShapeBinarySPIRV(DataType::Float32, op, elementCount);
 	}
 
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinarySPIRV(DataType dtype, BinaryOp op,
-	                                                            std::uint32_t elementCount)
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeBinarySPIRV(DataType dtype, BinaryOp op, std::uint32_t elementCount)
 	{
 		if (!VulkanNativeSupportsSameShapeBinary(dtype, op))
 		{
@@ -4208,7 +4208,7 @@ namespace LiteNN
 
 	VulkanNativeGeneratedSPIRV
 	VulkanNativeSameShapeElementwiseF32DAGSPIRV(std::span<const VulkanNativeElementwiseF32KernelOp> ops,
-	                                           std::uint32_t elementCount)
+	                                            std::uint32_t elementCount)
 	{
 		if (ops.empty())
 		{
@@ -4299,8 +4299,7 @@ namespace LiteNN
 			}
 			if (!VulkanNativeSupportsMatMulBiasF32(spec.m, spec.k, spec.n, spec.biasRows))
 			{
-				throw std::runtime_error(
-				    "Vulkan native MatMulBias multi-entry spec contains unsupported dimensions");
+				throw std::runtime_error("Vulkan native MatMulBias multi-entry spec contains unsupported dimensions");
 			}
 		}
 		return SerializeMatMulBiasF32SPIRV(specs);

@@ -1,20 +1,20 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Compiler/CUDANativePayload.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelIO.h>
 
 #ifdef LITENN_ENABLE_CUDA
 #include <LiteNN/Compiler/CUDANativeCodegen.h>
 #endif
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +22,8 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
-#include <future>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -144,8 +144,8 @@ namespace
 	Graph BuildGenericExternalRegionGraph()
 	{
 		Graph graph;
-		const auto scaleIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
 		graph.SetVariableName(scaleIndex, "scale.weight");
 
 		Subgraph sg;
@@ -168,14 +168,13 @@ namespace
 	Graph BuildCallExternalRegionGraph()
 	{
 		Graph graph;
-		const auto scaleIndex = graph.AddVariable(
-		    Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
 		graph.SetVariableName(scaleIndex, "call.scale.weight");
 
 		Subgraph callee;
 		const auto calleeInput = callee.AddParam(DataType::Float32, { 2, 2 });
-		const auto scale =
-		    callee.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto scale = callee.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto scaled = callee.AddNode(BinaryOpNode{ BinaryOp::Multiply, { calleeInput, 0 }, { scale, 0 } },
 		                                   { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto biasTensor = Tensor<CPU>({ 0.125, -0.25 }, { 1, 2 }, DataType::Float32);
@@ -188,8 +187,8 @@ namespace
 
 		Subgraph forward;
 		const auto input = forward.AddParam(DataType::Float32, { 2, 2 });
-		const auto call = forward.AddNode(CallNode{ calleeId, { { input, 0 } } },
-		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto call =
+		    forward.AddNode(CallNode{ calleeId, { { input, 0 } } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		forward.SetResults({ { call, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(forward)));
 		graph.SetInputNames({ "input" });
@@ -255,8 +254,8 @@ namespace
 	{
 		Graph graph;
 		Subgraph sg;
-		auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8,
-		                                       PackedNibbleOrder::HighThenLow);
+		auto params =
+		    PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8, PackedNibbleOrder::HighThenLow);
 		Tensor<CPU> storage({ 0xf1, 0x02 }, { 2 }, DataType::UInt8);
 		const auto quantized =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
@@ -332,9 +331,9 @@ namespace
 		auto b1 = MakePatternValues(kHidden, 0.001);
 		auto w2 = MakePatternValues(kHidden * kOutput, 0.004);
 		auto b2 = MakePatternValues(kOutput, 0.001);
-		const auto h1 =
-		    Layer::CreateLinear(builder, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
-		                        Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
+		const auto h1 = Layer::CreateLinear(
+		    builder, Tensor<CPU>(std::span<const double>(w1), { kInput, kHidden }, DataType::Float32),
+		    Tensor<CPU>(std::span<const double>(b1), { 1, kHidden }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
 		    builder, Tensor<CPU>(std::span<const double>(w2), { kHidden, kOutput }, DataType::Float32),
 		    Tensor<CPU>(std::span<const double>(b2), { 1, kOutput }, DataType::Float32));
@@ -693,8 +692,8 @@ TEST(CompiledModuleTest, WritesSeparatedCarrierObjects)
 
 	const auto splitDir = root / "split";
 	separated.WriteObjectFiles(splitDir, "litenn_sep_test");
-	for (const auto& name : { "litenn_sep_test_metadata.o", "litenn_sep_test_constants.o",
-		                      "litenn_sep_test_weights.o", "litenn_sep_test_instructions.o" })
+	for (const auto& name : { "litenn_sep_test_metadata.o", "litenn_sep_test_constants.o", "litenn_sep_test_weights.o",
+	                          "litenn_sep_test_instructions.o" })
 	{
 		const auto path = splitDir / name;
 		ASSERT_TRUE(std::filesystem::exists(path)) << path.string();
@@ -724,7 +723,8 @@ TEST(CompiledModuleTest, CPUGetRowsArtifactMatchesInterpreter)
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>({ 2, 0, 3 }, { 3 }, DataType::Int32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
 	auto loaded = artifact.Load();
 	const auto outputs = loaded.RunTensors(inputs);
@@ -760,7 +760,8 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
 	const auto outputs = compiled.RunTensors(std::span<const Tensor<CPU>>(inputs));
 
@@ -820,12 +821,11 @@ TEST(CompiledModuleTest, CPUFloat16RMSNormArtifactUsesFloat32Accumulator)
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float16, { 1, 4 });
-	const auto scale =
-	    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
+	const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
 	const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float16, { 1, 4 } } });
 	const auto normalized = sg.AddNode(
-	    NormalizationNode{ { input, 0 }, NodeOutput{ scale, 0 }, NodeOutput{ bias, 0 },
-	                       NormalizationMode::RMSNorm, 1, 1, 1e-5 },
+	    NormalizationNode{
+	        { input, 0 }, NodeOutput{ scale, 0 }, NodeOutput{ bias, 0 }, NormalizationMode::RMSNorm, 1, 1, 1e-5 },
 	    { OutputInfo{ DataType::Float16, { 1, 4 } } });
 	sg.SetResults({ { normalized, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -869,8 +869,7 @@ TEST(CompiledModuleTest, CPUFloat16MatMulArtifactUsesFloat32Accumulator)
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float16, { 1, 2 });
-	const auto weight =
-	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 2, 1 } } });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 2, 1 } } });
 	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 	                               { OutputInfo{ DataType::Float16, { 1, 1 } } });
 	sg.SetResults({ { output, 0 } });
@@ -896,8 +895,8 @@ TEST(CompiledModuleTest, CPUFloat16BatchMatMulArtifactUsesFloat32Accumulator)
 	Subgraph sg;
 	const auto lhs = sg.AddParam(DataType::Float16, { 1, 1, 2 });
 	const auto rhs = sg.AddParam(DataType::Float16, { 1, 2, 1 });
-	const auto output = sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } },
-	                               { OutputInfo{ DataType::Float16, { 1, 1, 1 } } });
+	const auto output =
+	    sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float16, { 1, 1, 1 } } });
 	sg.SetResults({ { output, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -924,11 +923,10 @@ TEST(CompiledModuleTest, CPUFloat16Conv2DArtifactUsesFloat32Accumulator)
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float16, { 1, 2, 1, 1 });
-	const auto weight =
-	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 1, 2, 1, 1 } } });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float16, { 1, 2, 1, 1 } } });
 	const auto output = sg.AddNode(
-	    Conv2DNode{ { input, 0 }, { weight, 0 }, std::optional<NodeOutput>{}, { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 },
-	                1 },
+	    Conv2DNode{
+	        { input, 0 }, { weight, 0 }, std::optional<NodeOutput>{}, { 1, 1 }, { 1, 1 }, { 0, 0 }, { 0, 0 }, 1 },
 	    { OutputInfo{ DataType::Float16, { 1, 1, 1, 1 } } });
 	sg.SetResults({ { output, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -977,9 +975,8 @@ TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
 {
 	ModelBuilder builder;
 	auto& graph = builder.UnsafeMutableGraph();
-	auto linear = Layer::CreateLinear(
-	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
-	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	auto linear = Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	                                  Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,
 	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
@@ -1000,9 +997,8 @@ TEST(CompiledModuleTest, CPUUnmergedLoRAExternalRegionsCanBindAdapterWeights)
 {
 	ModelBuilder builder;
 	auto& graph = builder.UnsafeMutableGraph();
-	auto linear = Layer::CreateLinear(
-	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
-	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	auto linear = Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	                                  Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
 	graph.SetVariableName(linear.weightVariable, "linear.weight");
 	graph.SetVariableName(*linear.biasVariable, "linear.bias");
 	auto adapter = Layer::CreateLinearLoRA(
@@ -1020,7 +1016,8 @@ TEST(CompiledModuleTest, CPUUnmergedLoRAExternalRegionsCanBindAdapterWeights)
 
 	std::array inputs = { Tensor<CPU>({ 1.0f, 2.0f }, { 1, 2 }, DataType::Float32) };
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 
 	CompilerOptions options;
 	options.enableCPUAOTExternalRegions = true;
@@ -1046,9 +1043,8 @@ TEST(CompiledModuleTest, CPUUnmergedLoRAExternalRegionsCanBindAdapterWeights)
 	ASSERT_EQ(expected.size(), 1u);
 	ExpectTensorNear(outputs[0], expected[0], 1e-5f);
 
-	const auto aInfo = std::ranges::find_if(externalInfos, [](const auto& info) {
-		return info.name == "linear.lora_A.default.weight";
-	});
+	const auto aInfo = std::ranges::find_if(
+	    externalInfos, [](const auto& info) { return info.name == "linear.lora_A.default.weight"; });
 	ASSERT_NE(aInfo, externalInfos.end());
 	ASSERT_GE(borrowedWeights.size(), aInfo->byteOffset + aInfo->byteSize);
 	std::fill(borrowedWeights.begin() + static_cast<std::ptrdiff_t>(aInfo->byteOffset),
@@ -1070,20 +1066,17 @@ TEST(CompiledModuleTest, CPUBatchMatMulArtifactMatchesInterpreter)
 	Subgraph sg;
 	const auto lhs = sg.AddParam(DataType::Float32, { 2, 1, 2, 3 });
 	const auto rhs = sg.AddParam(DataType::Float32, { 1, 4, 3, 2 });
-	const auto out = sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } },
-	                            { OutputInfo{ DataType::Float32, { 2, 4, 2, 2 } } });
+	const auto out =
+	    sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, { 2, 4, 2, 2 } } });
 	sg.SetResults({ { out, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	const std::vector<double> lhsData = {
-		1.0,  -2.0, 0.5,  3.0,  0.25, -1.0,
-		0.75, 1.5,  -0.5, 2.0,  -1.25, 0.125,
+		1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5, -0.5, 2.0, -1.25, 0.125,
 	};
 	const std::vector<double> rhsData = {
-		0.5,  -1.0,  1.5, 0.25, -0.75, 2.0,
-		1.0,  0.5,   -1.0, 1.25, 0.75,  -0.25,
-		-0.5, 2.0,   0.25, -1.5, 1.0,   0.75,
-		1.25, -0.75, 0.5, 0.5,  -1.25, 1.5,
+		0.5,  -1.0, 1.5,  0.25, -0.75, 2.0,  1.0,  0.5,   -1.0, 1.25, 0.75,  -0.25,
+		-0.5, 2.0,  0.25, -1.5, 1.0,   0.75, 1.25, -0.75, 0.5,  0.5,  -1.25, 1.5,
 	};
 	std::array<Tensor<CPU>, 2> inputs = {
 		Tensor<CPU>(std::span<const double>(lhsData), { 2, 1, 2, 3 }, DataType::Float32),
@@ -1109,19 +1102,18 @@ TEST(CompiledModuleTest, CPUConv2DArtifactMatchesInterpreter)
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 2, 3, 3 });
-	const auto weight =
-	    sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 4, 1, 3, 3 } } });
+	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 4, 1, 3, 3 } } });
 	const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 4 } } });
-	const auto conv = Layer::AddConv2D(sg, { input, 0 }, { weight, 0 }, NodeOutput{ bias, 0 },
-	                                   { 1, 1 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, 2);
+	const auto conv = Layer::AddConv2D(sg, { input, 0 }, { weight, 0 }, NodeOutput{ bias, 0 }, { 1, 1 }, { 1, 1 },
+	                                   { 1, 1 }, { 1, 1 }, 2);
 	sg.SetResults({ conv });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 	graph.SetInputNames({ "input" });
 	graph.SetOutputNames({ "conv" });
 
 	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5, -0.5,
-		              2.0, -1.25, 0.125, 0.5, -0.75, 1.25, -1.5, 0.875, 0.25 },
+		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5, -0.5, 2.0, -1.25, 0.125, 0.5, -0.75, 1.25, -1.5,
+		              0.875, 0.25 },
 		            { 1, 2, 3, 3 }, DataType::Float32),
 	};
 
@@ -1159,10 +1151,8 @@ TEST(CompiledModuleTest, CPUTorchStyleGroupNormArtifactMatchesInterpreter)
 	const auto grouped = Layer::AddReshape(sg, { input, 0 }, { 1, 2, 4 });
 	const auto normalized = Layer::AddNormalization(sg, grouped, NormalizationMode::LayerNorm, 2, 1e-5);
 	const auto nchw = Layer::AddReshape(sg, normalized, { 1, 2, 2, 2 });
-	const auto scale =
-	    sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
-	const auto bias =
-	    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
+	const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
+	const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 2, 1, 1 } } });
 	const auto scaled = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, nchw, { scale, 0 } },
 	                               { OutputInfo{ DataType::Float32, { 1, 2, 2, 2 } } });
 	const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { bias, 0 } },
@@ -1171,8 +1161,7 @@ TEST(CompiledModuleTest, CPUTorchStyleGroupNormArtifactMatchesInterpreter)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	std::array<Tensor<CPU>, 1> inputs = {
-		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5 },
-		            { 1, 2, 2, 2 }, DataType::Float32),
+		Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, 0.25, -1.0, 0.75, 1.5 }, { 1, 2, 2, 2 }, DataType::Float32),
 	};
 
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs), 1e-5f);
@@ -1204,15 +1193,12 @@ TEST(CompiledModuleTest, CPUGatherPadArtifactMatchesInterpreter)
 	const auto indices = sg.AddParam(DataType::Int32, { 2 });
 	const auto gathered =
 	    sg.AddNode(GatherNode{ { data, 0 }, { indices, 0 }, 1 }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
-	const auto constantPad =
-	    sg.AddNode(PadNode{ { gathered, 0 }, { 1, 1 }, { 0, 1 }, PadMode::Constant, -5.0 },
-	               { OutputInfo{ DataType::Float32, { 3, 4 } } });
-	const auto reflectPad =
-	    sg.AddNode(PadNode{ { data, 0 }, { 1, 2 }, { 1, 1 }, PadMode::Reflect, 0.0 },
-	               { OutputInfo{ DataType::Float32, { 4, 6 } } });
-	const auto replicatePad =
-	    sg.AddNode(PadNode{ { data, 0 }, { 1, 1 }, { 1, 2 }, PadMode::Replicate, 0.0 },
-	               { OutputInfo{ DataType::Float32, { 4, 6 } } });
+	const auto constantPad = sg.AddNode(PadNode{ { gathered, 0 }, { 1, 1 }, { 0, 1 }, PadMode::Constant, -5.0 },
+	                                    { OutputInfo{ DataType::Float32, { 3, 4 } } });
+	const auto reflectPad = sg.AddNode(PadNode{ { data, 0 }, { 1, 2 }, { 1, 1 }, PadMode::Reflect, 0.0 },
+	                                   { OutputInfo{ DataType::Float32, { 4, 6 } } });
+	const auto replicatePad = sg.AddNode(PadNode{ { data, 0 }, { 1, 1 }, { 1, 2 }, PadMode::Replicate, 0.0 },
+	                                     { OutputInfo{ DataType::Float32, { 4, 6 } } });
 	sg.SetResults({ { constantPad, 0 }, { reflectPad, 0 }, { replicatePad, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1230,8 +1216,8 @@ TEST(CompiledModuleTest, CPUCrossEntropyArtifactMatchesInterpreter)
 	Subgraph sg;
 	const auto logits = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto labels = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto loss = sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto loss =
+	    sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 	sg.SetResults({ { loss, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1249,10 +1235,9 @@ TEST(CompiledModuleTest, CPURankOneSoftmaxCrossEntropyArtifactMatchesInterpreter
 	Subgraph sg;
 	const auto logits = sg.AddParam(DataType::Float32, { 3 });
 	const auto labels = sg.AddParam(DataType::Float32, { 3 });
-	const auto probabilities =
-	    sg.AddNode(SoftmaxNode{ { logits, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 3 } } });
-	const auto loss = sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto probabilities = sg.AddNode(SoftmaxNode{ { logits, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto loss =
+	    sg.AddNode(CrossEntropyLossNode{ { logits, 0 }, { labels, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 	sg.SetResults({ { probabilities, 0 }, { loss, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1291,9 +1276,9 @@ TEST(CompiledModuleTest, CPUSGDStepArtifactMatchesInterpreter)
 	Subgraph sg;
 	const auto parameter = sg.AddParam(DataType::Float32, { 4 });
 	const auto gradient = sg.AddParam(DataType::Float32, { 4 });
-	const auto update = sg.AddNode(
-	    SGDStepNode{ { parameter, 0 }, { gradient, 0 }, std::nullopt, 0.25, 0.0, 0.1, false },
-	    { OutputInfo{ DataType::Float32, { 4 } } });
+	const auto update =
+	    sg.AddNode(SGDStepNode{ { parameter, 0 }, { gradient, 0 }, std::nullopt, 0.25, 0.0, 0.1, false },
+	               { OutputInfo{ DataType::Float32, { 4 } } });
 	sg.SetResults({ { update, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1313,11 +1298,18 @@ TEST(CompiledModuleTest, CPUAdamWStepArtifactMatchesInterpreter)
 	const auto gradient = sg.AddParam(DataType::Float32, { 4 });
 	const auto firstMoment = sg.AddParam(DataType::Float32, { 4 });
 	const auto secondMoment = sg.AddParam(DataType::Float32, { 4 });
-	const auto update = sg.AddNode(
-	    AdamWStepNode{ { parameter, 0 }, { gradient, 0 }, { firstMoment, 0 }, { secondMoment, 0 },
-	                   0.05, 0.9, 0.999, 1.0e-8, 0.01, 3 },
-	    { OutputInfo{ DataType::Float32, { 4 } }, OutputInfo{ DataType::Float32, { 4 } },
-	      OutputInfo{ DataType::Float32, { 4 } } });
+	const auto update = sg.AddNode(AdamWStepNode{ { parameter, 0 },
+	                                              { gradient, 0 },
+	                                              { firstMoment, 0 },
+	                                              { secondMoment, 0 },
+	                                              0.05,
+	                                              0.9,
+	                                              0.999,
+	                                              1.0e-8,
+	                                              0.01,
+	                                              3 },
+	                               { OutputInfo{ DataType::Float32, { 4 } }, OutputInfo{ DataType::Float32, { 4 } },
+	                                 OutputInfo{ DataType::Float32, { 4 } } });
 	sg.SetResults({ { update, 0 }, { update, 1 }, { update, 2 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -2197,7 +2189,8 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
@@ -2230,10 +2223,11 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto graph = BuildWideLinearChainGraph(kBatch);
 	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput },
-	                                                  DataType::Float32) };
+		                                              DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
@@ -2274,14 +2268,12 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	for (std::size_t i = 0; i < 4; ++i)
 	{
 		const auto name = std::format("variable{}", i);
-		const auto it = std::ranges::find_if(externalInfos, [&](const auto& info) {
-			return info.name == name && info.region == "weights";
-		});
+		const auto it = std::ranges::find_if(
+		    externalInfos, [&](const auto& info) { return info.name == name && info.region == "weights"; });
 		EXPECT_NE(it, externalInfos.end());
 	}
 
-	auto runAndCheck = [&](CompiledModule<CPU>& module)
-	{
+	auto runAndCheck = [&](CompiledModule<CPU>& module) {
 		std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32) };
 		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
 
@@ -2347,8 +2339,9 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	EXPECT_THROW((void) separated.WithReboundConstants({ .data = wrongSize.data(), .size = wrongSize.size() }),
 	             std::runtime_error);
 	std::vector<std::byte> wrongWeightsSize(separated.Weights().size() + 1);
-	EXPECT_THROW((void) separated.WithReboundWeights({ .data = wrongWeightsSize.data(), .size = wrongWeightsSize.size() }),
-	             std::runtime_error);
+	EXPECT_THROW(
+	    (void) separated.WithReboundWeights({ .data = wrongWeightsSize.data(), .size = wrongWeightsSize.size() }),
+	    std::runtime_error);
 
 	std::vector<std::byte> corruptedWeights(separated.Weights().begin(), separated.Weights().end());
 	ASSERT_FALSE(corruptedWeights.empty());
@@ -2369,7 +2362,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 	auto inlineModule = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph)).Load();
 	const auto inlineOutputs = inlineModule.RunTensors(std::span<const Tensor<CPU>>(inputs));
 
@@ -2478,7 +2472,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
 		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
 	};
 	Runtime::Interpreter<CPU> interpreter;
-	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 
 	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
 	auto separated = artifact.SeparateRodata();
@@ -2486,9 +2481,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
 	ASSERT_GT(separated.Weights().size(), 0u);
 	const auto externalInfos = separated.ExternalTensorInfos();
 	ASSERT_EQ(externalInfos.size(), 2u);
-	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
-		return info.name == "call.scale.weight" && info.region == "weights";
-	}));
+	EXPECT_TRUE(std::ranges::any_of(
+	    externalInfos, [](const auto& info) { return info.name == "call.scale.weight" && info.region == "weights"; }));
 	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
 		return info.name.starts_with("constant_") && info.region == "constants";
 	}));
@@ -2512,9 +2506,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 	ASSERT_GT(separated.Weights().size(), 0u);
 	const auto externalInfos = separated.ExternalTensorInfos();
 	ASSERT_EQ(externalInfos.size(), 2u);
-	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
-		return info.name == "cond.scale.weight" && info.region == "weights";
-	}));
+	EXPECT_TRUE(std::ranges::any_of(
+	    externalInfos, [](const auto& info) { return info.name == "cond.scale.weight" && info.region == "weights"; }));
 	EXPECT_TRUE(std::ranges::any_of(externalInfos, [](const auto& info) {
 		return info.name.starts_with("constant_") && info.region == "constants";
 	}));
@@ -2526,7 +2519,8 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCondNode)
 			std::move(condition),
 			Tensor<CPU>({ 1.5, -2.0 }, { 2 }, DataType::Float32),
 		};
-		const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+		const auto expected =
+		    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
 		const auto outputs = module.RunTensors(std::span<const Tensor<CPU>>(inputs));
 		ASSERT_EQ(outputs.size(), expected.size());
 		ExpectTensorNear(outputs[0], expected[0], 1e-5f);
@@ -2563,7 +2557,8 @@ TEST(CompiledModuleTest, CompilerDefaultsDoNotReadEnvironmentVariables)
 	explicitOptions.cpuAOTThreadCount = 4;
 	explicitOptions.cpuAOTParallelMinFlops = 1;
 	explicitOptions.enableCPUAOTExternalRegions = true;
-	auto explicitArtifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), explicitOptions);
+	auto explicitArtifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), explicitOptions);
 
 	EXPECT_EQ(defaultArtifact.SeparateRodata().Weights().size(), 0u);
 	EXPECT_GT(explicitArtifact.SeparateRodata().Weights().size(), 0u);
@@ -2652,7 +2647,7 @@ void SkipBytesForTest(std::span<const std::byte> metadata, std::size_t& offset)
 
 ExternalTensorMetadataOffsets FindFirstExternalTensorMetadataOffsets(std::span<const std::byte> metadata)
 {
-	std::size_t offset = 8; // separated metadata magic
+	std::size_t offset = 8;                    // separated metadata magic
 	(void) ReadU32LEForTest(metadata, offset); // version
 	(void) ReadU32LEForTest(metadata, offset); // pointer size
 	(void) ReadU32LEForTest(metadata, offset); // endian tag
@@ -2694,8 +2689,7 @@ ExternalTensorMetadataOffsets FindFirstExternalTensorMetadataOffsets(std::span<c
 }
 
 template <typename Mutator>
-void ExpectMalformedExternalTensorMetadata(const CompiledModuleSeparatedArtifact& separated,
-                                           Mutator&& mutator,
+void ExpectMalformedExternalTensorMetadata(const CompiledModuleSeparatedArtifact& separated, Mutator&& mutator,
                                            std::string_view expectedMessage)
 {
 	std::vector<std::byte> metadata(separated.Metadata().begin(), separated.Metadata().end());

@@ -9,637 +9,647 @@
 
 namespace LiteNN::Debug
 {
-namespace
-{
-	template <typename Formatter>
-	std::string JoinIndexed(std::size_t count, std::string_view separator, Formatter&& formatter)
+	namespace
 	{
-		std::string result;
-		for (std::size_t index = 0; index < count; ++index)
+		template <typename Formatter>
+		std::string JoinIndexed(std::size_t count, std::string_view separator, Formatter&& formatter)
 		{
-			if (index != 0)
+			std::string result;
+			for (std::size_t index = 0; index < count; ++index)
 			{
-				result += separator;
+				if (index != 0)
+				{
+					result += separator;
+				}
+				result += formatter(index);
 			}
-			result += formatter(index);
+			return result;
 		}
-		return result;
-	}
 
-	template <typename Range, typename Formatter>
-	std::string JoinMapped(const Range& range, std::string_view separator, Formatter&& formatter)
-	{
-		std::string result;
-		bool first = true;
-		for (const auto& value : range)
+		template <typename Range, typename Formatter>
+		std::string JoinMapped(const Range& range, std::string_view separator, Formatter&& formatter)
 		{
-			if (!first)
+			std::string result;
+			bool first = true;
+			for (const auto& value : range)
 			{
-				result += separator;
+				if (!first)
+				{
+					result += separator;
+				}
+				first = false;
+				result += formatter(value);
 			}
-			first = false;
-			result += formatter(value);
-		}
-		return result;
-	}
-
-	std::string FormatValueRef(NodeOutput output)
-	{
-		if (output.port == 0)
-		{
-			return std::format("%{}", output.node);
-		}
-		return std::format("%{}#{}", output.node, output.port);
-	}
-
-	std::string FormatOptionalValueRef(const std::optional<NodeOutput>& output)
-	{
-		return output ? FormatValueRef(*output) : "none";
-	}
-
-	std::string FormatInfo(DataType dtype, std::span<const std::size_t> shape)
-	{
-		return Validation::FormatInfo(dtype, shape);
-	}
-
-	std::string FormatInfo(const OutputInfo& info)
-	{
-		return FormatInfo(info.dtype, info.shape);
-	}
-
-	std::string FormatInfo(const SubgraphParam& param)
-	{
-		return FormatInfo(param.dtype, param.shape);
-	}
-
-	std::string FormatInfo(const ActivationSlot& slot)
-	{
-		return FormatInfo(slot.dtype, slot.shape);
-	}
-
-	std::string FormatInfo(const TapeSlot& slot)
-	{
-		return FormatInfo(slot.dtype, slot.shape);
-	}
-
-	std::string FormatInfo(const NamedTensorSpec& spec)
-	{
-		return std::format("{}: {}", spec.name, FormatInfo(spec.dtype, spec.shape));
-	}
-
-	std::string UnaryOpToString(UnaryOp op)
-	{
-		switch (op)
-		{
-		case UnaryOp::Negate:
-			return "UnaryOp::Negate";
-		case UnaryOp::Abs:
-			return "UnaryOp::Abs";
-		case UnaryOp::Sqrt:
-			return "UnaryOp::Sqrt";
-		case UnaryOp::Exp:
-			return "UnaryOp::Exp";
-		case UnaryOp::Log:
-			return "UnaryOp::Log";
-		case UnaryOp::Sin:
-			return "UnaryOp::Sin";
-		case UnaryOp::Cos:
-			return "UnaryOp::Cos";
-		case UnaryOp::Tan:
-			return "UnaryOp::Tan";
-		case UnaryOp::Arcsin:
-			return "UnaryOp::Arcsin";
-		case UnaryOp::Arccos:
-			return "UnaryOp::Arccos";
-		case UnaryOp::Arctan:
-			return "UnaryOp::Arctan";
-		case UnaryOp::Transpose:
-			return "UnaryOp::Transpose";
-		case UnaryOp::LogicalNegation:
-			return "UnaryOp::LogicalNegation";
-		case UnaryOp::Erf:
-			return "UnaryOp::Erf";
-		}
-		return std::format("UnaryOp::<invalid:{}>", static_cast<int>(op));
-	}
-
-	std::string BinaryOpToString(BinaryOp op)
-	{
-		switch (op)
-		{
-		case BinaryOp::Add:
-			return "BinaryOp::Add";
-		case BinaryOp::Subtract:
-			return "BinaryOp::Subtract";
-		case BinaryOp::Multiply:
-			return "BinaryOp::Multiply";
-		case BinaryOp::Divide:
-			return "BinaryOp::Divide";
-		case BinaryOp::MatMul:
-			return "BinaryOp::MatMul";
-		case BinaryOp::Pow:
-			return "BinaryOp::Pow";
-		case BinaryOp::Max:
-			return "BinaryOp::Max";
-		case BinaryOp::Min:
-			return "BinaryOp::Min";
-		case BinaryOp::Less:
-			return "BinaryOp::Less";
-		case BinaryOp::Greater:
-			return "BinaryOp::Greater";
-		case BinaryOp::Equal:
-			return "BinaryOp::Equal";
-		}
-		return std::format("BinaryOp::<invalid:{}>", static_cast<int>(op));
-	}
-
-	std::string ReduceOpToString(ReduceOp op)
-	{
-		switch (op)
-		{
-		case ReduceOp::Sum:
-			return "ReduceOp::Sum";
-		case ReduceOp::Mean:
-			return "ReduceOp::Mean";
-		case ReduceOp::Max:
-			return "ReduceOp::Max";
-		case ReduceOp::Min:
-			return "ReduceOp::Min";
-	}
-		return std::format("ReduceOp::<invalid:{}>", static_cast<int>(op));
-	}
-
-	std::string FusionPatternToString(FusionPattern pattern)
-	{
-		switch (pattern)
-		{
-		case FusionPattern::MatMulBiasAdd:
-			return "FusionPattern::MatMulBiasAdd";
-		case FusionPattern::ElementWiseChain:
-			return "FusionPattern::ElementWiseChain";
-		case FusionPattern::MatMulBiasAddReLU:
-			return "FusionPattern::MatMulBiasAddReLU";
-		}
-		return std::format("FusionPattern::<invalid:{}>", static_cast<int>(pattern));
-	}
-
-	std::string SortOrderToString(SortOrder order)
-	{
-		switch (order)
-		{
-		case SortOrder::Ascending:
-			return "SortOrder::Ascending";
-		case SortOrder::Descending:
-			return "SortOrder::Descending";
-		}
-		return std::format("SortOrder::<invalid:{}>", static_cast<int>(order));
-	}
-
-	std::string PadModeToString(PadMode mode)
-	{
-		switch (mode)
-		{
-		case PadMode::Constant:
-			return "PadMode::Constant";
-		case PadMode::Reflect:
-			return "PadMode::Reflect";
-		case PadMode::Replicate:
-			return "PadMode::Replicate";
-		}
-		return std::format("PadMode::<invalid:{}>", static_cast<int>(mode));
-	}
-
-	std::string ScatterModeToString(ScatterMode mode)
-	{
-		switch (mode)
-		{
-		case ScatterMode::Update:
-			return "ScatterMode::Update";
-		case ScatterMode::Add:
-			return "ScatterMode::Add";
-		}
-		return std::format("ScatterMode::<invalid:{}>", static_cast<int>(mode));
-	}
-
-	std::string ScanOpToString(ScanOp op)
-	{
-		switch (op)
-		{
-		case ScanOp::Sum:
-			return "ScanOp::Sum";
-		case ScanOp::Max:
-			return "ScanOp::Max";
-		case ScanOp::Prod:
-			return "ScanOp::Prod";
-		case ScanOp::LogSumExp:
-			return "ScanOp::LogSumExp";
-		}
-		return std::format("ScanOp::<invalid:{}>", static_cast<int>(op));
-	}
-
-	std::string NormalizationModeToString(NormalizationMode mode)
-	{
-		switch (mode)
-		{
-		case NormalizationMode::LayerNorm:
-			return "NormalizationMode::LayerNorm";
-		case NormalizationMode::RMSNorm:
-			return "NormalizationMode::RMSNorm";
-		case NormalizationMode::GroupNorm:
-			return "NormalizationMode::GroupNorm";
-		}
-		return std::format("NormalizationMode::<invalid:{}>", static_cast<int>(mode));
-	}
-
-	std::string PoolModeToString(PoolMode mode)
-	{
-		switch (mode)
-		{
-		case PoolMode::Max:
-			return "PoolMode::Max";
-		case PoolMode::Average:
-			return "PoolMode::Average";
-		}
-		return std::format("PoolMode::<invalid:{}>", static_cast<int>(mode));
-	}
-
-	std::string UpsampleModeToString(UpsampleMode mode)
-	{
-		switch (mode)
-		{
-		case UpsampleMode::Nearest:
-			return "UpsampleMode::Nearest";
-		case UpsampleMode::Bilinear:
-			return "UpsampleMode::Bilinear";
-		case UpsampleMode::Bicubic:
-			return "UpsampleMode::Bicubic";
-		}
-		return std::format("UpsampleMode::<invalid:{}>", static_cast<int>(mode));
-	}
-
-	std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
-	{
-		if (!options.includeConstantValues)
-		{
-			return std::format("<{} elements elided>", tensor.NumElements());
+			return result;
 		}
 
-		if (tensor.NumElements() > options.maxConstantElements)
+		std::string FormatValueRef(NodeOutput output)
 		{
-			return std::format("<{} elements elided>", tensor.NumElements());
-		}
-
-		return std::format("{}", tensor);
-	}
-
-	std::string FormatNodeOutputs(NodeId nodeId, std::span<const OutputInfo> outputInfos)
-	{
-		if (outputInfos.size() == 1)
-		{
-			return std::format("{}: {}", FormatValueRef({ nodeId, 0 }), FormatInfo(outputInfos.front()));
-		}
-
-		return std::format("({})",
-		                   JoinIndexed(outputInfos.size(), ", ", [&](std::size_t port) {
-			                   return std::format("{}: {}", FormatValueRef({ nodeId, port }),
-			                                      FormatInfo(outputInfos[port]));
-		                   }));
-	}
-
-	std::string FormatNodeArgs(std::span<const NodeOutput> outputs)
-	{
-		return std::format("[{}]", JoinMapped(outputs, ", ", [](NodeOutput output) { return FormatValueRef(output); }));
-	}
-
-	std::string FormatNodePayload(const NodeVariant& node, const GraphDumpOptions& options)
-	{
-		return std::visit(
-		    [&](const auto& value) -> std::string {
-				using T = std::decay_t<decltype(value)>;
-				if constexpr (std::same_as<T, ParamRefNode>)
-				{
-					return std::format("ParamRefNode(param={})", value.paramIndex);
-				}
-				else if constexpr (std::same_as<T, ConstantNode>)
-				{
-					return std::format("ConstantNode(value={})", FormatTensorSummary(value.value, options));
-				}
-				else if constexpr (std::same_as<T, QuantizedConstantNode>)
-				{
-					return std::format("QuantizedConstantNode(storage={}, scheme={}, format={}, packed={}, order={}, scaleLayout={})",
-					                   FormatTensorSummary(value.storage, options),
-					                   QuantizationSchemeName(value.params.scheme),
-					                   QuantizedBlockFormatName(value.params.blockFormat),
-					                   PackedNibbleFormatName(value.params.packedFormat),
-					                   PackedNibbleOrderName(value.params.packedOrder),
-					                   BlockScaleLayoutName(value.params.blockScaleLayout));
-				}
-				else if constexpr (std::same_as<T, VariableRefNode>)
-				{
-					return std::format("VariableRefNode(variable={})", value.variableIndex);
-				}
-				else if constexpr (std::same_as<T, UnaryOpNode>)
-				{
-					return std::format("UnaryOpNode(op={}, input={})", UnaryOpToString(value.op),
-					                   FormatValueRef(value.input));
-				}
-				else if constexpr (std::same_as<T, BinaryOpNode>)
-				{
-					return std::format("BinaryOpNode(op={}, lhs={}, rhs={})", BinaryOpToString(value.op),
-					                   FormatValueRef(value.lhs), FormatValueRef(value.rhs));
-				}
-				else if constexpr (std::same_as<T, CallNode>)
-				{
-					return std::format("CallNode(callee=@{}, args={})", value.callee, FormatNodeArgs(value.args));
-				}
-				else if constexpr (std::same_as<T, CastNode>)
-				{
-					return std::format("CastNode(input={}, targetType={})", FormatValueRef(value.input),
-					                   Validation::DataTypeToString(value.targetType));
-				}
-				else if constexpr (std::same_as<T, QuantizeNode>)
-				{
-					return std::format("QuantizeNode(input={}, storageType={}, granularity={})",
-					                   FormatValueRef(value.input),
-					                   Validation::DataTypeToString(value.params.storageType),
-					                   QuantizationGranularityName(value.params.granularity));
-				}
-				else if constexpr (std::same_as<T, DequantizeNode>)
-				{
-					return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={}, packed={}, order={}, scaleLayout={})",
-					                   FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
-					                   QuantizationSchemeName(value.params.scheme),
-					                   QuantizedBlockFormatName(value.params.blockFormat),
-					                   PackedNibbleFormatName(value.params.packedFormat),
-					                   PackedNibbleOrderName(value.params.packedOrder),
-					                   BlockScaleLayoutName(value.params.blockScaleLayout));
-				}
-				else if constexpr (std::same_as<T, CondNode>)
-				{
-					return std::format("CondNode(condition={}, then=@{}, else=@{}, args={})",
-					                   FormatValueRef(value.condition), value.thenBranch, value.elseBranch,
-					                   FormatNodeArgs(value.args));
-				}
-				else if constexpr (std::same_as<T, WhileNode>)
-				{
-					return std::format("WhileNode(cond=@{}, body=@{}, initArgs={})", value.condBranch,
-					                   value.bodyBranch, FormatNodeArgs(value.initArgs));
-				}
-				else if constexpr (std::same_as<T, SaveActivationNode>)
-				{
-					return std::format("SaveActivationNode(input={}, slot={})", FormatValueRef(value.input), value.slotId);
-				}
-				else if constexpr (std::same_as<T, LoadActivationNode>)
-				{
-					return std::format("LoadActivationNode(slot={})", value.slotId);
-				}
-				else if constexpr (std::same_as<T, TapeSaveActivationNode>)
-				{
-					return std::format("TapeSaveActivationNode(input={}, tapeSlot={})", FormatValueRef(value.input),
-					                   value.tapeSlotId);
-				}
-				else if constexpr (std::same_as<T, TapeLoadActivationNode>)
-				{
-					return std::format("TapeLoadActivationNode(tapeSlot={})", value.tapeSlotId);
-				}
-				else if constexpr (std::same_as<T, ReduceOpNode>)
-				{
-					return std::format("ReduceOpNode(op={}, input={}, axis={})", ReduceOpToString(value.op),
-					                   FormatValueRef(value.input), value.axis);
-				}
-				else if constexpr (std::same_as<T, ReshapeNode>)
-				{
-					return std::format("ReshapeNode(input={}, targetShape={})", FormatValueRef(value.input),
-					                   Validation::ShapeToString(value.targetShape));
-				}
-				else if constexpr (std::same_as<T, PermuteNode>)
-				{
-					return std::format("PermuteNode(input={}, permutation={})", FormatValueRef(value.input),
-					                   Validation::ShapeToString(value.permutation));
-				}
-				else if constexpr (std::same_as<T, BroadcastToNode>)
-				{
-					return std::format("BroadcastToNode(input={}, targetShape={})", FormatValueRef(value.input),
-					                   Validation::ShapeToString(value.targetShape));
-				}
-				else if constexpr (std::same_as<T, PadNode>)
-				{
-					return std::format("PadNode(input={}, lowPads={}, highPads={}, mode={}, constantValue={})",
-					                   FormatValueRef(value.input), Validation::ShapeToString(value.lowPads),
-					                   Validation::ShapeToString(value.highPads), PadModeToString(value.mode),
-					                   value.constantValue);
-				}
-				else if constexpr (std::same_as<T, GatherNode>)
-				{
-					return std::format("GatherNode(data={}, indices={}, axis={})", FormatValueRef(value.data),
-					                   FormatValueRef(value.indices), value.axis);
-				}
-				else if constexpr (std::same_as<T, ScatterNode>)
-				{
-					return std::format("ScatterNode(data={}, indices={}, updates={}, axis={}, mode={})",
-					                   FormatValueRef(value.data), FormatValueRef(value.indices),
-					                   FormatValueRef(value.updates), value.axis, ScatterModeToString(value.mode));
-				}
-				else if constexpr (std::same_as<T, ScanNode>)
-				{
-					return std::format("ScanNode(input={}, axis={}, op={})", FormatValueRef(value.input),
-					                   value.axis, ScanOpToString(value.op));
-				}
-				else if constexpr (std::same_as<T, SSMScanNode>)
-				{
-					return std::format("SSMScanNode(state={}, dt={}, a={}, b={}, c={}, d={})",
-					                   FormatValueRef(value.state), FormatValueRef(value.dt), FormatValueRef(value.a),
-					                   FormatValueRef(value.b), FormatValueRef(value.c), FormatOptionalValueRef(value.d));
-				}
-				else if constexpr (std::same_as<T, RWKVWKVNode>)
-				{
-					return std::format("RWKVWKVNode(key={}, value={}, receptance={}, timeDecay={}, timeFirst={})",
-					                   FormatValueRef(value.key), FormatValueRef(value.value),
-					                   FormatValueRef(value.receptance), FormatValueRef(value.timeDecay),
-					                   FormatValueRef(value.timeFirst));
-				}
-				else if constexpr (std::same_as<T, SoftmaxNode>)
-				{
-					return std::format("SoftmaxNode(input={}, axis={})", FormatValueRef(value.input), value.axis);
-				}
-				else if constexpr (std::same_as<T, CrossEntropyLossNode>)
-				{
-					return std::format("CrossEntropyLossNode(logits={}, labels={})",
-					                   FormatValueRef(value.logits), FormatValueRef(value.labels));
-				}
-				else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
-				{
-					return std::format("CrossEntropyLossBackwardNode(grad={}, logits={}, labels={})",
-					                   FormatValueRef(value.grad), FormatValueRef(value.logits),
-					                   FormatValueRef(value.labels));
-				}
-				else if constexpr (std::same_as<T, NormalizationNode>)
-				{
-					return std::format(
-					    "NormalizationNode(input={}, scale={}, bias={}, mode={}, axis={}, groupCount={}, epsilon={})",
-					    FormatValueRef(value.input), FormatOptionalValueRef(value.scale), FormatOptionalValueRef(value.bias),
-					    NormalizationModeToString(value.mode), value.axis, value.groupCount, value.epsilon);
-				}
-				else if constexpr (std::same_as<T, BatchMatMulNode>)
-				{
-					return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
-					                   FormatValueRef(value.rhs));
-				}
-				else if constexpr (std::same_as<T, OutProdNode>)
-				{
-					return std::format("OutProdNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
-					                   FormatValueRef(value.rhs));
-				}
-				else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
-				{
-					return std::format("TimestepEmbeddingNode(timesteps={}, dim={}, maxPeriod={})",
-					                   FormatValueRef(value.timesteps), value.dim, value.maxPeriod);
-				}
-				else if constexpr (std::same_as<T, SolveTriNode>)
-				{
-					return std::format("SolveTriNode(a={}, b={}, lower={}, unitDiagonal={})",
-					                   FormatValueRef(value.a), FormatValueRef(value.b), value.lower,
-					                   value.unitDiagonal);
-				}
-				else if constexpr (std::same_as<T, SGDStepNode>)
-				{
-					return std::format(
-					    "SGDStepNode(parameter={}, gradient={}, velocity={}, learningRate={}, momentum={}, weightDecay={}, nesterov={})",
-					    FormatValueRef(value.parameter), FormatValueRef(value.gradient),
-					    FormatOptionalValueRef(value.velocity), value.learningRate, value.momentum,
-					    value.weightDecay, value.nesterov);
-				}
-				else if constexpr (std::same_as<T, AdamWStepNode>)
-				{
-					return std::format(
-					    "AdamWStepNode(parameter={}, gradient={}, firstMoment={}, secondMoment={}, learningRate={}, beta1={}, beta2={}, epsilon={}, weightDecay={}, step={})",
-					    FormatValueRef(value.parameter), FormatValueRef(value.gradient),
-					    FormatValueRef(value.firstMoment), FormatValueRef(value.secondMoment),
-					    value.learningRate, value.beta1, value.beta2, value.epsilon,
-					    value.weightDecay, value.step);
-				}
-				else if constexpr (std::same_as<T, Im2ColNode>)
-				{
-					return std::format(
-					    "Im2ColNode(input={}, kernelShape={}, strides={}, dilations={}, lowPads={}, highPads={})",
-					    FormatValueRef(value.input), Validation::ShapeToString(value.kernelShape),
-					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
-					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads));
-				}
-				else if constexpr (std::same_as<T, Conv2DNode>)
-				{
-					return std::format(
-					    "Conv2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, lowPads={}, highPads={}, groupCount={})",
-					    FormatValueRef(value.input), FormatValueRef(value.weight), FormatOptionalValueRef(value.bias),
-					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
-					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
-					    value.groupCount);
-				}
-				else if constexpr (std::same_as<T, ConvTranspose2DNode>)
-				{
-					return std::format(
-					    "ConvTranspose2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, lowPads={}, highPads={}, outputPads={}, groupCount={})",
-					    FormatValueRef(value.input), FormatValueRef(value.weight), FormatOptionalValueRef(value.bias),
-					    Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
-					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
-					    Validation::ShapeToString(value.outputPads), value.groupCount);
-				}
-				else if constexpr (std::same_as<T, Pool2DNode>)
-				{
-					return std::format(
-					    "Pool2DNode(input={}, mode={}, kernelShape={}, strides={}, lowPads={}, highPads={}, countIncludePad={})",
-					    FormatValueRef(value.input), PoolModeToString(value.mode),
-					    Validation::ShapeToString(value.kernelShape), Validation::ShapeToString(value.strides),
-					    Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads),
-					    value.countIncludePad);
-				}
-				else if constexpr (std::same_as<T, UpsampleNode>)
-				{
-					return std::format("UpsampleNode(input={}, mode={}, outputSpatialShape={}, alignCorners={})",
-					                   FormatValueRef(value.input), UpsampleModeToString(value.mode),
-					                   Validation::ShapeToString(value.outputSpatialShape), value.alignCorners);
-				}
-				else if constexpr (std::same_as<T, ConcatNode>)
-				{
-					return std::format("ConcatNode(inputs={}, axis={})", FormatNodeArgs(value.inputs), value.axis);
-				}
-				else if constexpr (std::same_as<T, SliceNode>)
-				{
-					return std::format("SliceNode(input={}, axis={}, start={}, length={})", FormatValueRef(value.input),
-					                   value.axis, value.start, value.length);
-				}
-				else if constexpr (std::same_as<T, GetRowsNode>)
-				{
-					return std::format("GetRowsNode(data={}, indices={})", FormatValueRef(value.data),
-					                   FormatValueRef(value.indices));
-				}
-				else if constexpr (std::same_as<T, ArgsortNode>)
-				{
-					return std::format("ArgsortNode(input={}, axis={}, order={})", FormatValueRef(value.input),
-					                   value.axis, SortOrderToString(value.order));
-				}
-				else if constexpr (std::same_as<T, MulMatIdNode>)
-				{
-					return std::format("MulMatIdNode(as={}, b={}, ids={})", FormatValueRef(value.as),
-					                   FormatValueRef(value.b), FormatValueRef(value.ids));
-				}
-				else if constexpr (std::same_as<T, FusedOpNode>)
-				{
-					return std::format("FusedOpNode(pattern={}, body=@{}, args={})",
-					                   FusionPatternToString(value.pattern), value.body, FormatNodeArgs(value.args));
-				}
-				else
-				{
-					return std::format("{}", Validation::NodeKindName(node));
-				}
-		    },
-		    node);
-	}
-
-	std::string FormatForwardSignatures(const Graph& graph)
-	{
-		if (graph.SubgraphCount() == 0 || graph.Forward() >= graph.SubgraphCount())
-		{
-			return "<unavailable>";
-		}
-
-		const auto inputSignature = graph.InputSignature();
-		const auto outputSignature = graph.OutputSignature();
-		return std::format("inputs = [{}]\n  outputs = [{}]",
-		                   JoinMapped(inputSignature, ", ", [](const NamedTensorSpec& spec) { return FormatInfo(spec); }),
-		                   JoinMapped(outputSignature, ", ", [](const NamedTensorSpec& spec) { return FormatInfo(spec); }));
-	}
-
-	std::string FormatSubgraphResults(const Graph& graph, SubgraphId subgraphId, const Subgraph& subgraph)
-	{
-		return std::format(
-		    "[{}]",
-		    JoinIndexed(subgraph.Results().size(), ", ", [&](std::size_t index) {
-			    const auto result = subgraph.Results()[index];
-			    const auto& info = subgraph.GetOutputInfo(result);
-			    const auto name = subgraphId == graph.Forward() ? graph.OutputName(index) : std::format("result{}", index);
-			    return std::format("{}={}: {}", name, FormatValueRef(result), FormatInfo(info));
-		    }));
-	}
-
-	std::string FormatSubgraphTags(const Graph& graph, SubgraphId subgraphId)
-	{
-		std::string tags;
-		if (subgraphId == graph.Forward())
-		{
-			tags = "forward";
-		}
-		if (graph.Backward() && subgraphId == *graph.Backward())
-		{
-			if (!tags.empty())
+			if (output.port == 0)
 			{
-				tags += ", ";
+				return std::format("%{}", output.node);
 			}
-			tags += "backward";
+			return std::format("%{}#{}", output.node, output.port);
 		}
-		return tags.empty() ? "" : std::format(" [{}]", tags);
-	}
-} // namespace
+
+		std::string FormatOptionalValueRef(const std::optional<NodeOutput>& output)
+		{
+			return output ? FormatValueRef(*output) : "none";
+		}
+
+		std::string FormatInfo(DataType dtype, std::span<const std::size_t> shape)
+		{
+			return Validation::FormatInfo(dtype, shape);
+		}
+
+		std::string FormatInfo(const OutputInfo& info)
+		{
+			return FormatInfo(info.dtype, info.shape);
+		}
+
+		std::string FormatInfo(const SubgraphParam& param)
+		{
+			return FormatInfo(param.dtype, param.shape);
+		}
+
+		std::string FormatInfo(const ActivationSlot& slot)
+		{
+			return FormatInfo(slot.dtype, slot.shape);
+		}
+
+		std::string FormatInfo(const TapeSlot& slot)
+		{
+			return FormatInfo(slot.dtype, slot.shape);
+		}
+
+		std::string FormatInfo(const NamedTensorSpec& spec)
+		{
+			return std::format("{}: {}", spec.name, FormatInfo(spec.dtype, spec.shape));
+		}
+
+		std::string UnaryOpToString(UnaryOp op)
+		{
+			switch (op)
+			{
+			case UnaryOp::Negate:
+				return "UnaryOp::Negate";
+			case UnaryOp::Abs:
+				return "UnaryOp::Abs";
+			case UnaryOp::Sqrt:
+				return "UnaryOp::Sqrt";
+			case UnaryOp::Exp:
+				return "UnaryOp::Exp";
+			case UnaryOp::Log:
+				return "UnaryOp::Log";
+			case UnaryOp::Sin:
+				return "UnaryOp::Sin";
+			case UnaryOp::Cos:
+				return "UnaryOp::Cos";
+			case UnaryOp::Tan:
+				return "UnaryOp::Tan";
+			case UnaryOp::Arcsin:
+				return "UnaryOp::Arcsin";
+			case UnaryOp::Arccos:
+				return "UnaryOp::Arccos";
+			case UnaryOp::Arctan:
+				return "UnaryOp::Arctan";
+			case UnaryOp::Transpose:
+				return "UnaryOp::Transpose";
+			case UnaryOp::LogicalNegation:
+				return "UnaryOp::LogicalNegation";
+			case UnaryOp::Erf:
+				return "UnaryOp::Erf";
+			}
+			return std::format("UnaryOp::<invalid:{}>", static_cast<int>(op));
+		}
+
+		std::string BinaryOpToString(BinaryOp op)
+		{
+			switch (op)
+			{
+			case BinaryOp::Add:
+				return "BinaryOp::Add";
+			case BinaryOp::Subtract:
+				return "BinaryOp::Subtract";
+			case BinaryOp::Multiply:
+				return "BinaryOp::Multiply";
+			case BinaryOp::Divide:
+				return "BinaryOp::Divide";
+			case BinaryOp::MatMul:
+				return "BinaryOp::MatMul";
+			case BinaryOp::Pow:
+				return "BinaryOp::Pow";
+			case BinaryOp::Max:
+				return "BinaryOp::Max";
+			case BinaryOp::Min:
+				return "BinaryOp::Min";
+			case BinaryOp::Less:
+				return "BinaryOp::Less";
+			case BinaryOp::Greater:
+				return "BinaryOp::Greater";
+			case BinaryOp::Equal:
+				return "BinaryOp::Equal";
+			}
+			return std::format("BinaryOp::<invalid:{}>", static_cast<int>(op));
+		}
+
+		std::string ReduceOpToString(ReduceOp op)
+		{
+			switch (op)
+			{
+			case ReduceOp::Sum:
+				return "ReduceOp::Sum";
+			case ReduceOp::Mean:
+				return "ReduceOp::Mean";
+			case ReduceOp::Max:
+				return "ReduceOp::Max";
+			case ReduceOp::Min:
+				return "ReduceOp::Min";
+			}
+			return std::format("ReduceOp::<invalid:{}>", static_cast<int>(op));
+		}
+
+		std::string FusionPatternToString(FusionPattern pattern)
+		{
+			switch (pattern)
+			{
+			case FusionPattern::MatMulBiasAdd:
+				return "FusionPattern::MatMulBiasAdd";
+			case FusionPattern::ElementWiseChain:
+				return "FusionPattern::ElementWiseChain";
+			case FusionPattern::MatMulBiasAddReLU:
+				return "FusionPattern::MatMulBiasAddReLU";
+			}
+			return std::format("FusionPattern::<invalid:{}>", static_cast<int>(pattern));
+		}
+
+		std::string SortOrderToString(SortOrder order)
+		{
+			switch (order)
+			{
+			case SortOrder::Ascending:
+				return "SortOrder::Ascending";
+			case SortOrder::Descending:
+				return "SortOrder::Descending";
+			}
+			return std::format("SortOrder::<invalid:{}>", static_cast<int>(order));
+		}
+
+		std::string PadModeToString(PadMode mode)
+		{
+			switch (mode)
+			{
+			case PadMode::Constant:
+				return "PadMode::Constant";
+			case PadMode::Reflect:
+				return "PadMode::Reflect";
+			case PadMode::Replicate:
+				return "PadMode::Replicate";
+			}
+			return std::format("PadMode::<invalid:{}>", static_cast<int>(mode));
+		}
+
+		std::string ScatterModeToString(ScatterMode mode)
+		{
+			switch (mode)
+			{
+			case ScatterMode::Update:
+				return "ScatterMode::Update";
+			case ScatterMode::Add:
+				return "ScatterMode::Add";
+			}
+			return std::format("ScatterMode::<invalid:{}>", static_cast<int>(mode));
+		}
+
+		std::string ScanOpToString(ScanOp op)
+		{
+			switch (op)
+			{
+			case ScanOp::Sum:
+				return "ScanOp::Sum";
+			case ScanOp::Max:
+				return "ScanOp::Max";
+			case ScanOp::Prod:
+				return "ScanOp::Prod";
+			case ScanOp::LogSumExp:
+				return "ScanOp::LogSumExp";
+			}
+			return std::format("ScanOp::<invalid:{}>", static_cast<int>(op));
+		}
+
+		std::string NormalizationModeToString(NormalizationMode mode)
+		{
+			switch (mode)
+			{
+			case NormalizationMode::LayerNorm:
+				return "NormalizationMode::LayerNorm";
+			case NormalizationMode::RMSNorm:
+				return "NormalizationMode::RMSNorm";
+			case NormalizationMode::GroupNorm:
+				return "NormalizationMode::GroupNorm";
+			}
+			return std::format("NormalizationMode::<invalid:{}>", static_cast<int>(mode));
+		}
+
+		std::string PoolModeToString(PoolMode mode)
+		{
+			switch (mode)
+			{
+			case PoolMode::Max:
+				return "PoolMode::Max";
+			case PoolMode::Average:
+				return "PoolMode::Average";
+			}
+			return std::format("PoolMode::<invalid:{}>", static_cast<int>(mode));
+		}
+
+		std::string UpsampleModeToString(UpsampleMode mode)
+		{
+			switch (mode)
+			{
+			case UpsampleMode::Nearest:
+				return "UpsampleMode::Nearest";
+			case UpsampleMode::Bilinear:
+				return "UpsampleMode::Bilinear";
+			case UpsampleMode::Bicubic:
+				return "UpsampleMode::Bicubic";
+			}
+			return std::format("UpsampleMode::<invalid:{}>", static_cast<int>(mode));
+		}
+
+		std::string FormatTensorSummary(const Tensor<PolymorphicDevice>& tensor, const GraphDumpOptions& options)
+		{
+			if (!options.includeConstantValues)
+			{
+				return std::format("<{} elements elided>", tensor.NumElements());
+			}
+
+			if (tensor.NumElements() > options.maxConstantElements)
+			{
+				return std::format("<{} elements elided>", tensor.NumElements());
+			}
+
+			return std::format("{}", tensor);
+		}
+
+		std::string FormatNodeOutputs(NodeId nodeId, std::span<const OutputInfo> outputInfos)
+		{
+			if (outputInfos.size() == 1)
+			{
+				return std::format("{}: {}", FormatValueRef({ nodeId, 0 }), FormatInfo(outputInfos.front()));
+			}
+
+			return std::format("({})", JoinIndexed(outputInfos.size(), ", ", [&](std::size_t port) {
+				                   return std::format("{}: {}", FormatValueRef({ nodeId, port }),
+				                                      FormatInfo(outputInfos[port]));
+			                   }));
+		}
+
+		std::string FormatNodeArgs(std::span<const NodeOutput> outputs)
+		{
+			return std::format("[{}]",
+			                   JoinMapped(outputs, ", ", [](NodeOutput output) { return FormatValueRef(output); }));
+		}
+
+		std::string FormatNodePayload(const NodeVariant& node, const GraphDumpOptions& options)
+		{
+			return std::visit(
+			    [&](const auto& value) -> std::string {
+				    using T = std::decay_t<decltype(value)>;
+				    if constexpr (std::same_as<T, ParamRefNode>)
+				    {
+					    return std::format("ParamRefNode(param={})", value.paramIndex);
+				    }
+				    else if constexpr (std::same_as<T, ConstantNode>)
+				    {
+					    return std::format("ConstantNode(value={})", FormatTensorSummary(value.value, options));
+				    }
+				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
+				    {
+					    return std::format("QuantizedConstantNode(storage={}, scheme={}, format={}, packed={}, "
+					                       "order={}, scaleLayout={})",
+					                       FormatTensorSummary(value.storage, options),
+					                       QuantizationSchemeName(value.params.scheme),
+					                       QuantizedBlockFormatName(value.params.blockFormat),
+					                       PackedNibbleFormatName(value.params.packedFormat),
+					                       PackedNibbleOrderName(value.params.packedOrder),
+					                       BlockScaleLayoutName(value.params.blockScaleLayout));
+				    }
+				    else if constexpr (std::same_as<T, VariableRefNode>)
+				    {
+					    return std::format("VariableRefNode(variable={})", value.variableIndex);
+				    }
+				    else if constexpr (std::same_as<T, UnaryOpNode>)
+				    {
+					    return std::format("UnaryOpNode(op={}, input={})", UnaryOpToString(value.op),
+					                       FormatValueRef(value.input));
+				    }
+				    else if constexpr (std::same_as<T, BinaryOpNode>)
+				    {
+					    return std::format("BinaryOpNode(op={}, lhs={}, rhs={})", BinaryOpToString(value.op),
+					                       FormatValueRef(value.lhs), FormatValueRef(value.rhs));
+				    }
+				    else if constexpr (std::same_as<T, CallNode>)
+				    {
+					    return std::format("CallNode(callee=@{}, args={})", value.callee, FormatNodeArgs(value.args));
+				    }
+				    else if constexpr (std::same_as<T, CastNode>)
+				    {
+					    return std::format("CastNode(input={}, targetType={})", FormatValueRef(value.input),
+					                       Validation::DataTypeToString(value.targetType));
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return std::format("QuantizeNode(input={}, storageType={}, granularity={})",
+					                       FormatValueRef(value.input),
+					                       Validation::DataTypeToString(value.params.storageType),
+					                       QuantizationGranularityName(value.params.granularity));
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={}, packed={}, "
+					                       "order={}, scaleLayout={})",
+					                       FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
+					                       QuantizationSchemeName(value.params.scheme),
+					                       QuantizedBlockFormatName(value.params.blockFormat),
+					                       PackedNibbleFormatName(value.params.packedFormat),
+					                       PackedNibbleOrderName(value.params.packedOrder),
+					                       BlockScaleLayoutName(value.params.blockScaleLayout));
+				    }
+				    else if constexpr (std::same_as<T, CondNode>)
+				    {
+					    return std::format("CondNode(condition={}, then=@{}, else=@{}, args={})",
+					                       FormatValueRef(value.condition), value.thenBranch, value.elseBranch,
+					                       FormatNodeArgs(value.args));
+				    }
+				    else if constexpr (std::same_as<T, WhileNode>)
+				    {
+					    return std::format("WhileNode(cond=@{}, body=@{}, initArgs={})", value.condBranch,
+					                       value.bodyBranch, FormatNodeArgs(value.initArgs));
+				    }
+				    else if constexpr (std::same_as<T, SaveActivationNode>)
+				    {
+					    return std::format("SaveActivationNode(input={}, slot={})", FormatValueRef(value.input),
+					                       value.slotId);
+				    }
+				    else if constexpr (std::same_as<T, LoadActivationNode>)
+				    {
+					    return std::format("LoadActivationNode(slot={})", value.slotId);
+				    }
+				    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
+				    {
+					    return std::format("TapeSaveActivationNode(input={}, tapeSlot={})", FormatValueRef(value.input),
+					                       value.tapeSlotId);
+				    }
+				    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
+				    {
+					    return std::format("TapeLoadActivationNode(tapeSlot={})", value.tapeSlotId);
+				    }
+				    else if constexpr (std::same_as<T, ReduceOpNode>)
+				    {
+					    return std::format("ReduceOpNode(op={}, input={}, axis={})", ReduceOpToString(value.op),
+					                       FormatValueRef(value.input), value.axis);
+				    }
+				    else if constexpr (std::same_as<T, ReshapeNode>)
+				    {
+					    return std::format("ReshapeNode(input={}, targetShape={})", FormatValueRef(value.input),
+					                       Validation::ShapeToString(value.targetShape));
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return std::format("PermuteNode(input={}, permutation={})", FormatValueRef(value.input),
+					                       Validation::ShapeToString(value.permutation));
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return std::format("BroadcastToNode(input={}, targetShape={})", FormatValueRef(value.input),
+					                       Validation::ShapeToString(value.targetShape));
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return std::format("PadNode(input={}, lowPads={}, highPads={}, mode={}, constantValue={})",
+					                       FormatValueRef(value.input), Validation::ShapeToString(value.lowPads),
+					                       Validation::ShapeToString(value.highPads), PadModeToString(value.mode),
+					                       value.constantValue);
+				    }
+				    else if constexpr (std::same_as<T, GatherNode>)
+				    {
+					    return std::format("GatherNode(data={}, indices={}, axis={})", FormatValueRef(value.data),
+					                       FormatValueRef(value.indices), value.axis);
+				    }
+				    else if constexpr (std::same_as<T, ScatterNode>)
+				    {
+					    return std::format("ScatterNode(data={}, indices={}, updates={}, axis={}, mode={})",
+					                       FormatValueRef(value.data), FormatValueRef(value.indices),
+					                       FormatValueRef(value.updates), value.axis, ScatterModeToString(value.mode));
+				    }
+				    else if constexpr (std::same_as<T, ScanNode>)
+				    {
+					    return std::format("ScanNode(input={}, axis={}, op={})", FormatValueRef(value.input),
+					                       value.axis, ScanOpToString(value.op));
+				    }
+				    else if constexpr (std::same_as<T, SSMScanNode>)
+				    {
+					    return std::format("SSMScanNode(state={}, dt={}, a={}, b={}, c={}, d={})",
+					                       FormatValueRef(value.state), FormatValueRef(value.dt),
+					                       FormatValueRef(value.a), FormatValueRef(value.b), FormatValueRef(value.c),
+					                       FormatOptionalValueRef(value.d));
+				    }
+				    else if constexpr (std::same_as<T, RWKVWKVNode>)
+				    {
+					    return std::format("RWKVWKVNode(key={}, value={}, receptance={}, timeDecay={}, timeFirst={})",
+					                       FormatValueRef(value.key), FormatValueRef(value.value),
+					                       FormatValueRef(value.receptance), FormatValueRef(value.timeDecay),
+					                       FormatValueRef(value.timeFirst));
+				    }
+				    else if constexpr (std::same_as<T, SoftmaxNode>)
+				    {
+					    return std::format("SoftmaxNode(input={}, axis={})", FormatValueRef(value.input), value.axis);
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
+				    {
+					    return std::format("CrossEntropyLossNode(logits={}, labels={})", FormatValueRef(value.logits),
+					                       FormatValueRef(value.labels));
+				    }
+				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
+				    {
+					    return std::format("CrossEntropyLossBackwardNode(grad={}, logits={}, labels={})",
+					                       FormatValueRef(value.grad), FormatValueRef(value.logits),
+					                       FormatValueRef(value.labels));
+				    }
+				    else if constexpr (std::same_as<T, NormalizationNode>)
+				    {
+					    return std::format("NormalizationNode(input={}, scale={}, bias={}, mode={}, axis={}, "
+					                       "groupCount={}, epsilon={})",
+					                       FormatValueRef(value.input), FormatOptionalValueRef(value.scale),
+					                       FormatOptionalValueRef(value.bias), NormalizationModeToString(value.mode),
+					                       value.axis, value.groupCount, value.epsilon);
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
+					                       FormatValueRef(value.rhs));
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return std::format("OutProdNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
+					                       FormatValueRef(value.rhs));
+				    }
+				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
+				    {
+					    return std::format("TimestepEmbeddingNode(timesteps={}, dim={}, maxPeriod={})",
+					                       FormatValueRef(value.timesteps), value.dim, value.maxPeriod);
+				    }
+				    else if constexpr (std::same_as<T, SolveTriNode>)
+				    {
+					    return std::format("SolveTriNode(a={}, b={}, lower={}, unitDiagonal={})",
+					                       FormatValueRef(value.a), FormatValueRef(value.b), value.lower,
+					                       value.unitDiagonal);
+				    }
+				    else if constexpr (std::same_as<T, SGDStepNode>)
+				    {
+					    return std::format("SGDStepNode(parameter={}, gradient={}, velocity={}, learningRate={}, "
+					                       "momentum={}, weightDecay={}, nesterov={})",
+					                       FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+					                       FormatOptionalValueRef(value.velocity), value.learningRate, value.momentum,
+					                       value.weightDecay, value.nesterov);
+				    }
+				    else if constexpr (std::same_as<T, AdamWStepNode>)
+				    {
+					    return std::format("AdamWStepNode(parameter={}, gradient={}, firstMoment={}, secondMoment={}, "
+					                       "learningRate={}, beta1={}, beta2={}, epsilon={}, weightDecay={}, step={})",
+					                       FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+					                       FormatValueRef(value.firstMoment), FormatValueRef(value.secondMoment),
+					                       value.learningRate, value.beta1, value.beta2, value.epsilon,
+					                       value.weightDecay, value.step);
+				    }
+				    else if constexpr (std::same_as<T, Im2ColNode>)
+				    {
+					    return std::format(
+					        "Im2ColNode(input={}, kernelShape={}, strides={}, dilations={}, lowPads={}, highPads={})",
+					        FormatValueRef(value.input), Validation::ShapeToString(value.kernelShape),
+					        Validation::ShapeToString(value.strides), Validation::ShapeToString(value.dilations),
+					        Validation::ShapeToString(value.lowPads), Validation::ShapeToString(value.highPads));
+				    }
+				    else if constexpr (std::same_as<T, Conv2DNode>)
+				    {
+					    return std::format("Conv2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, "
+					                       "lowPads={}, highPads={}, groupCount={})",
+					                       FormatValueRef(value.input), FormatValueRef(value.weight),
+					                       FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
+					                       Validation::ShapeToString(value.dilations),
+					                       Validation::ShapeToString(value.lowPads),
+					                       Validation::ShapeToString(value.highPads), value.groupCount);
+				    }
+				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
+				    {
+					    return std::format("ConvTranspose2DNode(input={}, weight={}, bias={}, strides={}, "
+					                       "dilations={}, lowPads={}, highPads={}, outputPads={}, groupCount={})",
+					                       FormatValueRef(value.input), FormatValueRef(value.weight),
+					                       FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
+					                       Validation::ShapeToString(value.dilations),
+					                       Validation::ShapeToString(value.lowPads),
+					                       Validation::ShapeToString(value.highPads),
+					                       Validation::ShapeToString(value.outputPads), value.groupCount);
+				    }
+				    else if constexpr (std::same_as<T, Pool2DNode>)
+				    {
+					    return std::format("Pool2DNode(input={}, mode={}, kernelShape={}, strides={}, lowPads={}, "
+					                       "highPads={}, countIncludePad={})",
+					                       FormatValueRef(value.input), PoolModeToString(value.mode),
+					                       Validation::ShapeToString(value.kernelShape),
+					                       Validation::ShapeToString(value.strides),
+					                       Validation::ShapeToString(value.lowPads),
+					                       Validation::ShapeToString(value.highPads), value.countIncludePad);
+				    }
+				    else if constexpr (std::same_as<T, UpsampleNode>)
+				    {
+					    return std::format("UpsampleNode(input={}, mode={}, outputSpatialShape={}, alignCorners={})",
+					                       FormatValueRef(value.input), UpsampleModeToString(value.mode),
+					                       Validation::ShapeToString(value.outputSpatialShape), value.alignCorners);
+				    }
+				    else if constexpr (std::same_as<T, ConcatNode>)
+				    {
+					    return std::format("ConcatNode(inputs={}, axis={})", FormatNodeArgs(value.inputs), value.axis);
+				    }
+				    else if constexpr (std::same_as<T, SliceNode>)
+				    {
+					    return std::format("SliceNode(input={}, axis={}, start={}, length={})",
+					                       FormatValueRef(value.input), value.axis, value.start, value.length);
+				    }
+				    else if constexpr (std::same_as<T, GetRowsNode>)
+				    {
+					    return std::format("GetRowsNode(data={}, indices={})", FormatValueRef(value.data),
+					                       FormatValueRef(value.indices));
+				    }
+				    else if constexpr (std::same_as<T, ArgsortNode>)
+				    {
+					    return std::format("ArgsortNode(input={}, axis={}, order={})", FormatValueRef(value.input),
+					                       value.axis, SortOrderToString(value.order));
+				    }
+				    else if constexpr (std::same_as<T, MulMatIdNode>)
+				    {
+					    return std::format("MulMatIdNode(as={}, b={}, ids={})", FormatValueRef(value.as),
+					                       FormatValueRef(value.b), FormatValueRef(value.ids));
+				    }
+				    else if constexpr (std::same_as<T, FusedOpNode>)
+				    {
+					    return std::format("FusedOpNode(pattern={}, body=@{}, args={})",
+					                       FusionPatternToString(value.pattern), value.body,
+					                       FormatNodeArgs(value.args));
+				    }
+				    else
+				    {
+					    return std::format("{}", Validation::NodeKindName(node));
+				    }
+			    },
+			    node);
+		}
+
+		std::string FormatForwardSignatures(const Graph& graph)
+		{
+			if (graph.SubgraphCount() == 0 || graph.Forward() >= graph.SubgraphCount())
+			{
+				return "<unavailable>";
+			}
+
+			const auto inputSignature = graph.InputSignature();
+			const auto outputSignature = graph.OutputSignature();
+			return std::format(
+			    "inputs = [{}]\n  outputs = [{}]",
+			    JoinMapped(inputSignature, ", ", [](const NamedTensorSpec& spec) { return FormatInfo(spec); }),
+			    JoinMapped(outputSignature, ", ", [](const NamedTensorSpec& spec) { return FormatInfo(spec); }));
+		}
+
+		std::string FormatSubgraphResults(const Graph& graph, SubgraphId subgraphId, const Subgraph& subgraph)
+		{
+			return std::format("[{}]", JoinIndexed(subgraph.Results().size(), ", ", [&](std::size_t index) {
+				                   const auto result = subgraph.Results()[index];
+				                   const auto& info = subgraph.GetOutputInfo(result);
+				                   const auto name = subgraphId == graph.Forward() ? graph.OutputName(index)
+				                                                                   : std::format("result{}", index);
+				                   return std::format("{}={}: {}", name, FormatValueRef(result), FormatInfo(info));
+			                   }));
+		}
+
+		std::string FormatSubgraphTags(const Graph& graph, SubgraphId subgraphId)
+		{
+			std::string tags;
+			if (subgraphId == graph.Forward())
+			{
+				tags = "forward";
+			}
+			if (graph.Backward() && subgraphId == *graph.Backward())
+			{
+				if (!tags.empty())
+				{
+					tags += ", ";
+				}
+				tags += "backward";
+			}
+			return tags.empty() ? "" : std::format(" [{}]", tags);
+		}
+	} // namespace
 
 	std::string DumpGraph(const Graph& graph, const GraphDumpOptions& options)
 	{
@@ -665,28 +675,28 @@ namespace
 			out += "\n";
 		}
 
-		out += std::format("  variables = [{}]\n", JoinIndexed(graph.VariableCount(), ", ", [&](std::size_t index) {
-			const auto& variable = graph.GetVariable(index)->Data();
-			return std::format("var{}: {}", index, FormatInfo(variable.DType(), variable.Shape().Dims));
-		}));
+		out +=
+		    std::format("  variables = [{}]\n", JoinIndexed(graph.VariableCount(), ", ", [&](std::size_t index) {
+			                const auto& variable = graph.GetVariable(index)->Data();
+			                return std::format("var{}: {}", index, FormatInfo(variable.DType(), variable.Shape().Dims));
+		                }));
 		out += std::format("  activation_slots = [{}]\n",
 		                   JoinIndexed(graph.ActivationSlotCount(), ", ", [&](std::size_t index) {
 			                   return std::format("slot{}: {}", index, FormatInfo(graph.GetActivationSlot(index)));
 		                   }));
 		out += std::format("  tape_slots = [{}]\n", JoinIndexed(graph.TapeSlotCount(), ", ", [&](std::size_t index) {
-			return std::format("slot{}: {}", index, FormatInfo(graph.GetTapeSlot(index)));
-		}));
+			                   return std::format("slot{}: {}", index, FormatInfo(graph.GetTapeSlot(index)));
+		                   }));
 
 		for (std::size_t subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
 		{
 			const auto& subgraph = graph.GetSubgraph(subgraphId);
 			out += "\n";
 			out += std::format("  subgraph @{}{} {{\n", subgraphId, FormatSubgraphTags(graph, subgraphId));
-			out += std::format("    params = [{}]\n",
-			                   JoinIndexed(subgraph.Params().size(), ", ", [&](std::size_t index) {
-				                   return std::format("{}: {}", FormatValueRef({ index, 0 }),
-				                                      FormatInfo(subgraph.Params()[index]));
-			                   }));
+			out += std::format(
+			    "    params = [{}]\n", JoinIndexed(subgraph.Params().size(), ", ", [&](std::size_t index) {
+				    return std::format("{}: {}", FormatValueRef({ index, 0 }), FormatInfo(subgraph.Params()[index]));
+			    }));
 			out += std::format("    results = {}\n", FormatSubgraphResults(graph, subgraphId, subgraph));
 
 			for (std::size_t nodeId = 0; nodeId < subgraph.Nodes().size(); ++nodeId)

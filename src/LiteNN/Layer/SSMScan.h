@@ -9,8 +9,8 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddSSMScan(Subgraph& subgraph, NodeOutput state, NodeOutput dt, NodeOutput a,
-	                             NodeOutput b, NodeOutput c, std::optional<NodeOutput> d = std::nullopt)
+	inline NodeOutput AddSSMScan(Subgraph& subgraph, NodeOutput state, NodeOutput dt, NodeOutput a, NodeOutput b,
+	                             NodeOutput c, std::optional<NodeOutput> d = std::nullopt)
 	{
 		const auto stateInfo = subgraph.GetOutputInfo(state);
 		if (stateInfo.shape.size() != 2 || !IsFloatingDataType(stateInfo.dtype))
@@ -24,7 +24,7 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("SSMScan inputs must be floating-point tensors");
 			}
-			(void)::LiteNN::Detail::BroadcastToShape(info.shape, stateInfo.shape);
+			(void) ::LiteNN::Detail::BroadcastToShape(info.shape, stateInfo.shape);
 		}
 		if (d)
 		{
@@ -33,10 +33,10 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("SSMScan D input must be floating-point");
 			}
-			(void)::LiteNN::Detail::BroadcastToShape(info.shape, stateInfo.shape);
+			(void) ::LiteNN::Detail::BroadcastToShape(info.shape, stateInfo.shape);
 		}
-		const auto result = subgraph.AddNode(SSMScanNode{ state, dt, a, b, c, d },
-		                                     { OutputInfo{ stateInfo.dtype, stateInfo.shape } });
+		const auto result =
+		    subgraph.AddNode(SSMScanNode{ state, dt, a, b, c, d }, { OutputInfo{ stateInfo.dtype, stateInfo.shape } });
 		return { result, 0 };
 	}
 } // namespace LiteNN::Layer

@@ -34,6 +34,22 @@ cmake -S . -B build
 cmake --build build
 ```
 
+## 开发格式化
+
+仓库使用根目录的 `.clang-format` 统一格式化所有已跟踪的 C/C++ 源码文件。手动格式化：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/format_sources.ps1
+```
+
+clone 后 Git 不会自动安装仓库里的 hook 模板。需要在本地执行一次：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1
+```
+
+安装后，pre-commit hook 会在提交前运行全量 `clang-format`，并重新暂存本次提交中已经暂存的文件。
+
 启用 MLIR/AOT 编译器：
 
 ```powershell

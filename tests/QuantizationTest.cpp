@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelIO.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -62,8 +62,7 @@ TEST(Quantization, PerAxisAffineUsesAxisScale)
 TEST(Quantization, GroupedAffineUsesPerLineGroups)
 {
 	const Tensor<CPU> source({ 1.0, 2.0, 10.0, 20.0, 3.0, 6.0, 40.0, 80.0 }, { 2, 4 }, DataType::Float32);
-	const auto params =
-	    GroupedAffineQuantization(DataType::Int8, 1, 2, { 1.0F, 10.0F, 3.0F, 40.0F }, { 0, 0, 0, 0 });
+	const auto params = GroupedAffineQuantization(DataType::Int8, 1, 2, { 1.0F, 10.0F, 3.0F, 40.0F }, { 0, 0, 0, 0 });
 
 	const auto quantized = QuantizeAffine(source, params);
 	const auto* storage = static_cast<const std::int8_t*>(quantized.Storage().UnsafeRawData());
@@ -123,8 +122,7 @@ TEST(Quantization, PackedUInt4RoundTripsLowThenHigh)
 TEST(Quantization, PackedInt4RoundTripsHighThenLow)
 {
 	const Tensor<CPU> source({ -8.0, -1.0, 0.0, 7.0 }, { 4 }, DataType::Int8);
-	auto params =
-	    PackedNibbleQuantization(PackedNibbleFormat::Int4, { 4 }, 1.0F, 0, PackedNibbleOrder::HighThenLow);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 4 }, 1.0F, 0, PackedNibbleOrder::HighThenLow);
 
 	const auto packed = PackInteger4(source, params);
 	const auto* packedData = static_cast<const std::uint8_t*>(packed.UnsafeRawData());
@@ -145,7 +143,7 @@ TEST(Quantization, PackedInt4RejectsOutOfRangeValues)
 	const Tensor<CPU> source({ -9.0 }, { 1 }, DataType::Int8);
 	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 1 });
 
-	EXPECT_THROW((void)PackInteger4(source, params), std::runtime_error);
+	EXPECT_THROW((void) PackInteger4(source, params), std::runtime_error);
 }
 
 TEST(Quantization, PackedInt4DequantizesToFloat32)
@@ -202,7 +200,7 @@ TEST(Quantization, RejectsInvalidScaleCount)
 {
 	const Tensor<CPU> source({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32);
 	const auto params = PerAxisAffineQuantization(DataType::Int8, 0, { 1.0F });
-	EXPECT_THROW((void)QuantizeAffine(source, params), std::runtime_error);
+	EXPECT_THROW((void) QuantizeAffine(source, params), std::runtime_error);
 }
 
 TEST(Quantization, GraphQuantizeDequantizeRunsInInterpreter)
@@ -213,8 +211,8 @@ TEST(Quantization, GraphQuantizeDequantizeRunsInInterpreter)
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 3 });
 	const auto q = sg.AddNode(QuantizeNode{ { input, 0 }, params }, { OutputInfo{ DataType::UInt8, { 3 } } });
-	const auto dq = sg.AddNode(DequantizeNode{ { q, 0 }, params, DataType::Float32 },
-	                           { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto dq =
+	    sg.AddNode(DequantizeNode{ { q, 0 }, params, DataType::Float32 }, { OutputInfo{ DataType::Float32, { 3 } } });
 	sg.SetResults({ { dq, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -264,8 +262,8 @@ TEST(Quantization, ConstFoldQuantizeDequantize)
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ -1.0, 0.0, 1.0 }, { 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
 	               { OutputInfo{ DataType::Float32, { 3 } } });
 	const auto q = sg.AddNode(QuantizeNode{ { c, 0 }, params }, { OutputInfo{ DataType::Int8, { 3 } } });
-	const auto dq = sg.AddNode(DequantizeNode{ { q, 0 }, params, DataType::Float32 },
-	                           { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto dq =
+	    sg.AddNode(DequantizeNode{ { q, 0 }, params, DataType::Float32 }, { OutputInfo{ DataType::Float32, { 3 } } });
 	sg.SetResults({ { dq, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -294,8 +292,8 @@ TEST(Quantization, ConstFoldPackedNibbleDequantize)
 	Subgraph sg;
 	const auto c = sg.AddNode(ConstantNode{ packed.CopyToDevice(PolymorphicDevice{ CPU{} }) },
 	                          { OutputInfo{ DataType::UInt8, { 2 } } });
-	const auto dq = sg.AddNode(DequantizeNode{ { c, 0 }, params, DataType::Float32 },
-	                           { OutputInfo{ DataType::Float32, { 3 } } });
+	const auto dq =
+	    sg.AddNode(DequantizeNode{ { c, 0 }, params, DataType::Float32 }, { OutputInfo{ DataType::Float32, { 3 } } });
 	sg.SetResults({ { dq, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

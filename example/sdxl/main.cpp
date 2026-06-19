@@ -21,8 +21,8 @@
 #include <map>
 #include <optional>
 #include <random>
-#include <sstream>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -151,8 +151,7 @@ namespace
 		std::cout << std::format("Total payload bytes: {}\n", totalBytes);
 		for (const auto& [component, summary] : components)
 		{
-			std::cout << std::format("  {}: {} tensor(s), {} byte(s)\n",
-			                         component, summary.first, summary.second);
+			std::cout << std::format("  {}: {} tensor(s), {} byte(s)\n", component, summary.first, summary.second);
 		}
 
 		const auto preview = std::min<std::size_t>(archive.Tensors().size(), 16uz);
@@ -168,10 +167,8 @@ namespace
 		}
 	}
 
-	void ImportManifest(const std::filesystem::path& manifestPath,
-	                    const std::filesystem::path& safetensorsPath,
-	                    const std::filesystem::path& outputPath,
-	                    bool allowExtraTensors,
+	void ImportManifest(const std::filesystem::path& manifestPath, const std::filesystem::path& safetensorsPath,
+	                    const std::filesystem::path& outputPath, bool allowExtraTensors,
 	                    const std::optional<std::filesystem::path>& externalWeightsPath,
 	                    std::uint64_t externalWeightMinBytes)
 	{
@@ -187,11 +184,13 @@ namespace
 		}
 		else
 		{
-			LiteNN::Serialization::SaveVNextModelPackage(LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), outputPath);
+			LiteNN::Serialization::SaveVNextModelPackage(
+			    LiteNN::Detail::BuildExecutableModuleFromGraph(imported.model.UnsafeGraphView()), outputPath);
 		}
 		std::cout << std::format("Wrote vNext LiteNN package {} with {} variable(s), {} input(s), {} output(s)\n",
 		                         outputPath.string(), imported.model.UnsafeGraphView().VariableCount(),
-		                         imported.model.UnsafeGraphView().InputSignature().size(), imported.model.UnsafeGraphView().OutputSignature().size());
+		                         imported.model.UnsafeGraphView().InputSignature().size(),
+		                         imported.model.UnsafeGraphView().OutputSignature().size());
 		if (externalWeightsPath)
 		{
 			std::cout << std::format("Wrote external LiteNN weights {}\n", externalWeightsPath->string());
@@ -301,34 +300,33 @@ namespace
 		return options;
 	}
 
-	void PrintCompileBudgetEstimate(const LiteNN::CompileBudgetEstimate& budget,
-	                                const LiteNN::CompilerOptions& options,
+	void PrintCompileBudgetEstimate(const LiteNN::CompileBudgetEstimate& budget, const LiteNN::CompilerOptions& options,
 	                                std::string_view label)
 	{
-		std::cout << std::format(
-		    "{} compile budget: subgraphs={} nodes={} variables={} variable_refs={} constants={} qconstants={}\n"
-		    "  variable_payload={} constant_payload={} qconstant_payload={}\n"
-		    "  cpu_external_regions={} cpu_llvm_opt=O{} projected_inline_mlir_payload={} projected_external_constants={}"
-		    " projected_external_weights={}\n",
-		    label, budget.subgraphCount, budget.nodeCount, budget.variableCount, budget.variableRefNodeCount,
-		    budget.constantNodeCount, budget.quantizedConstantNodeCount, FormatByteSize(budget.variablePayloadBytes),
-		    FormatByteSize(budget.constantPayloadBytes), FormatByteSize(budget.quantizedConstantPayloadBytes),
-		    budget.cpuAOTExternalRegionsEnabled ? "on" : "off", options.cpuAOTLLVMOptLevel,
-		    FormatByteSize(budget.projectedInlineMLIRPayloadBytes),
-		    FormatByteSize(budget.projectedExternalConstantBytes),
-		    FormatByteSize(budget.projectedExternalWeightBytes))
-		          << std::flush;
+		std::cout
+		    << std::format(
+		           "{} compile budget: subgraphs={} nodes={} variables={} variable_refs={} constants={} qconstants={}\n"
+		           "  variable_payload={} constant_payload={} qconstant_payload={}\n"
+		           "  cpu_external_regions={} cpu_llvm_opt=O{} projected_inline_mlir_payload={} "
+		           "projected_external_constants={}"
+		           " projected_external_weights={}\n",
+		           label, budget.subgraphCount, budget.nodeCount, budget.variableCount, budget.variableRefNodeCount,
+		           budget.constantNodeCount, budget.quantizedConstantNodeCount,
+		           FormatByteSize(budget.variablePayloadBytes), FormatByteSize(budget.constantPayloadBytes),
+		           FormatByteSize(budget.quantizedConstantPayloadBytes),
+		           budget.cpuAOTExternalRegionsEnabled ? "on" : "off", options.cpuAOTLLVMOptLevel,
+		           FormatByteSize(budget.projectedInlineMLIRPayloadBytes),
+		           FormatByteSize(budget.projectedExternalConstantBytes),
+		           FormatByteSize(budget.projectedExternalWeightBytes))
+		    << std::flush;
 	}
 
-	void PrintCompileBudget(const LiteNN::Graph& graph,
-	                        const LiteNN::CompilerOptions& options,
-	                        std::string_view label)
+	void PrintCompileBudget(const LiteNN::Graph& graph, const LiteNN::CompilerOptions& options, std::string_view label)
 	{
 		PrintCompileBudgetEstimate(LiteNN::EstimateCompileBudget(graph, options), options, label);
 	}
 
-	void PrintCompileBudget(const LiteNN::ExecutablePlan& plan,
-	                        const LiteNN::CompilerOptions& options,
+	void PrintCompileBudget(const LiteNN::ExecutablePlan& plan, const LiteNN::CompilerOptions& options,
 	                        std::string_view label)
 	{
 		PrintCompileBudgetEstimate(LiteNN::EstimateCompileBudget(plan, options), options, label);
@@ -347,15 +345,13 @@ namespace
 		if constexpr (std::is_void_v<std::invoke_result_t<F>>)
 		{
 			std::forward<F>(f)();
-			const auto elapsed = std::chrono::duration<double, std::milli>(
-			    std::chrono::steady_clock::now() - start);
+			const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
 			std::cout << std::format("{}: ok {:.3f} ms\n", label, elapsed.count()) << std::flush;
 		}
 		else
 		{
 			auto result = std::forward<F>(f)();
-			const auto elapsed = std::chrono::duration<double, std::milli>(
-			    std::chrono::steady_clock::now() - start);
+			const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
 			std::cout << std::format("{}: ok {:.3f} ms\n", label, elapsed.count()) << std::flush;
 			return result;
 		}
@@ -463,14 +459,14 @@ namespace
 			{
 				options.failOnNonFinite = true;
 			}
-		else if (option == "--max-nodes")
-		{
-			options.maxNodes = ParseSize(requireValue(option), "max-nodes");
-			if (*options.maxNodes == 0)
+			else if (option == "--max-nodes")
 			{
-				throw std::runtime_error("--max-nodes must be positive");
+				options.maxNodes = ParseSize(requireValue(option), "max-nodes");
+				if (*options.maxNodes == 0)
+				{
+					throw std::runtime_error("--max-nodes must be positive");
+				}
 			}
-		}
 			else
 			{
 				throw std::runtime_error("Unknown --diagnose-model-with-inputs option: " + std::string(option));
@@ -642,9 +638,8 @@ namespace
 			throw std::runtime_error(
 			    "Euler sampler --denoiser-contract must be one of epsilon, denoised, sgm-edm, sgm-eps, or sgm-v");
 		}
-		if (options.timestepMode != "auto" && options.timestepMode != "legacy" &&
-		    options.timestepMode != "sigma" && options.timestepMode != "edm-log" &&
-		    options.timestepMode != "zero")
+		if (options.timestepMode != "auto" && options.timestepMode != "legacy" && options.timestepMode != "sigma" &&
+		    options.timestepMode != "edm-log" && options.timestepMode != "zero")
 		{
 			throw std::runtime_error("Euler sampler --timestep-mode must be auto, legacy, sigma, edm-log, or zero");
 		}
@@ -748,8 +743,7 @@ namespace
 		throw std::runtime_error("Unsupported denoiser contract");
 	}
 
-	double TimestepForStep(const EulerSamplerOptions& options,
-	                       const DenoiserStepCoefficients& coefficients,
+	double TimestepForStep(const EulerSamplerOptions& options, const DenoiserStepCoefficients& coefficients,
 	                       double sigma)
 	{
 		auto mode = options.timestepMode;
@@ -862,8 +856,7 @@ namespace
 	}
 
 	template <typename T>
-	void CopyScaledTensorTyped(const LiteNN::Tensor<LiteNN::CPU>& source,
-	                           LiteNN::Tensor<LiteNN::CPU>& destination,
+	void CopyScaledTensorTyped(const LiteNN::Tensor<LiteNN::CPU>& source, LiteNN::Tensor<LiteNN::CPU>& destination,
 	                           double scale)
 	{
 		const auto* src = static_cast<const T*>(source.UnsafeRawData());
@@ -874,17 +867,15 @@ namespace
 		}
 	}
 
-	void CopyScaledTensor(const LiteNN::Tensor<LiteNN::CPU>& source,
-	                      LiteNN::Tensor<LiteNN::CPU>& destination,
-	                      double scale,
-	                      std::string_view label)
+	void CopyScaledTensor(const LiteNN::Tensor<LiteNN::CPU>& source, LiteNN::Tensor<LiteNN::CPU>& destination,
+	                      double scale, std::string_view label)
 	{
 		if (source.DType() != destination.DType() || source.Shape() != destination.Shape())
 		{
-			throw std::runtime_error(std::format(
-			    "{} copy requires matching dtype/shape; source {} {}, destination {} {}", label,
-			    LiteNN::DataTypeName(source.DType()), ShapeToString(source.Shape()),
-			    LiteNN::DataTypeName(destination.DType()), ShapeToString(destination.Shape())));
+			throw std::runtime_error(
+			    std::format("{} copy requires matching dtype/shape; source {} {}, destination {} {}", label,
+			                LiteNN::DataTypeName(source.DType()), ShapeToString(source.Shape()),
+			                LiteNN::DataTypeName(destination.DType()), ShapeToString(destination.Shape())));
 		}
 		switch (source.DType())
 		{
@@ -959,14 +950,13 @@ namespace
 	void EulerUpdateFromPredictionsTyped(LiteNN::Tensor<LiteNN::CPU>& latent,
 	                                     const LiteNN::Tensor<LiteNN::CPU>& condPrediction,
 	                                     const LiteNN::Tensor<LiteNN::CPU>* uncondPrediction,
-	                                     const DenoiserStepCoefficients& coefficients,
-	                                     double cfgScale,
-	                                     double sigma,
+	                                     const DenoiserStepCoefficients& coefficients, double cfgScale, double sigma,
 	                                     double dt)
 	{
 		auto* latentData = static_cast<T*>(latent.UnsafeRawData());
 		const auto* condData = static_cast<const T*>(condPrediction.UnsafeRawData());
-		const auto* uncondData = uncondPrediction == nullptr ? nullptr : static_cast<const T*>(uncondPrediction->UnsafeRawData());
+		const auto* uncondData =
+		    uncondPrediction == nullptr ? nullptr : static_cast<const T*>(uncondPrediction->UnsafeRawData());
 		for (std::size_t i = 0; i < latent.NumElements(); ++i)
 		{
 			const auto state = static_cast<double>(latentData[i]);
@@ -981,7 +971,8 @@ namespace
 			else
 			{
 				const auto toDenoised = [&](double raw) {
-					return coefficients.rawOutputIsDenoised ? raw : raw * coefficients.cOut + state * coefficients.cSkip;
+					return coefficients.rawOutputIsDenoised ? raw
+					                                        : raw * coefficients.cOut + state * coefficients.cSkip;
 				};
 				const auto condDenoised = toDenoised(condRaw);
 				const auto denoised = uncondData == nullptr
@@ -997,9 +988,7 @@ namespace
 	void EulerUpdateFromPredictions(LiteNN::Tensor<LiteNN::CPU>& latent,
 	                                const LiteNN::Tensor<LiteNN::CPU>& condPrediction,
 	                                const LiteNN::Tensor<LiteNN::CPU>* uncondPrediction,
-	                                const DenoiserStepCoefficients& coefficients,
-	                                double cfgScale,
-	                                double sigma,
+	                                const DenoiserStepCoefficients& coefficients, double cfgScale, double sigma,
 	                                double dt)
 	{
 		const auto validatePrediction = [&](const LiteNN::Tensor<LiteNN::CPU>& prediction, std::string_view label) {
@@ -1019,20 +1008,20 @@ namespace
 		switch (latent.DType())
 		{
 		case LiteNN::DataType::Float16:
-			EulerUpdateFromPredictionsTyped<LiteNN::Float16>(
-			    latent, condPrediction, uncondPrediction, coefficients, cfgScale, sigma, dt);
+			EulerUpdateFromPredictionsTyped<LiteNN::Float16>(latent, condPrediction, uncondPrediction, coefficients,
+			                                                 cfgScale, sigma, dt);
 			break;
 		case LiteNN::DataType::BFloat16:
-			EulerUpdateFromPredictionsTyped<LiteNN::BFloat16>(
-			    latent, condPrediction, uncondPrediction, coefficients, cfgScale, sigma, dt);
+			EulerUpdateFromPredictionsTyped<LiteNN::BFloat16>(latent, condPrediction, uncondPrediction, coefficients,
+			                                                  cfgScale, sigma, dt);
 			break;
 		case LiteNN::DataType::Float32:
-			EulerUpdateFromPredictionsTyped<float>(
-			    latent, condPrediction, uncondPrediction, coefficients, cfgScale, sigma, dt);
+			EulerUpdateFromPredictionsTyped<float>(latent, condPrediction, uncondPrediction, coefficients, cfgScale,
+			                                       sigma, dt);
 			break;
 		case LiteNN::DataType::Float64:
-			EulerUpdateFromPredictionsTyped<double>(
-			    latent, condPrediction, uncondPrediction, coefficients, cfgScale, sigma, dt);
+			EulerUpdateFromPredictionsTyped<double>(latent, condPrediction, uncondPrediction, coefficients, cfgScale,
+			                                        sigma, dt);
 			break;
 		default:
 			throw std::runtime_error("Euler update currently requires floating-point tensors");
@@ -1041,17 +1030,16 @@ namespace
 
 	void PrintStats(std::string_view label, const TensorStats& stats)
 	{
-		std::cout << std::format("{} mean={} rms={} min={} max={} finite={} nonfinite={}\n",
-		                         label, stats.mean, stats.rms, stats.min, stats.max,
-		                         stats.finiteCount, stats.nonFiniteCount);
+		std::cout << std::format("{} mean={} rms={} min={} max={} finite={} nonfinite={}\n", label, stats.mean,
+		                         stats.rms, stats.min, stats.max, stats.finiteCount, stats.nonFiniteCount);
 	}
 
 	void RequireFinite(std::string label, const TensorStats& stats)
 	{
 		if (!stats.AllFinite())
 		{
-			throw std::runtime_error(std::format("{} contains {} non-finite value(s) out of {}",
-			                                     label, stats.nonFiniteCount, stats.TotalCount()));
+			throw std::runtime_error(std::format("{} contains {} non-finite value(s) out of {}", label,
+			                                     stats.nonFiniteCount, stats.TotalCount()));
 		}
 	}
 
@@ -1094,13 +1082,12 @@ namespace
 		}
 	}
 
-	void WriteTensorSafetensors(const std::filesystem::path& path,
-	                            std::string_view name,
+	void WriteTensorSafetensors(const std::filesystem::path& path, std::string_view name,
 	                            const LiteNN::Tensor<LiteNN::CPU>& tensor)
 	{
 		const auto byteCount = tensor.NumElements() * LiteNN::ElementByteSize(tensor.DType());
-		std::string header = std::format("{{\"{}\":{{\"dtype\":\"{}\",\"shape\":[", name,
-		                                 SafetensorsDataTypeName(tensor.DType()));
+		std::string header =
+		    std::format("{{\"{}\":{{\"dtype\":\"{}\",\"shape\":[", name, SafetensorsDataTypeName(tensor.DType()));
 		for (std::size_t i = 0; i < tensor.Shape().NumDim(); ++i)
 		{
 			if (i != 0)
@@ -1145,8 +1132,8 @@ namespace
 		    << "    " << symbolPrefix << "_instructions_size DATA\n";
 		std::cout << std::format("Wrote Windows export definition file {}\n", defPath.string());
 #else
-		(void)objectPath;
-		(void)symbolPrefix;
+		(void) objectPath;
+		(void) symbolPrefix;
 #endif
 	}
 
@@ -1170,25 +1157,21 @@ namespace
 		    << "    " << symbolPrefix << "_instructions_size DATA\n";
 		std::cout << std::format("Wrote Windows export definition file {}\n", defPath.string());
 #else
-		(void)objectPath;
-		(void)symbolPrefix;
+		(void) objectPath;
+		(void) symbolPrefix;
 #endif
 	}
 
-	void CompileObject(const std::filesystem::path& graphPath,
-	                   const std::filesystem::path& objectPath,
+	void CompileObject(const std::filesystem::path& graphPath, const std::filesystem::path& objectPath,
 	                   std::string_view symbolPrefix)
 	{
 		auto plan = LoadExecutablePlanInput(graphPath);
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(plan, options, "compile-object");
 		auto artifact = TimedStep("compile-object codegen",
-		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
-		                          });
+		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options); });
 		auto separated = artifact.SeparateRodata();
-		if (!separated.Constants().empty() || !separated.Weights().empty() ||
-		    !separated.ExternalTensorInfos().empty())
+		if (!separated.Constants().empty() || !separated.Weights().empty() || !separated.ExternalTensorInfos().empty())
 		{
 			separated.WriteObjectFile(objectPath, symbolPrefix);
 			std::cout << std::format(
@@ -1356,14 +1339,14 @@ namespace
 		if (tensor.type.dtype != spec.type.dtype)
 		{
 			throw std::runtime_error(std::format(
-			    "Input tensor '{}' from {} has dtype {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), LiteNN::DataTypeName(tensor.type.dtype), LiteNN::DataTypeName(spec.type.dtype)));
+			    "Input tensor '{}' from {} has dtype {}, but compiled module expects {}", spec.name, inputPath.string(),
+			    LiteNN::DataTypeName(tensor.type.dtype), LiteNN::DataTypeName(spec.type.dtype)));
 		}
 		if (tensorShape != specShape)
 		{
-			throw std::runtime_error(std::format(
-			    "Input tensor '{}' from {} has shape {}, but compiled module expects {}", spec.name,
-			    inputPath.string(), ShapeToString(tensorShape), ShapeToString(specShape)));
+			throw std::runtime_error(
+			    std::format("Input tensor '{}' from {} has shape {}, but compiled module expects {}", spec.name,
+			                inputPath.string(), ShapeToString(tensorShape), ShapeToString(specShape)));
 		}
 	}
 
@@ -1423,11 +1406,9 @@ namespace
 		return candidates;
 	}
 
-	const LiteNN::Serialization::SafetensorsTensorInfo* FindBindingTensor(
-	    const LiteNN::Serialization::SafetensorsArchive& archive,
-	    std::string_view name,
-	    InputBindingFlavor flavor,
-	    std::string& matchedName)
+	const LiteNN::Serialization::SafetensorsTensorInfo*
+	FindBindingTensor(const LiteNN::Serialization::SafetensorsArchive& archive, std::string_view name,
+	                  InputBindingFlavor flavor, std::string& matchedName)
 	{
 		for (const auto& candidate : BindingCandidates(name, flavor))
 		{
@@ -1440,11 +1421,9 @@ namespace
 		return nullptr;
 	}
 
-	std::vector<LiteNN::Tensor<LiteNN::CPU>> MakeInputsFromSafetensors(
-	    std::span<const LiteNN::CompiledTensorSpec> specs,
-	    const std::filesystem::path& inputPath,
-	    bool zeroFillMissing,
-	    InputBindingFlavor flavor = InputBindingFlavor::Default)
+	std::vector<LiteNN::Tensor<LiteNN::CPU>>
+	MakeInputsFromSafetensors(std::span<const LiteNN::CompiledTensorSpec> specs, const std::filesystem::path& inputPath,
+	                          bool zeroFillMissing, InputBindingFlavor flavor = InputBindingFlavor::Default)
 	{
 		auto archive = LiteNN::Serialization::SafetensorsArchive::LoadFile(inputPath);
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
@@ -1454,8 +1433,8 @@ namespace
 			const auto& spec = specs[i];
 			if (spec.name.empty())
 			{
-				throw std::runtime_error(std::format(
-				    "Compiled input {} has no name; safetensors input binding requires named inputs", i));
+				throw std::runtime_error(
+				    std::format("Compiled input {} has no name; safetensors input binding requires named inputs", i));
 			}
 			std::string matchedName;
 			const auto* tensor = FindBindingTensor(archive, spec.name, flavor, matchedName);
@@ -1469,8 +1448,8 @@ namespace
 					          << std::flush;
 					continue;
 				}
-				throw std::runtime_error(std::format(
-				    "Missing compiled input '{}' in safetensors bindings file {}", spec.name, inputPath.string()));
+				throw std::runtime_error(std::format("Missing compiled input '{}' in safetensors bindings file {}",
+				                                     spec.name, inputPath.string()));
 			}
 			ValidateBoundTensor(spec, *tensor, inputPath);
 			auto& input = inputs.emplace_back(LiteNN::Uninitialized, spec.type.StaticShape(), spec.type.dtype);
@@ -1484,8 +1463,7 @@ namespace
 	}
 
 	void PrintOutputs(std::span<const LiteNN::CompiledTensorSpec> specs,
-	                  std::span<const LiteNN::Tensor<LiteNN::CPU>> outputs,
-	                  bool failOnNonFinite)
+	                  std::span<const LiteNN::Tensor<LiteNN::CPU>> outputs, bool failOnNonFinite)
 	{
 		for (std::size_t i = 0; i < outputs.size(); ++i)
 		{
@@ -1573,8 +1551,7 @@ namespace
 		return result;
 	}
 
-	std::vector<LiteNN::Tensor<LiteNN::CPU>> AllocateCPUOutputs(
-	    std::span<const LiteNN::CompiledTensorSpec> specs)
+	std::vector<LiteNN::Tensor<LiteNN::CPU>> AllocateCPUOutputs(std::span<const LiteNN::CompiledTensorSpec> specs)
 	{
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
 		outputs.reserve(specs.size());
@@ -1653,13 +1630,12 @@ namespace
 
 	void PrintBenchmarkResult(const ModelBenchmarkResult& result)
 	{
-		std::cout << std::format(
-		    "Benchmark device={} status={} backend={} compile_ms={} load_ms={} input_bind_ms={}"
-		    " input_upload_ms={} run_mean_ms={} iterations={} rodata_bytes={} instruction_bytes={}"
-		    " input_bytes={} output_bytes={}\n",
-		    result.device, result.status, result.backend, result.compileMs, result.loadMs, result.inputBindMs,
-		    result.inputUploadMs, result.runMeanMs, result.iterations, result.rodataBytes,
-		    result.instructionBytes, result.inputBytes, result.outputBytes);
+		std::cout << std::format("Benchmark device={} status={} backend={} compile_ms={} load_ms={} input_bind_ms={}"
+		                         " input_upload_ms={} run_mean_ms={} iterations={} rodata_bytes={} instruction_bytes={}"
+		                         " input_bytes={} output_bytes={}\n",
+		                         result.device, result.status, result.backend, result.compileMs, result.loadMs,
+		                         result.inputBindMs, result.inputUploadMs, result.runMeanMs, result.iterations,
+		                         result.rodataBytes, result.instructionBytes, result.inputBytes, result.outputBytes);
 		if (!result.message.empty())
 		{
 			std::cout << "  message: " << result.message << '\n';
@@ -1748,13 +1724,13 @@ namespace
 		for (std::size_t i = 0; i < options.warmup; ++i)
 		{
 			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
-			               std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
+			                      std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
 		}
 		begin = BenchmarkClock::now();
 		for (std::size_t i = 0; i < options.iterations; ++i)
 		{
 			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs),
-			               std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
+			                      std::span<LiteNN::Tensor<LiteNN::CPU>>(outputs));
 		}
 		end = BenchmarkClock::now();
 		result.runTotalMs = ElapsedMs(begin, end);
@@ -1763,9 +1739,8 @@ namespace
 	}
 
 #ifdef LITENN_ENABLE_CUDA
-	std::vector<LiteNN::Tensor<LiteNN::CUDA>> CopyInputsToCUDA(
-	    std::span<const LiteNN::Tensor<LiteNN::CPU>> cpuInputs,
-	    LiteNN::CUDA device)
+	std::vector<LiteNN::Tensor<LiteNN::CUDA>> CopyInputsToCUDA(std::span<const LiteNN::Tensor<LiteNN::CPU>> cpuInputs,
+	                                                           LiteNN::CUDA device)
 	{
 		std::vector<LiteNN::Tensor<LiteNN::CUDA>> inputs;
 		inputs.reserve(cpuInputs.size());
@@ -1776,15 +1751,15 @@ namespace
 		return inputs;
 	}
 
-	std::vector<LiteNN::Tensor<LiteNN::CUDA>> AllocateCUDAOutputs(
-	    std::span<const LiteNN::CompiledTensorSpec> specs,
-	    LiteNN::CUDA device)
+	std::vector<LiteNN::Tensor<LiteNN::CUDA>> AllocateCUDAOutputs(std::span<const LiteNN::CompiledTensorSpec> specs,
+	                                                              LiteNN::CUDA device)
 	{
 		std::vector<LiteNN::Tensor<LiteNN::CUDA>> outputs;
 		outputs.reserve(specs.size());
 		for (const auto& spec : specs)
 		{
-			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() }, spec.type.dtype, device);
+			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() }, spec.type.dtype,
+			                     device);
 		}
 		return outputs;
 	}
@@ -1838,28 +1813,27 @@ namespace
 		for (std::size_t i = 0; i < options.warmup; ++i)
 		{
 			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
-			               std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
+			                      std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
 		}
 		begin = BenchmarkClock::now();
 		for (std::size_t i = 0; i < options.iterations; ++i)
 		{
 			module.RunTensorsInto(std::span<const LiteNN::Tensor<LiteNN::CUDA>>(inputs),
-			               std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
+			                      std::span<LiteNN::Tensor<LiteNN::CUDA>>(outputs));
 		}
 		end = BenchmarkClock::now();
 		result.runTotalMs = ElapsedMs(begin, end);
 		result.runMeanMs = result.runTotalMs / static_cast<double>(options.iterations);
 #else
-		(void)graphPath;
-		(void)inputPath;
+		(void) graphPath;
+		(void) inputPath;
 		result.status = "skipped";
 		result.message = "LiteNN was built without CUDA support";
 #endif
 		return result;
 	}
 
-	void BenchmarkModelWithInputs(const std::filesystem::path& graphPath,
-	                              const std::filesystem::path& inputPath,
+	void BenchmarkModelWithInputs(const std::filesystem::path& graphPath, const std::filesystem::path& inputPath,
 	                              const ModelBenchmarkOptions& options)
 	{
 		const auto result = options.device == "cuda" ? BenchmarkCUDAModelWithInputs(graphPath, inputPath, options)
@@ -1871,10 +1845,9 @@ namespace
 		}
 	}
 
-	std::vector<LiteNN::Tensor<LiteNN::CPU>> RunInputsAndPrint(
-	    const LiteNN::CompiledModule<LiteNN::CPU>& module,
-	    std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs,
-	    bool failOnNonFinite = true)
+	std::vector<LiteNN::Tensor<LiteNN::CPU>> RunInputsAndPrint(const LiteNN::CompiledModule<LiteNN::CPU>& module,
+	                                                           std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs,
+	                                                           bool failOnNonFinite = true)
 	{
 		auto outputs = module.RunTensors(inputs);
 		PrintOutputs(module.OutputSpecs(), outputs, failOnNonFinite);
@@ -1895,9 +1868,7 @@ namespace
 			auto options = MakeExampleCompilerOptions();
 			PrintCompileBudget(plan, options, "run-model");
 			auto artifact = TimedStep("run-model codegen",
-			                          [&] {
-				                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
-			                          });
+			                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options); });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1910,8 +1881,7 @@ namespace
 		RunZeroInputsAndPrint(module);
 	}
 
-	void CompileAndRunModelWithInputs(const std::filesystem::path& graphPath,
-	                                  const std::filesystem::path& inputPath,
+	void CompileAndRunModelWithInputs(const std::filesystem::path& graphPath, const std::filesystem::path& inputPath,
 	                                  const OutputRunOptions& outputOptions)
 	{
 		LiteNN::CompiledModule<LiteNN::CPU> module;
@@ -1920,9 +1890,7 @@ namespace
 			auto options = MakeExampleCompilerOptions();
 			PrintCompileBudget(plan, options, "run-model-with-inputs");
 			auto artifact = TimedStep("run-model-with-inputs codegen",
-			                          [&] {
-				                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
-			                          });
+			                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options); });
 			std::cout << std::format("Compiled {} backend={} rodata={} bytes instructions={} bytes\n",
 			                         graphPath.string(), BackendName(artifact.Backend()), artifact.Rodata().size(),
 			                         artifact.Instructions().size())
@@ -1937,8 +1905,7 @@ namespace
 		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 	}
 
-	void DiagnoseModelWithInputs(const std::filesystem::path& graphPath,
-	                             const std::filesystem::path& inputPath,
+	void DiagnoseModelWithInputs(const std::filesystem::path& graphPath, const std::filesystem::path& inputPath,
 	                             const FiniteDiagnosticOptions& options)
 	{
 		auto plan = LoadExecutablePlanInput(graphPath);
@@ -1964,9 +1931,9 @@ namespace
 			    ++visitedNodes;
 			    if (options.maxNodes && visitedNodes > *options.maxNodes)
 			    {
-				    throw std::runtime_error(std::format(
-				        "Finite diagnostics reached --max-nodes {} without finding a non-finite tensor",
-				        *options.maxNodes));
+				    throw std::runtime_error(
+				        std::format("Finite diagnostics reached --max-nodes {} without finding a non-finite tensor",
+				                    *options.maxNodes));
 			    }
 			    for (std::size_t port = 0; port < nodeOutputs.size(); ++port)
 			    {
@@ -1975,10 +1942,10 @@ namespace
 				    {
 					    if (options.verbose)
 					    {
-						    std::cout << std::format("  subgraph={} node={} kind={} port={} dtype={} shape={} skipped\n",
-						                             subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node),
-						                             port, LiteNN::DataTypeName(tensor.DType()),
-						                             ShapeToString(tensor.Shape()));
+						    std::cout << std::format(
+						        "  subgraph={} node={} kind={} port={} dtype={} shape={} skipped\n", subgraphId, nodeId,
+						        LiteNN::Validation::NodeKindName(entry.node), port,
+						        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()));
 					    }
 					    continue;
 				    }
@@ -1992,8 +1959,8 @@ namespace
 					        "  non-finite subgraph={} node={} kind={} port={} dtype={} shape={} nonfinite={}/{}"
 					        " mean={} rms={} min={} max={}\n",
 					        subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
-					        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()),
-					        stats.nonFiniteCount, stats.TotalCount(), stats.mean, stats.rms, stats.min, stats.max);
+					        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()), stats.nonFiniteCount,
+					        stats.TotalCount(), stats.mean, stats.rms, stats.min, stats.max);
 					    printedFirstNonFinite = true;
 					    if (options.failOnNonFinite)
 					    {
@@ -2002,11 +1969,11 @@ namespace
 				    }
 				    else if (options.verbose)
 				    {
-					    std::cout << std::format(
-					        "  finite subgraph={} node={} kind={} port={} dtype={} shape={} mean={} rms={} min={} max={}\n",
-					        subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
-					        LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()), stats.mean,
-					        stats.rms, stats.min, stats.max);
+					    std::cout << std::format("  finite subgraph={} node={} kind={} port={} dtype={} shape={} "
+					                             "mean={} rms={} min={} max={}\n",
+					                             subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
+					                             LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()),
+					                             stats.mean, stats.rms, stats.min, stats.max);
 				    }
 			    }
 		    });
@@ -2028,16 +1995,15 @@ namespace
 		auto options = MakeExampleCompilerOptions();
 		PrintCompileBudget(plan, options, "compile-raw-object");
 		auto artifact = TimedStep("compile-raw-object codegen",
-		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
-		                          });
+		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options); });
 		std::ofstream out(objectPath, std::ios::binary);
 		if (!out)
 		{
 			throw std::runtime_error("Failed to open output raw object file");
 		}
 		const auto instructions = artifact.Instructions();
-		out.write(reinterpret_cast<const char*>(instructions.data()), static_cast<std::streamsize>(instructions.size()));
+		out.write(reinterpret_cast<const char*>(instructions.data()),
+		          static_cast<std::streamsize>(instructions.size()));
 		if (!out)
 		{
 			throw std::runtime_error("Failed to write output raw object file");
@@ -2047,18 +2013,14 @@ namespace
 		                         instructions.size());
 	}
 
-	void CompileImageRegions(const std::filesystem::path& graphPath,
-	                         const std::filesystem::path& outputDir,
-	                         std::string_view filePrefix,
-	                         const ExampleCompilerSettings& compilerSettings = {})
+	void CompileImageRegions(const std::filesystem::path& graphPath, const std::filesystem::path& outputDir,
+	                         std::string_view filePrefix, const ExampleCompilerSettings& compilerSettings = {})
 	{
 		auto plan = LoadExecutablePlanInput(graphPath);
 		auto options = MakeExampleCompilerOptions(compilerSettings);
 		PrintCompileBudget(plan, options, "compile-image-regions");
 		auto artifact = TimedStep("compile-image-regions codegen",
-		                          [&] {
-			                          return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
-		                          });
+		                          [&] { return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options); });
 		std::filesystem::create_directories(outputDir);
 		const auto prefix = std::string(filePrefix);
 		const auto rodataPath = outputDir / (prefix + ".rodata.bin");
@@ -2070,8 +2032,8 @@ namespace
 		{
 			const auto constantsPath = outputDir / (prefix + ".constants.bin");
 			const auto weightsPath = outputDir / (prefix + ".weights.bin");
-			auto metadata = TimedStep("compile-image-regions metadata",
-			                          [&] { return artifact.BuildSeparatedMetadata(); });
+			auto metadata =
+			    TimedStep("compile-image-regions metadata", [&] { return artifact.BuildSeparatedMetadata(); });
 			TimedStep("compile-image-regions write metadata", [&] { WriteAllBytes(rodataPath, metadata); });
 			TimedStep("compile-image-regions write constants", [&] { WriteAllBytes(constantsPath, constants); });
 			TimedStep("compile-image-regions write weights", [&] { WriteAllBytes(weightsPath, weights); });
@@ -2105,9 +2067,8 @@ namespace
 		return filename.substr(0, filename.size() - suffix.size());
 	}
 
-	std::optional<LiteNN::CompiledModuleSeparatedArtifact> TryLoadSeparatedImageRegions(
-	    const std::filesystem::path& rodataPath,
-	    const std::filesystem::path& instructionsPath)
+	std::optional<LiteNN::CompiledModuleSeparatedArtifact>
+	TryLoadSeparatedImageRegions(const std::filesystem::path& rodataPath, const std::filesystem::path& instructionsPath)
 	{
 		const auto prefix = RegionFilePrefixFromRodataPath(rodataPath);
 		if (!prefix)
@@ -2137,8 +2098,7 @@ namespace
 		}
 	}
 
-	LiteNN::CompiledModuleArtifact LoadArtifactFromLibrary(const DynamicLibrary& library,
-	                                                       std::string_view symbolPrefix)
+	LiteNN::CompiledModuleArtifact LoadArtifactFromLibrary(const DynamicLibrary& library, std::string_view symbolPrefix)
 	{
 		return LiteNN::CompiledModuleArtifact::FromExportedSymbols({
 		    .rodata = library.Lookup(SymbolName(symbolPrefix, "_rodata")),
@@ -2148,9 +2108,8 @@ namespace
 		});
 	}
 
-	std::optional<LiteNN::CompiledModuleSeparatedArtifact> TryLoadSeparatedArtifactFromLibrary(
-	    const DynamicLibrary& library,
-	    std::string_view symbolPrefix)
+	std::optional<LiteNN::CompiledModuleSeparatedArtifact>
+	TryLoadSeparatedArtifactFromLibrary(const DynamicLibrary& library, std::string_view symbolPrefix)
 	{
 		const auto metadata = library.TryLookup(SymbolName(symbolPrefix, "_metadata"));
 		const auto metadataSize = library.TryLookup(SymbolName(symbolPrefix, "_metadata_size"));
@@ -2175,12 +2134,13 @@ namespace
 		DynamicLibrary library(libraryPath);
 		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
 		{
-			std::cout << std::format(
-			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
-			    " instructions={} bytes external_tensors={}\n",
-			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
-			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
-			    separated->ExternalTensorInfos().size())
+			std::cout << std::format("Loaded separated carrier image {} backend={} metadata={} bytes constants={} "
+			                         "bytes weights={} bytes"
+			                         " instructions={} bytes external_tensors={}\n",
+			                         libraryPath.string(), BackendName(separated->Backend()),
+			                         separated->Metadata().size(), separated->Constants().size(),
+			                         separated->Weights().size(), separated->Instructions().size(),
+			                         separated->ExternalTensorInfos().size())
 			          << std::flush;
 			auto module = separated->LoadBorrowedExternalRegions();
 			std::cout << std::format("Loaded separated carrier DLL {} backend={} input_count={} output_count={}\n",
@@ -2198,26 +2158,25 @@ namespace
 		          << std::flush;
 		auto module = artifact.Load();
 		std::cout << std::format("Loaded carrier DLL {} backend={} input_count={} output_count={}\n",
-		                         libraryPath.string(), BackendName(module.Backend()),
-		                         module.InputSpecs().size(), module.OutputSpecs().size())
+		                         libraryPath.string(), BackendName(module.Backend()), module.InputSpecs().size(),
+		                         module.OutputSpecs().size())
 		          << std::flush;
 		RunZeroInputsAndPrint(module);
 	}
 
-	void LoadDllAndRunWithInputs(const std::filesystem::path& libraryPath,
-	                             const std::filesystem::path& inputPath,
-	                             std::string_view symbolPrefix,
-	                             const OutputRunOptions& outputOptions)
+	void LoadDllAndRunWithInputs(const std::filesystem::path& libraryPath, const std::filesystem::path& inputPath,
+	                             std::string_view symbolPrefix, const OutputRunOptions& outputOptions)
 	{
 		DynamicLibrary library(libraryPath);
 		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
 		{
-			std::cout << std::format(
-			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
-			    " instructions={} bytes external_tensors={}\n",
-			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
-			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
-			    separated->ExternalTensorInfos().size())
+			std::cout << std::format("Loaded separated carrier image {} backend={} metadata={} bytes constants={} "
+			                         "bytes weights={} bytes"
+			                         " instructions={} bytes external_tensors={}\n",
+			                         libraryPath.string(), BackendName(separated->Backend()),
+			                         separated->Metadata().size(), separated->Constants().size(),
+			                         separated->Weights().size(), separated->Instructions().size(),
+			                         separated->ExternalTensorInfos().size())
 			          << std::flush;
 			auto module = separated->LoadBorrowedExternalRegions();
 			std::cout << std::format("Loaded separated carrier DLL {} backend={} input_count={} output_count={}\n",
@@ -2237,8 +2196,8 @@ namespace
 		          << std::flush;
 		auto module = artifact.Load();
 		std::cout << std::format("Loaded carrier DLL {} backend={} input_count={} output_count={}\n",
-		                         libraryPath.string(), BackendName(module.Backend()),
-		                         module.InputSpecs().size(), module.OutputSpecs().size())
+		                         libraryPath.string(), BackendName(module.Backend()), module.InputSpecs().size(),
+		                         module.OutputSpecs().size())
 		          << std::flush;
 		auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
 		auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
@@ -2247,18 +2206,18 @@ namespace
 
 	void LoadImageAndRunWithInputs(const std::filesystem::path& rodataPath,
 	                               const std::filesystem::path& instructionsPath,
-	                               const std::filesystem::path& inputPath,
-	                               const OutputRunOptions& outputOptions)
+	                               const std::filesystem::path& inputPath, const OutputRunOptions& outputOptions)
 	{
 		if (auto separated = TryLoadSeparatedImageRegions(rodataPath, instructionsPath))
 		{
 			auto module = separated->LoadBorrowedExternalRegions();
-			std::cout << std::format(
-			    "Loaded separated image regions metadata={} instructions={} backend={} input_count={} output_count={}"
-			    " constants={} bytes weights={} bytes external_tensors={}\n",
-			    rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
-			    module.InputSpecs().size(), module.OutputSpecs().size(), separated->Constants().size(),
-			    separated->Weights().size(), separated->ExternalTensorInfos().size())
+			std::cout << std::format("Loaded separated image regions metadata={} instructions={} backend={} "
+			                         "input_count={} output_count={}"
+			                         " constants={} bytes weights={} bytes external_tensors={}\n",
+			                         rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+			                         module.InputSpecs().size(), module.OutputSpecs().size(),
+			                         separated->Constants().size(), separated->Weights().size(),
+			                         separated->ExternalTensorInfos().size())
 			          << std::flush;
 			auto inputs = MakeInputsFromSafetensors(module.InputSpecs(), inputPath, false);
 			auto outputs = RunInputsAndPrint(module, inputs, outputOptions.failOnNonFinite);
@@ -2282,8 +2241,7 @@ namespace
 		WriteSingleOutputIfRequested(outputOptions.outputPath, module.OutputSpecs(), outputs);
 	}
 
-	void SampleEulerModule(const LiteNN::CompiledModule<LiteNN::CPU>& module,
-	                       std::string_view sourceLabel,
+	void SampleEulerModule(const LiteNN::CompiledModule<LiteNN::CPU>& module, std::string_view sourceLabel,
 	                       const EulerSamplerOptions& options)
 	{
 		const auto latentInput = module.FindInput("latent");
@@ -2311,14 +2269,12 @@ namespace
 		{
 			throw std::runtime_error("Euler CFG dual mode requires --inputs with negative conditioning tensors");
 		}
-		auto inputs = options.inputBindings
-		                  ? MakeInputsFromSafetensors(module.InputSpecs(), *options.inputBindings, true,
-		                                               InputBindingFlavor::Default)
-		                  : MakeZeroInputs(module.InputSpecs());
-		auto uncondInputs = cfgMode == "dual"
-		                        ? MakeInputsFromSafetensors(module.InputSpecs(), *options.inputBindings, true,
-		                                                     InputBindingFlavor::Negative)
-		                        : std::vector<LiteNN::Tensor<LiteNN::CPU>>{};
+		auto inputs = options.inputBindings ? MakeInputsFromSafetensors(module.InputSpecs(), *options.inputBindings,
+		                                                                true, InputBindingFlavor::Default)
+		                                    : MakeZeroInputs(module.InputSpecs());
+		auto uncondInputs = cfgMode == "dual" ? MakeInputsFromSafetensors(module.InputSpecs(), *options.inputBindings,
+		                                                                  true, InputBindingFlavor::Negative)
+		                                      : std::vector<LiteNN::Tensor<LiteNN::CPU>>{};
 		LiteNN::Tensor<LiteNN::CPU> latentState(LiteNN::Uninitialized, inputs[*latentInput].Shape(),
 		                                        inputs[*latentInput].DType());
 		if (options.latentInit == "inputs")
@@ -2388,8 +2344,7 @@ namespace
 				RequireFinite(std::format("step {} prediction", step + 1), noiseStats);
 				if (uncondNoiseStats)
 				{
-					RequireFinite(std::format("step {} unconditional prediction", step + 1),
-					              *uncondNoiseStats);
+					RequireFinite(std::format("step {} unconditional prediction", step + 1), *uncondNoiseStats);
 				}
 			}
 			EulerUpdateFromPredictions(latentState, outputs[*noiseOutput], uncondPrediction, coefficients,
@@ -2401,22 +2356,20 @@ namespace
 			}
 			if (uncondNoiseStats)
 			{
-				std::cout << std::format(
-				    "  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
-				    " pred_nonfinite={} uncond_pred_rms={} uncond_pred_nonfinite={} latent_rms={}"
-				    " latent_nonfinite={}\n",
-				    step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
-				    noiseStats.rms, noiseStats.nonFiniteCount, uncondNoiseStats->rms,
-				    uncondNoiseStats->nonFiniteCount, latentStats.rms, latentStats.nonFiniteCount);
+				std::cout << std::format("  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
+				                         " pred_nonfinite={} uncond_pred_rms={} uncond_pred_nonfinite={} latent_rms={}"
+				                         " latent_nonfinite={}\n",
+				                         step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
+				                         noiseStats.rms, noiseStats.nonFiniteCount, uncondNoiseStats->rms,
+				                         uncondNoiseStats->nonFiniteCount, latentStats.rms, latentStats.nonFiniteCount);
 			}
 			else
 			{
-				std::cout << std::format(
-				    "  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
-				    " pred_nonfinite={} latent_rms={} latent_nonfinite={}\n",
-				    step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
-				    noiseStats.rms, noiseStats.nonFiniteCount, latentStats.rms,
-				    latentStats.nonFiniteCount);
+				std::cout << std::format("  step {}/{} sigma={} next_sigma={} timestep={} c_in={} dt={} pred_rms={}"
+				                         " pred_nonfinite={} latent_rms={} latent_nonfinite={}\n",
+				                         step + 1, options.steps, sigma, nextSigma, timestep, coefficients.cIn, dt,
+				                         noiseStats.rms, noiseStats.nonFiniteCount, latentStats.rms,
+				                         latentStats.nonFiniteCount);
 			}
 		}
 
@@ -2439,12 +2392,13 @@ namespace
 		DynamicLibrary library(libraryPath);
 		if (auto separated = TryLoadSeparatedArtifactFromLibrary(library, symbolPrefix))
 		{
-			std::cout << std::format(
-			    "Loaded separated carrier image {} backend={} metadata={} bytes constants={} bytes weights={} bytes"
-			    " instructions={} bytes external_tensors={}\n",
-			    libraryPath.string(), BackendName(separated->Backend()), separated->Metadata().size(),
-			    separated->Constants().size(), separated->Weights().size(), separated->Instructions().size(),
-			    separated->ExternalTensorInfos().size())
+			std::cout << std::format("Loaded separated carrier image {} backend={} metadata={} bytes constants={} "
+			                         "bytes weights={} bytes"
+			                         " instructions={} bytes external_tensors={}\n",
+			                         libraryPath.string(), BackendName(separated->Backend()),
+			                         separated->Metadata().size(), separated->Constants().size(),
+			                         separated->Weights().size(), separated->Instructions().size(),
+			                         separated->ExternalTensorInfos().size())
 			          << std::flush;
 			auto module = separated->LoadBorrowedExternalRegions();
 			SampleEulerModule(module, libraryPath.string(), options);
@@ -2460,19 +2414,19 @@ namespace
 		SampleEulerModule(module, libraryPath.string(), options);
 	}
 
-	void SampleEulerImage(const std::filesystem::path& rodataPath,
-	                      const std::filesystem::path& instructionsPath,
+	void SampleEulerImage(const std::filesystem::path& rodataPath, const std::filesystem::path& instructionsPath,
 	                      const EulerSamplerOptions& options)
 	{
 		if (auto separated = TryLoadSeparatedImageRegions(rodataPath, instructionsPath))
 		{
 			auto module = separated->LoadBorrowedExternalRegions();
-			std::cout << std::format(
-			    "Loaded separated image regions metadata={} instructions={} backend={} input_count={} output_count={}"
-			    " constants={} bytes weights={} bytes external_tensors={}\n",
-			    rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
-			    module.InputSpecs().size(), module.OutputSpecs().size(), separated->Constants().size(),
-			    separated->Weights().size(), separated->ExternalTensorInfos().size())
+			std::cout << std::format("Loaded separated image regions metadata={} instructions={} backend={} "
+			                         "input_count={} output_count={}"
+			                         " constants={} bytes weights={} bytes external_tensors={}\n",
+			                         rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+			                         module.InputSpecs().size(), module.OutputSpecs().size(),
+			                         separated->Constants().size(), separated->Weights().size(),
+			                         separated->ExternalTensorInfos().size())
 			          << std::flush;
 			SampleEulerModule(module, rodataPath.string(), options);
 			return;
@@ -2486,9 +2440,10 @@ namespace
 		    .instructions = instructions.data(),
 		    .instructionSize = instructions.size(),
 		});
-		std::cout << std::format("Loaded image regions rodata={} instructions={} backend={} input_count={} output_count={}\n",
-		                         rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
-		                         module.InputSpecs().size(), module.OutputSpecs().size())
+		std::cout << std::format(
+		                 "Loaded image regions rodata={} instructions={} backend={} input_count={} output_count={}\n",
+		                 rodataPath.string(), instructionsPath.string(), BackendName(module.Backend()),
+		                 module.InputSpecs().size(), module.OutputSpecs().size())
 		          << std::flush;
 		SampleEulerModule(module, rodataPath.string(), options);
 	}
@@ -2786,8 +2741,8 @@ int main(int argc, char** argv)
 			auto options = ParseEulerOptions(argc, argv, optionStart);
 			if (options.inputBindings || options.outputLatent)
 			{
-				throw std::runtime_error(
-				    "--denoise-latent takes input/output paths positionally; do not also pass --inputs or --output-latent");
+				throw std::runtime_error("--denoise-latent takes input/output paths positionally; do not also pass "
+				                         "--inputs or --output-latent");
 			}
 			options.inputBindings = std::filesystem::path(argv[3]);
 			options.outputLatent = std::filesystem::path(argv[4]);
@@ -2808,8 +2763,8 @@ int main(int argc, char** argv)
 			auto options = ParseEulerOptions(argc, argv, 6);
 			if (options.inputBindings || options.outputLatent)
 			{
-				throw std::runtime_error(
-				    "--denoise-latent-image takes input/output paths positionally; do not also pass --inputs or --output-latent");
+				throw std::runtime_error("--denoise-latent-image takes input/output paths positionally; do not also "
+				                         "pass --inputs or --output-latent");
 			}
 			options.inputBindings = std::filesystem::path(argv[4]);
 			options.outputLatent = std::filesystem::path(argv[5]);

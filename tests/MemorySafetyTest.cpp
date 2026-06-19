@@ -42,8 +42,7 @@ namespace
 			_CrtMemCheckpoint(&after);
 			if (_CrtMemDifference(&diff, &before_, &after) != 0)
 			{
-				return testing::AssertionFailure()
-				       << "detected net debug heap growth during memory-safety stress loop";
+				return testing::AssertionFailure() << "detected net debug heap growth during memory-safety stress loop";
 			}
 			return testing::AssertionSuccess();
 		}
@@ -82,7 +81,7 @@ TEST(MemorySafetyTest, TensorViewsSurviveRepeatedAssignmentAndDestruction)
 		Tensor<CPU> tensor({ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }, { 4, 3 }, DataType::Float32);
 		auto row = tensor[1];
 		Tensor<CPU> replacement({ static_cast<double>(iteration + 1), static_cast<double>(iteration + 2),
-		                         static_cast<double>(iteration + 3) },
+		                          static_cast<double>(iteration + 3) },
 		                        { 3 }, DataType::Float32);
 
 		row = replacement;
@@ -164,10 +163,10 @@ TEST(MemorySafetyTest, CompiledModuleLoadCopiesImageAcrossLifetimeCycles)
 		}
 
 		std::array<Tensor<CPU>, 2> inputs = {
-		    Tensor<CPU>({ static_cast<double>(iteration + 1), static_cast<double>(iteration + 2),
-		                  static_cast<double>(iteration + 3), static_cast<double>(iteration + 4) },
-		                 { 2, 2 }, DataType::Float32),
-		    Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32),
+			Tensor<CPU>({ static_cast<double>(iteration + 1), static_cast<double>(iteration + 2),
+			              static_cast<double>(iteration + 3), static_cast<double>(iteration + 4) },
+			            { 2, 2 }, DataType::Float32),
+			Tensor<CPU>({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32),
 		};
 
 		auto outputs = loaded.RunTensors(inputs);

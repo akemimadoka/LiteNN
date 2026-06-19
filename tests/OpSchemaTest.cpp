@@ -60,12 +60,11 @@ TEST(OpSchemaTest, ReportsBackendCapabilities)
 	EXPECT_FALSE(binary.SupportsBackend(BackendCUDANative));
 
 	auto custom = BuildDefaultOpSchemaRegistry();
-	custom.RegisterCapability("BinaryOpNode",
-	                          { .backend = std::string(BackendCUDANative),
-	                            .support = BackendSupportLevel::Fallback,
-	                            .dtypes = { DataType::Float32 },
-	                            .layouts = { TensorLayoutKind::RowMajor },
-	                            .relativeCost = 3.0 });
+	custom.RegisterCapability("BinaryOpNode", { .backend = std::string(BackendCUDANative),
+	                                            .support = BackendSupportLevel::Fallback,
+	                                            .dtypes = { DataType::Float32 },
+	                                            .layouts = { TensorLayoutKind::RowMajor },
+	                                            .relativeCost = 3.0 });
 	const auto& updated = custom.Require("BinaryOpNode");
 	ASSERT_NE(updated.FindCapability(BackendCUDANative), nullptr);
 	EXPECT_EQ(updated.FindCapability(BackendCUDANative)->support, BackendSupportLevel::Fallback);
@@ -78,9 +77,8 @@ TEST(OpSchemaTest, BuildsCoverageReportForDefaultBackends)
 	const auto report = registry.CoverageReport();
 
 	ASSERT_EQ(report.size(), std::variant_size_v<NodeVariant>);
-	const auto binary = std::ranges::find_if(report, [](const OpCoverageRow& row) {
-		return row.kind == "BinaryOpNode";
-	});
+	const auto binary =
+	    std::ranges::find_if(report, [](const OpCoverageRow& row) { return row.kind == "BinaryOpNode"; });
 	ASSERT_NE(binary, report.end());
 	EXPECT_EQ(binary->capabilities.size(), DefaultBackendNames.size());
 	EXPECT_EQ(binary->capabilities[0].backend, BackendCPUInterpreter);
@@ -88,9 +86,8 @@ TEST(OpSchemaTest, BuildsCoverageReportForDefaultBackends)
 	EXPECT_EQ(binary->capabilities[1].backend, BackendCPUAOT);
 	EXPECT_EQ(binary->capabilities[1].support, BackendSupportLevel::Unsupported);
 
-	const auto mulMatId = std::ranges::find_if(report, [](const OpCoverageRow& row) {
-		return row.kind == "MulMatIdNode";
-	});
+	const auto mulMatId =
+	    std::ranges::find_if(report, [](const OpCoverageRow& row) { return row.kind == "MulMatIdNode"; });
 	ASSERT_NE(mulMatId, report.end());
 	EXPECT_EQ(mulMatId->domain, OpDomain::GGMLCompatibility);
 }

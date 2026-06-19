@@ -13,7 +13,9 @@ namespace LiteNN
 	public:
 		ModelBuilder() = default;
 
-		explicit ModelBuilder(ModelGraph model) : model_(std::move(model)) {}
+		explicit ModelBuilder(ModelGraph model) : model_(std::move(model))
+		{
+		}
 
 		ModelGraph& Model() noexcept
 		{

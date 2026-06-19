@@ -108,8 +108,8 @@ namespace LiteNN::Layer
 				adapter = "default";
 			}
 			return ParsedLoRATensorName{ .targetName = std::string(name.substr(0, markerPos)),
-			                             .adapterName = std::string(adapter),
-			                             .role = role };
+				                         .adapterName = std::string(adapter),
+				                         .role = role };
 		};
 		if (auto parsed = parse(".lora_A", LoRATensorRole::A))
 		{
@@ -141,7 +141,7 @@ namespace LiteNN::Layer
 	namespace Detail
 	{
 		inline LinearLoRAAdapter CreateLinearLoRAImpl(Graph& graph, LoRAAdapterMetadata metadata, Tensor<CPU> a,
-		                                             Tensor<CPU> b)
+		                                              Tensor<CPU> b)
 		{
 			ValidateLoRAMetadata(metadata);
 			if (a.DType() != metadata.dtype || b.DType() != metadata.dtype)
@@ -154,7 +154,8 @@ namespace LiteNN::Layer
 			}
 			if (a.Shape()[1] != metadata.rank || b.Shape()[0] != metadata.rank)
 			{
-				throw std::runtime_error("LoRA adapter tensor shapes must be [inFeatures, rank] and [rank, outFeatures]");
+				throw std::runtime_error(
+				    "LoRA adapter tensor shapes must be [inFeatures, rank] and [rank, outFeatures]");
 			}
 
 			LinearLoRAAdapter adapter;
@@ -168,9 +169,10 @@ namespace LiteNN::Layer
 	} // namespace Detail
 
 	inline LinearLoRAAdapter CreateLinearLoRA(ModelBuilder& builder, LoRAAdapterMetadata metadata, Tensor<CPU> a,
-	                                         Tensor<CPU> b)
+	                                          Tensor<CPU> b)
 	{
-		return Detail::CreateLinearLoRAImpl(builder.UnsafeMutableGraph(), std::move(metadata), std::move(a), std::move(b));
+		return Detail::CreateLinearLoRAImpl(builder.UnsafeMutableGraph(), std::move(metadata), std::move(a),
+		                                    std::move(b));
 	}
 
 	inline LinearLoRAAdapter CreateLinearLoRA(Graph& graph, LoRAAdapterMetadata metadata, Tensor<CPU> a, Tensor<CPU> b)
@@ -178,8 +180,8 @@ namespace LiteNN::Layer
 		return Detail::CreateLinearLoRAImpl(graph, std::move(metadata), std::move(a), std::move(b));
 	}
 
-	inline NodeOutput AddLinearWithLoRA(Subgraph& subgraph, const LinearLayer& linear,
-	                                    const LinearLoRAAdapter& adapter, NodeOutput input)
+	inline NodeOutput AddLinearWithLoRA(Subgraph& subgraph, const LinearLayer& linear, const LinearLoRAAdapter& adapter,
+	                                    NodeOutput input)
 	{
 		ValidateLinearLoRACompatibility(linear, adapter);
 
@@ -187,8 +189,8 @@ namespace LiteNN::Layer
 		if (inputInfo.dtype != adapter.metadata.dtype || inputInfo.shape.size() != 2 ||
 		    inputInfo.shape[1] != adapter.inFeatures)
 		{
-			throw std::runtime_error(std::format("LoRA input must have shape [batch, {}] and matching dtype",
-			                                    adapter.inFeatures));
+			throw std::runtime_error(
+			    std::format("LoRA input must have shape [batch, {}] and matching dtype", adapter.inFeatures));
 		}
 
 		const auto base = AddLinear(subgraph, linear, input);
@@ -197,13 +199,16 @@ namespace LiteNN::Layer
 		const std::vector<std::size_t> bShape{ adapter.metadata.rank, adapter.outFeatures };
 		const std::vector<std::size_t> outputShape{ inputInfo.shape[0], adapter.outFeatures };
 
-		const auto a = subgraph.AddNode(VariableRefNode{ adapter.aVariable }, { OutputInfo{ adapter.metadata.dtype, aShape } });
+		const auto a =
+		    subgraph.AddNode(VariableRefNode{ adapter.aVariable }, { OutputInfo{ adapter.metadata.dtype, aShape } });
 		const auto hidden = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, { a, 0 } },
 		                                     { OutputInfo{ adapter.metadata.dtype, hiddenShape } });
-		const auto b = subgraph.AddNode(VariableRefNode{ adapter.bVariable }, { OutputInfo{ adapter.metadata.dtype, bShape } });
+		const auto b =
+		    subgraph.AddNode(VariableRefNode{ adapter.bVariable }, { OutputInfo{ adapter.metadata.dtype, bShape } });
 		const auto delta = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, { hidden, 0 }, { b, 0 } },
 		                                    { OutputInfo{ adapter.metadata.dtype, outputShape } });
-		const auto scaleTensor = Detail::MakeFilledTensor(outputShape, adapter.metadata.dtype, LoRAScale(adapter.metadata));
+		const auto scaleTensor =
+		    Detail::MakeFilledTensor(outputShape, adapter.metadata.dtype, LoRAScale(adapter.metadata));
 		const auto scale = Detail::AddConstant(subgraph, scaleTensor);
 		const auto scaledDelta = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { delta, 0 }, { scale, 0 } },
 		                                          { OutputInfo{ adapter.metadata.dtype, outputShape } });
@@ -219,8 +224,8 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("Merged LoRA export currently supports Float32 Linear layers only");
 		}
-		if (graph.GetVariable(linear.weightVariable)->IsQuantized() || graph.GetVariable(adapter.aVariable)->IsQuantized() ||
-		    graph.GetVariable(adapter.bVariable)->IsQuantized())
+		if (graph.GetVariable(linear.weightVariable)->IsQuantized() ||
+		    graph.GetVariable(adapter.aVariable)->IsQuantized() || graph.GetVariable(adapter.bVariable)->IsQuantized())
 		{
 			throw std::runtime_error("Merged LoRA export currently requires dequantized Float32 variables");
 		}

@@ -47,8 +47,7 @@ namespace LiteNN
 	bool VulkanNativeSupportsSameShapeUnaryF32(UnaryOp op);
 	bool VulkanNativeSupportsSameShapeUnary(DataType dtype, UnaryOp op);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnaryF32SPIRV(UnaryOp op, std::uint32_t elementCount);
-	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op,
-	                                                           std::uint32_t elementCount);
+	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeUnarySPIRV(DataType dtype, UnaryOp op, std::uint32_t elementCount);
 	std::string VulkanNativeSameShapeUnaryF32KernelName(UnaryOp op);
 	bool VulkanNativeSupportsSameShapeBinaryF32(BinaryOp op);
 	bool VulkanNativeSupportsSameShapeBinary(DataType dtype, BinaryOp op);
@@ -61,7 +60,7 @@ namespace LiteNN
 	                                                                    std::uint32_t elementCount);
 	VulkanNativeGeneratedSPIRV
 	VulkanNativeSameShapeElementwiseF32DAGSPIRV(std::span<const VulkanNativeElementwiseF32KernelOp> ops,
-	                                           std::uint32_t elementCount);
+	                                            std::uint32_t elementCount);
 	bool VulkanNativeSupportsSameShapeCast(DataType srcType, DataType dstType);
 	VulkanNativeGeneratedSPIRV VulkanNativeSameShapeCastSPIRV(DataType srcType, DataType dstType,
 	                                                          std::uint32_t elementCount);

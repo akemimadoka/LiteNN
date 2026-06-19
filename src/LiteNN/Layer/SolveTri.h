@@ -10,8 +10,8 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddSolveTri(Subgraph& subgraph, NodeOutput a, NodeOutput b,
-	                              bool lower = true, bool unitDiagonal = false)
+	inline NodeOutput AddSolveTri(Subgraph& subgraph, NodeOutput a, NodeOutput b, bool lower = true,
+	                              bool unitDiagonal = false)
 	{
 		const auto aInfo = subgraph.GetOutputInfo(a);
 		const auto bInfo = subgraph.GetOutputInfo(b);
@@ -25,8 +25,8 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildSolveTri(ModelBuilder& builder, ShapeView aShape, ShapeView bShape,
-	                                bool lower = true, bool unitDiagonal = false)
+	inline SubgraphId BuildSolveTri(ModelBuilder& builder, ShapeView aShape, ShapeView bShape, bool lower = true,
+	                                bool unitDiagonal = false)
 	{
 		Subgraph subgraph;
 		const auto a = subgraph.AddParam(DataType::Float32, aShape.ToOwned());

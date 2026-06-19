@@ -92,7 +92,8 @@ TEST(TransformPipeline, RunsExecutablePlanTransformsWithInvalidationMetadata)
 		.invalidates = { TransformInvalidation::MemoryPlan, TransformInvalidation::BackendPlacement },
 	};
 
-	auto result = RunExecutablePlanPipeline(std::move(plan), std::span<const NamedExecutablePlanTransform>{ &transform, 1 });
+	auto result =
+	    RunExecutablePlanPipeline(std::move(plan), std::span<const NamedExecutablePlanTransform>{ &transform, 1 });
 
 	ASSERT_EQ(result.steps.size(), 1u);
 	EXPECT_EQ(result.steps[0].stage, TransformStageKind::ExecutablePlanToExecutablePlan);
@@ -107,7 +108,8 @@ TEST(TransformPipeline, BuildsBackendPlanAsTypedStage)
 	auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
 	std::array<std::string_view, 1> backends{ BackendCPUInterpreter };
 
-	auto result = RunExecutablePlanToBackendPlanPipeline(std::move(plan), std::span<const std::string_view>{ backends });
+	auto result =
+	    RunExecutablePlanToBackendPlanPipeline(std::move(plan), std::span<const std::string_view>{ backends });
 
 	ASSERT_EQ(result.steps.size(), 1u);
 	EXPECT_EQ(result.steps[0].stage, TransformStageKind::ExecutablePlanToBackendPlan);

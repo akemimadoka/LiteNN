@@ -12,8 +12,7 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddReshape(Subgraph& subgraph, NodeOutput input,
-	                             std::span<const std::size_t> targetShape)
+	inline NodeOutput AddReshape(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> targetShape)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		::LiteNN::Detail::ValidatePositiveShape(targetShape, "Reshape target shape");
@@ -23,16 +22,14 @@ namespace LiteNN::Layer
 		}
 
 		auto outputShape = std::vector<std::size_t>(targetShape.begin(), targetShape.end());
-		const auto result = subgraph.AddNode(ReshapeNode{ input, outputShape },
-		                                     { OutputInfo{ info.dtype, outputShape } });
+		const auto result =
+		    subgraph.AddNode(ReshapeNode{ input, outputShape }, { OutputInfo{ info.dtype, outputShape } });
 		return { result, 0 };
 	}
 
-	inline NodeOutput AddReshape(Subgraph& subgraph, NodeOutput input,
-	                             std::initializer_list<std::size_t> targetShape)
+	inline NodeOutput AddReshape(Subgraph& subgraph, NodeOutput input, std::initializer_list<std::size_t> targetShape)
 	{
-		return AddReshape(subgraph, input,
-		                  std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
+		return AddReshape(subgraph, input, std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
 	}
 
 	inline SubgraphId BuildReshape(ModelBuilder& builder, DataType dtype, ShapeView inputShape,

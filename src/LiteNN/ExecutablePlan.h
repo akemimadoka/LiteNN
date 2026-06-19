@@ -23,7 +23,9 @@ namespace LiteNN
 	public:
 		ModelGraph() = default;
 
-		explicit ModelGraph(Graph graph) : graph_(std::move(graph)) {}
+		explicit ModelGraph(Graph graph) : graph_(std::move(graph))
+		{
+		}
 
 		Graph& UnsafeMutableGraph() noexcept
 		{
@@ -70,7 +72,8 @@ namespace LiteNN
 	{
 		NodeId sourceNode{};
 		ExecutablePlanOp op;
-		// Internal execution payload. vNext packages and public runtime/compiler boundaries must use op/schema/type facts.
+		// Internal execution payload. vNext packages and public runtime/compiler boundaries must use op/schema/type
+		// facts.
 		NodeVariant node;
 		std::string opKind;
 		OpCategory category{ OpCategory::Custom };
@@ -155,14 +158,12 @@ namespace LiteNN
 		std::string message;
 	};
 
-	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
-	                             std::string value)
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, std::string value)
 	{
 		attributes.push_back({ std::move(name), std::move(value) });
 	}
 
-	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
-	                             std::size_t value)
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, std::size_t value)
 	{
 		AddPlanAttribute(attributes, std::move(name), std::to_string(value));
 	}
@@ -178,7 +179,7 @@ namespace LiteNN
 	}
 
 	template <typename Enum>
-		requires std::is_enum_v<Enum>
+	    requires std::is_enum_v<Enum>
 	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, Enum value)
 	{
 		AddPlanAttribute(attributes, std::move(name), static_cast<std::size_t>(value));
@@ -569,27 +570,28 @@ namespace LiteNN
 		if (type.layout.HasExplicitStrides() && type.layout.strides.size() != type.Rank())
 		{
 			throw std::runtime_error(std::format("{} has {} explicit strides for rank {}", context,
-			                                    type.layout.strides.size(), type.Rank()));
+			                                     type.layout.strides.size(), type.Rank()));
 		}
 	}
 
 	inline void ValidateExecutablePlanValueRef(const ExecutablePlanSubgraph& subgraph, NodeOutput output,
-	                                           std::string_view context, std::optional<NodeId> currentNode = std::nullopt)
+	                                           std::string_view context,
+	                                           std::optional<NodeId> currentNode = std::nullopt)
 	{
 		if (output.node >= subgraph.nodes.size())
 		{
-			throw std::runtime_error(std::format("{} references node {}, but nodeCount={}", context, output.node,
-			                                    subgraph.nodes.size()));
+			throw std::runtime_error(
+			    std::format("{} references node {}, but nodeCount={}", context, output.node, subgraph.nodes.size()));
 		}
 		if (currentNode && output.node >= *currentNode)
 		{
 			throw std::runtime_error(std::format("{} references node {}, which is not before current node {}", context,
-			                                    output.node, *currentNode));
+			                                     output.node, *currentNode));
 		}
 		if (output.port >= subgraph.nodes[output.node].outputs.size())
 		{
 			throw std::runtime_error(std::format("{} references node {} port {}, but outputCount={}", context,
-			                                    output.node, output.port, subgraph.nodes[output.node].outputs.size()));
+			                                     output.node, output.port, subgraph.nodes[output.node].outputs.size()));
 		}
 	}
 
@@ -602,13 +604,13 @@ namespace LiteNN
 		}
 		if (plan.forward >= plan.subgraphs.size())
 		{
-			throw std::runtime_error(std::format("ExecutablePlan validation failed: forward subgraph {} is out of range",
-			                                    plan.forward));
+			throw std::runtime_error(
+			    std::format("ExecutablePlan validation failed: forward subgraph {} is out of range", plan.forward));
 		}
 		if (plan.backward && *plan.backward >= plan.subgraphs.size())
 		{
-			throw std::runtime_error(std::format("ExecutablePlan validation failed: backward subgraph {} is out of range",
-			                                    *plan.backward));
+			throw std::runtime_error(
+			    std::format("ExecutablePlan validation failed: backward subgraph {} is out of range", *plan.backward));
 		}
 
 		for (std::size_t i = 0; i < plan.variables.size(); ++i)
@@ -622,8 +624,8 @@ namespace LiteNN
 			    plan.variables[i].viewStrides.size() != plan.variables[i].type.Rank())
 			{
 				throw std::runtime_error(std::format("variable {} view has {} strides for rank {}", i,
-				                                    plan.variables[i].viewStrides.size(),
-				                                    plan.variables[i].type.Rank()));
+				                                     plan.variables[i].viewStrides.size(),
+				                                     plan.variables[i].type.Rank()));
 			}
 			if (const auto logicalBytes = plan.variables[i].LogicalByteSize();
 			    logicalBytes && plan.variables[i].region.byteSize != 0 &&
@@ -654,46 +656,45 @@ namespace LiteNN
 				if (node.sourceNode != nodeIndex)
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} sourceNode mismatch: {}", subgraphIndex,
-					                                    nodeIndex, node.sourceNode));
+					                                     nodeIndex, node.sourceNode));
 				}
 				if (node.op.kind.empty())
 				{
-					throw std::runtime_error(std::format("subgraph {} node {} has empty executable op kind",
-					                                    subgraphIndex, nodeIndex));
+					throw std::runtime_error(
+					    std::format("subgraph {} node {} has empty executable op kind", subgraphIndex, nodeIndex));
 				}
 				if (!node.opKind.empty() && node.opKind != node.op.kind)
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} op kind mismatch: {} vs {}",
-					                                    subgraphIndex, nodeIndex, node.op.kind, node.opKind));
+					                                     subgraphIndex, nodeIndex, node.op.kind, node.opKind));
 				}
 				if (node.category != node.op.category || node.effect != node.op.effect)
 				{
-					throw std::runtime_error(std::format("subgraph {} node {} op metadata mismatch",
-					                                    subgraphIndex, nodeIndex));
+					throw std::runtime_error(
+					    std::format("subgraph {} node {} op metadata mismatch", subgraphIndex, nodeIndex));
 				}
 				const auto expectedSchemaId = static_cast<std::uint32_t>(registry.IndexOf(node.op.kind));
 				if (node.op.schemaId != expectedSchemaId)
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} schema id mismatch: expected {}, got {}",
-					                                    subgraphIndex, nodeIndex, expectedSchemaId,
-					                                    node.op.schemaId));
+					                                     subgraphIndex, nodeIndex, expectedSchemaId, node.op.schemaId));
 				}
 				const auto& schema = registry.Require(node.op.kind);
 				if (!schema.AllowsInputCount(node.inputs.size()))
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} {} input count {} violates schema",
-					                                    subgraphIndex, nodeIndex, node.op.kind, node.inputs.size()));
+					                                     subgraphIndex, nodeIndex, node.op.kind, node.inputs.size()));
 				}
 				if (!schema.AllowsOutputCount(node.outputs.size()))
 				{
 					throw std::runtime_error(std::format("subgraph {} node {} {} output count {} violates schema",
-					                                    subgraphIndex, nodeIndex, node.op.kind, node.outputs.size()));
+					                                     subgraphIndex, nodeIndex, node.op.kind, node.outputs.size()));
 				}
 				for (std::size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
 				{
-					ValidateExecutableTensorType(node.outputs[outputIndex],
-					                             std::format("subgraph {} node {} output {}", subgraphIndex, nodeIndex,
-					                                         outputIndex));
+					ValidateExecutableTensorType(
+					    node.outputs[outputIndex],
+					    std::format("subgraph {} node {} output {}", subgraphIndex, nodeIndex, outputIndex));
 				}
 				for (std::size_t inputIndex = 0; inputIndex < node.inputs.size(); ++inputIndex)
 				{
@@ -704,24 +705,23 @@ namespace LiteNN
 			}
 			for (std::size_t resultIndex = 0; resultIndex < subgraph.results.size(); ++resultIndex)
 			{
-				ValidateExecutablePlanValueRef(
-				    subgraph, subgraph.results[resultIndex],
-				    std::format("subgraph {} result {}", subgraphIndex, resultIndex));
+				ValidateExecutablePlanValueRef(subgraph, subgraph.results[resultIndex],
+				                               std::format("subgraph {} result {}", subgraphIndex, resultIndex));
 			}
 		}
 
 		const auto& forward = plan.subgraphs[plan.forward];
 		if (plan.inputs.size() != forward.params.size())
 		{
-			throw std::runtime_error(std::format(
-			    "ExecutablePlan public input count {} does not match forward param count {}", plan.inputs.size(),
-			    forward.params.size()));
+			throw std::runtime_error(
+			    std::format("ExecutablePlan public input count {} does not match forward param count {}",
+			                plan.inputs.size(), forward.params.size()));
 		}
 		if (plan.outputs.size() != forward.results.size())
 		{
-			throw std::runtime_error(std::format(
-			    "ExecutablePlan public output count {} does not match forward result count {}", plan.outputs.size(),
-			    forward.results.size()));
+			throw std::runtime_error(
+			    std::format("ExecutablePlan public output count {} does not match forward result count {}",
+			                plan.outputs.size(), forward.results.size()));
 		}
 		for (std::size_t i = 0; i < plan.inputs.size(); ++i)
 		{
@@ -746,9 +746,10 @@ namespace LiteNN
 		}
 	}
 
-	inline std::vector<ExecutablePlanBackendIssue> CollectExecutablePlanBackendIssues(
-	    const ExecutablePlan& plan, std::string_view backend,
-	    const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(), bool allowFallback = true)
+	inline std::vector<ExecutablePlanBackendIssue>
+	CollectExecutablePlanBackendIssues(const ExecutablePlan& plan, std::string_view backend,
+	                                   const OpSchemaRegistry& registry = DefaultOpSchemaRegistry(),
+	                                   bool allowFallback = true)
 	{
 		ValidateExecutablePlan(plan, registry);
 		std::vector<ExecutablePlanBackendIssue> issues;
@@ -775,8 +776,9 @@ namespace LiteNN
 		return issues;
 	}
 
-	inline std::vector<ExecutablePlanCompatibilityDiagnostic> CollectExecutablePlanCompatibilityDiagnostics(
-	    const ExecutablePlan& plan, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+	inline std::vector<ExecutablePlanCompatibilityDiagnostic>
+	CollectExecutablePlanCompatibilityDiagnostics(const ExecutablePlan& plan,
+	                                              const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 	{
 		ValidateExecutablePlan(plan, registry);
 		std::vector<ExecutablePlanCompatibilityDiagnostic> diagnostics;
@@ -796,9 +798,9 @@ namespace LiteNN
 				    .node = node.sourceNode,
 				    .opKind = node.op.kind,
 				    .domain = schema.domain,
-				    .message = std::format(
-				        "op '{}' remains in compatibility domain; importer must lower it to core ops or keep it in a tagged compatibility partition",
-				        node.op.kind),
+				    .message = std::format("op '{}' remains in compatibility domain; importer must lower it to core "
+				                           "ops or keep it in a tagged compatibility partition",
+				                           node.op.kind),
 				});
 			}
 		}
@@ -842,103 +844,104 @@ namespace LiteNN
 
 	namespace Detail
 	{
-	inline ExecutablePlan BuildExecutablePlanFromGraph(const Graph& graph,
-	                                                   const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
-	{
-		ExecutablePlan plan;
-		plan.forward = graph.Forward();
-		plan.backward = graph.Backward();
-		plan.subgraphs.reserve(graph.SubgraphCount());
-
-		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		inline ExecutablePlan BuildExecutablePlanFromGraph(const Graph& graph,
+		                                                   const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
 		{
-			const auto& subgraph = graph.GetSubgraph(subgraphId);
-			ExecutablePlanSubgraph planSubgraph;
-			planSubgraph.sourceSubgraph = subgraphId;
-			planSubgraph.params.reserve(subgraph.Params().size());
-			for (const auto& param : subgraph.Params())
+			ExecutablePlan plan;
+			plan.forward = graph.Forward();
+			plan.backward = graph.Backward();
+			plan.subgraphs.reserve(graph.SubgraphCount());
+
+			for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
 			{
-				planSubgraph.params.push_back(ToTensorType(param));
+				const auto& subgraph = graph.GetSubgraph(subgraphId);
+				ExecutablePlanSubgraph planSubgraph;
+				planSubgraph.sourceSubgraph = subgraphId;
+				planSubgraph.params.reserve(subgraph.Params().size());
+				for (const auto& param : subgraph.Params())
+				{
+					planSubgraph.params.push_back(ToTensorType(param));
+				}
+
+				planSubgraph.nodes.reserve(subgraph.Nodes().size());
+				for (NodeId nodeId = 0; nodeId < subgraph.Nodes().size(); ++nodeId)
+				{
+					const auto& entry = subgraph.Nodes()[nodeId];
+					const auto opKind = OpKindName(entry.node);
+					const auto& schema = registry.Require(opKind);
+					auto inputs = NodeInputs(entry.node);
+					if (!schema.AllowsInputCount(inputs.size()))
+					{
+						throw std::runtime_error("Node input count does not match op schema: " + opKind);
+					}
+					if (!schema.AllowsOutputCount(entry.outputInfos.size()))
+					{
+						throw std::runtime_error("Node output count does not match op schema: " + opKind);
+					}
+
+					ExecutablePlanNode planNode;
+					planNode.sourceNode = nodeId;
+					planNode.op =
+					    BuildExecutablePlanOp(entry.node, schema, static_cast<std::uint32_t>(registry.IndexOf(opKind)));
+					planNode.node = entry.node;
+					planNode.opKind = opKind;
+					planNode.category = schema.category;
+					planNode.effect = schema.effect;
+					planNode.inputs = std::move(inputs);
+					planNode.outputs.reserve(entry.outputInfos.size());
+					for (const auto& output : entry.outputInfos)
+					{
+						planNode.outputs.push_back(ToTensorType(output));
+					}
+					planSubgraph.nodes.push_back(std::move(planNode));
+				}
+				planSubgraph.results.assign(subgraph.Results().begin(), subgraph.Results().end());
+				plan.subgraphs.push_back(std::move(planSubgraph));
 			}
 
-			planSubgraph.nodes.reserve(subgraph.Nodes().size());
-			for (NodeId nodeId = 0; nodeId < subgraph.Nodes().size(); ++nodeId)
+			plan.variables.reserve(graph.VariableCount());
+			for (std::size_t i = 0; i < graph.VariableCount(); ++i)
 			{
-				const auto& entry = subgraph.Nodes()[nodeId];
-				const auto opKind = OpKindName(entry.node);
-				const auto& schema = registry.Require(opKind);
-				auto inputs = NodeInputs(entry.node);
-				if (!schema.AllowsInputCount(inputs.size()))
-				{
-					throw std::runtime_error("Node input count does not match op schema: " + opKind);
-				}
-				if (!schema.AllowsOutputCount(entry.outputInfos.size()))
-				{
-					throw std::runtime_error("Node output count does not match op schema: " + opKind);
-				}
-
-				ExecutablePlanNode planNode;
-				planNode.sourceNode = nodeId;
-				planNode.op = BuildExecutablePlanOp(entry.node, schema,
-				                                     static_cast<std::uint32_t>(registry.IndexOf(opKind)));
-				planNode.node = entry.node;
-				planNode.opKind = opKind;
-				planNode.category = schema.category;
-				planNode.effect = schema.effect;
-				planNode.inputs = std::move(inputs);
-				planNode.outputs.reserve(entry.outputInfos.size());
-				for (const auto& output : entry.outputInfos)
-				{
-					planNode.outputs.push_back(ToTensorType(output));
-				}
-				planSubgraph.nodes.push_back(std::move(planNode));
+				const auto& tensor = graph.GetVariable(i)->Data();
+				TensorStorageRef storage;
+				const auto memorySpace = TensorMemorySpaceFor(tensor.CurDevice());
+				storage.type = TensorType::Dense(tensor.DType(), tensor.Shape(), memorySpace);
+				storage.quantization = graph.GetVariable(i)->Quantization();
+				storage.region =
+				    MakeBorrowedBufferRegion(tensor.UnsafeRawData(), storage.type.ByteSize().value_or(0), memorySpace);
+				storage.region.name = graph.VariableName(i);
+				plan.variables.push_back(std::move(storage));
 			}
-			planSubgraph.results.assign(subgraph.Results().begin(), subgraph.Results().end());
-			plan.subgraphs.push_back(std::move(planSubgraph));
-		}
 
-		plan.variables.reserve(graph.VariableCount());
-		for (std::size_t i = 0; i < graph.VariableCount(); ++i)
-		{
-			const auto& tensor = graph.GetVariable(i)->Data();
-			TensorStorageRef storage;
-			const auto memorySpace = TensorMemorySpaceFor(tensor.CurDevice());
-			storage.type = TensorType::Dense(tensor.DType(), tensor.Shape(), memorySpace);
-			storage.quantization = graph.GetVariable(i)->Quantization();
-			storage.region = MakeBorrowedBufferRegion(tensor.UnsafeRawData(), storage.type.ByteSize().value_or(0), memorySpace);
-			storage.region.name = graph.VariableName(i);
-			plan.variables.push_back(std::move(storage));
-		}
+			plan.activationSlots.reserve(graph.ActivationSlotCount());
+			for (std::size_t i = 0; i < graph.ActivationSlotCount(); ++i)
+			{
+				plan.activationSlots.push_back(graph.GetActivationSlot(i).Type());
+			}
+			plan.tapeSlots.reserve(graph.TapeSlotCount());
+			for (std::size_t i = 0; i < graph.TapeSlotCount(); ++i)
+			{
+				plan.tapeSlots.push_back(graph.GetTapeSlot(i).Type());
+			}
 
-		plan.activationSlots.reserve(graph.ActivationSlotCount());
-		for (std::size_t i = 0; i < graph.ActivationSlotCount(); ++i)
-		{
-			plan.activationSlots.push_back(graph.GetActivationSlot(i).Type());
-		}
-		plan.tapeSlots.reserve(graph.TapeSlotCount());
-		for (std::size_t i = 0; i < graph.TapeSlotCount(); ++i)
-		{
-			plan.tapeSlots.push_back(graph.GetTapeSlot(i).Type());
-		}
+			const auto inputSignature = graph.InputTypeSignature();
+			plan.inputs.reserve(inputSignature.size());
+			for (std::size_t i = 0; i < inputSignature.size(); ++i)
+			{
+				plan.inputs.push_back({ { i, 0 }, inputSignature[i].type, inputSignature[i].name });
+			}
 
-		const auto inputSignature = graph.InputTypeSignature();
-		plan.inputs.reserve(inputSignature.size());
-		for (std::size_t i = 0; i < inputSignature.size(); ++i)
-		{
-			plan.inputs.push_back({ { i, 0 }, inputSignature[i].type, inputSignature[i].name });
-		}
+			const auto outputSignature = graph.OutputTypeSignature();
+			plan.outputs.reserve(outputSignature.size());
+			for (std::size_t i = 0; i < outputSignature.size(); ++i)
+			{
+				plan.outputs.push_back({ graph.GetSubgraph(graph.Forward()).Results()[i], outputSignature[i].type,
+				                         outputSignature[i].name });
+			}
 
-		const auto outputSignature = graph.OutputTypeSignature();
-		plan.outputs.reserve(outputSignature.size());
-		for (std::size_t i = 0; i < outputSignature.size(); ++i)
-		{
-			plan.outputs.push_back(
-			    { graph.GetSubgraph(graph.Forward()).Results()[i], outputSignature[i].type, outputSignature[i].name });
+			ValidateExecutablePlan(plan, registry);
+			return plan;
 		}
-
-		ValidateExecutablePlan(plan, registry);
-		return plan;
-	}
 	} // namespace Detail
 
 	inline ExecutablePlan BuildExecutablePlan(const ModelGraph& model,
@@ -1002,11 +1005,11 @@ namespace LiteNN
 
 	namespace Detail
 	{
-	inline ExecutableModule BuildExecutableModuleFromGraph(const Graph& graph,
-	                                                       const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
-	{
-		return BuildExecutableModule(BuildExecutablePlanFromGraph(graph, registry));
-	}
+		inline ExecutableModule
+		BuildExecutableModuleFromGraph(const Graph& graph, const OpSchemaRegistry& registry = DefaultOpSchemaRegistry())
+		{
+			return BuildExecutableModule(BuildExecutablePlanFromGraph(graph, registry));
+		}
 	} // namespace Detail
 
 	inline ExecutableModule BuildExecutableModule(const ModelGraph& model,

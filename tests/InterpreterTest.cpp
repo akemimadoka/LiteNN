@@ -72,7 +72,7 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 	std::vector<std::tuple<SubgraphId, NodeId, std::string, std::size_t, bool>> trace;
 	Runtime::Interpreter<CPU> interp;
 	auto results = interp.RunForwardWithTrace(
-		Detail::BuildExecutablePlanFromGraph(graph), inputs,
+	    Detail::BuildExecutablePlanFromGraph(graph), inputs,
 	    [&](SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry, std::span<const Tensor<CPU>> outputs) {
 		    bool sawNonFinite = false;
 		    for (const auto& output : outputs)
@@ -87,8 +87,8 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 				    sawNonFinite = sawNonFinite || !std::isfinite(static_cast<double>(data[i]));
 			    }
 		    }
-		    trace.emplace_back(subgraphId, nodeId, std::string(Validation::NodeKindName(entry.node)),
-		                       outputs.size(), sawNonFinite);
+		    trace.emplace_back(subgraphId, nodeId, std::string(Validation::NodeKindName(entry.node)), outputs.size(),
+		                       sawNonFinite);
 	    });
 
 	ASSERT_EQ(results.size(), 1);
@@ -1053,9 +1053,9 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 
 		// [grad_x, grad_V, grad_W] — sorted by variableIndex: wIdx=0, vIdx=1
 		ASSERT_EQ(bwdResults.size(), 3);
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 2);  // grad_x = W = 2
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[1], 0), 3);  // grad_W = x = 3
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[2], 0), 0);  // grad_V = 0 (else 分支未执行)
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 2); // grad_x = W = 2
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[1], 0), 3); // grad_W = x = 3
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[2], 0), 0); // grad_V = 0 (else 分支未执行)
 	}
 
 	// x=-4 (<= 0): elseBranch, y = V*x = 5*(-4) = -20
@@ -1075,9 +1075,9 @@ TEST(Interpreter, AutogradCondNodeWithVariable)
 		auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 		ASSERT_EQ(bwdResults.size(), 3);
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 5);   // grad_x = V = 5
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[1], 0), 0);   // grad_W = 0 (then 分支未执行)
-		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[2], 0), -4);   // grad_V = x = -4
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[0], 0), 5);  // grad_x = V = 5
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[1], 0), 0);  // grad_W = 0 (then 分支未执行)
+		EXPECT_FLOAT_EQ(ReadFloat(bwdResults[2], 0), -4); // grad_V = x = -4
 	}
 }
 
@@ -1105,7 +1105,8 @@ TEST(Interpreter, AutogradNestedCallWithVariable)
 	// callee: y = Call(sub-callee, [x])
 	Subgraph calleeSg;
 	const auto cx = calleeSg.AddParam(DataType::Float32, { 2 });
-	const auto ccall = calleeSg.AddNode(CallNode{ subCalleeId, { { cx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto ccall =
+	    calleeSg.AddNode(CallNode{ subCalleeId, { { cx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { ccall, 0 } });
 	const auto calleeId = graph.AddSubgraph(std::move(calleeSg));
 

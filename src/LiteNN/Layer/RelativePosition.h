@@ -31,8 +31,8 @@ namespace LiteNN::Compatibility::GGML
 		}
 	} // namespace Detail
 
-	inline NodeOutput AddGetRelativePosition(Subgraph& subgraph, NodeOutput relativePosition,
-	                                         std::size_t querySize, std::size_t keySize)
+	inline NodeOutput AddGetRelativePosition(Subgraph& subgraph, NodeOutput relativePosition, std::size_t querySize,
+	                                         std::size_t keySize)
 	{
 		const auto info = subgraph.GetOutputInfo(relativePosition);
 		if (info.shape.size() != 2 || querySize == 0 || keySize == 0)
@@ -57,18 +57,19 @@ namespace LiteNN::Compatibility::GGML
 		return Layer::AddGather(subgraph, relativePosition, { indexNode, 0 }, 0uz);
 	}
 
-	inline NodeOutput AddRelativePositionBias2D(Subgraph& subgraph, NodeOutput scores,
-	                                           NodeOutput widthBias, NodeOutput heightBias)
+	inline NodeOutput AddRelativePositionBias2D(Subgraph& subgraph, NodeOutput scores, NodeOutput widthBias,
+	                                            NodeOutput heightBias)
 	{
 		const auto scoreInfo = subgraph.GetOutputInfo(scores);
 		const auto widthInfo = subgraph.GetOutputInfo(widthBias);
 		const auto heightInfo = subgraph.GetOutputInfo(heightBias);
 		if (scoreInfo.shape.size() != 5 || widthInfo.shape.size() != 3 || heightInfo.shape.size() != 3)
 		{
-			throw std::runtime_error(
-			    "RelativePositionBias2D expects scores [qH, qW, kH, kW, heads], width [qW, kW, heads], height [qH, kH, heads]");
+			throw std::runtime_error("RelativePositionBias2D expects scores [qH, qW, kH, kW, heads], width [qW, kW, "
+			                         "heads], height [qH, kH, heads]");
 		}
-		if (scoreInfo.dtype != widthInfo.dtype || scoreInfo.dtype != heightInfo.dtype || scoreInfo.dtype == DataType::Bool)
+		if (scoreInfo.dtype != widthInfo.dtype || scoreInfo.dtype != heightInfo.dtype ||
+		    scoreInfo.dtype == DataType::Bool)
 		{
 			throw std::runtime_error("RelativePositionBias2D requires matching non-Bool dtypes");
 		}
@@ -87,13 +88,14 @@ namespace LiteNN::Compatibility::GGML
 		const std::vector<std::size_t> scoreShape = scoreInfo.shape;
 		const auto widthReshaped = Layer::AddReshape(subgraph, widthBias, { 1uz, queryWidth, 1uz, keyWidth, heads });
 		const auto widthExpanded = Layer::AddBroadcastTo(subgraph, widthReshaped, scoreShape);
-		const auto heightReshaped = Layer::AddReshape(subgraph, heightBias, { queryHeight, 1uz, keyHeight, 1uz, heads });
+		const auto heightReshaped =
+		    Layer::AddReshape(subgraph, heightBias, { queryHeight, 1uz, keyHeight, 1uz, heads });
 		const auto heightExpanded = Layer::AddBroadcastTo(subgraph, heightReshaped, scoreShape);
 
 		const auto withWidth = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, scores, widthExpanded },
-		                                      { OutputInfo{ scoreInfo.dtype, scoreShape } });
+		                                        { OutputInfo{ scoreInfo.dtype, scoreShape } });
 		const auto withHeight = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { withWidth, 0 }, heightExpanded },
-		                                       { OutputInfo{ scoreInfo.dtype, scoreShape } });
+		                                         { OutputInfo{ scoreInfo.dtype, scoreShape } });
 		return { withHeight, 0 };
 	}
 } // namespace LiteNN::Compatibility::GGML

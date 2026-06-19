@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Serialization/ModelIO.h>
 #include <LiteNN/Layer/BroadcastTo.h>
 #include <LiteNN/Layer/Gather.h>
 #include <LiteNN/Layer/Pad.h>
 #include <LiteNN/Layer/Scatter.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
+#include <LiteNN/Serialization/ModelIO.h>
 
 #include <array>
 #include <cstdint>
@@ -24,8 +24,7 @@ namespace
 		return static_cast<const float*>(tensor.UnsafeRawData())[index];
 	}
 
-	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
-	                            std::initializer_list<std::size_t> shape)
+	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values, std::initializer_list<std::size_t> shape)
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
@@ -168,14 +167,14 @@ TEST(DataMovementNode, ConstFoldBroadcastAndGather)
 {
 	Graph graph;
 	Subgraph sg;
-	const auto data = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2, 3 } } });
-	const auto indices = sg.AddNode(
-	    ConstantNode{ MakeInt32Tensor({ 2, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Int32, { 2 } } });
-	const auto gathered = sg.AddNode(GatherNode{ { data, 0 }, { indices, 0 }, 1 },
-	                                 { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto data =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto indices =
+	    sg.AddNode(ConstantNode{ MakeInt32Tensor({ 2, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Int32, { 2 } } });
+	const auto gathered =
+	    sg.AddNode(GatherNode{ { data, 0 }, { indices, 0 }, 1 }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	sg.SetResults({ { gathered, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

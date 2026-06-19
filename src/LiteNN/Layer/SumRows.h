@@ -32,10 +32,10 @@ namespace LiteNN::Layer
 		auto outputShape = info.shape;
 		outputShape[0] = 1;
 
-		const auto reduced = subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, input, 0 },
-		                                     { OutputInfo{ info.dtype, reducedShape } });
-		const auto reshaped = subgraph.AddNode(ReshapeNode{ { reduced, 0 }, outputShape },
-		                                      { OutputInfo{ info.dtype, outputShape } });
+		const auto reduced =
+		    subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, input, 0 }, { OutputInfo{ info.dtype, reducedShape } });
+		const auto reshaped =
+		    subgraph.AddNode(ReshapeNode{ { reduced, 0 }, outputShape }, { OutputInfo{ info.dtype, outputShape } });
 		return { reshaped, 0 };
 	}
 

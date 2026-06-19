@@ -90,9 +90,8 @@ TEST(ThreadSafety, ReadOnlyGraphCanRunConcurrentlyWithSeparateInterpreters)
 	std::vector<std::future<WorkerResult>> futures;
 	for (int workerId = 0; workerId < 4; ++workerId)
 	{
-		futures.push_back(std::async(std::launch::async, [&graph, workerId] {
-			return RunInterpreterWorker(graph, workerId);
-		}));
+		futures.push_back(
+		    std::async(std::launch::async, [&graph, workerId] { return RunInterpreterWorker(graph, workerId); }));
 	}
 
 	for (auto& future : futures)

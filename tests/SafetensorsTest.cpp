@@ -273,20 +273,20 @@ TEST(Safetensors, RejectsCorruptHeadersAndPayloads)
 	EXPECT_THROW(Serialization::SafetensorsArchive::Load(std::span<const std::byte>()), std::runtime_error);
 
 	std::vector<std::byte> payload(4);
-	EXPECT_THROW(Serialization::SafetensorsArchive::Load(BuildSafetensors(
-	                 R"({"x":{"dtype":"U64","shape":[1],"data_offsets":[0,8]}})", payload)),
+	EXPECT_THROW(Serialization::SafetensorsArchive::Load(
+	                 BuildSafetensors(R"({"x":{"dtype":"U64","shape":[1],"data_offsets":[0,8]}})", payload)),
 	             std::runtime_error);
 
-	EXPECT_THROW(Serialization::SafetensorsArchive::Load(BuildSafetensors(
-	                 R"({"x":{"dtype":"F32","shape":[2],"data_offsets":[0,4]}})", payload)),
+	EXPECT_THROW(Serialization::SafetensorsArchive::Load(
+	                 BuildSafetensors(R"({"x":{"dtype":"F32","shape":[2],"data_offsets":[0,4]}})", payload)),
 	             std::runtime_error);
 
-	EXPECT_THROW(Serialization::SafetensorsArchive::Load(BuildSafetensors(
-	                 R"({"x":{"dtype":"F32","shape":[1],"data_offsets":[0,8]}})", payload)),
+	EXPECT_THROW(Serialization::SafetensorsArchive::Load(
+	                 BuildSafetensors(R"({"x":{"dtype":"F32","shape":[1],"data_offsets":[0,8]}})", payload)),
 	             std::runtime_error);
 
-	EXPECT_THROW(Serialization::SafetensorsArchive::Load(BuildSafetensors(
-	                 R"({"x":{"dtype":"BOOL","shape":[1],"data_offsets":[0,1]}})",
-	                 std::vector<std::byte>{ std::byte{ 2 } })),
-	             std::runtime_error);
+	EXPECT_THROW(
+	    Serialization::SafetensorsArchive::Load(BuildSafetensors(
+	        R"({"x":{"dtype":"BOOL","shape":[1],"data_offsets":[0,1]}})", std::vector<std::byte>{ std::byte{ 2 } })),
+	    std::runtime_error);
 }

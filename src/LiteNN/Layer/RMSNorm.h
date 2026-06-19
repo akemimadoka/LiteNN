@@ -25,8 +25,7 @@ namespace LiteNN::Layer
 
 	namespace Detail
 	{
-		inline RMSNormLayer CreateRMSNormImpl(Graph& graph, std::size_t featureSize,
-		                                      DataType dtype, double eps)
+		inline RMSNormLayer CreateRMSNormImpl(Graph& graph, std::size_t featureSize, DataType dtype, double eps)
 		{
 			RMSNormLayer layer;
 			layer.featureSize = featureSize;
@@ -51,16 +50,14 @@ namespace LiteNN::Layer
 		const auto info = subgraph.GetOutputInfo(input); // copy
 		if (info.shape.size() != 2 || info.shape[1] != layer.featureSize || info.dtype != layer.dtype)
 		{
-			throw std::runtime_error(
-			    "RMSNorm input must be 2D with shape [batch, featureSize] and matching dtype");
+			throw std::runtime_error("RMSNorm input must be 2D with shape [batch, featureSize] and matching dtype");
 		}
 
 		const std::size_t features = info.shape[1];
 		const std::vector<std::size_t> paramShape{ 1, features };
-		const auto weight = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
-		                                    { OutputInfo{ layer.dtype, paramShape } });
-		return AddNormalization(subgraph, input, NormalizationMode::RMSNorm, 1, layer.eps,
-		                        NodeOutput{ weight, 0 });
+		const auto weight =
+		    subgraph.AddNode(VariableRefNode{ layer.weightVariable }, { OutputInfo{ layer.dtype, paramShape } });
+		return AddNormalization(subgraph, input, NormalizationMode::RMSNorm, 1, layer.eps, NodeOutput{ weight, 0 });
 	}
 
 	namespace Detail

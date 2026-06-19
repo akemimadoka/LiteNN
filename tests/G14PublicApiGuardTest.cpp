@@ -53,23 +53,32 @@ namespace
 TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloads)
 {
 	const std::vector<ForbiddenPattern> forbidden{
-		{ "src/LiteNN/ExecutablePlan.h", "BuildExecutablePlan(const Graph&",
-		  "Detail::BuildExecutablePlanFromGraph" },
+		{ "src/LiteNN/ExecutablePlan.h", "BuildExecutablePlan(const Graph&", "Detail::BuildExecutablePlanFromGraph" },
 		{ "src/LiteNN/ExecutablePlan.h", "BuildExecutableModule(const Graph&",
 		  "Detail::BuildExecutableModuleFromGraph" },
-		{ "src/LiteNN/Runtime/Scheduler.h", "BuildRuntimeSchedule(const Graph&", "Detail::BuildExecutableModuleFromGraph(graph)" },
-		{ "src/LiteNN/Runtime/Placement.h", "BuildPlacementPlan(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Training/TrainStepPlan.h", "BuildTrainStepPlan(const Graph&", "Detail::BuildExecutableModuleFromGraph(graph)" },
-		{ "src/LiteNN/Compiler/CompiledModule.h", "CompileArtifact(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Scheduler.h", "BuildRuntimeSchedule(const Graph&",
+		  "Detail::BuildExecutableModuleFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Placement.h", "BuildPlacementPlan(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Training/TrainStepPlan.h", "BuildTrainStepPlan(const Graph&",
+		  "Detail::BuildExecutableModuleFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/CompiledModule.h", "CompileArtifact(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/CompiledModule.h", "Compile(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
 		{ "src/LiteNN/Compiler/Dump.h", "DumpMLIR(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.h", "translateGraphToMLIR",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
 		{ "src/LiteNN/Compiler/Translation/GraphToMLIR.cpp", "BuildMLIRGraphFromPlan",
 		  "direct ExecutablePlan lowering" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunSubgraph(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunForward(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunForwardWithTrace(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
-		{ "src/LiteNN/Runtime/Interpreter.h", "RunBackward(const Graph&", "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunSubgraph(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunForward(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunForwardWithTrace(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
+		{ "src/LiteNN/Runtime/Interpreter.h", "RunBackward(const Graph&",
+		  "Detail::BuildExecutablePlanFromGraph(graph)" },
 		{ "src/LiteNN/Serialization/ModelIO.h", "SaveModel(const Graph&", "SaveGraphArchive(graph)" },
 		{ "src/LiteNN/Serialization/ModelIO.h", "SaveModelExternalWeights(const Graph&",
 		  "SaveGraphArchiveExternalWeights(graph)" },
@@ -91,12 +100,10 @@ TEST(G14PublicApiGuard, PlanNativeRuntimeEntrypointsDoNotReintroduceGraphOverloa
 		  "Trainer(ModelGraph&) with explicit unsafe graph access inside the implementation" },
 		{ "src/LiteNN/Training/Trainer.h", "Trainer AOT execution policy is not wired yet",
 		  "explicit forward runner plus train-step diagnostic" },
-		{ "src/LiteNN/Training/Trainer.h", "Optimizer::ZeroGradients(*graph_",
-		  "explicit ParameterSet binding" },
+		{ "src/LiteNN/Training/Trainer.h", "Optimizer::ZeroGradients(*graph_", "explicit ParameterSet binding" },
 		{ "src/LiteNN/Training/Trainer.h", "Optimizer::StoreVariableGradients(*graph_",
 		  "explicit ParameterSet binding" },
-		{ "src/LiteNN/Training/Trainer.h", "optimizer_.Step(*graph_",
-		  "explicit ParameterSet binding" },
+		{ "src/LiteNN/Training/Trainer.h", "optimizer_.Step(*graph_", "explicit ParameterSet binding" },
 		{ "src/LiteNN/Optimizer/OptimizerUtils.h", "ZeroGradients(Graph&", "ZeroGradients(ParameterSet&)" },
 		{ "src/LiteNN/Optimizer/OptimizerUtils.h", "StoreVariableGradients(Graph&",
 		  "StoreVariableGradients(ParameterSet&)" },
@@ -169,14 +176,14 @@ TEST(G14PublicApiGuard, PublicLayerBuildHelpersDoNotAcceptRawGraph)
 	}
 
 	EXPECT_TRUE(violations.empty()) << "Public layer Build* helpers must accept ModelBuilder& after vNext:\n"
-	                               << [&]() {
-		                                  std::ostringstream output;
-		                                  for (const auto& violation : violations)
-		                                  {
-			                                  output << violation << '\n';
-		                                  }
-		                                  return output.str();
-	                                  }();
+	                                << [&]() {
+		                                   std::ostringstream output;
+		                                   for (const auto& violation : violations)
+		                                   {
+			                                   output << violation << '\n';
+		                                   }
+		                                   return output.str();
+	                                   }();
 }
 
 TEST(G14PublicApiGuard, GraphArchiveApisAreRemoved)
@@ -221,7 +228,8 @@ TEST(G14PublicApiGuard, ProductionExamplesUseVNextPackagesAndManifests)
 		{
 			continue;
 		}
-		const auto relative = entry.path().lexically_relative(std::filesystem::path(LITENN_SOURCE_DIR)).generic_string();
+		const auto relative =
+		    entry.path().lexically_relative(std::filesystem::path(LITENN_SOURCE_DIR)).generic_string();
 		const auto text = ReadSourceFile(relative);
 		checkedFiles.push_back(relative);
 		for (const auto pattern : forbidden)
@@ -234,15 +242,15 @@ TEST(G14PublicApiGuard, ProductionExamplesUseVNextPackagesAndManifests)
 	}
 	ASSERT_FALSE(checkedFiles.empty());
 	EXPECT_TRUE(violations.empty()) << "Production examples must stay on vNext package, separated artifact, or "
-	                                  "importer manifest flows:\n"
-	                               << [&]() {
-		                                  std::ostringstream output;
-		                                  for (const auto& violation : violations)
-		                                  {
-			                                  output << violation << '\n';
-		                                  }
-		                                  return output.str();
-	                                  }();
+	                                   "importer manifest flows:\n"
+	                                << [&]() {
+		                                   std::ostringstream output;
+		                                   for (const auto& violation : violations)
+		                                   {
+			                                   output << violation << '\n';
+		                                   }
+		                                   return output.str();
+	                                   }();
 
 	const std::vector<std::pair<std::string_view, std::string_view>> required{
 		{ "example/mnist/mnist_common.h", "SaveVNextModelPackage" },
@@ -309,12 +317,9 @@ TEST(G14PublicApiGuard, StableBoundaryHeadersKeepTensorTypeAsShapeTypeContract)
 		"src/LiteNN/Serialization/TorchManifest.h",
 	};
 	const std::vector<std::string_view> forbidden{
-		"OutputInfo",
-		" TensorSpec",
-		"<TensorSpec",
-		"std::vector<TensorSpec>",
-		"DataType dtype",
-		"std::vector<std::size_t> shape",
+		"OutputInfo",      " TensorSpec",
+		"<TensorSpec",     "std::vector<TensorSpec>",
+		"DataType dtype",  "std::vector<std::size_t> shape",
 		"ShapeView shape",
 	};
 
@@ -397,12 +402,10 @@ TEST(G14PublicApiGuard, CMakeExposesCoreImporterAndFullRuntimeTargets)
 
 	const auto compilerCmake = ReadSourceFile("src/LiteNN/Compiler/CMakeLists.txt");
 	EXPECT_NE(compilerCmake.find("add_library(LiteNNTrainingAOT"), std::string::npos);
-	EXPECT_NE(compilerCmake.find("add_library(LiteNN::LiteNNTrainingAOT ALIAS LiteNNTrainingAOT)"),
-	          std::string::npos);
+	EXPECT_NE(compilerCmake.find("add_library(LiteNN::LiteNNTrainingAOT ALIAS LiteNNTrainingAOT)"), std::string::npos);
 	EXPECT_NE(compilerCmake.find("target_compile_definitions(LiteNNTrainingAOT PUBLIC LITENN_ENABLE_TRAINING_AOT=1)"),
 	          std::string::npos);
-	EXPECT_NE(compilerCmake.find("target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)"),
-	          std::string::npos);
+	EXPECT_NE(compilerCmake.find("target_link_libraries(LiteNNTrainingAOT PUBLIC LiteNNCompiler)"), std::string::npos);
 	EXPECT_NE(compilerCmake.find("src/LiteNN/Training/TrainStepAOTRunner.cpp"), std::string::npos);
 	EXPECT_EQ(compilerCmake.find("list(APPEND LITENN_COMPILER_SOURCES\n"
 	                             "    ${CMAKE_SOURCE_DIR}/src/LiteNN/Training/TrainStepAOTRunner.cpp"),
@@ -460,9 +463,8 @@ TEST(G14PublicApiGuard, RawGraphMutationPassesAreInternalDetailScoped)
 	EXPECT_NE(passHeader.find("std::span<Detail::GraphMutationPass* const>"), std::string::npos);
 
 	const std::vector<std::string_view> graphMutationPassHeaders{
-		"src/LiteNN/Pass/AutogradPass.h",   "src/LiteNN/Pass/ConstFoldPass.h",
-		"src/LiteNN/Pass/EGraphPass.h",     "src/LiteNN/Pass/ForwardOnlyPass.h",
-		"src/LiteNN/Pass/FusionPass.h",     "src/LiteNN/Pass/InlinePass.h",
+		"src/LiteNN/Pass/AutogradPass.h",    "src/LiteNN/Pass/ConstFoldPass.h", "src/LiteNN/Pass/EGraphPass.h",
+		"src/LiteNN/Pass/ForwardOnlyPass.h", "src/LiteNN/Pass/FusionPass.h",    "src/LiteNN/Pass/InlinePass.h",
 	};
 	for (const auto header : graphMutationPassHeaders)
 	{

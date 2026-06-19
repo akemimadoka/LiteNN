@@ -220,7 +220,9 @@ namespace LiteNN::Validation
 	class GraphValidator
 	{
 	public:
-		explicit GraphValidator(const Graph& graph) : graph_(graph) {}
+		explicit GraphValidator(const Graph& graph) : graph_(graph)
+		{
+		}
 
 		void Validate() const
 		{
@@ -230,15 +232,15 @@ namespace LiteNN::Validation
 			}
 			if (graph_.Forward() >= graph_.SubgraphCount())
 			{
-				throw GraphValidationError(std::format(
-				    "Graph validation failed: forward subgraph {} is out of range; subgraphCount={}", graph_.Forward(),
-				    graph_.SubgraphCount()));
+				throw GraphValidationError(
+				    std::format("Graph validation failed: forward subgraph {} is out of range; subgraphCount={}",
+				                graph_.Forward(), graph_.SubgraphCount()));
 			}
 			if (const auto backward = graph_.Backward(); backward && *backward >= graph_.SubgraphCount())
 			{
-				throw GraphValidationError(std::format(
-				    "Graph validation failed: backward subgraph {} is out of range; subgraphCount={}", *backward,
-				    graph_.SubgraphCount()));
+				throw GraphValidationError(
+				    std::format("Graph validation failed: backward subgraph {} is out of range; subgraphCount={}",
+				                *backward, graph_.SubgraphCount()));
 			}
 
 			ValidateVariables();
@@ -279,8 +281,7 @@ namespace LiteNN::Validation
 		{
 			if (!IsValidDataType(dtype))
 			{
-				throw GraphValidationError(
-				    std::format("{} has invalid dtype {}", context, static_cast<int>(dtype)));
+				throw GraphValidationError(std::format("{} has invalid dtype {}", context, static_cast<int>(dtype)));
 			}
 		}
 
@@ -336,8 +337,8 @@ namespace LiteNN::Validation
 
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
-				(void)ValidateNodeOutput(subgraph, subgraphId, nodeId, inputs[i],
-				                         std::format("{} input {}", kind, i), true);
+				(void) ValidateNodeOutput(subgraph, subgraphId, nodeId, inputs[i], std::format("{} input {}", kind, i),
+				                          true);
 			}
 		}
 
@@ -363,7 +364,8 @@ namespace LiteNN::Validation
 				                 source.outputInfos.size()));
 			}
 			const auto info = source.outputInfos[output.port];
-			ValidateOutputInfo(info, std::format("subgraph {} node {} output {}", subgraphId, output.node, output.port));
+			ValidateOutputInfo(info,
+			                   std::format("subgraph {} node {} output {}", subgraphId, output.node, output.port));
 			return info;
 		}
 
@@ -411,8 +413,8 @@ namespace LiteNN::Validation
 					}
 					catch (const std::runtime_error& ex)
 					{
-						Fail(std::format("Graph validation failed: variable {} quantization metadata is invalid: {}",
-						                 i, ex.what()));
+						Fail(std::format("Graph validation failed: variable {} quantization metadata is invalid: {}", i,
+						                 ex.what()));
 					}
 				}
 			}
@@ -517,15 +519,14 @@ namespace LiteNN::Validation
 				}
 				catch (const GraphValidationError& ex)
 				{
-					throw GraphValidationError(
-					    std::format("{} (nodeKind={})", ex.what(), NodeKindName(entry.node)));
+					throw GraphValidationError(std::format("{} (nodeKind={})", ex.what(), NodeKindName(entry.node)));
 				}
 			}
 
 			for (std::size_t i = 0; i < subgraph.Results().size(); ++i)
 			{
-				(void)ValidateNodeOutput(subgraph, subgraphId, subgraph.NodeCount(), subgraph.Results()[i],
-				                         std::format("result {}", i), false);
+				(void) ValidateNodeOutput(subgraph, subgraphId, subgraph.NodeCount(), subgraph.Results()[i],
+				                          std::format("result {}", i), false);
 			}
 		}
 
@@ -547,8 +548,8 @@ namespace LiteNN::Validation
 		                  const ConstantNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
-			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
-			           { node.value.DType(), node.value.Shape().ToOwned() }, "ConstantNode output");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.value.DType(), node.value.Shape().ToOwned() },
+			           "ConstantNode output");
 		}
 
 		void ValidateNode(const Subgraph&, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -563,8 +564,7 @@ namespace LiteNN::Validation
 			}
 			catch (const std::runtime_error& ex)
 			{
-				Fail(subgraphId, nodeId,
-				     std::format("QuantizedConstantNode metadata is invalid: {}", ex.what()));
+				Fail(subgraphId, nodeId, std::format("QuantizedConstantNode metadata is invalid: {}", ex.what()));
 			}
 		}
 
@@ -712,7 +712,8 @@ namespace LiteNN::Validation
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const CondNode& node) const
 		{
-			const auto cond = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.condition, "CondNode condition", true);
+			const auto cond =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.condition, "CondNode condition", true);
 			if (cond.dtype != DataType::Bool || NumElements(cond.shape) != 1)
 			{
 				Fail(subgraphId, nodeId,
@@ -789,7 +790,8 @@ namespace LiteNN::Validation
 				     std::format("SaveActivationNode slot {} out of range; activationSlotCount={}", node.slotId,
 				                 graph_.ActivationSlotCount()));
 			}
-			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "SaveActivationNode input", true);
+			const auto input =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "SaveActivationNode input", true);
 			const auto& slot = graph_.GetActivationSlot(node.slotId);
 			ExpectInfo(subgraphId, nodeId, { slot.dtype, slot.shape }, input, "SaveActivationNode slot");
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], input, "SaveActivationNode output");
@@ -806,7 +808,8 @@ namespace LiteNN::Validation
 				                 graph_.ActivationSlotCount()));
 			}
 			const auto& slot = graph_.GetActivationSlot(node.slotId);
-			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { slot.dtype, slot.shape }, "LoadActivationNode output");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { slot.dtype, slot.shape },
+			           "LoadActivationNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -837,7 +840,8 @@ namespace LiteNN::Validation
 				                 graph_.TapeSlotCount()));
 			}
 			const auto& slot = graph_.GetTapeSlot(node.tapeSlotId);
-			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { slot.dtype, slot.shape }, "TapeLoadActivationNode output");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { slot.dtype, slot.shape },
+			           "TapeLoadActivationNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -874,8 +878,8 @@ namespace LiteNN::Validation
 			if (NumElements(input.shape) != NumElements(node.targetShape))
 			{
 				Fail(subgraphId, nodeId,
-				     std::format("ReshapeNode element count mismatch: input {}, target {}",
-				                 ShapeToString(input.shape), ShapeToString(node.targetShape)));
+				     std::format("ReshapeNode element count mismatch: input {}, target {}", ShapeToString(input.shape),
+				                 ShapeToString(node.targetShape)));
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, node.targetShape },
 			           "ReshapeNode output");
@@ -885,8 +889,7 @@ namespace LiteNN::Validation
 		                  const PermuteNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
-			const auto input =
-			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PermuteNode input", true);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "PermuteNode input", true);
 			const auto rank = input.shape.size();
 			if (node.permutation.size() != rank)
 			{
@@ -1021,7 +1024,8 @@ namespace LiteNN::Validation
 			}
 			if (node.axis >= input.shape.size())
 			{
-				Fail(subgraphId, nodeId, std::format("ScanNode axis {} out of range for rank {}", node.axis, input.shape.size()));
+				Fail(subgraphId, nodeId,
+				     std::format("ScanNode axis {} out of range for rank {}", node.axis, input.shape.size()));
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape }, "ScanNode output");
 		}
@@ -1044,10 +1048,10 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "SSMScanNode requires floating-point tensors");
 			}
-			(void)Detail::BroadcastToShape(dt.shape, state.shape);
-			(void)Detail::BroadcastToShape(a.shape, state.shape);
-			(void)Detail::BroadcastToShape(b.shape, state.shape);
-			(void)Detail::BroadcastToShape(c.shape, state.shape);
+			(void) Detail::BroadcastToShape(dt.shape, state.shape);
+			(void) Detail::BroadcastToShape(a.shape, state.shape);
+			(void) Detail::BroadcastToShape(b.shape, state.shape);
+			(void) Detail::BroadcastToShape(c.shape, state.shape);
 			if (node.d)
 			{
 				const auto d = ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.d, "SSMScanNode d", true);
@@ -1055,7 +1059,7 @@ namespace LiteNN::Validation
 				{
 					Fail(subgraphId, nodeId, "SSMScanNode requires floating-point tensors");
 				}
-				(void)Detail::BroadcastToShape(d.shape, state.shape);
+				(void) Detail::BroadcastToShape(d.shape, state.shape);
 			}
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { state.dtype, state.shape }, "SSMScanNode output");
 		}
@@ -1086,8 +1090,8 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "RWKVWKVNode requires floating-point tensors");
 			}
-			(void)Detail::BroadcastToShape(timeDecay.shape, key.shape);
-			(void)Detail::BroadcastToShape(timeFirst.shape, key.shape);
+			(void) Detail::BroadcastToShape(timeDecay.shape, key.shape);
+			(void) Detail::BroadcastToShape(timeFirst.shape, key.shape);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { key.dtype, key.shape }, "RWKVWKVNode output");
 		}
 
@@ -1137,10 +1141,10 @@ namespace LiteNN::Validation
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
 			const auto grad =
 			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.grad, "CrossEntropyLossBackwardNode grad", true);
-			const auto logits =
-			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.logits, "CrossEntropyLossBackwardNode logits", true);
-			const auto labels =
-			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.labels, "CrossEntropyLossBackwardNode labels", true);
+			const auto logits = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.logits,
+			                                       "CrossEntropyLossBackwardNode logits", true);
+			const auto labels = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.labels,
+			                                       "CrossEntropyLossBackwardNode labels", true);
 			if (grad.dtype != DataType::Float32 || grad.shape != std::vector<std::size_t>{ 1 })
 			{
 				Fail(subgraphId, nodeId, "CrossEntropyLossBackwardNode grad must be Float32 [1]");
@@ -1187,7 +1191,7 @@ namespace LiteNN::Validation
 				{
 					Fail(subgraphId, nodeId, "NormalizationNode scale must be floating-point");
 				}
-				(void)Detail::BroadcastToShape(scale.shape, input.shape);
+				(void) Detail::BroadcastToShape(scale.shape, input.shape);
 			}
 			if (node.bias)
 			{
@@ -1197,7 +1201,7 @@ namespace LiteNN::Validation
 				{
 					Fail(subgraphId, nodeId, "NormalizationNode bias must be floating-point");
 				}
-				(void)Detail::BroadcastToShape(bias.shape, input.shape);
+				(void) Detail::BroadcastToShape(bias.shape, input.shape);
 			}
 			if (node.mode == NormalizationMode::LayerNorm || node.mode == NormalizationMode::RMSNorm)
 			{
@@ -1272,14 +1276,13 @@ namespace LiteNN::Validation
 		                  const TimestepEmbeddingNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
-			const auto timesteps =
-			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timesteps, "TimestepEmbeddingNode timesteps", true);
+			const auto timesteps = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.timesteps,
+			                                          "TimestepEmbeddingNode timesteps", true);
 			if (!IsFloatingDataType(timesteps.dtype))
 			{
 				Fail(subgraphId, nodeId, "TimestepEmbeddingNode requires floating-point timesteps");
 			}
-			const auto outputShape =
-			    Detail::TimestepEmbeddingOutputShape(timesteps.shape, node.dim, node.maxPeriod);
+			const auto outputShape = Detail::TimestepEmbeddingOutputShape(timesteps.shape, node.dim, node.maxPeriod);
 			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, outputShape },
 			           "TimestepEmbeddingNode output");
 		}
@@ -1323,15 +1326,15 @@ namespace LiteNN::Validation
 				}
 				Detail::ValidateOptimizerStepShape(parameter.shape, velocity.shape, "SGDStepNode velocity");
 			}
-			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
-			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0)
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 || !std::isfinite(node.weightDecay) ||
+			    node.weightDecay < 0.0)
 			{
 				Fail(subgraphId, nodeId, "SGDStepNode has invalid scalar hyperparameters");
 			}
 			for (auto output = 0uz; output < outputCount; ++output)
 			{
-				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
-				           { DataType::Float32, parameter.shape }, "SGDStepNode output");
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output], { DataType::Float32, parameter.shape },
+				           "SGDStepNode output");
 			}
 		}
 
@@ -1355,18 +1358,17 @@ namespace LiteNN::Validation
 			Detail::ValidateOptimizerStepShape(parameter.shape, gradient.shape, "AdamWStepNode gradient");
 			Detail::ValidateOptimizerStepShape(parameter.shape, firstMoment.shape, "AdamWStepNode firstMoment");
 			Detail::ValidateOptimizerStepShape(parameter.shape, secondMoment.shape, "AdamWStepNode secondMoment");
-			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 ||
-			    !std::isfinite(node.beta1) || !std::isfinite(node.beta2) ||
-			    node.beta1 < 0.0 || node.beta1 >= 1.0 || node.beta2 < 0.0 || node.beta2 >= 1.0 ||
-			    !std::isfinite(node.epsilon) || node.epsilon <= 0.0 ||
+			if (!std::isfinite(node.learningRate) || node.learningRate <= 0.0 || !std::isfinite(node.beta1) ||
+			    !std::isfinite(node.beta2) || node.beta1 < 0.0 || node.beta1 >= 1.0 || node.beta2 < 0.0 ||
+			    node.beta2 >= 1.0 || !std::isfinite(node.epsilon) || node.epsilon <= 0.0 ||
 			    !std::isfinite(node.weightDecay) || node.weightDecay < 0.0 || node.step == 0)
 			{
 				Fail(subgraphId, nodeId, "AdamWStepNode has invalid scalar hyperparameters");
 			}
 			for (auto output = 0uz; output < 3; ++output)
 			{
-				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output],
-				           { DataType::Float32, parameter.shape }, "AdamWStepNode output");
+				ExpectInfo(subgraphId, nodeId, entry.outputInfos[output], { DataType::Float32, parameter.shape },
+				           "AdamWStepNode output");
 			}
 		}
 
@@ -1425,9 +1427,9 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "ConvTranspose2DNode does not support Bool tensors");
 			}
-			const auto outputShape = Detail::ConvTranspose2DOutputShape(input.shape, weight.shape, node.strides,
-			                                                            node.dilations, node.lowPads, node.highPads,
-			                                                            node.outputPads, node.groupCount);
+			const auto outputShape =
+			    Detail::ConvTranspose2DOutputShape(input.shape, weight.shape, node.strides, node.dilations,
+			                                       node.lowPads, node.highPads, node.outputPads, node.groupCount);
 			if (node.bias)
 			{
 				const auto bias =
@@ -1578,13 +1580,15 @@ namespace LiteNN::Validation
 			}
 			if (node.axis >= input.shape.size())
 			{
-				Fail(subgraphId, nodeId, std::format("ArgsortNode axis {} out of range for rank {}", node.axis, input.shape.size()));
+				Fail(subgraphId, nodeId,
+				     std::format("ArgsortNode axis {} out of range for rank {}", node.axis, input.shape.size()));
 			}
 			if (input.shape[node.axis] > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
 			{
 				Fail(subgraphId, nodeId, "ArgsortNode sort dimension exceeds Int32 index range");
 			}
-			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Int32, input.shape }, "ArgsortNode output");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Int32, input.shape },
+			           "ArgsortNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -1621,8 +1625,8 @@ namespace LiteNN::Validation
 				Fail(subgraphId, nodeId, "MulMatIdNode requires ids.shape[0] to be divisible by b.shape[1]");
 			}
 
-			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { DataType::Float32, { as.shape[1], ids.shape[0], b.shape[2] } },
-			           "MulMatIdNode output");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { DataType::Float32, { as.shape[1], ids.shape[0], b.shape[2] } }, "MulMatIdNode output");
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
@@ -1649,8 +1653,8 @@ namespace LiteNN::Validation
 			infos.reserve(inputs.size());
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
-				infos.push_back(ValidateNodeOutput(subgraph, subgraphId, nodeId, inputs[i],
-				                                   std::format("{} {}", role, i), true));
+				infos.push_back(
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, inputs[i], std::format("{} {}", role, i), true));
 			}
 			return infos;
 		}
@@ -1668,8 +1672,8 @@ namespace LiteNN::Validation
 			}
 			for (std::size_t i = 0; i < args.size(); ++i)
 			{
-				const auto arg = ValidateNodeOutput(caller, callerId, nodeId, args[i],
-				                                    std::format("{} arg {}", context, i), true);
+				const auto arg =
+				    ValidateNodeOutput(caller, callerId, nodeId, args[i], std::format("{} arg {}", context, i), true);
 				const auto& param = callee.Params()[i];
 				ExpectInfo(callerId, nodeId, arg, { param.dtype, param.shape },
 				           std::format("{} arg {} for callee {}", context, i, calleeId));
@@ -1722,8 +1726,8 @@ namespace LiteNN::Validation
 			if (branch.Params().size() != infos.size())
 			{
 				Fail(ownerId, nodeId,
-				     std::format("{} param count {} does not match expected count {}", context,
-				                 branch.Params().size(), infos.size()));
+				     std::format("{} param count {} does not match expected count {}", context, branch.Params().size(),
+				                 infos.size()));
 			}
 			for (std::size_t i = 0; i < infos.size(); ++i)
 			{

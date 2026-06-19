@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <functional>
 #include <format>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -35,8 +35,7 @@ namespace LiteNN::Runtime
 			return RunSubgraphUnchecked(plan, subgraphId, inputs, std::move(device));
 		}
 
-		std::vector<Tensor<D>> RunForward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs,
-		                                  D device = D{})
+		std::vector<Tensor<D>> RunForward(const ExecutablePlan& plan, std::span<const Tensor<D>> inputs, D device = D{})
 		{
 			ValidateExecutablePlan(plan);
 			activationStore_.clear();
@@ -86,18 +85,19 @@ namespace LiteNN::Runtime
 			const auto& subgraph = graph.GetSubgraph(subgraphId);
 			if (inputs.size() != subgraph.Params().size())
 			{
-				throw std::runtime_error(std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}",
-				                                     subgraphId, subgraph.Params().size(), inputs.size()));
+				throw std::runtime_error(
+				    std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}", subgraphId,
+				                subgraph.Params().size(), inputs.size()));
 			}
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
 				const auto& param = subgraph.Params()[i];
 				if (inputs[i].DType() != param.dtype || inputs[i].Shape() != param.shape)
 				{
-					throw std::runtime_error(std::format(
-					    "RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
-					    Validation::FormatInfo(param.dtype, param.shape),
-					    Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+					throw std::runtime_error(
+					    std::format("RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
+					                Validation::FormatInfo(param.dtype, param.shape),
+					                Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
 				}
 			}
 		}
@@ -113,8 +113,9 @@ namespace LiteNN::Runtime
 			const auto& subgraph = plan.subgraphs[subgraphId];
 			if (inputs.size() != subgraph.params.size())
 			{
-				throw std::runtime_error(std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}",
-				                                     subgraphId, subgraph.params.size(), inputs.size()));
+				throw std::runtime_error(
+				    std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}", subgraphId,
+				                subgraph.params.size(), inputs.size()));
 			}
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
@@ -127,10 +128,10 @@ namespace LiteNN::Runtime
 				const auto expectedShape = param.StaticShape();
 				if (inputs[i].DType() != param.dtype || inputs[i].Shape() != ShapeView{ expectedShape })
 				{
-					throw std::runtime_error(std::format(
-					    "RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
-					    Validation::FormatInfo(param.dtype, expectedShape),
-					    Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+					throw std::runtime_error(
+					    std::format("RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
+					                Validation::FormatInfo(param.dtype, expectedShape),
+					                Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
 				}
 			}
 		}
@@ -266,8 +267,8 @@ namespace LiteNN::Runtime
 			    storage.type.memorySpace == TensorMemorySpace::External ||
 			    storage.type.memorySpace == TensorMemorySpace::Unified)
 			{
-				auto hostView =
-					Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape }, storage.type.dtype, CPU{});
+				auto hostView = Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape },
+				                                            storage.type.dtype, CPU{});
 				return hostView.CopyToDevice(device);
 			}
 
@@ -298,7 +299,7 @@ namespace LiteNN::Runtime
 
 		template <DataType TypeValue, typename T>
 		static bool ArgsortComesBefore(const T& lhsValue, std::int32_t lhsIndex, const T& rhsValue,
-		                              std::int32_t rhsIndex, SortOrder order)
+		                               std::int32_t rhsIndex, SortOrder order)
 		{
 			if constexpr (TypeValue == DataType::Float32 || TypeValue == DataType::Float64 ||
 			              TypeValue == DataType::Float16 || TypeValue == DataType::BFloat16 ||
@@ -373,11 +374,15 @@ namespace LiteNN::Runtime
 						for (auto inner = 0uz; inner < innerSize; ++inner)
 						{
 							std::iota(orderIndices.begin(), orderIndices.end(), std::int32_t{ 0 });
-							std::stable_sort(orderIndices.begin(), orderIndices.end(), [&](std::int32_t lhs, std::int32_t rhs) {
-								const auto lhsOffset = (outer * axisSize + static_cast<std::size_t>(lhs)) * innerSize + inner;
-								const auto rhsOffset = (outer * axisSize + static_cast<std::size_t>(rhs)) * innerSize + inner;
-								return ArgsortComesBefore<TypeValue>(src[lhsOffset], lhs, src[rhsOffset], rhs, order);
-							});
+							std::stable_sort(
+							    orderIndices.begin(), orderIndices.end(), [&](std::int32_t lhs, std::int32_t rhs) {
+								    const auto lhsOffset =
+								        (outer * axisSize + static_cast<std::size_t>(lhs)) * innerSize + inner;
+								    const auto rhsOffset =
+								        (outer * axisSize + static_cast<std::size_t>(rhs)) * innerSize + inner;
+								    return ArgsortComesBefore<TypeValue>(src[lhsOffset], lhs, src[rhsOffset], rhs,
+								                                         order);
+							    });
 
 							for (auto index = 0uz; index < axisSize; ++index)
 							{
@@ -484,8 +489,9 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const QuantizedConstantNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const QuantizedConstantNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			slots[nodeId].push_back(node.storage.CopyToDevice(device));
 		}
@@ -519,8 +525,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoBinaryOp(device, node.op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(), lhs.UnsafeRawData(),
-			                            rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
+			DeviceTraits<D>::DoBinaryOp(device, node.op, result.UnsafeRawData(), lhs.DType(), lhs.Shape(),
+			                            lhs.UnsafeRawData(), rhs.DType(), rhs.Shape(), rhs.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -531,8 +537,8 @@ namespace LiteNN::Runtime
 			const auto& input = GetValue(slots, node.input);
 
 			Tensor<D> result(Uninitialized, input.Shape(), node.targetType, device);
-			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), node.targetType,
-			                           result.UnsafeRawData());
+			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(),
+			                           node.targetType, result.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -566,8 +572,8 @@ namespace LiteNN::Runtime
 			const auto& input = GetValue(slots, node.input);
 			const auto cpuInput = input.CopyToDevice(CPU{});
 			auto dequantized = node.params.scheme == QuantizationScheme::Affine
-			                     ? DequantizeAffine(cpuInput, node.params, node.targetType)
-			                     : DequantizePackedNibble(cpuInput, node.params, node.targetType);
+			                       ? DequantizeAffine(cpuInput, node.params, node.targetType)
+			                       : DequantizePackedNibble(cpuInput, node.params, node.targetType);
 			slots[nodeId].push_back(dequantized.CopyToDevice(device));
 		}
 
@@ -653,8 +659,9 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TapeSaveActivationNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const TapeSaveActivationNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
 			tapeStore_[node.tapeSlotId].push_back(Tensor<D>(input));
@@ -663,8 +670,9 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TapeLoadActivationNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const TapeLoadActivationNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			assert(!tapeStore_[node.tapeSlotId].empty());
 			slots[nodeId].push_back(std::move(tapeStore_[node.tapeSlotId].back()));
@@ -694,8 +702,8 @@ namespace LiteNN::Runtime
 			// 复制数据到新 shape 的 tensor
 			const auto& outputInfo = entry.outputInfos[0];
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(), outputInfo.dtype,
-			                           result.UnsafeRawData());
+			DeviceTraits<D>::ConvertTo(device, input.DType(), input.UnsafeRawData(), input.NumElements(),
+			                           outputInfo.dtype, result.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -707,8 +715,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(), input.UnsafeRawData(),
-			                            ShapeView{ node.permutation });
+			DeviceTraits<D>::DoPermuteOp(device, result.UnsafeRawData(), input.DType(), input.Shape(),
+			                             input.UnsafeRawData(), ShapeView{ node.permutation });
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -733,8 +741,8 @@ namespace LiteNN::Runtime
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			const auto& input = GetValue(slots, node.input);
-			auto cpuResult = Detail::EvalPad(input.CopyToDevice(CPU{}), node.lowPads, node.highPads, node.mode,
-			                                 node.constantValue);
+			auto cpuResult =
+			    Detail::EvalPad(input.CopyToDevice(CPU{}), node.lowPads, node.highPads, node.mode, node.constantValue);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -803,12 +811,10 @@ namespace LiteNN::Runtime
 		{
 			const Tensor<D>* dTensor = node.d ? &GetValue(slots, *node.d) : nullptr;
 			const auto cpuD = dTensor ? std::optional{ dTensor->CopyToDevice(CPU{}) } : std::nullopt;
-			auto cpuResult = Detail::EvalSSMScan(GetValue(slots, node.state).CopyToDevice(CPU{}),
-			                                     GetValue(slots, node.dt).CopyToDevice(CPU{}),
-			                                     GetValue(slots, node.a).CopyToDevice(CPU{}),
-			                                     GetValue(slots, node.b).CopyToDevice(CPU{}),
-			                                     GetValue(slots, node.c).CopyToDevice(CPU{}),
-			                                     cpuD ? &*cpuD : nullptr);
+			auto cpuResult = Detail::EvalSSMScan(
+			    GetValue(slots, node.state).CopyToDevice(CPU{}), GetValue(slots, node.dt).CopyToDevice(CPU{}),
+			    GetValue(slots, node.a).CopyToDevice(CPU{}), GetValue(slots, node.b).CopyToDevice(CPU{}),
+			    GetValue(slots, node.c).CopyToDevice(CPU{}), cpuD ? &*cpuD : nullptr);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -855,11 +861,12 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const CrossEntropyLossNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const CrossEntropyLossNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalCrossEntropyLoss(GetValue(slots, node.logits).CopyToDevice(CPU{}),
-			                                             GetValue(slots, node.labels).CopyToDevice(CPU{}));
+			                                              GetValue(slots, node.labels).CopyToDevice(CPU{}));
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -876,8 +883,8 @@ namespace LiteNN::Runtime
 		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalCrossEntropyLossBackward(GetValue(slots, node.grad).CopyToDevice(CPU{}),
-			                                                     GetValue(slots, node.logits).CopyToDevice(CPU{}),
-			                                                     GetValue(slots, node.labels).CopyToDevice(CPU{}));
+			                                                      GetValue(slots, node.logits).CopyToDevice(CPU{}),
+			                                                      GetValue(slots, node.labels).CopyToDevice(CPU{}));
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -897,9 +904,8 @@ namespace LiteNN::Runtime
 			const auto cpuScale = scaleTensor ? std::optional{ scaleTensor->CopyToDevice(CPU{}) } : std::nullopt;
 			const auto cpuBias = biasTensor ? std::optional{ biasTensor->CopyToDevice(CPU{}) } : std::nullopt;
 			auto cpuResult = Detail::EvalNormalization(GetValue(slots, node.input).CopyToDevice(CPU{}),
-			                                           cpuScale ? &*cpuScale : nullptr,
-			                                           cpuBias ? &*cpuBias : nullptr, node.mode,
-			                                           node.axis, node.groupCount, node.epsilon);
+			                                           cpuScale ? &*cpuScale : nullptr, cpuBias ? &*cpuBias : nullptr,
+			                                           node.mode, node.axis, node.groupCount, node.epsilon);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -915,7 +921,7 @@ namespace LiteNN::Runtime
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalBatchMatMul(GetValue(slots, node.lhs).CopyToDevice(CPU{}),
-			                                        GetValue(slots, node.rhs).CopyToDevice(CPU{}));
+			                                         GetValue(slots, node.rhs).CopyToDevice(CPU{}));
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -943,8 +949,9 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const TimestepEmbeddingNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const TimestepEmbeddingNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuResult = Detail::EvalTimestepEmbedding(GetValue(slots, node.timesteps).CopyToDevice(CPU{}),
 			                                               node.dim, node.maxPeriod);
@@ -962,9 +969,9 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SolveTriNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			auto cpuResult = Detail::EvalSolveTri(GetValue(slots, node.a).CopyToDevice(CPU{}),
-			                                      GetValue(slots, node.b).CopyToDevice(CPU{}),
-			                                      node.lower, node.unitDiagonal);
+			auto cpuResult =
+			    Detail::EvalSolveTri(GetValue(slots, node.a).CopyToDevice(CPU{}),
+			                         GetValue(slots, node.b).CopyToDevice(CPU{}), node.lower, node.unitDiagonal);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -983,9 +990,8 @@ namespace LiteNN::Runtime
 			const auto cpuVelocity = velocity ? std::optional{ velocity->CopyToDevice(CPU{}) } : std::nullopt;
 			auto cpuResults = Detail::EvalSGDStep(GetValue(slots, node.parameter).CopyToDevice(CPU{}),
 			                                      GetValue(slots, node.gradient).CopyToDevice(CPU{}),
-			                                      cpuVelocity ? &*cpuVelocity : nullptr,
-			                                      node.learningRate, node.momentum, node.weightDecay,
-			                                      node.nesterov);
+			                                      cpuVelocity ? &*cpuVelocity : nullptr, node.learningRate,
+			                                      node.momentum, node.weightDecay, node.nesterov);
 			for (auto& cpuResult : cpuResults)
 			{
 				if constexpr (std::same_as<D, CPU>)
@@ -1003,12 +1009,11 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const AdamWStepNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			auto cpuResults = Detail::EvalAdamWStep(GetValue(slots, node.parameter).CopyToDevice(CPU{}),
-			                                        GetValue(slots, node.gradient).CopyToDevice(CPU{}),
-			                                        GetValue(slots, node.firstMoment).CopyToDevice(CPU{}),
-			                                        GetValue(slots, node.secondMoment).CopyToDevice(CPU{}),
-			                                        node.learningRate, node.beta1, node.beta2, node.epsilon,
-			                                        node.weightDecay, node.step);
+			auto cpuResults = Detail::EvalAdamWStep(
+			    GetValue(slots, node.parameter).CopyToDevice(CPU{}), GetValue(slots, node.gradient).CopyToDevice(CPU{}),
+			    GetValue(slots, node.firstMoment).CopyToDevice(CPU{}),
+			    GetValue(slots, node.secondMoment).CopyToDevice(CPU{}), node.learningRate, node.beta1, node.beta2,
+			    node.epsilon, node.weightDecay, node.step);
 			for (auto& cpuResult : cpuResults)
 			{
 				if constexpr (std::same_as<D, CPU>)
@@ -1026,9 +1031,8 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const Im2ColNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			auto cpuResult = Detail::EvalIm2Col(GetValue(slots, node.input).CopyToDevice(CPU{}),
-			                                    node.kernelShape, node.strides, node.dilations,
-			                                    node.lowPads, node.highPads);
+			auto cpuResult = Detail::EvalIm2Col(GetValue(slots, node.input).CopyToDevice(CPU{}), node.kernelShape,
+			                                    node.strides, node.dilations, node.lowPads, node.highPads);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1045,12 +1049,12 @@ namespace LiteNN::Runtime
 		{
 			auto cpuInput = GetValue(slots, node.input).CopyToDevice(CPU{});
 			auto cpuWeight = GetValue(slots, node.weight).CopyToDevice(CPU{});
-			auto cpuBiasStorage = node.bias ? std::optional<Tensor<CPU>>{ GetValue(slots, *node.bias).CopyToDevice(CPU{}) }
-			                                : std::nullopt;
-			auto cpuResult = Detail::EvalConv2D(cpuInput, cpuWeight,
-			                                    cpuBiasStorage ? &*cpuBiasStorage : nullptr,
-			                                    node.strides, node.dilations, node.lowPads, node.highPads,
-			                                    node.groupCount);
+			auto cpuBiasStorage = node.bias
+			                          ? std::optional<Tensor<CPU>>{ GetValue(slots, *node.bias).CopyToDevice(CPU{}) }
+			                          : std::nullopt;
+			auto cpuResult =
+			    Detail::EvalConv2D(cpuInput, cpuWeight, cpuBiasStorage ? &*cpuBiasStorage : nullptr, node.strides,
+			                       node.dilations, node.lowPads, node.highPads, node.groupCount);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1062,17 +1066,18 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
-		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const ConvTranspose2DNode& node,
-		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const ConvTranspose2DNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
 		{
 			auto cpuInput = GetValue(slots, node.input).CopyToDevice(CPU{});
 			auto cpuWeight = GetValue(slots, node.weight).CopyToDevice(CPU{});
-			auto cpuBiasStorage = node.bias ? std::optional<Tensor<CPU>>{ GetValue(slots, *node.bias).CopyToDevice(CPU{}) }
-			                                : std::nullopt;
-			auto cpuResult = Detail::EvalConvTranspose2D(cpuInput, cpuWeight,
-			                                             cpuBiasStorage ? &*cpuBiasStorage : nullptr,
-			                                             node.strides, node.dilations, node.lowPads, node.highPads,
-			                                             node.outputPads, node.groupCount);
+			auto cpuBiasStorage = node.bias
+			                          ? std::optional<Tensor<CPU>>{ GetValue(slots, *node.bias).CopyToDevice(CPU{}) }
+			                          : std::nullopt;
+			auto cpuResult = Detail::EvalConvTranspose2D(
+			    cpuInput, cpuWeight, cpuBiasStorage ? &*cpuBiasStorage : nullptr, node.strides, node.dilations,
+			    node.lowPads, node.highPads, node.outputPads, node.groupCount);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1087,9 +1092,9 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const Pool2DNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			auto cpuResult = Detail::EvalPool2D(GetValue(slots, node.input).CopyToDevice(CPU{}),
-			                                    node.mode, node.kernelShape, node.strides,
-			                                    node.lowPads, node.highPads, node.countIncludePad);
+			auto cpuResult =
+			    Detail::EvalPool2D(GetValue(slots, node.input).CopyToDevice(CPU{}), node.mode, node.kernelShape,
+			                       node.strides, node.lowPads, node.highPads, node.countIncludePad);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1104,8 +1109,8 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const UpsampleNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			auto cpuResult = Detail::EvalUpsample(GetValue(slots, node.input).CopyToDevice(CPU{}),
-			                                      node.mode, node.outputSpatialShape, node.alignCorners);
+			auto cpuResult = Detail::EvalUpsample(GetValue(slots, node.input).CopyToDevice(CPU{}), node.mode,
+			                                      node.outputSpatialShape, node.alignCorners);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1134,8 +1139,8 @@ namespace LiteNN::Runtime
 			}
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoConcatOp(device, result.UnsafeRawData(), outputInfo.dtype, srcPtrs.data(), srcShapes.data(),
-			                            srcPtrs.size(), node.axis);
+			DeviceTraits<D>::DoConcatOp(device, result.UnsafeRawData(), outputInfo.dtype, srcPtrs.data(),
+			                            srcShapes.data(), srcPtrs.size(), node.axis);
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -1147,8 +1152,8 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoSliceOp(device, result.UnsafeRawData(), outputInfo.dtype, input.Shape(), input.UnsafeRawData(),
-			                           node.axis, node.start, node.length);
+			DeviceTraits<D>::DoSliceOp(device, result.UnsafeRawData(), outputInfo.dtype, input.Shape(),
+			                           input.UnsafeRawData(), node.axis, node.start, node.length);
 			slots[nodeId].push_back(std::move(result));
 		}
 
@@ -1161,8 +1166,9 @@ namespace LiteNN::Runtime
 			const auto& outputInfo = entry.outputInfos[0];
 
 			Tensor<D> result(Uninitialized, outputInfo.shape, outputInfo.dtype, device);
-			DeviceTraits<D>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(), data.UnsafeRawData(),
-			                            indices.DType(), indices.Shape(), indices.UnsafeRawData());
+			DeviceTraits<D>::DoGetRowsOp(device, result.UnsafeRawData(), data.DType(), data.Shape(),
+			                             data.UnsafeRawData(), indices.DType(), indices.Shape(),
+			                             indices.UnsafeRawData());
 			slots[nodeId].push_back(std::move(result));
 		}
 

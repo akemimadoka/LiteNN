@@ -64,10 +64,10 @@ namespace LiteNN
 	inline constexpr std::string_view BackendVulkanBridge = "VulkanBridge";
 	inline constexpr std::string_view BackendMobile = "Mobile";
 
-	inline constexpr std::array<std::string_view, 7> DefaultBackendNames{
-		BackendCPUInterpreter, BackendCPUAOT, BackendCUDANative, BackendCUDABridge,
-		BackendVulkanNative, BackendVulkanBridge, BackendMobile
-	};
+	inline constexpr std::array<std::string_view, 7> DefaultBackendNames{ BackendCPUInterpreter, BackendCPUAOT,
+		                                                                  BackendCUDANative,     BackendCUDABridge,
+		                                                                  BackendVulkanNative,   BackendVulkanBridge,
+		                                                                  BackendMobile };
 
 	struct BackendCapability
 	{
@@ -660,22 +660,20 @@ namespace LiteNN
 		                                            std::make_index_sequence<std::variant_size_v<NodeVariant>>{});
 		for (const auto& schema : registry.Schemas())
 		{
-			registry.RegisterCapability(schema.kind,
-			                            { .backend = std::string(BackendCPUInterpreter),
-			                              .support = BackendSupportLevel::Native,
-			                              .layouts = { TensorLayoutKind::RowMajor },
-			                              .memorySpaces = { TensorMemorySpace::Host },
-			                              .memoryEffect = schema.effect,
-			                              .lowering = "Runtime::Interpreter",
-			                              .relativeCost = 1.0 });
+			registry.RegisterCapability(schema.kind, { .backend = std::string(BackendCPUInterpreter),
+			                                           .support = BackendSupportLevel::Native,
+			                                           .layouts = { TensorLayoutKind::RowMajor },
+			                                           .memorySpaces = { TensorMemorySpace::Host },
+			                                           .memoryEffect = schema.effect,
+			                                           .lowering = "Runtime::Interpreter",
+			                                           .relativeCost = 1.0 });
 			for (const auto backend : { BackendCPUAOT, BackendCUDANative, BackendCUDABridge, BackendVulkanNative,
-				                        BackendVulkanBridge, BackendMobile })
+			                            BackendVulkanBridge, BackendMobile })
 			{
-				registry.RegisterCapability(schema.kind,
-				                            { .backend = std::string(backend),
-				                              .support = BackendSupportLevel::Unsupported,
-				                              .memoryEffect = schema.effect,
-				                              .fallback = std::string(BackendCPUInterpreter) });
+				registry.RegisterCapability(schema.kind, { .backend = std::string(backend),
+				                                           .support = BackendSupportLevel::Unsupported,
+				                                           .memoryEffect = schema.effect,
+				                                           .fallback = std::string(BackendCPUInterpreter) });
 			}
 		}
 		return registry;
@@ -697,8 +695,8 @@ namespace LiteNN
 			                  std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode> ||
 			                  std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
 			                  std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
-			                  std::same_as<T, PadNode> || std::same_as<T, ScanNode> ||
-			                  std::same_as<T, SoftmaxNode> || std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+			                  std::same_as<T, PadNode> || std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
+			                  std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
 			                  std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
 			                  std::same_as<T, ArgsortNode>)
 			    {

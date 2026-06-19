@@ -86,10 +86,10 @@ namespace
 		const auto norm = Layer::AddNormalization(subgraph, { x, 0 }, NormalizationMode::LayerNorm, 1, 1e-5,
 		                                          NodeOutput{ scale, 0 }, NodeOutput{ bias, 0 });
 		const auto batchMatMul = Layer::AddBatchMatMul(subgraph, { lhs, 0 }, { rhs, 0 });
-		const auto ssm = Layer::AddSSMScan(subgraph, { state, 0 }, { dt, 0 }, { a, 0 }, { b, 0 }, { c, 0 },
-		                                   NodeOutput{ d, 0 });
-		const auto rwkv = Layer::AddRWKVWKV(subgraph, { key, 0 }, { value, 0 }, { receptance, 0 },
-		                                    { timeDecay, 0 }, { timeFirst, 0 });
+		const auto ssm =
+		    Layer::AddSSMScan(subgraph, { state, 0 }, { dt, 0 }, { a, 0 }, { b, 0 }, { c, 0 }, NodeOutput{ d, 0 });
+		const auto rwkv = Layer::AddRWKVWKV(subgraph, { key, 0 }, { value, 0 }, { receptance, 0 }, { timeDecay, 0 },
+		                                    { timeFirst, 0 });
 
 		subgraph.SetResults({ scan, softmax, norm, batchMatMul, ssm, rwkv });
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
@@ -102,15 +102,9 @@ namespace
 		inputs.emplace_back(Tensor<CPU>({ 1.0F, 3.0F, 2.0F, 4.0F, 0.0F, 5.0F }, { 2, 3 }));
 		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 1.0F }, { 1, 3 }));
 		inputs.emplace_back(Tensor<CPU>({ 0.0F, 0.5F, -1.0F }, { 1, 3 }));
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F,
-		                                  4.0F, 5.0F, 6.0F,
-		                                  7.0F, 8.0F, 9.0F,
-		                                  10.0F, 11.0F, 12.0F },
-		                                { 2, 2, 3 }));
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F,
-		                                  0.0F, 1.0F,
-		                                  1.0F, 1.0F },
-		                                { 1, 3, 2 }));
+		inputs.emplace_back(
+		    Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F, 9.0F, 10.0F, 11.0F, 12.0F }, { 2, 2, 3 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 1, 3, 2 }));
 		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F }, { 2, 2 }));
 		inputs.emplace_back(Tensor<CPU>({ 1.0F }, { 1 }));
 		inputs.emplace_back(Tensor<CPU>({ 0.0F }, { 1 }));
@@ -150,15 +144,9 @@ TEST(ScanHotPathNode, ExecutesScanSoftmaxNormalizationAndBatchMatMul)
 	inputs.emplace_back(Tensor<CPU>({ 1.0F, 3.0F, 2.0F, 4.0F, 0.0F, 5.0F }, { 2, 3 }));
 	inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 1.0F }, { 1, 3 }));
 	inputs.emplace_back(Tensor<CPU>({ 0.0F, 0.5F, -1.0F }, { 1, 3 }));
-	inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F,
-	                                  4.0F, 5.0F, 6.0F,
-	                                  7.0F, 8.0F, 9.0F,
-	                                  10.0F, 11.0F, 12.0F },
-	                                { 2, 2, 3 }));
-	inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F,
-	                                  0.0F, 1.0F,
-	                                  1.0F, 1.0F },
-	                                { 1, 3, 2 }));
+	inputs.emplace_back(
+	    Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F, 9.0F, 10.0F, 11.0F, 12.0F }, { 2, 2, 3 }));
+	inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 1, 3, 2 }));
 
 	const auto outputs = RunGraph(graph, std::move(inputs));
 	ASSERT_EQ(outputs.size(), 5u);
@@ -176,9 +164,8 @@ TEST(ScanHotPathNode, ExecutesScanSoftmaxNormalizationAndBatchMatMul)
 	const auto row0NormDenom = std::sqrt(2.0F / 3.0F + 1e-5F);
 	const auto row1NormDenom = std::sqrt(14.0F / 3.0F + 1e-5F);
 	ExpectTensorNear(outputs[3],
-	                 { -1.0F / row0NormDenom, 0.5F + 2.0F / row0NormDenom, -1.0F,
-	                   1.0F / row1NormDenom, 0.5F - 6.0F / row1NormDenom,
-	                   -1.0F + 2.0F / row1NormDenom },
+	                 { -1.0F / row0NormDenom, 0.5F + 2.0F / row0NormDenom, -1.0F, 1.0F / row1NormDenom,
+	                   0.5F - 6.0F / row1NormDenom, -1.0F + 2.0F / row1NormDenom },
 	                 1e-5F);
 
 	ExpectShape(outputs[4].Shape(), { 2, 2, 2 });
@@ -201,10 +188,10 @@ TEST(ScanHotPathNode, ExecutesRecurrenceReferenceKernels)
 	const auto timeDecay = subgraph.AddParam(DataType::Float32, { 1 });
 	const auto timeFirst = subgraph.AddParam(DataType::Float32, { 1 });
 
-	const auto ssm = Layer::AddSSMScan(subgraph, { state, 0 }, { dt, 0 }, { a, 0 }, { b, 0 }, { c, 0 },
-	                                   NodeOutput{ d, 0 });
-	const auto rwkv = Layer::AddRWKVWKV(subgraph, { key, 0 }, { value, 0 }, { receptance, 0 },
-	                                    { timeDecay, 0 }, { timeFirst, 0 });
+	const auto ssm =
+	    Layer::AddSSMScan(subgraph, { state, 0 }, { dt, 0 }, { a, 0 }, { b, 0 }, { c, 0 }, NodeOutput{ d, 0 });
+	const auto rwkv =
+	    Layer::AddRWKVWKV(subgraph, { key, 0 }, { value, 0 }, { receptance, 0 }, { timeDecay, 0 }, { timeFirst, 0 });
 	subgraph.SetResults({ ssm, rwkv });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 
@@ -234,17 +221,9 @@ TEST(ScanHotPathNode, ConstFoldHandlesG52G53Nodes)
 	const auto x = AddFloatConstant(subgraph, { 1.0F, 3.0F, 2.0F, 4.0F, 0.0F, 5.0F }, { 2, 3 });
 	const auto scale = AddFloatConstant(subgraph, { 1.0F, 2.0F, 1.0F }, { 1, 3 });
 	const auto bias = AddFloatConstant(subgraph, { 0.0F, 0.5F, -1.0F }, { 1, 3 });
-	const auto lhs = AddFloatConstant(subgraph,
-	                                  { 1.0F, 2.0F, 3.0F,
-	                                    4.0F, 5.0F, 6.0F,
-	                                    7.0F, 8.0F, 9.0F,
-	                                    10.0F, 11.0F, 12.0F },
-	                                  { 2, 2, 3 });
-	const auto rhs = AddFloatConstant(subgraph,
-	                                  { 1.0F, 0.0F,
-	                                    0.0F, 1.0F,
-	                                    1.0F, 1.0F },
-	                                  { 1, 3, 2 });
+	const auto lhs = AddFloatConstant(
+	    subgraph, { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F, 9.0F, 10.0F, 11.0F, 12.0F }, { 2, 2, 3 });
+	const auto rhs = AddFloatConstant(subgraph, { 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 1, 3, 2 });
 	const auto state = AddFloatConstant(subgraph, { 1.0F, 2.0F, 3.0F, 4.0F }, { 2, 2 });
 	const auto dt = AddFloatConstant(subgraph, { 1.0F }, { 1 });
 	const auto a = AddFloatConstant(subgraph, { 0.0F }, { 1 });
@@ -259,8 +238,7 @@ TEST(ScanHotPathNode, ConstFoldHandlesG52G53Nodes)
 
 	const auto scan = Layer::AddScan(subgraph, x, 1, ScanOp::Sum);
 	const auto softmax = Layer::AddSoftmax(subgraph, x, 1);
-	const auto norm =
-	    Layer::AddNormalization(subgraph, x, NormalizationMode::LayerNorm, 1, 1e-5, scale, bias);
+	const auto norm = Layer::AddNormalization(subgraph, x, NormalizationMode::LayerNorm, 1, 1e-5, scale, bias);
 	const auto batchMatMul = Layer::AddBatchMatMul(subgraph, lhs, rhs);
 	const auto ssm = Layer::AddSSMScan(subgraph, state, dt, a, b, c, d);
 	const auto rwkv = Layer::AddRWKVWKV(subgraph, key, value, receptance, timeDecay, timeFirst);

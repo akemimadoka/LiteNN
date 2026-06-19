@@ -12,8 +12,8 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -31,171 +31,168 @@
 
 namespace LiteNN::Debug
 {
-namespace
-{
-	template <typename Formatter>
-	std::string JoinIndexed(std::size_t count, std::string_view separator, Formatter&& formatter)
+	namespace
 	{
-		std::string result;
-		for (std::size_t index = 0; index < count; ++index)
+		template <typename Formatter>
+		std::string JoinIndexed(std::size_t count, std::string_view separator, Formatter&& formatter)
 		{
-			if (index != 0)
+			std::string result;
+			for (std::size_t index = 0; index < count; ++index)
 			{
-				result += separator;
+				if (index != 0)
+				{
+					result += separator;
+				}
+				result += formatter(index);
 			}
-			result += formatter(index);
+			return result;
 		}
-		return result;
-	}
 
-	std::string FormatCompiledSpec(const CompiledTensorSpec& spec, std::string_view fallbackPrefix, std::size_t index)
-	{
-		const auto name = spec.name.empty() ? std::format("{}{}", fallbackPrefix, index) : spec.name;
-		const auto shape = spec.type.StaticShape();
-		auto text = std::format("{}: {}", name, Validation::FormatInfo(spec.type.dtype, shape));
-		if (spec.quantization)
+		std::string FormatCompiledSpec(const CompiledTensorSpec& spec, std::string_view fallbackPrefix,
+		                               std::size_t index)
 		{
-			text += std::format(" quant={} format={} packed={} order={} scaleLayout={} expressed={}",
-			                    QuantizationSchemeName(spec.quantization->scheme),
-			                    QuantizedBlockFormatName(spec.quantization->blockFormat),
-			                    PackedNibbleFormatName(spec.quantization->packedFormat),
-			                    PackedNibbleOrderName(spec.quantization->packedOrder),
-			                    BlockScaleLayoutName(spec.quantization->blockScaleLayout),
-			                    Validation::FormatInfo(spec.quantization->expressedType,
-			                                           spec.quantization->expressedShape.empty()
-			                                               ? shape
-			                                               : spec.quantization->expressedShape));
+			const auto name = spec.name.empty() ? std::format("{}{}", fallbackPrefix, index) : spec.name;
+			const auto shape = spec.type.StaticShape();
+			auto text = std::format("{}: {}", name, Validation::FormatInfo(spec.type.dtype, shape));
+			if (spec.quantization)
+			{
+				text += std::format(
+				    " quant={} format={} packed={} order={} scaleLayout={} expressed={}",
+				    QuantizationSchemeName(spec.quantization->scheme),
+				    QuantizedBlockFormatName(spec.quantization->blockFormat),
+				    PackedNibbleFormatName(spec.quantization->packedFormat),
+				    PackedNibbleOrderName(spec.quantization->packedOrder),
+				    BlockScaleLayoutName(spec.quantization->blockScaleLayout),
+				    Validation::FormatInfo(spec.quantization->expressedType, spec.quantization->expressedShape.empty()
+				                                                                 ? shape
+				                                                                 : spec.quantization->expressedShape));
+			}
+			return text;
 		}
-		return text;
-	}
 
-	std::string_view FormatBackend(CompiledModuleBackend backend)
-	{
-		switch (backend)
+		std::string_view FormatBackend(CompiledModuleBackend backend)
 		{
+			switch (backend)
+			{
 			case CompiledModuleBackend::CPUNative:
 				return "cpu_native";
 			case CompiledModuleBackend::CUDANative:
 				return "cuda_native";
+			}
+			return "unknown";
 		}
-		return "unknown";
-	}
 
-	std::string_view FormatRebindPolicy(CompiledModuleExternalTensorRebindPolicy policy)
-	{
-		switch (policy)
+		std::string_view FormatRebindPolicy(CompiledModuleExternalTensorRebindPolicy policy)
 		{
+			switch (policy)
+			{
 			case CompiledModuleExternalTensorRebindPolicy::ExactChecksum:
 				return "exact_checksum";
+			}
+			return "unknown";
 		}
-		return "unknown";
-	}
 
-	std::string FormatRegionInfo(const CompiledModuleRegionInfo& info)
-	{
-		return std::format("{}: size={} align={} checksum={}", info.name, info.size, info.alignment, info.checksum);
-	}
-
-	std::string FormatExternalTensorInfo(const CompiledModuleExternalTensorInfo& info)
-	{
-		return std::format("{}: region={} offset={} bytes={} align={} checksum={} policy={} {}",
-		                   info.name, info.region, info.byteOffset, info.byteSize, info.alignment, info.checksum,
-		                   FormatRebindPolicy(info.rebindPolicy),
-		                   Validation::FormatInfo(info.type.dtype, info.type.StaticShape()));
-	}
-
-	std::string PrintModule(mlir::ModuleOp module)
-	{
-		std::string text;
-		llvm::raw_string_ostream stream(text);
-		module->print(stream);
-		stream.flush();
-		return text;
-	}
-
-	void SetupDumpMLIRContext(mlir::MLIRContext& ctx)
-	{
-		ctx.disableMultithreading();
-
-		mlir::DialectRegistry registry;
-		litenn::registerBufferizationModels(registry);
-		litenn::registerLLVMTranslations(registry);
-
-		ctx.appendDialectRegistry(registry);
-		ctx.loadDialect<litenn::LiteNNDialect, mlir::arith::ArithDialect, mlir::bufferization::BufferizationDialect,
-		                mlir::cf::ControlFlowDialect, mlir::func::FuncDialect, mlir::linalg::LinalgDialect,
-		                mlir::LLVM::LLVMDialect, mlir::math::MathDialect, mlir::memref::MemRefDialect,
-		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
-	}
-
-	mlir::OwningOpRef<mlir::ModuleOp> CreateTranslatedModule(const ExecutablePlan& plan, mlir::MLIRContext& ctx)
-	{
-		auto module = litenn::translateExecutablePlanToMLIR(plan, ctx);
-		if (!module)
+		std::string FormatRegionInfo(const CompiledModuleRegionInfo& info)
 		{
-			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
+			return std::format("{}: size={} align={} checksum={}", info.name, info.size, info.alignment, info.checksum);
 		}
-		if (mlir::failed(mlir::verify(*module)))
+
+		std::string FormatExternalTensorInfo(const CompiledModuleExternalTensorInfo& info)
 		{
-			throw std::runtime_error("LiteNN input MLIR module verification failed");
+			return std::format("{}: region={} offset={} bytes={} align={} checksum={} policy={} {}", info.name,
+			                   info.region, info.byteOffset, info.byteSize, info.alignment, info.checksum,
+			                   FormatRebindPolicy(info.rebindPolicy),
+			                   Validation::FormatInfo(info.type.dtype, info.type.StaticShape()));
 		}
-		return module;
-	}
 
-	std::string DumpCompiledModuleMetadataImpl(std::span<const std::byte> rodata,
-	                                          std::span<const std::byte> instructions,
-	                                          std::span<const CompiledTensorSpec> inputSpecs,
-	                                          std::span<const CompiledTensorSpec> outputSpecs,
-	                                          CompiledModuleBackend backend)
-	{
-		std::string out = "compiled_module {\n";
-		out += std::format("  backend = {}\n", FormatBackend(backend));
-		out += std::format("  rodata_size = {}\n", rodata.size());
-		out += std::format("  instruction_size = {}\n", instructions.size());
-		out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
-			return FormatCompiledSpec(inputSpecs[index], "input", index);
-		}));
-		out += std::format("  outputs = [{}]\n", JoinIndexed(outputSpecs.size(), ", ", [&](std::size_t index) {
-			return FormatCompiledSpec(outputSpecs[index], "output", index);
-		}));
-		out += "}\n";
-		return out;
-	}
+		std::string PrintModule(mlir::ModuleOp module)
+		{
+			std::string text;
+			llvm::raw_string_ostream stream(text);
+			module->print(stream);
+			stream.flush();
+			return text;
+		}
 
-	std::string DumpSeparatedCompiledModuleMetadataImpl(
-	    std::span<const std::byte> metadata,
-	    std::span<const std::byte> constants,
-	    std::span<const std::byte> weights,
-	    std::span<const std::byte> instructions,
-	    std::span<const CompiledTensorSpec> inputSpecs,
-	    std::span<const CompiledTensorSpec> outputSpecs,
-	    CompiledModuleBackend backend,
-	    std::span<const CompiledModuleRegionInfo> regionInfos,
-	    std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
-	{
-		std::string out = "compiled_module {\n";
-		out += std::format("  backend = {}\n", FormatBackend(backend));
-		out += std::format("  metadata_size = {}\n", metadata.size());
-		out += std::format("  constants_size = {}\n", constants.size());
-		out += std::format("  weights_size = {}\n", weights.size());
-		out += std::format("  instruction_size = {}\n", instructions.size());
-		out += std::format("  regions = [{}]\n", JoinIndexed(regionInfos.size(), ", ", [&](std::size_t index) {
-			return FormatRegionInfo(regionInfos[index]);
-		}));
-		out += std::format("  external_tensors = [{}]\n",
-		                   JoinIndexed(externalTensorInfos.size(), ", ", [&](std::size_t index) {
-			                   return FormatExternalTensorInfo(externalTensorInfos[index]);
-		                   }));
-		out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
-			return FormatCompiledSpec(inputSpecs[index], "input", index);
-		}));
-		out += std::format("  outputs = [{}]\n", JoinIndexed(outputSpecs.size(), ", ", [&](std::size_t index) {
-			return FormatCompiledSpec(outputSpecs[index], "output", index);
-		}));
-		out += "}\n";
-		return out;
-	}
-} // namespace
+		void SetupDumpMLIRContext(mlir::MLIRContext& ctx)
+		{
+			ctx.disableMultithreading();
+
+			mlir::DialectRegistry registry;
+			litenn::registerBufferizationModels(registry);
+			litenn::registerLLVMTranslations(registry);
+
+			ctx.appendDialectRegistry(registry);
+			ctx.loadDialect<litenn::LiteNNDialect, mlir::arith::ArithDialect, mlir::bufferization::BufferizationDialect,
+			                mlir::cf::ControlFlowDialect, mlir::func::FuncDialect, mlir::linalg::LinalgDialect,
+			                mlir::LLVM::LLVMDialect, mlir::math::MathDialect, mlir::memref::MemRefDialect,
+			                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
+		}
+
+		mlir::OwningOpRef<mlir::ModuleOp> CreateTranslatedModule(const ExecutablePlan& plan, mlir::MLIRContext& ctx)
+		{
+			auto module = litenn::translateExecutablePlanToMLIR(plan, ctx);
+			if (!module)
+			{
+				throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
+			}
+			if (mlir::failed(mlir::verify(*module)))
+			{
+				throw std::runtime_error("LiteNN input MLIR module verification failed");
+			}
+			return module;
+		}
+
+		std::string DumpCompiledModuleMetadataImpl(std::span<const std::byte> rodata,
+		                                           std::span<const std::byte> instructions,
+		                                           std::span<const CompiledTensorSpec> inputSpecs,
+		                                           std::span<const CompiledTensorSpec> outputSpecs,
+		                                           CompiledModuleBackend backend)
+		{
+			std::string out = "compiled_module {\n";
+			out += std::format("  backend = {}\n", FormatBackend(backend));
+			out += std::format("  rodata_size = {}\n", rodata.size());
+			out += std::format("  instruction_size = {}\n", instructions.size());
+			out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
+				                   return FormatCompiledSpec(inputSpecs[index], "input", index);
+			                   }));
+			out += std::format("  outputs = [{}]\n", JoinIndexed(outputSpecs.size(), ", ", [&](std::size_t index) {
+				                   return FormatCompiledSpec(outputSpecs[index], "output", index);
+			                   }));
+			out += "}\n";
+			return out;
+		}
+
+		std::string DumpSeparatedCompiledModuleMetadataImpl(
+		    std::span<const std::byte> metadata, std::span<const std::byte> constants,
+		    std::span<const std::byte> weights, std::span<const std::byte> instructions,
+		    std::span<const CompiledTensorSpec> inputSpecs, std::span<const CompiledTensorSpec> outputSpecs,
+		    CompiledModuleBackend backend, std::span<const CompiledModuleRegionInfo> regionInfos,
+		    std::span<const CompiledModuleExternalTensorInfo> externalTensorInfos)
+		{
+			std::string out = "compiled_module {\n";
+			out += std::format("  backend = {}\n", FormatBackend(backend));
+			out += std::format("  metadata_size = {}\n", metadata.size());
+			out += std::format("  constants_size = {}\n", constants.size());
+			out += std::format("  weights_size = {}\n", weights.size());
+			out += std::format("  instruction_size = {}\n", instructions.size());
+			out += std::format("  regions = [{}]\n", JoinIndexed(regionInfos.size(), ", ", [&](std::size_t index) {
+				                   return FormatRegionInfo(regionInfos[index]);
+			                   }));
+			out += std::format("  external_tensors = [{}]\n",
+			                   JoinIndexed(externalTensorInfos.size(), ", ", [&](std::size_t index) {
+				                   return FormatExternalTensorInfo(externalTensorInfos[index]);
+			                   }));
+			out += std::format("  inputs = [{}]\n", JoinIndexed(inputSpecs.size(), ", ", [&](std::size_t index) {
+				                   return FormatCompiledSpec(inputSpecs[index], "input", index);
+			                   }));
+			out += std::format("  outputs = [{}]\n", JoinIndexed(outputSpecs.size(), ", ", [&](std::size_t index) {
+				                   return FormatCompiledSpec(outputSpecs[index], "output", index);
+			                   }));
+			out += "}\n";
+			return out;
+		}
+	} // namespace
 
 	std::string DumpMLIR(const ExecutablePlan& plan, MLIRDumpStage stage)
 	{
@@ -233,7 +230,7 @@ namespace
 	std::string DumpCompiledModuleMetadata(const CompiledModuleArtifact& artifact)
 	{
 		return DumpCompiledModuleMetadataImpl(artifact.Rodata(), artifact.Instructions(), artifact.InputSpecs(),
-		                                    artifact.OutputSpecs(), artifact.Backend());
+		                                      artifact.OutputSpecs(), artifact.Backend());
 	}
 
 	std::string DumpCompiledModuleMetadata(const CompiledModuleSeparatedArtifact& artifact)
@@ -241,20 +238,20 @@ namespace
 		auto regionInfos = artifact.RegionInfos();
 		auto externalTensorInfos = artifact.ExternalTensorInfos();
 		return DumpSeparatedCompiledModuleMetadataImpl(
-		    artifact.Metadata(), artifact.Constants(), artifact.Weights(), artifact.Instructions(), artifact.InputSpecs(),
-		    artifact.OutputSpecs(), artifact.Backend(), regionInfos, externalTensorInfos);
+		    artifact.Metadata(), artifact.Constants(), artifact.Weights(), artifact.Instructions(),
+		    artifact.InputSpecs(), artifact.OutputSpecs(), artifact.Backend(), regionInfos, externalTensorInfos);
 	}
 
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CPU>& module)
 	{
 		return DumpCompiledModuleMetadataImpl(module.Rodata(), module.Instructions(), module.InputSpecs(),
-		                                    module.OutputSpecs(), module.Backend());
+		                                      module.OutputSpecs(), module.Backend());
 	}
 #ifdef LITENN_ENABLE_CUDA
 	std::string DumpCompiledModuleMetadata(const CompiledModule<CUDA>& module)
 	{
 		return DumpCompiledModuleMetadataImpl(module.Rodata(), module.Instructions(), module.InputSpecs(),
-		                                    module.OutputSpecs(), module.Backend());
+		                                      module.OutputSpecs(), module.Backend());
 	}
 #endif
 } // namespace LiteNN::Debug

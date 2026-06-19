@@ -43,8 +43,7 @@ static std::size_t CountOpNodes(const Subgraph& sg)
 	for (NodeId id = 0; id < sg.NodeCount(); ++id)
 	{
 		const auto& entry = sg.GetNodeEntry(id);
-		if (!std::holds_alternative<ConstantNode>(entry.node) &&
-		    !std::holds_alternative<ParamRefNode>(entry.node) &&
+		if (!std::holds_alternative<ConstantNode>(entry.node) && !std::holds_alternative<ParamRefNode>(entry.node) &&
 		    !std::holds_alternative<VariableRefNode>(entry.node))
 		{
 			++count;
@@ -70,14 +69,12 @@ TEST(ConstFoldPass, FullConstantFold)
 	Graph graph;
 	Subgraph sg;
 
-	const auto c1 = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto c2 = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { c1, 0 }, { c2, 0 } },
+	const auto c1 = sg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
 	                           { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto c2 = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                           { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { c1, 0 }, { c2, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -106,16 +103,14 @@ TEST(ConstFoldPass, PartialConstantFold)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto c1 = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto c2 = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto c1 = sg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                           { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto c2 = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                           { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto mul = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { c1, 0 }, { c2, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { mul, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	                            { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { mul, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -149,11 +144,9 @@ TEST(ConstFoldPass, ConstantUnaryOp)
 	Graph graph;
 	Subgraph sg;
 
-	const auto c = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto y =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { c, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto c = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { c, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -179,11 +172,9 @@ TEST(ConstFoldPass, ConstantCast)
 	Graph graph;
 	Subgraph sg;
 
-	const auto c = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto y =
-	    sg.AddNode(CastNode{ { c, 0 }, DataType::Float64 }, { OutputInfo{ DataType::Float64, { 1 } } });
+	const auto c = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(CastNode{ { c, 0 }, DataType::Float64 }, { OutputInfo{ DataType::Float64, { 1 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -210,11 +201,10 @@ TEST(ConstFoldPass, ConstantReduceOp)
 	Graph graph;
 	Subgraph sg;
 
-	const auto c = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2, 2 } } });
-	const auto y =
-	    sg.AddNode(ReduceOpNode{ ReduceOp::Sum, { c, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto c =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto y = sg.AddNode(ReduceOpNode{ ReduceOp::Sum, { c, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -242,11 +232,10 @@ TEST(ConstFoldPass, ConstantReshape)
 	Graph graph;
 	Subgraph sg;
 
-	const auto c = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 4 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 4 } } });
-	const auto y =
-	    sg.AddNode(ReshapeNode{ { c, 0 }, { 2, 2 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto c =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 4 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 4 } } });
+	const auto y = sg.AddNode(ReshapeNode{ { c, 0 }, { 2, 2 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -276,11 +265,10 @@ TEST(ConstFoldPass, AddZeroElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto zero = sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                             { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -311,11 +299,10 @@ TEST(ConstFoldPass, MulOneElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto one = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 1, 1 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto one = sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 1 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                            { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { one, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -345,11 +332,10 @@ TEST(ConstFoldPass, MulZeroElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto zero = sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                             { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { zero, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -380,11 +366,10 @@ TEST(ConstFoldPass, ZeroAddElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { zero, 0 }, { x, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto zero = sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                             { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { zero, 0 }, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -414,11 +399,10 @@ TEST(ConstFoldPass, ZeroMulElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto zero = sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                             { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { zero, 0 }, { x, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	                          { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -448,11 +432,11 @@ TEST(ConstFoldPass, BroadcastNoElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0, 0 }, { 1, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 1, 3 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto zero =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0, 0 }, { 1, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 1, 3 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -497,11 +481,11 @@ TEST(ConstFoldPass, BroadcastNoEliminationActual)
 
 	// x 的 shape [1,3] 与 输出 shape [2,3] 不同
 	const auto x = sg.AddParam(DataType::Float32, { 1, 3 });
-	const auto zero = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 0, 0, 0, 0, 0, 0 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2, 3 } } });
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } },
-	                           { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto zero =
+	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0, 0, 0, 0, 0 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -537,8 +521,7 @@ TEST(ConstFoldPass, DoubleNegateElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto neg1 =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto neg1 = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto neg2 =
 	    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { neg1, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 
@@ -571,12 +554,10 @@ TEST(ConstFoldPass, DeadNodeElimination)
 	Subgraph sg;
 
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto neg =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto neg = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	// 这个死节点不被 Results 引用
-	const auto dead =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Exp, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
-	(void)dead;
+	const auto dead = sg.AddNode(UnaryOpNode{ UnaryOp::Exp, { x, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	(void) dead;
 
 	sg.SetResults({ { neg, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -610,21 +591,19 @@ TEST(ConstFoldPass, AfterInlinePass)
 	// callee: f(x) = x * Constant(2)
 	Subgraph calleeSg;
 	const auto cx = calleeSg.AddParam(DataType::Float32, { 2 });
-	const auto cConst = calleeSg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 2, 2 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto cConst =
+	    calleeSg.AddNode(ConstantNode{ Tensor<CPU>({ 2, 2 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                     { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cMul = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { cx, 0 }, { cConst, 0 } },
-	                                    { OutputInfo{ DataType::Float32, { 2 } } });
+	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { cMul, 0 } });
 	const auto calleeId = graph.AddSubgraph(std::move(calleeSg));
 
 	// 前向: y = Call(callee, [Constant(3, 5)])
 	Subgraph sg;
-	const auto input = sg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 3, 5 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto y =
-	    sg.AddNode(CallNode{ calleeId, { { input, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto input = sg.AddNode(ConstantNode{ Tensor<CPU>({ 3, 5 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                              { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y = sg.AddNode(CallNode{ calleeId, { { input, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -672,9 +651,8 @@ TEST(ConstFoldPass, FullPipeline)
 	const auto matmul =
 	    sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { x, 0 }, { w, 0 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	const auto add = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { b, 0 } },
-	                             { OutputInfo{ DataType::Float32, { 2, 2 } } });
-	const auto relu =
-	    sg.AddNode(CallNode{ reluId, { { add, 0 } } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	                            { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto relu = sg.AddNode(CallNode{ reluId, { { add, 0 } } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { relu, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
@@ -693,11 +671,11 @@ TEST(ConstFoldPass, FullPipeline)
 		const auto refWNode = refSg.AddNode(VariableRefNode{ refWIdx }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 		const auto refB = refSg.AddParam(DataType::Float32, { 1, 2 });
 		const auto refMM = refSg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { refX, 0 }, { refWNode, 0 } },
-		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                                 { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto refAdd = refSg.AddNode(BinaryOpNode{ BinaryOp::Add, { refMM, 0 }, { refB, 0 } },
-		                                   { OutputInfo{ DataType::Float32, { 2, 2 } } });
-		const auto refRelu = refSg.AddNode(CallNode{ refReluId, { { refAdd, 0 } } },
-		                                    { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                                  { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto refRelu =
+		    refSg.AddNode(CallNode{ refReluId, { { refAdd, 0 } } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		refSg.SetResults({ { refRelu, 0 } });
 		const auto refFwdId = refGraph.AddSubgraph(std::move(refSg));
 		refGraph.SetForward(refFwdId);

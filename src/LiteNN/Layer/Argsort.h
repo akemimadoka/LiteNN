@@ -27,7 +27,7 @@ namespace LiteNN::Layer
 	}
 
 	inline SubgraphId BuildArgsort(ModelBuilder& builder, DataType dtype, ShapeView shape,
-	                              SortOrder order = SortOrder::Descending, std::size_t axis = 0)
+	                               SortOrder order = SortOrder::Descending, std::size_t axis = 0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());

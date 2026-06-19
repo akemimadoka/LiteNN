@@ -42,13 +42,14 @@ namespace LiteNN::Compatibility::GGML
 			throw std::runtime_error("MulMatId requires ids.shape[0] to be divisible by b.shape[1]");
 		}
 
-		const auto nodeId = subgraph.AddNode(MulMatIdNode{ as, b, ids },
-		                                    { OutputInfo{ DataType::Float32, { asInfo.shape[1], idsInfo.shape[0], bInfo.shape[2] } } });
+		const auto nodeId = subgraph.AddNode(
+		    MulMatIdNode{ as, b, ids },
+		    { OutputInfo{ DataType::Float32, { asInfo.shape[1], idsInfo.shape[0], bInfo.shape[2] } } });
 		return { nodeId, 0 };
 	}
 
-	inline SubgraphId BuildMulMatId(ModelBuilder& builder, DataType asType, ShapeView asShape, DataType bType, ShapeView bShape,
-	                               DataType idsType, ShapeView idsShape)
+	inline SubgraphId BuildMulMatId(ModelBuilder& builder, DataType asType, ShapeView asShape, DataType bType,
+	                                ShapeView bShape, DataType idsType, ShapeView idsShape)
 	{
 		Subgraph subgraph;
 		const auto as = subgraph.AddParam(asType, asShape.ToOwned());

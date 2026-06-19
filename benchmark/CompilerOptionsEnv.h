@@ -4,8 +4,8 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -62,17 +62,15 @@ inline LiteNN::CompilerOptions LiteNNBenchCompilerOptionsFromEnvironment()
 	if (const char* affinity = std::getenv("LITENN_CPU_AOT_AFFINITY"))
 	{
 		std::string value{ affinity };
-		std::ranges::transform(value, value.begin(), [](unsigned char ch) {
-			return static_cast<char>(std::tolower(ch));
-		});
+		std::ranges::transform(value, value.begin(),
+		                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 		if (value == "compact" || value == "1" || value == "true" || value == "on")
 		{
 			options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Compact;
 		}
 	}
-	options.enableCPUAOTExternalRegions =
-	    LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
-	    LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
+	options.enableCPUAOTExternalRegions = LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
+	                                      LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
 	if (const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_REGION_FUSION"))
 	{
 		options.enableCPUAOTExternalRegionFusion = LiteNNBenchTruthyEnvValue(value);

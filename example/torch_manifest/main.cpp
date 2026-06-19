@@ -1,7 +1,7 @@
 #include <LiteNN.h>
-#include <LiteNNImporters.h>
 #include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/TorchManifest.h>
+#include <LiteNNImporters.h>
 
 #ifdef LITENN_ENABLE_MLIR
 #include <LiteNN/Compiler/CompiledModule.h>
@@ -77,20 +77,26 @@ int main(int argc, char** argv)
 		PrintReport(imported.report);
 
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
-		inputs.emplace_back(LiteNN::Tensor<LiteNN::CPU>({
-		                                                    1.0, -2.0, 0.5,
-		                                                    0.0, 3.0, -1.0,
-		                                                },
-		                                                { 2, 3 }));
+		inputs.emplace_back(LiteNN::Tensor<LiteNN::CPU>(
+		    {
+		        1.0,
+		        -2.0,
+		        0.5,
+		        0.0,
+		        3.0,
+		        -1.0,
+		    },
+		    { 2, 3 }));
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter;
-		const auto interpreted =
-		    interpreter.RunForward(LiteNN::Detail::BuildExecutablePlanFromGraph(imported.model.UnsafeGraphView()), inputs);
+		const auto interpreted = interpreter.RunForward(
+		    LiteNN::Detail::BuildExecutablePlanFromGraph(imported.model.UnsafeGraphView()), inputs);
 		PrintTensor("Interpreter output", interpreted[0]);
 
 #ifdef LITENN_ENABLE_MLIR
 		auto compiled = LiteNN::Compiler<LiteNN::CPU>::Compile(
-		    LiteNN::Detail::BuildExecutablePlanFromGraph(imported.model.UnsafeGraphView()), LiteNN::CompilerOptions::Defaults());
+		    LiteNN::Detail::BuildExecutablePlanFromGraph(imported.model.UnsafeGraphView()),
+		    LiteNN::CompilerOptions::Defaults());
 		const auto compiledOutputs = compiled.RunTensors(std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs));
 		PrintTensor("CPU AOT output", compiledOutputs[0]);
 #else

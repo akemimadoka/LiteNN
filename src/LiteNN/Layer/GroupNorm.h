@@ -1,7 +1,7 @@
 #include <LiteNN/Graph.h>
 #include <LiteNN/Layer/LayerUtils.h>
-#include <LiteNN/ModelBuilder.h>
 #include <LiteNN/Layer/Normalization.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 #include <vector>
@@ -40,13 +40,13 @@ namespace LiteNN::Layer
 			throw std::runtime_error("GroupNorm requires grouped element count to be divisible by numGroups");
 		}
 
-		(void)batch;
+		(void) batch;
 		return AddNormalization(subgraph, input, NormalizationMode::GroupNorm, 0, eps, std::nullopt, std::nullopt,
 		                        numGroups);
 	}
 
 	inline SubgraphId BuildGroupNorm(ModelBuilder& builder, DataType dtype, ShapeView shape, std::size_t numGroups,
-	                                double eps = 1e-5)
+	                                 double eps = 1e-5)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());

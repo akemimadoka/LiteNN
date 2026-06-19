@@ -92,8 +92,8 @@ TEST(WhileNode, Forward_MultiCarry)
 	Subgraph bodySg;
 	const auto ba = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto bb = bodySg.AddParam(DataType::Float32, { 1 });
-	const auto sum = bodySg.AddNode(BinaryOpNode{ BinaryOp::Add, { ba, 0 }, { bb, 0 } },
-	                                { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto sum =
+	    bodySg.AddNode(BinaryOpNode{ BinaryOp::Add, { ba, 0 }, { bb, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { bb, 0 }, { sum, 0 } }); // (b, a+b)
 	const auto bodyId = graph.AddSubgraph(std::move(bodySg));
 
@@ -101,8 +101,9 @@ TEST(WhileNode, Forward_MultiCarry)
 	Subgraph fwdSg;
 	const auto a = fwdSg.AddParam(DataType::Float32, { 1 });
 	const auto b = fwdSg.AddParam(DataType::Float32, { 1 });
-	const auto whileNode = fwdSg.AddNode(WhileNode{ condId, bodyId, { { a, 0 }, { b, 0 } } },
-	                                     { OutputInfo{ DataType::Float32, { 1 } }, OutputInfo{ DataType::Float32, { 1 } } });
+	const auto whileNode =
+	    fwdSg.AddNode(WhileNode{ condId, bodyId, { { a, 0 }, { b, 0 } } },
+	                  { OutputInfo{ DataType::Float32, { 1 } }, OutputInfo{ DataType::Float32, { 1 } } });
 	fwdSg.SetResults({ { whileNode, 0 }, { whileNode, 1 } });
 	graph.SetForward(graph.AddSubgraph(std::move(fwdSg)));
 
@@ -132,8 +133,8 @@ TEST(WhileNode, Forward_ZeroIteration)
 	const auto zero =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 0.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
 	                   { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } },
-	                                { OutputInfo{ DataType::Bool, { 1 } } });
+	const auto cmp =
+	    condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
 	const auto condId = graph.AddSubgraph(std::move(condSg));
 
@@ -239,8 +240,8 @@ TEST(WhileNode, Autograd_ZeroIteration)
 	const auto zero =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 0.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
 	                   { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } },
-	                                { OutputInfo{ DataType::Bool, { 1 } } });
+	const auto cmp =
+	    condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
 	const auto condId = graph.AddSubgraph(std::move(condSg));
 

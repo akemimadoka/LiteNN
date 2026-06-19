@@ -1,6 +1,6 @@
 #include <LiteNN/Graph.h>
-#include <LiteNN/ModelBuilder.h>
 #include <LiteNN/Layer/Scan.h>
+#include <LiteNN/ModelBuilder.h>
 
 #include <stdexcept>
 

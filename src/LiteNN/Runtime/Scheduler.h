@@ -149,22 +149,22 @@ namespace LiteNN::Runtime
 	inline RuntimeStateBinding MakeDiffusionState(std::string name, std::string role, TensorType type,
 	                                              BufferMutability mutability = BufferMutability::Mutable)
 	{
-		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::Diffusion, std::move(role),
-		                               std::move(type), mutability, { "read", "write" });
+		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::Diffusion, std::move(role), std::move(type),
+		                               mutability, { "read", "write" });
 	}
 
 	inline RuntimeStateBinding MakeTrainingState(std::string name, std::string role, TensorType type,
 	                                             BufferMutability mutability = BufferMutability::Mutable)
 	{
-		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::Training, std::move(role),
-		                               std::move(type), mutability, { "read", "write" });
+		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::Training, std::move(role), std::move(type),
+		                               mutability, { "read", "write" });
 	}
 
 	inline RuntimeStateBinding MakeLoRAAdapterState(std::string name, std::string role, TensorType type,
 	                                                BufferMutability mutability = BufferMutability::Mutable)
 	{
-		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::LoRAAdapter, std::move(role),
-		                               std::move(type), mutability, { "read", "rebind", "merge" });
+		return MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::LoRAAdapter, std::move(role), std::move(type),
+		                               mutability, { "read", "rebind", "merge" });
 	}
 
 	inline RuntimeSchedule BuildRuntimeSchedule(ExecutableModule module, std::vector<RuntimeStateBinding> states = {})
@@ -182,8 +182,9 @@ namespace LiteNN::Runtime
 			{
 				if (*state.memoryBuffer >= schedule.memory.buffers.size())
 				{
-					throw std::runtime_error(std::format("Runtime state '{}' references memory buffer {}, but bufferCount={}",
-					                                    state.name, *state.memoryBuffer, schedule.memory.buffers.size()));
+					throw std::runtime_error(
+					    std::format("Runtime state '{}' references memory buffer {}, but bufferCount={}", state.name,
+					                *state.memoryBuffer, schedule.memory.buffers.size()));
 				}
 				continue;
 			}
@@ -242,8 +243,9 @@ namespace LiteNN::Runtime
 			{
 				if (regionId >= schedule.module.regions.size())
 				{
-					throw std::runtime_error(std::format("Runtime schedule partition {} references region {}, but regionCount={}",
-					                                    partition.id, regionId, schedule.module.regions.size()));
+					throw std::runtime_error(
+					    std::format("Runtime schedule partition {} references region {}, but regionCount={}",
+					                partition.id, regionId, schedule.module.regions.size()));
 				}
 				const auto& region = schedule.module.regions[regionId];
 				RuntimeScheduleStep step;
@@ -267,8 +269,8 @@ namespace LiteNN::Runtime
 					}
 					for (std::size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
 					{
-						if (const auto* assignment =
-						        FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, { node.sourceNode, outputIndex }))
+						if (const auto* assignment = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph,
+						                                                  { node.sourceNode, outputIndex }))
 						{
 							step.outputBuffers.push_back(assignment->buffer);
 						}
@@ -317,20 +319,18 @@ namespace LiteNN::Runtime
 			std::string message;
 			if (step.kind == RuntimeScheduleStepKind::DispatchRegion)
 			{
-				message = std::format("dispatch region {} function {} on {}", step.region, step.function,
-				                      step.backend);
+				message = std::format("dispatch region {} function {} on {}", step.region, step.function, step.backend);
 			}
 			else if (step.kind == RuntimeScheduleStepKind::Fallback)
 			{
-				message = std::format("fallback from {} to {} inputBuffers={} outputBuffers={}",
-				                      step.backend, step.fallbackBackend,
-				                      step.inputBuffers.size(), step.outputBuffers.size());
+				message = std::format("fallback from {} to {} inputBuffers={} outputBuffers={}", step.backend,
+				                      step.fallbackBackend, step.inputBuffers.size(), step.outputBuffers.size());
 			}
 			else
 			{
-				message = std::format("{} on {} inputBuffers={} outputBuffers={}",
-				                      RuntimeScheduleStepKindName(step.kind), step.backend,
-				                      step.inputBuffers.size(), step.outputBuffers.size());
+				message =
+				    std::format("{} on {} inputBuffers={} outputBuffers={}", RuntimeScheduleStepKindName(step.kind),
+				                step.backend, step.inputBuffers.size(), step.outputBuffers.size());
 			}
 			events.push_back({ .step = step.id,
 			                   .kind = step.kind,
@@ -346,8 +346,8 @@ namespace LiteNN::Runtime
 		std::string label;
 		if (step.kind == RuntimeScheduleStepKind::Fallback)
 		{
-			label = std::format("{}:{}->{}", RuntimeScheduleStepKindName(step.kind), step.backend,
-			                    step.fallbackBackend);
+			label =
+			    std::format("{}:{}->{}", RuntimeScheduleStepKindName(step.kind), step.backend, step.fallbackBackend);
 		}
 		else
 		{
@@ -362,8 +362,7 @@ namespace LiteNN::Runtime
 			     .label = std::move(label) };
 	}
 
-	inline std::vector<RuntimeScheduleProfileRecord> BuildRuntimeScheduleProfileRecords(
-	    const RuntimeSchedule& schedule)
+	inline std::vector<RuntimeScheduleProfileRecord> BuildRuntimeScheduleProfileRecords(const RuntimeSchedule& schedule)
 	{
 		std::vector<RuntimeScheduleProfileRecord> records;
 		records.reserve(schedule.steps.size());

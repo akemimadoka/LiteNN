@@ -97,8 +97,8 @@ namespace LiteNN
 				throw std::runtime_error("Vulkan native instruction payload byte blob is truncated");
 			}
 			std::vector<std::byte> result(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-			                              bytes.begin() + static_cast<std::ptrdiff_t>(
-			                                                  offset + static_cast<std::size_t>(size)));
+			                              bytes.begin() +
+			                                  static_cast<std::ptrdiff_t>(offset + static_cast<std::size_t>(size)));
 			offset += static_cast<std::size_t>(size);
 			return result;
 		}

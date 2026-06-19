@@ -183,8 +183,7 @@ namespace LiteNN
 			if (storedExponent <= 0)
 			{
 				const auto subnormal = Ldexp(magnitude, exponent + exponentBias - 1);
-				const auto mantissa = std::min(RoundToUInt(subnormal * mantissaScale),
-				                               (1U << mantissaBits) - 1U);
+				const auto mantissa = std::min(RoundToUInt(subnormal * mantissaScale), (1U << mantissaBits) - 1U);
 				return static_cast<std::uint8_t>(signBit | mantissa);
 			}
 
@@ -230,9 +229,7 @@ namespace LiteNN
 		}
 
 		template <typename T>
-		concept FloatConvertible = requires(T value) {
-			static_cast<float>(value);
-		};
+		concept FloatConvertible = requires(T value) { static_cast<float>(value); };
 	} // namespace Detail
 
 	struct Float16

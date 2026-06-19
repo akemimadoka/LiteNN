@@ -22,8 +22,7 @@ namespace LiteNN::Layer
 			throw std::runtime_error("BatchMatMul does not support Bool tensors");
 		}
 		const auto outputShape = ::LiteNN::Detail::BatchMatMulOutputShape(lhsInfo.shape, rhsInfo.shape);
-		const auto result =
-		    subgraph.AddNode(BatchMatMulNode{ lhs, rhs }, { OutputInfo{ lhsInfo.dtype, outputShape } });
+		const auto result = subgraph.AddNode(BatchMatMulNode{ lhs, rhs }, { OutputInfo{ lhsInfo.dtype, outputShape } });
 		return { result, 0 };
 	}
 

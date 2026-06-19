@@ -99,7 +99,7 @@ TEST(InlinePass, MultiParamInline)
 	const auto ca = calleeSg.AddParam(DataType::Float32, { 2 });
 	const auto cb = calleeSg.AddParam(DataType::Float32, { 2 });
 	const auto cAdd = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Add, { ca, 0 }, { cb, 0 } },
-	                                    { OutputInfo{ DataType::Float32, { 2 } } });
+	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { cAdd, 0 } });
 	const auto calleeId = graph.AddSubgraph(std::move(calleeSg));
 
@@ -149,10 +149,8 @@ TEST(InlinePass, NestedCallNode)
 	// g(x) = f(f(x))
 	Subgraph gSg;
 	const auto gx = gSg.AddParam(DataType::Float32, { 2 });
-	const auto inner =
-	    gSg.AddNode(CallNode{ fId, { { gx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto outer =
-	    gSg.AddNode(CallNode{ fId, { { inner, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto inner = gSg.AddNode(CallNode{ fId, { { gx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto outer = gSg.AddNode(CallNode{ fId, { { inner, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	gSg.SetResults({ { outer, 0 } });
 	const auto gId = graph.AddSubgraph(std::move(gSg));
 
@@ -203,12 +201,11 @@ TEST(InlinePass, MultiOutputCallee)
 	// 前向: (negResult, absResult) = Call(callee, [x]); y = negResult + absResult
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto call = sg.AddNode(
-	    CallNode{ calleeId, { { x, 0 } } },
-	    { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
+	const auto call = sg.AddNode(CallNode{ calleeId, { { x, 0 } } },
+	                             { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
 	// 使用 port 0 (Negate result) 和 port 1 (Abs result)
-	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { call, 0 }, { call, 1 } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y =
+	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { call, 0 }, { call, 1 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
 	graph.SetForward(fwdId);
@@ -259,8 +256,8 @@ TEST(InlinePass, CondNodeBranchesNotInlined)
 	Subgraph sg;
 	const auto cond = sg.AddParam(DataType::Bool, { 1 });
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
-	const auto y = sg.AddNode(CondNode{ { cond, 0 }, thenId, elseId, { { x, 0 } } },
-	                           { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y =
+	    sg.AddNode(CondNode{ { cond, 0 }, thenId, elseId, { { x, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
 	graph.SetForward(fwdId);
@@ -347,12 +344,12 @@ TEST(InlinePass, VariableRefAndConstant)
 	const auto cx = calleeSg.AddParam(DataType::Float32, { 2 });
 	const auto cw = calleeSg.AddNode(VariableRefNode{ wIdx }, { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cMul = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { cx, 0 }, { cw, 0 } },
-	                                    { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto cConst = calleeSg.AddNode(
-	    ConstantNode{ Tensor<CPU>({ 10, 20 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	    { OutputInfo{ DataType::Float32, { 2 } } });
+	                                   { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto cConst =
+	    calleeSg.AddNode(ConstantNode{ Tensor<CPU>({ 10, 20 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
+	                     { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cAdd = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Add, { cMul, 0 }, { cConst, 0 } },
-	                                    { OutputInfo{ DataType::Float32, { 2 } } });
+	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { cAdd, 0 } });
 	const auto calleeId = graph.AddSubgraph(std::move(calleeSg));
 
@@ -410,15 +407,14 @@ TEST(InlinePass, AfterAutogradPass)
 	{
 		Subgraph rCalleeSg;
 		const auto rcx = rCalleeSg.AddParam(DataType::Float32, { 2 });
-		const auto rcNeg = rCalleeSg.AddNode(UnaryOpNode{ UnaryOp::Negate, { rcx, 0 } },
-		                                      { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto rcNeg =
+		    rCalleeSg.AddNode(UnaryOpNode{ UnaryOp::Negate, { rcx, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 		rCalleeSg.SetResults({ { rcNeg, 0 } });
 		const auto rCalleeId = refGraph.AddSubgraph(std::move(rCalleeSg));
 
 		Subgraph rSg;
 		const auto rx = rSg.AddParam(DataType::Float32, { 2 });
-		const auto ry =
-		    rSg.AddNode(CallNode{ rCalleeId, { { rx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto ry = rSg.AddNode(CallNode{ rCalleeId, { { rx, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
 		rSg.SetResults({ { ry, 0 } });
 		const auto rFwdId = refGraph.AddSubgraph(std::move(rSg));
 		refGraph.SetForward(rFwdId);
@@ -481,8 +477,7 @@ TEST(InlinePass, PassthroughCallee)
 	Subgraph sg;
 	const auto x = sg.AddParam(DataType::Float32, { 2 });
 	const auto call = sg.AddNode(CallNode{ calleeId, { { x, 0 } } }, { OutputInfo{ DataType::Float32, { 2 } } });
-	const auto y =
-	    sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { call, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	const auto y = sg.AddNode(UnaryOpNode{ UnaryOp::Negate, { call, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
 	sg.SetResults({ { y, 0 } });
 	const auto fwdId = graph.AddSubgraph(std::move(sg));
 	graph.SetForward(fwdId);

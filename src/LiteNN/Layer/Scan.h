@@ -8,8 +8,7 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddScan(Subgraph& subgraph, NodeOutput input, std::size_t axis = 0,
-	                          ScanOp op = ScanOp::Sum)
+	inline NodeOutput AddScan(Subgraph& subgraph, NodeOutput input, std::size_t axis = 0, ScanOp op = ScanOp::Sum)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		if (info.shape.empty())

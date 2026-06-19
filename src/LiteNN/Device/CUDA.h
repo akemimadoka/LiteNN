@@ -1,8 +1,8 @@
 #ifndef LITENN_DEVICE_CUDA_H
 #define LITENN_DEVICE_CUDA_H
 
-#include <cstdint>
 #include <LiteNN/Device.h>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -169,9 +169,9 @@ namespace LiteNN
 		static void DoSliceOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
 		                      std::size_t axis, std::size_t start, std::size_t length);
 		static void DoGetRowsOp(CUDA& device, void* dst, DataType dataType, ShapeView dataShape, const void* data,
-		                       DataType indexType, ShapeView indexShape, const void* indices);
+		                        DataType indexType, ShapeView indexShape, const void* indices);
 		static void DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
-		                       ShapeView permutation);
+		                        ShapeView permutation);
 	};
 } // namespace LiteNN
 

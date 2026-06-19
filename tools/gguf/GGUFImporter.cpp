@@ -27,9 +27,9 @@ namespace LiteNN::GGUF
 		}
 		if ((embeddingLength % attentionHeadCount) != 0)
 		{
-			throw std::runtime_error(std::format(
-			    "LLaMA embedding_length {} must be divisible by attention.head_count {}", embeddingLength,
-			    attentionHeadCount));
+			throw std::runtime_error(
+			    std::format("LLaMA embedding_length {} must be divisible by attention.head_count {}", embeddingLength,
+			                attentionHeadCount));
 		}
 		return embeddingLength / attentionHeadCount;
 	}
@@ -42,9 +42,9 @@ namespace LiteNN::GGUF
 		}
 		if ((attentionHeadCount % attentionHeadCountKV) != 0)
 		{
-			throw std::runtime_error(std::format(
-			    "LLaMA attention.head_count {} must be divisible by attention.head_count_kv {}",
-			    attentionHeadCount, attentionHeadCountKV));
+			throw std::runtime_error(
+			    std::format("LLaMA attention.head_count {} must be divisible by attention.head_count_kv {}",
+			                attentionHeadCount, attentionHeadCountKV));
 		}
 		return attentionHeadCount / attentionHeadCountKV;
 	}
@@ -83,24 +83,25 @@ namespace LiteNN::GGUF
 		{
 			return std::visit(
 			    [&entry](const auto& value) -> std::size_t {
-				using T = std::decay_t<decltype(value)>;
-				if constexpr (std::same_as<T, std::uint64_t>)
-				{
-					return NarrowToSize(value, entry.key);
-				}
-				else if constexpr (std::same_as<T, std::int64_t>)
-				{
-					if (value < 0)
-					{
-						throw std::runtime_error(std::format("GGUF metadata key '{}' must be non-negative", entry.key));
-					}
-					return NarrowToSize(static_cast<std::uint64_t>(value), entry.key);
-				}
-				else
-				{
-					throw std::runtime_error(std::format("GGUF metadata key '{}' must be an integer", entry.key));
-				}
-			},
+				    using T = std::decay_t<decltype(value)>;
+				    if constexpr (std::same_as<T, std::uint64_t>)
+				    {
+					    return NarrowToSize(value, entry.key);
+				    }
+				    else if constexpr (std::same_as<T, std::int64_t>)
+				    {
+					    if (value < 0)
+					    {
+						    throw std::runtime_error(
+						        std::format("GGUF metadata key '{}' must be non-negative", entry.key));
+					    }
+					    return NarrowToSize(static_cast<std::uint64_t>(value), entry.key);
+				    }
+				    else
+				    {
+					    throw std::runtime_error(std::format("GGUF metadata key '{}' must be an integer", entry.key));
+				    }
+			    },
 			    entry.value);
 		}
 
@@ -108,24 +109,24 @@ namespace LiteNN::GGUF
 		{
 			return std::visit(
 			    [&entry](const auto& value) -> double {
-				using T = std::decay_t<decltype(value)>;
-				if constexpr (std::same_as<T, double>)
-				{
-					return value;
-				}
-				else if constexpr (std::same_as<T, std::uint64_t>)
-				{
-					return static_cast<double>(value);
-				}
-				else if constexpr (std::same_as<T, std::int64_t>)
-				{
-					return static_cast<double>(value);
-				}
-				else
-				{
-					throw std::runtime_error(std::format("GGUF metadata key '{}' must be numeric", entry.key));
-				}
-			},
+				    using T = std::decay_t<decltype(value)>;
+				    if constexpr (std::same_as<T, double>)
+				    {
+					    return value;
+				    }
+				    else if constexpr (std::same_as<T, std::uint64_t>)
+				    {
+					    return static_cast<double>(value);
+				    }
+				    else if constexpr (std::same_as<T, std::int64_t>)
+				    {
+					    return static_cast<double>(value);
+				    }
+				    else
+				    {
+					    throw std::runtime_error(std::format("GGUF metadata key '{}' must be numeric", entry.key));
+				    }
+			    },
 			    entry.value);
 		}
 
@@ -319,8 +320,7 @@ namespace LiteNN::GGUF
 			input.read(static_cast<char*>(destination), static_cast<std::streamsize>(bytes));
 			if (static_cast<std::size_t>(input.gcount()) != bytes)
 			{
-				throw std::runtime_error(
-				    std::format("Failed to read {} bytes for GGUF tensor '{}'", bytes, label));
+				throw std::runtime_error(std::format("Failed to read {} bytes for GGUF tensor '{}'", bytes, label));
 			}
 		}
 
@@ -438,7 +438,7 @@ namespace LiteNN::GGUF
 		}
 
 		Tensor<CPU> ReadPlainTensor(std::ifstream& input, std::size_t offset, const std::vector<std::size_t>& shape,
-		                           DataType dtype, std::string_view tensorName)
+		                            DataType dtype, std::string_view tensorName)
 		{
 			Tensor<CPU> tensor(Uninitialized, shape, dtype);
 			SeekTo(input, offset);
@@ -447,7 +447,7 @@ namespace LiteNN::GGUF
 		}
 
 		Tensor<CPU> ReadPayloadTensor(std::ifstream& input, std::size_t offset, std::size_t bytes,
-		                             std::string_view tensorName)
+		                              std::string_view tensorName)
 		{
 			Tensor<CPU> tensor(Uninitialized, { bytes }, DataType::UInt8);
 			SeekTo(input, offset);
@@ -456,7 +456,7 @@ namespace LiteNN::GGUF
 		}
 
 		void ImportTensor(Graph& graph, std::ifstream& input, const gguf_context* gguf, ggml_context* ggml,
-		                 std::int64_t tensorId, std::string_view tensorName)
+		                  std::int64_t tensorId, std::string_view tensorName)
 		{
 			auto* tensor = ggml_get_tensor(ggml, std::string(tensorName).c_str());
 			if (!tensor)
@@ -481,8 +481,8 @@ namespace LiteNN::GGUF
 				const auto format = TryMapQuantizedBlockFormat(tensor->type);
 				if (!format)
 				{
-					throw std::runtime_error(std::format(
-					    "Unsupported ggml tensor type '{}' for tensor '{}'", ggml_type_name(tensor->type), tensorName));
+					throw std::runtime_error(std::format("Unsupported ggml tensor type '{}' for tensor '{}'",
+					                                     ggml_type_name(tensor->type), tensorName));
 				}
 
 				auto storage = ReadPayloadTensor(input, dataOffset, storedBytes, tensorName);
@@ -494,8 +494,8 @@ namespace LiteNN::GGUF
 			const auto dtype = TryMapPlainDataType(tensor->type);
 			if (!dtype)
 			{
-				throw std::runtime_error(std::format(
-				    "Unsupported ggml tensor type '{}' for tensor '{}'", ggml_type_name(tensor->type), tensorName));
+				throw std::runtime_error(std::format("Unsupported ggml tensor type '{}' for tensor '{}'",
+				                                     ggml_type_name(tensor->type), tensorName));
 			}
 
 			auto plainTensor = ReadPlainTensor(input, dataOffset, shape, *dtype, tensorName);
@@ -582,8 +582,7 @@ namespace LiteNN::GGUF
 		{
 			hyperparameters.ropeScalingFinetuned = ReadBoolValue(**ropeScalingFinetuned);
 		}
-		if (const auto ropeScalingYarnLogMultiplier =
-		        FindMetadata(graph, key("rope.scaling.yarn_log_multiplier")))
+		if (const auto ropeScalingYarnLogMultiplier = FindMetadata(graph, key("rope.scaling.yarn_log_multiplier")))
 		{
 			hyperparameters.ropeScalingYarnLogMultiplier = ReadDoubleValue(**ropeScalingYarnLogMultiplier);
 		}
@@ -591,8 +590,7 @@ namespace LiteNN::GGUF
 		{
 			hyperparameters.ropeScalingYarnExtFactor = ReadDoubleValue(**ropeScalingYarnExtFactor);
 		}
-		if (const auto ropeScalingYarnAttentionFactor =
-		        FindMetadata(graph, key("rope.scaling.yarn_attn_factor")))
+		if (const auto ropeScalingYarnAttentionFactor = FindMetadata(graph, key("rope.scaling.yarn_attn_factor")))
 		{
 			hyperparameters.ropeScalingYarnAttentionFactor = ReadDoubleValue(**ropeScalingYarnAttentionFactor);
 		}
@@ -625,8 +623,8 @@ namespace LiteNN::GGUF
 		if (hyperparameters.ropeScalingType != "none" && hyperparameters.ropeScalingType != "linear" &&
 		    hyperparameters.ropeScalingType != "yarn" && hyperparameters.ropeScalingType != "longrope")
 		{
-			throw std::runtime_error(std::format("Unsupported LLaMA rope.scaling.type '{}'",
-			                                    hyperparameters.ropeScalingType));
+			throw std::runtime_error(
+			    std::format("Unsupported LLaMA rope.scaling.type '{}'", hyperparameters.ropeScalingType));
 		}
 
 		const auto headDimension = hyperparameters.HeadDimension();
@@ -678,11 +676,11 @@ namespace LiteNN::GGUF
 		};
 	}
 
-	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath,
-	                                const std::filesystem::path& outputPath)
+	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath)
 	{
 		auto result = ImportGGUFArchive(inputPath);
-		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(result.model.UnsafeGraphView()), outputPath);
+		Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(result.model.UnsafeGraphView()),
+		                                     outputPath);
 		return result.summary;
 	}
 } // namespace LiteNN::GGUF

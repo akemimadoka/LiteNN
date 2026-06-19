@@ -12,8 +12,8 @@
 namespace LiteNN::Layer
 {
 	inline NodeOutput AddPad(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> lowPads,
-	                         std::span<const std::size_t> highPads,
-	                         PadMode mode = PadMode::Constant, double constantValue = 0.0)
+	                         std::span<const std::size_t> highPads, PadMode mode = PadMode::Constant,
+	                         double constantValue = 0.0)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		auto low = std::vector<std::size_t>(lowPads.begin(), lowPads.end());
@@ -24,8 +24,8 @@ namespace LiteNN::Layer
 		return { result, 0 };
 	}
 
-	inline SubgraphId BuildPad(ModelBuilder& builder, DataType dtype, ShapeView shape, std::span<const std::size_t> lowPads,
-	                           std::span<const std::size_t> highPads,
+	inline SubgraphId BuildPad(ModelBuilder& builder, DataType dtype, ShapeView shape,
+	                           std::span<const std::size_t> lowPads, std::span<const std::size_t> highPads,
 	                           PadMode mode = PadMode::Constant, double constantValue = 0.0)
 	{
 		Subgraph subgraph;

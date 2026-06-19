@@ -78,21 +78,12 @@ namespace
 	std::vector<Tensor<CPU>> MakeRareNumericalInputs()
 	{
 		std::vector<Tensor<CPU>> inputs;
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F,
-		                                  4.0F, 5.0F, 6.0F },
-		                                { 1, 2, 3 }));
-		inputs.emplace_back(Tensor<CPU>({ 1.0F, 0.0F, 1.0F,
-		                                  0.0F, 1.0F, 1.0F,
-		                                  2.0F, 1.0F, 0.0F,
-		                                  1.0F, 1.0F, 1.0F },
-		                                { 2, 2, 3 }));
+		inputs.emplace_back(Tensor<CPU>({ 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F }, { 1, 2, 3 }));
+		inputs.emplace_back(
+		    Tensor<CPU>({ 1.0F, 0.0F, 1.0F, 0.0F, 1.0F, 1.0F, 2.0F, 1.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 2, 2, 3 }));
 		inputs.emplace_back(Tensor<CPU>({ 0.0F, 1.0F }, { 2 }));
-		inputs.emplace_back(Tensor<CPU>({ 2.0F, 0.0F,
-		                                  3.0F, 1.0F },
-		                                { 2, 2 }));
-		inputs.emplace_back(Tensor<CPU>({ 4.0F, 2.0F,
-		                                  11.0F, 7.0F },
-		                                { 2, 2 }));
+		inputs.emplace_back(Tensor<CPU>({ 2.0F, 0.0F, 3.0F, 1.0F }, { 2, 2 }));
+		inputs.emplace_back(Tensor<CPU>({ 4.0F, 2.0F, 11.0F, 7.0F }, { 2, 2 }));
 		return inputs;
 	}
 } // namespace
@@ -106,41 +97,27 @@ TEST(RareNumericalNode, ExecutesOutProdTimestepEmbeddingAndSolveTri)
 	ASSERT_EQ(outputs.size(), 3u);
 
 	ExpectShape(outputs[0].Shape(), { 2, 2, 2 });
-	ExpectTensorNear(outputs[0], { 4.0F, 5.0F,
-	                               10.0F, 11.0F,
-	                               4.0F, 6.0F,
-	                               13.0F, 15.0F });
+	ExpectTensorNear(outputs[0], { 4.0F, 5.0F, 10.0F, 11.0F, 4.0F, 6.0F, 13.0F, 15.0F });
 
 	const auto freq = std::exp(-std::log(1000.0F) / 2.0F);
 	ExpectShape(outputs[1].Shape(), { 2, 5 });
-	ExpectTensorNear(outputs[1], { 1.0F, 1.0F, 0.0F, 0.0F, 0.0F,
-	                               std::cos(1.0F), std::cos(freq),
-	                               std::sin(1.0F), std::sin(freq), 0.0F });
+	ExpectTensorNear(outputs[1], { 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, std::cos(1.0F), std::cos(freq), std::sin(1.0F),
+	                               std::sin(freq), 0.0F });
 
 	ExpectShape(outputs[2].Shape(), { 2, 2 });
-	ExpectTensorNear(outputs[2], { 2.0F, 1.0F,
-	                               5.0F, 4.0F });
+	ExpectTensorNear(outputs[2], { 2.0F, 1.0F, 5.0F, 4.0F });
 }
 
 TEST(RareNumericalNode, ConstFoldFoldsRareNumericalNodes)
 {
 	Graph graph;
 	Subgraph subgraph;
-	const auto lhs = AddFloatConstant(subgraph, { 1.0F, 2.0F, 3.0F,
-	                                              4.0F, 5.0F, 6.0F },
-	                                  { 1, 2, 3 });
-	const auto rhs = AddFloatConstant(subgraph, { 1.0F, 0.0F, 1.0F,
-	                                              0.0F, 1.0F, 1.0F,
-	                                              2.0F, 1.0F, 0.0F,
-	                                              1.0F, 1.0F, 1.0F },
-	                                  { 2, 2, 3 });
+	const auto lhs = AddFloatConstant(subgraph, { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F }, { 1, 2, 3 });
+	const auto rhs = AddFloatConstant(
+	    subgraph, { 1.0F, 0.0F, 1.0F, 0.0F, 1.0F, 1.0F, 2.0F, 1.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 2, 2, 3 });
 	const auto timesteps = AddFloatConstant(subgraph, { 0.0F, 1.0F }, { 2 });
-	const auto a = AddFloatConstant(subgraph, { 2.0F, 0.0F,
-	                                            3.0F, 1.0F },
-	                                { 2, 2 });
-	const auto b = AddFloatConstant(subgraph, { 4.0F, 2.0F,
-	                                            11.0F, 7.0F },
-	                                { 2, 2 });
+	const auto a = AddFloatConstant(subgraph, { 2.0F, 0.0F, 3.0F, 1.0F }, { 2, 2 });
+	const auto b = AddFloatConstant(subgraph, { 4.0F, 2.0F, 11.0F, 7.0F }, { 2, 2 });
 
 	const auto outProd = Layer::AddOutProd(subgraph, lhs, rhs);
 	const auto embedding = Layer::AddTimestepEmbedding(subgraph, timesteps, 5, 1000);

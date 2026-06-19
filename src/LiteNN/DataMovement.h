@@ -27,7 +27,7 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> BroadcastToShape(std::span<const std::size_t> inputShape,
-	                                                std::span<const std::size_t> targetShape)
+	                                                 std::span<const std::size_t> targetShape)
 	{
 		ValidatePositiveShape(targetShape, "BroadcastTo target shape");
 		if (targetShape.size() < inputShape.size())
@@ -41,17 +41,17 @@ namespace LiteNN::Detail
 			const auto targetDim = targetShape[rankDelta + dim];
 			if (inputDim != targetDim && inputDim != 1)
 			{
-				throw std::runtime_error(std::format(
-				    "BroadcastTo input dim {} (size {}) cannot broadcast to target dim {} (size {})",
-				    dim, inputDim, rankDelta + dim, targetDim));
+				throw std::runtime_error(
+				    std::format("BroadcastTo input dim {} (size {}) cannot broadcast to target dim {} (size {})", dim,
+				                inputDim, rankDelta + dim, targetDim));
 			}
 		}
 		return { targetShape.begin(), targetShape.end() };
 	}
 
 	inline std::vector<std::size_t> PadOutputShape(std::span<const std::size_t> inputShape,
-	                                              std::span<const std::size_t> lowPads,
-	                                              std::span<const std::size_t> highPads)
+	                                               std::span<const std::size_t> lowPads,
+	                                               std::span<const std::size_t> highPads)
 	{
 		if (inputShape.empty())
 		{
@@ -70,8 +70,7 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> GatherOutputShape(std::span<const std::size_t> dataShape,
-	                                                 std::span<const std::size_t> indexShape,
-	                                                 std::size_t axis)
+	                                                  std::span<const std::size_t> indexShape, std::size_t axis)
 	{
 		if (dataShape.empty())
 		{
@@ -90,8 +89,7 @@ namespace LiteNN::Detail
 	}
 
 	inline std::vector<std::size_t> ScatterUpdatesShape(std::span<const std::size_t> dataShape,
-	                                                   std::span<const std::size_t> indexShape,
-	                                                   std::size_t axis)
+	                                                    std::span<const std::size_t> indexShape, std::size_t axis)
 	{
 		return GatherOutputShape(dataShape, indexShape, axis);
 	}
@@ -145,7 +143,8 @@ namespace LiteNN::Detail
 		const auto index = static_cast<std::size_t>(rawIndex);
 		if (index >= upperBound)
 		{
-			throw std::runtime_error(std::format("{} index {} out of range for axis size {}", label, index, upperBound));
+			throw std::runtime_error(
+			    std::format("{} index {} out of range for axis size {}", label, index, upperBound));
 		}
 		return index;
 	}
@@ -192,7 +191,7 @@ namespace LiteNN::Detail
 	}
 
 	inline Tensor<CPU> EvalPad(const Tensor<CPU>& input, std::span<const std::size_t> lowPads,
-	                          std::span<const std::size_t> highPads, PadMode mode, double constantValue)
+	                           std::span<const std::size_t> highPads, PadMode mode, double constantValue)
 	{
 		const auto outputShape = PadOutputShape(input.Shape().Dims, lowPads, highPads);
 		CPU cpu;
@@ -229,7 +228,8 @@ namespace LiteNN::Detail
 							srcCoord = ReflectIndex(srcCoord, static_cast<std::int64_t>(input.Shape()[dim]));
 							break;
 						case PadMode::Replicate:
-							srcCoord = std::clamp<std::int64_t>(srcCoord, 0, static_cast<std::int64_t>(input.Shape()[dim]) - 1);
+							srcCoord = std::clamp<std::int64_t>(srcCoord, 0,
+							                                    static_cast<std::int64_t>(input.Shape()[dim]) - 1);
 							break;
 						}
 					}
@@ -297,7 +297,7 @@ namespace LiteNN::Detail
 	}
 
 	inline Tensor<CPU> EvalScatter(const Tensor<CPU>& data, const Tensor<CPU>& indices, const Tensor<CPU>& updates,
-	                              std::size_t axis, ScatterMode mode)
+	                               std::size_t axis, ScatterMode mode)
 	{
 		const auto expectedUpdatesShape = ScatterUpdatesShape(data.Shape().Dims, indices.Shape().Dims, axis);
 		if (updates.DType() != data.DType() || updates.Shape() != ShapeView{ expectedUpdatesShape })
@@ -310,7 +310,8 @@ namespace LiteNN::Detail
 		}
 		CPU cpu;
 		Tensor<CPU> result(Uninitialized, data.Shape(), data.DType(), cpu);
-		DeviceTraits<CPU>::ConvertTo(cpu, data.DType(), data.UnsafeRawData(), data.NumElements(), data.DType(), result.UnsafeRawData());
+		DeviceTraits<CPU>::ConvertTo(cpu, data.DType(), data.UnsafeRawData(), data.NumElements(), data.DType(),
+		                             result.UnsafeRawData());
 
 		const auto axisDim = data.Shape()[axis];
 		auto outer = 1uz;

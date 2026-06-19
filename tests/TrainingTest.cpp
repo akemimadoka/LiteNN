@@ -48,9 +48,9 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	EXPECT_EQ(trainer.ExecutionPolicy(), Training::TrainExecutionPolicy::Interpreter);
 	EXPECT_NO_THROW(Training::ValidateTrainStepPlan(trainer.Plan()));
 	const auto countAbiRole = [&](Training::TrainStepABIRole role) {
-		return static_cast<std::size_t>(std::ranges::count_if(
-		    trainer.Plan().abiBindings,
-		    [&](const Training::TrainStepABIBinding& binding) { return binding.role == role; }));
+		return static_cast<std::size_t>(
+		    std::ranges::count_if(trainer.Plan().abiBindings,
+		                          [&](const Training::TrainStepABIBinding& binding) { return binding.role == role; }));
 	};
 	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::MutableParameter), 1u);
 	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::Gradient), 1u);
@@ -229,8 +229,7 @@ TEST(Training, StepSoftmaxCrossEntropyBatchAveragesLossAndGradients)
 {
 	ModelGraph model;
 	Graph& graph = model.UnsafeMutableGraph();
-	const auto logitsIndex =
-	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f }, { 2, 2 })));
+	const auto logitsIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f }, { 2, 2 })));
 
 	Subgraph sg;
 	const auto logits = sg.AddNode(VariableRefNode{ logitsIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });

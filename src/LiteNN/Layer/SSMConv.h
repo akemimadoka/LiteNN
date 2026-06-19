@@ -16,7 +16,8 @@ namespace LiteNN::Compatibility::GGML
 		const auto weightInfo = subgraph.GetOutputInfo(weight);
 		if (inputInfo.shape.size() != 3 || weightInfo.shape.size() != 2)
 		{
-			throw std::runtime_error("SSMConv expects convInput [kernel - 1 + tokens, channels, batch] and weight [kernel, channels]");
+			throw std::runtime_error(
+			    "SSMConv expects convInput [kernel - 1 + tokens, channels, batch] and weight [kernel, channels]");
 		}
 		if (inputInfo.dtype != DataType::Float32 || weightInfo.dtype != DataType::Float32)
 		{
@@ -37,8 +38,8 @@ namespace LiteNN::Compatibility::GGML
 		const auto inputNCHW = Layer::AddReshape(subgraph, inputBCL, { batch, channels, 1uz, inputLength });
 		const auto weightCK = Layer::AddPermute(subgraph, weight, { 1uz, 0uz });
 		const auto weightGrouped = Layer::AddReshape(subgraph, weightCK, { channels, 1uz, 1uz, kernel });
-		const auto convolved = Layer::AddConv2D(subgraph, inputNCHW, weightGrouped, std::nullopt,
-		                                       { 1uz, 1uz }, { 1uz, 1uz }, { 0uz, 0uz }, { 0uz, 0uz }, channels);
+		const auto convolved = Layer::AddConv2D(subgraph, inputNCHW, weightGrouped, std::nullopt, { 1uz, 1uz },
+		                                        { 1uz, 1uz }, { 0uz, 0uz }, { 0uz, 0uz }, channels);
 		const auto convolvedBCT = Layer::AddReshape(subgraph, convolved, { batch, channels, tokens });
 		return Layer::AddPermute(subgraph, convolvedBCT, { 1uz, 2uz, 0uz });
 	}

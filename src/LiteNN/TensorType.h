@@ -157,8 +157,7 @@ namespace LiteNN
 			return {};
 		}
 
-		static TensorLayout WithStrides(TensorLayoutKind kind, std::vector<std::size_t> strides,
-		                                std::string tag = {})
+		static TensorLayout WithStrides(TensorLayoutKind kind, std::vector<std::size_t> strides, std::string tag = {})
 		{
 			return { kind, std::move(strides), std::move(tag) };
 		}

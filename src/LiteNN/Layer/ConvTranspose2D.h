@@ -17,8 +17,7 @@ namespace LiteNN::Layer
 	                                     std::vector<std::size_t> dilations = { 1, 1 },
 	                                     std::vector<std::size_t> lowPads = { 0, 0 },
 	                                     std::vector<std::size_t> highPads = { 0, 0 },
-	                                     std::vector<std::size_t> outputPads = { 0, 0 },
-	                                     std::size_t groupCount = 1)
+	                                     std::vector<std::size_t> outputPads = { 0, 0 }, std::size_t groupCount = 1)
 	{
 		const auto inputInfo = subgraph.GetOutputInfo(input);
 		const auto weightInfo = subgraph.GetOutputInfo(weight);
@@ -55,8 +54,7 @@ namespace LiteNN::Layer
 	                                       std::vector<std::size_t> dilations = { 1, 1 },
 	                                       std::vector<std::size_t> lowPads = { 0, 0 },
 	                                       std::vector<std::size_t> highPads = { 0, 0 },
-	                                       std::vector<std::size_t> outputPads = { 0, 0 },
-	                                       std::size_t groupCount = 1)
+	                                       std::vector<std::size_t> outputPads = { 0, 0 }, std::size_t groupCount = 1)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());
@@ -66,9 +64,9 @@ namespace LiteNN::Layer
 		{
 			bias = NodeOutput{ subgraph.AddParam(dtype, biasShape->ToOwned()), 0 };
 		}
-		const auto result = AddConvTranspose2D(subgraph, { input, 0 }, { weight, 0 }, bias, std::move(strides),
-		                                       std::move(dilations), std::move(lowPads), std::move(highPads),
-		                                       std::move(outputPads), groupCount);
+		const auto result =
+		    AddConvTranspose2D(subgraph, { input, 0 }, { weight, 0 }, bias, std::move(strides), std::move(dilations),
+		                       std::move(lowPads), std::move(highPads), std::move(outputPads), groupCount);
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}

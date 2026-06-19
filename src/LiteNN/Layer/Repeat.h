@@ -12,8 +12,7 @@
 
 namespace LiteNN::Compatibility::GGML
 {
-	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input,
-	                            std::span<const std::size_t> targetShape)
+	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input, std::span<const std::size_t> targetShape)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		::LiteNN::Detail::ValidatePositiveShape(targetShape, "Repeat target shape");
@@ -36,7 +35,7 @@ namespace LiteNN::Compatibility::GGML
 			if (targetDim % inputDim != 0)
 			{
 				throw std::runtime_error(std::format("Repeat target dim {} ({}) must be a multiple of input dim {}",
-				                               dim, targetDim, inputDim));
+				                                     dim, targetDim, inputDim));
 			}
 			reshapedShape.push_back(1uz);
 			reshapedShape.push_back(inputDim);
@@ -49,11 +48,9 @@ namespace LiteNN::Compatibility::GGML
 		return Layer::AddReshape(subgraph, tiled, targetShape);
 	}
 
-	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input,
-	                            std::initializer_list<std::size_t> targetShape)
+	inline NodeOutput AddRepeat(Subgraph& subgraph, NodeOutput input, std::initializer_list<std::size_t> targetShape)
 	{
-		return AddRepeat(subgraph, input,
-		                 std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
+		return AddRepeat(subgraph, input, std::span<const std::size_t>{ targetShape.begin(), targetShape.size() });
 	}
 
 	inline SubgraphId BuildRepeat(ModelBuilder& builder, DataType dtype, ShapeView inputShape,

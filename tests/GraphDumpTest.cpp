@@ -23,9 +23,9 @@ namespace
 		const auto bias =
 		    subgraph.AddNode(VariableRefNode{ variableIndex }, { OutputInfo{ DataType::Float32, { 4, 8 } } });
 		const auto shifted = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { image, 0 }, { bias, 0 } },
-		                                     { OutputInfo{ DataType::Float32, { 4, 8 } } });
+		                                      { OutputInfo{ DataType::Float32, { 4, 8 } } });
 		const auto logits = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { shifted, 0 }, { scale, 0 } },
-		                                    { OutputInfo{ DataType::Float32, { 4, 8 } } });
+		                                     { OutputInfo{ DataType::Float32, { 4, 8 } } });
 		subgraph.SetResults({ { logits, 0 } });
 
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));

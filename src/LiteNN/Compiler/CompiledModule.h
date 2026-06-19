@@ -45,9 +45,7 @@ namespace LiteNN
 		static CompiledTensorSpec FromType(std::string name, const TensorType& type,
 		                                   std::optional<QuantizationParams> quantization = std::nullopt)
 		{
-			return { .type = type,
-				     .name = std::move(name),
-				     .quantization = std::move(quantization) };
+			return { .type = type, .name = std::move(name), .quantization = std::move(quantization) };
 		}
 	};
 
@@ -121,7 +119,9 @@ namespace LiteNN
 		std::uint64_t byteSize{};
 		std::uint64_t alignment{ 1 };
 		std::uint64_t checksum{};
-		CompiledModuleExternalTensorRebindPolicy rebindPolicy{ CompiledModuleExternalTensorRebindPolicy::ExactChecksum };
+		CompiledModuleExternalTensorRebindPolicy rebindPolicy{
+			CompiledModuleExternalTensorRebindPolicy::ExactChecksum
+		};
 	};
 
 	struct CompilerOptions
@@ -247,8 +247,7 @@ namespace LiteNN
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
-		void WriteObjectFile(const std::filesystem::path& path,
-		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix = "litenn_module") const;
 		void WriteObjectFiles(const std::filesystem::path& directory,
 		                      std::string_view symbolPrefix = "litenn_module") const;
 		void WriteRegionFiles(const std::filesystem::path& directory,
@@ -257,13 +256,10 @@ namespace LiteNN
 	private:
 		friend class CompiledModuleArtifact;
 
-		CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata,
-		                                std::vector<std::byte> constants,
-		                                std::vector<std::byte> weights,
-		                                std::vector<std::byte> instructions,
+		CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata, std::vector<std::byte> constants,
+		                                std::vector<std::byte> weights, std::vector<std::byte> instructions,
 		                                std::vector<CompiledTensorSpec> inputSpecs,
-		                                std::vector<CompiledTensorSpec> outputSpecs,
-		                                CompiledModuleBackend backend);
+		                                std::vector<CompiledTensorSpec> outputSpecs, CompiledModuleBackend backend);
 
 		std::vector<std::byte> metadata_;
 		std::vector<std::byte> constants_;
@@ -315,8 +311,7 @@ namespace LiteNN
 		std::vector<std::byte> BuildSeparatedMetadata() const;
 		CompiledModuleSeparatedArtifact SeparateRodata() const;
 
-		void WriteObjectFile(const std::filesystem::path& path,
-		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix = "litenn_module") const;
 
 	private:
 		friend class Compiler<CPU>;
@@ -327,14 +322,11 @@ namespace LiteNN
 		friend class Compiler<Vulkan>;
 #endif
 
-		CompiledModuleArtifact(std::vector<std::byte> rodata,
-		                      std::vector<std::byte> instructions,
-		                      std::vector<CompiledTensorSpec> inputSpecs,
-		                      std::vector<CompiledTensorSpec> outputSpecs,
-		                      CompiledModuleBackend backend,
-		                      std::vector<std::byte> constants = {},
-		                      std::vector<std::byte> weights = {},
-		                      std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {});
+		CompiledModuleArtifact(std::vector<std::byte> rodata, std::vector<std::byte> instructions,
+		                       std::vector<CompiledTensorSpec> inputSpecs, std::vector<CompiledTensorSpec> outputSpecs,
+		                       CompiledModuleBackend backend, std::vector<std::byte> constants = {},
+		                       std::vector<std::byte> weights = {},
+		                       std::vector<CompiledModuleExternalTensorInfo> externalTensorInfos = {});
 
 		std::vector<std::byte> rodata_;
 		std::vector<std::byte> instructions_;
@@ -393,8 +385,7 @@ namespace LiteNN
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
-		void WriteObjectFile(const std::filesystem::path& path,
-		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix = "litenn_module") const;
 
 	private:
 		friend class CompiledModuleArtifact;
@@ -477,8 +468,7 @@ namespace LiteNN
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
-		void WriteObjectFile(const std::filesystem::path& path,
-		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix = "litenn_module") const;
 
 	private:
 		struct Impl;
@@ -568,8 +558,7 @@ namespace LiteNN
 
 		static CompiledModule Load(CompiledModuleImage image, Vulkan device = Vulkan{});
 		static CompiledModule Load(CompiledModuleSeparatedImage image, Vulkan device = Vulkan{});
-		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image,
-		                                                  Vulkan device = Vulkan{});
+		static CompiledModule LoadBorrowedExternalRegions(CompiledModuleSeparatedImage image, Vulkan device = Vulkan{});
 
 		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs) const;
 		std::vector<Tensor<Vulkan>> RunTensors(std::span<const Tensor<Vulkan>> inputs,
@@ -596,8 +585,7 @@ namespace LiteNN
 		std::optional<std::size_t> FindInput(std::string_view name) const;
 		std::optional<std::size_t> FindOutput(std::string_view name) const;
 
-		void WriteObjectFile(const std::filesystem::path& path,
-		                     std::string_view symbolPrefix = "litenn_module") const;
+		void WriteObjectFile(const std::filesystem::path& path, std::string_view symbolPrefix = "litenn_module") const;
 
 	private:
 		struct Impl;

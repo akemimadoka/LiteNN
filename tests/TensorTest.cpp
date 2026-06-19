@@ -131,7 +131,7 @@ TEST(Initializer, LowPrecisionFloatingInitializers)
 	const auto bf16 = Initializer::Ones({ 2 }, DataType::BFloat16);
 	EXPECT_EQ(bf16.DType(), DataType::BFloat16);
 	EXPECT_NEAR(ReadAsFloat(bf16, 0), 1.0F, 1e-2F);
-	EXPECT_THROW((void)Initializer::Uniform({ 4 }, -1.0, 1.0, rng, DataType::Int8), std::runtime_error);
+	EXPECT_THROW((void) Initializer::Uniform({ 4 }, -1.0, 1.0, rng, DataType::Int8), std::runtime_error);
 }
 
 // tensor = [[1,2,3],[4,5,6]]

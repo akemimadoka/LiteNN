@@ -105,9 +105,11 @@ int main(int argc, char** argv)
 			auto result = LiteNN::Serialization::LoadTorchManifest(manifestPath, inputPath, options);
 			LiteNN::Serialization::SaveVNextModelPackage(
 			    LiteNN::Detail::BuildExecutableModuleFromGraph(result.model.UnsafeGraphView()), outputPath);
-			std::cout << "Imported Torch manifest graph with " << result.model.UnsafeGraphView().VariableCount() << " variable(s), "
-			          << result.model.UnsafeGraphView().GetSubgraph(result.model.UnsafeGraphView().Forward()).NodeCount() << " node(s) into "
-			          << outputPath.string() << '\n';
+			std::cout
+			    << "Imported Torch manifest graph with " << result.model.UnsafeGraphView().VariableCount()
+			    << " variable(s), "
+			    << result.model.UnsafeGraphView().GetSubgraph(result.model.UnsafeGraphView().Forward()).NodeCount()
+			    << " node(s) into " << outputPath.string() << '\n';
 			PrintReport(result.report);
 			return 0;
 		}

@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <LiteNN.h>
-#include <LiteNN/Layer/AddId.h>
 #include <LiteNN/Layer/Activation.h>
-#include <LiteNN/Layer/Argsort.h>
+#include <LiteNN/Layer/AddId.h>
 #include <LiteNN/Layer/Arange.h>
+#include <LiteNN/Layer/Argsort.h>
 #include <LiteNN/Layer/CausalMask.h>
 #include <LiteNN/Layer/Cumsum.h>
 #include <LiteNN/Layer/FlashAttnExt.h>
@@ -15,11 +15,11 @@
 #include <LiteNN/Layer/LoRA.h>
 #include <LiteNN/Layer/MulMatId.h>
 #include <LiteNN/Layer/Pad.h>
+#include <LiteNN/Layer/RMSNorm.h>
 #include <LiteNN/Layer/RelativePosition.h>
 #include <LiteNN/Layer/Repeat.h>
-#include <LiteNN/Layer/RMSNorm.h>
-#include <LiteNN/Layer/Roll.h>
 #include <LiteNN/Layer/RoPE.h>
+#include <LiteNN/Layer/Roll.h>
 #include <LiteNN/Layer/SSMConv.h>
 #include <LiteNN/Layer/Softmax.h>
 #include <LiteNN/Layer/SumRows.h>
@@ -44,13 +44,12 @@ namespace
 		return static_cast<const float*>(t.UnsafeRawData())[i];
 	}
 
-	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values,
-	                           std::initializer_list<std::size_t> shape)
+	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values, std::initializer_list<std::size_t> shape)
 	{
 		CPU device;
 		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int32, device);
 		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int32, tensor.UnsafeRawData(), DataType::Int32, values.begin(),
-		                              values.size());
+		                               values.size());
 		return tensor;
 	}
 
@@ -65,132 +64,131 @@ namespace
 		return std::move(results[0]);
 	}
 
-		std::vector<Tensor<CPU>> RunWithInputs(Graph& graph, std::vector<Tensor<CPU>> inputs)
+	std::vector<Tensor<CPU>> RunWithInputs(Graph& graph, std::vector<Tensor<CPU>> inputs)
+	{
+		Runtime::Interpreter<CPU> interp;
+		return interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+	}
+
+	std::int32_t ReadInt32(const Tensor<CPU>& t, std::size_t i)
+	{
+		return static_cast<const std::int32_t*>(t.UnsafeRawData())[i];
+	}
+
+	struct FlashAttnReferenceOptions
+	{
+		bool causal = false;
+		std::size_t keyPositionOffset = 0;
+		std::size_t queryPositionOffset = 0;
+		std::vector<float> mask;
+		bool hasMask = false;
+		float scale = 1.0f;
+		float maxBias = 0.0f;
+		float logitSoftcap = 0.0f;
+		std::optional<float> sink;
+		std::size_t headIndex = 0;
+		std::size_t headCount = 1;
+	};
+
+	double ComputeALiBiSlope(std::size_t headIndex, std::size_t headCount, double maxBias)
+	{
+		if (maxBias <= 0.0)
 		{
-			Runtime::Interpreter<CPU> interp;
-			return interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+			return 1.0;
 		}
-
-		std::int32_t ReadInt32(const Tensor<CPU>& t, std::size_t i)
+		auto headLog2 = 1uz;
+		while ((headLog2 << 1uz) <= headCount)
 		{
-			return static_cast<const std::int32_t*>(t.UnsafeRawData())[i];
+			headLog2 <<= 1uz;
 		}
-
-		struct FlashAttnReferenceOptions
+		const auto m0 = std::pow(2.0, -maxBias / static_cast<double>(headLog2));
+		const auto m1 = std::pow(2.0, -(maxBias / 2.0) / static_cast<double>(headLog2));
+		if (headIndex < headLog2)
 		{
-			bool causal = false;
-			std::size_t keyPositionOffset = 0;
-			std::size_t queryPositionOffset = 0;
-			std::vector<float> mask;
-			bool hasMask = false;
-			float scale = 1.0f;
-			float maxBias = 0.0f;
-			float logitSoftcap = 0.0f;
-			std::optional<float> sink;
-			std::size_t headIndex = 0;
-			std::size_t headCount = 1;
-		};
-
-		double ComputeALiBiSlope(std::size_t headIndex, std::size_t headCount, double maxBias)
-		{
-			if (maxBias <= 0.0)
-			{
-				return 1.0;
-			}
-			auto headLog2 = 1uz;
-			while ((headLog2 << 1uz) <= headCount)
-			{
-				headLog2 <<= 1uz;
-			}
-			const auto m0 = std::pow(2.0, -maxBias / static_cast<double>(headLog2));
-			const auto m1 = std::pow(2.0, -(maxBias / 2.0) / static_cast<double>(headLog2));
-			if (headIndex < headLog2)
-			{
-				return std::pow(m0, static_cast<double>(headIndex + 1));
-			}
-			return std::pow(m1, static_cast<double>(2 * (headIndex - headLog2) + 1));
+			return std::pow(m0, static_cast<double>(headIndex + 1));
 		}
+		return std::pow(m1, static_cast<double>(2 * (headIndex - headLog2) + 1));
+	}
 
-		std::vector<float> ComputeFlashAttnExpected(const std::vector<float>& queries, std::size_t queryLength,
-		                                          const std::vector<float>& keys, std::size_t keyLength,
-		                                          std::size_t headDim, const std::vector<float>& values,
-		                                          std::size_t valueDim, const FlashAttnReferenceOptions& options)
+	std::vector<float> ComputeFlashAttnExpected(const std::vector<float>& queries, std::size_t queryLength,
+	                                            const std::vector<float>& keys, std::size_t keyLength,
+	                                            std::size_t headDim, const std::vector<float>& values,
+	                                            std::size_t valueDim, const FlashAttnReferenceOptions& options)
+	{
+		std::vector<float> result(queryLength * valueDim, 0.0f);
+		const auto slope = ComputeALiBiSlope(options.headIndex, options.headCount, options.maxBias);
+
+		for (std::size_t row = 0; row < queryLength; ++row)
 		{
-			std::vector<float> result(queryLength * valueDim, 0.0f);
-			const auto slope = ComputeALiBiSlope(options.headIndex, options.headCount, options.maxBias);
-
-			for (std::size_t row = 0; row < queryLength; ++row)
+			std::vector<double> scores(keyLength, 0.0);
+			for (std::size_t col = 0; col < keyLength; ++col)
 			{
-				std::vector<double> scores(keyLength, 0.0);
-				for (std::size_t col = 0; col < keyLength; ++col)
+				double score = 0.0;
+				for (std::size_t dim = 0; dim < headDim; ++dim)
 				{
-					double score = 0.0;
-					for (std::size_t dim = 0; dim < headDim; ++dim)
-					{
-						score += static_cast<double>(queries[row * headDim + dim]) *
-						         static_cast<double>(keys[col * headDim + dim]);
-					}
-					score *= options.scale;
-					if (options.logitSoftcap != 0.0f)
-					{
-						score = static_cast<double>(options.logitSoftcap) *
-						        std::tanh(score / static_cast<double>(options.logitSoftcap));
-					}
-					if (options.hasMask)
-					{
-						score += slope * static_cast<double>(options.mask[row * keyLength + col]);
-					}
-					if (options.causal && options.keyPositionOffset + col > options.queryPositionOffset + row)
-					{
-						score += -1.0e9;
-					}
-					scores[col] = score;
+					score += static_cast<double>(queries[row * headDim + dim]) *
+					         static_cast<double>(keys[col * headDim + dim]);
 				}
-
-				double maxScore = -std::numeric_limits<double>::infinity();
-				for (const auto score : scores)
+				score *= options.scale;
+				if (options.logitSoftcap != 0.0f)
 				{
-					maxScore = std::max(maxScore, score);
+					score = static_cast<double>(options.logitSoftcap) *
+					        std::tanh(score / static_cast<double>(options.logitSoftcap));
 				}
-				if (options.sink)
+				if (options.hasMask)
 				{
-					maxScore = std::max(maxScore, static_cast<double>(*options.sink));
+					score += slope * static_cast<double>(options.mask[row * keyLength + col]);
 				}
-
-				double denominator = 0.0;
-				std::vector<double> probabilities(keyLength, 0.0);
-				for (std::size_t col = 0; col < keyLength; ++col)
+				if (options.causal && options.keyPositionOffset + col > options.queryPositionOffset + row)
 				{
-					probabilities[col] = std::exp(scores[col] - maxScore);
-					denominator += probabilities[col];
+					score += -1.0e9;
 				}
-				if (options.sink)
-				{
-					denominator += std::exp(static_cast<double>(*options.sink) - maxScore);
-				}
-
-				for (std::size_t col = 0; col < keyLength; ++col)
-				{
-					const auto weight = probabilities[col] / denominator;
-					for (std::size_t outCol = 0; outCol < valueDim; ++outCol)
-					{
-						result[row * valueDim + outCol] +=
-						    static_cast<float>(weight * static_cast<double>(values[col * valueDim + outCol]));
-					}
-				}
+				scores[col] = score;
 			}
 
-			return result;
+			double maxScore = -std::numeric_limits<double>::infinity();
+			for (const auto score : scores)
+			{
+				maxScore = std::max(maxScore, score);
+			}
+			if (options.sink)
+			{
+				maxScore = std::max(maxScore, static_cast<double>(*options.sink));
+			}
+
+			double denominator = 0.0;
+			std::vector<double> probabilities(keyLength, 0.0);
+			for (std::size_t col = 0; col < keyLength; ++col)
+			{
+				probabilities[col] = std::exp(scores[col] - maxScore);
+				denominator += probabilities[col];
+			}
+			if (options.sink)
+			{
+				denominator += std::exp(static_cast<double>(*options.sink) - maxScore);
+			}
+
+			for (std::size_t col = 0; col < keyLength; ++col)
+			{
+				const auto weight = probabilities[col] / denominator;
+				for (std::size_t outCol = 0; outCol < valueDim; ++outCol)
+				{
+					result[row * valueDim + outCol] +=
+					    static_cast<float>(weight * static_cast<double>(values[col * valueDim + outCol]));
+				}
+			}
 		}
+
+		return result;
+	}
 } // namespace
 
 TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 {
 	ModelBuilder builder;
-	auto layer = Layer::CreateLinear(builder,
-	                                 Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 0.5f, -1.0f },
-	                                             { 3, 2 }, DataType::Float32),
-	                                 Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
+	auto layer =
+	    Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 0.5f, -1.0f }, { 3, 2 }, DataType::Float32),
+	                        Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
 	const auto forward = Layer::BuildLinear(builder, layer, 2);
 	builder.SetForward(forward);
 
@@ -211,8 +209,7 @@ TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
 {
 	ModelBuilder builder;
 	auto& graph = builder.UnsafeMutableGraph();
-	auto linear = Layer::CreateLinear(
-	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
+	auto linear = Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,
 	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
@@ -278,9 +275,8 @@ TEST(LoRALayerTest, MergesLinearAdapterIntoBaseWeight)
 {
 	ModelBuilder builder;
 	auto& graph = builder.UnsafeMutableGraph();
-	auto linear = Layer::CreateLinear(
-	    builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
-	    Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
+	auto linear = Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }, DataType::Float32),
+	                                  Tensor<CPU>({ 1.0f, -1.0f }, { 1, 2 }, DataType::Float32));
 	auto adapter = Layer::CreateLinearLoRA(
 	    graph,
 	    Layer::LoRAAdapterMetadata{ .targetName = "linear", .rank = 1, .alpha = 2.0f, .dtype = DataType::Float32 },
@@ -306,17 +302,13 @@ TEST(LayerGetRows, LooksUpEmbeddingRowsFromTokenIds)
 	Subgraph sg;
 	const auto table = sg.AddParam(DataType::Float32, { 4, 2 });
 	const auto indices = sg.AddParam(DataType::Int32, { 3 });
-	const auto output = sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } },
-	                              { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto output =
+	    sg.AddNode(GetRowsNode{ { table, 0 }, { indices, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { output, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Tensor<CPU>({ 10.0f, 11.0f,
-	                                 20.0f, 21.0f,
-	                                 30.0f, 31.0f,
-	                                 40.0f, 41.0f },
-	                                { 4, 2 }));
+	inputs.emplace_back(Tensor<CPU>({ 10.0f, 11.0f, 20.0f, 21.0f, 30.0f, 31.0f, 40.0f, 41.0f }, { 4, 2 }));
 	inputs.emplace_back(MakeInt32Tensor({ 2, 0, 3 }, { 3 }));
 
 	const auto outputs = RunWithInputs(graph, std::move(inputs));
@@ -335,14 +327,12 @@ TEST(LayerTranspose, SwapsAxesForNonSquareMatrices)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
-	const auto output = sg.AddNode(UnaryOpNode{ UnaryOp::Transpose, { input, 0 } },
-	                              { OutputInfo{ DataType::Float32, { 3, 2 } } });
+	const auto output =
+	    sg.AddNode(UnaryOpNode{ UnaryOp::Transpose, { input, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { output, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f,
-	                                        4.0f, 5.0f, 6.0f },
-	                                { 2, 3 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 2, 3 });
 
 	ASSERT_EQ(result.Shape().NumDim(), 2u);
 	EXPECT_EQ(result.Shape()[0], 3u);
@@ -433,15 +423,9 @@ TEST(LayerFlashAttnExt, AppliesCausalMaskBeforeSoftmax)
 	sg.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const std::vector<float> queryData{ 1.0f, 0.0f,
-	                                  0.0f, 1.0f,
-	                                  1.0f, 1.0f };
-	const std::vector<float> keyData{ 1.0f, 0.0f,
-	                                0.0f, 1.0f,
-	                                1.0f, 1.0f };
-	const std::vector<float> valueData{ 2.0f,
-	                                  5.0f,
-	                                  11.0f };
+	const std::vector<float> queryData{ 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+	const std::vector<float> keyData{ 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+	const std::vector<float> valueData{ 2.0f, 5.0f, 11.0f };
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Optimizer::MakeFloatTensor(queryData, { 3, 2 }));
@@ -476,12 +460,8 @@ TEST(LayerFlashAttnExt, SupportsRectangularCausalDecodeMask)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	const std::vector<float> queryData{ 1.0f, 0.0f };
-	const std::vector<float> keyData{ 1.0f, 0.0f,
-	                                0.0f, 1.0f,
-	                                10.0f, 0.0f };
-	const std::vector<float> valueData{ 2.0f,
-	                                  5.0f,
-	                                  1000.0f };
+	const std::vector<float> keyData{ 1.0f, 0.0f, 0.0f, 1.0f, 10.0f, 0.0f };
+	const std::vector<float> valueData{ 2.0f, 5.0f, 1000.0f };
 
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Optimizer::MakeFloatTensor(queryData, { 1, 2 }));
@@ -520,14 +500,10 @@ TEST(LayerFlashAttnExt, AppliesMaskSoftcapAndSinks)
 	sg.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const std::vector<float> queryData{ 1.0f, 2.0f,
-	                                  0.5f, -1.0f };
-	const std::vector<float> keyData{ 2.0f, -1.0f,
-	                                1.0f, 1.0f };
-	const std::vector<float> valueData{ 1.0f,
-	                                  4.0f };
-	const std::vector<float> maskData{ 0.0f, 1.0f,
-	                                 -2.0f, 0.5f };
+	const std::vector<float> queryData{ 1.0f, 2.0f, 0.5f, -1.0f };
+	const std::vector<float> keyData{ 2.0f, -1.0f, 1.0f, 1.0f };
+	const std::vector<float> valueData{ 1.0f, 4.0f };
+	const std::vector<float> maskData{ 0.0f, 1.0f, -2.0f, 0.5f };
 	const std::vector<float> sinkData{ 0.2f };
 
 	std::vector<Tensor<CPU>> inputs;
@@ -565,10 +541,7 @@ TEST(LayerSumRows, ReducesFirstAxisAndKeepsLeadingDimension)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f,
-	                                        3.0f, 4.0f,
-	                                        5.0f, 6.0f },
-	                                { 3, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 });
 
 	ASSERT_EQ(result.Shape().NumDim(), 2u);
 	EXPECT_EQ(result.Shape()[0], 1u);
@@ -586,11 +559,7 @@ TEST(LayerSumRows, PreservesTrailingDimensions)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f,
-	                                        3.0f, 4.0f,
-	                                        10.0f, 20.0f,
-	                                        30.0f, 40.0f },
-	                                { 2, 2, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 10.0f, 20.0f, 30.0f, 40.0f }, { 2, 2, 2 });
 
 	ASSERT_EQ(result.Shape().NumDim(), 3u);
 	EXPECT_EQ(result.Shape()[0], 1u);
@@ -611,9 +580,7 @@ TEST(LayerRoll, PositiveShiftRotatesAxisOne)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f,
-	                                        5.0f, 6.0f, 7.0f, 8.0f },
-	                                { 2, 4 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, { 2, 4 });
 
 	EXPECT_NEAR(ReadFloat(result, 0), 4.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 1), 1.0f, 1e-5f);
@@ -634,10 +601,7 @@ TEST(LayerRoll, NegativeShiftRotatesAxisZero)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f,
-	                                        3.0f, 4.0f,
-	                                        5.0f, 6.0f },
-	                                { 3, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 });
 
 	EXPECT_NEAR(ReadFloat(result, 0), 3.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 1), 4.0f, 1e-5f);
@@ -672,11 +636,7 @@ TEST(LayerArgsort, SortsEachTrailingPositionAlongFirstAxis)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 0.5f, 4.0f,
-	                                        2.0f, 0.0f,
-	                                        -1.0f, 5.0f,
-	                                        2.0f, 1.0f },
-	                                { 4, 2 });
+	const auto result = RunSingleIO(graph, { 0.5f, 4.0f, 2.0f, 0.0f, -1.0f, 5.0f, 2.0f, 1.0f }, { 4, 2 });
 
 	ASSERT_EQ(result.DType(), DataType::Int32);
 	EXPECT_EQ(ReadInt32(result, 0), 1);
@@ -698,11 +658,7 @@ TEST(LayerTopK, ReturnsLeadingDescendingIndices)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 0.5f, 4.0f,
-	                                        2.0f, 0.0f,
-	                                        -1.0f, 5.0f,
-	                                        2.0f, 1.0f },
-	                                { 4, 2 });
+	const auto result = RunSingleIO(graph, { 0.5f, 4.0f, 2.0f, 0.0f, -1.0f, 5.0f, 2.0f, 1.0f }, { 4, 2 });
 
 	ASSERT_EQ(result.DType(), DataType::Int32);
 	ASSERT_EQ(result.Shape().NumDim(), 2u);
@@ -723,9 +679,7 @@ TEST(LayerTopK, SupportsExplicitLastAxis)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 0.5f, 4.0f, -1.0f, 2.0f,
-	                                        3.0f, 1.0f, 5.0f, 5.0f },
-	                                { 2, 4 });
+	const auto result = RunSingleIO(graph, { 0.5f, 4.0f, -1.0f, 2.0f, 3.0f, 1.0f, 5.0f, 5.0f }, { 2, 4 });
 
 	ASSERT_EQ(result.DType(), DataType::Int32);
 	ASSERT_EQ(result.Shape().NumDim(), 2u);
@@ -748,9 +702,7 @@ TEST(LayerPad, AppendsZerosAlongEachAxis)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f,
-	                                        3.0f, 4.0f },
-	                                { 2, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 });
 
 	ASSERT_EQ(result.Shape().NumDim(), 2u);
 	EXPECT_EQ(result.Shape()[0], 3u);
@@ -778,10 +730,7 @@ TEST(LayerCumsum, AccumulatesAlongAxisZero)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f,
-	                                        3.0f, 4.0f,
-	                                        5.0f, 6.0f },
-	                                { 3, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 });
 
 	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 1), 2.0f, 1e-5f);
@@ -800,9 +749,7 @@ TEST(LayerCumsum, AccumulatesAlongAxisOne)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f,
-	                                        4.0f, 5.0f, 6.0f },
-	                                { 2, 3 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 2, 3 });
 
 	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 1), 3.0f, 1e-5f);
@@ -821,11 +768,7 @@ TEST(LayerGroupNorm, NormalizesContiguousGroupsInOneDimension)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 3.0f,
-	                                        2.0f, 4.0f,
-	                                        5.0f, 7.0f,
-	                                        6.0f, 8.0f },
-	                                { 8 });
+	const auto result = RunSingleIO(graph, { 1.0f, 3.0f, 2.0f, 4.0f, 5.0f, 7.0f, 6.0f, 8.0f }, { 8 });
 
 	for (std::size_t group = 0; group < 4; ++group)
 	{
@@ -843,11 +786,7 @@ TEST(LayerGroupNorm, PreservesBatchSeparationForRankFourInput)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph, { 1.0f, 10.0f,
-	                                        3.0f, 30.0f,
-	                                        2.0f, 20.0f,
-	                                        4.0f, 40.0f },
-	                                { 4, 1, 1, 2 });
+	const auto result = RunSingleIO(graph, { 1.0f, 10.0f, 3.0f, 30.0f, 2.0f, 20.0f, 4.0f, 40.0f }, { 4, 1, 1, 2 });
 
 	EXPECT_NEAR(ReadFloat(result, 0), -1.0f, 1e-3f);
 	EXPECT_NEAR(ReadFloat(result, 1), -1.0f, 1e-3f);
@@ -867,17 +806,10 @@ TEST(LayerAddId, AddsExpertBiasBySelectedIds)
 	    Compatibility::GGML::BuildAddId(builder, DataType::Float32, { 2, 2, 3 }, { 2, 4 }, DataType::Int32, { 2, 3 }));
 
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Tensor<CPU>({ 0.0f, 0.0f, 0.0f,
-	                                 0.0f, 0.0f, 0.0f,
-	                                 0.0f, 0.0f, 0.0f,
-	                                 0.0f, 0.0f, 0.0f },
-	                                { 2, 2, 3 }));
-	inputs.emplace_back(Tensor<CPU>({ 10.0f, 20.0f, 30.0f, 40.0f,
-	                                 100.0f, 200.0f, 300.0f, 400.0f },
-	                                { 2, 4 }));
-	inputs.emplace_back(MakeInt32Tensor({ 1, 3, 0,
-	                                     2, 1, 3 },
-	                                    { 2, 3 }));
+	inputs.emplace_back(
+	    Tensor<CPU>({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 2, 2, 3 }));
+	inputs.emplace_back(Tensor<CPU>({ 10.0f, 20.0f, 30.0f, 40.0f, 100.0f, 200.0f, 300.0f, 400.0f }, { 2, 4 }));
+	inputs.emplace_back(MakeInt32Tensor({ 1, 3, 0, 2, 1, 3 }, { 2, 3 }));
 
 	const auto outputs = RunWithInputs(graph, std::move(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
@@ -901,27 +833,39 @@ TEST(LayerMulMatId, SelectsPerExpertMatrices)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	graph.SetForward(Compatibility::GGML::BuildMulMatId(
-	    builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32, { 2, 2, 2 }, DataType::Int32, { 2, 2 }));
+	graph.SetForward(Compatibility::GGML::BuildMulMatId(builder, DataType::Float32, { 2, 3, 2 }, DataType::Float32,
+	                                                    { 2, 2, 2 }, DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Tensor<CPU>({
-	    1.0f, 4.0f,
-	    2.0f, 5.0f,
-	    3.0f, 6.0f,
-	    10.0f, 40.0f,
-	    20.0f, 50.0f,
-	    30.0f, 60.0f,
-	}, { 2, 3, 2 }));
-	inputs.emplace_back(Tensor<CPU>({
-	    1.0f, 3.0f,
-	    5.0f, 7.0f,
-	    2.0f, 4.0f,
-	    6.0f, 8.0f,
-	}, { 2, 2, 2 }));
-	inputs.emplace_back(MakeInt32Tensor({ 0, 1,
-	                                     1, 0 },
-	                                    { 2, 2 }));
+	inputs.emplace_back(Tensor<CPU>(
+	    {
+	        1.0f,
+	        4.0f,
+	        2.0f,
+	        5.0f,
+	        3.0f,
+	        6.0f,
+	        10.0f,
+	        40.0f,
+	        20.0f,
+	        50.0f,
+	        30.0f,
+	        60.0f,
+	    },
+	    { 2, 3, 2 }));
+	inputs.emplace_back(Tensor<CPU>(
+	    {
+	        1.0f,
+	        3.0f,
+	        5.0f,
+	        7.0f,
+	        2.0f,
+	        4.0f,
+	        6.0f,
+	        8.0f,
+	    },
+	    { 2, 2, 2 }));
+	inputs.emplace_back(MakeInt32Tensor({ 0, 1, 1, 0 }, { 2, 2 }));
 
 	const auto outputs = RunWithInputs(graph, std::move(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
@@ -945,23 +889,31 @@ TEST(LayerMulMatId, BroadcastsInputVectorsAcrossUsedExperts)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	graph.SetForward(Compatibility::GGML::BuildMulMatId(
-	    builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32, { 2, 1, 2 }, DataType::Int32, { 2, 2 }));
+	graph.SetForward(Compatibility::GGML::BuildMulMatId(builder, DataType::Float32, { 2, 2, 2 }, DataType::Float32,
+	                                                    { 2, 1, 2 }, DataType::Int32, { 2, 2 }));
 
 	std::vector<Tensor<CPU>> inputs;
-	inputs.emplace_back(Tensor<CPU>({
-	    1.0f, 3.0f,
-	    2.0f, 4.0f,
-	    10.0f, 30.0f,
-	    20.0f, 40.0f,
-	}, { 2, 2, 2 }));
-	inputs.emplace_back(Tensor<CPU>({
-	    1.0f, 3.0f,
-	    2.0f, 4.0f,
-	}, { 2, 1, 2 }));
-	inputs.emplace_back(MakeInt32Tensor({ 0, 1,
-	                                     1, 0 },
-	                                    { 2, 2 }));
+	inputs.emplace_back(Tensor<CPU>(
+	    {
+	        1.0f,
+	        3.0f,
+	        2.0f,
+	        4.0f,
+	        10.0f,
+	        30.0f,
+	        20.0f,
+	        40.0f,
+	    },
+	    { 2, 2, 2 }));
+	inputs.emplace_back(Tensor<CPU>(
+	    {
+	        1.0f,
+	        3.0f,
+	        2.0f,
+	        4.0f,
+	    },
+	    { 2, 1, 2 }));
+	inputs.emplace_back(MakeInt32Tensor({ 0, 1, 1, 0 }, { 2, 2 }));
 
 	const auto outputs = RunWithInputs(graph, std::move(inputs));
 	ASSERT_EQ(outputs.size(), 1u);
@@ -1373,8 +1325,7 @@ TEST(LayerRMSNorm, WeightScalesNormalizedOutput)
 	norm.featureSize = 3;
 	norm.dtype = DataType::Float32;
 	norm.eps = 1e-6;
-	norm.weightVariable = graph.AddVariable(
-	    Variable::Create(Tensor<CPU>({ 2.0f, 2.0f, 2.0f }, { 1, 3 })));
+	norm.weightVariable = graph.AddVariable(Variable::Create(Tensor<CPU>({ 2.0f, 2.0f, 2.0f }, { 1, 3 })));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
@@ -1469,11 +1420,9 @@ TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	const auto layer = Layer::CreateSwiGLUMLP(
-	    builder,
-	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
-	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
-	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }));
+	const auto layer = Layer::CreateSwiGLUMLP(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                                          Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                                          Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
@@ -1490,11 +1439,9 @@ TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 {
 	ModelBuilder builder;
 	Graph& graph = builder.UnsafeMutableGraph();
-	const auto layer = Layer::CreateSwiGLUMLP(
-	    builder,
-	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
-	    Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
-	    Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }));
+	const auto layer = Layer::CreateSwiGLUMLP(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                                          Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                                          Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 2 });
@@ -1512,11 +1459,9 @@ TEST(LayerSwiGLU, DownProjectionChangesOutputWidth)
 TEST(LayerSwiGLU, RejectsMismatchedHiddenSizes)
 {
 	ModelBuilder builder;
-	EXPECT_THROW(static_cast<void>(Layer::CreateSwiGLUMLP(
-	                 builder,
-	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
-	                 Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f }, { 2, 3 }),
-	                 Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }))),
+	EXPECT_THROW(static_cast<void>(Layer::CreateSwiGLUMLP(builder, Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f }, { 2, 2 }),
+	                                                      Tensor<CPU>({ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f }, { 2, 3 }),
+	                                                      Tensor<CPU>({ 1.0f, 1.0f }, { 2, 1 }))),
 	             std::runtime_error);
 }
 
@@ -1529,11 +1474,7 @@ TEST(LayerCausalMask, PreservesDiagonalAndLowerTriangle)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph,
-	                                { 1.0f, 2.0f, 3.0f,
-	                                  4.0f, 5.0f, 6.0f,
-	                                  7.0f, 8.0f, 9.0f },
-	                                { 3, 3 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, { 3, 3 });
 	EXPECT_NEAR(ReadFloat(result, 0), 1.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 3), 4.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 4), 5.0f, 1e-5f);
@@ -1551,11 +1492,7 @@ TEST(LayerCausalMask, MasksStrictUpperTriangle)
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	const auto result = RunSingleIO(graph,
-	                                { 1.0f, 2.0f, 3.0f,
-	                                  4.0f, 5.0f, 6.0f,
-	                                  7.0f, 8.0f, 9.0f },
-	                                { 3, 3 });
+	const auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, { 3, 3 });
 	EXPECT_LT(ReadFloat(result, 1), -1.0e8f);
 	EXPECT_LT(ReadFloat(result, 2), -1.0e8f);
 	EXPECT_LT(ReadFloat(result, 5), -1.0e8f);
@@ -1584,18 +1521,17 @@ TEST(LayerKVCache, AppendConcatenatesPastAndPresent)
 	const auto pastValues = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto newKeys = sg.AddParam(DataType::Float32, { 1, 2 });
 	const auto newValues = sg.AddParam(DataType::Float32, { 1, 3 });
-	const auto updated = Layer::AddKVCacheAppend(sg, { { pastKeys, 0 }, { pastValues, 0 } },
-	                                          { { newKeys, 0 }, { newValues, 0 } });
+	const auto updated =
+	    Layer::AddKVCacheAppend(sg, { { pastKeys, 0 }, { pastValues, 0 } }, { { newKeys, 0 }, { newValues, 0 } });
 	sg.SetResults({ updated.keys, updated.values });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	auto results = RunWithInputs(graph,
-	                            {
-	                                Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 }),
-	                                Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f }, { 2, 3 }),
-	                                Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }),
-	                                Tensor<CPU>({ 16.0f, 17.0f, 18.0f }, { 1, 3 }),
-	                            });
+	auto results = RunWithInputs(graph, {
+	                                        Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 }),
+	                                        Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f }, { 2, 3 }),
+	                                        Tensor<CPU>({ 5.0f, 6.0f }, { 1, 2 }),
+	                                        Tensor<CPU>({ 16.0f, 17.0f, 18.0f }, { 1, 3 }),
+	                                    });
 
 	ASSERT_EQ(results.size(), 2u);
 	EXPECT_EQ(results[0].Shape().NumElements(), 6u);
@@ -1618,12 +1554,11 @@ TEST(LayerKVCache, ViewReturnsRequestedWindow)
 	sg.SetResults({ window.keys, window.values });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	auto results = RunWithInputs(graph,
-	                            {
-	                                Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 }),
-	                                Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f },
-	                                            { 3, 3 }),
-	                            });
+	auto results = RunWithInputs(
+	    graph, {
+	               Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, { 3, 2 }),
+	               Tensor<CPU>({ 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f }, { 3, 3 }),
+	           });
 
 	ASSERT_EQ(results.size(), 2u);
 	EXPECT_EQ(results[0].Shape().NumElements(), 4u);
@@ -1656,10 +1591,8 @@ TEST(LayerRepeat, TilesNonSingletonDimensions)
 	auto result = RunSingleIO(graph, { 1.0f, 2.0f, 3.0f, 4.0f }, { 2, 2 });
 	const std::vector<std::size_t> repeatedShape{ 4, 4 };
 	ASSERT_EQ(result.Shape(), ShapeView{ repeatedShape });
-	const std::vector<float> expected{ 1.0f, 2.0f, 1.0f, 2.0f,
-	                                  3.0f, 4.0f, 3.0f, 4.0f,
-	                                  1.0f, 2.0f, 1.0f, 2.0f,
-	                                  3.0f, 4.0f, 3.0f, 4.0f };
+	const std::vector<float> expected{ 1.0f, 2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 3.0f, 4.0f,
+		                               1.0f, 2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 3.0f, 4.0f };
 	for (auto index = 0uz; index < expected.size(); ++index)
 	{
 		EXPECT_NEAR(ReadFloat(result, index), expected[index], 1e-5f);
@@ -1719,16 +1652,16 @@ TEST(LayerRelativePosition, Adds2DRelativePositionBias)
 	const auto scores = sg.AddParam(DataType::Float32, { 1, 2, 1, 2, 1 });
 	const auto widthBias = sg.AddParam(DataType::Float32, { 2, 2, 1 });
 	const auto heightBias = sg.AddParam(DataType::Float32, { 1, 1, 1 });
-	const auto biased = Compatibility::GGML::AddRelativePositionBias2D(sg, { scores, 0 }, { widthBias, 0 }, { heightBias, 0 });
+	const auto biased =
+	    Compatibility::GGML::AddRelativePositionBias2D(sg, { scores, 0 }, { widthBias, 0 }, { heightBias, 0 });
 	sg.SetResults({ biased });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	auto results = RunWithInputs(graph,
-	                            {
-	                                Tensor<CPU>({ 0.0f, 1.0f, 2.0f, 3.0f }, { 1, 2, 1, 2, 1 }),
-	                                Tensor<CPU>({ 10.0f, 20.0f, 30.0f, 40.0f }, { 2, 2, 1 }),
-	                                Tensor<CPU>({ 100.0f }, { 1, 1, 1 }),
-	                            });
+	auto results = RunWithInputs(graph, {
+	                                        Tensor<CPU>({ 0.0f, 1.0f, 2.0f, 3.0f }, { 1, 2, 1, 2, 1 }),
+	                                        Tensor<CPU>({ 10.0f, 20.0f, 30.0f, 40.0f }, { 2, 2, 1 }),
+	                                        Tensor<CPU>({ 100.0f }, { 1, 1, 1 }),
+	                                    });
 	ASSERT_EQ(results.size(), 1u);
 	const std::vector<float> expected{ 110.0f, 121.0f, 132.0f, 143.0f };
 	for (auto index = 0uz; index < expected.size(); ++index)
@@ -1747,17 +1680,11 @@ TEST(LayerSSMConv, MatchesRowwiseDepthwiseConvolution)
 	sg.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
-	auto results = RunWithInputs(graph,
-	                            {
-	                                Tensor<CPU>({ 1.0f, 10.0f,
-	                                             2.0f, 20.0f,
-	                                             3.0f, 30.0f,
-	                                             4.0f, 40.0f },
-	                                            { 4, 2, 1 }),
-	                                Tensor<CPU>({ 0.5f, 1.0f,
-	                                             1.5f, -1.0f },
-	                                            { 2, 2 }),
-	                            });
+	auto results =
+	    RunWithInputs(graph, {
+	                             Tensor<CPU>({ 1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f, 4.0f, 40.0f }, { 4, 2, 1 }),
+	                             Tensor<CPU>({ 0.5f, 1.0f, 1.5f, -1.0f }, { 2, 2 }),
+	                         });
 	ASSERT_EQ(results.size(), 1u);
 	const std::vector<std::size_t> outputShape{ 2, 3, 1 };
 	ASSERT_EQ(results[0].Shape(), ShapeView{ outputShape });

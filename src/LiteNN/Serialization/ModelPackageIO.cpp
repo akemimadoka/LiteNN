@@ -253,18 +253,20 @@ namespace LiteNN::Serialization
 			JsonString(out, tensor.relativePath);
 			out << ",\"byteOffset\":" << tensor.byteOffset << ",\"byteSize\":" << tensor.byteSize
 			    << ",\"alignment\":" << tensor.alignment << ",\"checksum\":" << tensor.checksum
-			    << ",\"mutability\":" << EnumValue(tensor.mutability) << ",\"rebindPolicy\":"
-			    << EnumValue(tensor.rebindPolicy);
+			    << ",\"mutability\":" << EnumValue(tensor.mutability)
+			    << ",\"rebindPolicy\":" << EnumValue(tensor.rebindPolicy);
 			if (tensor.quantization)
 			{
 				const auto& q = *tensor.quantization;
-				out << ",\"quantization\":{\"scheme\":" << EnumValue(q.scheme) << ",\"granularity\":"
-				    << EnumValue(q.granularity) << ",\"blockFormat\":" << EnumValue(q.blockFormat)
-				    << ",\"packedFormat\":" << EnumValue(q.packedFormat) << ",\"packedOrder\":"
-				    << EnumValue(q.packedOrder) << ",\"blockScaleLayout\":" << EnumValue(q.blockScaleLayout)
-				    << ",\"storageType\":" << EnumValue(q.storageType) << ",\"expressedType\":"
-				    << EnumValue(q.expressedType) << ",\"axis\":" << q.axis << ",\"groupSize\":"
-				    << q.groupSize << ",\"scales\":";
+				out << ",\"quantization\":{\"scheme\":" << EnumValue(q.scheme)
+				    << ",\"granularity\":" << EnumValue(q.granularity)
+				    << ",\"blockFormat\":" << EnumValue(q.blockFormat)
+				    << ",\"packedFormat\":" << EnumValue(q.packedFormat)
+				    << ",\"packedOrder\":" << EnumValue(q.packedOrder)
+				    << ",\"blockScaleLayout\":" << EnumValue(q.blockScaleLayout)
+				    << ",\"storageType\":" << EnumValue(q.storageType)
+				    << ",\"expressedType\":" << EnumValue(q.expressedType) << ",\"axis\":" << q.axis
+				    << ",\"groupSize\":" << q.groupSize << ",\"scales\":";
 				NumberList(out, q.scales);
 				out << ",\"zeroPoints\":";
 				NumberList(out, q.zeroPoints);
@@ -293,9 +295,9 @@ namespace LiteNN::Serialization
 				{
 					out << ',';
 				}
-				out << "{\"id\":" << b.id << ",\"kind\":" << EnumValue(b.kind) << ",\"memorySpace\":"
-				    << EnumValue(b.memorySpace) << ",\"byteSize\":" << b.byteSize << ",\"alignment\":"
-				    << b.alignment << ",\"aliasSet\":" << b.aliasSet << '}';
+				out << "{\"id\":" << b.id << ",\"kind\":" << EnumValue(b.kind)
+				    << ",\"memorySpace\":" << EnumValue(b.memorySpace) << ",\"byteSize\":" << b.byteSize
+				    << ",\"alignment\":" << b.alignment << ",\"aliasSet\":" << b.aliasSet << '}';
 			}
 			out << "]}";
 		}
@@ -306,11 +308,12 @@ namespace LiteNN::Serialization
 			JsonString(out, binding.name);
 			out << ",\"type\":";
 			TensorTypeJson(out, binding.type);
-			out << ",\"ownership\":" << EnumValue(binding.ownership) << ",\"externalKind\":"
-			    << EnumValue(binding.externalKind) << ",\"memorySpace\":" << EnumValue(binding.memorySpace)
-			    << ",\"memoryBuffer\":" << binding.memoryBuffer << ",\"byteOffset\":" << binding.byteOffset
-			    << ",\"byteSize\":" << binding.byteSize << ",\"alignment\":" << binding.alignment
-			    << ",\"checksum\":" << binding.checksum << ",\"mutability\":" << EnumValue(binding.mutability)
+			out << ",\"ownership\":" << EnumValue(binding.ownership)
+			    << ",\"externalKind\":" << EnumValue(binding.externalKind)
+			    << ",\"memorySpace\":" << EnumValue(binding.memorySpace) << ",\"memoryBuffer\":" << binding.memoryBuffer
+			    << ",\"byteOffset\":" << binding.byteOffset << ",\"byteSize\":" << binding.byteSize
+			    << ",\"alignment\":" << binding.alignment << ",\"checksum\":" << binding.checksum
+			    << ",\"mutability\":" << EnumValue(binding.mutability)
 			    << ",\"rebindPolicy\":" << EnumValue(binding.rebindPolicy) << ",\"strides\":";
 			NumberList(out, binding.strides);
 			out << ",\"layoutTag\":";
@@ -349,8 +352,8 @@ namespace LiteNN::Serialization
 			out << ",\"kind\":";
 			JsonString(out, adapter.kind);
 			out << ",\"aTensor\":" << adapter.aTensor << ",\"bTensor\":" << adapter.bTensor
-			    << ",\"rank\":" << adapter.rank << ",\"alpha\":" << adapter.alpha << ",\"dropout\":"
-			    << adapter.dropout << ",\"dtype\":" << EnumValue(adapter.dtype) << ",\"mergeMode\":";
+			    << ",\"rank\":" << adapter.rank << ",\"alpha\":" << adapter.alpha << ",\"dropout\":" << adapter.dropout
+			    << ",\"dtype\":" << EnumValue(adapter.dtype) << ",\"mergeMode\":";
 			JsonString(out, adapter.mergeMode);
 			out << '}';
 		}
@@ -464,9 +467,10 @@ namespace LiteNN::Serialization
 
 		void ManifestJson(std::ostream& out, const VNextPackageManifest& manifest)
 		{
-			out << "{\"versions\":{\"manifest\":" << manifest.versions.manifest << ",\"opSet\":"
-			    << manifest.versions.opSet << ",\"dtypeSet\":" << manifest.versions.dtypeSet << ",\"layoutSet\":"
-			    << manifest.versions.layoutSet << ",\"quantizationSet\":" << manifest.versions.quantizationSet
+			out << "{\"versions\":{\"manifest\":" << manifest.versions.manifest
+			    << ",\"opSet\":" << manifest.versions.opSet << ",\"dtypeSet\":" << manifest.versions.dtypeSet
+			    << ",\"layoutSet\":" << manifest.versions.layoutSet
+			    << ",\"quantizationSet\":" << manifest.versions.quantizationSet
 			    << ",\"artifactABI\":" << manifest.versions.artifactABI << "},\"layout\":{\"mode\":";
 			JsonString(out, manifest.layout.mode);
 			out << ",\"manifestPath\":";
@@ -550,8 +554,8 @@ namespace LiteNN::Serialization
 				{
 					out << ',';
 				}
-				out << "{\"id\":" << step.id << ",\"kind\":" << EnumValue(step.kind) << ",\"function\":"
-				    << step.function << ",\"region\":" << step.region << ",\"backend\":";
+				out << "{\"id\":" << step.id << ",\"kind\":" << EnumValue(step.kind)
+				    << ",\"function\":" << step.function << ",\"region\":" << step.region << ",\"backend\":";
 				JsonString(out, step.backend);
 				out << ",\"fallbackBackend\":";
 				JsonString(out, step.fallbackBackend);
@@ -673,8 +677,8 @@ namespace LiteNN::Serialization
 			{
 				const auto dim = AsObject(dimElement, label);
 				shape.dims.push_back({ static_cast<TensorDimKind>(AsUInt(Member(dim, "kind", label), label)),
-					                   static_cast<std::size_t>(AsUInt(Member(dim, "extent", label), label)),
-					                   AsString(Member(dim, "symbol", label), label) });
+				                       static_cast<std::size_t>(AsUInt(Member(dim, "extent", label), label)),
+				                       AsString(Member(dim, "symbol", label), label) });
 			}
 			const auto layoutObject = AsObject(Member(object, "layout", label), label);
 			TensorLayout layout;
@@ -735,7 +739,7 @@ namespace LiteNN::Serialization
 			{
 				const auto attr = AsObject(item, label);
 				op.attributes.push_back({ .name = AsString(Member(attr, "name", label), label),
-					                      .value = AsString(Member(attr, "value", label), label) });
+				                          .value = AsString(Member(attr, "value", label), label) });
 			}
 			return op;
 		}
@@ -753,8 +757,7 @@ namespace LiteNN::Serialization
 			tensor.alignment = static_cast<std::size_t>(AsUInt(Member(object, "alignment", label), label));
 			tensor.checksum = AsUInt(Member(object, "checksum", label), label);
 			tensor.mutability = static_cast<BufferMutability>(AsUInt(Member(object, "mutability", label), label));
-			tensor.rebindPolicy =
-			    static_cast<BufferRebindPolicy>(AsUInt(Member(object, "rebindPolicy", label), label));
+			tensor.rebindPolicy = static_cast<BufferRebindPolicy>(AsUInt(Member(object, "rebindPolicy", label), label));
 			if (const auto quantElement = FindMember(object, "quantization"))
 			{
 				const auto quantObject = AsObject(*quantElement, label);
@@ -794,17 +797,17 @@ namespace LiteNN::Serialization
 			return { .type = tensor.type,
 				     .quantization = tensor.quantization,
 				     .region = { .ownership = tensor.kind == ExternalBufferKind::None ? BufferOwnership::Owned
-				                                                                       : BufferOwnership::External,
-					          .externalKind = tensor.kind,
-					          .memorySpace = tensor.type.memorySpace,
-					          .name = tensor.relativePath.empty() ? tensor.name : tensor.relativePath,
-					          .data = nullptr,
-					          .byteOffset = tensor.byteOffset,
-					          .byteSize = tensor.byteSize,
-					          .alignment = tensor.alignment,
-					          .checksum = tensor.checksum,
-					          .mutability = tensor.mutability,
-					          .rebindPolicy = tensor.rebindPolicy },
+				                                                                      : BufferOwnership::External,
+				                 .externalKind = tensor.kind,
+				                 .memorySpace = tensor.type.memorySpace,
+				                 .name = tensor.relativePath.empty() ? tensor.name : tensor.relativePath,
+				                 .data = nullptr,
+				                 .byteOffset = tensor.byteOffset,
+				                 .byteSize = tensor.byteSize,
+				                 .alignment = tensor.alignment,
+				                 .checksum = tensor.checksum,
+				                 .mutability = tensor.mutability,
+				                 .rebindPolicy = tensor.rebindPolicy },
 				     .viewMutability = tensor.mutability };
 		}
 
@@ -867,9 +870,8 @@ namespace LiteNN::Serialization
 
 		const std::string& RequirePlanAttribute(const ExecutablePlanOp& op, std::string_view name)
 		{
-			const auto it = std::ranges::find_if(op.attributes, [&](const ExecutablePlanAttribute& attr) {
-				return attr.name == name;
-			});
+			const auto it = std::ranges::find_if(
+			    op.attributes, [&](const ExecutablePlanAttribute& attr) { return attr.name == name; });
 			if (it == op.attributes.end())
 			{
 				throw std::runtime_error("vNext node descriptor for '" + op.kind +
@@ -884,7 +886,7 @@ namespace LiteNN::Serialization
 		}
 
 		template <typename Enum>
-			requires std::is_enum_v<Enum>
+		    requires std::is_enum_v<Enum>
 		Enum PlanAttributeEnum(const ExecutablePlanOp& op, std::string_view name)
 		{
 			return static_cast<Enum>(PlanAttributeSize(op, name));
@@ -912,19 +914,16 @@ namespace LiteNN::Serialization
 			return values;
 		}
 
-		NodeOutput RequireNodeInput(std::span<const NodeOutput> inputs, std::size_t index,
-		                            std::string_view opKind)
+		NodeOutput RequireNodeInput(std::span<const NodeOutput> inputs, std::size_t index, std::string_view opKind)
 		{
 			if (index >= inputs.size())
 			{
-				throw std::runtime_error("vNext node descriptor for '" + std::string(opKind) +
-				                         "' has too few inputs");
+				throw std::runtime_error("vNext node descriptor for '" + std::string(opKind) + "' has too few inputs");
 			}
 			return inputs[index];
 		}
 
-		NodeVariant HydrateExecutablePlanNodePayload(const ExecutablePlanOp& op,
-		                                             std::span<const NodeOutput> inputs)
+		NodeVariant HydrateExecutablePlanNodePayload(const ExecutablePlanOp& op, std::span<const NodeOutput> inputs)
 		{
 			if (op.kind == "ParamRefNode")
 			{
@@ -936,35 +935,29 @@ namespace LiteNN::Serialization
 			}
 			if (op.kind == "UnaryOpNode")
 			{
-				return UnaryOpNode{ PlanAttributeEnum<UnaryOp>(op, "op"),
-					                RequireNodeInput(inputs, 0, op.kind) };
+				return UnaryOpNode{ PlanAttributeEnum<UnaryOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind) };
 			}
 			if (op.kind == "BinaryOpNode")
 			{
-				return BinaryOpNode{ PlanAttributeEnum<BinaryOp>(op, "op"),
-					                 RequireNodeInput(inputs, 0, op.kind),
+				return BinaryOpNode{ PlanAttributeEnum<BinaryOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),
 					                 RequireNodeInput(inputs, 1, op.kind) };
 			}
 			if (op.kind == "CastNode")
 			{
-				return CastNode{ RequireNodeInput(inputs, 0, op.kind),
-					             PlanAttributeEnum<DataType>(op, "targetType") };
+				return CastNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeEnum<DataType>(op, "targetType") };
 			}
 			if (op.kind == "ReduceOpNode")
 			{
-				return ReduceOpNode{ PlanAttributeEnum<ReduceOp>(op, "op"),
-					                 RequireNodeInput(inputs, 0, op.kind),
+				return ReduceOpNode{ PlanAttributeEnum<ReduceOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),
 					                 PlanAttributeSize(op, "axis") };
 			}
 			if (op.kind == "ReshapeNode")
 			{
-				return ReshapeNode{ RequireNodeInput(inputs, 0, op.kind),
-					                PlanAttributeSizeList(op, "targetShape") };
+				return ReshapeNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSizeList(op, "targetShape") };
 			}
 			if (op.kind == "PermuteNode")
 			{
-				return PermuteNode{ RequireNodeInput(inputs, 0, op.kind),
-					                PlanAttributeSizeList(op, "permutation") };
+				return PermuteNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSizeList(op, "permutation") };
 			}
 			if (op.kind == "BroadcastToNode")
 			{
@@ -973,8 +966,7 @@ namespace LiteNN::Serialization
 			}
 			if (op.kind == "SoftmaxNode")
 			{
-				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind),
-					                PlanAttributeSize(op, "axis") };
+				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis") };
 			}
 			if (op.kind == "ConcatNode")
 			{
@@ -983,10 +975,8 @@ namespace LiteNN::Serialization
 			}
 			if (op.kind == "SliceNode")
 			{
-				return SliceNode{ RequireNodeInput(inputs, 0, op.kind),
-					              PlanAttributeSize(op, "axis"),
-					              PlanAttributeSize(op, "start"),
-					              PlanAttributeSize(op, "length") };
+				return SliceNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis"),
+					              PlanAttributeSize(op, "start"), PlanAttributeSize(op, "length") };
 			}
 			throw std::runtime_error("vNext node descriptor cannot hydrate executable payload for op: " + op.kind);
 		}
@@ -1023,8 +1013,7 @@ namespace LiteNN::Serialization
 			binding.ownership = static_cast<BufferOwnership>(AsUInt(Member(object, "ownership", label), label));
 			binding.externalKind =
 			    static_cast<ExternalBufferKind>(AsUInt(Member(object, "externalKind", label), label));
-			binding.memorySpace =
-			    static_cast<TensorMemorySpace>(AsUInt(Member(object, "memorySpace", label), label));
+			binding.memorySpace = static_cast<TensorMemorySpace>(AsUInt(Member(object, "memorySpace", label), label));
 			binding.memoryBuffer = static_cast<std::size_t>(AsUInt(Member(object, "memoryBuffer", label), label));
 			binding.byteOffset = static_cast<std::size_t>(AsUInt(Member(object, "byteOffset", label), label));
 			binding.byteSize = static_cast<std::size_t>(AsUInt(Member(object, "byteSize", label), label));
@@ -1089,8 +1078,8 @@ namespace LiteNN::Serialization
 			{
 				plan.variables.push_back(ParseTensorStorageRef(item, "plan.variables"));
 			}
-			plan.activationSlots = TensorTypeList(Member(object, "activationSlots", "plan.activationSlots"),
-			                                      "plan.activationSlots");
+			plan.activationSlots =
+			    TensorTypeList(Member(object, "activationSlots", "plan.activationSlots"), "plan.activationSlots");
 			plan.tapeSlots = TensorTypeList(Member(object, "tapeSlots", "plan.tapeSlots"), "plan.tapeSlots");
 			const auto parseValues = [](simdjson::dom::element list, std::string_view label) {
 				std::vector<ExecutablePlanValue> result;
@@ -1098,8 +1087,8 @@ namespace LiteNN::Serialization
 				{
 					const auto value = AsObject(item, label);
 					result.push_back({ .source = ParseNodeOutput(Member(value, "source", label), label),
-						               .type = ParseTensorType(Member(value, "type", label), label),
-						               .name = AsString(Member(value, "name", label), label) });
+					                   .type = ParseTensorType(Member(value, "type", label), label),
+					                   .name = AsString(Member(value, "name", label), label) });
 				}
 				return result;
 			};
@@ -1112,16 +1101,15 @@ namespace LiteNN::Serialization
 				subgraph.sourceSubgraph = static_cast<SubgraphId>(
 				    AsUInt(Member(subgraphObject, "sourceSubgraph", "plan.subgraph.sourceSubgraph"),
 				           "plan.subgraph.sourceSubgraph"));
-				subgraph.params = TensorTypeList(Member(subgraphObject, "params", "plan.subgraph.params"),
-				                                 "plan.subgraph.params");
+				subgraph.params =
+				    TensorTypeList(Member(subgraphObject, "params", "plan.subgraph.params"), "plan.subgraph.params");
 				for (const auto nodeItem :
 				     AsArray(Member(subgraphObject, "nodes", "plan.subgraph.nodes"), "plan.subgraph.nodes"))
 				{
 					const auto nodeObject = AsObject(nodeItem, "plan.subgraph.nodes");
 					ExecutablePlanNode node;
-					node.sourceNode =
-					    static_cast<NodeId>(AsUInt(Member(nodeObject, "sourceNode", "plan.node.sourceNode"),
-					                              "plan.node.sourceNode"));
+					node.sourceNode = static_cast<NodeId>(
+					    AsUInt(Member(nodeObject, "sourceNode", "plan.node.sourceNode"), "plan.node.sourceNode"));
 					node.op = ParsePlanOp(Member(nodeObject, "op", "plan.node.op"), "plan.node.op");
 					node.opKind = node.op.kind;
 					node.category = node.op.category;
@@ -1144,28 +1132,23 @@ namespace LiteNN::Serialization
 			const auto object = AsObject(value, "manifest");
 			VNextPackageManifest manifest;
 			const auto versions = AsObject(Member(object, "versions", "manifest.versions"), "manifest.versions");
-			manifest.versions.manifest =
-			    static_cast<std::uint32_t>(AsUInt(Member(versions, "manifest", "manifest.versions.manifest"),
-			                                     "manifest.versions.manifest"));
-			manifest.versions.opSet =
-			    static_cast<std::uint32_t>(AsUInt(Member(versions, "opSet", "manifest.versions.opSet"),
-			                                     "manifest.versions.opSet"));
-			manifest.versions.dtypeSet =
-			    static_cast<std::uint32_t>(AsUInt(Member(versions, "dtypeSet", "manifest.versions.dtypeSet"),
-			                                     "manifest.versions.dtypeSet"));
-			manifest.versions.layoutSet =
-			    static_cast<std::uint32_t>(AsUInt(Member(versions, "layoutSet", "manifest.versions.layoutSet"),
-			                                     "manifest.versions.layoutSet"));
+			manifest.versions.manifest = static_cast<std::uint32_t>(
+			    AsUInt(Member(versions, "manifest", "manifest.versions.manifest"), "manifest.versions.manifest"));
+			manifest.versions.opSet = static_cast<std::uint32_t>(
+			    AsUInt(Member(versions, "opSet", "manifest.versions.opSet"), "manifest.versions.opSet"));
+			manifest.versions.dtypeSet = static_cast<std::uint32_t>(
+			    AsUInt(Member(versions, "dtypeSet", "manifest.versions.dtypeSet"), "manifest.versions.dtypeSet"));
+			manifest.versions.layoutSet = static_cast<std::uint32_t>(
+			    AsUInt(Member(versions, "layoutSet", "manifest.versions.layoutSet"), "manifest.versions.layoutSet"));
 			manifest.versions.quantizationSet = static_cast<std::uint32_t>(
 			    AsUInt(Member(versions, "quantizationSet", "manifest.versions.quantizationSet"),
 			           "manifest.versions.quantizationSet"));
-			manifest.versions.artifactABI =
-			    static_cast<std::uint32_t>(AsUInt(Member(versions, "artifactABI", "manifest.versions.artifactABI"),
-			                                     "manifest.versions.artifactABI"));
+			manifest.versions.artifactABI = static_cast<std::uint32_t>(AsUInt(
+			    Member(versions, "artifactABI", "manifest.versions.artifactABI"), "manifest.versions.artifactABI"));
 			const auto layout = AsObject(Member(object, "layout", "manifest.layout"), "manifest.layout");
 			manifest.layout.mode = AsString(Member(layout, "mode", "manifest.layout.mode"), "manifest.layout.mode");
-			manifest.layout.manifestPath =
-			    AsString(Member(layout, "manifestPath", "manifest.layout.manifestPath"), "manifest.layout.manifestPath");
+			manifest.layout.manifestPath = AsString(Member(layout, "manifestPath", "manifest.layout.manifestPath"),
+			                                        "manifest.layout.manifestPath");
 			manifest.layout.tensorDirectory =
 			    AsString(Member(layout, "tensorDirectory", "manifest.layout.tensorDirectory"),
 			             "manifest.layout.tensorDirectory");
@@ -1189,10 +1172,10 @@ namespace LiteNN::Serialization
 				manifest.regions.push_back({
 				    .id = static_cast<RegionId>(AsUInt(Member(r, "id", "region.id"), "region.id")),
 				    .name = AsString(Member(r, "name", "region.name"), "region.name"),
-				    .function = static_cast<FunctionId>(AsUInt(Member(r, "function", "region.function"),
-				                                               "region.function")),
-				    .subgraph = static_cast<SubgraphId>(AsUInt(Member(r, "subgraph", "region.subgraph"),
-				                                               "region.subgraph")),
+				    .function =
+				        static_cast<FunctionId>(AsUInt(Member(r, "function", "region.function"), "region.function")),
+				    .subgraph =
+				        static_cast<SubgraphId>(AsUInt(Member(r, "subgraph", "region.subgraph"), "region.subgraph")),
 				    .nodes = SizeList(Member(r, "nodes", "region.nodes"), "region.nodes"),
 				});
 			}
@@ -1204,41 +1187,42 @@ namespace LiteNN::Serialization
 				partition.backend = AsString(Member(p, "backend", "partition.backend"), "partition.backend");
 				partition.regions = SizeList(Member(p, "regions", "partition.regions"), "partition.regions");
 				partition.memorySpaces.clear();
-				for (const auto space : AsArray(Member(p, "memorySpaces", "partition.memorySpaces"),
-				                                "partition.memorySpaces"))
+				for (const auto space :
+				     AsArray(Member(p, "memorySpaces", "partition.memorySpaces"), "partition.memorySpaces"))
 				{
-					partition.memorySpaces.push_back(static_cast<TensorMemorySpace>(AsUInt(space, "partition.memorySpace")));
+					partition.memorySpaces.push_back(
+					    static_cast<TensorMemorySpace>(AsUInt(space, "partition.memorySpace")));
 				}
 				manifest.partitions.push_back(std::move(partition));
 			}
 			manifest.memory = ParseMemory(Member(object, "memory", "manifest.memory"), "manifest.memory");
-			for (const auto item : AsArray(Member(object, "runtimeStates", "manifest.runtimeStates"),
-			                              "manifest.runtimeStates"))
+			for (const auto item :
+			     AsArray(Member(object, "runtimeStates", "manifest.runtimeStates"), "manifest.runtimeStates"))
 			{
 				manifest.runtimeStates.push_back(ParseRuntimeStateBinding(item, "manifest.runtimeStates"));
 			}
-			for (const auto item : AsArray(Member(object, "bufferBindings", "manifest.bufferBindings"),
-			                              "manifest.bufferBindings"))
+			for (const auto item :
+			     AsArray(Member(object, "bufferBindings", "manifest.bufferBindings"), "manifest.bufferBindings"))
 			{
 				manifest.bufferBindings.push_back(ParseRuntimeBufferBinding(item, "manifest.bufferBindings"));
 			}
-			for (const auto item : AsArray(Member(object, "runtimeSteps", "manifest.runtimeSteps"),
-			                              "manifest.runtimeSteps"))
+			for (const auto item :
+			     AsArray(Member(object, "runtimeSteps", "manifest.runtimeSteps"), "manifest.runtimeSteps"))
 			{
 				const auto step = AsObject(item, "manifest.runtimeSteps");
 				manifest.runtimeSteps.push_back({
 				    .id = static_cast<std::size_t>(AsUInt(Member(step, "id", "runtimeStep.id"), "runtimeStep.id")),
 				    .kind = static_cast<Runtime::RuntimeScheduleStepKind>(
 				        AsUInt(Member(step, "kind", "runtimeStep.kind"), "runtimeStep.kind")),
-				    .function = static_cast<FunctionId>(AsUInt(Member(step, "function", "runtimeStep.function"),
-				                                               "runtimeStep.function")),
-				    .region = static_cast<RegionId>(AsUInt(Member(step, "region", "runtimeStep.region"),
-				                                           "runtimeStep.region")),
+				    .function = static_cast<FunctionId>(
+				        AsUInt(Member(step, "function", "runtimeStep.function"), "runtimeStep.function")),
+				    .region = static_cast<RegionId>(
+				        AsUInt(Member(step, "region", "runtimeStep.region"), "runtimeStep.region")),
 				    .backend = AsString(Member(step, "backend", "runtimeStep.backend"), "runtimeStep.backend"),
 				    .fallbackBackend = AsString(Member(step, "fallbackBackend", "runtimeStep.fallbackBackend"),
 				                                "runtimeStep.fallbackBackend"),
-				    .inputBuffers = SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"),
-				                             "runtimeStep.inputBuffers"),
+				    .inputBuffers =
+				        SizeList(Member(step, "inputBuffers", "runtimeStep.inputBuffers"), "runtimeStep.inputBuffers"),
 				    .outputBuffers = SizeList(Member(step, "outputBuffers", "runtimeStep.outputBuffers"),
 				                              "runtimeStep.outputBuffers"),
 				});
@@ -1262,18 +1246,16 @@ namespace LiteNN::Serialization
 					const auto entryObject = AsObject(entryItem, "artifact.entries");
 					artifact.entries.push_back({
 					    .name = AsString(Member(entryObject, "name", "artifact.entry.name"), "artifact.entry.name"),
-					    .kind = static_cast<VNextArtifactEntryKind>(AsUInt(Member(entryObject, "kind",
-					                                                              "artifact.entry.kind"),
-					                                                     "artifact.entry.kind")),
-					    .function = static_cast<FunctionId>(AsUInt(Member(entryObject, "function",
-					                                                        "artifact.entry.function"),
-					                                               "artifact.entry.function")),
-					    .requiredStateBindings = StringList(Member(entryObject, "requiredStateBindings",
-					                                                "artifact.entry.requiredStateBindings"),
-					                                        "artifact.entry.requiredStateBindings"),
-					    .requiredBufferBindings = StringList(Member(entryObject, "requiredBufferBindings",
-					                                                 "artifact.entry.requiredBufferBindings"),
-					                                         "artifact.entry.requiredBufferBindings"),
+					    .kind = static_cast<VNextArtifactEntryKind>(
+					        AsUInt(Member(entryObject, "kind", "artifact.entry.kind"), "artifact.entry.kind")),
+					    .function = static_cast<FunctionId>(AsUInt(
+					        Member(entryObject, "function", "artifact.entry.function"), "artifact.entry.function")),
+					    .requiredStateBindings = StringList(
+					        Member(entryObject, "requiredStateBindings", "artifact.entry.requiredStateBindings"),
+					        "artifact.entry.requiredStateBindings"),
+					    .requiredBufferBindings = StringList(
+					        Member(entryObject, "requiredBufferBindings", "artifact.entry.requiredBufferBindings"),
+					        "artifact.entry.requiredBufferBindings"),
 					});
 				}
 				for (const auto regionItem : AsArray(Member(a, "regions", "artifact.regions"), "artifact.regions"))
@@ -1281,16 +1263,16 @@ namespace LiteNN::Serialization
 					const auto r = AsObject(regionItem, "artifact.regions");
 					artifact.regions.push_back({
 					    .name = AsString(Member(r, "name", "artifact.region.name"), "artifact.region.name"),
-					    .kind = static_cast<ExternalBufferKind>(AsUInt(Member(r, "kind", "artifact.region.kind"),
-					                                                   "artifact.region.kind")),
+					    .kind = static_cast<ExternalBufferKind>(
+					        AsUInt(Member(r, "kind", "artifact.region.kind"), "artifact.region.kind")),
 					    .relativePath = AsString(Member(r, "relativePath", "artifact.region.relativePath"),
 					                             "artifact.region.relativePath"),
-					    .byteOffset = static_cast<std::size_t>(
-					        AsUInt(Member(r, "byteOffset", "artifact.region.byteOffset"), "artifact.region.byteOffset")),
+					    .byteOffset = static_cast<std::size_t>(AsUInt(
+					        Member(r, "byteOffset", "artifact.region.byteOffset"), "artifact.region.byteOffset")),
 					    .byteSize = static_cast<std::size_t>(
 					        AsUInt(Member(r, "byteSize", "artifact.region.byteSize"), "artifact.region.byteSize")),
-					    .checksum = AsUInt(Member(r, "checksum", "artifact.region.checksum"),
-					                       "artifact.region.checksum"),
+					    .checksum =
+					        AsUInt(Member(r, "checksum", "artifact.region.checksum"), "artifact.region.checksum"),
 					});
 				}
 				for (const auto tensorItem :
@@ -1303,8 +1285,7 @@ namespace LiteNN::Serialization
 			return manifest;
 		}
 
-		void WriteVNextModelPackageFile(const std::filesystem::path& path,
-		                                const VNextPackageManifest& manifest,
+		void WriteVNextModelPackageFile(const std::filesystem::path& path, const VNextPackageManifest& manifest,
 		                                const ExecutablePlan& plan)
 		{
 			std::ofstream out(path, std::ios::binary);
@@ -1327,25 +1308,25 @@ namespace LiteNN::Serialization
 	} // namespace
 
 	void SaveVNextModelPackage(const ExecutableModule& module, const std::filesystem::path& path,
-	                           std::vector<VNextArtifactRef> artifacts,
-	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters,
+	                           std::vector<VNextArtifactRef> artifacts, VNextPackageLayout layout,
+	                           std::vector<VNextAdapterRef> adapters,
 	                           std::vector<Runtime::RuntimeStateBinding> runtimeStates)
 	{
 		ValidateExecutablePlan(module.plan);
-		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout),
-		                                          std::move(adapters), std::move(runtimeStates));
+		auto manifest = BuildVNextPackageManifest(module, std::move(artifacts), std::move(layout), std::move(adapters),
+		                                          std::move(runtimeStates));
 		ValidateVNextPackageManifest(manifest);
 
 		WriteVNextModelPackageFile(path, manifest, module.plan);
 	}
 
 	void SaveVNextModelPackage(const Runtime::RuntimeSchedule& schedule, const std::filesystem::path& path,
-	                           std::vector<VNextArtifactRef> artifacts,
-	                           VNextPackageLayout layout, std::vector<VNextAdapterRef> adapters)
+	                           std::vector<VNextArtifactRef> artifacts, VNextPackageLayout layout,
+	                           std::vector<VNextAdapterRef> adapters)
 	{
 		Runtime::ValidateRuntimeSchedule(schedule);
-		auto manifest = BuildVNextPackageManifest(schedule, std::move(artifacts), std::move(layout),
-		                                          std::move(adapters));
+		auto manifest =
+		    BuildVNextPackageManifest(schedule, std::move(artifacts), std::move(layout), std::move(adapters));
 		ValidateVNextPackageManifest(manifest);
 		WriteVNextModelPackageFile(path, manifest, schedule.module.plan);
 	}

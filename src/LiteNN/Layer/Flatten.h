@@ -29,7 +29,8 @@ namespace LiteNN::Layer
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		auto outputShape = FlattenShape(info.shape, startDim);
-		const auto result = subgraph.AddNode(ReshapeNode{ input, outputShape }, { OutputInfo{ info.dtype, outputShape } });
+		const auto result =
+		    subgraph.AddNode(ReshapeNode{ input, outputShape }, { OutputInfo{ info.dtype, outputShape } });
 		return { result, 0 };
 	}
 

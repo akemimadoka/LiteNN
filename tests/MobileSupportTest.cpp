@@ -12,9 +12,8 @@ namespace
 	bool ContainsDiagnostic(std::string_view needle)
 	{
 		const auto diagnostics = CollectUnsupportedMobileFeatureDiagnostics();
-		return std::ranges::any_of(diagnostics, [&](const std::string& diagnostic) {
-			return diagnostic.find(needle) != std::string::npos;
-		});
+		return std::ranges::any_of(
+		    diagnostics, [&](const std::string& diagnostic) { return diagnostic.find(needle) != std::string::npos; });
 	}
 } // namespace
 
@@ -50,9 +49,8 @@ TEST(MobileSupportTest, ReportsMobileConstraintPolicies)
 	EXPECT_EQ(QueryMobileConstraintStatus(MobileConstraint::Threading).level, MobileConstraintLevel::Constrained);
 
 	const auto diagnostics = CollectMobileConstraintDiagnostics();
-	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
-		return diagnostic.find("Filesystem") != std::string::npos;
-	}));
+	EXPECT_TRUE(std::ranges::any_of(
+	    diagnostics, [](const std::string& diagnostic) { return diagnostic.find("Filesystem") != std::string::npos; }));
 	EXPECT_TRUE(std::ranges::any_of(diagnostics, [](const std::string& diagnostic) {
 		return diagnostic.find("DynamicLoading") != std::string::npos;
 	}));

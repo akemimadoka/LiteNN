@@ -105,7 +105,7 @@ namespace LiteNN
 			const auto& variable = plan.variables[i];
 			const auto byteSize = variable.LogicalByteSize().value_or(variable.region.byteSize);
 			const auto kind = variable.IsExternal() ? MemoryBufferKind::External : MemoryBufferKind::Persistent;
-			(void)addBuffer(kind, variable.type.memorySpace, byteSize, variable.region.alignment, variable.aliasSet);
+			(void) addBuffer(kind, variable.type.memorySpace, byteSize, variable.region.alignment, variable.aliasSet);
 		}
 
 		for (std::size_t subgraphIndex = 0; subgraphIndex < plan.subgraphs.size(); ++subgraphIndex)
@@ -118,9 +118,9 @@ namespace LiteNN
 				const auto byteSize = subgraph.params[paramIndex].ByteSize();
 				if (!byteSize)
 				{
-					throw std::runtime_error(std::format(
-					    "Memory planner requires static byte size for subgraph {} param {}",
-					    subgraph.sourceSubgraph, paramIndex));
+					throw std::runtime_error(
+					    std::format("Memory planner requires static byte size for subgraph {} param {}",
+					                subgraph.sourceSubgraph, paramIndex));
 				}
 				paramBuffers.push_back(addBuffer(MemoryBufferKind::External, subgraph.params[paramIndex].memorySpace,
 				                                 *byteSize, 1, memoryPlan.buffers.size()));
@@ -164,9 +164,9 @@ namespace LiteNN
 					const auto byteSize = lifetime.type.ByteSize();
 					if (!byteSize)
 					{
-						throw std::runtime_error(std::format(
-						    "Memory planner requires static byte size for subgraph {} node {} port {}",
-						    lifetime.subgraph, lifetime.value.node, lifetime.value.port));
+						throw std::runtime_error(
+						    std::format("Memory planner requires static byte size for subgraph {} node {} port {}",
+						                lifetime.subgraph, lifetime.value.node, lifetime.value.port));
 					}
 
 					const auto& node = subgraph.nodes[lifetime.value.node];
@@ -183,7 +183,8 @@ namespace LiteNN
 					{
 						if (variable->variableIndex >= plan.variables.size())
 						{
-							throw std::runtime_error("Memory planner found VariableRefNode with invalid variable index");
+							throw std::runtime_error(
+							    "Memory planner found VariableRefNode with invalid variable index");
 						}
 						fixedBuffer = variable->variableIndex;
 					}
@@ -226,13 +227,14 @@ namespace LiteNN
 					const auto bufferId = fixedBuffer.value_or(reusable.value_or(memoryPlan.buffers.size()));
 					if (!fixedBuffer && !reusable)
 					{
-						(void)addBuffer(MemoryBufferKind::Workspace, lifetime.type.memorySpace, *byteSize, 1, bufferId);
+						(void) addBuffer(MemoryBufferKind::Workspace, lifetime.type.memorySpace, *byteSize, 1,
+						                 bufferId);
 					}
 					MemoryAssignment assignment{ .subgraph = lifetime.subgraph,
-					                             .value = lifetime.value,
-					                             .buffer = bufferId,
-					                             .offset = 0,
-					                             .lifetime = lifetime };
+						                         .value = lifetime.value,
+						                         .buffer = bufferId,
+						                         .offset = 0,
+						                         .lifetime = lifetime };
 					activeAssignments.push_back(assignment);
 					memoryPlan.assignments.push_back(std::move(assignment));
 				}
@@ -281,9 +283,9 @@ namespace LiteNN
 					{
 						if (inputType.memorySpace != outputType.memorySpace)
 						{
-							throw std::runtime_error(std::format(
-							    "Hidden memory-space copy is not allowed in subgraph {} node {} ({})",
-							    subgraph.sourceSubgraph, node.sourceNode, node.opKind));
+							throw std::runtime_error(
+							    std::format("Hidden memory-space copy is not allowed in subgraph {} node {} ({})",
+							                subgraph.sourceSubgraph, node.sourceNode, node.opKind));
 						}
 					}
 				}
@@ -293,8 +295,9 @@ namespace LiteNN
 					const auto* assignment = FindMemoryAssignment(memoryPlan, subgraph.sourceSubgraph, output);
 					if (!assignment)
 					{
-						throw std::runtime_error(std::format("Missing memory assignment for subgraph {} node {} port {}",
-						                                    subgraph.sourceSubgraph, output.node, output.port));
+						throw std::runtime_error(
+						    std::format("Missing memory assignment for subgraph {} node {} port {}",
+						                subgraph.sourceSubgraph, output.node, output.port));
 					}
 					if (assignment->buffer >= memoryPlan.buffers.size())
 					{

@@ -53,7 +53,7 @@ namespace
 		Graph inferenceGraph;
 
 		const auto useMlp = options.hiddenSize > 0;
-		const auto hiddenSize = useMlp ? options.hiddenSize : std::size_t{0};
+		const auto hiddenSize = useMlp ? options.hiddenSize : std::size_t{ 0 };
 
 		std::cout << std::format("Loading MNIST from {}\n", options.dataDir.string());
 		const auto train = LoadTrainSplit(options);
@@ -61,8 +61,7 @@ namespace
 
 		if (useMlp)
 		{
-			std::cout << std::format("Training 2-layer MLP (784->{}->10) with {} images\n",
-			                         hiddenSize, train.Count());
+			std::cout << std::format("Training 2-layer MLP (784->{}->10) with {} images\n", hiddenSize, train.Count());
 			auto trainingGraph = BuildTrainableMlpGraph(options.seed, hiddenSize);
 			TrainMnistGraph(trainingGraph, train, options);
 

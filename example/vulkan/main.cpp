@@ -92,20 +92,16 @@ namespace
 	{
 		Graph graph;
 		const auto weightIndex = graph.AddVariable(Variable::Create(Tensor<CPU>(
-		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 },
-		    DataType::Float32)));
+		    { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 }, { 3, 4 }, DataType::Float32)));
 		const auto biasIndex =
-		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 },
-		                                                     DataType::Float32)));
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, -100.0, 3.0, -200.0 }, { 1, 4 }, DataType::Float32)));
 		graph.SetVariableName(weightIndex, "linear.weight");
 		graph.SetVariableName(biasIndex, "linear.bias");
 
 		Subgraph sg;
 		const auto input = sg.AddParam(DataType::Float32, { 1, 3 });
-		const auto weight = sg.AddNode(VariableRefNode{ weightIndex },
-		                               { OutputInfo{ DataType::Float32, { 3, 4 } } });
-		const auto bias =
-		    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+		const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 3, 4 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
 		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 		                               { OutputInfo{ DataType::Float32, { 1, 4 } } });
 		const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
@@ -209,13 +205,11 @@ namespace
 	{
 		for (const auto& event : events)
 		{
-			std::cout << "Profile kernel[" << event.kernelIndex << "] entry=" << event.entryPoint
-			          << " groups=(" << event.groups.x << ',' << event.groups.y << ',' << event.groups.z
-			          << ") local=(" << event.localSize.x << ',' << event.localSize.y << ',' << event.localSize.z
-			          << ") descriptors=" << event.descriptorCount
-			          << " module_ms=" << event.moduleCreationWallMs
-			          << " dispatch_ms=" << event.dispatchWallMs
-			          << " gpu_ms=";
+			std::cout << "Profile kernel[" << event.kernelIndex << "] entry=" << event.entryPoint << " groups=("
+			          << event.groups.x << ',' << event.groups.y << ',' << event.groups.z << ") local=("
+			          << event.localSize.x << ',' << event.localSize.y << ',' << event.localSize.z
+			          << ") descriptors=" << event.descriptorCount << " module_ms=" << event.moduleCreationWallMs
+			          << " dispatch_ms=" << event.dispatchWallMs << " gpu_ms=";
 			if (event.gpuTimestampAvailable)
 			{
 				std::cout << event.gpuElapsedMs;
@@ -227,7 +221,7 @@ namespace
 			std::cout << '\n';
 		}
 	}
-}
+} // namespace
 
 int main()
 {
@@ -251,8 +245,7 @@ int main()
 	PrintResult("Vulkan Add separated result:", RunAdd(separatedModule, device));
 	PrintProfileEvents(profileEvents);
 	std::cout << "Separated regions: metadata=" << separated.Metadata().size()
-	          << " constants=" << separated.Constants().size()
-	          << " weights=" << separated.Weights().size()
+	          << " constants=" << separated.Constants().size() << " weights=" << separated.Weights().size()
 	          << " instructions=" << separated.Instructions().size() << '\n';
 
 	auto linearGraph = BuildLinearExternalWeightsGraph();
@@ -261,13 +254,13 @@ int main()
 	std::cout << "LinearExternalWeights artifact backend: " << BackendName(linearArtifact.Backend()) << '\n';
 	auto linearSeparated = linearArtifact.SeparateRodata();
 	std::cout << "LinearExternalWeights separated regions: metadata=" << linearSeparated.Metadata().size()
-	          << " constants=" << linearSeparated.Constants().size()
-	          << " weights=" << linearSeparated.Weights().size()
+	          << " constants=" << linearSeparated.Constants().size() << " weights=" << linearSeparated.Weights().size()
 	          << " instructions=" << linearSeparated.Instructions().size()
 	          << " external_tensors=" << linearSeparated.ExternalTensorInfos().size() << '\n';
 	if (linearArtifact.Backend() != CompiledModuleBackend::VulkanNative || linearSeparated.Weights().empty())
 	{
-		throw std::runtime_error("expected Vulkan-native LinearExternalWeights to use a non-empty separated weights region");
+		throw std::runtime_error(
+		    "expected Vulkan-native LinearExternalWeights to use a non-empty separated weights region");
 	}
 	auto linearSeparatedModule = linearSeparated.LoadBorrowedExternalRegions(device);
 	PrintResult("Vulkan LinearExternalWeights separated result:", RunLinear(linearSeparatedModule, device));
@@ -296,7 +289,7 @@ int main()
 		bool strictLoadRejected = false;
 		try
 		{
-			(void)fallbackArtifact.Load(device);
+			(void) fallbackArtifact.Load(device);
 		}
 		catch (const std::exception& error)
 		{

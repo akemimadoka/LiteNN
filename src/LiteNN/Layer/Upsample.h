@@ -11,8 +11,7 @@
 namespace LiteNN::Layer
 {
 	inline NodeOutput AddUpsample(Subgraph& subgraph, NodeOutput input, UpsampleMode mode,
-	                              std::vector<std::size_t> outputSpatialShape,
-	                              bool alignCorners = false)
+	                              std::vector<std::size_t> outputSpatialShape, bool alignCorners = false)
 	{
 		const auto inputInfo = subgraph.GetOutputInfo(input);
 		const auto outputShape = ::LiteNN::Detail::UpsampleOutputShape(inputInfo.shape, outputSpatialShape);
@@ -20,9 +19,8 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("Upsample only supports Bool tensors in nearest mode");
 		}
-		const auto result = subgraph.AddNode(
-		    UpsampleNode{ input, mode, std::move(outputSpatialShape), alignCorners },
-		    { OutputInfo{ inputInfo.dtype, outputShape } });
+		const auto result = subgraph.AddNode(UpsampleNode{ input, mode, std::move(outputSpatialShape), alignCorners },
+		                                     { OutputInfo{ inputInfo.dtype, outputShape } });
 		return { result, 0 };
 	}
 
@@ -33,22 +31,19 @@ namespace LiteNN::Layer
 	}
 
 	inline NodeOutput AddBilinearUpsample2D(Subgraph& subgraph, NodeOutput input,
-	                                        std::vector<std::size_t> outputSpatialShape,
-	                                        bool alignCorners = false)
+	                                        std::vector<std::size_t> outputSpatialShape, bool alignCorners = false)
 	{
 		return AddUpsample(subgraph, input, UpsampleMode::Bilinear, std::move(outputSpatialShape), alignCorners);
 	}
 
 	inline NodeOutput AddBicubicUpsample2D(Subgraph& subgraph, NodeOutput input,
-	                                       std::vector<std::size_t> outputSpatialShape,
-	                                       bool alignCorners = false)
+	                                       std::vector<std::size_t> outputSpatialShape, bool alignCorners = false)
 	{
 		return AddUpsample(subgraph, input, UpsampleMode::Bicubic, std::move(outputSpatialShape), alignCorners);
 	}
 
 	inline SubgraphId BuildUpsample(ModelBuilder& builder, DataType dtype, ShapeView inputShape, UpsampleMode mode,
-	                                std::vector<std::size_t> outputSpatialShape,
-	                                bool alignCorners = false)
+	                                std::vector<std::size_t> outputSpatialShape, bool alignCorners = false)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());

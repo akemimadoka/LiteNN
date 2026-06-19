@@ -16,7 +16,9 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection& symbolTable)
 {
 	auto fn = symbolTable.lookupNearestSymbolFrom<FuncOp>(*this, getCalleeAttr());
 	if (!fn)
+	{
 		return emitOpError("references unknown function '") << getCallee() << "'";
+	}
 	return success();
 }
 
@@ -34,13 +36,11 @@ void FuncOp::build(OpBuilder& builder, OperationState& state, llvm::StringRef na
 ParseResult FuncOp::parse(OpAsmParser& parser, OperationState& result)
 {
 	auto buildFuncType = [](Builder& builder, ArrayRef<Type> argTypes, ArrayRef<Type> results,
-	                        function_interface_impl::VariadicFlag, std::string&) {
-		return builder.getFunctionType(argTypes, results);
-	};
+	                        function_interface_impl::VariadicFlag,
+	                        std::string&) { return builder.getFunctionType(argTypes, results); };
 	return function_interface_impl::parseFunctionOp(parser, result, /*allowVariadic=*/false,
 	                                                getFunctionTypeAttrName(result.name), buildFuncType,
-	                                                getArgAttrsAttrName(result.name),
-	                                                getResAttrsAttrName(result.name));
+	                                                getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
 }
 
 void FuncOp::print(OpAsmPrinter& p)
@@ -74,34 +74,50 @@ ParseResult CondOp::parse(OpAsmParser& parser, OperationState& result)
 	SmallVector<Type> resultTypes;
 
 	if (parser.parseOperand(condOperand))
+	{
 		return failure();
+	}
 
 	if (succeeded(parser.parseOptionalComma()))
 	{
 		if (parser.parseOperandList(argOperands))
+		{
 			return failure();
+		}
 	}
 
 	if (parser.parseColon() || parser.parseType(condType))
+	{
 		return failure();
+	}
 
 	if (succeeded(parser.parseOptionalComma()))
 	{
 		if (parser.parseLParen() || parser.parseTypeList(argTypes) || parser.parseRParen())
+		{
 			return failure();
+		}
 	}
 
 	if (parser.parseArrow())
+	{
 		return failure();
+	}
 
 	if (parser.parseLParen() || parser.parseTypeList(resultTypes) || parser.parseRParen())
+	{
 		return failure();
+	}
 
 	if (parser.resolveOperand(condOperand, condType, result.operands))
+	{
 		return failure();
+	}
 
 	if (parser.resolveOperands(argOperands, argTypes, parser.getCurrentLocation(), result.operands))
+	{
 		return failure();
+	}
 
 	result.addTypes(resultTypes);
 
@@ -109,10 +125,14 @@ ParseResult CondOp::parse(OpAsmParser& parser, OperationState& result)
 	auto* elseRegion = result.addRegion();
 
 	if (parser.parseRegion(*thenRegion) || parser.parseKeyword("else") || parser.parseRegion(*elseRegion))
+	{
 		return failure();
+	}
 
 	if (parser.parseOptionalAttrDict(result.attributes))
+	{
 		return failure();
+	}
 
 	return success();
 }
@@ -157,10 +177,14 @@ ParseResult WhileOp::parse(OpAsmParser& parser, OperationState& result)
 	if (parser.parseOperandList(initOperands) || parser.parseColon() || parser.parseLParen() ||
 	    parser.parseTypeList(initTypes) || parser.parseRParen() || parser.parseArrow() || parser.parseLParen() ||
 	    parser.parseTypeList(resultTypes) || parser.parseRParen())
+	{
 		return failure();
+	}
 
 	if (parser.resolveOperands(initOperands, initTypes, parser.getCurrentLocation(), result.operands))
+	{
 		return failure();
+	}
 
 	result.addTypes(resultTypes);
 
@@ -169,10 +193,14 @@ ParseResult WhileOp::parse(OpAsmParser& parser, OperationState& result)
 
 	if (parser.parseKeyword("cond") || parser.parseRegion(*condRegion) || parser.parseKeyword("body") ||
 	    parser.parseRegion(*bodyRegion))
+	{
 		return failure();
+	}
 
 	if (parser.parseOptionalAttrDict(result.attributes))
+	{
 		return failure();
+	}
 
 	return success();
 }
@@ -206,30 +234,41 @@ ParseResult FusedOp::parse(OpAsmParser& parser, OperationState& result)
 
 	// Parse pattern keyword as enum value
 	if (parser.parseKeyword(&patternStr))
+	{
 		return failure();
+	}
 
 	auto patternKind = symbolizeFusionPatternKind(patternStr);
 	if (!patternKind)
+	{
 		return failure();
-	result.addAttribute("pattern",
-		FusionPatternKindAttr::get(parser.getContext(), *patternKind));
+	}
+	result.addAttribute("pattern", FusionPatternKindAttr::get(parser.getContext(), *patternKind));
 
 	if (parser.parseLParen() || parser.parseOperandList(argOperands) || parser.parseRParen() || parser.parseColon() ||
 	    parser.parseLParen() || parser.parseTypeList(argTypes) || parser.parseRParen() || parser.parseArrow() ||
 	    parser.parseLParen() || parser.parseTypeList(resultTypes) || parser.parseRParen())
+	{
 		return failure();
+	}
 
 	if (parser.resolveOperands(argOperands, argTypes, parser.getCurrentLocation(), result.operands))
+	{
 		return failure();
+	}
 
 	result.addTypes(resultTypes);
 
 	auto* bodyRegion = result.addRegion();
 	if (parser.parseRegion(*bodyRegion))
+	{
 		return failure();
+	}
 
 	if (parser.parseOptionalAttrDict(result.attributes))
+	{
 		return failure();
+	}
 
 	return success();
 }
@@ -244,7 +283,7 @@ void FusedOp::print(OpAsmPrinter& p)
 	llvm::interleaveComma(getResultTypes(), p);
 	p << ") ";
 	p.printRegion(getBody());
-	p.printOptionalAttrDict((*this)->getAttrs(), {"pattern"});
+	p.printOptionalAttrDict((*this)->getAttrs(), { "pattern" });
 }
 
 //===----------------------------------------------------------------------===//

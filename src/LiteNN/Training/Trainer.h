@@ -62,8 +62,8 @@ namespace LiteNN::Training
 			}
 			Validation::ValidateGraph(*graph_);
 			parameters_ = ParameterSet::BindGraph(*graph_);
-			trainStepPlan_ = BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(*graph_), options_.executionPolicy,
-			                                    options_.aotBackendAvailable);
+			trainStepPlan_ = BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(*graph_),
+			                                    options_.executionPolicy, options_.aotBackendAvailable);
 			ValidateTrainStepPlan(trainStepPlan_);
 			if (trainStepPlan_.policy == TrainExecutionPolicy::AOT)
 			{
@@ -332,10 +332,9 @@ namespace LiteNN::Training
 					{
 						throw std::runtime_error("Trainer AOT optimizer update runner returned no outputs");
 					}
-					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
-					                                             parameter.UnsafeRawData(), updateOutputs[0].DType(),
-					                                             updateOutputs[0].UnsafeRawData(),
-					                                             updateOutputs[0].NumElements());
+					DeviceTraits<PolymorphicDevice>::CopyFromCPU(
+					    parameter.CurDevice(), parameter.DType(), parameter.UnsafeRawData(), updateOutputs[0].DType(),
+					    updateOutputs[0].UnsafeRawData(), updateOutputs[0].NumElements());
 				}
 				return true;
 			}
@@ -355,20 +354,18 @@ namespace LiteNN::Training
 					    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
 					Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
 					std::array<Tensor<CPU>, 4> updateInputs = { parameterCPU, gradient,
-						                                    optimizer_.FirstMoment(parameterIndex),
-						                                    optimizer_.SecondMoment(parameterIndex) };
-					auto updateRunner =
-					    CreateCompiledAdamWUpdateRunner(parameters_[parameterIndex].type, optimizer_.Options(), step,
-					                                    device_);
+						                                        optimizer_.FirstMoment(parameterIndex),
+						                                        optimizer_.SecondMoment(parameterIndex) };
+					auto updateRunner = CreateCompiledAdamWUpdateRunner(parameters_[parameterIndex].type,
+					                                                    optimizer_.Options(), step, device_);
 					auto updateOutputs = updateRunner(updateInputs);
 					if (updateOutputs.size() != 3)
 					{
 						throw std::runtime_error("Trainer AOT AdamW update runner returned an unexpected output count");
 					}
-					DeviceTraits<PolymorphicDevice>::CopyFromCPU(parameter.CurDevice(), parameter.DType(),
-					                                             parameter.UnsafeRawData(), updateOutputs[0].DType(),
-					                                             updateOutputs[0].UnsafeRawData(),
-					                                             updateOutputs[0].NumElements());
+					DeviceTraits<PolymorphicDevice>::CopyFromCPU(
+					    parameter.CurDevice(), parameter.DType(), parameter.UnsafeRawData(), updateOutputs[0].DType(),
+					    updateOutputs[0].UnsafeRawData(), updateOutputs[0].NumElements());
 					optimizer_.FirstMoment(parameterIndex) = std::move(updateOutputs[1]);
 					optimizer_.SecondMoment(parameterIndex) = std::move(updateOutputs[2]);
 				}

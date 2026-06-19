@@ -9,28 +9,23 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddIm2Col(Subgraph& subgraph, NodeOutput input,
-	                            std::vector<std::size_t> kernelShape,
-	                            std::vector<std::size_t> strides,
-	                            std::vector<std::size_t> dilations,
-	                            std::vector<std::size_t> lowPads,
-	                            std::vector<std::size_t> highPads)
+	inline NodeOutput AddIm2Col(Subgraph& subgraph, NodeOutput input, std::vector<std::size_t> kernelShape,
+	                            std::vector<std::size_t> strides, std::vector<std::size_t> dilations,
+	                            std::vector<std::size_t> lowPads, std::vector<std::size_t> highPads)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
-		const auto outputShape = ::LiteNN::Detail::Im2ColOutputShape(info.shape, kernelShape, strides,
-		                                                             dilations, lowPads, highPads);
-		const auto result = subgraph.AddNode(
-		    Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
-		                std::move(lowPads), std::move(highPads) },
-		    { OutputInfo{ info.dtype, outputShape } });
+		const auto outputShape =
+		    ::LiteNN::Detail::Im2ColOutputShape(info.shape, kernelShape, strides, dilations, lowPads, highPads);
+		const auto result =
+		    subgraph.AddNode(Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
+		                                 std::move(lowPads), std::move(highPads) },
+		                     { OutputInfo{ info.dtype, outputShape } });
 		return { result, 0 };
 	}
 
 	inline SubgraphId BuildIm2Col(ModelBuilder& builder, DataType dtype, ShapeView inputShape,
-	                              std::vector<std::size_t> kernelShape,
-	                              std::vector<std::size_t> strides,
-	                              std::vector<std::size_t> dilations,
-	                              std::vector<std::size_t> lowPads,
+	                              std::vector<std::size_t> kernelShape, std::vector<std::size_t> strides,
+	                              std::vector<std::size_t> dilations, std::vector<std::size_t> lowPads,
 	                              std::vector<std::size_t> highPads)
 	{
 		Subgraph subgraph;

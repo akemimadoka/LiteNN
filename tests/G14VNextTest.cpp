@@ -36,10 +36,10 @@ namespace
 	Graph BuildLinearAddGraphWithLoRAWeights()
 	{
 		auto graph = BuildLinearAddGraph();
-		const auto a = graph.AddVariable(
-		    Variable::CreateFrozen(Tensor<CPU>({ 0.5F, -0.25F }, { 2, 1 }, DataType::Float32)));
-		const auto b = graph.AddVariable(
-		    Variable::CreateFrozen(Tensor<CPU>({ 1.5F, 2.0F }, { 1, 2 }, DataType::Float32)));
+		const auto a =
+		    graph.AddVariable(Variable::CreateFrozen(Tensor<CPU>({ 0.5F, -0.25F }, { 2, 1 }, DataType::Float32)));
+		const auto b =
+		    graph.AddVariable(Variable::CreateFrozen(Tensor<CPU>({ 1.5F, 2.0F }, { 1, 2 }, DataType::Float32)));
 		graph.SetVariableName(a, "linear.lora_A.default.weight");
 		graph.SetVariableName(b, "linear.lora_B.default.weight");
 		return graph;
@@ -54,9 +54,9 @@ TEST(G14VNext, BuildsManifestWithTensorArtifactAndCoverageTables)
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
 	artifact.entries.push_back({ .name = "forward",
-		                         .kind = VNextArtifactEntryKind::Forward,
-		                         .function = 0,
-		                         .requiredBufferBindings = { "linear.bias" } });
+	                             .kind = VNextArtifactEntryKind::Forward,
+	                             .function = 0,
+	                             .requiredBufferBindings = { "linear.bias" } });
 	artifact.regions.push_back({ .name = "instructions",
 	                             .kind = ExternalBufferKind::ObjectFile,
 	                             .relativePath = "artifacts/cpu_forward.o",
@@ -101,16 +101,16 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 {
 	const auto graph = BuildLinearAddGraph();
 	auto module = Detail::BuildExecutableModuleFromGraph(graph);
-	auto kvCache = Runtime::MakeKVCacheState("kv.cache.0",
-	                                         TensorType::Dense(DataType::Float16, ShapeView{ 1, 2, 4, 8 }));
+	auto kvCache =
+	    Runtime::MakeKVCacheState("kv.cache.0", TensorType::Dense(DataType::Float16, ShapeView{ 1, 2, 4, 8 }));
 	VNextArtifactRef artifact;
 	artifact.name = "cpu_forward";
 	artifact.backend = std::string(BackendCPUAOT);
 	artifact.entries.push_back({ .name = "forward",
-		                         .kind = VNextArtifactEntryKind::Forward,
-		                         .function = 0,
-		                         .requiredStateBindings = { "kv.cache.0" },
-		                         .requiredBufferBindings = { "linear.bias" } });
+	                             .kind = VNextArtifactEntryKind::Forward,
+	                             .function = 0,
+	                             .requiredStateBindings = { "kv.cache.0" },
+	                             .requiredBufferBindings = { "linear.bias" } });
 	artifact.regions.push_back({ .name = "instructions",
 	                             .kind = ExternalBufferKind::ObjectFile,
 	                             .relativePath = "artifacts/cpu_forward.o",
@@ -126,11 +126,11 @@ TEST(G14VNext, VNextModelPackageRoundTripsManifestAndExecutablePlan)
 		const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 		EXPECT_NE(json.find("\"op\":"), std::string::npos);
 		EXPECT_EQ(json.find("\"opKind\""), std::string::npos);
-	EXPECT_NE(json.find("\"runtimeStates\""), std::string::npos);
-	EXPECT_NE(json.find("\"kv.cache.0\""), std::string::npos);
-	EXPECT_NE(json.find("\"kind\":"), std::string::npos);
-	EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
-	EXPECT_NE(json.find("\"entries\""), std::string::npos);
+		EXPECT_NE(json.find("\"runtimeStates\""), std::string::npos);
+		EXPECT_NE(json.find("\"kv.cache.0\""), std::string::npos);
+		EXPECT_NE(json.find("\"kind\":"), std::string::npos);
+		EXPECT_NE(json.find("\"bufferBindings\""), std::string::npos);
+		EXPECT_NE(json.find("\"entries\""), std::string::npos);
 		EXPECT_EQ(json.find("\"entryFunction\""), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
@@ -200,9 +200,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeScheduleFallbackRecords)
 	const auto abi = DescribeVNextABIFamily(package.manifest);
 	EXPECT_TRUE(abi.hasFallbackRecords);
 	EXPECT_TRUE(abi.hasProfileRecords);
-	EXPECT_TRUE(std::ranges::contains(abi.runtimeStepRecords,
-	                                  std::format("{}:fallback:{}->{}",
-	                                              loadedFallback.id, BackendCUDANative, BackendCPUInterpreter)));
+	EXPECT_TRUE(std::ranges::contains(abi.runtimeStepRecords, std::format("{}:fallback:{}->{}", loadedFallback.id,
+	                                                                      BackendCUDANative, BackendCPUInterpreter)));
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 }
 
@@ -293,8 +292,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsPackedNibbleQuantizationMetadata)
 	Graph graph;
 	auto packed = PackInteger4(Tensor<CPU>({ 1.0, 15.0, 2.0 }, { 3 }, DataType::UInt8),
 	                           PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }));
-	auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8,
-	                                       PackedNibbleOrder::HighThenLow);
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3 }, 0.25F, 8, PackedNibbleOrder::HighThenLow);
 	const auto packedVariable = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(packed), params));
 	graph.SetVariableName(packedVariable, "linear.weight.uint4");
 	Subgraph subgraph;
@@ -341,15 +339,14 @@ TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
 		std::ofstream out(path, std::ios::binary);
 		out << "{\"format\":\"litenn.legacy.graph\"}";
 	}
-	EXPECT_THROW((void)Serialization::LoadVNextModelPackage(path), std::runtime_error);
+	EXPECT_THROW((void) Serialization::LoadVNextModelPackage(path), std::runtime_error);
 	std::filesystem::remove(path);
 }
 
 TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 {
 	const auto graph = BuildLinearAddGraph();
-	auto kvCache = Runtime::MakeKVCacheState("kv.cache.0",
-	                                         TensorType::Dense(DataType::Float32, ShapeView{ 1, 2, 4 }));
+	auto kvCache = Runtime::MakeKVCacheState("kv.cache.0", TensorType::Dense(DataType::Float32, ShapeView{ 1, 2, 4 }));
 
 	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { kvCache });
 
@@ -411,14 +408,11 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
-	manifest.artifacts.push_back({ .name = "broken-kind",
-		                           .backend = std::string(BackendCPUAOT),
-		                           .entries = { { .name = "forward",
-		                                          .kind = static_cast<VNextArtifactEntryKind>(99),
-		                                          .function = 0 } },
-		                           .regions = { { .name = "instructions",
-		                                          .relativePath = "artifacts/broken.o",
-		                                          .byteSize = 1 } } });
+	manifest.artifacts.push_back(
+	    { .name = "broken-kind",
+	      .backend = std::string(BackendCPUAOT),
+	      .entries = { { .name = "forward", .kind = static_cast<VNextArtifactEntryKind>(99), .function = 0 } },
+	      .regions = { { .name = "instructions", .relativePath = "artifacts/broken.o", .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
@@ -428,14 +422,11 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
-	manifest.artifacts.push_back({ .name = "missing-binding",
-		                           .backend = std::string(BackendCPUAOT),
-		                           .entries = { { .name = "forward",
-		                                          .function = 0,
-		                                          .requiredBufferBindings = { "missing.weight" } } },
-		                           .regions = { { .name = "instructions",
-		                                          .relativePath = "artifacts/missing.o",
-		                                          .byteSize = 1 } } });
+	manifest.artifacts.push_back(
+	    { .name = "missing-binding",
+	      .backend = std::string(BackendCPUAOT),
+	      .entries = { { .name = "forward", .function = 0, .requiredBufferBindings = { "missing.weight" } } },
+	      .regions = { { .name = "instructions", .relativePath = "artifacts/missing.o", .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
@@ -448,8 +439,7 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 
 	manifest = BuildVNextPackageManifest(
 	    Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()), {}, {}, {},
-	    { Runtime::MakeKVCacheState("kv.cache.0",
-	                                TensorType::Dense(DataType::Float16, ShapeView{ 1, 2, 4, 8 })) });
+	    { Runtime::MakeKVCacheState("kv.cache.0", TensorType::Dense(DataType::Float16, ShapeView{ 1, 2, 4, 8 })) });
 	manifest.runtimeStates[0].memoryBuffer = manifest.memory.buffers.size();
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
@@ -480,9 +470,7 @@ TEST(G14VNext, VNextABIVersionBumpRulesCoverProductionContracts)
 	const auto rules = DescribeVNextABIVersionBumpRules();
 	EXPECT_GE(rules.size(), 11u);
 	const auto covers = [&](VNextABIChangeArea area) {
-		return std::ranges::any_of(rules, [&](const VNextABIVersionBumpRule& rule) {
-			return rule.area == area;
-		});
+		return std::ranges::any_of(rules, [&](const VNextABIVersionBumpRule& rule) { return rule.area == area; });
 	};
 	EXPECT_TRUE(covers(VNextABIChangeArea::TensorBinding));
 	EXPECT_TRUE(covers(VNextABIChangeArea::ExternalRegion));
@@ -505,18 +493,18 @@ TEST(G14VNext, MemoryPlanRejectsHiddenMemorySpaceCopies)
 TEST(G14VNext, RuntimeStateABICoversLLMDiffusionAndTraining)
 {
 	Runtime::LLMDecodeStateABI llm;
-	llm.kvCaches.push_back(Runtime::MakeKVCacheState(
-	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 1, 8, 16, 64 })));
+	llm.kvCaches.push_back(
+	    Runtime::MakeKVCacheState("kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 1, 8, 16, 64 })));
 	llm.currentPosition = Runtime::MakeRuntimeStateBinding(
 	    "position", Runtime::RuntimeStateKind::KVCache, "current-position",
 	    TensorType::Dense(DataType::Int64, ShapeView{ 1 }), BufferMutability::Mutable, { "read", "increment" });
 
 	Runtime::DiffusionExecutionABI diffusion{
-		.latent = Runtime::MakeDiffusionState(
-		    "latent", "latent-state", TensorType::Dense(DataType::Float16, ShapeView{ 1, 4, 128, 128 })),
-		.timestepSchedule = Runtime::MakeDiffusionState(
-		    "timesteps", "timestep-schedule", TensorType::Dense(DataType::Float32, ShapeView{ 32 }),
-		    BufferMutability::Immutable)
+		.latent = Runtime::MakeDiffusionState("latent", "latent-state",
+		                                      TensorType::Dense(DataType::Float16, ShapeView{ 1, 4, 128, 128 })),
+		.timestepSchedule = Runtime::MakeDiffusionState("timesteps", "timestep-schedule",
+		                                                TensorType::Dense(DataType::Float32, ShapeView{ 32 }),
+		                                                BufferMutability::Immutable)
 	};
 
 	Runtime::TrainingExecutionABI training;
@@ -527,12 +515,12 @@ TEST(G14VNext, RuntimeStateABICoversLLMDiffusionAndTraining)
 	training.recomputationStrategy = "none";
 
 	Runtime::LoRAAdapterExecutionABI lora;
-	lora.adapterWeights.push_back(Runtime::MakeLoRAAdapterState(
-	    "lora.linear.default.A", "adapter-weight-a",
-	    TensorType::Dense(DataType::Float16, ShapeView{ 8, 4 }), BufferMutability::Mutable));
-	lora.mergeState = Runtime::MakeLoRAAdapterState(
-	    "lora.linear.default.merge", "adapter-merge-state",
-	    TensorType::Dense(DataType::Int32, ShapeView{ 1 }), BufferMutability::Mutable);
+	lora.adapterWeights.push_back(Runtime::MakeLoRAAdapterState("lora.linear.default.A", "adapter-weight-a",
+	                                                            TensorType::Dense(DataType::Float16, ShapeView{ 8, 4 }),
+	                                                            BufferMutability::Mutable));
+	lora.mergeState =
+	    Runtime::MakeLoRAAdapterState("lora.linear.default.merge", "adapter-merge-state",
+	                                  TensorType::Dense(DataType::Int32, ShapeView{ 1 }), BufferMutability::Mutable);
 
 	EXPECT_EQ(llm.kvCaches[0].role, "kv-cache");
 	ASSERT_TRUE(llm.currentPosition.has_value());

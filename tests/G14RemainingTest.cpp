@@ -30,14 +30,14 @@ namespace
 		Subgraph backwardAndUpdate;
 		const auto backwardInput = backwardAndUpdate.AddParam(DataType::Float32, { 2 });
 		const auto outputGradient = backwardAndUpdate.AddParam(DataType::Float32, { 2 });
-		const auto backwardParameter = backwardAndUpdate.AddNode(
-		    VariableRefNode{ parameterIndex }, { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto backwardParameter =
+		    backwardAndUpdate.AddNode(VariableRefNode{ parameterIndex }, { OutputInfo{ DataType::Float32, { 2 } } });
 		const auto inputGradient = backwardAndUpdate.AddNode(
 		    BinaryOpNode{ BinaryOp::Multiply, { outputGradient, 0 }, { backwardParameter, 0 } },
 		    { OutputInfo{ DataType::Float32, { 2 } } });
-		const auto parameterGradient = backwardAndUpdate.AddNode(
-		    BinaryOpNode{ BinaryOp::Multiply, { outputGradient, 0 }, { backwardInput, 0 } },
-		    { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto parameterGradient =
+		    backwardAndUpdate.AddNode(BinaryOpNode{ BinaryOp::Multiply, { outputGradient, 0 }, { backwardInput, 0 } },
+		                              { OutputInfo{ DataType::Float32, { 2 } } });
 		const auto update = backwardAndUpdate.AddNode(
 		    SGDStepNode{ { backwardParameter, 0 }, { parameterGradient, 0 }, std::nullopt, 0.1, 0.0, 0.0, false },
 		    { OutputInfo{ DataType::Float32, { 2 } } });
@@ -50,8 +50,8 @@ namespace
 TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph), Training::TrainExecutionPolicy::Auto,
-	                                                true);
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph),
+	                                                Training::TrainExecutionPolicy::Auto, true);
 
 	EXPECT_EQ(train.policy, Training::TrainExecutionPolicy::AOT);
 	EXPECT_TRUE(train.backwardFunction.has_value());
@@ -64,8 +64,8 @@ TEST(G14Remaining, BuildsAndValidatesTrainStepPlan)
 TEST(G14Remaining, TrainStepPlanExposesNamedArtifactEntries)
 {
 	const auto graph = BuildTrainableGraph();
-	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph), Training::TrainExecutionPolicy::AOT,
-	                                                true);
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph),
+	                                                Training::TrainExecutionPolicy::AOT, true);
 
 	const auto findEntry = [&](std::string_view name) -> const Training::TrainStepArtifactEntry* {
 		for (const auto& entry : train.artifactEntries)
@@ -111,8 +111,7 @@ TEST(G14Remaining, TrainStepPlanExposesNamedArtifactEntries)
 	EXPECT_FALSE(update->outputBindings.empty());
 
 	const auto hasBindingRole = [&](const Training::TrainStepArtifactEntry& entry,
-	                                std::span<const std::size_t> bindings,
-	                                Training::TrainStepABIRole role) {
+	                                std::span<const std::size_t> bindings, Training::TrainStepABIRole role) {
 		for (const auto binding : bindings)
 		{
 			if (train.abiBindings[binding].role == role)
@@ -188,8 +187,8 @@ TEST(G14Remaining, PlacementFallbacksAreExplicitAndCanBeRejected)
 	EXPECT_EQ(profileRecords.back().fallbackBackend, BackendCPUInterpreter);
 	EXPECT_NE(profileRecords.back().label.find("fallback"), std::string::npos);
 
-	EXPECT_THROW((void)Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends, registry, {},
-	                                              Runtime::PlacementFallbackPolicy::RejectFallback),
+	EXPECT_THROW((void) Runtime::BuildPlacementPlan(Detail::BuildExecutablePlanFromGraph(graph), backends, registry, {},
+	                                                Runtime::PlacementFallbackPolicy::RejectFallback),
 	             std::runtime_error);
 }
 
@@ -221,9 +220,8 @@ TEST(G14Remaining, CompatibilityOpsAreReportedByImporterDiagnostics)
 	const auto experts = subgraph.AddParam(DataType::Float32, { 2, 3, 1 });
 	const auto input = subgraph.AddParam(DataType::Float32, { 2, 1, 4 });
 	const auto ids = subgraph.AddParam(DataType::Int32, { 1, 4 });
-	const auto routed = subgraph.AddNode(
-	    MulMatIdNode{ { experts, 0 }, { input, 0 }, { ids, 0 } },
-	    { OutputInfo{ DataType::Float32, { 3, 1, 4 } } });
+	const auto routed = subgraph.AddNode(MulMatIdNode{ { experts, 0 }, { input, 0 }, { ids, 0 } },
+	                                     { OutputInfo{ DataType::Float32, { 3, 1, 4 } } });
 	subgraph.SetResults({ { routed, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 

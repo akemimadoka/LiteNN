@@ -47,8 +47,7 @@ TEST(ForwardOnlyPass, ExtractsInferenceGraphFromAutogradGraph)
 	const auto weight = sg.AddNode(VariableRefNode{ weightIndex }, { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto product = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { x, 0 }, { weight, 0 } },
 	                                { OutputInfo{ DataType::Float32, { 1 } } });
-	const auto y = sg.AddNode(UnaryOpNode{ UnaryOp::Sqrt, { product, 0 } },
-	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	const auto y = sg.AddNode(UnaryOpNode{ UnaryOp::Sqrt, { product, 0 } }, { OutputInfo{ DataType::Float32, { 1 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 	graph.SetInputNames({ "x" });
@@ -75,7 +74,8 @@ TEST(ForwardOnlyPass, ExtractsInferenceGraphFromAutogradGraph)
 	EXPECT_EQ(forwardOnly.OutputSignature()[0].name, "y");
 
 	Runtime::Interpreter<CPU> forwardOnlyInterpreter;
-	auto inferenceForward = forwardOnlyInterpreter.RunForward(Detail::BuildExecutablePlanFromGraph(forwardOnly), inputs);
+	auto inferenceForward =
+	    forwardOnlyInterpreter.RunForward(Detail::BuildExecutablePlanFromGraph(forwardOnly), inputs);
 	ASSERT_EQ(trainingForward.size(), 1u);
 	ASSERT_EQ(inferenceForward.size(), 1u);
 	EXPECT_FLOAT_EQ(ReadFloat(inferenceForward[0], 0), ReadFloat(trainingForward[0], 0));

@@ -26,13 +26,13 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("CrossEntropyLoss logits and labels shapes must match");
 		}
-		const auto result = subgraph.AddNode(CrossEntropyLossNode{ logits, labels },
-		                                    { OutputInfo{ DataType::Float32, { 1 } } });
+		const auto result =
+		    subgraph.AddNode(CrossEntropyLossNode{ logits, labels }, { OutputInfo{ DataType::Float32, { 1 } } });
 		return { result, 0 };
 	}
 
-	inline NodeOutput AddCrossEntropyLossBackward(Subgraph& subgraph, NodeOutput grad,
-	                                              NodeOutput logits, NodeOutput labels)
+	inline NodeOutput AddCrossEntropyLossBackward(Subgraph& subgraph, NodeOutput grad, NodeOutput logits,
+	                                              NodeOutput labels)
 	{
 		const auto gradInfo = subgraph.GetOutputInfo(grad);
 		const auto logitsInfo = subgraph.GetOutputInfo(logits);
@@ -54,7 +54,7 @@ namespace LiteNN::Layer
 			throw std::runtime_error("CrossEntropyLossBackward logits and labels shapes must match");
 		}
 		const auto result = subgraph.AddNode(CrossEntropyLossBackwardNode{ grad, logits, labels },
-		                                    { OutputInfo{ DataType::Float32, logitsInfo.shape } });
+		                                     { OutputInfo{ DataType::Float32, logitsInfo.shape } });
 		return { result, 0 };
 	}
 

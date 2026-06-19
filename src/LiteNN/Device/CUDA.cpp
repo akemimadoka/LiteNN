@@ -21,9 +21,9 @@
 #ifdef LITENN_ENABLE_NVRTC
 #include <nvrtc.h>
 #endif
+#include <cstdint>
 #include <memory>
 #include <mutex>
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -88,8 +88,7 @@ namespace LiteNN
 
 		bool AllowsHostFallback(const CUDA& device, const CUDAExecutionOptions& options) noexcept
 		{
-			return options.allowHostFallback ||
-			       device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow;
+			return options.allowHostFallback || device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow;
 		}
 
 		void RequireHostFallbackAllowed(const CUDA& device, const CUDAExecutionOptions& options,
@@ -97,19 +96,20 @@ namespace LiteNN
 		{
 			if (!AllowsHostFallback(device, options))
 			{
-				throw std::runtime_error(std::format(
-				    "CUDA host fallback for {} is disabled; add an explicit runtime schedule fallback step or set CUDAHostFallbackPolicy::Allow for this debug/fallback path",
-				    operation));
+				throw std::runtime_error(
+				    std::format("CUDA host fallback for {} is disabled; add an explicit runtime schedule fallback step "
+				                "or set CUDAHostFallbackPolicy::Allow for this debug/fallback path",
+				                operation));
 			}
 		}
 
 		CUDAExecutionOptions DeviceDefaultCUDAOptions(const CUDA& device) noexcept
 		{
 			return CUDAExecutionOptions{
-			    .stream = nullptr,
-			    .synchronize = true,
-			    .enableCUBLASLt = true,
-			    .allowHostFallback = device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow,
+				.stream = nullptr,
+				.synchronize = true,
+				.enableCUBLASLt = true,
+				.allowHostFallback = device.hostFallbackPolicy == CUDAHostFallbackPolicy::Allow,
 			};
 		}
 
@@ -162,8 +162,8 @@ namespace LiteNN
 		{
 			const char* name = nullptr;
 			const char* message = nullptr;
-			(void)cuGetErrorName(status, &name);
-			(void)cuGetErrorString(status, &message);
+			(void) cuGetErrorName(status, &name);
+			(void) cuGetErrorString(status, &message);
 			if (name != nullptr && message != nullptr)
 			{
 				return std::format("{} ({})", name, message);
@@ -216,7 +216,7 @@ namespace LiteNN
 				if (pushed_)
 				{
 					CUcontext popped{};
-					(void)cuCtxPopCurrent(&popped);
+					(void) cuCtxPopCurrent(&popped);
 				}
 			}
 
@@ -231,7 +231,7 @@ namespace LiteNN
 
 		void ClearCUDAError() noexcept
 		{
-			(void)cudaGetLastError();
+			(void) cudaGetLastError();
 		}
 
 		constexpr bool BuildHasCUBLASLt() noexcept
@@ -267,7 +267,7 @@ namespace LiteNN
 		}
 
 		CUDALowPrecisionCapabilities MakeLowPrecisionCapabilities(int deviceIndex,
-		                                                           const cudaDeviceProp& properties) noexcept
+		                                                          const cudaDeviceProp& properties) noexcept
 		{
 			const auto cc = ComputeCapabilityScore(properties.major, properties.minor);
 			return {
@@ -340,7 +340,7 @@ namespace LiteNN
 				CheckCUDA(cudaMalloc(&ptr_, ElementSize(type) * size), "cudaMalloc temporary buffer");
 				if (previousDevice != deviceIndex_)
 				{
-					(void)cudaSetDevice(previousDevice);
+					(void) cudaSetDevice(previousDevice);
 				}
 			}
 
@@ -353,16 +353,16 @@ namespace LiteNN
 					{
 						if (previousDevice != deviceIndex_)
 						{
-							(void)cudaSetDevice(deviceIndex_);
+							(void) cudaSetDevice(deviceIndex_);
 						}
-						(void)cudaFree(ptr_);
+						(void) cudaFree(ptr_);
 						if (previousDevice != deviceIndex_)
 						{
-							(void)cudaSetDevice(previousDevice);
+							(void) cudaSetDevice(previousDevice);
 						}
 						return;
 					}
-					(void)cudaFree(ptr_);
+					(void) cudaFree(ptr_);
 				}
 			}
 
@@ -658,35 +658,37 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto destroyProgram = [&] {
 				if (program != nullptr)
 				{
-					(void)nvrtcDestroyProgram(&program);
+					(void) nvrtcDestroyProgram(&program);
 				}
 			};
 
 			try
 			{
 				cudaDeviceProp properties{};
-				CheckCUDA(cudaGetDeviceProperties(&properties, deviceIndex), "cudaGetDeviceProperties for NVRTC conversion kernel");
+				CheckCUDA(cudaGetDeviceProperties(&properties, deviceIndex),
+				          "cudaGetDeviceProperties for NVRTC conversion kernel");
 				const auto arch = std::format("--gpu-architecture=compute_{}{}", properties.major, properties.minor);
 				const std::array optionStorage{
 					std::string("--std=c++17"),
 					arch,
 				};
 				std::array<const char*, 2> options{ optionStorage[0].c_str(), optionStorage[1].c_str() };
-				const auto compileStatus = nvrtcCompileProgram(program, static_cast<int>(options.size()), options.data());
+				const auto compileStatus =
+				    nvrtcCompileProgram(program, static_cast<int>(options.size()), options.data());
 
 				size_t logSize = 0;
-				(void)nvrtcGetProgramLogSize(program, &logSize);
+				(void) nvrtcGetProgramLogSize(program, &logSize);
 				std::string log;
 				if (logSize != 0)
 				{
 					log.resize(logSize);
-					(void)nvrtcGetProgramLog(program, log.data());
+					(void) nvrtcGetProgramLog(program, log.data());
 				}
 				if (compileStatus != NVRTC_SUCCESS)
 				{
-					throw std::runtime_error(std::format(
-					    "nvrtcCompileProgram for CUDA conversion kernel failed: {}\n{}",
-					    NVRTCStatusName(compileStatus), log));
+					throw std::runtime_error(
+					    std::format("nvrtcCompileProgram for CUDA conversion kernel failed: {}\n{}",
+					                NVRTCStatusName(compileStatus), log));
 				}
 
 				size_t ptxSize = 0;
@@ -724,14 +726,15 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			}
 
 			auto ptx = CompileCUDANativeConvertPTX(device.deviceIndex);
-			auto module = std::make_unique<CUDADriverModule>(device, std::span<const std::byte>(ptx.data(), ptx.size()));
+			auto module =
+			    std::make_unique<CUDADriverModule>(device, std::span<const std::byte>(ptx.data(), ptx.size()));
 			auto& ref = *module;
 			modules.push_back({ .deviceIndex = device.deviceIndex, .module = std::move(module) });
 			return ref;
 		}
 
 		void LaunchNativeCUDAConvert(CUDA& device, DataType srcType, const void* src, std::size_t size,
-		                            DataType dstType, void* dst, CUDAExecutionOptions options)
+		                             DataType dstType, void* dst, CUDAExecutionOptions options)
 		{
 			if (size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) * 256ull)
 			{
@@ -743,7 +746,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto count = static_cast<std::uint64_t>(size);
 			void* srcPtr = const_cast<void*>(src);
 			void* arguments[]{ &srcPtr, const_cast<int*>(&srcTypeValue), &dst, const_cast<int*>(&dstTypeValue),
-			                   const_cast<std::uint64_t*>(&count) };
+				               const_cast<std::uint64_t*>(&count) };
 			constexpr unsigned int kBlockSize = 256;
 			const auto gridX = static_cast<unsigned int>((size + kBlockSize - 1) / kBlockSize);
 			module.Launch("litenn_convert_kernel",
@@ -775,7 +778,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			{
 				if (changed_)
 				{
-					(void)cudaSetDevice(previousDevice_);
+					(void) cudaSetDevice(previousDevice_);
 				}
 			}
 
@@ -800,7 +803,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			{
 				if (handle_ != nullptr)
 				{
-					(void)cublasDestroy(handle_);
+					(void) cublasDestroy(handle_);
 				}
 			}
 
@@ -863,7 +866,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			{
 				if (handle_ != nullptr)
 				{
-					(void)cublasLtDestroy(handle_);
+					(void) cublasLtDestroy(handle_);
 				}
 			}
 
@@ -956,12 +959,14 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		{
 		public:
 			CUBLASLtDescriptor() = default;
-			explicit CUBLASLtDescriptor(Descriptor descriptor) : descriptor_(descriptor) {}
+			explicit CUBLASLtDescriptor(Descriptor descriptor) : descriptor_(descriptor)
+			{
+			}
 			~CUBLASLtDescriptor()
 			{
 				if (descriptor_ != nullptr)
 				{
-					(void)DestroyFn(descriptor_);
+					(void) DestroyFn(descriptor_);
 				}
 			}
 
@@ -977,12 +982,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			Descriptor descriptor_{};
 		};
 
-		using CUBLASLtMatmulDescOwner =
-		    CUBLASLtDescriptor<cublasLtMatmulDesc_t, cublasLtMatmulDescDestroy>;
-		using CUBLASLtMatrixLayoutOwner =
-		    CUBLASLtDescriptor<cublasLtMatrixLayout_t, cublasLtMatrixLayoutDestroy>;
-		using CUBLASLtPreferenceOwner =
-		    CUBLASLtDescriptor<cublasLtMatmulPreference_t, cublasLtMatmulPreferenceDestroy>;
+		using CUBLASLtMatmulDescOwner = CUBLASLtDescriptor<cublasLtMatmulDesc_t, cublasLtMatmulDescDestroy>;
+		using CUBLASLtMatrixLayoutOwner = CUBLASLtDescriptor<cublasLtMatrixLayout_t, cublasLtMatrixLayoutDestroy>;
+		using CUBLASLtPreferenceOwner = CUBLASLtDescriptor<cublasLtMatmulPreference_t, cublasLtMatmulPreferenceDestroy>;
 
 		bool ShouldTryCUBLASLtMatMul(DataType dtype, int m, int k, int n, CUDAExecutionOptions options)
 		{
@@ -1109,18 +1111,18 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			}
 			CUBLASLtMatmulDescOwner operationOwner(operation);
 			const cublasOperation_t opN = CUBLAS_OP_N;
-			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
-			(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
+			(void) cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
+			(void) cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
 			if (fastAccum)
 			{
 				int fastAccumValue = 1;
-				(void)cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_FAST_ACCUM,
-				                                     &fastAccumValue, sizeof(fastAccumValue));
+				(void) cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccumValue,
+				                                      sizeof(fastAccumValue));
 			}
 
 			const cublasLtOrder_t rowMajor = CUBLASLT_ORDER_ROW;
-			const auto makeLayout = [&](std::uint64_t rows, std::uint64_t cols, std::int64_t ld)
-			    -> CUBLASLtMatrixLayoutOwner {
+			const auto makeLayout = [&](std::uint64_t rows, std::uint64_t cols,
+			                            std::int64_t ld) -> CUBLASLtMatrixLayoutOwner {
 				cublasLtMatrixLayout_t layout{};
 				if (cublasLtMatrixLayoutCreate(&layout, dataType, rows, cols, ld) != CUBLAS_STATUS_SUCCESS)
 				{
@@ -1129,7 +1131,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				if (cublasLtMatrixLayoutSetAttribute(layout, CUBLASLT_MATRIX_LAYOUT_ORDER, &rowMajor,
 				                                     sizeof(rowMajor)) != CUBLAS_STATUS_SUCCESS)
 				{
-					(void)cublasLtMatrixLayoutDestroy(layout);
+					(void) cublasLtMatrixLayoutDestroy(layout);
 					return {};
 				}
 				return CUBLASLtMatrixLayoutOwner(layout);
@@ -1138,7 +1140,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			auto bLayout = makeLayout(static_cast<std::uint64_t>(k), static_cast<std::uint64_t>(n), n);
 			cublasLtMatrixLayout_t cLayoutRaw{};
 			if (cublasLtMatrixLayoutCreate(&cLayoutRaw, outputType, static_cast<std::uint64_t>(m),
-			                              static_cast<std::uint64_t>(n), n) != CUBLAS_STATUS_SUCCESS)
+			                               static_cast<std::uint64_t>(n), n) != CUBLAS_STATUS_SUCCESS)
 			{
 				return false;
 			}
@@ -1165,13 +1167,13 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				}
 				CUBLASLtPreferenceOwner preferenceOwner(preference);
 				constexpr std::uint64_t workspaceBytes = 1ull << 22;
-				(void)cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
-				                                           &workspaceBytes, sizeof(workspaceBytes));
+				(void) cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+				                                            &workspaceBytes, sizeof(workspaceBytes));
 				cublasLtMatmulHeuristicResult_t heuristic{};
 				int returned = 0;
 				if (cublasLtMatmulAlgoGetHeuristic(handle.get(), operation, aLayout.get(), bLayout.get(), cLayout.get(),
-				                                   cLayout.get(), preference, 1, &heuristic, &returned) !=
-				        CUBLAS_STATUS_SUCCESS ||
+				                                   cLayout.get(), preference, 1, &heuristic,
+				                                   &returned) != CUBLAS_STATUS_SUCCESS ||
 				    returned <= 0 || heuristic.state != CUBLAS_STATUS_SUCCESS)
 				{
 					return false;
@@ -1185,10 +1187,10 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			std::int32_t betaI32 = 0;
 			float alphaF32 = 1.0F;
 			float betaF32 = 0.0F;
-			const void* alpha = scaleType == CUDA_R_32I ? static_cast<const void*>(&alphaI32)
-			                                           : static_cast<const void*>(&alphaF32);
-			const void* beta = scaleType == CUDA_R_32I ? static_cast<const void*>(&betaI32)
-			                                          : static_cast<const void*>(&betaF32);
+			const void* alpha =
+			    scaleType == CUDA_R_32I ? static_cast<const void*>(&alphaI32) : static_cast<const void*>(&alphaF32);
+			const void* beta =
+			    scaleType == CUDA_R_32I ? static_cast<const void*>(&betaI32) : static_cast<const void*>(&betaF32);
 			std::unique_ptr<CUDATemporaryBuffer> workspace;
 			void* workspacePtr = nullptr;
 			if (algoWorkspaceBytes > 0)
@@ -1196,10 +1198,10 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				workspace = std::make_unique<CUDATemporaryBuffer>(device, DataType::UInt8, algoWorkspaceBytes);
 				workspacePtr = workspace->get();
 			}
-			const auto status = cublasLtMatmul(handle.get(), operation, alpha, src1, aLayout.get(), src2,
-			                                   bLayout.get(), beta, outputBuffer, cLayout.get(), outputBuffer,
-			                                   cLayout.get(), algo, workspacePtr, algoWorkspaceBytes,
-			                                   reinterpret_cast<cudaStream_t>(options.stream));
+			const auto status =
+			    cublasLtMatmul(handle.get(), operation, alpha, src1, aLayout.get(), src2, bLayout.get(), beta,
+			                   outputBuffer, cLayout.get(), outputBuffer, cLayout.get(), algo, workspacePtr,
+			                   algoWorkspaceBytes, reinterpret_cast<cudaStream_t>(options.stream));
 			if (status != CUBLAS_STATUS_SUCCESS)
 			{
 				return false;
@@ -1359,8 +1361,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		}
 
 		bool TryCUBLASMatMul(CUDA& device, void* dst, DataType type1, ShapeView shape1, const void* src1,
-		                     DataType type2, ShapeView shape2, const void* src2,
-		                     CUDAExecutionOptions options = {})
+		                     DataType type2, ShapeView shape2, const void* src2, CUDAExecutionOptions options = {})
 		{
 			if (shape1.NumDim() != 2 || shape2.NumDim() != 2 || shape1[1] != shape2[0] || type1 != type2)
 			{
@@ -1397,8 +1398,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				const float alpha = 1.0F;
 				const float beta = 0.0F;
 				CheckCUBLAS(cublasSgemm(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
-				                        static_cast<const float*>(src2), n, static_cast<const float*>(src1), k,
-				                        &beta, static_cast<float*>(dst), n),
+				                        static_cast<const float*>(src2), n, static_cast<const float*>(src1), k, &beta,
+				                        static_cast<float*>(dst), n),
 				            "cublasSgemm");
 			}
 			else if (type1 == DataType::Float64)
@@ -1406,8 +1407,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				const double alpha = 1.0;
 				const double beta = 0.0;
 				CheckCUBLAS(cublasDgemm(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
-				                        static_cast<const double*>(src2), n, static_cast<const double*>(src1), k,
-				                        &beta, static_cast<double*>(dst), n),
+				                        static_cast<const double*>(src2), n, static_cast<const double*>(src1), k, &beta,
+				                        static_cast<double*>(dst), n),
 				            "cublasDgemm");
 			}
 			else if (type1 == DataType::Float16)
@@ -1415,8 +1416,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				const float alpha = 1.0F;
 				const float beta = 0.0F;
 				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
-				                                  CUDA_R_16F, n, src1, CUDA_R_16F, k, &beta, dst, CUDA_R_16F, n,
-				                                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				                                 CUDA_R_16F, n, src1, CUDA_R_16F, k, &beta, dst, CUDA_R_16F, n,
+				                                 CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 				if (status != CUBLAS_STATUS_SUCCESS)
 				{
 					return false;
@@ -1428,8 +1429,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				const float alpha = 1.0F;
 				const float beta = 0.0F;
 				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
-				                                  CUDA_R_16BF, n, src1, CUDA_R_16BF, k, &beta, dst, CUDA_R_16BF, n,
-				                                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				                                 CUDA_R_16BF, n, src1, CUDA_R_16BF, k, &beta, dst, CUDA_R_16BF, n,
+				                                 CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 				if (status != CUBLAS_STATUS_SUCCESS)
 				{
 					return false;
@@ -1446,8 +1447,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				const std::int32_t alpha = 1;
 				const std::int32_t beta = 0;
 				const auto status = cublasGemmEx(handle.get(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, src2,
-				                                  CUDA_R_8I, n, src1, CUDA_R_8I, k, &beta, outputScratch.get(),
-				                                  CUDA_R_32I, n, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+				                                 CUDA_R_8I, n, src1, CUDA_R_8I, k, &beta, outputScratch.get(),
+				                                 CUDA_R_32I, n, CUBLAS_COMPUTE_32I, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 				if (status != CUBLAS_STATUS_SUCCESS)
 				{
 					return false;
@@ -1595,8 +1596,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		    capabilities.hasCUBLASLt, capabilities.supportsFloat16Storage, capabilities.supportsFloat16MatMul,
 		    capabilities.supportsBFloat16Storage, capabilities.supportsBFloat16MatMul,
 		    capabilities.supportsFloat8Storage, capabilities.supportsFloat8MatMul, capabilities.supportsInt8Storage,
-		    capabilities.supportsInt8TensorCores,
-		    capabilities.hasCUBLASLt && capabilities.supportsInt8TensorCores,
+		    capabilities.supportsInt8TensorCores, capabilities.hasCUBLASLt && capabilities.supportsInt8TensorCores,
 		    BuildHasNVRTC() && IsCUDADriverAvailable(capabilities.deviceIndex));
 	}
 
@@ -1673,7 +1673,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			}
 			catch (...)
 			{
-				(void)cuDevicePrimaryCtxRelease(driverDevice);
+				(void) cuDevicePrimaryCtxRelease(driverDevice);
 				context = nullptr;
 				throw;
 			}
@@ -1685,14 +1685,14 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			{
 				if (cuCtxPushCurrent(context) == CUDA_SUCCESS)
 				{
-					(void)cuModuleUnload(module);
+					(void) cuModuleUnload(module);
 					CUcontext popped{};
-					(void)cuCtxPopCurrent(&popped);
+					(void) cuCtxPopCurrent(&popped);
 				}
 			}
 			if (context != nullptr)
 			{
-				(void)cuDevicePrimaryCtxRelease(driverDevice);
+				(void) cuDevicePrimaryCtxRelease(driverDevice);
 			}
 		}
 
@@ -1739,8 +1739,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 		impl_ = std::make_unique<Impl>(std::move(device), image);
 #else
-		(void)device;
-		(void)image;
+		(void) device;
+		(void) image;
 		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
 #endif
 	}
@@ -1757,9 +1757,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			throw std::runtime_error("CUDA driver module is empty");
 		}
 #ifdef LITENN_ENABLE_CUDA_DRIVER
-		(void)impl_->GetFunction(functionName);
+		(void) impl_->GetFunction(functionName);
 #else
-		(void)functionName;
+		(void) functionName;
 		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
 #endif
 	}
@@ -1771,8 +1771,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		{
 			throw std::runtime_error("CUDA driver module is empty");
 		}
-		if (options.grid.x == 0 || options.grid.y == 0 || options.grid.z == 0 ||
-		    options.block.x == 0 || options.block.y == 0 || options.block.z == 0)
+		if (options.grid.x == 0 || options.grid.y == 0 || options.grid.z == 0 || options.block.x == 0 ||
+		    options.block.y == 0 || options.block.z == 0)
 		{
 			throw std::runtime_error("CUDA driver launch dimensions must be non-zero");
 		}
@@ -1783,8 +1783,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 #ifdef LITENN_ENABLE_CUDA_DRIVER
 		const auto function = impl_->GetFunction(functionName);
 		CUDADriverContextScope scope(impl_->context);
-		CheckCUDADriver(cuLaunchKernel(function, options.grid.x, options.grid.y, options.grid.z,
-		                               options.block.x, options.block.y, options.block.z,
+		CheckCUDADriver(cuLaunchKernel(function, options.grid.x, options.grid.y, options.grid.z, options.block.x,
+		                               options.block.y, options.block.z,
 		                               static_cast<unsigned int>(options.sharedMemoryBytes),
 		                               reinterpret_cast<CUstream>(options.stream),
 		                               arguments.empty() ? nullptr : arguments.data(), nullptr),
@@ -1794,9 +1794,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			CheckCUDADriver(cuStreamSynchronize(reinterpret_cast<CUstream>(options.stream)), "cuStreamSynchronize");
 		}
 #else
-		(void)functionName;
-		(void)options;
-		(void)arguments;
+		(void) functionName;
+		(void) options;
+		(void) arguments;
 		throw std::runtime_error("CUDA driver runtime is not enabled in this LiteNN build");
 #endif
 	}
@@ -1834,8 +1834,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 
 	void DeviceTraits<CUDA>::Deallocate(CUDA& device, void* ptr, DataType type, std::size_t size)
 	{
-		(void)type;
-		(void)size;
+		(void) type;
+		(void) size;
 		if (ptr == nullptr)
 		{
 			return;
@@ -1880,8 +1880,9 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			CUDATemporaryBuffer converted(device, dstType, size);
 			LaunchNativeCUDAConvert(device, srcType, src, size, dstType, converted.get(),
 			                        CUDAExecutionOptions{ .stream = options.stream, .synchronize = true });
-			CheckCUDA(cudaMemcpyAsync(dst, converted.get(), ElementSize(dstType) * size, cudaMemcpyDeviceToHost, stream),
-			          "cudaMemcpyAsync converted D2H");
+			CheckCUDA(
+			    cudaMemcpyAsync(dst, converted.get(), ElementSize(dstType) * size, cudaMemcpyDeviceToHost, stream),
+			    "cudaMemcpyAsync converted D2H");
 			SynchronizeCUDAStream(options.stream, "cudaStreamSynchronize after converted D2H");
 			return;
 		}
@@ -1895,14 +1896,14 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		DeviceTraits<CPU>::ConvertTo(cpu, srcType, hostSrc.data(), size, dstType, dst);
 	}
 
-	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
-	                                     const void* src, std::size_t size)
+	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType, const void* src,
+	                                     std::size_t size)
 	{
 		CopyFromCPU(device, dstType, dst, srcType, src, size, DeviceDefaultCUDAOptions(device));
 	}
 
-	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType,
-	                                     const void* src, std::size_t size, CUDAExecutionOptions options)
+	void DeviceTraits<CUDA>::CopyFromCPU(CUDA& device, DataType dstType, void* dst, DataType srcType, const void* src,
+	                                     std::size_t size, CUDAExecutionOptions options)
 	{
 		CUDADeviceGuard guard(device.deviceIndex);
 		const auto stream = reinterpret_cast<cudaStream_t>(options.stream);
@@ -1946,8 +1947,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		CUDADeviceGuard guard(device.deviceIndex);
 		if (srcType == dstType)
 		{
-			CheckCUDA(cudaMemcpy(dst, src, ElementSize(srcType) * size, cudaMemcpyDeviceToDevice),
-			          "cudaMemcpy D2D");
+			CheckCUDA(cudaMemcpy(dst, src, ElementSize(srcType) * size, cudaMemcpyDeviceToDevice), "cudaMemcpy D2D");
 			return;
 		}
 		if (CUDACanUseNativeConversion(srcType, dstType, device.deviceIndex))
@@ -1993,8 +1993,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	                                    const void* src1, DataType type2, ShapeView shape2, const void* src2,
 	                                    CUDAExecutionOptions options)
 	{
-		if (binaryOp == BinaryOp::MatMul && TryCUBLASMatMul(device, dst, type1, shape1, src1, type2, shape2, src2,
-		                                                     options))
+		if (binaryOp == BinaryOp::MatMul &&
+		    TryCUBLASMatMul(device, dst, type1, shape1, src1, type2, shape2, src2, options))
 		{
 			return;
 		}
@@ -2070,8 +2070,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 	}
 
 	void DeviceTraits<CUDA>::DoGetRowsOp(CUDA& device, void* dst, DataType dataType, ShapeView dataShape,
-	                                    const void* data, DataType indexType, ShapeView indexShape,
-	                                    const void* indices)
+	                                     const void* data, DataType indexType, ShapeView indexShape,
+	                                     const void* indices)
 	{
 		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "get-rows op");
 		const auto resultShape = ResolveGetRowsResultShape(dataShape, indexShape);
@@ -2083,13 +2083,13 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 		CopyToCPU(device, indexType, indices, indexShape.NumElements(), indexType, hostIndices.data());
 
 		CPU cpu;
-		DeviceTraits<CPU>::DoGetRowsOp(cpu, hostDst.data(), dataType, dataShape, hostData.data(), indexType,
-		                              indexShape, hostIndices.data());
+		DeviceTraits<CPU>::DoGetRowsOp(cpu, hostDst.data(), dataType, dataShape, hostData.data(), indexType, indexShape,
+		                               hostIndices.data());
 		CopyFromCPU(device, dataType, dst, dataType, hostDst.data(), ShapeView{ resultShape }.NumElements());
 	}
 
-	void DeviceTraits<CUDA>::DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape,
-	                                    const void* src, ShapeView permutation)
+	void DeviceTraits<CUDA>::DoPermuteOp(CUDA& device, void* dst, DataType type, ShapeView srcShape, const void* src,
+	                                     ShapeView permutation)
 	{
 		RequireHostFallbackAllowed(device, DeviceDefaultCUDAOptions(device), "permute op");
 		const auto numElements = srcShape.NumElements();

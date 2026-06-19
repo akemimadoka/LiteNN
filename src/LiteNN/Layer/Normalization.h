@@ -10,11 +10,9 @@
 
 namespace LiteNN::Layer
 {
-	inline NodeOutput AddNormalization(Subgraph& subgraph, NodeOutput input, NormalizationMode mode,
-	                                   std::size_t axis, double epsilon,
-	                                   std::optional<NodeOutput> scale = std::nullopt,
-	                                   std::optional<NodeOutput> bias = std::nullopt,
-	                                   std::size_t groupCount = 1)
+	inline NodeOutput AddNormalization(Subgraph& subgraph, NodeOutput input, NormalizationMode mode, std::size_t axis,
+	                                   double epsilon, std::optional<NodeOutput> scale = std::nullopt,
+	                                   std::optional<NodeOutput> bias = std::nullopt, std::size_t groupCount = 1)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
 		if (!IsFloatingDataType(info.dtype))
@@ -32,7 +30,7 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("Normalization scale must be floating-point");
 			}
-			(void)::LiteNN::Detail::BroadcastToShape(scaleInfo.shape, info.shape);
+			(void) ::LiteNN::Detail::BroadcastToShape(scaleInfo.shape, info.shape);
 		}
 		if (bias)
 		{
@@ -41,7 +39,7 @@ namespace LiteNN::Layer
 			{
 				throw std::runtime_error("Normalization bias must be floating-point");
 			}
-			(void)::LiteNN::Detail::BroadcastToShape(biasInfo.shape, info.shape);
+			(void) ::LiteNN::Detail::BroadcastToShape(biasInfo.shape, info.shape);
 		}
 		if (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::RMSNorm)
 		{
@@ -66,9 +64,8 @@ namespace LiteNN::Layer
 			throw std::runtime_error("Invalid normalization mode");
 		}
 
-		const auto result = subgraph.AddNode(
-		    NormalizationNode{ input, scale, bias, mode, axis, groupCount, epsilon },
-		    { OutputInfo{ info.dtype, info.shape } });
+		const auto result = subgraph.AddNode(NormalizationNode{ input, scale, bias, mode, axis, groupCount, epsilon },
+		                                     { OutputInfo{ info.dtype, info.shape } });
 		return { result, 0 };
 	}
 } // namespace LiteNN::Layer

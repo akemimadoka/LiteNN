@@ -16,8 +16,7 @@ namespace LiteNN::Layer
 	                            std::vector<std::size_t> strides = { 1, 1 },
 	                            std::vector<std::size_t> dilations = { 1, 1 },
 	                            std::vector<std::size_t> lowPads = { 0, 0 },
-	                            std::vector<std::size_t> highPads = { 0, 0 },
-	                            std::size_t groupCount = 1)
+	                            std::vector<std::size_t> highPads = { 0, 0 }, std::size_t groupCount = 1)
 	{
 		const auto inputInfo = subgraph.GetOutputInfo(input);
 		const auto weightInfo = subgraph.GetOutputInfo(weight);
@@ -29,8 +28,8 @@ namespace LiteNN::Layer
 		{
 			throw std::runtime_error("Conv2D input and weight dtypes must match");
 		}
-		const auto outputShape = ::LiteNN::Detail::Conv2DOutputShape(
-		    inputInfo.shape, weightInfo.shape, strides, dilations, lowPads, highPads, groupCount);
+		const auto outputShape = ::LiteNN::Detail::Conv2DOutputShape(inputInfo.shape, weightInfo.shape, strides,
+		                                                             dilations, lowPads, highPads, groupCount);
 		if (bias)
 		{
 			const auto biasInfo = subgraph.GetOutputInfo(*bias);
@@ -41,10 +40,9 @@ namespace LiteNN::Layer
 			::LiteNN::Detail::ValidateConv2DBiasShape(biasInfo.shape, outputShape[1]);
 		}
 
-		const auto result = subgraph.AddNode(
-		    Conv2DNode{ input, weight, bias, std::move(strides), std::move(dilations), std::move(lowPads),
-		                std::move(highPads), groupCount },
-		    { OutputInfo{ inputInfo.dtype, outputShape } });
+		const auto result = subgraph.AddNode(Conv2DNode{ input, weight, bias, std::move(strides), std::move(dilations),
+		                                                 std::move(lowPads), std::move(highPads), groupCount },
+		                                     { OutputInfo{ inputInfo.dtype, outputShape } });
 		return { result, 0 };
 	}
 
@@ -53,8 +51,7 @@ namespace LiteNN::Layer
 	                              std::vector<std::size_t> strides = { 1, 1 },
 	                              std::vector<std::size_t> dilations = { 1, 1 },
 	                              std::vector<std::size_t> lowPads = { 0, 0 },
-	                              std::vector<std::size_t> highPads = { 0, 0 },
-	                              std::size_t groupCount = 1)
+	                              std::vector<std::size_t> highPads = { 0, 0 }, std::size_t groupCount = 1)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, inputShape.ToOwned());

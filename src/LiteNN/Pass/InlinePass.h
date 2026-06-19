@@ -106,13 +106,15 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
-					    return SSMScanNode{ remap(n.state), remap(n.dt), remap(n.a), remap(n.b), remap(n.c),
-					                        n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt };
+					    return SSMScanNode{
+						    remap(n.state), remap(n.dt), remap(n.a),
+						    remap(n.b),     remap(n.c),  n.d ? std::optional<NodeOutput>{ remap(*n.d) } : std::nullopt
+					    };
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
-					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance),
-					                        remap(n.timeDecay), remap(n.timeFirst) };
+					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
+						                    remap(n.timeFirst) };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -129,9 +131,12 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    return NormalizationNode{ remap(n.input),
-					                              n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
-					                              n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                              n.mode, n.axis, n.groupCount, n.epsilon };
+						                          n.scale ? std::optional<NodeOutput>{ remap(*n.scale) } : std::nullopt,
+						                          n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                          n.mode,
+						                          n.axis,
+						                          n.groupCount,
+						                          n.epsilon };
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
@@ -151,45 +156,60 @@ namespace LiteNN
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
-					    return SGDStepNode{ remap(n.parameter), remap(n.gradient),
-					                        n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
-					                        n.learningRate, n.momentum, n.weightDecay, n.nesterov };
+					    return SGDStepNode{ remap(n.parameter),
+						                    remap(n.gradient),
+						                    n.velocity ? std::optional<NodeOutput>{ remap(*n.velocity) } : std::nullopt,
+						                    n.learningRate,
+						                    n.momentum,
+						                    n.weightDecay,
+						                    n.nesterov };
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
-					    return AdamWStepNode{ remap(n.parameter), remap(n.gradient), remap(n.firstMoment),
-					                          remap(n.secondMoment), n.learningRate, n.beta1, n.beta2,
-					                          n.epsilon, n.weightDecay, n.step };
+					    return AdamWStepNode{ remap(n.parameter),
+						                      remap(n.gradient),
+						                      remap(n.firstMoment),
+						                      remap(n.secondMoment),
+						                      n.learningRate,
+						                      n.beta1,
+						                      n.beta2,
+						                      n.epsilon,
+						                      n.weightDecay,
+						                      n.step };
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
-					    return Im2ColNode{ remap(n.input), n.kernelShape, n.strides, n.dilations,
-					                       n.lowPads, n.highPads };
+					    return Im2ColNode{
+						    remap(n.input), n.kernelShape, n.strides, n.dilations, n.lowPads, n.highPads
+					    };
 				    }
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
-					    return Conv2DNode{ remap(n.input), remap(n.weight),
-					                       n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					                       n.strides, n.dilations, n.lowPads, n.highPads, n.groupCount };
+					    return Conv2DNode{ remap(n.input),
+						                   remap(n.weight),
+						                   n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                   n.strides,
+						                   n.dilations,
+						                   n.lowPads,
+						                   n.highPads,
+						                   n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
-					    return ConvTranspose2DNode{
-					        remap(n.input),
-					        remap(n.weight),
-					        n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
-					        n.strides,
-					        n.dilations,
-					        n.lowPads,
-					        n.highPads,
-					        n.outputPads,
-					        n.groupCount
-					    };
+					    return ConvTranspose2DNode{ remap(n.input),
+						                            remap(n.weight),
+						                            n.bias ? std::optional<NodeOutput>{ remap(*n.bias) } : std::nullopt,
+						                            n.strides,
+						                            n.dilations,
+						                            n.lowPads,
+						                            n.highPads,
+						                            n.outputPads,
+						                            n.groupCount };
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
-					    return Pool2DNode{ remap(n.input), n.mode, n.kernelShape, n.strides,
-					                       n.lowPads, n.highPads, n.countIncludePad };
+					    return Pool2DNode{ remap(n.input), n.mode,     n.kernelShape,    n.strides,
+						                   n.lowPads,      n.highPads, n.countIncludePad };
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
@@ -343,8 +363,8 @@ namespace LiteNN
 				{
 					// 普通节点：重映射输入后复制
 					auto remapped = RemapNodeInputs(entry.node, remapOutput);
-					auto newId = newSg.AddNode(std::move(remapped),
-					                           { entry.outputInfos.begin(), entry.outputInfos.end() });
+					auto newId =
+					    newSg.AddNode(std::move(remapped), { entry.outputInfos.begin(), entry.outputInfos.end() });
 					nodeMap[oldId] = newId;
 				}
 			}
@@ -362,11 +382,9 @@ namespace LiteNN
 		}
 
 		template <typename RemapFn>
-		void InlineCallNode(Graph& graph, Subgraph& newSg, const Subgraph& callerSg,
-		                    NodeId callNodeOldId, const CallNode& callNode,
-		                    std::vector<NodeId>& nodeMap,
-		                    std::map<NodeOutputKey, NodeOutput>& callResultMap,
-		                    RemapFn& remapOutput)
+		void InlineCallNode(Graph& graph, Subgraph& newSg, const Subgraph& callerSg, NodeId callNodeOldId,
+		                    const CallNode& callNode, std::vector<NodeId>& nodeMap,
+		                    std::map<NodeOutputKey, NodeOutput>& callResultMap, RemapFn& remapOutput)
 		{
 			const auto& callee = graph.GetSubgraph(callNode.callee);
 

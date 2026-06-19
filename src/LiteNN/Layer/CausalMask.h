@@ -47,16 +47,15 @@ namespace LiteNN::Layer
 			throw std::runtime_error("Causal mask input dtype must be floating-point");
 		}
 
-		const auto mask =
-		    Detail::AddConstant(subgraph, Detail::MakeCausalMaskTensor(info.shape[0], info.shape[1], info.dtype,
-		                                                               maskedValue, keyPositionOffset,
-		                                                               queryPositionOffset));
+		const auto mask = Detail::AddConstant(
+		    subgraph, Detail::MakeCausalMaskTensor(info.shape[0], info.shape[1], info.dtype, maskedValue,
+		                                           keyPositionOffset, queryPositionOffset));
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, input, mask }, { info });
 		return { result, 0 };
 	}
 
 	inline SubgraphId BuildCausalMask(ModelBuilder& builder, DataType dtype, std::size_t sequenceLength,
-	                                double maskedValue = -1.0e9)
+	                                  double maskedValue = -1.0e9)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, { sequenceLength, sequenceLength });
