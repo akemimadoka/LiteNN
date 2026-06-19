@@ -271,6 +271,51 @@ TEST(Training, AOTPolicyRunsAdamWCompiledOptimizerStateUpdate)
 	EXPECT_NEAR(ReadVariableDataFloat(graph, weightIndex, 0), 2.8f, 1.0e-5f);
 	EXPECT_EQ(trainer.Optimizer().StepIndex(), 2u);
 }
+
+TEST(Training, AOTAndInterpreterAdamWStepsKeepOptimizerStateInParity)
+{
+	ModelGraph interpreterModel;
+	const auto interpreterWeight = BuildScalarMultiplyModel(interpreterModel);
+	ModelGraph aotModel;
+	const auto aotWeight = BuildScalarMultiplyModel(aotModel);
+
+	Optimizer::AdamWOptions adamwOptions;
+	adamwOptions.learningRate = 0.05f;
+	adamwOptions.beta1 = 0.8f;
+	adamwOptions.beta2 = 0.95f;
+	adamwOptions.epsilon = 1.0e-8f;
+	adamwOptions.weightDecay = 0.01f;
+	Training::Trainer<CPU, Optimizer::AdamW> interpreterTrainer(interpreterModel, Optimizer::AdamW(adamwOptions));
+	Training::TrainerOptions aotOptions;
+	aotOptions.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::AdamW> aotTrainer(aotModel, Optimizer::AdamW(adamwOptions), aotOptions);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 2.0f }, { 1 }));
+	for (std::size_t step = 1; step <= 2; ++step)
+	{
+		const auto interpreterStep = interpreterTrainer.Step(inputs, outputGradients);
+		const auto aotStep = aotTrainer.Step(inputs, outputGradients);
+
+		ASSERT_EQ(aotStep.outputs.size(), interpreterStep.outputs.size());
+		ASSERT_EQ(aotStep.backwardResults.size(), interpreterStep.backwardResults.size());
+		EXPECT_NEAR(ReadFloat(aotStep.outputs[0], 0), ReadFloat(interpreterStep.outputs[0], 0), 1.0e-5f);
+		EXPECT_NEAR(ReadFloat(aotStep.backwardResults[0], 0), ReadFloat(interpreterStep.backwardResults[0], 0),
+		            1.0e-5f);
+		EXPECT_NEAR(ReadFloat(aotStep.backwardResults[1], 0), ReadFloat(interpreterStep.backwardResults[1], 0),
+		            1.0e-5f);
+		EXPECT_NEAR(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), aotWeight, 0),
+		            ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), interpreterWeight, 0), 1.0e-5f);
+		EXPECT_NEAR(ReadFloat(aotTrainer.Optimizer().FirstMoment(0), 0),
+		            ReadFloat(interpreterTrainer.Optimizer().FirstMoment(0), 0), 1.0e-5f);
+		EXPECT_NEAR(ReadFloat(aotTrainer.Optimizer().SecondMoment(0), 0),
+		            ReadFloat(interpreterTrainer.Optimizer().SecondMoment(0), 0), 1.0e-5f);
+		EXPECT_EQ(aotTrainer.Optimizer().StepIndex(), step);
+		EXPECT_EQ(interpreterTrainer.Optimizer().StepIndex(), step);
+	}
+}
 #endif
 
 TEST(Training, StepSoftmaxCrossEntropyComputesLossAndUpdatesVariables)
