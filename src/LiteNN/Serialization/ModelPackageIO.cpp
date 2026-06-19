@@ -1026,6 +1026,26 @@ namespace LiteNN::Serialization
 			return static_cast<std::size_t>(std::stoull(RequirePlanAttribute(op, name)));
 		}
 
+		double PlanAttributeDouble(const ExecutablePlanOp& op, std::string_view name)
+		{
+			return std::stod(RequirePlanAttribute(op, name));
+		}
+
+		bool PlanAttributeBool(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto& value = RequirePlanAttribute(op, name);
+			if (value == "true")
+			{
+				return true;
+			}
+			if (value == "false")
+			{
+				return false;
+			}
+			throw std::runtime_error("vNext node descriptor for '" + op.kind +
+			                         "' has an invalid boolean attribute: " + std::string(name));
+		}
+
 		template <typename Enum>
 		    requires std::is_enum_v<Enum>
 		Enum PlanAttributeEnum(const ExecutablePlanOp& op, std::string_view name)
@@ -1118,6 +1138,32 @@ namespace LiteNN::Serialization
 			{
 				return SliceNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis"),
 					              PlanAttributeSize(op, "start"), PlanAttributeSize(op, "length") };
+			}
+			if (op.kind == "SGDStepNode")
+			{
+				if (inputs.size() != 2 && inputs.size() != 3)
+				{
+					throw std::runtime_error("vNext SGDStepNode descriptor requires two or three inputs");
+				}
+				return SGDStepNode{ RequireNodeInput(inputs, 0, op.kind),
+					                RequireNodeInput(inputs, 1, op.kind),
+					                inputs.size() == 3 ? std::optional<NodeOutput>{ inputs[2] } : std::nullopt,
+					                PlanAttributeDouble(op, "learningRate"),
+					                PlanAttributeDouble(op, "momentum"),
+					                PlanAttributeDouble(op, "weightDecay"),
+					                PlanAttributeBool(op, "nesterov") };
+			}
+			if (op.kind == "AdamWStepNode")
+			{
+				if (inputs.size() != 4)
+				{
+					throw std::runtime_error("vNext AdamWStepNode descriptor requires four inputs");
+				}
+				return AdamWStepNode{ RequireNodeInput(inputs, 0, op.kind),    RequireNodeInput(inputs, 1, op.kind),
+					                  RequireNodeInput(inputs, 2, op.kind),    RequireNodeInput(inputs, 3, op.kind),
+					                  PlanAttributeDouble(op, "learningRate"), PlanAttributeDouble(op, "beta1"),
+					                  PlanAttributeDouble(op, "beta2"),        PlanAttributeDouble(op, "epsilon"),
+					                  PlanAttributeDouble(op, "weightDecay"),  PlanAttributeSize(op, "step") };
 			}
 			throw std::runtime_error("vNext node descriptor cannot hydrate executable payload for op: " + op.kind);
 		}

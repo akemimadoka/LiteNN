@@ -4,6 +4,7 @@
 #include <LiteNNImporters.h>
 
 #include <array>
+#include <filesystem>
 
 using namespace LiteNN;
 
@@ -64,6 +65,36 @@ namespace
 		                                    { OutputInfo{ DataType::Float32, { 2 } } });
 		backward.SetResults({ { saved, 0 } });
 		graph.SetBackward(graph.AddSubgraph(std::move(backward)));
+		return graph;
+	}
+
+	Graph BuildOptimizerStateGraph()
+	{
+		Graph graph;
+		Subgraph subgraph;
+		const auto parameter = subgraph.AddParam(DataType::Float32, { 2 });
+		const auto gradient = subgraph.AddParam(DataType::Float32, { 2 });
+		const auto velocity = subgraph.AddParam(DataType::Float32, { 2 });
+		const auto firstMoment = subgraph.AddParam(DataType::Float32, { 2 });
+		const auto secondMoment = subgraph.AddParam(DataType::Float32, { 2 });
+		const auto sgd = subgraph.AddNode(
+		    SGDStepNode{ { parameter, 0 }, { gradient, 0 }, NodeOutput{ velocity, 0 }, 0.1, 0.9, 0.01, true },
+		    { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
+		const auto adamw =
+		    subgraph.AddNode(AdamWStepNode{ { parameter, 0 },
+		                                    { gradient, 0 },
+		                                    { firstMoment, 0 },
+		                                    { secondMoment, 0 },
+		                                    0.001,
+		                                    0.9,
+		                                    0.999,
+		                                    1e-8,
+		                                    0.01,
+		                                    7 },
+		                     { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } },
+		                       OutputInfo{ DataType::Float32, { 2 } } });
+		subgraph.SetResults({ { sgd, 0 }, { sgd, 1 }, { adamw, 0 }, { adamw, 1 }, { adamw, 2 } });
+		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 		return graph;
 	}
 } // namespace
@@ -210,6 +241,86 @@ TEST(G14Remaining, TrainStepPlanBuildsVNextArtifactEntries)
 	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:loss")));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:backward")));
 	EXPECT_TRUE(std::ranges::contains(abi.artifactEntries, std::string("cpu_train_step:" + train.updates[0].name)));
+}
+
+TEST(G14Remaining, TrainStepVNextArtifactEntriesRoundTripThroughPackage)
+{
+	const auto graph = BuildTrainableGraph();
+	const auto train = Training::BuildTrainStepPlan(Detail::BuildExecutableModuleFromGraph(graph),
+	                                                Training::TrainExecutionPolicy::AOT, true);
+	const auto artifact = Training::BuildTrainStepVNextArtifactRef(train, "cpu_train_step", std::string(BackendCPUAOT));
+	const auto path = std::filesystem::temp_directory_path() / "litenn_train_step_vnext_roundtrip.json";
+
+	Serialization::SaveVNextModelPackage(train.module, path, { artifact });
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(package.manifest.artifacts.size(), 1u);
+	const auto& loadedArtifact = package.manifest.artifacts[0];
+	ASSERT_EQ(loadedArtifact.entries.size(), train.artifactEntries.size());
+	const auto findEntry = [&](std::string_view name) -> const VNextArtifactEntryRef* {
+		const auto it = std::ranges::find_if(loadedArtifact.entries,
+		                                     [&](const VNextArtifactEntryRef& entry) { return entry.name == name; });
+		return it == loadedArtifact.entries.end() ? nullptr : &*it;
+	};
+
+	const auto* forward = findEntry("forward");
+	ASSERT_NE(forward, nullptr);
+	EXPECT_EQ(forward->kind, VNextArtifactEntryKind::Forward);
+	EXPECT_EQ(forward->function, train.forwardFunction);
+	EXPECT_EQ(forward->sourceSubgraph, train.module.functions[train.forwardFunction].body);
+
+	const auto* loss = findEntry("loss");
+	ASSERT_NE(loss, nullptr);
+	EXPECT_EQ(loss->kind, VNextArtifactEntryKind::Loss);
+	EXPECT_FALSE(loss->function.has_value());
+	EXPECT_EQ(loss->sourceSubgraph, train.module.functions[train.forwardFunction].body);
+
+	ASSERT_TRUE(train.backwardFunction.has_value());
+	const auto* backward = findEntry("backward");
+	ASSERT_NE(backward, nullptr);
+	EXPECT_EQ(backward->kind, VNextArtifactEntryKind::Backward);
+	EXPECT_EQ(backward->function, train.backwardFunction);
+	EXPECT_EQ(backward->sourceSubgraph, train.module.functions[*train.backwardFunction].body);
+
+	ASSERT_EQ(train.updates.size(), 1u);
+	const auto* update = findEntry(train.updates[0].name);
+	ASSERT_NE(update, nullptr);
+	EXPECT_EQ(update->kind, VNextArtifactEntryKind::OptimizerStep);
+	EXPECT_EQ(update->sourceSubgraph, train.updates[0].subgraph);
+	EXPECT_TRUE(update->function.has_value());
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
+TEST(G14Remaining, OptimizerStateNodesRoundTripThroughVNextPackage)
+{
+	const auto module = Detail::BuildExecutableModuleFromGraph(BuildOptimizerStateGraph());
+	const auto path = std::filesystem::temp_directory_path() / "litenn_optimizer_state_vnext_roundtrip.json";
+
+	Serialization::SaveVNextModelPackage(module, path);
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	const auto& nodes = package.plan.subgraphs[package.plan.forward].nodes;
+	const auto sgd = std::ranges::find_if(nodes, [](const auto& node) { return node.op.kind == "SGDStepNode"; });
+	ASSERT_NE(sgd, nodes.end());
+	const auto& sgdPayload = std::get<SGDStepNode>(sgd->node);
+	ASSERT_TRUE(sgdPayload.velocity.has_value());
+	EXPECT_DOUBLE_EQ(sgdPayload.learningRate, 0.1);
+	EXPECT_DOUBLE_EQ(sgdPayload.momentum, 0.9);
+	EXPECT_DOUBLE_EQ(sgdPayload.weightDecay, 0.01);
+	EXPECT_TRUE(sgdPayload.nesterov);
+
+	const auto adamw = std::ranges::find_if(nodes, [](const auto& node) { return node.op.kind == "AdamWStepNode"; });
+	ASSERT_NE(adamw, nodes.end());
+	const auto& adamwPayload = std::get<AdamWStepNode>(adamw->node);
+	EXPECT_DOUBLE_EQ(adamwPayload.learningRate, 0.001);
+	EXPECT_DOUBLE_EQ(adamwPayload.beta1, 0.9);
+	EXPECT_DOUBLE_EQ(adamwPayload.beta2, 0.999);
+	EXPECT_DOUBLE_EQ(adamwPayload.epsilon, 1e-8);
+	EXPECT_DOUBLE_EQ(adamwPayload.weightDecay, 0.01);
+	EXPECT_EQ(adamwPayload.step, 7u);
+	EXPECT_NO_THROW(ValidateExecutablePlan(package.plan));
 }
 
 TEST(G14Remaining, BuildsCostBasedPlacementPlanAndCoverage)
