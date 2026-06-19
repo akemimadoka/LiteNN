@@ -252,16 +252,17 @@ Status: implemented on 2026-05-16.
     `TrainCPUAOTT16`, `TrainCUDACPUFallback`, and `TrainCUDANative`; CUDA CPU fallback uses
     `LITENN_CUDA_DISABLE_NATIVE_AOT=1` to keep the bridge measurable after native coverage expanded.
 - [x] Add a CPU AOT trainer full-step row for the current compiled-training subset.
-  - Implementation: `TrainCPUAOT/FullStep/MNIST-Linear` runs through `Trainer` with `TrainExecutionPolicy::AOT`.
-    MLP full-step rows are registered but report the current `LoadActivationNode` readiness diagnostic until saved
-    activation/tape state is represented through explicit G13.1 train-step ABI bindings or recomputation.
+  - Implementation: `TrainCPUAOT/FullStep/MNIST-Linear` and `TrainCPUAOT/FullStep/MNIST-MLP128` run through
+    `Trainer` with `TrainExecutionPolicy::AOT`; forward saved activations are passed into the compiled backward entry
+    as explicit ABI params.
   - Metric split: the row reports `compile_ms` as a setup counter, while the benchmark timer measures train-step latency.
 
 P5 validation spot check:
 
 | Benchmark | Real time |
 | --- | ---: |
-| `TrainCPUAOT/FullStep/MNIST-Linear/batch:32` | `321 ms` Debug smoke; `compile_ms=389` |
+| `TrainCPUAOT/FullStep/MNIST-Linear/batch:32` | `156 ms` Debug smoke; `compile_ms=232` |
+| `TrainCPUAOT/FullStep/MNIST-MLP128/batch:32` | `290 ms` Debug smoke; `compile_ms=438` |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP128/batch:512` | `17.84 ms` |
 | `TrainCPUInterpreter/FullStep/MNIST-MLP512/batch:512` | `86.18 ms` |
 | `TrainCUDANative/Forward/MNIST-MLP128/batch:512` | `0.188 ms` |

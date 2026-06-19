@@ -5,13 +5,256 @@
 #endif
 #include <LiteNN/Optimizer/GraphOps.h>
 
+#include <algorithm>
 #include <format>
+#include <map>
 #include <utility>
 
 namespace LiteNN::Training
 {
 	namespace
 	{
+		struct SavedActivationCapture
+		{
+			std::size_t slot{};
+			NodeOutput value;
+			TensorType type;
+		};
+
+		std::vector<SavedActivationCapture> CollectForwardSavedActivations(const ExecutablePlan& plan)
+		{
+			if (plan.forward >= plan.subgraphs.size())
+			{
+				throw std::runtime_error("Trainer AOT forward runner references an invalid forward subgraph");
+			}
+			std::vector<SavedActivationCapture> captures;
+			const auto& forwardSubgraph = plan.subgraphs[plan.forward];
+			for (const auto& node : forwardSubgraph.nodes)
+			{
+				const auto* save = std::get_if<SaveActivationNode>(&node.node);
+				if (save == nullptr)
+				{
+					continue;
+				}
+				if (save->slotId >= plan.activationSlots.size())
+				{
+					throw std::runtime_error("Trainer AOT forward runner references an invalid activation slot");
+				}
+				if (node.outputs.empty())
+				{
+					throw std::runtime_error("Trainer AOT forward runner cannot capture a save node without outputs");
+				}
+				captures.push_back({ .slot = save->slotId, .value = { node.sourceNode, 0 }, .type = node.outputs[0] });
+			}
+			std::ranges::sort(captures, {}, &SavedActivationCapture::slot);
+			const auto duplicate =
+			    std::ranges::adjacent_find(captures, {}, &SavedActivationCapture::slot) != captures.end();
+			if (duplicate)
+			{
+				throw std::runtime_error("Trainer AOT forward runner cannot capture duplicate activation slots yet");
+			}
+			return captures;
+		}
+
+		ExecutablePlan BuildForwardCapturePlan(const ExecutablePlan& plan)
+		{
+			auto capturePlan = plan;
+			const auto forwardSubgraphCopy = capturePlan.subgraphs[capturePlan.forward];
+			capturePlan.subgraphs.clear();
+			capturePlan.subgraphs.push_back(forwardSubgraphCopy);
+			capturePlan.subgraphs[0].sourceSubgraph = 0;
+			capturePlan.forward = 0;
+			capturePlan.backward = std::nullopt;
+			auto& forwardSubgraph = capturePlan.subgraphs[capturePlan.forward];
+			for (const auto& capture : CollectForwardSavedActivations(capturePlan))
+			{
+				forwardSubgraph.results.push_back(capture.value);
+				capturePlan.outputs.push_back({ .source = capture.value,
+				                                .type = capture.type,
+				                                .name = std::format("activation.{}", capture.slot) });
+			}
+			ValidateExecutablePlan(capturePlan);
+			return capturePlan;
+		}
+
+		ExecutablePlanNode MakeParamRefPlanNode(NodeId sourceNode, std::size_t paramIndex, const TensorType& type)
+		{
+			ParamRefNode param{ paramIndex };
+			const auto opKind = OpKindName(NodeVariant{ param });
+			const auto& registry = DefaultOpSchemaRegistry();
+			const auto& schema = registry.Require(opKind);
+			ExecutablePlanNode node;
+			node.sourceNode = sourceNode;
+			node.op = BuildExecutablePlanOp(NodeVariant{ param }, schema,
+			                                static_cast<std::uint32_t>(registry.IndexOf(opKind)));
+			node.node = param;
+			node.opKind = opKind;
+			node.category = schema.category;
+			node.effect = schema.effect;
+			node.outputs = { type };
+			return node;
+		}
+
+		void RefreshPlanNodeMetadata(ExecutablePlanNode& node)
+		{
+			const auto opKind = OpKindName(node.node);
+			const auto& registry = DefaultOpSchemaRegistry();
+			const auto& schema = registry.Require(opKind);
+			node.op = BuildExecutablePlanOp(node.node, schema, static_cast<std::uint32_t>(registry.IndexOf(opKind)));
+			node.opKind = opKind;
+			node.category = schema.category;
+			node.effect = schema.effect;
+			node.inputs = NodeInputs(node.node);
+		}
+
+		template <typename RemapFn>
+		NodeVariant RemapNodeInputsForTrainingAOT(const NodeVariant& node, RemapFn&& remap)
+		{
+			return std::visit(
+			    [&](const auto& n) -> NodeVariant {
+				    using T = std::decay_t<decltype(n)>;
+				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
+				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				                  std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+				    {
+					    return n;
+				    }
+				    else if constexpr (std::same_as<T, UnaryOpNode>)
+				    {
+					    return UnaryOpNode{ n.op, remap(n.input) };
+				    }
+				    else if constexpr (std::same_as<T, BinaryOpNode>)
+				    {
+					    return BinaryOpNode{ n.op, remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, CastNode>)
+				    {
+					    return CastNode{ remap(n.input), n.targetType };
+				    }
+				    else if constexpr (std::same_as<T, QuantizeNode>)
+				    {
+					    return QuantizeNode{ remap(n.input), n.params };
+				    }
+				    else if constexpr (std::same_as<T, DequantizeNode>)
+				    {
+					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
+				    }
+				    else if constexpr (std::same_as<T, ReduceOpNode>)
+				    {
+					    return ReduceOpNode{ n.op, remap(n.input), n.axis };
+				    }
+				    else if constexpr (std::same_as<T, ReshapeNode>)
+				    {
+					    return ReshapeNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PermuteNode>)
+				    {
+					    return PermuteNode{ remap(n.input), n.permutation };
+				    }
+				    else if constexpr (std::same_as<T, BroadcastToNode>)
+				    {
+					    return BroadcastToNode{ remap(n.input), n.targetShape };
+				    }
+				    else if constexpr (std::same_as<T, PadNode>)
+				    {
+					    return PadNode{ remap(n.input), n.lowPads, n.highPads, n.mode, n.constantValue };
+				    }
+				    else if constexpr (std::same_as<T, BatchMatMulNode>)
+				    {
+					    return BatchMatMulNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, OutProdNode>)
+				    {
+					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
+				    }
+				    else if constexpr (std::same_as<T, SaveActivationNode>)
+				    {
+					    return SaveActivationNode{ remap(n.input), n.slotId };
+				    }
+				    else
+				    {
+					    return n;
+				    }
+			    },
+			    node);
+		}
+
+		void BindBackwardSavedActivations(ExecutablePlanSubgraph& subgraph,
+		                                  std::span<const SavedActivationCapture> captures)
+		{
+			if (captures.empty())
+			{
+				return;
+			}
+			const auto oldParamCount = subgraph.params.size();
+			const auto insertedParamCount = captures.size();
+			std::map<std::size_t, NodeOutput> activationValueBySlot;
+			for (std::size_t i = 0; i < captures.size(); ++i)
+			{
+				subgraph.params.push_back(captures[i].type);
+				activationValueBySlot[captures[i].slot] = { oldParamCount + i, 0 };
+			}
+
+			std::map<NodeId, NodeOutput> loadReplacement;
+			for (const auto& node : subgraph.nodes)
+			{
+				if (const auto* load = std::get_if<LoadActivationNode>(&node.node))
+				{
+					const auto it = activationValueBySlot.find(load->slotId);
+					if (it == activationValueBySlot.end())
+					{
+						throw std::runtime_error(
+						    std::format("Trainer AOT backward runner cannot bind activation slot {}", load->slotId));
+					}
+					loadReplacement[node.sourceNode] = it->second;
+				}
+			}
+
+			auto remap = [&](NodeOutput output) -> NodeOutput {
+				if (const auto it = loadReplacement.find(output.node); it != loadReplacement.end())
+				{
+					return { it->second.node, output.port };
+				}
+				if (output.node < oldParamCount)
+				{
+					return output;
+				}
+				return { output.node + insertedParamCount, output.port };
+			};
+
+			std::vector<ExecutablePlanNode> nodes;
+			nodes.reserve(subgraph.nodes.size() + insertedParamCount);
+			for (std::size_t i = 0; i < oldParamCount; ++i)
+			{
+				nodes.push_back(subgraph.nodes[i]);
+			}
+			for (std::size_t i = 0; i < captures.size(); ++i)
+			{
+				nodes.push_back(MakeParamRefPlanNode(nodes.size(), oldParamCount + i, captures[i].type));
+			}
+			for (std::size_t i = oldParamCount; i < subgraph.nodes.size(); ++i)
+			{
+				auto node = subgraph.nodes[i];
+				node.sourceNode = nodes.size();
+				if (const auto* load = std::get_if<LoadActivationNode>(&node.node))
+				{
+					const auto input = activationValueBySlot.at(load->slotId);
+					node.node = CastNode{ input, node.outputs[0].dtype };
+				}
+				else
+				{
+					node.node = RemapNodeInputsForTrainingAOT(node.node, remap);
+				}
+				RefreshPlanNodeMetadata(node);
+				nodes.push_back(std::move(node));
+			}
+			for (auto& result : subgraph.results)
+			{
+				result = remap(result);
+			}
+			subgraph.nodes = std::move(nodes);
+		}
+
 		ExecutablePlan BuildBackwardEntryPlan(const ExecutablePlan& plan)
 		{
 			if (!plan.backward)
@@ -24,9 +267,16 @@ namespace LiteNN::Training
 			}
 
 			ExecutablePlan backwardPlan = plan;
-			backwardPlan.forward = *plan.backward;
+			const auto backwardSubgraphSource = *plan.backward;
+			const auto backwardSubgraphCopy = backwardPlan.subgraphs[backwardSubgraphSource];
+			backwardPlan.subgraphs.clear();
+			backwardPlan.subgraphs.push_back(backwardSubgraphCopy);
+			backwardPlan.subgraphs[0].sourceSubgraph = 0;
+			backwardPlan.forward = 0;
 			backwardPlan.backward = std::nullopt;
-			const auto& backwardSubgraph = backwardPlan.subgraphs[backwardPlan.forward];
+			const auto captures = CollectForwardSavedActivations(plan);
+			BindBackwardSavedActivations(backwardPlan.subgraphs[0], captures);
+			auto& backwardSubgraph = backwardPlan.subgraphs[backwardPlan.forward];
 
 			backwardPlan.inputs.clear();
 			backwardPlan.inputs.reserve(backwardSubgraph.params.size());
@@ -113,7 +363,7 @@ namespace LiteNN::Training
 #ifndef LITENN_ENABLE_MLIR
 		throw std::runtime_error("Trainer AOT forward runner requires LiteNNCompiler/MLIR support");
 #else
-		auto module = Compiler<CPU>::Compile(plan);
+		auto module = Compiler<CPU>::Compile(BuildForwardCapturePlan(plan));
 		return [module = std::move(module)](std::span<const Tensor<CPU>> inputs) { return module.RunTensors(inputs); };
 #endif
 	}
@@ -163,7 +413,7 @@ namespace LiteNN::Training
 #ifndef LITENN_ENABLE_MLIR
 		throw std::runtime_error("Trainer CUDA AOT forward runner requires LiteNNCompiler/MLIR support");
 #else
-		auto module = Compiler<CUDA>::Compile(plan, std::move(device));
+		auto module = Compiler<CUDA>::Compile(BuildForwardCapturePlan(plan), std::move(device));
 		return [module = std::move(module)](std::span<const Tensor<CUDA>> inputs) { return module.RunTensors(inputs); };
 #endif
 	}

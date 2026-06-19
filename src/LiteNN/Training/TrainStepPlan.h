@@ -6,6 +6,7 @@
 #include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/VNextPackage.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -406,6 +407,33 @@ namespace LiteNN::Training
 		       std::holds_alternative<TapeLoadActivationNode>(node);
 	}
 
+	inline std::vector<bool> CollectForwardSavedActivationSlots(const TrainStepPlan& plan)
+	{
+		std::vector<bool> saved(plan.module.plan.activationSlots.size(), false);
+		if (plan.forwardFunction >= plan.module.functions.size())
+		{
+			return saved;
+		}
+		const auto forwardSubgraph = plan.module.functions[plan.forwardFunction].body;
+		const auto subgraphIt =
+		    std::ranges::find_if(plan.module.plan.subgraphs, [&](const ExecutablePlanSubgraph& subgraph) {
+			    return subgraph.sourceSubgraph == forwardSubgraph;
+		    });
+		if (subgraphIt == plan.module.plan.subgraphs.end())
+		{
+			return saved;
+		}
+		for (const auto& node : subgraphIt->nodes)
+		{
+			if (const auto* save = std::get_if<SaveActivationNode>(&node.node);
+			    save != nullptr && save->slotId < saved.size())
+			{
+				saved[save->slotId] = true;
+			}
+		}
+		return saved;
+	}
+
 	inline void
 	CollectTrainStepAOTReadinessDiagnosticsForSubgraph(const TrainStepPlan& plan, const TrainStepArtifactEntry& entry,
 	                                                   SubgraphId sourceSubgraph,
@@ -443,6 +471,7 @@ namespace LiteNN::Training
 	CollectTrainStepAOTReadinessDiagnostics(const TrainStepPlan& plan)
 	{
 		std::vector<TrainStepAOTReadinessDiagnostic> diagnostics;
+		const auto forwardSavedActivationSlots = CollectForwardSavedActivationSlots(plan);
 		for (const auto& entry : plan.artifactEntries)
 		{
 			if (entry.kind == TrainStepArtifactEntryKind::Forward)
@@ -458,8 +487,32 @@ namespace LiteNN::Training
 					                        .message = "train-step entry references an unknown executable function" });
 					continue;
 				}
-				CollectTrainStepAOTReadinessDiagnosticsForSubgraph(plan, entry, plan.module.functions[function].body,
-				                                                   diagnostics);
+				const auto subgraphId = plan.module.functions[function].body;
+				const auto beforeCount = diagnostics.size();
+				CollectTrainStepAOTReadinessDiagnosticsForSubgraph(plan, entry, subgraphId, diagnostics);
+				auto writeIt = diagnostics.begin() + static_cast<std::ptrdiff_t>(beforeCount);
+				diagnostics.erase(
+				    std::remove_if(writeIt, diagnostics.end(),
+				                   [&](const TrainStepAOTReadinessDiagnostic& diagnostic) {
+					                   if (diagnostic.opKind != "LoadActivationNode")
+					                   {
+						                   return false;
+					                   }
+					                   const auto subgraphIt = std::ranges::find_if(
+					                       plan.module.plan.subgraphs, [&](const ExecutablePlanSubgraph& subgraph) {
+						                       return subgraph.sourceSubgraph == subgraphId;
+					                       });
+					                   if (subgraphIt == plan.module.plan.subgraphs.end() ||
+					                       diagnostic.node >= subgraphIt->nodes.size())
+					                   {
+						                   return false;
+					                   }
+					                   const auto* load =
+					                       std::get_if<LoadActivationNode>(&subgraphIt->nodes[diagnostic.node].node);
+					                   return load != nullptr && load->slotId < forwardSavedActivationSlots.size() &&
+					                          forwardSavedActivationSlots[load->slotId];
+				                   }),
+				    diagnostics.end());
 			}
 			if (entry.update)
 			{

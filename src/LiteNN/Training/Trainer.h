@@ -250,7 +250,28 @@ namespace LiteNN::Training
 			{
 				throw std::runtime_error("Trainer AOT forward runner was not initialized");
 			}
-			return compiledForward_(inputs);
+			auto outputsAndActivations = compiledForward_(inputs);
+			const auto outputCount = graph_->GetSubgraph(graph_->Forward()).Results().size();
+			if (outputsAndActivations.size() < outputCount)
+			{
+				throw std::runtime_error("Trainer AOT forward runner returned fewer outputs than the forward graph");
+			}
+			savedActivations_.clear();
+			if (outputsAndActivations.size() > outputCount)
+			{
+				savedActivations_.reserve(outputsAndActivations.size() - outputCount);
+				for (std::size_t i = outputCount; i < outputsAndActivations.size(); ++i)
+				{
+					savedActivations_.push_back(std::move(outputsAndActivations[i]));
+				}
+			}
+			std::vector<Tensor<D>> outputs;
+			outputs.reserve(outputCount);
+			for (std::size_t i = 0; i < outputCount; ++i)
+			{
+				outputs.push_back(std::move(outputsAndActivations[i]));
+			}
+			return outputs;
 		}
 
 		static std::vector<Tensor<CPU>> CopyToCPU(std::span<const Tensor<D>> tensors)
@@ -388,7 +409,17 @@ namespace LiteNN::Training
 			{
 				throw std::runtime_error("Trainer AOT backward runner was not initialized");
 			}
-			return compiledBackward_(inputs);
+			std::vector<Tensor<D>> inputsAndActivations;
+			inputsAndActivations.reserve(inputs.size() + savedActivations_.size());
+			for (const auto& input : inputs)
+			{
+				inputsAndActivations.push_back(input);
+			}
+			for (const auto& activation : savedActivations_)
+			{
+				inputsAndActivations.push_back(activation);
+			}
+			return compiledBackward_(inputsAndActivations);
 		}
 
 		ModelGraph* model_;
@@ -402,6 +433,7 @@ namespace LiteNN::Training
 		CompiledForwardRunner<D> compiledForward_;
 		CompiledBackwardRunner<D> compiledBackward_;
 		std::vector<CompiledOptimizerUpdateRunner<CPU>> compiledOptimizerUpdates_;
+		std::vector<Tensor<D>> savedActivations_;
 		bool compiledOptimizerUpdatesAvailable_{};
 	};
 } // namespace LiteNN::Training

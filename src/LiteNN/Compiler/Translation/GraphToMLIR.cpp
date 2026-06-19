@@ -1169,12 +1169,20 @@ namespace litenn
 				valueMap[nodeId] = { input };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId nodeId, const LoadActivationNode& node,
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const LoadActivationNode& node,
 			              std::span<const OutputInfo>, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>& activationMap, std::map<std::size_t, Value>&)
 			{
 				// SSA化: lookup saved value
-				valueMap[nodeId] = { activationMap.at(node.slotId) };
+				const auto it = activationMap.find(node.slotId);
+				if (it == activationMap.end())
+				{
+					throw std::runtime_error(std::format(
+					    "GraphToMLIR cannot lower LoadActivationNode for slot {} in subgraph {} node {} without an "
+					    "explicit saved-activation binding",
+					    node.slotId, sg.subgraph.sourceSubgraph, nodeId));
+				}
+				valueMap[nodeId] = { it->second };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const TapeSaveActivationNode& node,
@@ -1186,11 +1194,19 @@ namespace litenn
 				valueMap[nodeId] = { input };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId nodeId, const TapeLoadActivationNode& node,
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const TapeLoadActivationNode& node,
 			              std::span<const OutputInfo>, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>& tapeMap)
 			{
-				valueMap[nodeId] = { tapeMap.at(node.tapeSlotId) };
+				const auto it = tapeMap.find(node.tapeSlotId);
+				if (it == tapeMap.end())
+				{
+					throw std::runtime_error(std::format(
+					    "GraphToMLIR cannot lower TapeLoadActivationNode for slot {} in subgraph {} node {} without "
+					    "an explicit tape binding",
+					    node.tapeSlotId, sg.subgraph.sourceSubgraph, nodeId));
+				}
+				valueMap[nodeId] = { it->second };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const ReduceOpNode& node,

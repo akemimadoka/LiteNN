@@ -1389,13 +1389,18 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   updated parameters, and updated optimizer state.
 - [ ] Remove hidden interpreter-only activation/tape dependencies from compiled training by representing saved activations
   as explicit values, explicit workspace buffers, or a documented recomputation strategy.
+  CPU AOT training now captures forward `SaveActivationNode` values as explicit forward-entry outputs and feeds them
+  back into the backward-entry runner as leading ABI params, so non-tape saved activations no longer require the
+  interpreter activation store. Tape/while activation stacks remain rejected until they get an explicit stack/workspace
+  ABI or recomputation plan.
 - [x] Decide whether the first compiled trainer emits one fused train-step artifact or separate forward/loss/backward/
   optimizer artifacts with a runtime scheduler.
   The current contract uses separate named artifact entries for `forward`, `loss`, `backward`, and each optimizer update,
   so partial compilation can fail or fall back at entry granularity.
 - [x] Add validation diagnostics that reject AOT training when backward nodes still require interpreter-local state.
-  `CollectTrainStepAOTReadinessDiagnostics` and `RequireTrainStepAOTReady` reject activation/tape store nodes in
-  non-forward train-step entries until those states are represented through ABI bindings or recomputation.
+  `CollectTrainStepAOTReadinessDiagnostics` and `RequireTrainStepAOTReady` now allow backward `LoadActivationNode`
+  entries only when the forward entry has a matching explicit saved-activation capture; tape store/load nodes still
+  produce explicit AOT readiness diagnostics.
 
 #### G13.2 Compiler and Runtime Support
 
@@ -1407,7 +1412,8 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   entry is still source-level metadata, not an independently compiled loss kernel.
 - [x] Teach the CPU AOT path to compile backward subgraphs with stable tensor specs instead of wrapping only
   `graph.Forward()`.
-  `CreateCompiledTrainBackwardRunner` builds and validates an explicit backward-entry plan before CPU AOT compilation.
+  `CreateCompiledTrainBackwardRunner` builds a single-entry backward plan, inserts saved activations as explicit leading
+  params, validates it, and compiles it through CPU AOT.
 - [ ] Compile loss entries as independent CPU AOT kernels instead of computing softmax cross entropy and its gradient on
   the host between forward and backward.
 - [ ] Add a CUDA AOT training path after CPU semantics are stable, including stream/workspace ownership and explicit
@@ -1436,15 +1442,16 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 #### G13.4 Validation and Benchmarking
 
 - [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
-  Current coverage compares scalar SGD, batch Linear softmax cross entropy with SGD, and two-step AdamW execution,
-  including losses, forward outputs, gradients, updated parameters, optimizer step indices, and first/second moments.
-  MLP and compiled-loss parity still need broader coverage.
+  Current coverage compares scalar SGD, batch Linear softmax cross entropy with SGD, a two-layer Linear chain with saved
+  activation captures, and two-step AdamW execution, including losses, forward outputs, gradients, updated parameters,
+  optimizer step indices, and first/second moments. ReLU/compare-mask MLP and compiled-loss parity still need broader
+  coverage.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
   `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers
-  `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. The Linear AOT full-step row executes today; MLP AOT
-  full-step rows intentionally surface the current `LoadActivationNode` readiness diagnostic until G13.1 removes hidden
-  activation/tape state from compiled training.
+  `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. Linear and MLP128 AOT full-step rows now execute; the
+  remaining correctness gap for ReLU-heavy MLP training is compare/mask-gradient parity rather than hidden activation
+  store access.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
   `TrainCPUAOT/FullStep` reports `compile_ms` as a setup counter while the benchmark timer covers train-step latency.
   Memory/workspace and automated numerical-drift benchmark reporting remain open.
