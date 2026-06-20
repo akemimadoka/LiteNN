@@ -54,6 +54,10 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N]\n"
+		          << "  " << executable
+		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
+		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
+		             "[--seed N]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -174,24 +178,16 @@ namespace
 	struct DecodeLoopCommandOptions
 	{
 		std::string inputPath;
-		std::int32_t initialTokenId{};
+		std::vector<std::int32_t> initialTokenIds;
+		std::optional<std::string> exactPrompt;
 		std::size_t steps{};
 		std::optional<std::string> outputPath;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 	};
 
-	DecodeLoopCommandOptions ParseDecodeLoopOptions(int argc, char** argv)
+	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
 	{
-		if (argc < 5)
-		{
-			throw std::runtime_error("--run-llama-decode-loop-token-id requires input, initial-token-id, and steps");
-		}
-		DecodeLoopCommandOptions options{
-			.inputPath = argv[2],
-			.initialTokenId = ParseTokenId(argv[3], "initial-token-id"),
-			.steps = ParseSize(argv[4], "steps"),
-		};
-		for (int i = 5; i < argc; ++i)
+		for (int i = firstOptionIndex; i < argc; ++i)
 		{
 			const std::string_view arg = argv[i];
 			const auto requireValue = [&](std::string_view name) -> std::string_view {
@@ -239,6 +235,35 @@ namespace
 				throw std::runtime_error(std::format("Unknown decode-loop option '{}'", arg));
 			}
 		}
+	}
+
+	DecodeLoopCommandOptions ParseDecodeLoopOptions(int argc, char** argv)
+	{
+		if (argc < 5)
+		{
+			throw std::runtime_error("--run-llama-decode-loop-token-id requires input, initial-token-id, and steps");
+		}
+		DecodeLoopCommandOptions options{
+			.inputPath = argv[2],
+			.initialTokenIds = { ParseTokenId(argv[3], "initial-token-id") },
+			.steps = ParseSize(argv[4], "steps"),
+		};
+		ParseDecodeLoopTrailingOptions(argc, argv, 5, options);
+		return options;
+	}
+
+	DecodeLoopCommandOptions ParsePromptDecodeLoopOptions(int argc, char** argv)
+	{
+		if (argc < 5)
+		{
+			throw std::runtime_error("--run-llama-prompt-decode-loop requires input, prompt, and steps");
+		}
+		DecodeLoopCommandOptions options{
+			.inputPath = argv[2],
+			.exactPrompt = argv[3],
+			.steps = ParseSize(argv[4], "steps"),
+		};
+		ParseDecodeLoopTrailingOptions(argc, argv, 5, options);
 		return options;
 	}
 
@@ -554,10 +579,22 @@ namespace
 			throw std::runtime_error("decode-loop steps must be positive");
 		}
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(options.inputPath);
+		auto initialTokenIds = options.initialTokenIds;
+		if (options.exactPrompt)
+		{
+			initialTokenIds =
+			    LiteNN::GGUF::MakeExactVocabularyPromptTokens(*options.exactPrompt, imported.model.UnsafeGraphView())
+			        .tokenIds;
+		}
+		if (initialTokenIds.empty())
+		{
+			throw std::runtime_error("decode-loop requires at least one initial token");
+		}
+		const auto runCount = initialTokenIds.size() + options.steps - 1;
 		std::vector<LiteNN::ExecutablePlan> decodePlans;
-		decodePlans.reserve(options.steps);
+		decodePlans.reserve(runCount);
 		const auto buildStart = std::chrono::steady_clock::now();
-		for (std::size_t step = 0; step < options.steps; ++step)
+		for (std::size_t step = 0; step < runCount; ++step)
 		{
 			const auto pastLength = step + 1;
 			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
@@ -568,14 +605,14 @@ namespace
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
-		std::vector<std::int32_t> history{ options.initialTokenId };
+		std::vector<std::int32_t> history = initialTokenIds;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
-		std::int32_t currentToken = options.initialTokenId;
+		std::int32_t currentToken = initialTokenIds.front();
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
 
 		const auto runStart = std::chrono::steady_clock::now();
-		for (std::size_t step = 0; step < options.steps; ++step)
+		for (std::size_t step = 0; step < runCount; ++step)
 		{
 			const auto& plan = decodePlans[step];
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
@@ -612,8 +649,15 @@ namespace
 				throw std::runtime_error("decode-loop produced no outputs");
 			}
 			lastLogitsShape = outputs.front().Shape().ToOwned();
-			currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history);
-			history.push_back(currentToken);
+			if (step + 1 < initialTokenIds.size())
+			{
+				currentToken = initialTokenIds[step + 1];
+			}
+			else
+			{
+				currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history);
+				history.push_back(currentToken);
+			}
 			lastOutputCount = outputs.size();
 			caches.reserve(outputs.size() - 1);
 			for (std::size_t i = 1; i < outputs.size(); ++i)
@@ -1040,6 +1084,12 @@ int main(int argc, char** argv)
 		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-decode-loop-token-id")
 		{
 			RunDecodeLoopFromGGUF(ParseDecodeLoopOptions(argc, argv));
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-prompt-decode-loop")
+		{
+			RunDecodeLoopFromGGUF(ParsePromptDecodeLoopOptions(argc, argv));
 			return 0;
 		}
 

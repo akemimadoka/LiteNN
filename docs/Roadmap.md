@@ -2502,6 +2502,9 @@ placement and fallback policy.
       build/run timing plus generated token ids and tokenizer pieces when `tokenizer.ggml.tokens` is available.
 - [x] Wire decode-loop sampling flags for greedy/random mode, temperature, top-k, top-p, repeat penalty, fixed seed, and
       explicit `--output` path while retaining the original positional output-path form.
+- [x] Add an exact-prompt decode-loop smoke CLI: `--run-llama-prompt-decode-loop` tokenizes a fixture/diagnostic prompt,
+      fills KV state through static decode steps, then generates the requested number of new tokens with the configured
+      sampler.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.

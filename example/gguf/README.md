@@ -34,6 +34,7 @@ build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt model.gguf "hello"
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --sample random --temperature 0.7 --top-k 40 --top-p 0.9 --repeat-penalty 1.1 --seed 42 --output generated_token_ids.txt
+build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt-decode-loop model.gguf "hello" 8 --sample random --seed 42 --output generated_token_ids.txt
 ```
 
 `--run-llama-token-ids` is a token-id level smoke path. It imports the GGUF file,
@@ -53,6 +54,9 @@ pieces when `tokenizer.ggml.tokens` is available. If an output path is supplied,
 it writes both lists to that file. The decode loop defaults to greedy sampling;
 `--sample random` enables seedable temperature/top-k/top-p sampling with an
 optional repeat penalty.
+`--run-llama-prompt-decode-loop` feeds the exact-vocabulary prompt tokens through
+the same static decode loop first, then generates the requested number of new
+tokens.
 
 When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
 emitted as carrier objects with exported rodata/instruction symbols:
