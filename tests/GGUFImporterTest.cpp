@@ -824,6 +824,19 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].updatedValueOutput, "updated_value_0");
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.dtype, DataType::Float32);
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 3, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateType.StaticShape(), std::vector<std::size_t>({ 2, 3, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.name, "kv.layer0");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.kind, Runtime::RuntimeStateKind::KVCache);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].keyByteOffset, 0u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].valueByteOffset, 24u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].layerByteStride, 48u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].tokenByteStride, 8u);
+	ASSERT_EQ(plan.decodeStateABI.kvCaches.size(), 1u);
+	EXPECT_EQ(plan.decodeStateABI.kvCaches[0].name, "kv.layer0");
+	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.kvCaches[0].effects, std::string("write")));
+	ASSERT_TRUE(plan.decodeStateABI.currentPosition.has_value());
+	EXPECT_EQ(plan.decodeStateABI.currentPosition->name, "decode.position");
+	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.currentPosition->effects, std::string("increment")));
 }
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)

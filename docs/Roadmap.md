@@ -2432,7 +2432,9 @@ placement and fallback policy.
 
 - [x] Split LLM lowering into named artifact entries: `prefill`, `decode_step`, optional `logits_postprocess`, and
       metadata/state descriptors.
-- [ ] Replace fully materialized KV cache tensors with explicit mutable KV-cache buffer bindings and per-layer offsets.
+- [x] Expose explicit mutable KV-cache runtime-state bindings and per-layer key/value byte offsets in the LLM artifact
+      plan.
+- [ ] Replace functional decode graph cache inputs/outputs with in-place runtime-state rebinding.
 - [ ] Support variable prompt length and decode position without recompiling for every `pastLength`.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
       golden logits before enabling production profiles.

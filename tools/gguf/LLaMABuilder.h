@@ -1,6 +1,7 @@
 #include "GGUFImporter.h"
 
 #include <LiteNN/Layer/Layer.h>
+#include <LiteNN/Runtime/Scheduler.h>
 
 #include <cstddef>
 #include <optional>
@@ -61,6 +62,12 @@ namespace LiteNN::GGUF
 		std::string updatedKeyOutput;
 		std::string updatedValueOutput;
 		TensorType cacheType;
+		TensorType stateType;
+		Runtime::RuntimeStateBinding stateBinding;
+		std::size_t keyByteOffset{};
+		std::size_t valueByteOffset{};
+		std::size_t layerByteStride{};
+		std::size_t tokenByteStride{};
 	};
 
 	struct LLaMAArtifactEntry
@@ -82,6 +89,7 @@ namespace LiteNN::GGUF
 		std::size_t vocabSize{};
 		LLaMAArtifactEntry prefill;
 		LLaMAArtifactEntry decodeStep;
+		Runtime::LLMDecodeStateABI decodeStateABI;
 	};
 
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,

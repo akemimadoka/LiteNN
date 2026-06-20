@@ -506,6 +506,11 @@ namespace LiteNN::GGUF
 		const auto headDim = hyperparameters.HeadDimension();
 		const std::vector<std::size_t> cacheShape{ decodePastLength, hyperparameters.attentionHeadCountKV, headDim };
 		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
+		const std::vector<std::size_t> stateShape{ 2, decodePastLength, hyperparameters.attentionHeadCountKV, headDim };
+		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
+		const auto cacheByteSize = cacheType.ByteSize().value_or(0);
+		const auto stateByteSize = stateType.ByteSize().value_or(0);
+		const auto tokenByteStride = hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 
 		LLaMAArtifactEntry prefill{
 			.kind = LLaMAArtifactKind::Prefill,
@@ -539,6 +544,9 @@ namespace LiteNN::GGUF
 			decode.inputNames.push_back(pastValue);
 			decode.outputNames.push_back(updatedKey);
 			decode.outputNames.push_back(updatedValue);
+			auto stateBinding = Runtime::MakeRuntimeStateBinding(
+			    std::format("kv.layer{}", blockIndex), Runtime::RuntimeStateKind::KVCache, "kv-cache",
+			    TensorType{ stateType }, BufferMutability::Mutable, { "read", "write", "append", "view" });
 			decode.kvCaches.push_back({
 			    .blockIndex = blockIndex,
 			    .pastKeyInput = std::move(pastKey),
@@ -546,8 +554,25 @@ namespace LiteNN::GGUF
 			    .updatedKeyOutput = std::move(updatedKey),
 			    .updatedValueOutput = std::move(updatedValue),
 			    .cacheType = cacheType,
+			    .stateType = stateType,
+			    .stateBinding = stateBinding,
+			    .keyByteOffset = 0,
+			    .valueByteOffset = cacheByteSize,
+			    .layerByteStride = stateByteSize,
+			    .tokenByteStride = tokenByteStride,
 			});
 		}
+
+		Runtime::LLMDecodeStateABI decodeStateABI;
+		decodeStateABI.kvCaches.reserve(decode.kvCaches.size());
+		for (const auto& cache : decode.kvCaches)
+		{
+			decodeStateABI.kvCaches.push_back(cache.stateBinding);
+		}
+		decodeStateABI.currentPosition = Runtime::MakeRuntimeStateBinding(
+		    "decode.position", Runtime::RuntimeStateKind::KVCache, "current-position",
+		    TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{ 1 } }), BufferMutability::Mutable,
+		    { "read", "write", "increment" });
 
 		return {
 			.hyperparameters = hyperparameters,
@@ -555,6 +580,7 @@ namespace LiteNN::GGUF
 			.vocabSize = vocabSize,
 			.prefill = std::move(prefill),
 			.decodeStep = std::move(decode),
+			.decodeStateABI = std::move(decodeStateABI),
 		};
 	}
 
