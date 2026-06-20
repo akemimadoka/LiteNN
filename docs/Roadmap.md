@@ -1446,7 +1446,9 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
   activation captures, a ReLU/compare-mask MLP, and two-step AdamW execution, including losses, forward outputs,
   gradients, updated parameters, optimizer step indices, and first/second moments. Compiled-loss parity and broader
   training graph coverage remain open.
-- [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
+- [x] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
+  `Training.AOTAndInterpreterBroadcastReduceSharedVariableGradientsMatch` now validates CPU AOT vs interpreter parity for
+  broadcasted binary gradients, ReduceSum backward expansion, and merged gradients from repeated VariableRef uses.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
   `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers
   `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. Linear and MLP128 AOT full-step rows now execute; the
