@@ -639,6 +639,52 @@ namespace LiteNN::GGUF
 		return std::nullopt;
 	}
 
+	LLMTokenizerMetadataSummary SummarizeLLMTokenizerMetadata(const Graph& graph)
+	{
+		LLMTokenizerMetadataSummary summary;
+		if (const auto model = FindMetadata(graph, "tokenizer.ggml.model"))
+		{
+			if (const auto* value = std::get_if<std::string>(&(*model)->value))
+			{
+				summary.model = *value;
+			}
+		}
+		if (const auto tokens = FindMetadata(graph, "tokenizer.ggml.tokens"))
+		{
+			if (const auto* value = std::get_if<std::vector<std::string>>(&(*tokens)->value))
+			{
+				summary.tokenCount = value->size();
+			}
+		}
+		if (const auto tokenTypes = FindMetadata(graph, "tokenizer.ggml.token_type"))
+		{
+			if (const auto* value = std::get_if<std::vector<std::int64_t>>(&(*tokenTypes)->value))
+			{
+				summary.tokenTypeCount = value->size();
+			}
+			else if (const auto* unsignedValue = std::get_if<std::vector<std::uint64_t>>(&(*tokenTypes)->value))
+			{
+				summary.tokenTypeCount = unsignedValue->size();
+			}
+		}
+		for (const auto key : { "tokenizer.chat_template", "tokenizer.ggml.chat_template" })
+		{
+			if (const auto chatTemplate = FindMetadata(graph, key))
+			{
+				if (const auto* value = std::get_if<std::string>(&(*chatTemplate)->value))
+				{
+					summary.hasChatTemplate = true;
+					summary.chatTemplateBytes = value->size();
+					break;
+				}
+			}
+		}
+		summary.hasBosTokenId = FindMetadata(graph, "tokenizer.ggml.bos_token_id").has_value();
+		summary.hasEosTokenId = FindMetadata(graph, "tokenizer.ggml.eos_token_id").has_value();
+		summary.hasUnknownTokenId = FindMetadata(graph, "tokenizer.ggml.unknown_token_id").has_value();
+		return summary;
+	}
+
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind)
 	{
 		LLaMACompatibilityReport report{
@@ -679,10 +725,17 @@ namespace LiteNN::GGUF
 		}
 		if (kind == LLaMACompatibilityProfileKind::Qwen2LikeCausalLM)
 		{
-			addDiagnostic("qwen2.tokenizer",
-			              "Qwen2 production execution requires tokenizer.ggml metadata, chat-template handling, and "
-			              "token-id parity against llama.cpp; current LiteNN lowering accepts token ids directly.",
-			              false);
+			const auto tokenizer = SummarizeLLMTokenizerMetadata(archive);
+			addDiagnostic(
+			    "qwen2.tokenizer",
+			    std::format("Qwen2 tokenizer metadata: model={}, tokens={}, token_types={}, "
+			                "chat_template={} ({} bytes), bos={}, eos={}, unk={}. Token-id parity against "
+			                "llama.cpp is still required; current LiteNN lowering accepts token ids directly.",
+			                tokenizer.model.value_or("<missing>"), tokenizer.tokenCount, tokenizer.tokenTypeCount,
+			                tokenizer.hasChatTemplate ? "yes" : "no", tokenizer.chatTemplateBytes,
+			                tokenizer.hasBosTokenId ? "yes" : "no", tokenizer.hasEosTokenId ? "yes" : "no",
+			                tokenizer.hasUnknownTokenId ? "yes" : "no"),
+			    false);
 			addDiagnostic("qwen2.quantized-cuda",
 			              "Qwen2 Q4_K_M CUDA execution requires native GGML block-quantized projection kernels or an "
 			              "explicit dequantized-float fallback budget; current LLaMA lowering materializes quantized "

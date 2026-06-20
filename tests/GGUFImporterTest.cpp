@@ -284,6 +284,11 @@ namespace
 		    { "qwen2.attention.layer_norm_rms_epsilon", 1.0e-6 },
 		    { "qwen2.rope.freq_base", 10000.0 },
 		    { "tokenizer.ggml.model", std::string("gpt2") },
+		    { "tokenizer.ggml.tokens", std::vector<std::string>{ "<|im_start|>", "hello", "<|im_end|>" } },
+		    { "tokenizer.ggml.token_type", std::vector<std::int64_t>{ 3, 1, 3 } },
+		    { "tokenizer.ggml.bos_token_id", std::int64_t{ 0 } },
+		    { "tokenizer.ggml.eos_token_id", std::int64_t{ 2 } },
+		    { "tokenizer.ggml.unknown_token_id", std::int64_t{ 1 } },
 		    { "tokenizer.chat_template",
 		      std::string("{% for message in messages %}{{ message.content }}{% endfor %}") },
 		});
@@ -700,7 +705,9 @@ TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnos
 	EXPECT_TRUE(report.externalGoldenRequired);
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.tokenizer" &&
-		       diagnostic.message.find("token-id parity") != std::string::npos;
+		       diagnostic.message.find("tokens=3") != std::string::npos &&
+		       diagnostic.message.find("chat_template=yes") != std::string::npos &&
+		       diagnostic.message.find("Token-id parity") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.quantized-cuda" &&
@@ -710,6 +717,21 @@ TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnos
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.decode-loop" &&
 		       diagnostic.message.find("runtime decode loop") != std::string::npos;
 	}));
+}
+
+TEST(GGUFLLaMACompatibility, SummarizesTokenizerMetadata)
+{
+	const auto summary = GGUF::SummarizeLLMTokenizerMetadata(BuildTinyQwen2Archive());
+
+	ASSERT_TRUE(summary.model.has_value());
+	EXPECT_EQ(*summary.model, "gpt2");
+	EXPECT_EQ(summary.tokenCount, 3u);
+	EXPECT_EQ(summary.tokenTypeCount, 3u);
+	EXPECT_TRUE(summary.hasChatTemplate);
+	EXPECT_GT(summary.chatTemplateBytes, 0u);
+	EXPECT_TRUE(summary.hasBosTokenId);
+	EXPECT_TRUE(summary.hasEosTokenId);
+	EXPECT_TRUE(summary.hasUnknownTokenId);
 }
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)

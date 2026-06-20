@@ -93,11 +93,24 @@ namespace LiteNN::GGUF
 		std::vector<LLaMACompatibilityDiagnostic> diagnostics;
 	};
 
+	struct LLMTokenizerMetadataSummary
+	{
+		std::optional<std::string> model;
+		std::size_t tokenCount{};
+		std::size_t tokenTypeCount{};
+		bool hasChatTemplate{};
+		std::size_t chatTemplateBytes{};
+		bool hasBosTokenId{};
+		bool hasEosTokenId{};
+		bool hasUnknownTokenId{};
+	};
+
 	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind);
 	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind);
 	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles();
 	std::optional<LLaMACompatibilityProfileKind> TryInferLLaMACompatibilityProfile(std::string_view architecture);
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind);
+	LLMTokenizerMetadataSummary SummarizeLLMTokenizerMetadata(const Graph& graph);
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);

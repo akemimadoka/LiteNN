@@ -2420,7 +2420,7 @@ placement and fallback policy.
 
 #### G16.2 Tokenizer, Prompt, and Sampler Runtime
 
-- [ ] Preserve and expose tokenizer metadata needed by Qwen chat templates, BOS/EOS handling, special tokens, and byte
+- [x] Preserve and expose tokenizer metadata needed by Qwen chat templates, BOS/EOS handling, special tokens, and byte
       fallback rules.
 - [ ] Add a minimal tokenizer bridge: first allow caller-provided token ids, then add tokenizer execution or a llama.cpp
       tokenizer adapter behind an explicit optional target.
