@@ -1542,3 +1542,26 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithExplicitDequantiz
 	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
 	EXPECT_NO_THROW(ValidateExecutablePlan(plan));
 }
+
+TEST(GGUFLLaMACausalLM, ImportsQwenProjectionBiasesWithVectorShapes)
+{
+	auto archive = BuildTinyQwen2Archive();
+	AddNamedVariable(archive, "blk.0.attn_q.bias", Tensor<CPU>({ 0.1F, 0.2F, 0.3F, 0.4F }, { 4 }));
+	AddNamedVariable(archive, "blk.0.attn_k.bias", Tensor<CPU>({ 0.5F, 0.6F }, { 2 }));
+	AddNamedVariable(archive, "blk.0.attn_v.bias", Tensor<CPU>({ 0.7F, 0.8F }, { 2 }));
+
+	Graph lowered;
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(archive);
+	const auto model = GGUF::CreateLLaMACausalLM(lowered, archive, hyperparameters);
+	ASSERT_EQ(model.blocks.size(), 1u);
+	ASSERT_TRUE(model.blocks[0].queryProjection.biasVariable.has_value());
+	ASSERT_TRUE(model.blocks[0].keyProjection.biasVariable.has_value());
+	ASSERT_TRUE(model.blocks[0].valueProjection.biasVariable.has_value());
+	EXPECT_EQ(model.blocks[0].queryProjection.biasShape, (std::vector<std::size_t>{ 4 }));
+	EXPECT_EQ(model.blocks[0].keyProjection.biasShape, (std::vector<std::size_t>{ 2 }));
+	EXPECT_EQ(model.blocks[0].valueProjection.biasShape, (std::vector<std::size_t>{ 2 }));
+
+	const auto forward = GGUF::BuildLLaMACausalLM(lowered, model, hyperparameters, 1);
+	lowered.SetForward(forward);
+	EXPECT_NO_THROW(ValidateExecutablePlan(Detail::BuildExecutablePlanFromGraph(lowered)));
+}

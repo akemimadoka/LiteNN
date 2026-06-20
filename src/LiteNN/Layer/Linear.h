@@ -16,6 +16,7 @@ namespace LiteNN::Layer
 	{
 		std::size_t weightVariable{};
 		std::optional<std::size_t> biasVariable;
+		std::vector<std::size_t> biasShape;
 		std::size_t inFeatures{};
 		std::size_t outFeatures{};
 		DataType dtype{ DataType::Float32 };
@@ -34,10 +35,12 @@ namespace LiteNN::Layer
 
 	inline void ValidateLinearBias(const Tensor<CPU>& bias, std::size_t outFeatures, DataType dtype)
 	{
-		if (bias.DType() != dtype || bias.Shape().NumDim() != 2 || bias.Shape()[0] != 1 ||
-		    bias.Shape()[1] != outFeatures)
+		const auto vectorBias = bias.Shape().NumDim() == 1 && bias.Shape()[0] == outFeatures;
+		const auto rowBias = bias.Shape().NumDim() == 2 && bias.Shape()[0] == 1 && bias.Shape()[1] == outFeatures;
+		if (bias.DType() != dtype || (!vectorBias && !rowBias))
 		{
-			throw std::runtime_error("Linear bias must have shape [1, outFeatures] and the same dtype as weight");
+			throw std::runtime_error(
+			    "Linear bias must have shape [outFeatures] or [1, outFeatures] and the same dtype as weight");
 		}
 	}
 
@@ -64,6 +67,7 @@ namespace LiteNN::Layer
 			layer.outFeatures = weight.Shape()[1];
 			layer.dtype = weight.DType();
 			layer.weightVariable = graph.AddVariable(Variable::Create(std::move(weight)));
+			layer.biasShape = bias.Shape().ToOwned();
 			layer.biasVariable = graph.AddVariable(Variable::Create(std::move(bias)));
 			return layer;
 		}
@@ -146,7 +150,13 @@ namespace LiteNN::Layer
 			return { matmul, 0 };
 		}
 
-		const std::vector<std::size_t> biasShape{ 1, layer.outFeatures };
+		const auto biasShape =
+		    layer.biasShape.empty() ? std::vector<std::size_t>{ 1, layer.outFeatures } : layer.biasShape;
+		if (biasShape != std::vector<std::size_t>{ layer.outFeatures } &&
+		    biasShape != std::vector<std::size_t>{ 1, layer.outFeatures })
+		{
+			throw std::runtime_error("Linear bias metadata must have shape [outFeatures] or [1, outFeatures]");
+		}
 		const auto bias =
 		    subgraph.AddNode(VariableRefNode{ *layer.biasVariable }, { OutputInfo{ layer.dtype, biasShape } });
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },

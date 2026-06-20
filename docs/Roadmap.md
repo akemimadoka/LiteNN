@@ -2444,6 +2444,8 @@ placement and fallback policy.
       golden logits before enabling production profiles.
 - [x] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
       layout must each be inspectable.
+- [x] Preserve optional Qwen2 projection biases during GGUF lowering, including the native GGUF `[outFeatures]` vector
+      shape and LiteNN's existing `[1, outFeatures]` broadcast form.
 
 #### G16.4 Quantized Weight Execution
 
@@ -2557,6 +2559,8 @@ These improvements do not require a compatibility break and should not block vNe
   dequantize/transpose semantics instead of expanding archive weights during model construction.
 - Added executable packed Int4 Linear coverage and structural Q8_0 LLaMA lowering coverage; native GGML block execution
   remains the next G16.4 backend milestone.
+- Added optional GGUF Linear bias import and 1D bias broadcasting so Qwen2 Q/K/V projection semantics are no longer
+  silently dropped by the generic LLaMA builder.
 
 ### 2026-06-02
 

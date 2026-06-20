@@ -192,6 +192,46 @@ namespace LiteNN::GGUF
 			return targetIndex;
 		}
 
+		struct ImportedLinearBias
+		{
+			std::size_t variable{};
+			std::vector<std::size_t> shape;
+		};
+
+		std::optional<ImportedLinearBias> ImportOptionalLinearBias(Graph& target, const Graph& archive,
+		                                                           std::string_view weightName, std::size_t outFeatures,
+		                                                           DataType dtype)
+		{
+			if (!weightName.ends_with(".weight"))
+			{
+				return std::nullopt;
+			}
+			auto biasName = std::string(weightName.substr(0, weightName.size() - std::string_view("weight").size()));
+			biasName += "bias";
+			const auto sourceIndex = archive.FindVariable(biasName);
+			if (!sourceIndex)
+			{
+				return std::nullopt;
+			}
+
+			auto materialized = MaterializeArchiveVariable(archive, *sourceIndex, biasName);
+			if (materialized->IsQuantized() || materialized->Data().DType() != dtype)
+			{
+				throw std::runtime_error(
+				    std::format("GGUF Linear bias '{}' must use the projection's expressed dtype {}", biasName,
+				                DataTypeName(dtype)));
+			}
+			const auto shape = materialized->Data().Shape().ToOwned();
+			if (shape != std::vector<std::size_t>{ outFeatures } && shape != std::vector<std::size_t>{ 1, outFeatures })
+			{
+				throw std::runtime_error(std::format("GGUF Linear bias '{}' must have shape [{}] or [1, {}]", biasName,
+				                                     outFeatures, outFeatures));
+			}
+			const auto variable = target.AddVariable(std::move(materialized));
+			target.SetVariableName(variable, biasName);
+			return ImportedLinearBias{ variable, shape };
+		}
+
 		const Variable& RequirePlainFloatingVariable(const Graph& graph, std::size_t variableIndex,
 		                                             std::string_view name)
 		{
@@ -234,9 +274,11 @@ namespace LiteNN::GGUF
 				}
 				const auto variableIndex = target.AddVariable(source);
 				target.SetVariableName(variableIndex, std::string(name));
+				const auto bias = ImportOptionalLinearBias(target, archive, name, outFeatures, params.expressedType);
 				return {
 					.weightVariable = variableIndex,
-					.biasVariable = std::nullopt,
+					.biasVariable = bias ? std::optional{ bias->variable } : std::nullopt,
+					.biasShape = bias ? bias->shape : std::vector<std::size_t>{},
 					.inFeatures = inFeatures,
 					.outFeatures = outFeatures,
 					.dtype = params.expressedType,
@@ -268,9 +310,12 @@ namespace LiteNN::GGUF
 
 			const auto variableIndex = target.AddVariable(std::move(materialized));
 			target.SetVariableName(variableIndex, std::string(name));
+			const auto bias = ImportOptionalLinearBias(target, archive, name, outFeatures,
+			                                           target.GetVariable(variableIndex)->Data().DType());
 			return {
 				.weightVariable = variableIndex,
-				.biasVariable = std::nullopt,
+				.biasVariable = bias ? std::optional{ bias->variable } : std::nullopt,
+				.biasShape = bias ? bias->shape : std::vector<std::size_t>{},
 				.inFeatures = inFeatures,
 				.outFeatures = outFeatures,
 				.dtype = target.GetVariable(variableIndex)->Data().DType(),
