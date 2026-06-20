@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -47,7 +48,8 @@ namespace
 		             "<max-cache-length>\n"
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
 		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
-		          << "  " << executable << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps>\n"
+		          << "  " << executable
+		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -235,18 +237,25 @@ namespace
 		std::cout << ']';
 	}
 
-	void PrintTokenList(std::span<const std::int32_t> values)
+	std::string TokenListText(std::span<const std::int32_t> values)
 	{
-		std::cout << '[';
+		std::string text;
+		text += '[';
 		for (std::size_t i = 0; i < values.size(); ++i)
 		{
 			if (i != 0)
 			{
-				std::cout << ',';
+				text += ',';
 			}
-			std::cout << values[i];
+			text += std::to_string(values[i]);
 		}
-		std::cout << ']';
+		text += ']';
+		return text;
+	}
+
+	void PrintTokenList(std::span<const std::int32_t> values)
+	{
+		std::cout << TokenListText(values);
 	}
 
 	void PrintTensorShape(LiteNN::ShapeView shape)
@@ -363,7 +372,8 @@ namespace
 		return MakeTokenIdTensor(ids, plan);
 	}
 
-	void RunDecodeLoopFromGGUF(std::string_view inputPath, std::int32_t initialTokenId, std::size_t steps)
+	void RunDecodeLoopFromGGUF(std::string_view inputPath, std::int32_t initialTokenId, std::size_t steps,
+	                           std::optional<std::string_view> outputPath)
 	{
 		if (steps == 0)
 		{
@@ -436,6 +446,19 @@ namespace
 		std::cout << " generated=";
 		PrintTokenList(history);
 		std::cout << '\n';
+		if (outputPath)
+		{
+			std::ofstream output(std::string(*outputPath), std::ios::binary);
+			if (!output)
+			{
+				throw std::runtime_error("Failed to open decode-loop output file: " + std::string(*outputPath));
+			}
+			output << TokenListText(history) << '\n';
+			if (!output)
+			{
+				throw std::runtime_error("Failed to write decode-loop output file: " + std::string(*outputPath));
+			}
+		}
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
@@ -791,14 +814,16 @@ int main(int argc, char** argv)
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-decode-loop-token-id")
 		{
-			if (argc != 5)
+			if (argc != 5 && argc != 6)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
 			const auto initialTokenId = ParseTokenId(argv[3], "initial-token-id");
 			const auto steps = ParseSize(argv[4], "steps");
-			RunDecodeLoopFromGGUF(argv[2], initialTokenId, steps);
+			const std::optional<std::string_view> outputPath =
+			    argc == 6 ? std::optional<std::string_view>(argv[5]) : std::nullopt;
+			RunDecodeLoopFromGGUF(argv[2], initialTokenId, steps, outputPath);
 			return 0;
 		}
 

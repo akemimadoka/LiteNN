@@ -2494,7 +2494,7 @@ placement and fallback policy.
 - [x] Add a saved-package token-id smoke CLI: `--run-llama-package-token-ids` loads a lowered `.ltnn` package, binds
       caller-provided token ids, executes through the same quantized MatMul callback path, and reports greedy next token.
 - [x] Add a token-id decode-loop smoke CLI: `--run-llama-decode-loop-token-id` repeatedly executes static decode graphs,
-      carries updated KV-cache tensors between steps, and reports the generated token-id sequence.
+      carries updated KV-cache tensors between steps, and reports or writes the generated token-id sequence.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
