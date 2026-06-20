@@ -2489,6 +2489,8 @@ placement and fallback policy.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
       logits shape plus greedy next token.
+- [x] Hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from saved package descriptors for direct
+      Interpreter execution of saved `.ltnn` graphs with inline constants.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
@@ -2516,9 +2518,6 @@ or backend architecture decisions before implementation would be meaningful.
 - Deferred: broad non-Qwen external llama.cpp parity fixtures for additional real LLaMA-family models, especially CUDA
   artifact parity and multi-token prefill/decode validation against external logits. The Qwen2.5 path is now tracked as
   the active G16 production LLM target.
-- Deferred: hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from package storage for direct Interpreter
-  execution of saved `.ltnn` graphs. Current CLI smoke executes directly from GGUF lowering because descriptors only
-  preserve constant type/shape facts, not bytes.
 - Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact
   entries, mutable parameter/state rebinding, and saved-activation/tape ABI. G14 closes the compatibility-breaking Trainer
   API split; the production compiled train-step implementation remains the G13 AOT-training project.

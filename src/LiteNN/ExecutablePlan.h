@@ -242,6 +242,22 @@ namespace LiteNN
 		AddPlanAttribute(attributes, std::move(name), std::move(text));
 	}
 
+	inline std::string TensorPayloadHex(const Tensor<PolymorphicDevice>& tensor)
+	{
+		const auto cpuTensor = tensor.CopyToDevice(CPU{});
+		const auto byteCount = cpuTensor.NumElements() * ElementByteSize(cpuTensor.DType());
+		const auto* bytes = static_cast<const std::uint8_t*>(cpuTensor.UnsafeRawData());
+		constexpr char digits[] = "0123456789abcdef";
+		std::string text;
+		text.resize(byteCount * 2);
+		for (std::size_t i = 0; i < byteCount; ++i)
+		{
+			text[2 * i] = digits[bytes[i] >> 4];
+			text[2 * i + 1] = digits[bytes[i] & 0x0F];
+		}
+		return text;
+	}
+
 	inline void AddPlanQuantizationAttributes(std::vector<ExecutablePlanAttribute>& attrs,
 	                                          const QuantizationParams& params)
 	{
@@ -272,6 +288,7 @@ namespace LiteNN
 		std::vector<ExecutablePlanAttribute> attrs;
 		AddPlanAttribute(attrs, "dtype", node.value.DType());
 		AddPlanAttribute(attrs, "shape", node.value.Shape().ToOwned());
+		AddPlanAttribute(attrs, "dataHex", TensorPayloadHex(node.value));
 		return attrs;
 	}
 

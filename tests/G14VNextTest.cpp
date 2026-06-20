@@ -613,6 +613,38 @@ TEST(G14VNext, VNextModelPackageRoundTripsDequantizeNodeParameters)
 	EXPECT_NO_THROW(ValidateExecutablePlan(package.plan));
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsConstantPayloadsForInterpreter)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2, 2 });
+	auto constant =
+	    Tensor<CPU>({ 10.0, 20.0, 30.0, 40.0 }, { 2, 2 }, DataType::Float32).CopyToDevice(PolymorphicDevice{ CPU{} });
+	const auto constantNode =
+	    forward.AddNode(ConstantNode{ std::move(constant) }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	const auto output = forward.AddNode(BinaryOpNode{ BinaryOp::Add, { input, 0 }, { constantNode, 0 } },
+	                                    { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	forward.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	graph.SetInputNames({ "x" });
+	graph.SetOutputNames({ "y" });
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_constant_payload.json";
+	Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(graph), path);
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs{ Tensor<CPU>({ 1.0, 2.0, 3.0, 4.0 }, { 2, 2 }, DataType::Float32) };
+	const auto outputs = interpreter.RunForward(package.plan, inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	const auto* values = static_cast<const float*>(outputs[0].UnsafeRawData());
+	EXPECT_FLOAT_EQ(values[0], 11.0F);
+	EXPECT_FLOAT_EQ(values[1], 22.0F);
+	EXPECT_FLOAT_EQ(values[2], 33.0F);
+	EXPECT_FLOAT_EQ(values[3], 44.0F);
+}
+
 TEST(G14VNext, VNextModelPackageRoundTripsRuntimeStateValueBindings)
 {
 	Graph graph;

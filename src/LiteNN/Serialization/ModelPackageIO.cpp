@@ -2,6 +2,7 @@
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -1142,6 +1143,57 @@ namespace LiteNN::Serialization
 			return values;
 		}
 
+		std::uint8_t HexNibble(char c)
+		{
+			if (c >= '0' && c <= '9')
+			{
+				return static_cast<std::uint8_t>(c - '0');
+			}
+			if (c >= 'a' && c <= 'f')
+			{
+				return static_cast<std::uint8_t>(10 + c - 'a');
+			}
+			if (c >= 'A' && c <= 'F')
+			{
+				return static_cast<std::uint8_t>(10 + c - 'A');
+			}
+			throw std::runtime_error("vNext tensor payload contains a non-hex character");
+		}
+
+		std::vector<std::byte> PlanAttributeHexBytes(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto& text = RequirePlanAttribute(op, name);
+			if ((text.size() % 2) != 0)
+			{
+				throw std::runtime_error("vNext tensor payload hex string must have an even length");
+			}
+			std::vector<std::byte> bytes(text.size() / 2);
+			for (std::size_t i = 0; i < bytes.size(); ++i)
+			{
+				const auto high = HexNibble(text[2 * i]);
+				const auto low = HexNibble(text[2 * i + 1]);
+				bytes[i] = static_cast<std::byte>((high << 4) | low);
+			}
+			return bytes;
+		}
+
+		Tensor<PolymorphicDevice> PlanConstantTensor(const ExecutablePlanOp& op)
+		{
+			const auto dtype = PlanAttributeEnum<DataType>(op, "dtype");
+			const auto shape = PlanAttributeSizeList(op, "shape");
+			const auto data = PlanAttributeHexBytes(op, "dataHex");
+			const auto expectedBytes = Detail::Product(shape) * ElementByteSize(dtype);
+			if (data.size() != expectedBytes)
+			{
+				throw std::runtime_error(std::format("vNext ConstantNode payload size mismatch: expected {}, got {}",
+				                                     expectedBytes, data.size()));
+			}
+			CPU cpu;
+			Tensor<CPU> tensor(Uninitialized, shape, dtype, cpu);
+			std::memcpy(tensor.UnsafeRawData(), data.data(), data.size());
+			return tensor.CopyToDevice(PolymorphicDevice{ CPU{} });
+		}
+
 		QuantizationParams PlanQuantizationParams(const ExecutablePlanOp& op)
 		{
 			return {
@@ -1175,6 +1227,14 @@ namespace LiteNN::Serialization
 			if (op.kind == "ParamRefNode")
 			{
 				return ParamRefNode{ PlanAttributeSize(op, "paramIndex") };
+			}
+			if (op.kind == "ConstantNode")
+			{
+				return ConstantNode{ PlanConstantTensor(op) };
+			}
+			if (op.kind == "QuantizedConstantNode")
+			{
+				return QuantizedConstantNode{ PlanConstantTensor(op), PlanQuantizationParams(op) };
 			}
 			if (op.kind == "VariableRefNode")
 			{
