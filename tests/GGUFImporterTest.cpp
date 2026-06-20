@@ -290,6 +290,16 @@ namespace
 		return graph;
 	}
 
+	Graph BuildTinyQwen2ArchiveWithQ4KPayload()
+	{
+		auto graph = BuildTinyQwen2Archive();
+		Tensor<CPU> storage(Uninitialized, { 144 }, DataType::UInt8);
+		const auto variable = graph.AddVariable(Variable::CreateQuantized(
+		    std::move(storage), BlockQuantization(QuantizedBlockFormat::GGML_Q4_K, { 256 }, DataType::Float32)));
+		graph.SetVariableName(variable, "diagnostic.q4_k.weight");
+		return graph;
+	}
+
 	Graph BuildQuantizedFriendlyLLaMAArchive()
 	{
 		constexpr std::size_t kEmbeddingLength = 32;
@@ -642,6 +652,17 @@ TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
 	EXPECT_NE(qwen2.acceptancePolicy.find("Qwen2.5"), std::string_view::npos);
 }
 
+TEST(GGUFLLaMACompatibility, InfersProfileFromArchitectureAliases)
+{
+	EXPECT_EQ(GGUF::TryInferLLaMACompatibilityProfile("llama"),
+	          GGUF::LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM);
+	EXPECT_EQ(GGUF::TryInferLLaMACompatibilityProfile("qwen2"), GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM);
+	EXPECT_FALSE(GGUF::TryInferLLaMACompatibilityProfile("qwen2moe").has_value());
+	EXPECT_FALSE(GGUF::TryInferLLaMACompatibilityProfile("mistral").has_value());
+	EXPECT_FALSE(GGUF::TryInferLLaMACompatibilityProfile("gemma").has_value());
+	EXPECT_FALSE(GGUF::TryInferLLaMACompatibilityProfile("unknown").has_value());
+}
+
 TEST(GGUFLLaMACompatibility, AnalyzesTinyArchiveAgainstProductionProfile)
 {
 	const auto archive = BuildTinyLLaMAArchive();
@@ -688,6 +709,23 @@ TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnos
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.decode-loop" &&
 		       diagnostic.message.find("runtime decode loop") != std::string::npos;
+	}));
+}
+
+TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
+{
+	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),
+	                                                    GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM);
+
+	EXPECT_TRUE(report.lowerable);
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return !diagnostic.blocking && diagnostic.subject == "quantization.mix" &&
+		       diagnostic.message.find("GGML_Q4_K") != std::string::npos &&
+		       diagnostic.message.find("reference dequantized-float") != std::string::npos;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return !diagnostic.blocking && diagnostic.subject == "quantization.q4_k_m" &&
+		       diagnostic.message.find("native K-quant projection kernels") != std::string::npos;
 	}));
 }
 

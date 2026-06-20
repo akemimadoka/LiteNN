@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -621,6 +622,23 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	std::optional<LLaMACompatibilityProfileKind> TryInferLLaMACompatibilityProfile(std::string_view architecture)
+	{
+		if (architecture == "llama")
+		{
+			return LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM;
+		}
+		if (architecture == "qwen2")
+		{
+			return LLaMACompatibilityProfileKind::Qwen2LikeCausalLM;
+		}
+		if (architecture == "qwen2moe" || architecture == "mistral" || architecture == "gemma")
+		{
+			return std::nullopt;
+		}
+		return std::nullopt;
+	}
+
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind)
 	{
 		LLaMACompatibilityReport report{
@@ -690,6 +708,48 @@ namespace LiteNN::GGUF
 		{
 			addDiagnostic(std::format("{}.rope.dimension_count", hyperparameters->architecture),
 			              "RoPE dimension count must be an even value in [2, headDim] for current lowering.", true);
+		}
+
+		std::map<QuantizedBlockFormat, std::pair<std::size_t, std::size_t>> quantizedFormats;
+		for (std::size_t variableIndex = 0; variableIndex < archive.VariableCount(); ++variableIndex)
+		{
+			const auto& variable = *archive.GetVariable(variableIndex);
+			if (!variable.IsQuantized())
+			{
+				continue;
+			}
+			const auto& params = *variable.Quantization();
+			const auto bytes = variable.Data().NumElements() * ElementByteSize(variable.Data().DType());
+			auto& [count, totalBytes] = quantizedFormats[params.blockFormat];
+			++count;
+			totalBytes += bytes;
+		}
+		if (!quantizedFormats.empty())
+		{
+			std::string summary;
+			for (const auto& [format, stats] : quantizedFormats)
+			{
+				if (!summary.empty())
+				{
+					summary += ", ";
+				}
+				summary +=
+				    std::format("{}:{} tensors/{} bytes", QuantizedBlockFormatName(format), stats.first, stats.second);
+			}
+			addDiagnostic("quantization.mix",
+			              std::format("GGUF archive contains block-quantized weights: {}. Current LLaMA/Qwen lowering "
+			                          "uses reference dequantized-float materialization; native quantized CUDA is not "
+			                          "yet selected.",
+			                          summary),
+			              false);
+		}
+		if (quantizedFormats.contains(QuantizedBlockFormat::GGML_Q4_K))
+		{
+			addDiagnostic("quantization.q4_k_m",
+			              "Detected GGML_Q4_K tensors, which are part of common Q4_K_M model mixes. Full-speed CUDA "
+			              "execution needs native K-quant projection kernels; otherwise callers must accept a "
+			              "dequantized-float memory budget.",
+			              false);
 		}
 
 		const auto requireTensor = [&](std::string name) {

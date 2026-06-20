@@ -2409,10 +2409,14 @@ placement and fallback policy.
 - [x] Add a `litenn_gguf_convert --analyze-llm <input.gguf> [profile]` command that prints blocking/non-blocking
       diagnostics before import/lowering/compile. The command infers `qwen2-like-causal-lm` for `general.architecture =
       qwen2`, accepts explicit profile names, and exits non-zero only for blocking compatibility failures.
-- [ ] Add model-family aliases for common GGUF `general.architecture` values: `llama`, `qwen2`, `qwen2moe`, `mistral`,
-      `gemma`, and reject unsupported families with a profile suggestion.
-- [ ] Detect real GGUF quantization mixes, especially `Q4_K_M`, and report whether the chosen execution path is
-      native-quantized, reference-dequantized, or rejected by memory budget.
+- [x] Add model-family aliases for common GGUF `general.architecture` values: `llama`, `qwen2`, `qwen2moe`, `mistral`,
+      `gemma`, and reject unsupported families with a profile suggestion. Automatic inference now maps `llama` and
+      `qwen2`; known but unsupported families such as `qwen2moe`, `mistral`, and `gemma` intentionally return no profile
+      until their contracts are added.
+- [x] Detect real GGUF quantization mixes, especially `Q4_K_M`, and report whether the chosen execution path is
+      native-quantized, reference-dequantized, or rejected by memory budget. The analyzer now reports per-format
+      block-quantized tensor counts/bytes and emits a dedicated `quantization.q4_k_m` diagnostic for `GGML_Q4_K` mixes;
+      native CUDA remains a G16.4/G16.5 implementation target.
 
 #### G16.2 Tokenizer, Prompt, and Sampler Runtime
 

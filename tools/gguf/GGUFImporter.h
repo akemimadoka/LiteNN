@@ -96,6 +96,7 @@ namespace LiteNN::GGUF
 	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind);
 	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind);
 	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles();
+	std::optional<LLaMACompatibilityProfileKind> TryInferLLaMACompatibilityProfile(std::string_view architecture);
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind);
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);

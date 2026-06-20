@@ -64,17 +64,15 @@ namespace
 	LiteNN::GGUF::LLaMACompatibilityProfileKind InferLLMProfile(const LiteNN::Graph& archive)
 	{
 		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(archive);
-		if (hyperparameters.architecture == "qwen2")
+		if (const auto profile = LiteNN::GGUF::TryInferLLaMACompatibilityProfile(hyperparameters.architecture))
 		{
-			return LiteNN::GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM;
+			return *profile;
 		}
-		if (hyperparameters.architecture == "llama")
-		{
-			return LiteNN::GGUF::LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM;
-		}
-		throw std::runtime_error(
-		    std::format("No default LLM compatibility profile for GGUF architecture '{}'; pass an explicit profile",
-		                hyperparameters.architecture));
+		throw std::runtime_error(std::format(
+		    "No default LLM compatibility profile for GGUF architecture '{}'; supported automatic profiles "
+		    "currently include 'llama' and 'qwen2'. Pass an explicit profile if this architecture shares one "
+		    "of the supported contracts.",
+		    hyperparameters.architecture));
 	}
 
 	void PrintLLMCompatibilityReport(const LiteNN::GGUF::LLaMACompatibilityReport& report)
