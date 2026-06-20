@@ -10,6 +10,7 @@
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
@@ -46,6 +47,7 @@ namespace
 		             "<max-cache-length>\n"
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
 		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
+		          << "  " << executable << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps>\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -233,6 +235,20 @@ namespace
 		std::cout << ']';
 	}
 
+	void PrintTokenList(std::span<const std::int32_t> values)
+	{
+		std::cout << '[';
+		for (std::size_t i = 0; i < values.size(); ++i)
+		{
+			if (i != 0)
+			{
+				std::cout << ',';
+			}
+			std::cout << values[i];
+		}
+		std::cout << ']';
+	}
+
 	void PrintTensorShape(LiteNN::ShapeView shape)
 	{
 		std::cout << '[';
@@ -329,6 +345,97 @@ namespace
 			inputs.emplace_back(input.type.StaticShape(), input.type.dtype, cpu);
 		}
 		return inputs;
+	}
+
+	std::int32_t ParseTokenId(std::string_view text, std::string_view label)
+	{
+		const auto ids = ParseTokenIds(text);
+		if (ids.size() != 1)
+		{
+			throw std::runtime_error(std::string(label) + " must contain exactly one token id");
+		}
+		return ids.front();
+	}
+
+	LiteNN::Tensor<LiteNN::CPU> MakeTokenIdTensorForPlan(std::int32_t tokenId, const LiteNN::ExecutablePlan& plan)
+	{
+		const std::array<std::int32_t, 1> ids{ tokenId };
+		return MakeTokenIdTensor(ids, plan);
+	}
+
+	void RunDecodeLoopFromGGUF(std::string_view inputPath, std::int32_t initialTokenId, std::size_t steps)
+	{
+		if (steps == 0)
+		{
+			throw std::runtime_error("decode-loop steps must be positive");
+		}
+		const auto imported = LiteNN::GGUF::ImportGGUFArchive(std::string(inputPath));
+		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
+		LiteNN::GGUF::LLMSamplerState sampler;
+		std::vector<std::int32_t> history{ initialTokenId };
+		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
+		std::int32_t currentToken = initialTokenId;
+		std::size_t pastLength = 1;
+		std::size_t lastOutputCount = 0;
+		std::vector<std::size_t> lastLogitsShape;
+
+		for (std::size_t step = 0; step < steps; ++step)
+		{
+			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
+			                                                    pastLength, { .preserveQuantizedWeights = true });
+			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(graph);
+			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
+			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, plan));
+			if (caches.empty())
+			{
+				LiteNN::CPU cpu;
+				for (std::size_t i = 1; i < plan.inputs.size(); ++i)
+				{
+					const auto& input = plan.inputs[i];
+					if (!input.type.IsFullyStatic())
+					{
+						throw std::runtime_error("decode-loop cache inputs must have static shapes");
+					}
+					inputs.emplace_back(input.type.StaticShape(), input.type.dtype, cpu);
+				}
+			}
+			else
+			{
+				if (caches.size() + 1 != plan.inputs.size())
+				{
+					throw std::runtime_error("decode-loop cache count does not match decode graph inputs");
+				}
+				for (auto& cache : caches)
+				{
+					inputs.push_back(std::move(cache));
+				}
+				caches.clear();
+			}
+
+			auto outputs = interpreter.RunForward(plan, inputs);
+			if (outputs.empty())
+			{
+				throw std::runtime_error("decode-loop produced no outputs");
+			}
+			lastLogitsShape = outputs.front().Shape().ToOwned();
+			currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history);
+			history.push_back(currentToken);
+			lastOutputCount = outputs.size();
+			caches.reserve(outputs.size() - 1);
+			for (std::size_t i = 1; i < outputs.size(); ++i)
+			{
+				caches.push_back(std::move(outputs[i]));
+			}
+			++pastLength;
+		}
+
+		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
+		          << " metadata=" << imported.summary.metadataCount << " steps=" << steps
+		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
+		PrintTensorShape(lastLogitsShape);
+		std::cout << " generated=";
+		PrintTokenList(history);
+		std::cout << '\n';
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
@@ -679,6 +786,19 @@ int main(int argc, char** argv)
 			          << " logits_shape=";
 			PrintTensorShape(logits.Shape());
 			std::cout << " next_token=" << nextToken << '\n';
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-decode-loop-token-id")
+		{
+			if (argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto initialTokenId = ParseTokenId(argv[3], "initial-token-id");
+			const auto steps = ParseSize(argv[4], "steps");
+			RunDecodeLoopFromGGUF(argv[2], initialTokenId, steps);
 			return 0;
 		}
 
