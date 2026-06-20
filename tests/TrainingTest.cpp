@@ -90,6 +90,25 @@ namespace
 		return scaleIndex;
 	}
 
+	std::size_t BuildExplicitBroadcastToModel(ModelGraph& model)
+	{
+		Graph& graph = model.UnsafeMutableGraph();
+		const auto scaleIndex = graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.5f, -0.25f }, { 2 })));
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2 } } });
+		const auto broadcasted =
+		    sg.AddNode(BroadcastToNode{ { scale, 0 }, { 2, 2 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { input, 0 }, { broadcasted, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "x" });
+		graph.SetOutputNames({ "scaled" });
+		return scaleIndex;
+	}
+
 	struct BatchLinearModelIndices
 	{
 		std::size_t weight{};
@@ -351,6 +370,47 @@ TEST(Training, AOTAndInterpreterBroadcastReduceSharedVariableGradientsMatch)
 	{
 		EXPECT_NEAR(ReadFloat(aotStep.outputs[0], i), ReadFloat(interpreterStep.outputs[0], i), 1.0e-5f);
 	}
+	for (std::size_t resultIndex = 0; resultIndex < aotStep.backwardResults.size(); ++resultIndex)
+	{
+		ASSERT_EQ(aotStep.backwardResults[resultIndex].NumElements(),
+		          interpreterStep.backwardResults[resultIndex].NumElements());
+		for (std::size_t i = 0; i < aotStep.backwardResults[resultIndex].NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(aotStep.backwardResults[resultIndex], i),
+			            ReadFloat(interpreterStep.backwardResults[resultIndex], i), 1.0e-5f);
+		}
+	}
+	for (std::size_t i = 0; i < 2; ++i)
+	{
+		EXPECT_NEAR(ReadVariableGradFloat(aotModel.UnsafeMutableGraph(), aotScale, i),
+		            ReadVariableGradFloat(interpreterModel.UnsafeMutableGraph(), interpreterScale, i), 1.0e-5f);
+		EXPECT_NEAR(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), aotScale, i),
+		            ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), interpreterScale, i), 1.0e-5f);
+	}
+}
+
+TEST(Training, AOTAndInterpreterExplicitBroadcastToGradientsMatch)
+{
+	ModelGraph interpreterModel;
+	const auto interpreterScale = BuildExplicitBroadcastToModel(interpreterModel);
+	ModelGraph aotModel;
+	const auto aotScale = BuildExplicitBroadcastToModel(aotModel);
+
+	Training::Trainer<CPU, Optimizer::SGD> interpreterTrainer(interpreterModel, Optimizer::SGD(0.05f));
+	Training::TrainerOptions aotOptions;
+	aotOptions.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::SGD> aotTrainer(aotModel, Optimizer::SGD(0.05f), aotOptions);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0f, 2.0f, -0.5f, 0.25f }, { 2, 2 }));
+	std::vector<Tensor<CPU>> outputGradients;
+	outputGradients.emplace_back(Tensor<CPU>({ 1.0f, -0.5f, 0.25f, 2.0f }, { 2, 2 }));
+
+	const auto interpreterStep = interpreterTrainer.Step(inputs, outputGradients);
+	const auto aotStep = aotTrainer.Step(inputs, outputGradients);
+
+	ASSERT_EQ(aotStep.outputs.size(), interpreterStep.outputs.size());
+	ASSERT_EQ(aotStep.backwardResults.size(), interpreterStep.backwardResults.size());
 	for (std::size_t resultIndex = 0; resultIndex < aotStep.backwardResults.size(); ++resultIndex)
 	{
 		ASSERT_EQ(aotStep.backwardResults[resultIndex].NumElements(),

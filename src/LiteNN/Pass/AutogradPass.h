@@ -1179,12 +1179,17 @@ namespace LiteNN
 			{
 				return grad;
 			}
+			if (gradInfo.shape.size() < targetInfo.shape.size())
+			{
+				throw std::runtime_error("AutogradPass: cannot reduce broadcast gradient from lower-rank gradient");
+			}
 
 			std::vector<std::size_t> currentShape = gradInfo.shape;
 			std::vector<std::size_t> reduceAxes;
+			const auto rankDelta = gradInfo.shape.size() - targetInfo.shape.size();
 			for (std::size_t axis = 0; axis < gradInfo.shape.size(); ++axis)
 			{
-				const auto targetDim = axis < targetInfo.shape.size() ? targetInfo.shape[axis] : 1;
+				const auto targetDim = axis < rankDelta ? 1 : targetInfo.shape[axis - rankDelta];
 				const auto gradDim = gradInfo.shape[axis];
 				if (targetDim == gradDim)
 				{
@@ -1278,8 +1283,9 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, BroadcastToNode>)
 					    {
-						    throw std::runtime_error(
-						        "AutogradPass: BroadcastToNode differentiation is not yet implemented");
+						    const auto& inInfo = fwdSg.GetOutputInfo(node.input);
+						    gradContribs[{ node.input.node, node.input.port }].push_back(
+						        ReduceBroadcastGradient(bwdSg, dy, entry.outputInfos[0], inInfo));
 					    }
 					    else if constexpr (std::same_as<T, PadNode>)
 					    {

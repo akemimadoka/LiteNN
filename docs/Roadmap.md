@@ -1449,6 +1449,8 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 - [x] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
   `Training.AOTAndInterpreterBroadcastReduceSharedVariableGradientsMatch` now validates CPU AOT vs interpreter parity for
   broadcasted binary gradients, ReduceSum backward expansion, and merged gradients from repeated VariableRef uses.
+  `BroadcastToNode` now has Autograd support, including right-aligned rank-prepending broadcasts such as `{2}->{2,2}`,
+  covered by `Training.AOTAndInterpreterExplicitBroadcastToGradientsMatch`.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
   `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers
   `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. Linear and MLP128 AOT full-step rows now execute; the
