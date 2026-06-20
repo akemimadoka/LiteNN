@@ -55,6 +55,10 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--ignore-eos]\n"
 		          << "  " << executable
+		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
+		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
+		             "[--seed N] [--ignore-eos]\n"
+		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--ignore-eos]\n"
@@ -251,6 +255,21 @@ namespace
 		DecodeLoopCommandOptions options{
 			.inputPath = argv[2],
 			.initialTokenIds = { ParseTokenId(argv[3], "initial-token-id") },
+			.steps = ParseSize(argv[4], "steps"),
+		};
+		ParseDecodeLoopTrailingOptions(argc, argv, 5, options);
+		return options;
+	}
+
+	DecodeLoopCommandOptions ParseTokenIdsDecodeLoopOptions(int argc, char** argv)
+	{
+		if (argc < 5)
+		{
+			throw std::runtime_error("--run-llama-decode-loop-token-ids requires input, comma-token-ids, and steps");
+		}
+		DecodeLoopCommandOptions options{
+			.inputPath = argv[2],
+			.initialTokenIds = ParseTokenIds(argv[3]),
 			.steps = ParseSize(argv[4], "steps"),
 		};
 		ParseDecodeLoopTrailingOptions(argc, argv, 5, options);
@@ -1113,6 +1132,12 @@ int main(int argc, char** argv)
 		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-decode-loop-token-id")
 		{
 			RunDecodeLoopFromGGUF(ParseDecodeLoopOptions(argc, argv));
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-decode-loop-token-ids")
+		{
+			RunDecodeLoopFromGGUF(ParseTokenIdsDecodeLoopOptions(argc, argv));
 			return 0;
 		}
 

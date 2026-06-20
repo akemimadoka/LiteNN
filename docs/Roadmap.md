@@ -2503,6 +2503,9 @@ placement and fallback policy.
 - [x] Add a token-id decode-loop smoke CLI: `--run-llama-decode-loop-token-id` repeatedly executes static decode graphs,
       prebuilds static decode plans for each cache length, carries updated KV-cache tensors between steps, and reports
       build/run timing plus generated token ids and tokenizer pieces when `tokenizer.ggml.tokens` is available.
+- [x] Add an externally tokenized prompt decode-loop CLI:
+      `--run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps>` bridges real tokenizer parity work by
+      accepting full prompt token-id sequences before the optional llama.cpp tokenizer adapter is available.
 - [x] Wire decode-loop sampling flags for greedy/random mode, temperature, top-k, top-p, repeat penalty, fixed seed, and
       explicit `--output` path while retaining the original positional output-path form.
 - [x] Add an exact-prompt decode-loop smoke CLI: `--run-llama-prompt-decode-loop` tokenizes a fixture/diagnostic prompt,

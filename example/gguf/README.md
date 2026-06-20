@@ -33,6 +33,7 @@ build\tools\gguf\litenn_gguf_convert.exe --run-llama-token-ids model.gguf 1,2,3,
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt model.gguf "hello"
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 generated_token_ids.txt
+build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-ids model.gguf 1,2,3,4 8 generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --sample random --temperature 0.7 --top-k 40 --top-p 0.9 --repeat-penalty 1.1 --seed 42 --output generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --ignore-eos
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt-decode-loop model.gguf "hello" 8 --sample random --seed 42 --output generated_token_ids.txt
@@ -58,6 +59,9 @@ optional repeat penalty. Generation stops early on `tokenizer.ggml.eos_token_id`
 when present; pass `--ignore-eos` to force the requested number of generated
 tokens. The loop also rejects prompts whose prompt-plus-generated length exceeds
 the model context length.
+`--run-llama-decode-loop-token-ids` accepts an externally tokenized prompt as
+comma-separated token ids, which is the preferred bridge for real tokenizer
+parity work until the optional llama.cpp tokenizer adapter is wired in.
 `--run-llama-prompt-decode-loop` feeds the exact-vocabulary prompt tokens through
 the same static decode loop first, then generates the requested number of new
 tokens.
