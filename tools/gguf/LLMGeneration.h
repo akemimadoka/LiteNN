@@ -49,10 +49,14 @@ namespace LiteNN::GGUF
 	LLMPromptTokens MakeCallerProvidedPromptTokens(std::span<const std::int32_t> tokenIds,
 	                                               const LLMTokenizerMetadataSummary& tokenizer);
 	LLMGenerationState BeginGeneration(LLMPromptTokens prompt, std::optional<std::int32_t> eosTokenId = std::nullopt);
+	std::vector<float> ExtractLastTokenLogits(const Tensor<CPU>& logits);
 	std::int32_t SelectNextToken(std::span<const float> logits, LLMSamplerState& sampler,
+	                             std::span<const std::int32_t> history = {});
+	std::int32_t SelectNextToken(const Tensor<CPU>& logits, LLMSamplerState& sampler,
 	                             std::span<const std::int32_t> history = {});
 	std::int32_t StepGeneration(LLMGenerationState& generation, std::span<const float> logits,
 	                            LLMSamplerState& sampler);
+	std::int32_t StepGeneration(LLMGenerationState& generation, const Tensor<CPU>& logits, LLMSamplerState& sampler);
 } // namespace LiteNN::GGUF
 
 #endif

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -120,6 +121,31 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	std::vector<float> ExtractLastTokenLogits(const Tensor<CPU>& logits)
+	{
+		if (logits.DType() != DataType::Float32)
+		{
+			throw std::runtime_error("LLM logits post-processing currently requires Float32 logits");
+		}
+		const auto shape = logits.Shape();
+		if (shape.NumDim() == 1)
+		{
+			std::vector<float> result(logits.NumElements());
+			std::memcpy(result.data(), logits.UnsafeRawData(), result.size() * sizeof(float));
+			return result;
+		}
+		if (shape.NumDim() != 2 || shape[0] == 0 || shape[1] == 0)
+		{
+			throw std::runtime_error("LLM logits post-processing expects rank-1 [vocab] or rank-2 [sequence, vocab]");
+		}
+
+		const auto vocabSize = shape[1];
+		std::vector<float> result(vocabSize);
+		const auto* data = static_cast<const float*>(logits.UnsafeRawData());
+		std::copy_n(data + (shape[0] - 1) * vocabSize, vocabSize, result.begin());
+		return result;
+	}
+
 	std::int32_t SelectNextToken(std::span<const float> logits, LLMSamplerState& sampler,
 	                             std::span<const std::int32_t> history)
 	{
@@ -176,6 +202,13 @@ namespace LiteNN::GGUF
 		return candidates.back().tokenId;
 	}
 
+	std::int32_t SelectNextToken(const Tensor<CPU>& logits, LLMSamplerState& sampler,
+	                             std::span<const std::int32_t> history)
+	{
+		const auto lastTokenLogits = ExtractLastTokenLogits(logits);
+		return SelectNextToken(lastTokenLogits, sampler, history);
+	}
+
 	std::int32_t StepGeneration(LLMGenerationState& generation, std::span<const float> logits, LLMSamplerState& sampler)
 	{
 		if (generation.finished)
@@ -190,5 +223,11 @@ namespace LiteNN::GGUF
 			generation.finished = true;
 		}
 		return nextToken;
+	}
+
+	std::int32_t StepGeneration(LLMGenerationState& generation, const Tensor<CPU>& logits, LLMSamplerState& sampler)
+	{
+		const auto lastTokenLogits = ExtractLastTokenLogits(logits);
+		return StepGeneration(generation, lastTokenLogits, sampler);
 	}
 } // namespace LiteNN::GGUF
