@@ -2,6 +2,8 @@ include(${PROJECT_SOURCE_DIR}/cmake/LiteNNGGMLVendor.cmake)
 litenn_ensure_ggml_vendor_target()
 
 add_library(LiteNNGGUFImporter STATIC
+	${CMAKE_CURRENT_SOURCE_DIR}/GGMLQuantizedKernels.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/GGMLQuantizedKernels.h
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.h
     ${CMAKE_CURRENT_SOURCE_DIR}/LLMGeneration.cpp

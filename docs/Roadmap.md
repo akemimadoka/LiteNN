@@ -2458,6 +2458,9 @@ placement and fallback policy.
 - [ ] Execute those GGML `Dequantize`/projection nodes directly in CPU AOT and CUDA without materializing a full
       Float32 weight tensor. Core affine and packed-nibble Linear execution is validated, but GGML block codecs still
       need importer/runtime adapters or native kernels before the preserved Q4_K_M graph is executable end to end.
+- [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
+      vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
+      and related block rows without materializing the complete Float32 weight. Graph/runtime dispatch remains open.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
@@ -2561,6 +2564,8 @@ These improvements do not require a compatibility break and should not block vNe
   remains the next G16.4 backend milestone.
 - Added optional GGUF Linear bias import and 1D bias broadcasting so Qwen2 Q/K/V projection semantics are no longer
   silently dropped by the generic LLaMA builder.
+- Extracted GGML block decoding into a dedicated adapter and added Q4_K direct CPU MatMul parity coverage using ggml's
+  native row quantizer and vector-dot traits.
 
 ### 2026-06-02
 

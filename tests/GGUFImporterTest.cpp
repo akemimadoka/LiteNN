@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <GGMLQuantizedKernels.h>
 #include <GGUFImporter.h>
 #include <LLMGeneration.h>
 #include <LLaMABuilder.h>
@@ -357,32 +358,33 @@ namespace
 		return graph;
 	}
 
-	std::shared_ptr<Variable> QuantizeQ80Variable(const Variable& source)
+	std::shared_ptr<Variable> QuantizeGGMLVariable(const Variable& source, ggml_type type,
+	                                               QuantizedBlockFormat blockFormat)
 	{
 		const auto data = source.Data().CopyToDevice(CPU{});
 		if (data.DType() != DataType::Float32)
 		{
-			throw std::runtime_error("QuantizeQ80Variable expects Float32 source tensors");
+			throw std::runtime_error("QuantizeGGMLVariable expects Float32 source tensors");
 		}
 		if (data.Shape().NumDim() == 0)
 		{
-			throw std::runtime_error("QuantizeQ80Variable requires at least 1D tensors");
+			throw std::runtime_error("QuantizeGGMLVariable requires at least 1D tensors");
 		}
 
-		const auto* traits = ggml_get_type_traits(GGML_TYPE_Q8_0);
+		const auto* traits = ggml_get_type_traits(type);
 		if (!traits || !traits->from_float_ref)
 		{
-			throw std::runtime_error("GGML_TYPE_Q8_0 reference quantizer is unavailable");
+			throw std::runtime_error("GGML reference quantizer is unavailable");
 		}
 
-		const auto rowSize = data.Shape()[0];
+		const auto rowSize = data.Shape()[data.Shape().NumDim() - 1];
 		if ((rowSize % static_cast<std::size_t>(traits->blck_size)) != 0)
 		{
-			throw std::runtime_error("QuantizeQ80Variable requires the leading dimension to be a multiple of 32");
+			throw std::runtime_error("QuantizeGGMLVariable row width is incompatible with the block size");
 		}
 
 		const auto rowCount = data.NumElements() / rowSize;
-		const auto rowBytes = (rowSize / static_cast<std::size_t>(traits->blck_size)) * traits->type_size;
+		const auto rowBytes = ggml_row_size(type, static_cast<std::int64_t>(rowSize));
 		Tensor<CPU> storage(Uninitialized, { rowCount * rowBytes }, DataType::UInt8);
 		const auto* src = static_cast<const float*>(data.UnsafeRawData());
 		auto* dst = static_cast<std::uint8_t*>(storage.UnsafeRawData());
@@ -391,9 +393,13 @@ namespace
 			traits->from_float_ref(src + row * rowSize, dst + row * rowBytes, static_cast<int64_t>(rowSize));
 		}
 
-		return Variable::CreateQuantized(
-		    std::move(storage),
-		    BlockQuantization(QuantizedBlockFormat::GGML_Q8_0, data.Shape().ToOwned(), DataType::Float32));
+		return Variable::CreateQuantized(std::move(storage),
+		                                 BlockQuantization(blockFormat, data.Shape().ToOwned(), DataType::Float32));
+	}
+
+	std::shared_ptr<Variable> QuantizeQ80Variable(const Variable& source)
+	{
+		return QuantizeGGMLVariable(source, GGML_TYPE_Q8_0, QuantizedBlockFormat::GGML_Q8_0);
 	}
 
 	bool IsQ80QuantizationTarget(std::string_view name)
@@ -1021,6 +1027,42 @@ TEST(GGUFLLaMAQuantizedExecution, PlansReferenceDequantizedFallbackAndBudgetReje
 	ASSERT_EQ(rejected.decisions.size(), 1u);
 	EXPECT_EQ(rejected.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::Reject);
 	EXPECT_TRUE(rejected.decisions[0].blocking);
+}
+
+TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWeight)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 2;
+	std::vector<float> weightValues(outFeatures * inFeatures);
+	for (std::size_t i = 0; i < weightValues.size(); ++i)
+	{
+		weightValues[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.125F;
+	}
+	const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+	const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K);
+
+	std::vector<float> inputValues(2 * inFeatures, 1.0F);
+	std::fill(inputValues.begin() + inFeatures, inputValues.end(), -0.5F);
+	const auto input = MakeFloatTensor(inputValues, { 2, inFeatures });
+	const auto actual = GGUF::EvalGGMLQuantizedMatMul(input, *quantizedWeight, true);
+	const auto dequantized = GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "q4_k.weight");
+
+	ASSERT_EQ(actual.Shape(), (ShapeView{ 2, outFeatures }));
+	const auto* inputData = static_cast<const float*>(input.UnsafeRawData());
+	const auto* weightData = static_cast<const float*>(dequantized.UnsafeRawData());
+	for (std::size_t row = 0; row < 2; ++row)
+	{
+		for (std::size_t column = 0; column < outFeatures; ++column)
+		{
+			float expected = 0.0F;
+			for (std::size_t k = 0; k < inFeatures; ++k)
+			{
+				expected += inputData[row * inFeatures + k] * weightData[column * inFeatures + k];
+			}
+			EXPECT_NEAR(ReadFloat(actual, row * outFeatures + column), expected, 1.0e-3F);
+		}
+	}
+	EXPECT_THROW((void) GGUF::EvalGGMLQuantizedMatMul(input, *quantizedWeight, false), std::runtime_error);
 }
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)

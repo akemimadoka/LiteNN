@@ -1,4 +1,5 @@
 #include "LLaMABuilder.h"
+#include "GGMLQuantizedKernels.h"
 
 #include <LiteNN/Layer/LayerUtils.h>
 
@@ -8,158 +9,10 @@
 #include <string>
 #include <vector>
 
-#include <ggml.h>
-
 namespace LiteNN::GGUF
 {
 	namespace
 	{
-		std::optional<ggml_type> TryMapGGMLQuantizedType(QuantizedBlockFormat format)
-		{
-			switch (format)
-			{
-			case QuantizedBlockFormat::GGML_Q4_0:
-				return GGML_TYPE_Q4_0;
-			case QuantizedBlockFormat::GGML_Q4_1:
-				return GGML_TYPE_Q4_1;
-			case QuantizedBlockFormat::GGML_Q5_0:
-				return GGML_TYPE_Q5_0;
-			case QuantizedBlockFormat::GGML_Q5_1:
-				return GGML_TYPE_Q5_1;
-			case QuantizedBlockFormat::GGML_Q8_0:
-				return GGML_TYPE_Q8_0;
-			case QuantizedBlockFormat::GGML_Q8_1:
-				return GGML_TYPE_Q8_1;
-			case QuantizedBlockFormat::GGML_Q2_K:
-				return GGML_TYPE_Q2_K;
-			case QuantizedBlockFormat::GGML_Q3_K:
-				return GGML_TYPE_Q3_K;
-			case QuantizedBlockFormat::GGML_Q4_K:
-				return GGML_TYPE_Q4_K;
-			case QuantizedBlockFormat::GGML_Q5_K:
-				return GGML_TYPE_Q5_K;
-			case QuantizedBlockFormat::GGML_Q6_K:
-				return GGML_TYPE_Q6_K;
-			case QuantizedBlockFormat::GGML_Q8_K:
-				return GGML_TYPE_Q8_K;
-			case QuantizedBlockFormat::GGML_IQ2_XXS:
-				return GGML_TYPE_IQ2_XXS;
-			case QuantizedBlockFormat::GGML_IQ2_XS:
-				return GGML_TYPE_IQ2_XS;
-			case QuantizedBlockFormat::GGML_IQ3_XXS:
-				return GGML_TYPE_IQ3_XXS;
-			case QuantizedBlockFormat::GGML_IQ1_S:
-				return GGML_TYPE_IQ1_S;
-			case QuantizedBlockFormat::GGML_IQ4_NL:
-				return GGML_TYPE_IQ4_NL;
-			case QuantizedBlockFormat::GGML_IQ3_S:
-				return GGML_TYPE_IQ3_S;
-			case QuantizedBlockFormat::GGML_IQ2_S:
-				return GGML_TYPE_IQ2_S;
-			case QuantizedBlockFormat::GGML_IQ4_XS:
-				return GGML_TYPE_IQ4_XS;
-			default:
-				return std::nullopt;
-			}
-		}
-
-		Tensor<CPU> DequantizeGGMLVariable(const Variable& variable, std::string_view name)
-		{
-			if (!variable.IsQuantized())
-			{
-				throw std::runtime_error(std::format("GGUF tensor '{}' is not quantized", name));
-			}
-
-			const auto& params = *variable.Quantization();
-			if (params.scheme != QuantizationScheme::Block)
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' uses unsupported quantization scheme {} for current LLaMA lowering",
-				                name, QuantizationSchemeName(params.scheme)));
-			}
-			if (!IsFloatingDataType(params.expressedType))
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' must dequantize to a floating-point type, got {}", name,
-				                DataTypeName(params.expressedType)));
-			}
-
-			const auto ggmlType = TryMapGGMLQuantizedType(params.blockFormat);
-			if (!ggmlType)
-			{
-				throw std::runtime_error(std::format("GGUF tensor '{}' uses unsupported block quantization format {}",
-				                                     name, QuantizedBlockFormatName(params.blockFormat)));
-			}
-
-			const auto* traits = ggml_get_type_traits(*ggmlType);
-			if (!traits || !traits->to_float)
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' uses block format {} which does not expose a ggml dequantizer", name,
-				                QuantizedBlockFormatName(params.blockFormat)));
-			}
-
-			if (params.expressedShape.empty())
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' is missing expressedShape for block quantization", name));
-			}
-
-			std::size_t totalElements = 1;
-			for (const auto dim : params.expressedShape)
-			{
-				totalElements *= dim;
-			}
-
-			const auto rowSize = params.expressedShape.back();
-			if (rowSize == 0 || totalElements % rowSize != 0)
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' has invalid expressed shape for row-wise ggml dequantization", name));
-			}
-			if ((rowSize % static_cast<std::size_t>(traits->blck_size)) != 0)
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' row width {} is incompatible with ggml block size {} for format {}",
-				                name, rowSize, traits->blck_size, QuantizedBlockFormatName(params.blockFormat)));
-			}
-
-			const auto rowCount = totalElements / rowSize;
-			const auto rowBytes = (rowSize / static_cast<std::size_t>(traits->blck_size)) * traits->type_size;
-			const auto storage = variable.Data().CopyToDevice(CPU{});
-			if (storage.DType() != DataType::UInt8)
-			{
-				throw std::runtime_error(
-				    std::format("GGUF tensor '{}' block payload must be stored as UInt8 bytes, got {}", name,
-				                DataTypeName(storage.DType())));
-			}
-			if (storage.NumElements() != rowCount * rowBytes)
-			{
-				throw std::runtime_error(std::format(
-				    "GGUF tensor '{}' payload byte count {} does not match expressed shape {}x{} for format {}", name,
-				    storage.NumElements(), rowCount, rowSize, QuantizedBlockFormatName(params.blockFormat)));
-			}
-
-			Tensor<CPU> dequantizedF32(Uninitialized, params.expressedShape, DataType::Float32);
-			const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
-			auto* dst = static_cast<float*>(dequantizedF32.UnsafeRawData());
-			for (std::size_t row = 0; row < rowCount; ++row)
-			{
-				traits->to_float(src + row * rowBytes, dst + row * rowSize, static_cast<int64_t>(rowSize));
-			}
-
-			if (params.expressedType == DataType::Float32)
-			{
-				return dequantizedF32;
-			}
-
-			CPU cpu;
-			Tensor<CPU> converted(Uninitialized, params.expressedShape, params.expressedType, cpu);
-			DeviceTraits<CPU>::ConvertTo(cpu, DataType::Float32, dequantizedF32.UnsafeRawData(),
-			                             dequantizedF32.NumElements(), params.expressedType, converted.UnsafeRawData());
-			return converted;
-		}
-
 		std::shared_ptr<Variable> MaterializeArchiveVariable(const Graph& archive, std::size_t variableIndex,
 		                                                     std::string_view name)
 		{
@@ -168,7 +21,7 @@ namespace LiteNN::GGUF
 			{
 				return source;
 			}
-			return Variable::Create(DequantizeGGMLVariable(*source, name));
+			return Variable::Create(DequantizeGGMLBlockVariable(*source, name));
 		}
 
 		std::string BlockTensorName(std::size_t blockIndex, std::string_view suffix)
