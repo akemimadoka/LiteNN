@@ -43,8 +43,9 @@ multi-token decode-loop generation are tracked in `docs/Roadmap.md`.
 useful for validating conversion artifacts without re-importing the GGUF file.
 `--run-llama-decode-loop-token-id` is a decode-loop smoke path: it repeatedly
 lowers the static-shape decode step for the current cache length, carries
-updated KV-cache tensors between steps, and prints the generated token ids. If
-an output path is supplied, it writes the generated token-id list to that file.
+updated KV-cache tensors between steps, and prints the generated token ids plus
+tokenizer pieces when `tokenizer.ggml.tokens` is available. If an output path is
+supplied, it writes both lists to that file.
 
 When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
 emitted as carrier objects with exported rodata/instruction symbols:

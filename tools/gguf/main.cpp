@@ -258,6 +258,67 @@ namespace
 		std::cout << TokenListText(values);
 	}
 
+	std::string EscapeTokenPiece(std::string_view value)
+	{
+		std::string escaped;
+		escaped.reserve(value.size() + 2);
+		escaped += '"';
+		for (const char c : value)
+		{
+			switch (c)
+			{
+			case '\\':
+				escaped += "\\\\";
+				break;
+			case '"':
+				escaped += "\\\"";
+				break;
+			case '\n':
+				escaped += "\\n";
+				break;
+			case '\r':
+				escaped += "\\r";
+				break;
+			case '\t':
+				escaped += "\\t";
+				break;
+			default:
+				escaped += c;
+				break;
+			}
+		}
+		escaped += '"';
+		return escaped;
+	}
+
+	std::string TokenPiecesText(const LiteNN::Graph& archive, std::span<const std::int32_t> tokenIds)
+	{
+		const auto* tokens = archive.FindMetadata("tokenizer.ggml.tokens");
+		const auto* tokenList = tokens == nullptr ? nullptr : std::get_if<std::vector<std::string>>(&tokens->value);
+		std::string text = "[";
+		for (std::size_t i = 0; i < tokenIds.size(); ++i)
+		{
+			if (i != 0)
+			{
+				text += ',';
+			}
+			if (tokenList == nullptr)
+			{
+				text += "\"<missing-tokenizer.ggml.tokens>\"";
+			}
+			else if (tokenIds[i] < 0 || static_cast<std::size_t>(tokenIds[i]) >= tokenList->size())
+			{
+				text += "\"<out-of-range>\"";
+			}
+			else
+			{
+				text += EscapeTokenPiece((*tokenList)[static_cast<std::size_t>(tokenIds[i])]);
+			}
+		}
+		text += "]";
+		return text;
+	}
+
 	void PrintTensorShape(LiteNN::ShapeView shape)
 	{
 		std::cout << '[';
@@ -445,6 +506,7 @@ namespace
 		PrintTensorShape(lastLogitsShape);
 		std::cout << " generated=";
 		PrintTokenList(history);
+		std::cout << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), history);
 		std::cout << '\n';
 		if (outputPath)
 		{
@@ -453,7 +515,8 @@ namespace
 			{
 				throw std::runtime_error("Failed to open decode-loop output file: " + std::string(*outputPath));
 			}
-			output << TokenListText(history) << '\n';
+			output << TokenListText(history) << '\n'
+			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + std::string(*outputPath));
