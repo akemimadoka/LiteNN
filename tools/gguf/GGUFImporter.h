@@ -1,4 +1,5 @@
 #include <LiteNN.h>
+#include <LiteNN/Serialization/ExternalWeights.h>
 
 #include <cstddef>
 #include <filesystem>
@@ -151,6 +152,10 @@ namespace LiteNN::GGUF
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);
+	ImportSummary ConvertGGUFArchiveExternalWeights(const std::filesystem::path& inputPath,
+	                                                const std::filesystem::path& outputPath,
+	                                                const std::filesystem::path& weightsPath,
+	                                                const Serialization::ExternalWeightSaveOptions& options = {});
 } // namespace LiteNN::GGUF
 
 #endif

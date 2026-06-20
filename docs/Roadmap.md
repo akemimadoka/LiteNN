@@ -2447,8 +2447,10 @@ placement and fallback policy.
 
 #### G16.4 Quantized Weight Execution
 
-- [ ] Keep GGML block-quantized weights external and quantized through packaging instead of always materializing them as
-      Float32 during lowering.
+- [x] Keep imported GGML block payloads external and quantized through vNext packaging. `--import-external` writes raw
+      payload bytes to a sibling weight region while retaining block format and expressed-shape metadata in the manifest.
+- [ ] Consume packaged GGML block weights directly from LLaMA projection lowering instead of materializing Float32
+      variables; this requires the native/reference quantized projection execution contract below.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model

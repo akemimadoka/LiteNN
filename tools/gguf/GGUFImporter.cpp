@@ -1133,4 +1133,15 @@ namespace LiteNN::GGUF
 		                                     outputPath);
 		return result.summary;
 	}
+
+	ImportSummary ConvertGGUFArchiveExternalWeights(const std::filesystem::path& inputPath,
+	                                                const std::filesystem::path& outputPath,
+	                                                const std::filesystem::path& weightsPath,
+	                                                const Serialization::ExternalWeightSaveOptions& options)
+	{
+		auto result = ImportGGUFArchive(inputPath);
+		Serialization::SaveVNextModelPackageExternalWeights(result.model.UnsafeGraphView(), outputPath, weightsPath,
+		                                                    options);
+		return result.summary;
+	}
 } // namespace LiteNN::GGUF

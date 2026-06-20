@@ -595,6 +595,38 @@ TEST(GGUFImporter, ConvertGGUFArchiveWritesLoadableLiteNNModel)
 	EXPECT_EQ(loaded.plan.variables[1].quantization->blockFormat, QuantizedBlockFormat::GGML_Q4_0);
 }
 
+TEST(GGUFImporter, ConvertGGUFArchivePreservesQuantizedExternalWeights)
+{
+	const auto inputPath = WriteSupportedFixture();
+	const auto outputPath = MakeTempFixturePath("litenn_gguf_external_archive", ".ltnn");
+	const auto weightsPath = MakeTempFixturePath("litenn_gguf_external_archive", ".weights.bin");
+	std::filesystem::remove(outputPath);
+	std::filesystem::remove(weightsPath);
+
+	const auto summary = GGUF::ConvertGGUFArchiveExternalWeights(inputPath, outputPath, weightsPath);
+	const auto loaded = Serialization::LoadVNextModelPackage(outputPath);
+
+	EXPECT_EQ(summary.tensorCount, 2u);
+	ASSERT_EQ(loaded.manifest.tensors.size(), 2u);
+	EXPECT_EQ(loaded.manifest.tensors[0].kind, ExternalBufferKind::User);
+	EXPECT_EQ(loaded.manifest.tensors[1].kind, ExternalBufferKind::User);
+	EXPECT_EQ(loaded.manifest.tensors[0].relativePath, weightsPath.filename().string());
+	EXPECT_EQ(loaded.manifest.tensors[1].relativePath, weightsPath.filename().string());
+	ASSERT_TRUE(loaded.manifest.tensors[1].quantization.has_value());
+	EXPECT_EQ(loaded.manifest.tensors[1].quantization->blockFormat, QuantizedBlockFormat::GGML_Q4_0);
+	EXPECT_EQ(loaded.manifest.tensors[1].quantization->expressedShape, std::vector<std::size_t>({ 32 }));
+	ASSERT_EQ(loaded.plan.variables.size(), 2u);
+	ASSERT_TRUE(loaded.plan.variables[1].quantization.has_value());
+	EXPECT_EQ(loaded.plan.variables[1].type.dtype, DataType::UInt8);
+	EXPECT_EQ(loaded.plan.variables[1].region.byteOffset, 64u);
+	EXPECT_EQ(loaded.plan.variables[1].region.byteSize, 18u);
+	EXPECT_EQ(std::filesystem::file_size(weightsPath), 82u);
+
+	std::filesystem::remove(inputPath);
+	std::filesystem::remove(outputPath);
+	std::filesystem::remove(weightsPath);
+}
+
 TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 {
 	Graph graph;

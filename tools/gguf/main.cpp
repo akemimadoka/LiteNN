@@ -25,6 +25,7 @@ namespace
 	{
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
+		          << "  " << executable << " --import-external <input.gguf> <output.ltnn> <weights.bin>\n"
 		          << "  " << executable
 		          << " --analyze-llm <input.gguf> [profile] [--dequantized-budget-bytes N|--dequantized-budget-mib N]\n"
 		          << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
@@ -334,6 +335,19 @@ int main(int argc, char** argv)
 			const auto summary = LiteNN::GGUF::ConvertGGUFArchive(argv[2], argv[3]);
 			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
 			          << " metadata entries\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--import-external")
+		{
+			if (argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto summary = LiteNN::GGUF::ConvertGGUFArchiveExternalWeights(argv[2], argv[3], argv[4]);
+			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
+			          << " metadata entries using external quantized weights\n";
 			return 0;
 		}
 
