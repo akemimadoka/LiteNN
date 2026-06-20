@@ -95,7 +95,7 @@ namespace LiteNN::Layer
 
 		const std::vector<std::size_t> weightShape{ layer.inFeatures, layer.outFeatures };
 		const std::vector<std::size_t> outputShape{ inputInfo.shape[0], layer.outFeatures };
-		NodeOutput weight;
+		NodeOutput matmul;
 		if (layer.weightQuantization)
 		{
 			const auto& params = *layer.weightQuantization;
@@ -113,21 +113,14 @@ namespace LiteNN::Layer
 			}
 			const auto storage = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
 			                                      { OutputInfo{ params.storageType, layer.weightStorageShape } });
-			const auto dequantized = subgraph.AddNode(DequantizeNode{ { storage, 0 }, params, layer.dtype },
-			                                          { OutputInfo{ layer.dtype, params.expressedShape } });
-			if (layer.transposeWeight)
-			{
-				const auto transposed = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, { dequantized, 0 } },
-				                                         { OutputInfo{ layer.dtype, weightShape } });
-				weight = { transposed, 0 };
-			}
-			else
-			{
-				weight = { dequantized, 0 };
-			}
+			const auto quantizedMatMul =
+			    subgraph.AddNode(QuantizedMatMulNode{ input, { storage, 0 }, params, layer.transposeWeight },
+			                     { OutputInfo{ layer.dtype, outputShape } });
+			matmul = { quantizedMatMul, 0 };
 		}
 		else
 		{
+			NodeOutput weight;
 			const auto storedWeightShape =
 			    layer.transposeWeight ? std::vector<std::size_t>{ layer.outFeatures, layer.inFeatures } : weightShape;
 			const auto plain = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
@@ -142,12 +135,13 @@ namespace LiteNN::Layer
 			{
 				weight = { plain, 0 };
 			}
+			const auto plainMatMul = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, weight },
+			                                          { OutputInfo{ layer.dtype, outputShape } });
+			matmul = { plainMatMul, 0 };
 		}
-		const auto matmul = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, weight },
-		                                     { OutputInfo{ layer.dtype, outputShape } });
 		if (!layer.biasVariable)
 		{
-			return { matmul, 0 };
+			return matmul;
 		}
 
 		const auto biasShape =
@@ -159,7 +153,7 @@ namespace LiteNN::Layer
 		}
 		const auto bias =
 		    subgraph.AddNode(VariableRefNode{ *layer.biasVariable }, { OutputInfo{ layer.dtype, biasShape } });
-		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
+		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, matmul, { bias, 0 } },
 		                                     { OutputInfo{ layer.dtype, outputShape } });
 		return { result, 0 };
 	}

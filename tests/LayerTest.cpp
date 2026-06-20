@@ -205,7 +205,7 @@ TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 2.5f);
 }
 
-TEST(LayerLinear, RunsPackedInt4WeightThroughExplicitDequantization)
+TEST(LayerLinear, RunsPackedInt4WeightThroughQuantizedMatMul)
 {
 	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 3, 2 });
 	auto packed = PackInteger4(Tensor<CPU>({ 1, 2, 3, 4, 0, -1 }, { 3, 2 }, DataType::Int8), params);

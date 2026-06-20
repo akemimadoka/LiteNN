@@ -27,6 +27,15 @@ namespace LiteNN::Runtime
 	{
 	public:
 		using TraceCallback = std::function<void(SubgraphId, NodeId, const NodeEntry&, std::span<const Tensor<D>>)>;
+		using QuantizedMatMulCallback = std::function<std::optional<Tensor<CPU>>(const Tensor<CPU>&, const Tensor<CPU>&,
+		                                                                         const QuantizationParams&, bool)>;
+
+		Interpreter() = default;
+
+		explicit Interpreter(QuantizedMatMulCallback quantizedMatMulCallback)
+		    : quantizedMatMulCallback_(std::move(quantizedMatMulCallback))
+		{
+		}
 
 		std::vector<Tensor<D>> RunSubgraph(const ExecutablePlan& plan, SubgraphId subgraphId,
 		                                   std::span<const Tensor<D>> inputs, D device = D{})
@@ -575,6 +584,37 @@ namespace LiteNN::Runtime
 			                       ? DequantizeAffine(cpuInput, node.params, node.targetType)
 			                       : DequantizePackedNibble(cpuInput, node.params, node.targetType);
 			slots[nodeId].push_back(dequantized.CopyToDevice(device));
+		}
+
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const QuantizedMatMulNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto lhs = GetValue(slots, node.lhs).CopyToDevice(CPU{});
+			const auto rhsStorage = GetValue(slots, node.rhsStorage).CopyToDevice(CPU{});
+			std::optional<Tensor<CPU>> cpuResult;
+			if (quantizedMatMulCallback_)
+			{
+				cpuResult = quantizedMatMulCallback_(lhs, rhsStorage, node.params, node.transposeRhs);
+			}
+			if (!cpuResult)
+			{
+				if (node.transposeRhs)
+				{
+					throw std::runtime_error(
+					    "Interpreter QuantizedMatMulNode requires a backend callback for transposed block weights");
+				}
+				cpuResult = EvalQuantizedMatMul(lhs, rhsStorage, node.params, node.params.expressedType);
+			}
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(*cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult->CopyToDevice(device));
+			}
 		}
 
 		template <typename ExecutionModel>
@@ -1231,6 +1271,7 @@ namespace LiteNN::Runtime
 		std::vector<std::optional<Tensor<D>>> activationStore_;
 		std::vector<std::vector<Tensor<D>>> tapeStore_;
 		TraceCallback traceCallback_;
+		QuantizedMatMulCallback quantizedMatMulCallback_;
 	};
 } // namespace LiteNN::Runtime
 

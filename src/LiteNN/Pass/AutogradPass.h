@@ -1260,6 +1260,11 @@ namespace LiteNN
 					    {
 						    EmitBinaryGrad(fwdSg, bwdSg, fwdNodeId, node, dy, entry, saved, loadMap, gradContribs);
 					    }
+					    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: QuantizedMatMulNode differentiation is not yet implemented");
+					    }
 					    else if constexpr (std::same_as<T, CastNode>)
 					    {
 						    EmitCastGrad(fwdSg, bwdSg, node, dy, gradContribs);

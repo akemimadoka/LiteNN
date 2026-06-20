@@ -1202,6 +1202,11 @@ namespace LiteNN::Serialization
 				return DequantizeNode{ RequireNodeInput(inputs, 0, op.kind), PlanQuantizationParams(op),
 					                   PlanAttributeEnum<DataType>(op, "targetType") };
 			}
+			if (op.kind == "QuantizedMatMulNode")
+			{
+				return QuantizedMatMulNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
+					                        PlanQuantizationParams(op), PlanAttributeBool(op, "transposeRhs") };
+			}
 			if (op.kind == "ReduceOpNode")
 			{
 				return ReduceOpNode{ PlanAttributeEnum<ReduceOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),

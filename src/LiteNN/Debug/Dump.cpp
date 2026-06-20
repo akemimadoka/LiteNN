@@ -376,6 +376,12 @@ namespace LiteNN::Debug
 					                       PackedNibbleOrderName(value.params.packedOrder),
 					                       BlockScaleLayoutName(value.params.blockScaleLayout));
 				    }
+				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+				    {
+					    return std::format("QuantizedMatMulNode(lhs={}, rhsStorage={}, format={}, transposeRhs={})",
+					                       FormatValueRef(value.lhs), FormatValueRef(value.rhsStorage),
+					                       QuantizedBlockFormatName(value.params.blockFormat), value.transposeRhs);
+				    }
 				    else if constexpr (std::same_as<T, CondNode>)
 				    {
 					    return std::format("CondNode(condition={}, then=@{}, else=@{}, args={})",

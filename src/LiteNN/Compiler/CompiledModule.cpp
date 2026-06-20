@@ -1914,6 +1914,12 @@ namespace
 				    copy.rhs = remap(copy.rhs);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+			    {
+				    copy.lhs = remap(copy.lhs);
+				    copy.rhsStorage = remap(copy.rhsStorage);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, CallNode>)
 			    {
 				    for (auto& arg : copy.args)

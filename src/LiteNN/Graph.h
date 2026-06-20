@@ -162,6 +162,15 @@ namespace LiteNN
 			DataType targetType{ DataType::Float32 };
 		};
 
+		// 浮点激活与量化权重 storage 的矩阵乘。transposeRhs 表示逻辑权重以 [N, K] 存储。
+		struct QuantizedMatMulNode
+		{
+			NodeOutput lhs;
+			NodeOutput rhsStorage;
+			QuantizationParams params;
+			bool transposeRhs{};
+		};
+
 		// 条件节点：根据 condition 选择执行 thenBranch 或 elseBranch
 		// 两个分支的子图必须有相同数量和类型的输出
 		// condition 必须是标量 Bool

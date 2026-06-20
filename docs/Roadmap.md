@@ -2455,12 +2455,15 @@ placement and fallback policy.
       while constructing the model. Quantized projections and token embeddings now emit explicit
       `VariableRef -> Dequantize -> optional Transpose -> MatMul/GetRows` semantics, and tied vocab-major embeddings use
       the same explicit transpose contract for the LM head.
-- [ ] Execute those GGML `Dequantize`/projection nodes directly in CPU AOT and CUDA without materializing a full
-      Float32 weight tensor. Core affine and packed-nibble Linear execution is validated, but GGML block codecs still
-      need importer/runtime adapters or native kernels before the preserved Q4_K_M graph is executable end to end.
+- [ ] Execute `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight tensor.
+      Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are complete; native compiled
+      lowering remains open.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
-      and related block rows without materializing the complete Float32 weight. Graph/runtime dispatch remains open.
+      and related block rows without materializing the complete Float32 weight.
+- [x] Add first-class `QuantizedMatMulNode` graph/schema/package semantics and Interpreter kernel injection. Quantized
+      LLaMA Linear lowering now emits this node directly, and Q4_K package roundtrip execution is covered without full
+      weight dequantization.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
@@ -2566,6 +2569,8 @@ These improvements do not require a compatibility break and should not block vNe
   silently dropped by the generic LLaMA builder.
 - Extracted GGML block decoding into a dedicated adapter and added Q4_K direct CPU MatMul parity coverage using ggml's
   native row quantizer and vector-dot traits.
+- Added `QuantizedMatMulNode` plus explicit Interpreter kernel injection and validated a saved/loaded Q4_K Linear graph
+  against the direct ggml-backed primitive.
 
 ### 2026-06-02
 

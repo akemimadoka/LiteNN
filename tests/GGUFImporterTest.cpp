@@ -1063,6 +1063,42 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 		}
 	}
 	EXPECT_THROW((void) GGUF::EvalGGMLQuantizedMatMul(input, *quantizedWeight, false), std::runtime_error);
+
+	Graph graph;
+	const auto weightVariable = graph.AddVariable(quantizedWeight);
+	const Layer::LinearLayer layer{
+		.weightVariable = weightVariable,
+		.inFeatures = inFeatures,
+		.outFeatures = outFeatures,
+		.dtype = DataType::Float32,
+		.weightQuantization = *quantizedWeight->Quantization(),
+		.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+		.transposeWeight = true,
+	};
+	Subgraph forward;
+	const auto inputNode = forward.AddParam(DataType::Float32, { 2, inFeatures });
+	const auto output = Layer::AddLinear(forward, layer, { inputNode, 0 });
+	forward.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "output" });
+
+	const auto packagePath = MakeTempFixturePath("litenn_ggml_q4k_matmul", ".ltnn");
+	const auto weightsPath = MakeTempFixturePath("litenn_ggml_q4k_matmul", ".weights.bin");
+	Serialization::ExternalWeightSaveOptions saveOptions;
+	saveOptions.minVariableBytes = 0;
+	Serialization::SaveVNextModelPackageExternalWeights(graph, packagePath, weightsPath, saveOptions);
+	const auto loaded = Serialization::LoadVNextModelPackage(packagePath);
+	std::filesystem::remove(packagePath);
+	std::filesystem::remove(weightsPath);
+	Runtime::Interpreter<CPU> interpreter(GGUF::TryEvalGGMLQuantizedMatMul);
+	std::array<Tensor<CPU>, 1> inputs{ input };
+	const auto graphOutputs = interpreter.RunForward(loaded.plan, inputs);
+	ASSERT_EQ(graphOutputs.size(), 1u);
+	for (std::size_t i = 0; i < actual.NumElements(); ++i)
+	{
+		EXPECT_FLOAT_EQ(ReadFloat(graphOutputs[0], i), ReadFloat(actual, i));
+	}
 }
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
@@ -1550,7 +1586,7 @@ TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)
 	}
 }
 
-TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithExplicitDequantizeNodes)
+TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithQuantizedMatMulNodes)
 {
 	const auto quantizedArchive = QuantizeQ80Weights(BuildQuantizedFriendlyLLaMAArchive());
 	const auto lowered = GGUF::LowerLLaMACausalLM(quantizedArchive, 2, 0, { .preserveQuantizedWeights = true });
@@ -1567,19 +1603,18 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithExplicitDequantiz
 	EXPECT_EQ(quantizedVariableCount, 7u);
 
 	const auto& forward = lowered.GetSubgraph(lowered.Forward());
-	std::size_t dequantizeNodeCount = 0;
+	std::size_t quantizedMatMulNodeCount = 0;
 	for (NodeId nodeId = 0; nodeId < forward.NodeCount(); ++nodeId)
 	{
-		const auto* dequantize = std::get_if<DequantizeNode>(&forward.GetNodeEntry(nodeId).node);
-		if (!dequantize)
+		const auto* quantizedMatMul = std::get_if<QuantizedMatMulNode>(&forward.GetNodeEntry(nodeId).node);
+		if (!quantizedMatMul)
 		{
 			continue;
 		}
-		++dequantizeNodeCount;
-		EXPECT_EQ(dequantize->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
-		EXPECT_EQ(dequantize->targetType, DataType::Float32);
+		++quantizedMatMulNodeCount;
+		EXPECT_EQ(quantizedMatMul->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
 	}
-	EXPECT_EQ(dequantizeNodeCount, 7u);
+	EXPECT_EQ(quantizedMatMulNodeCount, 7u);
 
 	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
 	EXPECT_NO_THROW(ValidateExecutablePlan(plan));

@@ -141,6 +141,11 @@ namespace LiteNN
 						    {
 							    return DequantizeNode{ remapOutput(node.input), node.params, node.targetType };
 						    }
+						    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+						    {
+							    return QuantizedMatMulNode{ remapOutput(node.lhs), remapOutput(node.rhsStorage),
+								                            node.params, node.transposeRhs };
+						    }
 						    else if constexpr (std::same_as<T, CondNode>)
 						    {
 							    return CondNode{ remapOutput(node.condition), CloneSubgraph(node.thenBranch),

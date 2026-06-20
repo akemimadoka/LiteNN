@@ -710,6 +710,39 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizedMatMulNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto lhs =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.lhs, "QuantizedMatMulNode lhs", true);
+			const auto rhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.rhsStorage,
+			                                    "QuantizedMatMulNode rhsStorage", true);
+			if (!IsFloatingDataType(lhs.dtype) || lhs.dtype != node.params.expressedType || lhs.shape.size() != 2 ||
+			    node.params.expressedShape.size() != 2)
+			{
+				Fail(subgraphId, nodeId,
+				     "QuantizedMatMulNode requires 2D floating lhs and 2D weight expressed metadata with matching "
+				     "dtype");
+			}
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ rhs.shape }, rhs.dtype);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("QuantizedMatMulNode metadata is invalid: {}", ex.what()));
+			}
+			const auto inFeatures = node.transposeRhs ? node.params.expressedShape[1] : node.params.expressedShape[0];
+			const auto outFeatures = node.transposeRhs ? node.params.expressedShape[0] : node.params.expressedShape[1];
+			if (lhs.shape[1] != inFeatures)
+			{
+				Fail(subgraphId, nodeId, "QuantizedMatMulNode lhs width does not match the logical weight K dimension");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { node.params.expressedType, { lhs.shape[0], outFeatures } }, "QuantizedMatMulNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const CondNode& node) const
 		{
 			const auto cond =

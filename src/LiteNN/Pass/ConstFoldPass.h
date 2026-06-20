@@ -363,6 +363,10 @@ namespace LiteNN
 				    {
 					    return DequantizeNode{ remap(n.input), n.params, n.targetType };
 				    }
+				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+				    {
+					    return QuantizedMatMulNode{ remap(n.lhs), remap(n.rhsStorage), n.params, n.transposeRhs };
+				    }
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {
 					    return ReduceOpNode{ n.op, remap(n.input), n.axis };
@@ -629,6 +633,11 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, DequantizeNode>)
 				    {
 					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
+				    {
+					    markInput(node.lhs);
+					    markInput(node.rhsStorage);
 				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {

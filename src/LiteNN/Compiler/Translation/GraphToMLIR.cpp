@@ -1084,6 +1084,14 @@ namespace litenn
 					                                 output.shape) };
 			}
 
+			void emitNode(const PlanSubgraphView&, NodeId, const QuantizedMatMulNode&, std::span<const OutputInfo>,
+			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+			              std::map<std::size_t, Value>&)
+			{
+				throw std::runtime_error("GraphToMLIR QuantizedMatMulNode requires backend-native lowering or an "
+				                         "explicit reference legalization");
+			}
+
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)

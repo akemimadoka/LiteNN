@@ -202,4 +202,15 @@ namespace LiteNN::GGUF
 		}
 		return result;
 	}
+
+	std::optional<Tensor<CPU>> TryEvalGGMLQuantizedMatMul(const Tensor<CPU>& input, const Tensor<CPU>& weightStorage,
+	                                                      const QuantizationParams& params, bool transposeWeight)
+	{
+		if (params.scheme != QuantizationScheme::Block || !IsGGMLQuantizedBlockFormat(params.blockFormat))
+		{
+			return std::nullopt;
+		}
+		const auto weight = Variable::CreateFrozenQuantized(Tensor<CPU>(weightStorage), params);
+		return EvalGGMLQuantizedMatMul(input, *weight, transposeWeight);
+	}
 } // namespace LiteNN::GGUF
