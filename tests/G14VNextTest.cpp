@@ -613,6 +613,39 @@ TEST(G14VNext, BuildsRuntimeScheduleWithStateBindingsAndTrace)
 	EXPECT_NE(trace[1].message.find("dispatch region"), std::string::npos);
 }
 
+TEST(G14VNext, RebindsFunctionValuesToPersistentRuntimeState)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2 });
+	const auto output =
+	    forward.AddNode(UnaryOpNode{ UnaryOp::Negate, { input, 0 } }, { OutputInfo{ DataType::Float32, { 2 } } });
+	forward.SetResults({ { output, 0 } });
+	graph.AddSubgraph(std::move(forward));
+	graph.SetForward(0);
+
+	auto state = Runtime::MakeKVCacheState("kv.cache.0", TensorType::Dense(DataType::Float32, ShapeView{ 2, 2 }));
+	const std::vector<Runtime::RuntimeStateValueBinding> aliases{
+		{ "kv.cache.0", 0, Runtime::RuntimeStateValueKind::FunctionInput, 0, 0 },
+		{ "kv.cache.0", 0, Runtime::RuntimeStateValueKind::FunctionOutput, 0, sizeof(float) * 2 },
+	};
+	const auto schedule =
+	    Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { std::move(state) }, aliases);
+
+	ASSERT_EQ(schedule.stateValueBindings.size(), 2u);
+	const auto stateBuffer = *schedule.states[0].memoryBuffer;
+	const auto& subgraph = schedule.module.plan.subgraphs[schedule.module.plan.forward];
+	const auto* inputAssignment = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, { input, 0 });
+	const auto* outputAssignment = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, subgraph.results[0]);
+	ASSERT_NE(inputAssignment, nullptr);
+	ASSERT_NE(outputAssignment, nullptr);
+	EXPECT_EQ(inputAssignment->buffer, stateBuffer);
+	EXPECT_EQ(inputAssignment->offset, 0u);
+	EXPECT_EQ(outputAssignment->buffer, stateBuffer);
+	EXPECT_EQ(outputAssignment->offset, sizeof(float) * 2);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+}
+
 TEST(G14VNext, MemoryPlanAssignsStaticValuesAndReusesWorkspace)
 {
 	const auto graph = BuildLinearAddGraph();

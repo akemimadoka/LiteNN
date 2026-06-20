@@ -81,6 +81,7 @@ namespace LiteNN::GGUF
 		std::vector<std::string> inputNames;
 		std::vector<std::string> outputNames;
 		std::vector<LLaMAKVCacheBinding> kvCaches;
+		std::vector<Runtime::RuntimeStateValueBinding> stateValueBindings;
 	};
 
 	struct LLaMATensorLayoutRecord

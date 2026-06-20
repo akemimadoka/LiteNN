@@ -38,6 +38,21 @@ namespace LiteNN::Runtime
 		std::optional<std::size_t> memoryBuffer;
 	};
 
+	enum class RuntimeStateValueKind
+	{
+		FunctionInput,
+		FunctionOutput
+	};
+
+	struct RuntimeStateValueBinding
+	{
+		std::string stateName;
+		FunctionId function{};
+		RuntimeStateValueKind kind{ RuntimeStateValueKind::FunctionInput };
+		std::size_t valueIndex{};
+		std::size_t stateByteOffset{};
+	};
+
 	struct LLMDecodeStateABI
 	{
 		std::vector<RuntimeStateBinding> kvCaches;
@@ -182,10 +197,16 @@ namespace LiteNN::Runtime
 		ExecutableModule module;
 		MemoryPlan memory;
 		std::vector<RuntimeStateBinding> states;
+		std::vector<RuntimeStateValueBinding> stateValueBindings;
 		std::vector<RuntimeBufferBinding> bufferBindings;
 		std::vector<RuntimeExecutionSegment> segments;
 		std::vector<RuntimeScheduleStep> steps;
 	};
+
+	inline std::string_view RuntimeStateValueKindName(RuntimeStateValueKind kind) noexcept
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(kind);
+	}
 
 	inline std::string_view RuntimeScheduleStepKindName(RuntimeScheduleStepKind kind) noexcept
 	{
@@ -232,7 +253,8 @@ namespace LiteNN::Runtime
 		                               mutability, { "read", "rebind", "merge" });
 	}
 
-	inline RuntimeSchedule BuildRuntimeSchedule(ExecutableModule module, std::vector<RuntimeStateBinding> states = {})
+	inline RuntimeSchedule BuildRuntimeSchedule(ExecutableModule module, std::vector<RuntimeStateBinding> states = {},
+	                                            std::vector<RuntimeStateValueBinding> stateValueBindings = {})
 	{
 		ValidateExecutablePlan(module.plan);
 		RuntimeSchedule schedule;
@@ -240,6 +262,7 @@ namespace LiteNN::Runtime
 		ValidateMemoryPlan(module.plan, schedule.memory);
 		schedule.module = std::move(module);
 		schedule.states = std::move(states);
+		schedule.stateValueBindings = std::move(stateValueBindings);
 
 		for (auto& state : schedule.states)
 		{
@@ -290,6 +313,81 @@ namespace LiteNN::Runtime
 			binding.mutability = state.mutability;
 			binding.rebindPolicy = BufferRebindPolicy::CompatibleMetadata;
 			schedule.bufferBindings.push_back(std::move(binding));
+		}
+
+		for (const auto& valueBinding : schedule.stateValueBindings)
+		{
+			const auto stateIt = std::ranges::find_if(schedule.states, [&](const RuntimeStateBinding& state) {
+				return state.name == valueBinding.stateName;
+			});
+			if (stateIt == schedule.states.end())
+			{
+				throw std::runtime_error("Runtime state value binding references an unknown state: " +
+				                         valueBinding.stateName);
+			}
+			if (valueBinding.function >= schedule.module.functions.size())
+			{
+				throw std::runtime_error("Runtime state value binding references an unknown function");
+			}
+			const auto& function = schedule.module.functions[valueBinding.function];
+			const auto subgraphIt = std::ranges::find_if(schedule.module.plan.subgraphs, [&](const auto& subgraph) {
+				return subgraph.sourceSubgraph == function.body;
+			});
+			if (subgraphIt == schedule.module.plan.subgraphs.end())
+			{
+				throw std::runtime_error("Runtime state value binding function has no executable subgraph");
+			}
+			NodeOutput value;
+			TensorType valueType;
+			if (valueBinding.kind == RuntimeStateValueKind::FunctionInput)
+			{
+				if (valueBinding.valueIndex >= function.inputs.size())
+				{
+					throw std::runtime_error("Runtime state value binding references an unknown function input");
+				}
+				const auto nodeIt = std::ranges::find_if(subgraphIt->nodes, [&](const auto& node) {
+					const auto* param = std::get_if<ParamRefNode>(&node.node);
+					return param != nullptr && param->paramIndex == valueBinding.valueIndex;
+				});
+				if (nodeIt == subgraphIt->nodes.end())
+				{
+					throw std::runtime_error("Runtime state value binding input has no ParamRefNode");
+				}
+				value = { nodeIt->sourceNode, 0 };
+				valueType = function.inputs[valueBinding.valueIndex];
+			}
+			else
+			{
+				if (valueBinding.valueIndex >= function.outputs.size() ||
+				    valueBinding.valueIndex >= subgraphIt->results.size())
+				{
+					throw std::runtime_error("Runtime state value binding references an unknown function output");
+				}
+				value = subgraphIt->results[valueBinding.valueIndex];
+				valueType = function.outputs[valueBinding.valueIndex];
+			}
+			if (valueType.dtype != stateIt->type.dtype || valueType.memorySpace != stateIt->type.memorySpace)
+			{
+				throw std::runtime_error("Runtime state value binding type is incompatible with state: " +
+				                         valueBinding.stateName);
+			}
+			const auto valueBytes = valueType.ByteSize();
+			const auto stateBytes = stateIt->type.ByteSize();
+			if (!valueBytes || !stateBytes || valueBinding.stateByteOffset > *stateBytes ||
+			    *valueBytes > *stateBytes - valueBinding.stateByteOffset)
+			{
+				throw std::runtime_error("Runtime state value binding exceeds state capacity: " +
+				                         valueBinding.stateName);
+			}
+			auto assignment = std::ranges::find_if(schedule.memory.assignments, [&](const MemoryAssignment& candidate) {
+				return candidate.subgraph == subgraphIt->sourceSubgraph && candidate.value == value;
+			});
+			if (assignment == schedule.memory.assignments.end())
+			{
+				throw std::runtime_error("Runtime state value binding has no memory assignment");
+			}
+			assignment->buffer = *stateIt->memoryBuffer;
+			assignment->offset = valueBinding.stateByteOffset;
 		}
 
 		for (const auto& state : schedule.states)

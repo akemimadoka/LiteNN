@@ -467,10 +467,11 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("LLaMA artifact plan requires prefillSequenceLength > 0");
 		}
-		const auto maxCacheLength = options.maxCacheLength == 0 ? options.decodePastLength : options.maxCacheLength;
-		if (maxCacheLength < options.decodePastLength)
+		const auto requiredCacheLength = options.decodePastLength + 1;
+		const auto maxCacheLength = options.maxCacheLength == 0 ? requiredCacheLength : options.maxCacheLength;
+		if (maxCacheLength < requiredCacheLength)
 		{
-			throw std::runtime_error("LLaMA artifact plan requires maxCacheLength >= decodePastLength");
+			throw std::runtime_error("LLaMA artifact plan requires maxCacheLength >= decodePastLength + 1");
 		}
 		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
 		const auto tokenEmbeddingIndex = archive.FindVariable("token_embd.weight");
@@ -569,6 +570,19 @@ namespace LiteNN::GGUF
 			    .layerByteStride = stateByteSize,
 			    .tokenByteStride = tokenByteStride,
 			});
+			const auto stateName = decode.kvCaches.back().stateBinding.name;
+			const auto keyInput = 1 + blockIndex * 2;
+			const auto valueInput = keyInput + 1;
+			const auto keyOutput = 1 + blockIndex * 2;
+			const auto valueOutput = keyOutput + 1;
+			decode.stateValueBindings.push_back(
+			    { stateName, 0, Runtime::RuntimeStateValueKind::FunctionInput, keyInput, 0 });
+			decode.stateValueBindings.push_back({ stateName, 0, Runtime::RuntimeStateValueKind::FunctionInput,
+			                                      valueInput, cacheCapacityPerPlaneBytes });
+			decode.stateValueBindings.push_back(
+			    { stateName, 0, Runtime::RuntimeStateValueKind::FunctionOutput, keyOutput, 0 });
+			decode.stateValueBindings.push_back({ stateName, 0, Runtime::RuntimeStateValueKind::FunctionOutput,
+			                                      valueOutput, cacheCapacityPerPlaneBytes });
 		}
 
 		Runtime::LLMDecodeStateABI decodeStateABI;
@@ -633,7 +647,7 @@ namespace LiteNN::GGUF
 	{
 		return PlanLLaMAArtifacts(archive, { .prefillSequenceLength = prefillSequenceLength,
 		                                     .decodePastLength = decodePastLength,
-		                                     .maxCacheLength = decodePastLength });
+		                                     .maxCacheLength = decodePastLength + 1 });
 	}
 
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,

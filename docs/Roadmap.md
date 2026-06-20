@@ -2434,7 +2434,9 @@ placement and fallback policy.
       metadata/state descriptors.
 - [x] Expose explicit mutable KV-cache runtime-state bindings and per-layer key/value byte offsets in the LLM artifact
       plan.
-- [ ] Replace functional decode graph cache inputs/outputs with in-place runtime-state rebinding.
+- [x] Replace functional decode graph cache inputs/outputs with in-place runtime-state rebinding. Runtime schedules now
+      map function input/output values directly onto byte ranges of persistent state buffers, and LLaMA artifact plans
+      emit key/value bindings for every decoder layer while enforcing capacity for the appended token.
 - [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
 - [ ] Support variable prompt length and decode position in executable lowering without recompiling for every
       `pastLength`.
