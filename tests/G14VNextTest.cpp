@@ -578,6 +578,41 @@ TEST(G14VNext, VNextModelPackageRoundTripsPackedNibbleQuantizationMetadata)
 	std::filesystem::remove(weightsPath);
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsDequantizeNodeParameters)
+{
+	auto params =
+	    PackedNibbleQuantization(PackedNibbleFormat::Int4, { 2, 3 }, 0.25F, -2, PackedNibbleOrder::HighThenLow);
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::UInt8, { 3 });
+	const auto output = forward.AddNode(DequantizeNode{ { input, 0 }, params, DataType::Float32 },
+	                                    { OutputInfo{ DataType::Float32, { 2, 3 } } });
+	forward.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	graph.SetInputNames({ "packed" });
+	graph.SetOutputNames({ "dequantized" });
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_dequantize_node.json";
+	Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(graph), path);
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	const auto& node = package.plan.subgraphs[package.plan.forward].nodes[1];
+	ASSERT_TRUE(std::holds_alternative<DequantizeNode>(node.node));
+	const auto& loaded = std::get<DequantizeNode>(node.node);
+	EXPECT_EQ(loaded.targetType, DataType::Float32);
+	EXPECT_EQ(loaded.params.scheme, QuantizationScheme::Block);
+	EXPECT_EQ(loaded.params.blockFormat, QuantizedBlockFormat::PackedNibble);
+	EXPECT_EQ(loaded.params.packedFormat, PackedNibbleFormat::Int4);
+	EXPECT_EQ(loaded.params.packedOrder, PackedNibbleOrder::HighThenLow);
+	EXPECT_EQ(loaded.params.expressedShape, std::vector<std::size_t>({ 2, 3 }));
+	ASSERT_EQ(loaded.params.scales.size(), 1u);
+	EXPECT_FLOAT_EQ(loaded.params.scales[0], 0.25F);
+	ASSERT_EQ(loaded.params.zeroPoints.size(), 1u);
+	EXPECT_EQ(loaded.params.zeroPoints[0], -2);
+	EXPECT_NO_THROW(ValidateExecutablePlan(package.plan));
+}
+
 TEST(G14VNext, VNextModelPackageRoundTripsRuntimeStateValueBindings)
 {
 	Graph graph;

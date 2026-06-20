@@ -7,6 +7,7 @@
 #include <LiteNN/TensorType.h>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -169,6 +170,11 @@ namespace LiteNN
 		AddPlanAttribute(attributes, std::move(name), std::to_string(value));
 	}
 
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, std::int64_t value)
+	{
+		AddPlanAttribute(attributes, std::move(name), std::to_string(value));
+	}
+
 	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name, double value)
 	{
 		AddPlanAttribute(attributes, std::move(name), std::format("{}", value));
@@ -206,6 +212,54 @@ namespace LiteNN
 		AddPlanAttribute(attributes, std::move(name), JoinSizeList(values));
 	}
 
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
+	                             const std::vector<float>& values)
+	{
+		std::string text;
+		for (std::size_t i = 0; i < values.size(); ++i)
+		{
+			if (i != 0)
+			{
+				text += ',';
+			}
+			text += std::format("{:.{}g}", values[i], std::numeric_limits<float>::max_digits10);
+		}
+		AddPlanAttribute(attributes, std::move(name), std::move(text));
+	}
+
+	inline void AddPlanAttribute(std::vector<ExecutablePlanAttribute>& attributes, std::string name,
+	                             const std::vector<std::int32_t>& values)
+	{
+		std::string text;
+		for (std::size_t i = 0; i < values.size(); ++i)
+		{
+			if (i != 0)
+			{
+				text += ',';
+			}
+			text += std::to_string(values[i]);
+		}
+		AddPlanAttribute(attributes, std::move(name), std::move(text));
+	}
+
+	inline void AddPlanQuantizationAttributes(std::vector<ExecutablePlanAttribute>& attrs,
+	                                          const QuantizationParams& params)
+	{
+		AddPlanAttribute(attrs, "scheme", params.scheme);
+		AddPlanAttribute(attrs, "granularity", params.granularity);
+		AddPlanAttribute(attrs, "blockFormat", params.blockFormat);
+		AddPlanAttribute(attrs, "packedFormat", params.packedFormat);
+		AddPlanAttribute(attrs, "packedOrder", params.packedOrder);
+		AddPlanAttribute(attrs, "blockScaleLayout", params.blockScaleLayout);
+		AddPlanAttribute(attrs, "storageType", params.storageType);
+		AddPlanAttribute(attrs, "expressedType", params.expressedType);
+		AddPlanAttribute(attrs, "axis", params.axis);
+		AddPlanAttribute(attrs, "groupSize", params.groupSize);
+		AddPlanAttribute(attrs, "scales", params.scales);
+		AddPlanAttribute(attrs, "zeroPoints", params.zeroPoints);
+		AddPlanAttribute(attrs, "expressedShape", params.expressedShape);
+	}
+
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ParamRefNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;
@@ -224,9 +278,7 @@ namespace LiteNN
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizedConstantNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs = PlanAttributesForNode(ConstantNode{ node.storage });
-		AddPlanAttribute(attrs, "quantizationScheme", node.params.scheme);
-		AddPlanAttribute(attrs, "quantizationStorageType", node.params.storageType);
-		AddPlanAttribute(attrs, "quantizationExpressedType", node.params.expressedType);
+		AddPlanQuantizationAttributes(attrs, node.params);
 		return attrs;
 	}
 
@@ -268,9 +320,7 @@ namespace LiteNN
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizeNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;
-		AddPlanAttribute(attrs, "scheme", node.params.scheme);
-		AddPlanAttribute(attrs, "storageType", node.params.storageType);
-		AddPlanAttribute(attrs, "expressedType", node.params.expressedType);
+		AddPlanQuantizationAttributes(attrs, node.params);
 		return attrs;
 	}
 

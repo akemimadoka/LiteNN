@@ -1046,6 +1046,11 @@ namespace LiteNN::Serialization
 			return static_cast<std::size_t>(std::stoull(RequirePlanAttribute(op, name)));
 		}
 
+		std::int64_t PlanAttributeInt(const ExecutablePlanOp& op, std::string_view name)
+		{
+			return std::stoll(RequirePlanAttribute(op, name));
+		}
+
 		double PlanAttributeDouble(const ExecutablePlanOp& op, std::string_view name)
 		{
 			return std::stod(RequirePlanAttribute(op, name));
@@ -1095,6 +1100,67 @@ namespace LiteNN::Serialization
 			return values;
 		}
 
+		std::vector<float> PlanAttributeFloatList(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto& text = RequirePlanAttribute(op, name);
+			std::vector<float> values;
+			if (text.empty())
+			{
+				return values;
+			}
+			std::stringstream stream(text);
+			std::string item;
+			while (std::getline(stream, item, ','))
+			{
+				if (item.empty())
+				{
+					throw std::runtime_error("vNext node descriptor has an empty float-list item");
+				}
+				values.push_back(std::stof(item));
+			}
+			return values;
+		}
+
+		std::vector<std::int32_t> PlanAttributeIntList(const ExecutablePlanOp& op, std::string_view name)
+		{
+			const auto& text = RequirePlanAttribute(op, name);
+			std::vector<std::int32_t> values;
+			if (text.empty())
+			{
+				return values;
+			}
+			std::stringstream stream(text);
+			std::string item;
+			while (std::getline(stream, item, ','))
+			{
+				if (item.empty())
+				{
+					throw std::runtime_error("vNext node descriptor has an empty integer-list item");
+				}
+				values.push_back(static_cast<std::int32_t>(std::stoll(item)));
+			}
+			return values;
+		}
+
+		QuantizationParams PlanQuantizationParams(const ExecutablePlanOp& op)
+		{
+			return {
+				.scheme = PlanAttributeEnum<QuantizationScheme>(op, "scheme"),
+				.granularity = PlanAttributeEnum<QuantizationGranularity>(op, "granularity"),
+				.blockFormat = PlanAttributeEnum<QuantizedBlockFormat>(op, "blockFormat"),
+				.packedFormat = PlanAttributeEnum<PackedNibbleFormat>(op, "packedFormat"),
+				.packedOrder = PlanAttributeEnum<PackedNibbleOrder>(op, "packedOrder"),
+				.blockScaleLayout = PlanAttributeEnum<BlockScaleLayout>(op, "blockScaleLayout"),
+				.storageType = PlanAttributeEnum<DataType>(op, "storageType"),
+				.expressedType = PlanAttributeEnum<DataType>(op, "expressedType"),
+				.axis = PlanAttributeInt(op, "axis"),
+				.groupSize = PlanAttributeSize(op, "groupSize"),
+				.scales = PlanAttributeFloatList(op, "scales"),
+				.zeroPoints = PlanAttributeIntList(op, "zeroPoints"),
+				.expressedShape = PlanAttributeSizeList(op, "expressedShape"),
+			};
+		}
+
 		NodeOutput RequireNodeInput(std::span<const NodeOutput> inputs, std::size_t index, std::string_view opKind)
 		{
 			if (index >= inputs.size())
@@ -1126,6 +1192,15 @@ namespace LiteNN::Serialization
 			if (op.kind == "CastNode")
 			{
 				return CastNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeEnum<DataType>(op, "targetType") };
+			}
+			if (op.kind == "QuantizeNode")
+			{
+				return QuantizeNode{ RequireNodeInput(inputs, 0, op.kind), PlanQuantizationParams(op) };
+			}
+			if (op.kind == "DequantizeNode")
+			{
+				return DequantizeNode{ RequireNodeInput(inputs, 0, op.kind), PlanQuantizationParams(op),
+					                   PlanAttributeEnum<DataType>(op, "targetType") };
 			}
 			if (op.kind == "ReduceOpNode")
 			{
