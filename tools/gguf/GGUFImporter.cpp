@@ -641,6 +641,24 @@ namespace LiteNN::GGUF
 
 	LLMTokenizerMetadataSummary SummarizeLLMTokenizerMetadata(const Graph& graph)
 	{
+		const auto readIntMetadata = [&graph](std::string_view key) -> std::optional<std::int64_t> {
+			if (const auto entry = FindMetadata(graph, key))
+			{
+				if (const auto* value = std::get_if<std::int64_t>(&(*entry)->value))
+				{
+					return *value;
+				}
+				if (const auto* value = std::get_if<std::uint64_t>(&(*entry)->value))
+				{
+					if (*value <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+					{
+						return static_cast<std::int64_t>(*value);
+					}
+				}
+			}
+			return std::nullopt;
+		};
+
 		LLMTokenizerMetadataSummary summary;
 		if (const auto model = FindMetadata(graph, "tokenizer.ggml.model"))
 		{
@@ -679,9 +697,12 @@ namespace LiteNN::GGUF
 				}
 			}
 		}
-		summary.hasBosTokenId = FindMetadata(graph, "tokenizer.ggml.bos_token_id").has_value();
-		summary.hasEosTokenId = FindMetadata(graph, "tokenizer.ggml.eos_token_id").has_value();
-		summary.hasUnknownTokenId = FindMetadata(graph, "tokenizer.ggml.unknown_token_id").has_value();
+		summary.bosTokenId = readIntMetadata("tokenizer.ggml.bos_token_id");
+		summary.eosTokenId = readIntMetadata("tokenizer.ggml.eos_token_id");
+		summary.unknownTokenId = readIntMetadata("tokenizer.ggml.unknown_token_id");
+		summary.hasBosTokenId = summary.bosTokenId.has_value();
+		summary.hasEosTokenId = summary.eosTokenId.has_value();
+		summary.hasUnknownTokenId = summary.unknownTokenId.has_value();
 		return summary;
 	}
 

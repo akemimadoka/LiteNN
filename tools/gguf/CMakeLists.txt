@@ -4,6 +4,8 @@ litenn_ensure_ggml_vendor_target()
 add_library(LiteNNGGUFImporter STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GGUFImporter.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/LLMGeneration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LLMGeneration.h
     ${CMAKE_CURRENT_SOURCE_DIR}/LLaMABuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/LLaMABuilder.h
 )

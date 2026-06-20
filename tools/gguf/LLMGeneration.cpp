@@ -1,0 +1,194 @@
+#include "LLMGeneration.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <numeric>
+#include <random>
+#include <stdexcept>
+
+namespace LiteNN::GGUF
+{
+	namespace
+	{
+		struct Candidate
+		{
+			std::int32_t tokenId{};
+			float logit{};
+			double weight{};
+		};
+
+		bool AppearsInHistory(std::span<const std::int32_t> history, std::int32_t tokenId)
+		{
+			return std::ranges::find(history, tokenId) != history.end();
+		}
+
+		float ApplyRepeatPenalty(float logit, float penalty)
+		{
+			if (penalty <= 1.0f)
+			{
+				return logit;
+			}
+			return logit >= 0.0f ? logit / penalty : logit * penalty;
+		}
+
+		void ValidateSamplingConfig(const LLMSamplingConfig& config)
+		{
+			if (!std::isfinite(config.temperature) || config.temperature < 0.0f)
+			{
+				throw std::runtime_error("LLM sampling temperature must be finite and non-negative");
+			}
+			if (!std::isfinite(config.topP) || config.topP <= 0.0f || config.topP > 1.0f)
+			{
+				throw std::runtime_error("LLM sampling topP must be in (0, 1]");
+			}
+			if (!std::isfinite(config.repeatPenalty) || config.repeatPenalty < 1.0f)
+			{
+				throw std::runtime_error("LLM sampling repeatPenalty must be finite and >= 1");
+			}
+		}
+
+		std::vector<Candidate> BuildCandidates(std::span<const float> logits, const LLMSamplingConfig& config,
+		                                       std::span<const std::int32_t> history)
+		{
+			if (logits.empty() || logits.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				throw std::runtime_error("LLM sampling requires a non-empty logits vector representable as int32 ids");
+			}
+
+			std::vector<Candidate> candidates;
+			candidates.reserve(logits.size());
+			for (std::size_t i = 0; i < logits.size(); ++i)
+			{
+				if (!std::isfinite(logits[i]))
+				{
+					throw std::runtime_error("LLM sampling logits must be finite");
+				}
+				const auto tokenId = static_cast<std::int32_t>(i);
+				const auto adjusted = AppearsInHistory(history, tokenId)
+				                          ? ApplyRepeatPenalty(logits[i], config.repeatPenalty)
+				                          : logits[i];
+				candidates.push_back({ .tokenId = tokenId, .logit = adjusted, .weight = 0.0 });
+			}
+			std::ranges::sort(candidates, [](const Candidate& lhs, const Candidate& rhs) {
+				if (lhs.logit == rhs.logit)
+				{
+					return lhs.tokenId < rhs.tokenId;
+				}
+				return lhs.logit > rhs.logit;
+			});
+			if (config.topK > 0 && candidates.size() > config.topK)
+			{
+				candidates.resize(config.topK);
+			}
+			return candidates;
+		}
+	} // namespace
+
+	LLMPromptTokens MakeCallerProvidedPromptTokens(std::span<const std::int32_t> tokenIds,
+	                                               const LLMTokenizerMetadataSummary& tokenizer)
+	{
+		if (tokenIds.empty())
+		{
+			throw std::runtime_error("LLM prompt token bridge requires at least one caller-provided token id");
+		}
+		for (const auto tokenId : tokenIds)
+		{
+			if (tokenId < 0)
+			{
+				throw std::runtime_error("LLM prompt token ids must be non-negative");
+			}
+			if (tokenizer.tokenCount > 0 && static_cast<std::size_t>(tokenId) >= tokenizer.tokenCount)
+			{
+				throw std::runtime_error("LLM prompt token id exceeds tokenizer vocabulary size");
+			}
+		}
+		return { .tokenIds = std::vector<std::int32_t>(tokenIds.begin(), tokenIds.end()), .callerProvided = true };
+	}
+
+	LLMGenerationState BeginGeneration(LLMPromptTokens prompt, std::optional<std::int32_t> eosTokenId)
+	{
+		if (prompt.tokenIds.empty())
+		{
+			throw std::runtime_error("LLM generation requires a non-empty prompt token sequence");
+		}
+		return {
+			.tokens = std::move(prompt.tokenIds),
+			.eosTokenId = eosTokenId,
+			.finished = false,
+			.generatedTokenCount = 0,
+		};
+	}
+
+	std::int32_t SelectNextToken(std::span<const float> logits, LLMSamplerState& sampler,
+	                             std::span<const std::int32_t> history)
+	{
+		ValidateSamplingConfig(sampler.config);
+		auto candidates = BuildCandidates(logits, sampler.config, history);
+		if (sampler.config.mode == LLMSamplingMode::Greedy || sampler.config.temperature == 0.0f)
+		{
+			return candidates.front().tokenId;
+		}
+
+		const auto maxLogit = candidates.front().logit;
+		double totalWeight = 0.0;
+		for (auto& candidate : candidates)
+		{
+			candidate.weight = std::exp((static_cast<double>(candidate.logit) - maxLogit) /
+			                            static_cast<double>(sampler.config.temperature));
+			totalWeight += candidate.weight;
+		}
+		if (!(totalWeight > 0.0) || !std::isfinite(totalWeight))
+		{
+			throw std::runtime_error("LLM sampling produced invalid probability mass");
+		}
+
+		if (sampler.config.topP < 1.0f)
+		{
+			double cumulative = 0.0;
+			std::size_t keep = 0;
+			for (; keep < candidates.size(); ++keep)
+			{
+				cumulative += candidates[keep].weight;
+				if ((cumulative / totalWeight) >= sampler.config.topP)
+				{
+					++keep;
+					break;
+				}
+			}
+			candidates.resize(std::max<std::size_t>(keep, 1));
+			totalWeight =
+			    std::accumulate(candidates.begin(), candidates.end(), 0.0,
+			                    [](double sum, const Candidate& candidate) { return sum + candidate.weight; });
+		}
+
+		std::mt19937_64 rng(sampler.config.seed + sampler.drawCount++);
+		std::uniform_real_distribution<double> distribution(0.0, totalWeight);
+		auto draw = distribution(rng);
+		for (const auto& candidate : candidates)
+		{
+			if (draw <= candidate.weight)
+			{
+				return candidate.tokenId;
+			}
+			draw -= candidate.weight;
+		}
+		return candidates.back().tokenId;
+	}
+
+	std::int32_t StepGeneration(LLMGenerationState& generation, std::span<const float> logits, LLMSamplerState& sampler)
+	{
+		if (generation.finished)
+		{
+			throw std::runtime_error("LLM generation cannot step after EOS");
+		}
+		const auto nextToken = SelectNextToken(logits, sampler, generation.tokens);
+		generation.tokens.push_back(nextToken);
+		++generation.generatedTokenCount;
+		if (generation.eosTokenId && nextToken == *generation.eosTokenId)
+		{
+			generation.finished = true;
+		}
+		return nextToken;
+	}
+} // namespace LiteNN::GGUF

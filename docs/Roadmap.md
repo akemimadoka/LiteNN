@@ -2422,11 +2422,11 @@ placement and fallback policy.
 
 - [x] Preserve and expose tokenizer metadata needed by Qwen chat templates, BOS/EOS handling, special tokens, and byte
       fallback rules.
-- [ ] Add a minimal tokenizer bridge: first allow caller-provided token ids, then add tokenizer execution or a llama.cpp
-      tokenizer adapter behind an explicit optional target.
-- [ ] Implement a generation loop API that owns prompt prefill, one-token decode, EOS detection, logits post-processing,
-      and sampler state.
-- [ ] Support temperature, top-k, top-p, repeat penalty, seedable sampling, and greedy mode with deterministic tests.
+- [x] Add a minimal tokenizer bridge for caller-provided token ids with tokenizer-vocabulary validation.
+- [ ] Add tokenizer execution or a llama.cpp tokenizer adapter behind an explicit optional target.
+- [x] Implement the graph-external generation loop control API for token history, EOS detection, logits
+      post-processing, and sampler state.
+- [x] Support temperature, top-k, top-p, repeat penalty, seedable sampling, and greedy mode with deterministic tests.
 
 #### G16.3 Lowering and State ABI
 

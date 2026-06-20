@@ -103,6 +103,9 @@ namespace LiteNN::GGUF
 		bool hasBosTokenId{};
 		bool hasEosTokenId{};
 		bool hasUnknownTokenId{};
+		std::optional<std::int64_t> bosTokenId;
+		std::optional<std::int64_t> eosTokenId;
+		std::optional<std::int64_t> unknownTokenId;
 	};
 
 	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind);

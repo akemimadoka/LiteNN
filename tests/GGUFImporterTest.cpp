@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <GGUFImporter.h>
+#include <LLMGeneration.h>
 #include <LLaMABuilder.h>
 
 #ifdef LITENN_ENABLE_MLIR
@@ -732,6 +733,57 @@ TEST(GGUFLLaMACompatibility, SummarizesTokenizerMetadata)
 	EXPECT_TRUE(summary.hasBosTokenId);
 	EXPECT_TRUE(summary.hasEosTokenId);
 	EXPECT_TRUE(summary.hasUnknownTokenId);
+	EXPECT_EQ(summary.bosTokenId, 0);
+	EXPECT_EQ(summary.eosTokenId, 2);
+	EXPECT_EQ(summary.unknownTokenId, 1);
+}
+
+TEST(GGUFLLMGeneration, AcceptsCallerProvidedTokenIdsAndTracksEOS)
+{
+	const auto tokenizer = GGUF::SummarizeLLMTokenizerMetadata(BuildTinyQwen2Archive());
+	const std::array<std::int32_t, 2> tokenIds{ 0, 1 };
+	auto prompt = GGUF::MakeCallerProvidedPromptTokens(tokenIds, tokenizer);
+
+	EXPECT_TRUE(prompt.callerProvided);
+	EXPECT_EQ(prompt.tokenIds, std::vector<std::int32_t>({ 0, 1 }));
+
+	auto generation = GGUF::BeginGeneration(std::move(prompt), static_cast<std::int32_t>(*tokenizer.eosTokenId));
+	GGUF::LLMSamplerState sampler{ .config = { .mode = GGUF::LLMSamplingMode::Greedy } };
+	const std::array<float, 3> logits{ -1.0f, 0.0f, 4.0f };
+
+	EXPECT_EQ(GGUF::StepGeneration(generation, logits, sampler), 2);
+	EXPECT_TRUE(generation.finished);
+	EXPECT_EQ(generation.generatedTokenCount, 1u);
+	EXPECT_EQ(generation.tokens, std::vector<std::int32_t>({ 0, 1, 2 }));
+}
+
+TEST(GGUFLLMGeneration, RejectsOutOfVocabularyCallerProvidedTokenIds)
+{
+	const auto tokenizer = GGUF::SummarizeLLMTokenizerMetadata(BuildTinyQwen2Archive());
+	const std::array<std::int32_t, 1> tokenIds{ 3 };
+
+	EXPECT_THROW(static_cast<void>(GGUF::MakeCallerProvidedPromptTokens(tokenIds, tokenizer)), std::runtime_error);
+}
+
+TEST(GGUFLLMGeneration, AppliesRepeatPenaltyBeforeGreedySampling)
+{
+	GGUF::LLMSamplerState sampler{ .config = { .mode = GGUF::LLMSamplingMode::Greedy, .repeatPenalty = 2.0f } };
+	const std::array<float, 3> logits{ 1.0f, 3.0f, 2.0f };
+	const std::array<std::int32_t, 1> history{ 1 };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler, history), 2);
+}
+
+TEST(GGUFLLMGeneration, SamplesDeterministicallyWithTopKAndTopP)
+{
+	GGUF::LLMSamplerState first{
+		.config = { .mode = GGUF::LLMSamplingMode::Random, .temperature = 0.7f, .topK = 3, .topP = 0.9f, .seed = 42 }
+	};
+	GGUF::LLMSamplerState second = first;
+	const std::array<float, 5> logits{ -4.0f, 2.0f, 1.0f, 0.5f, -2.0f };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, first), GGUF::SelectNextToken(logits, second));
+	EXPECT_EQ(first.drawCount, 1u);
 }
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
