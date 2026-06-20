@@ -839,6 +839,30 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.currentPosition->effects, std::string("increment")));
 }
 
+TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)
+{
+	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), 4, 3);
+
+	const auto findLayout = [&plan](std::string_view name) -> const GGUF::LLaMATensorLayoutRecord* {
+		const auto found =
+		    std::ranges::find_if(plan.tensorLayouts, [name](const auto& record) { return record.name == name; });
+		return found == plan.tensorLayouts.end() ? nullptr : std::to_address(found);
+	};
+
+	const auto* hidden = findLayout("litenn.hidden_state");
+	ASSERT_NE(hidden, nullptr);
+	EXPECT_EQ(hidden->domain, "litenn-semantic");
+	EXPECT_EQ(hidden->axes, std::vector<std::string>({ "sequence", "embedding" }));
+
+	const auto* mutableCache = findLayout("runtime.mutable_kv_state");
+	ASSERT_NE(mutableCache, nullptr);
+	EXPECT_EQ(mutableCache->axes, std::vector<std::string>({ "key_value", "capacity", "kv_head", "head_dim" }));
+	EXPECT_NE(mutableCache->note.find("value plane"), std::string::npos);
+
+	EXPECT_NE(findLayout("gguf.imported_weight"), nullptr);
+	EXPECT_NE(findLayout("runtime.functional_kv_cache"), nullptr);
+}
+
 TEST(GGUFLLaMAArtifacts, SeparatesDecodePositionFromCacheCapacity)
 {
 	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), GGUF::LLaMAArtifactPlanningOptions{

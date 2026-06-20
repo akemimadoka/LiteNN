@@ -2440,7 +2440,7 @@ placement and fallback policy.
       `pastLength`.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
       golden logits before enabling production profiles.
-- [ ] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
+- [x] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
       layout must each be inspectable.
 
 #### G16.4 Quantized Weight Execution

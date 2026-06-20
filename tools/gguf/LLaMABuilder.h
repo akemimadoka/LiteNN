@@ -83,6 +83,15 @@ namespace LiteNN::GGUF
 		std::vector<LLaMAKVCacheBinding> kvCaches;
 	};
 
+	struct LLaMATensorLayoutRecord
+	{
+		std::string name;
+		std::string domain;
+		std::vector<std::string> axes;
+		std::string layout;
+		std::string note;
+	};
+
 	struct LLaMAArtifactPlan
 	{
 		LLaMAHyperparameters hyperparameters;
@@ -91,6 +100,7 @@ namespace LiteNN::GGUF
 		LLaMAArtifactEntry prefill;
 		LLaMAArtifactEntry decodeStep;
 		Runtime::LLMDecodeStateABI decodeStateABI;
+		std::vector<LLaMATensorLayoutRecord> tensorLayouts;
 	};
 
 	struct LLaMAArtifactPlanningOptions

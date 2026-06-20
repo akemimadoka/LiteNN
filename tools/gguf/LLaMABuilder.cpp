@@ -582,6 +582,41 @@ namespace LiteNN::GGUF
 		    TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{ 1 } }), BufferMutability::Mutable,
 		    { "read", "write", "increment" });
 
+		std::vector<LLaMATensorLayoutRecord> tensorLayouts{
+			{
+			    .name = "gguf.imported_weight",
+			    .domain = "imported-gguf",
+			    .axes = { "gguf_dim0", "gguf_dim1" },
+			    .layout = "source-order",
+			    .note = "GGUF tensor payloads are preserved in archive order; LLaMA lowering validates and transposes "
+			            "linear "
+			            "weights into LiteNN semantic layout when needed.",
+			},
+			{
+			    .name = "litenn.hidden_state",
+			    .domain = "litenn-semantic",
+			    .axes = { "sequence", "embedding" },
+			    .layout = "row-major-2d",
+			    .note = "Token embeddings, decoder block inputs, residuals, and logits use sequence-major 2D tensors.",
+			},
+			{
+			    .name = "runtime.functional_kv_cache",
+			    .domain = "functional-decode",
+			    .axes = { "past", "kv_head", "head_dim" },
+			    .layout = "row-major-3d",
+			    .note =
+			        "Current decode graph accepts key/value cache tensors as explicit functional inputs and outputs.",
+			},
+			{
+			    .name = "runtime.mutable_kv_state",
+			    .domain = "runtime-state",
+			    .axes = { "key_value", "capacity", "kv_head", "head_dim" },
+			    .layout = "row-major-4d",
+			    .note = "Artifact ABI exposes a mutable state buffer with key plane at offset 0 and value plane at the "
+			            "per-plane capacity offset.",
+			},
+		};
+
 		return {
 			.hyperparameters = hyperparameters,
 			.dtype = dtype,
@@ -589,6 +624,7 @@ namespace LiteNN::GGUF
 			.prefill = std::move(prefill),
 			.decodeStep = std::move(decode),
 			.decodeStateABI = std::move(decodeStateABI),
+			.tensorLayouts = std::move(tensorLayouts),
 		};
 	}
 
