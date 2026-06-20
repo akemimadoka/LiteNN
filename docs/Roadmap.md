@@ -1443,15 +1443,15 @@ fast iteration path for graph validation, constant evaluation, debugging, and sm
 
 - [ ] Add golden tests comparing interpreter training and AOT training for Linear, MLP, softmax cross entropy, and AdamW/SGD.
   Current coverage compares scalar SGD, batch Linear softmax cross entropy with SGD, a two-layer Linear chain with saved
-  activation captures, and two-step AdamW execution, including losses, forward outputs, gradients, updated parameters,
-  optimizer step indices, and first/second moments. ReLU/compare-mask MLP and compiled-loss parity still need broader
-  coverage.
+  activation captures, a ReLU/compare-mask MLP, and two-step AdamW execution, including losses, forward outputs,
+  gradients, updated parameters, optimizer step indices, and first/second moments. Compiled-loss parity and broader
+  training graph coverage remain open.
 - [ ] Add gradient parity tests that cover saved activations, broadcasting, reductions, and parameter sharing.
 - [ ] Add benchmark rows for interpreter trainer, CPU AOT trainer, CUDA AOT trainer, PyTorch, and ggml where applicable.
   `litenn_bench_train` now includes `MNIST-Linear` alongside the MLP shapes and registers
   `TrainCPUAOT/FullStep` through the real `Trainer` AOT policy. Linear and MLP128 AOT full-step rows now execute; the
-  remaining correctness gap for ReLU-heavy MLP training is compare/mask-gradient parity rather than hidden activation
-  store access.
+  ReLU-heavy MLP compare/mask-gradient parity issue was fixed by lowering bool-to-numeric MLIR casts with unsigned
+  semantics, and the remaining training benchmark work is CUDA rows plus drift/workspace reporting.
 - [ ] Track compile time, train-step latency, memory/workspace use, and numerical drift separately.
   `TrainCPUAOT/FullStep` reports `compile_ms` as a setup counter while the benchmark timer covers train-step latency.
   Memory/workspace and automated numerical-drift benchmark reporting remain open.

@@ -116,6 +116,29 @@ namespace
 		model = ModelGraph(std::move(graph));
 		return { layer0.weightVariable, *layer0.biasVariable, layer1.weightVariable, *layer1.biasVariable };
 	}
+
+	std::vector<std::size_t> BuildTinyReLUMLPClassifierModel(ModelGraph& model)
+	{
+		ModelBuilder builder;
+		auto layer0 = Layer::CreateLinear(builder, Tensor<CPU>({ 0.25f, -0.5f, 0.75f, 0.125f, -0.25f, 0.5f }, { 2, 3 }),
+		                                  Tensor<CPU>({ 0.1f, -0.2f, 0.05f }, { 1, 3 }));
+		auto layer1 =
+		    Layer::CreateLinear(builder, Tensor<CPU>({ 0.5f, -0.25f, -0.125f, 0.375f, 0.25f, 0.125f }, { 3, 2 }),
+		                        Tensor<CPU>({ 0.0f, 0.1f }, { 1, 2 }));
+		Graph graph = builder.UnsafeTakeGraph();
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto hidden = Layer::AddReLU(sg, Layer::AddLinear(sg, layer0, { input, 0 }));
+		const auto logits = Layer::AddLinear(sg, layer1, hidden);
+		sg.SetResults({ logits });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "x" });
+		graph.SetOutputNames({ "logits" });
+
+		model = ModelGraph(std::move(graph));
+		return { layer0.weightVariable, *layer0.biasVariable, layer1.weightVariable, *layer1.biasVariable };
+	}
 } // namespace
 
 TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
@@ -431,6 +454,57 @@ TEST(Training, AOTAndInterpreterSoftmaxCrossEntropyTinyLinearChainSGDMatch)
 	const auto interpreterVariables = BuildTinyLinearChainClassifierModel(interpreterModel);
 	ModelGraph aotModel;
 	const auto aotVariables = BuildTinyLinearChainClassifierModel(aotModel);
+
+	Training::Trainer<CPU, Optimizer::SGD> interpreterTrainer(interpreterModel, Optimizer::SGD(0.05f));
+	Training::TrainerOptions aotOptions;
+	aotOptions.executionPolicy = Training::TrainExecutionPolicy::AOT;
+	Training::Trainer<CPU, Optimizer::SGD> aotTrainer(aotModel, Optimizer::SGD(0.05f), aotOptions);
+
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0f, 2.0f, -0.5f, 0.25f }, { 2, 2 }));
+	std::vector<std::size_t> targets = { 1, 0 };
+
+	const auto interpreterStep = interpreterTrainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+	const auto aotStep = aotTrainer.StepSoftmaxCrossEntropyBatch(inputs, targets);
+
+	EXPECT_NEAR(aotStep.loss, interpreterStep.loss, 1.0e-5);
+	ASSERT_EQ(aotStep.outputs.size(), interpreterStep.outputs.size());
+	ASSERT_EQ(aotStep.backwardResults.size(), interpreterStep.backwardResults.size());
+	for (std::size_t i = 0; i < aotStep.outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(aotStep.outputs[0], i), ReadFloat(interpreterStep.outputs[0], i), 1.0e-5f);
+	}
+	for (std::size_t resultIndex = 0; resultIndex < aotStep.backwardResults.size(); ++resultIndex)
+	{
+		ASSERT_EQ(aotStep.backwardResults[resultIndex].NumElements(),
+		          interpreterStep.backwardResults[resultIndex].NumElements());
+		for (std::size_t i = 0; i < aotStep.backwardResults[resultIndex].NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(aotStep.backwardResults[resultIndex], i),
+			            ReadFloat(interpreterStep.backwardResults[resultIndex], i), 1.0e-5f);
+		}
+	}
+	for (std::size_t variableIndex = 0; variableIndex < aotVariables.size(); ++variableIndex)
+	{
+		const auto variable = aotVariables[variableIndex];
+		const auto referenceVariable = interpreterVariables[variableIndex];
+		const auto elementCount = aotModel.UnsafeGraphView().GetVariable(variable)->Data().NumElements();
+		for (std::size_t i = 0; i < elementCount; ++i)
+		{
+			EXPECT_NEAR(ReadVariableGradFloat(aotModel.UnsafeMutableGraph(), variable, i),
+			            ReadVariableGradFloat(interpreterModel.UnsafeMutableGraph(), referenceVariable, i), 1.0e-5f);
+			EXPECT_NEAR(ReadVariableDataFloat(aotModel.UnsafeMutableGraph(), variable, i),
+			            ReadVariableDataFloat(interpreterModel.UnsafeMutableGraph(), referenceVariable, i), 1.0e-5f);
+		}
+	}
+}
+
+TEST(Training, AOTAndInterpreterSoftmaxCrossEntropyTinyReLUMLPSGDMatch)
+{
+	ModelGraph interpreterModel;
+	const auto interpreterVariables = BuildTinyReLUMLPClassifierModel(interpreterModel);
+	ModelGraph aotModel;
+	const auto aotVariables = BuildTinyReLUMLPClassifierModel(aotModel);
 
 	Training::Trainer<CPU, Optimizer::SGD> interpreterTrainer(interpreterModel, Optimizer::SGD(0.05f));
 	Training::TrainerOptions aotOptions;

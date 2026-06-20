@@ -438,13 +438,27 @@ namespace
 				    }
 				    else if (srcInt && dstFloat)
 				    {
-					    out = b.create<arith::SIToFPOp>(l, dstElem, in);
+					    if (srcIntTy.getWidth() == 1)
+					    {
+						    out = b.create<arith::UIToFPOp>(l, dstElem, in);
+					    }
+					    else
+					    {
+						    out = b.create<arith::SIToFPOp>(l, dstElem, in);
+					    }
 				    }
 				    else // int → int
 				    {
 					    if (srcIntTy.getWidth() < dstIntTy.getWidth())
 					    {
-						    out = b.create<arith::ExtSIOp>(l, dstElem, in);
+						    if (srcIntTy.getWidth() == 1)
+						    {
+							    out = b.create<arith::ExtUIOp>(l, dstElem, in);
+						    }
+						    else
+						    {
+							    out = b.create<arith::ExtSIOp>(l, dstElem, in);
+						    }
 					    }
 					    else if (srcIntTy.getWidth() > dstIntTy.getWidth())
 					    {
