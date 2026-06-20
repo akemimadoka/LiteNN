@@ -2423,6 +2423,8 @@ placement and fallback policy.
 - [x] Preserve and expose tokenizer metadata needed by Qwen chat templates, BOS/EOS handling, special tokens, and byte
       fallback rules.
 - [x] Add a minimal tokenizer bridge for caller-provided token ids with tokenizer-vocabulary validation.
+- [x] Add a deliberately limited exact-vocabulary prompt bridge over `tokenizer.ggml.tokens` for fixtures and diagnostic
+      CLI runs; this does not replace GPT2/BPE or llama.cpp tokenizer parity.
 - [ ] Add tokenizer execution or a llama.cpp tokenizer adapter behind an explicit optional target.
 - [x] Implement the graph-external generation loop control API for token history, EOS detection, logits
       post-processing, and sampler state.
@@ -2489,6 +2491,8 @@ placement and fallback policy.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
       logits shape plus greedy next token.
+- [x] Add an exact-prompt GGUF smoke CLI: `--run-llama-prompt` tokenizes with the limited exact-vocabulary bridge, runs
+      fixed-length prefill, and reports token ids, token pieces, logits shape, and greedy next token.
 - [x] Hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from saved package descriptors for direct
       Interpreter execution of saved `.ltnn` graphs with inline constants.
 - [x] Add a saved-package token-id smoke CLI: `--run-llama-package-token-ids` loads a lowered `.ltnn` package, binds

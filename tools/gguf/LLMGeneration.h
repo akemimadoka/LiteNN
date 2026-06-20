@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #ifndef LITENN_LLMGENERATION_H
@@ -48,6 +49,7 @@ namespace LiteNN::GGUF
 
 	LLMPromptTokens MakeCallerProvidedPromptTokens(std::span<const std::int32_t> tokenIds,
 	                                               const LLMTokenizerMetadataSummary& tokenizer);
+	LLMPromptTokens MakeExactVocabularyPromptTokens(std::string_view text, const Graph& archive, bool addBos = true);
 	LLMGenerationState BeginGeneration(LLMPromptTokens prompt, std::optional<std::int32_t> eosTokenId = std::nullopt);
 	std::vector<float> ExtractLastTokenLogits(const Tensor<CPU>& logits);
 	std::int32_t SelectNextToken(std::span<const float> logits, LLMSamplerState& sampler,

@@ -803,6 +803,25 @@ TEST(GGUFLLMGeneration, RejectsOutOfVocabularyCallerProvidedTokenIds)
 	EXPECT_THROW(static_cast<void>(GGUF::MakeCallerProvidedPromptTokens(tokenIds, tokenizer)), std::runtime_error);
 }
 
+TEST(GGUFLLMGeneration, TokenizesExactVocabularyPromptWithOptionalBos)
+{
+	const auto archive = BuildTinyQwen2Archive();
+
+	auto withBos = GGUF::MakeExactVocabularyPromptTokens("hello", archive);
+	EXPECT_FALSE(withBos.callerProvided);
+	EXPECT_EQ(withBos.tokenIds, std::vector<std::int32_t>({ 0, 1 }));
+
+	auto withoutBos = GGUF::MakeExactVocabularyPromptTokens("hellohello", archive, false);
+	EXPECT_EQ(withoutBos.tokenIds, std::vector<std::int32_t>({ 1, 1 }));
+}
+
+TEST(GGUFLLMGeneration, RejectsPromptTextOutsideExactVocabulary)
+{
+	const auto archive = BuildTinyQwen2Archive();
+
+	EXPECT_THROW(static_cast<void>(GGUF::MakeExactVocabularyPromptTokens("unknown", archive)), std::runtime_error);
+}
+
 TEST(GGUFLLMGeneration, AppliesRepeatPenaltyBeforeGreedySampling)
 {
 	GGUF::LLMSamplerState sampler{ .config = { .mode = GGUF::LLMSamplingMode::Greedy, .repeatPenalty = 2.0f } };

@@ -30,6 +30,7 @@ build\tools\gguf\litenn_gguf_convert.exe --lower-llama-quantized model.gguf mode
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.segment.ltnn 4 16
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.decode.ltnn 1 16
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-token-ids model.gguf 1,2,3,4
+build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt model.gguf "hello"
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --sample random --temperature 0.7 --top-k 40 --top-p 0.9 --repeat-penalty 1.1 --seed 42 --output generated_token_ids.txt
@@ -38,8 +39,11 @@ build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.
 `--run-llama-token-ids` is a token-id level smoke path. It imports the GGUF file,
 lowers a fixed-length prefill graph with quantized weights preserved, executes
 with the CPU interpreter plus the GGML quantized MatMul adapter, and prints the
-logits shape plus the greedy next token. Full tokenizer text input and
-multi-token decode-loop generation are tracked in `docs/Roadmap.md`.
+logits shape plus the greedy next token. Production tokenizer parity and
+full prompt-to-decode generation are tracked in `docs/Roadmap.md`.
+`--run-llama-prompt` uses a deliberately limited exact-vocabulary tokenizer
+bridge over `tokenizer.ggml.tokens`; it is useful for fixtures and diagnostics
+but does not replace GPT2/BPE or llama.cpp tokenizer parity.
 `--run-llama-package-token-ids` runs an already lowered `.ltnn` package and is
 useful for validating conversion artifacts without re-importing the GGUF file.
 `--run-llama-decode-loop-token-id` is a decode-loop smoke path: it prebuilds the

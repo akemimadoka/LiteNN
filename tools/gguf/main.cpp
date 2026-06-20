@@ -48,6 +48,7 @@ namespace
 		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
 		             "<max-cache-length>\n"
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
+		          << "  " << executable << " --run-llama-prompt <input.gguf> <prompt> [position-offset]\n"
 		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
@@ -969,6 +970,41 @@ int main(int argc, char** argv)
 			          << " metadata=" << imported.summary.metadataCount << " inputs=" << plan.inputs.size()
 			          << " outputs=" << outputs.size() << " logits_dtype=" << LiteNN::DataTypeName(logits.DType())
 			          << " logits_shape=";
+			PrintTensorShape(logits.Shape());
+			std::cout << " next_token=" << nextToken << '\n';
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-prompt")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto positionOffset = argc == 5 ? ParseSize(argv[4], "position-offset", true) : 0uz;
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto prompt =
+			    LiteNN::GGUF::MakeExactVocabularyPromptTokens(argv[3], imported.model.UnsafeGraphView());
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), prompt.tokenIds.size(),
+			                                                positionOffset, { .preserveQuantizedWeights = true });
+			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
+			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(prompt.tokenIds, plan));
+			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
+			const auto outputs = interpreter.RunForward(plan, inputs);
+			if (outputs.empty())
+			{
+				throw std::runtime_error("LLM package produced no outputs");
+			}
+			const auto& logits = outputs.front();
+			LiteNN::GGUF::LLMSamplerState sampler;
+			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, prompt.tokenIds);
+			std::cout << "Ran LLaMA GGUF exact-prompt smoke tensors=" << imported.summary.tensorCount
+			          << " metadata=" << imported.summary.metadataCount << " token_ids=";
+			PrintTokenList(prompt.tokenIds);
+			std::cout << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), prompt.tokenIds)
+			          << " inputs=" << plan.inputs.size() << " outputs=" << outputs.size()
+			          << " logits_dtype=" << LiteNN::DataTypeName(logits.DType()) << " logits_shape=";
 			PrintTensorShape(logits.Shape());
 			std::cout << " next_token=" << nextToken << '\n';
 			return 0;

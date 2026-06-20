@@ -7,6 +7,7 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <string_view>
 
 namespace LiteNN::GGUF
 {
@@ -105,6 +106,65 @@ namespace LiteNN::GGUF
 			}
 		}
 		return { .tokenIds = std::vector<std::int32_t>(tokenIds.begin(), tokenIds.end()), .callerProvided = true };
+	}
+
+	LLMPromptTokens MakeExactVocabularyPromptTokens(std::string_view text, const Graph& archive, bool addBos)
+	{
+		if (text.empty())
+		{
+			throw std::runtime_error("LLM exact tokenizer bridge requires a non-empty prompt");
+		}
+		const auto* tokensEntry = archive.FindMetadata("tokenizer.ggml.tokens");
+		if (tokensEntry == nullptr)
+		{
+			throw std::runtime_error("LLM exact tokenizer bridge requires tokenizer.ggml.tokens metadata");
+		}
+		const auto* tokens = std::get_if<std::vector<std::string>>(&tokensEntry->value);
+		if (tokens == nullptr || tokens->empty())
+		{
+			throw std::runtime_error("LLM exact tokenizer bridge requires a non-empty string token vocabulary");
+		}
+
+		std::vector<std::int32_t> tokenIds;
+		const auto tokenizer = SummarizeLLMTokenizerMetadata(archive);
+		if (addBos && tokenizer.bosTokenId)
+		{
+			if (*tokenizer.bosTokenId < 0 ||
+			    *tokenizer.bosTokenId > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) ||
+			    static_cast<std::size_t>(*tokenizer.bosTokenId) >= tokens->size())
+			{
+				throw std::runtime_error("LLM exact tokenizer bridge found an out-of-range BOS token id");
+			}
+			tokenIds.push_back(static_cast<std::int32_t>(*tokenizer.bosTokenId));
+		}
+
+		std::size_t offset = 0;
+		while (offset < text.size())
+		{
+			std::size_t bestIndex = tokens->size();
+			std::size_t bestLength = 0;
+			for (std::size_t i = 0; i < tokens->size(); ++i)
+			{
+				const std::string_view token = (*tokens)[i];
+				if (!token.empty() && token.size() > bestLength && text.substr(offset).starts_with(token))
+				{
+					bestIndex = i;
+					bestLength = token.size();
+				}
+			}
+			if (bestIndex == tokens->size())
+			{
+				throw std::runtime_error("LLM exact tokenizer bridge cannot match prompt at byte offset " +
+				                         std::to_string(offset));
+			}
+			if (bestIndex > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				throw std::runtime_error("LLM exact tokenizer bridge vocabulary exceeds int32 token-id range");
+			}
+			tokenIds.push_back(static_cast<std::int32_t>(bestIndex));
+			offset += bestLength;
+		}
+		return { .tokenIds = std::move(tokenIds), .callerProvided = false };
 	}
 
 	LLMGenerationState BeginGeneration(LLMPromptTokens prompt, std::optional<std::int32_t> eosTokenId)
