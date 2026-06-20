@@ -140,4 +140,38 @@ The comparison script replays the captured prompt token ids through
 writes `logits_compare.json` with max absolute/relative errors and the largest
 mismatches.
 
+Run a Qwen/Qwen2.5-style end-to-end smoke sequence from a GGUF path:
+
+```powershell
+python311 example\gguf\qwen_smoke.py `
+  --model model.gguf `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --token-ids 1,2,3,4 `
+  --backend-policy cpu-interpreter `
+  --max-tokens 16 `
+  --output build\gguf_qwen_smoke\generated_token_ids.txt `
+  --workdir build\gguf_qwen_smoke
+```
+
+For prompt-level validation, let llama.cpp provide the tokenizer/golden side and
+ask the smoke driver to replay those token ids through LiteNN:
+
+```powershell
+python311 example\gguf\qwen_smoke.py `
+  --model model.gguf `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --prompt "hello" `
+  --capture-llamacpp `
+  --compare-logits `
+  --llama-debug third_party\llama.cpp\build\bin\llama-debug.exe `
+  --llama-cli third_party\llama.cpp\build\bin\llama-cli.exe `
+  --max-tokens 16
+```
+
+`qwen_smoke.py` first runs the LiteNN LLM compatibility analyzer, then executes
+the selected token-id or llama.cpp-capture path and writes
+`qwen_smoke_report.json` with command, stdout, stderr, and return-code evidence.
+The current backend policy is intentionally limited to `cpu-interpreter`; CUDA
+and AOT decode policies are tracked as follow-up runtime integration work.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

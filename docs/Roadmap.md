@@ -2496,7 +2496,10 @@ placement and fallback policy.
       compares against llama-debug `index: value` logits, and emits max-error/mismatch JSON.
 - [ ] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits, multi-token decode, and final
       generated text for fixed prompts.
-- [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
+- [x] Add a Qwen2.5-Coder/Qwen-family smoke example:
+      `example/gguf/qwen_smoke.py` accepts a GGUF path, externally tokenized prompt ids or an optional llama.cpp prompt
+      capture, backend policy (`cpu-interpreter` for the current driver), max generated-token count, and an output file,
+      then writes a manifest-style smoke report with all command/stdout/stderr evidence.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
       logits shape plus greedy next token.
