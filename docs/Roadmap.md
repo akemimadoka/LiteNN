@@ -2430,7 +2430,7 @@ placement and fallback policy.
 
 #### G16.3 Lowering and State ABI
 
-- [ ] Split LLM lowering into named artifact entries: `prefill`, `decode_step`, optional `logits_postprocess`, and
+- [x] Split LLM lowering into named artifact entries: `prefill`, `decode_step`, optional `logits_postprocess`, and
       metadata/state descriptors.
 - [ ] Replace fully materialized KV cache tensors with explicit mutable KV-cache buffer bindings and per-layer offsets.
 - [ ] Support variable prompt length and decode position without recompiling for every `pastLength`.

@@ -786,6 +786,35 @@ TEST(GGUFLLMGeneration, SamplesDeterministicallyWithTopKAndTopP)
 	EXPECT_EQ(first.drawCount, 1u);
 }
 
+TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
+{
+	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), 4, 3);
+
+	EXPECT_EQ(plan.hyperparameters.architecture, "qwen2");
+	EXPECT_EQ(plan.dtype, DataType::Float32);
+	EXPECT_EQ(plan.vocabSize, 3u);
+	EXPECT_EQ(plan.prefill.kind, GGUF::LLaMAArtifactKind::Prefill);
+	EXPECT_EQ(plan.prefill.name, "prefill");
+	EXPECT_EQ(plan.prefill.sequenceLength, 4u);
+	EXPECT_EQ(plan.prefill.inputNames, std::vector<std::string>({ "token_ids" }));
+	EXPECT_EQ(plan.prefill.outputNames, std::vector<std::string>({ "logits" }));
+	EXPECT_TRUE(plan.prefill.kvCaches.empty());
+
+	EXPECT_EQ(plan.decodeStep.kind, GGUF::LLaMAArtifactKind::DecodeStep);
+	EXPECT_EQ(plan.decodeStep.name, "decode_step");
+	EXPECT_EQ(plan.decodeStep.sequenceLength, 1u);
+	EXPECT_EQ(plan.decodeStep.pastLength, 3u);
+	EXPECT_EQ(plan.decodeStep.positionOffset, 3u);
+	EXPECT_EQ(plan.decodeStep.inputNames, std::vector<std::string>({ "token_ids", "past_key_0", "past_value_0" }));
+	EXPECT_EQ(plan.decodeStep.outputNames, std::vector<std::string>({ "logits", "updated_key_0", "updated_value_0" }));
+	ASSERT_EQ(plan.decodeStep.kvCaches.size(), 1u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].blockIndex, 0u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pastKeyInput, "past_key_0");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].updatedValueOutput, "updated_value_0");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.dtype, DataType::Float32);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 3, 1, 2 }));
+}
+
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 {
 	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),

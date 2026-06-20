@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #ifndef LITENN_LLAMABUILDER_H
@@ -46,8 +47,47 @@ namespace LiteNN::GGUF
 		double relative;
 	};
 
+	enum class LLaMAArtifactKind
+	{
+		Prefill,
+		DecodeStep
+	};
+
+	struct LLaMAKVCacheBinding
+	{
+		std::size_t blockIndex{};
+		std::string pastKeyInput;
+		std::string pastValueInput;
+		std::string updatedKeyOutput;
+		std::string updatedValueOutput;
+		TensorType cacheType;
+	};
+
+	struct LLaMAArtifactEntry
+	{
+		LLaMAArtifactKind kind{ LLaMAArtifactKind::Prefill };
+		std::string name;
+		std::size_t sequenceLength{};
+		std::size_t pastLength{};
+		std::size_t positionOffset{};
+		std::vector<std::string> inputNames;
+		std::vector<std::string> outputNames;
+		std::vector<LLaMAKVCacheBinding> kvCaches;
+	};
+
+	struct LLaMAArtifactPlan
+	{
+		LLaMAHyperparameters hyperparameters;
+		DataType dtype{ DataType::Float32 };
+		std::size_t vocabSize{};
+		LLaMAArtifactEntry prefill;
+		LLaMAArtifactEntry decodeStep;
+	};
+
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,
 	                                             std::optional<QuantizedBlockFormat> blockFormat = std::nullopt);
+	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
+	                                     std::size_t decodePastLength);
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
 	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex);
 	NodeOutput AddLLaMADecoderBlock(Subgraph& subgraph, const LLaMADecoderBlock& block,

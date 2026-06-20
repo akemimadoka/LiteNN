@@ -461,6 +461,103 @@ namespace LiteNN::GGUF
 		}
 	}
 
+	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
+	                                     std::size_t decodePastLength)
+	{
+		if (prefillSequenceLength == 0)
+		{
+			throw std::runtime_error("LLaMA artifact plan requires prefillSequenceLength > 0");
+		}
+		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
+		const auto tokenEmbeddingIndex = archive.FindVariable("token_embd.weight");
+		if (!tokenEmbeddingIndex)
+		{
+			throw std::runtime_error("Missing GGUF tensor 'token_embd.weight'");
+		}
+
+		const auto& tokenEmbedding = *archive.GetVariable(*tokenEmbeddingIndex);
+		const auto dtype =
+		    tokenEmbedding.IsQuantized() ? tokenEmbedding.Quantization()->expressedType : tokenEmbedding.Data().DType();
+		std::vector<std::size_t> embeddingShape;
+		if (tokenEmbedding.IsQuantized())
+		{
+			embeddingShape = tokenEmbedding.Quantization()->expressedShape;
+		}
+		else
+		{
+			const auto shape = tokenEmbedding.Data().Shape();
+			embeddingShape.reserve(shape.NumDim());
+			for (std::size_t i = 0; i < shape.NumDim(); ++i)
+			{
+				embeddingShape.push_back(shape[i]);
+			}
+		}
+		if (embeddingShape.size() != 2)
+		{
+			throw std::runtime_error("GGUF tensor 'token_embd.weight' must be 2D for LLaMA artifact planning");
+		}
+		const auto vocabMajor = embeddingShape[1] == hyperparameters.embeddingLength;
+		const auto featureMajor = embeddingShape[0] == hyperparameters.embeddingLength;
+		if (!vocabMajor && !featureMajor)
+		{
+			throw std::runtime_error("GGUF tensor 'token_embd.weight' is incompatible with LLaMA embedding_length");
+		}
+		const auto vocabSize = vocabMajor ? embeddingShape[0] : embeddingShape[1];
+		const auto headDim = hyperparameters.HeadDimension();
+		const std::vector<std::size_t> cacheShape{ decodePastLength, hyperparameters.attentionHeadCountKV, headDim };
+		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
+
+		LLaMAArtifactEntry prefill{
+			.kind = LLaMAArtifactKind::Prefill,
+			.name = "prefill",
+			.sequenceLength = prefillSequenceLength,
+			.pastLength = 0,
+			.positionOffset = 0,
+			.inputNames = { "token_ids" },
+			.outputNames = { "logits" },
+			.kvCaches = {},
+		};
+
+		LLaMAArtifactEntry decode{
+			.kind = LLaMAArtifactKind::DecodeStep,
+			.name = "decode_step",
+			.sequenceLength = 1,
+			.pastLength = decodePastLength,
+			.positionOffset = decodePastLength,
+			.inputNames = { "token_ids" },
+			.outputNames = { "logits" },
+			.kvCaches = {},
+		};
+		decode.kvCaches.reserve(hyperparameters.blockCount);
+		for (std::size_t blockIndex = 0; blockIndex < hyperparameters.blockCount; ++blockIndex)
+		{
+			auto pastKey = std::format("past_key_{}", blockIndex);
+			auto pastValue = std::format("past_value_{}", blockIndex);
+			auto updatedKey = std::format("updated_key_{}", blockIndex);
+			auto updatedValue = std::format("updated_value_{}", blockIndex);
+			decode.inputNames.push_back(pastKey);
+			decode.inputNames.push_back(pastValue);
+			decode.outputNames.push_back(updatedKey);
+			decode.outputNames.push_back(updatedValue);
+			decode.kvCaches.push_back({
+			    .blockIndex = blockIndex,
+			    .pastKeyInput = std::move(pastKey),
+			    .pastValueInput = std::move(pastValue),
+			    .updatedKeyOutput = std::move(updatedKey),
+			    .updatedValueOutput = std::move(updatedValue),
+			    .cacheType = cacheType,
+			});
+		}
+
+		return {
+			.hyperparameters = hyperparameters,
+			.dtype = dtype,
+			.vocabSize = vocabSize,
+			.prefill = std::move(prefill),
+			.decodeStep = std::move(decode),
+		};
+	}
+
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
 	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex)
 	{
