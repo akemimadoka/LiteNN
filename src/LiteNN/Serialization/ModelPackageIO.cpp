@@ -1147,6 +1147,32 @@ namespace LiteNN::Serialization
 			{
 				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis") };
 			}
+			if (op.kind == "GetRowsNode")
+			{
+				return GetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind) };
+			}
+			if (op.kind == "NormalizationNode")
+			{
+				const auto hasScale = PlanAttributeBool(op, "hasScale");
+				const auto hasBias = PlanAttributeBool(op, "hasBias");
+				std::size_t inputIndex = 1;
+				const auto scale = hasScale
+				                       ? std::optional<NodeOutput>{ RequireNodeInput(inputs, inputIndex++, op.kind) }
+				                       : std::nullopt;
+				const auto bias = hasBias ? std::optional<NodeOutput>{ RequireNodeInput(inputs, inputIndex++, op.kind) }
+				                          : std::nullopt;
+				if (inputIndex != inputs.size())
+				{
+					throw std::runtime_error("vNext NormalizationNode descriptor has unexpected inputs");
+				}
+				return NormalizationNode{ .input = RequireNodeInput(inputs, 0, op.kind),
+					                      .scale = scale,
+					                      .bias = bias,
+					                      .mode = PlanAttributeEnum<NormalizationMode>(op, "mode"),
+					                      .axis = PlanAttributeSize(op, "axis"),
+					                      .groupCount = PlanAttributeSize(op, "groupCount"),
+					                      .epsilon = PlanAttributeDouble(op, "epsilon") };
+			}
 			if (op.kind == "ConcatNode")
 			{
 				return ConcatNode{ std::vector<NodeOutput>(inputs.begin(), inputs.end()),

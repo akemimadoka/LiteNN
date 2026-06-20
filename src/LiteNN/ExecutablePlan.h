@@ -402,6 +402,8 @@ namespace LiteNN
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const NormalizationNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "hasScale", node.scale.has_value());
+		AddPlanAttribute(attrs, "hasBias", node.bias.has_value());
 		AddPlanAttribute(attrs, "mode", node.mode);
 		AddPlanAttribute(attrs, "axis", node.axis);
 		AddPlanAttribute(attrs, "groupCount", node.groupCount);

@@ -913,6 +913,15 @@ TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
 	EXPECT_EQ(valueOutput->buffer, cacheBuffer);
 	EXPECT_EQ(valueOutput->offset, 64u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	const auto path = MakeTempFixturePath("litenn_llama_decode_schedule", ".ltnn");
+	Serialization::SaveVNextModelPackage(schedule, path);
+	const auto loaded = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+	ASSERT_EQ(loaded.manifest.runtimeStates.size(), 2u);
+	ASSERT_EQ(loaded.manifest.stateValueBindings.size(), 4u);
+	EXPECT_EQ(loaded.manifest.stateValueBindings[1].stateName, "kv.layer0");
+	EXPECT_EQ(loaded.manifest.stateValueBindings[1].stateByteOffset, 64u);
 }
 
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)

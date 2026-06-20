@@ -34,6 +34,8 @@ namespace
 		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable
 		          << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
+		          << "  " << executable
+		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <past-length> <max-cache-length>\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -380,7 +382,7 @@ int main(int argc, char** argv)
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
 			const auto prefillSequenceLength = ParseSize(argv[3], "prefill-sequence-length");
 			const auto decodePastLength = ParseSize(argv[4], "decode-past-length", true);
-			const auto maxCacheLength = argc == 6 ? ParseSize(argv[5], "max-cache-length", true) : decodePastLength;
+			const auto maxCacheLength = argc == 6 ? ParseSize(argv[5], "max-cache-length", true) : 0uz;
 			PrintLLMArtifactPlan(LiteNN::GGUF::PlanLLaMAArtifacts(imported.model.UnsafeGraphView(),
 			                                                      LiteNN::GGUF::LLaMAArtifactPlanningOptions{
 			                                                          .prefillSequenceLength = prefillSequenceLength,
@@ -511,6 +513,25 @@ int main(int argc, char** argv)
 			                                             argv[3]);
 			std::cout << "Lowered LLaMA decode graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama-decode-stateful")
+		{
+			if (argc != 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto pastLength = ParseSize(argv[4], "past-length", true);
+			const auto maxCacheLength = ParseSize(argv[5], "max-cache-length");
+			auto schedule = LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(
+			    imported.model.UnsafeGraphView(),
+			    { .prefillSequenceLength = 1, .decodePastLength = pastLength, .maxCacheLength = maxCacheLength });
+			LiteNN::Serialization::SaveVNextModelPackage(schedule, argv[3]);
+			std::cout << "Lowered stateful LLaMA decode package with " << schedule.states.size()
+			          << " runtime states and " << schedule.stateValueBindings.size() << " value bindings\n";
 			return 0;
 		}
 
