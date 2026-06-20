@@ -205,6 +205,40 @@ TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 2.5f);
 }
 
+TEST(LayerLinear, RunsPackedInt4WeightThroughExplicitDequantization)
+{
+	auto params = PackedNibbleQuantization(PackedNibbleFormat::Int4, { 3, 2 });
+	auto packed = PackInteger4(Tensor<CPU>({ 1, 2, 3, 4, 0, -1 }, { 3, 2 }, DataType::Int8), params);
+
+	Graph graph;
+	const auto weight = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(packed), params));
+	const Layer::LinearLayer layer{
+		.weightVariable = weight,
+		.inFeatures = 3,
+		.outFeatures = 2,
+		.dtype = DataType::Float32,
+		.weightQuantization = params,
+		.weightStorageShape = { 3 },
+	};
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2, 3 });
+	const auto output = Layer::AddLinear(forward, layer, { input, 0 });
+	forward.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+
+	Runtime::Interpreter<CPU> interpreter;
+	auto inputTensor = Optimizer::MakeFloatTensor(std::array{ 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 1.0F }, { 2, 3 });
+	std::array<Tensor<CPU>, 1> inputs{ std::move(inputTensor) };
+	const auto outputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+
+	ASSERT_EQ(outputs.size(), 1u);
+	EXPECT_EQ(outputs[0].Shape(), (ShapeView{ 2, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 1.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 0.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 3.0F);
+	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 3.0F);
+}
+
 TEST(LoRALayerTest, AddsUnmergedLinearAdapterDelta)
 {
 	ModelBuilder builder;

@@ -31,6 +31,8 @@ namespace LiteNN::GGUF
 		std::size_t vocabSize{};
 		bool tokenEmbeddingIsVocabMajor = true;
 		DataType dtype{ DataType::Float32 };
+		std::optional<QuantizationParams> tokenEmbeddingQuantization;
+		std::vector<std::size_t> tokenEmbeddingStorageShape;
 		std::vector<LLaMADecoderBlock> blocks;
 		Layer::RMSNormLayer outputNorm;
 		Layer::LinearLayer lmHead;
@@ -109,6 +111,12 @@ namespace LiteNN::GGUF
 		std::size_t prefillSequenceLength{};
 		std::size_t decodePastLength{};
 		std::size_t maxCacheLength{};
+		bool preserveQuantizedWeights{};
+	};
+
+	struct LLaMALoweringOptions
+	{
+		bool preserveQuantizedWeights{};
 	};
 
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,
@@ -119,14 +127,16 @@ namespace LiteNN::GGUF
 	Runtime::RuntimeSchedule BuildLLaMADecodeRuntimeSchedule(const Graph& archive,
 	                                                         const LLaMAArtifactPlanningOptions& options);
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
-	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex);
+	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex,
+	                                          const LLaMALoweringOptions& options = {});
 	NodeOutput AddLLaMADecoderBlock(Subgraph& subgraph, const LLaMADecoderBlock& block,
 	                                const LLaMAHyperparameters& hyperparameters, NodeOutput hiddenState,
 	                                std::size_t positionOffset = 0);
 	SubgraphId BuildLLaMADecoderBlock(Graph& graph, const LLaMADecoderBlock& block,
 	                                  const LLaMAHyperparameters& hyperparameters, std::size_t sequenceLength,
 	                                  std::size_t positionOffset = 0);
-	LLaMACausalLM CreateLLaMACausalLM(Graph& graph, const Graph& archive, const LLaMAHyperparameters& hyperparameters);
+	LLaMACausalLM CreateLLaMACausalLM(Graph& graph, const Graph& archive, const LLaMAHyperparameters& hyperparameters,
+	                                  const LLaMALoweringOptions& options = {});
 	NodeOutput AddLLaMATokenEmbedding(Subgraph& subgraph, const LLaMACausalLM& model, NodeOutput tokenIds);
 	NodeOutput AddLLaMACausalLM(Subgraph& subgraph, const LLaMACausalLM& model,
 	                            const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
@@ -137,9 +147,10 @@ namespace LiteNN::GGUF
 	                                         std::size_t positionOffset);
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
 	                              std::size_t sequenceLength, std::size_t positionOffset = 0);
-	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset = 0);
+	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset = 0,
+	                         const LLaMALoweringOptions& options = {});
 	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
-	                               std::size_t positionOffset);
+	                               std::size_t positionOffset, const LLaMALoweringOptions& options = {});
 } // namespace LiteNN::GGUF
 
 #endif

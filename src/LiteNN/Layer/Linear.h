@@ -19,6 +19,9 @@ namespace LiteNN::Layer
 		std::size_t inFeatures{};
 		std::size_t outFeatures{};
 		DataType dtype{ DataType::Float32 };
+		std::optional<QuantizationParams> weightQuantization;
+		std::vector<std::size_t> weightStorageShape;
+		bool transposeWeight{};
 	};
 
 	inline void ValidateLinearWeight(const Tensor<CPU>& weight)
@@ -88,9 +91,55 @@ namespace LiteNN::Layer
 
 		const std::vector<std::size_t> weightShape{ layer.inFeatures, layer.outFeatures };
 		const std::vector<std::size_t> outputShape{ inputInfo.shape[0], layer.outFeatures };
-		const auto weight =
-		    subgraph.AddNode(VariableRefNode{ layer.weightVariable }, { OutputInfo{ layer.dtype, weightShape } });
-		const auto matmul = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, { weight, 0 } },
+		NodeOutput weight;
+		if (layer.weightQuantization)
+		{
+			const auto& params = *layer.weightQuantization;
+			if (params.expressedType != layer.dtype || layer.weightStorageShape.empty())
+			{
+				throw std::runtime_error(
+				    "Quantized Linear weight metadata is incompatible with layer dtype or storage");
+			}
+			const auto expectedExpressedShape =
+			    layer.transposeWeight ? std::vector<std::size_t>{ layer.outFeatures, layer.inFeatures } : weightShape;
+			if (params.expressedShape != expectedExpressedShape)
+			{
+				throw std::runtime_error(
+				    "Quantized Linear expressed weight shape is incompatible with layer dimensions");
+			}
+			const auto storage = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
+			                                      { OutputInfo{ params.storageType, layer.weightStorageShape } });
+			const auto dequantized = subgraph.AddNode(DequantizeNode{ { storage, 0 }, params, layer.dtype },
+			                                          { OutputInfo{ layer.dtype, params.expressedShape } });
+			if (layer.transposeWeight)
+			{
+				const auto transposed = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, { dequantized, 0 } },
+				                                         { OutputInfo{ layer.dtype, weightShape } });
+				weight = { transposed, 0 };
+			}
+			else
+			{
+				weight = { dequantized, 0 };
+			}
+		}
+		else
+		{
+			const auto storedWeightShape =
+			    layer.transposeWeight ? std::vector<std::size_t>{ layer.outFeatures, layer.inFeatures } : weightShape;
+			const auto plain = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
+			                                    { OutputInfo{ layer.dtype, storedWeightShape } });
+			if (layer.transposeWeight)
+			{
+				const auto transposed = subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, { plain, 0 } },
+				                                         { OutputInfo{ layer.dtype, weightShape } });
+				weight = { transposed, 0 };
+			}
+			else
+			{
+				weight = { plain, 0 };
+			}
+		}
+		const auto matmul = subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, input, weight },
 		                                     { OutputInfo{ layer.dtype, outputShape } });
 		if (!layer.biasVariable)
 		{

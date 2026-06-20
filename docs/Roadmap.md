@@ -2449,8 +2449,13 @@ placement and fallback policy.
 
 - [x] Keep imported GGML block payloads external and quantized through vNext packaging. `--import-external` writes raw
       payload bytes to a sibling weight region while retaining block format and expressed-shape metadata in the manifest.
-- [ ] Consume packaged GGML block weights directly from LLaMA projection lowering instead of materializing Float32
-      variables; this requires the native/reference quantized projection execution contract below.
+- [x] Preserve packaged GGML block weights through LLaMA projection lowering instead of materializing Float32 variables
+      while constructing the model. Quantized projections and token embeddings now emit explicit
+      `VariableRef -> Dequantize -> optional Transpose -> MatMul/GetRows` semantics, and tied vocab-major embeddings use
+      the same explicit transpose contract for the LM head.
+- [ ] Execute those GGML `Dequantize`/projection nodes directly in CPU AOT and CUDA without materializing a full
+      Float32 weight tensor. Core affine and packed-nibble Linear execution is validated, but GGML block codecs still
+      need importer/runtime adapters or native kernels before the preserved Q4_K_M graph is executable end to end.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
@@ -2545,6 +2550,13 @@ These improvements do not require a compatibility break and should not block vNe
   use it as the production execution path.
 
 ## Date Notes
+
+### 2026-06-20
+
+- LLaMA lowering can now preserve quantized GGML projection storage in the executable graph and emits explicit
+  dequantize/transpose semantics instead of expanding archive weights during model construction.
+- Added executable packed Int4 Linear coverage and structural Q8_0 LLaMA lowering coverage; native GGML block execution
+  remains the next G16.4 backend milestone.
 
 ### 2026-06-02
 

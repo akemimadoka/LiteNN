@@ -1507,3 +1507,38 @@ TEST(GGUFLLaMACausalLM, LowersQuantizedWeightsByDequantizingDuringImport)
 		EXPECT_NEAR(ReadFloat(quantizedOutputs[0], i), ReadFloat(plainOutputs[0], i), 1e-6f);
 	}
 }
+
+TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithExplicitDequantizeNodes)
+{
+	const auto quantizedArchive = QuantizeQ80Weights(BuildQuantizedFriendlyLLaMAArchive());
+	const auto lowered = GGUF::LowerLLaMACausalLM(quantizedArchive, 2, 0, { .preserveQuantizedWeights = true });
+
+	std::size_t quantizedVariableCount = 0;
+	for (std::size_t i = 0; i < lowered.VariableCount(); ++i)
+	{
+		if (lowered.GetVariable(i)->IsQuantized())
+		{
+			++quantizedVariableCount;
+			EXPECT_EQ(lowered.GetVariable(i)->Quantization()->blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+		}
+	}
+	EXPECT_EQ(quantizedVariableCount, 7u);
+
+	const auto& forward = lowered.GetSubgraph(lowered.Forward());
+	std::size_t dequantizeNodeCount = 0;
+	for (NodeId nodeId = 0; nodeId < forward.NodeCount(); ++nodeId)
+	{
+		const auto* dequantize = std::get_if<DequantizeNode>(&forward.GetNodeEntry(nodeId).node);
+		if (!dequantize)
+		{
+			continue;
+		}
+		++dequantizeNodeCount;
+		EXPECT_EQ(dequantize->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+		EXPECT_EQ(dequantize->targetType, DataType::Float32);
+	}
+	EXPECT_EQ(dequantizeNodeCount, 7u);
+
+	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
+	EXPECT_NO_THROW(ValidateExecutablePlan(plan));
+}

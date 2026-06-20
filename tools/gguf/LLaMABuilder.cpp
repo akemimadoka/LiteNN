@@ -176,14 +176,18 @@ namespace LiteNN::GGUF
 			return std::format("blk.{}.{}", blockIndex, suffix);
 		}
 
-		std::size_t ImportNamedVariable(Graph& target, const Graph& archive, std::string_view name)
+		std::size_t ImportNamedVariable(Graph& target, const Graph& archive, std::string_view name,
+		                                bool preserveQuantized = false)
 		{
 			const auto sourceIndex = archive.FindVariable(name);
 			if (!sourceIndex)
 			{
 				throw std::runtime_error(std::format("Missing GGUF tensor '{}'", name));
 			}
-			const auto targetIndex = target.AddVariable(MaterializeArchiveVariable(archive, *sourceIndex, name));
+			const auto& source = archive.GetVariable(*sourceIndex);
+			const auto targetIndex = target.AddVariable(preserveQuantized && source->IsQuantized()
+			                                                ? source
+			                                                : MaterializeArchiveVariable(archive, *sourceIndex, name));
 			target.SetVariableName(targetIndex, std::string(name));
 			return targetIndex;
 		}
@@ -207,12 +211,39 @@ namespace LiteNN::GGUF
 		}
 
 		Layer::LinearLayer MakeLinearFromArchive(Graph& target, const Graph& archive, std::string_view name,
-		                                         std::size_t inFeatures, std::size_t outFeatures)
+		                                         std::size_t inFeatures, std::size_t outFeatures,
+		                                         bool preserveQuantized = false)
 		{
 			const auto sourceIndex = archive.FindVariable(name);
 			if (!sourceIndex)
 			{
 				throw std::runtime_error(std::format("Missing GGUF tensor '{}'", name));
+			}
+
+			const auto& source = archive.GetVariable(*sourceIndex);
+			if (preserveQuantized && source->IsQuantized())
+			{
+				const auto& params = *source->Quantization();
+				const auto& shape = params.expressedShape;
+				const auto transpose = shape == std::vector<std::size_t>{ outFeatures, inFeatures };
+				if (!transpose && shape != std::vector<std::size_t>{ inFeatures, outFeatures })
+				{
+					throw std::runtime_error(
+					    std::format("GGUF quantized tensor '{}' must have expressed shape [{}, {}] or [{}, {}]", name,
+					                inFeatures, outFeatures, outFeatures, inFeatures));
+				}
+				const auto variableIndex = target.AddVariable(source);
+				target.SetVariableName(variableIndex, std::string(name));
+				return {
+					.weightVariable = variableIndex,
+					.biasVariable = std::nullopt,
+					.inFeatures = inFeatures,
+					.outFeatures = outFeatures,
+					.dtype = params.expressedType,
+					.weightQuantization = params,
+					.weightStorageShape = source->Data().Shape().ToOwned(),
+					.transposeWeight = transpose,
+				};
 			}
 
 			auto materialized = MaterializeArchiveVariable(archive, *sourceIndex, name);
@@ -679,7 +710,8 @@ namespace LiteNN::GGUF
 	}
 
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
-	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex)
+	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex,
+	                                          const LLaMALoweringOptions& options)
 	{
 		const auto headDim = hyperparameters.HeadDimension();
 		const auto kvWidth = hyperparameters.attentionHeadCountKV * headDim;
@@ -689,27 +721,34 @@ namespace LiteNN::GGUF
 			                                      hyperparameters.embeddingLength,
 			                                      hyperparameters.rmsNormEpsilon),
 			.queryProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "attn_q.weight"),
-			                                        hyperparameters.embeddingLength, hyperparameters.embeddingLength),
+			                                        hyperparameters.embeddingLength, hyperparameters.embeddingLength,
+			                                        options.preserveQuantizedWeights),
 			.keyProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "attn_k.weight"),
-			                                      hyperparameters.embeddingLength, kvWidth),
+			                                      hyperparameters.embeddingLength, kvWidth,
+			                                      options.preserveQuantizedWeights),
 			.valueProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "attn_v.weight"),
-			                                        hyperparameters.embeddingLength, kvWidth),
+			                                        hyperparameters.embeddingLength, kvWidth,
+			                                        options.preserveQuantizedWeights),
 			.outputProjection = MakeLinearFromArchive(graph, archive,
 			                                         BlockTensorName(blockIndex, "attn_output.weight"),
-			                                         hyperparameters.embeddingLength, hyperparameters.embeddingLength),
+			                                         hyperparameters.embeddingLength, hyperparameters.embeddingLength,
+			                                         options.preserveQuantizedWeights),
 			.feedForwardNorm = MakeRMSNormFromArchive(graph, archive, BlockTensorName(blockIndex, "ffn_norm.weight"),
 			                                        hyperparameters.embeddingLength,
 			                                        hyperparameters.rmsNormEpsilon),
 			.mlp = {
 				.gateProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "ffn_gate.weight"),
 				                                      hyperparameters.embeddingLength,
-				                                      hyperparameters.feedForwardLength),
+				                                      hyperparameters.feedForwardLength,
+				                                      options.preserveQuantizedWeights),
 				.upProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "ffn_up.weight"),
 				                                    hyperparameters.embeddingLength,
-				                                    hyperparameters.feedForwardLength),
+				                                    hyperparameters.feedForwardLength,
+				                                    options.preserveQuantizedWeights),
 				.downProjection = MakeLinearFromArchive(graph, archive, BlockTensorName(blockIndex, "ffn_down.weight"),
 				                                      hyperparameters.feedForwardLength,
-				                                      hyperparameters.embeddingLength),
+				                                      hyperparameters.embeddingLength,
+				                                      options.preserveQuantizedWeights),
 			},
 		};
 	}
@@ -897,15 +936,33 @@ namespace LiteNN::GGUF
 		return graph.AddSubgraph(std::move(subgraph));
 	}
 
-	LLaMACausalLM CreateLLaMACausalLM(Graph& graph, const Graph& archive, const LLaMAHyperparameters& hyperparameters)
+	LLaMACausalLM CreateLLaMACausalLM(Graph& graph, const Graph& archive, const LLaMAHyperparameters& hyperparameters,
+	                                  const LLaMALoweringOptions& options)
 	{
-		const auto tokenEmbeddingVariable = ImportNamedVariable(graph, archive, "token_embd.weight");
-		const auto& tokenEmbedding = RequirePlainFloatingVariable(graph, tokenEmbeddingVariable, "token_embd.weight");
-		if (tokenEmbedding.Data().Shape().NumDim() != 2)
+		const auto tokenEmbeddingVariable =
+		    ImportNamedVariable(graph, archive, "token_embd.weight", options.preserveQuantizedWeights);
+		const auto& tokenEmbedding = *graph.GetVariable(tokenEmbeddingVariable);
+		std::vector<std::size_t> tokenEmbeddingShape;
+		std::optional<QuantizationParams> tokenEmbeddingQuantization;
+		std::vector<std::size_t> tokenEmbeddingStorageShape;
+		DataType tokenEmbeddingType{};
+		if (tokenEmbedding.IsQuantized())
+		{
+			tokenEmbeddingQuantization = *tokenEmbedding.Quantization();
+			tokenEmbeddingShape = tokenEmbeddingQuantization->expressedShape;
+			tokenEmbeddingStorageShape = tokenEmbedding.Data().Shape().ToOwned();
+			tokenEmbeddingType = tokenEmbeddingQuantization->expressedType;
+		}
+		else
+		{
+			const auto& plain = RequirePlainFloatingVariable(graph, tokenEmbeddingVariable, "token_embd.weight");
+			tokenEmbeddingShape = plain.Data().Shape().ToOwned();
+			tokenEmbeddingType = plain.Data().DType();
+		}
+		if (tokenEmbeddingShape.size() != 2)
 		{
 			throw std::runtime_error("GGUF tensor 'token_embd.weight' must be 2D for current LLaMA lowering");
 		}
-		const auto tokenEmbeddingShape = tokenEmbedding.Data().Shape();
 		const auto vocabMajor = tokenEmbeddingShape[1] == hyperparameters.embeddingLength;
 		const auto featureMajor = tokenEmbeddingShape[0] == hyperparameters.embeddingLength;
 		if (!vocabMajor && !featureMajor)
@@ -924,19 +981,21 @@ namespace LiteNN::GGUF
 		model.tokenEmbeddingVariable = tokenEmbeddingVariable;
 		model.vocabSize = vocabSize;
 		model.tokenEmbeddingIsVocabMajor = vocabMajor;
-		model.dtype = tokenEmbedding.Data().DType();
+		model.dtype = tokenEmbeddingType;
+		model.tokenEmbeddingQuantization = tokenEmbeddingQuantization;
+		model.tokenEmbeddingStorageShape = std::move(tokenEmbeddingStorageShape);
 		model.blocks.reserve(hyperparameters.blockCount);
 		for (std::size_t blockIndex = 0; blockIndex < hyperparameters.blockCount; ++blockIndex)
 		{
-			model.blocks.push_back(CreateLLaMADecoderBlock(graph, archive, hyperparameters, blockIndex));
+			model.blocks.push_back(CreateLLaMADecoderBlock(graph, archive, hyperparameters, blockIndex, options));
 		}
 		model.outputNorm = MakeRMSNormFromArchive(graph, archive, "output_norm.weight", hyperparameters.embeddingLength,
 		                                          hyperparameters.rmsNormEpsilon);
 
 		if (archive.FindVariable("output.weight"))
 		{
-			model.lmHead =
-			    MakeLinearFromArchive(graph, archive, "output.weight", hyperparameters.embeddingLength, vocabSize);
+			model.lmHead = MakeLinearFromArchive(graph, archive, "output.weight", hyperparameters.embeddingLength,
+			                                     vocabSize, options.preserveQuantizedWeights);
 		}
 		else
 		{
@@ -946,6 +1005,9 @@ namespace LiteNN::GGUF
 				.inFeatures = hyperparameters.embeddingLength,
 				.outFeatures = vocabSize,
 				.dtype = model.dtype,
+				.weightQuantization = model.tokenEmbeddingQuantization,
+				.weightStorageShape = model.tokenEmbeddingStorageShape,
+				.transposeWeight = model.tokenEmbeddingIsVocabMajor,
 			};
 		}
 
@@ -964,11 +1026,29 @@ namespace LiteNN::GGUF
 		    model.tokenEmbeddingIsVocabMajor
 		        ? std::vector<std::size_t>{ model.vocabSize, model.outputNorm.featureSize }
 		        : std::vector<std::size_t>{ model.outputNorm.featureSize, model.vocabSize };
-		const auto tokenEmbedding = subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
-		                                             { OutputInfo{ model.dtype, tokenEmbeddingShape } });
-		const auto tokenEmbeddingRows = model.tokenEmbeddingIsVocabMajor
-		                                    ? NodeOutput{ tokenEmbedding, 0 }
-		                                    : AddTranspose(subgraph, { tokenEmbedding, 0 });
+		NodeOutput tokenEmbedding;
+		if (model.tokenEmbeddingQuantization)
+		{
+			const auto& params = *model.tokenEmbeddingQuantization;
+			if (model.tokenEmbeddingStorageShape.empty() || params.expressedShape != tokenEmbeddingShape)
+			{
+				throw std::runtime_error("Quantized LLaMA token embedding metadata is inconsistent");
+			}
+			const auto storage =
+			    subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
+			                     { OutputInfo{ params.storageType, model.tokenEmbeddingStorageShape } });
+			const auto dequantized = subgraph.AddNode(DequantizeNode{ { storage, 0 }, params, model.dtype },
+			                                          { OutputInfo{ model.dtype, tokenEmbeddingShape } });
+			tokenEmbedding = { dequantized, 0 };
+		}
+		else
+		{
+			const auto plain = subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
+			                                    { OutputInfo{ model.dtype, tokenEmbeddingShape } });
+			tokenEmbedding = { plain, 0 };
+		}
+		const auto tokenEmbeddingRows =
+		    model.tokenEmbeddingIsVocabMajor ? tokenEmbedding : AddTranspose(subgraph, tokenEmbedding);
 		const auto hiddenState =
 		    subgraph.AddNode(GetRowsNode{ tokenEmbeddingRows, tokenIds },
 		                     { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
@@ -1025,12 +1105,13 @@ namespace LiteNN::GGUF
 		return graph.AddSubgraph(std::move(subgraph));
 	}
 
-	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset)
+	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset,
+	                         const LLaMALoweringOptions& options)
 	{
 		auto graph = Graph{};
 		graph.SetMetadata(CopyMetadata(archive));
 		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
-		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters);
+		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
 		const auto forward = BuildLLaMACausalLM(graph, model, hyperparameters, sequenceLength, positionOffset);
 		graph.SetForward(forward);
 		graph.SetInputNames({ "token_ids" });
@@ -1039,7 +1120,7 @@ namespace LiteNN::GGUF
 	}
 
 	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
-	                               std::size_t positionOffset)
+	                               std::size_t positionOffset, const LLaMALoweringOptions& options)
 	{
 		auto graph = Graph{};
 		graph.SetMetadata(CopyMetadata(archive));
@@ -1049,7 +1130,7 @@ namespace LiteNN::GGUF
 			throw std::runtime_error("Current LLaMA decode lowering requires positionOffset == pastLength");
 		}
 
-		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters);
+		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
 		const auto headDim = hyperparameters.HeadDimension();
 
 		Subgraph subgraph;
@@ -1089,7 +1170,8 @@ namespace LiteNN::GGUF
 	                                                         const LLaMAArtifactPlanningOptions& options)
 	{
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
-		auto graph = LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength);
+		auto graph = LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
+		                                      { .preserveQuantizedWeights = options.preserveQuantizedWeights });
 		PromoteConstantsToVariables(graph);
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
 		auto states = artifacts.decodeStateABI.kvCaches;
