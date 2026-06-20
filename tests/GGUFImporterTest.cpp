@@ -931,6 +931,18 @@ TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 	}));
 }
 
+TEST(GGUFLLaMACompatibility, AppliesQuantizedDequantizationBudgetAsBlockingDiagnostic)
+{
+	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),
+	                                                    GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM, 512);
+
+	EXPECT_FALSE(report.lowerable);
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return diagnostic.blocking && diagnostic.subject == "quantization.mix" &&
+		       diagnostic.message.find("policy=reject") != std::string::npos;
+	}));
+}
+
 TEST(GGUFLLaMAHyperparameters, UsesExplicitKVHeadCountAndRopeBase)
 {
 	Graph graph;

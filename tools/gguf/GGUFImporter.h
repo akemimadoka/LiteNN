@@ -142,7 +142,8 @@ namespace LiteNN::GGUF
 	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind);
 	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles();
 	std::optional<LLaMACompatibilityProfileKind> TryInferLLaMACompatibilityProfile(std::string_view architecture);
-	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind);
+	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind,
+	                                                   std::size_t dequantizedMemoryBudgetBytes = 0);
 	LLMTokenizerMetadataSummary SummarizeLLMTokenizerMetadata(const Graph& graph);
 	std::string_view LLaMAQuantizedExecutionPolicyName(LLaMAQuantizedExecutionPolicy policy);
 	LLaMAQuantizedExecutionPlan PlanLLaMAQuantizedWeightExecution(const Graph& archive,

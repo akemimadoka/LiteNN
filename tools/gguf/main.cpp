@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,8 @@ namespace
 	{
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
-		          << "  " << executable << " --analyze-llm <input.gguf> [profile]\n"
+		          << "  " << executable
+		          << " --analyze-llm <input.gguf> [profile] [--dequantized-budget-bytes N|--dequantized-budget-mib N]\n"
 		          << "  " << executable
 		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable
@@ -73,6 +75,61 @@ namespace
 		    "currently include 'llama' and 'qwen2'. Pass an explicit profile if this architecture shares one "
 		    "of the supported contracts.",
 		    hyperparameters.architecture));
+	}
+
+	struct AnalyzeLLMCommandOptions
+	{
+		std::string inputPath;
+		std::optional<LiteNN::GGUF::LLaMACompatibilityProfileKind> profile;
+		std::size_t dequantizedBudgetBytes{};
+	};
+
+	std::size_t ParseMibAsBytes(std::string_view text)
+	{
+		const auto mib = ParseSize(text, "dequantized-budget-mib", true);
+		constexpr std::size_t bytesPerMib = 1024 * 1024;
+		if (mib > std::numeric_limits<std::size_t>::max() / bytesPerMib)
+		{
+			throw std::runtime_error("dequantized-budget-mib is too large");
+		}
+		return mib * bytesPerMib;
+	}
+
+	AnalyzeLLMCommandOptions ParseAnalyzeLLMOptions(int argc, char** argv)
+	{
+		if (argc < 3)
+		{
+			throw std::runtime_error("--analyze-llm requires an input GGUF path");
+		}
+		AnalyzeLLMCommandOptions options{
+			.inputPath = argv[2],
+		};
+		for (int i = 3; i < argc; ++i)
+		{
+			const std::string_view arg = argv[i];
+			if (arg == "--dequantized-budget-bytes" || arg == "--dequantized-budget-mib")
+			{
+				if (i + 1 >= argc)
+				{
+					throw std::runtime_error(std::string(arg) + " requires a value");
+				}
+				++i;
+				options.dequantizedBudgetBytes = arg == "--dequantized-budget-bytes"
+				                                     ? ParseSize(argv[i], "dequantized-budget-bytes", true)
+				                                     : ParseMibAsBytes(argv[i]);
+				continue;
+			}
+			if (arg.starts_with("--"))
+			{
+				throw std::runtime_error(std::format("Unknown --analyze-llm option '{}'", arg));
+			}
+			if (options.profile)
+			{
+				throw std::runtime_error("--analyze-llm accepts at most one profile argument");
+			}
+			options.profile = ParseLLMProfile(arg);
+		}
+		return options;
 	}
 
 	void PrintLLMCompatibilityReport(const LiteNN::GGUF::LLaMACompatibilityReport& report)
@@ -207,15 +264,11 @@ int main(int argc, char** argv)
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--analyze-llm")
 		{
-			if (argc != 3 && argc != 4)
-			{
-				PrintUsage(argv[0]);
-				return 1;
-			}
-			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
-			const auto profile =
-			    argc == 4 ? ParseLLMProfile(argv[3]) : InferLLMProfile(imported.model.UnsafeGraphView());
-			const auto report = LiteNN::GGUF::AnalyzeLLaMACompatibility(imported.model.UnsafeGraphView(), profile);
+			const auto options = ParseAnalyzeLLMOptions(argc, argv);
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(options.inputPath);
+			const auto profile = options.profile ? *options.profile : InferLLMProfile(imported.model.UnsafeGraphView());
+			const auto report = LiteNN::GGUF::AnalyzeLLaMACompatibility(imported.model.UnsafeGraphView(), profile,
+			                                                            options.dequantizedBudgetBytes);
 			PrintLLMCompatibilityReport(report);
 			return report.lowerable ? 0 : 2;
 		}

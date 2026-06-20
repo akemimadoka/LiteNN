@@ -810,7 +810,8 @@ namespace LiteNN::GGUF
 		return plan;
 	}
 
-	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind)
+	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind,
+	                                                   std::size_t dequantizedMemoryBudgetBytes)
 	{
 		LLaMACompatibilityReport report{
 			.profile = QueryLLaMACompatibilityProfile(kind),
@@ -888,7 +889,7 @@ namespace LiteNN::GGUF
 			              "RoPE dimension count must be an even value in [2, headDim] for current lowering.", true);
 		}
 
-		const auto quantizedExecution = PlanLLaMAQuantizedWeightExecution(archive);
+		const auto quantizedExecution = PlanLLaMAQuantizedWeightExecution(archive, dequantizedMemoryBudgetBytes);
 		if (!quantizedExecution.decisions.empty())
 		{
 			std::string summary;
@@ -907,7 +908,7 @@ namespace LiteNN::GGUF
 			              std::format("GGUF archive contains block-quantized weights: {}. Current LLaMA/Qwen lowering "
 			                          "uses the reported fallback policy; native quantized CUDA is not yet selected.",
 			                          summary),
-			              false);
+			              !quantizedExecution.lowerable);
 		}
 		if (std::ranges::any_of(quantizedExecution.decisions, [](const auto& decision) {
 			    return decision.format == QuantizedBlockFormat::GGML_Q4_K;
