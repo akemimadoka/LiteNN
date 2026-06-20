@@ -108,12 +108,45 @@ namespace LiteNN::GGUF
 		std::optional<std::int64_t> unknownTokenId;
 	};
 
+	enum class LLaMAQuantizedExecutionPolicy
+	{
+		None,
+		Reject,
+		CPUReferenceDequantize,
+		CUDADequantizeThenGEMM,
+		CUDANativeQuantized
+	};
+
+	struct LLaMAQuantizedFormatDecision
+	{
+		QuantizedBlockFormat format{ QuantizedBlockFormat::Scalar };
+		std::size_t tensorCount{};
+		std::size_t storedBytes{};
+		std::size_t dequantizedBytes{};
+		LLaMAQuantizedExecutionPolicy selectedPolicy{ LLaMAQuantizedExecutionPolicy::None };
+		bool blocking{};
+		std::string reason;
+	};
+
+	struct LLaMAQuantizedExecutionPlan
+	{
+		std::size_t tensorCount{};
+		std::size_t storedBytes{};
+		std::size_t dequantizedBytes{};
+		std::size_t dequantizedMemoryBudgetBytes{};
+		bool lowerable{ true };
+		std::vector<LLaMAQuantizedFormatDecision> decisions;
+	};
+
 	std::string_view LLaMACompatibilityProfileName(LLaMACompatibilityProfileKind kind);
 	LLaMACompatibilityProfileDescriptor QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind kind);
 	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles();
 	std::optional<LLaMACompatibilityProfileKind> TryInferLLaMACompatibilityProfile(std::string_view architecture);
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind);
 	LLMTokenizerMetadataSummary SummarizeLLMTokenizerMetadata(const Graph& graph);
+	std::string_view LLaMAQuantizedExecutionPolicyName(LLaMAQuantizedExecutionPolicy policy);
+	LLaMAQuantizedExecutionPlan PlanLLaMAQuantizedWeightExecution(const Graph& archive,
+	                                                              std::size_t dequantizedMemoryBudgetBytes = 0);
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);

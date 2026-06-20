@@ -3,6 +3,7 @@
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -706,6 +707,109 @@ namespace LiteNN::GGUF
 		return summary;
 	}
 
+	std::string_view LLaMAQuantizedExecutionPolicyName(LLaMAQuantizedExecutionPolicy policy)
+	{
+		switch (policy)
+		{
+		case LLaMAQuantizedExecutionPolicy::None:
+			return "none";
+		case LLaMAQuantizedExecutionPolicy::Reject:
+			return "reject";
+		case LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize:
+			return "cpu-reference-dequantize";
+		case LLaMAQuantizedExecutionPolicy::CUDADequantizeThenGEMM:
+			return "cuda-dequantize-then-gemm";
+		case LLaMAQuantizedExecutionPolicy::CUDANativeQuantized:
+			return "cuda-native-quantized";
+		}
+		return "unknown";
+	}
+
+	LLaMAQuantizedExecutionPlan PlanLLaMAQuantizedWeightExecution(const Graph& archive,
+	                                                              std::size_t dequantizedMemoryBudgetBytes)
+	{
+		struct Stats
+		{
+			std::size_t tensorCount{};
+			std::size_t storedBytes{};
+			std::size_t dequantizedBytes{};
+		};
+
+		const auto addChecked = [](std::size_t lhs, std::size_t rhs, std::string_view label) {
+			if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+			{
+				throw std::runtime_error(std::format("LLaMA quantized execution {} byte count overflow", label));
+			}
+			return lhs + rhs;
+		};
+		const auto multiplyChecked = [](std::span<const std::size_t> dims, std::size_t elementBytes) {
+			std::size_t elements = 1;
+			for (const auto dim : dims)
+			{
+				if (dim != 0 && elements > std::numeric_limits<std::size_t>::max() / dim)
+				{
+					throw std::runtime_error("LLaMA quantized execution element count overflow");
+				}
+				elements *= dim;
+			}
+			if (elementBytes != 0 && elements > std::numeric_limits<std::size_t>::max() / elementBytes)
+			{
+				throw std::runtime_error("LLaMA quantized execution byte count overflow");
+			}
+			return elements * elementBytes;
+		};
+
+		std::map<QuantizedBlockFormat, Stats> statsByFormat;
+		for (std::size_t variableIndex = 0; variableIndex < archive.VariableCount(); ++variableIndex)
+		{
+			const auto& variable = *archive.GetVariable(variableIndex);
+			if (!variable.IsQuantized())
+			{
+				continue;
+			}
+			const auto& params = *variable.Quantization();
+			auto& stats = statsByFormat[params.blockFormat];
+			++stats.tensorCount;
+			stats.storedBytes = addChecked(
+			    stats.storedBytes, variable.Data().NumElements() * ElementByteSize(variable.Data().DType()), "stored");
+			stats.dequantizedBytes = addChecked(
+			    stats.dequantizedBytes, multiplyChecked(params.expressedShape, ElementByteSize(params.expressedType)),
+			    "dequantized");
+		}
+
+		LLaMAQuantizedExecutionPlan plan{
+			.dequantizedMemoryBudgetBytes = dequantizedMemoryBudgetBytes,
+		};
+		for (const auto& [format, stats] : statsByFormat)
+		{
+			plan.tensorCount = addChecked(plan.tensorCount, stats.tensorCount, "tensor");
+			plan.storedBytes = addChecked(plan.storedBytes, stats.storedBytes, "stored");
+			plan.dequantizedBytes = addChecked(plan.dequantizedBytes, stats.dequantizedBytes, "dequantized");
+			const auto overBudget =
+			    dequantizedMemoryBudgetBytes != 0 && stats.dequantizedBytes > dequantizedMemoryBudgetBytes;
+			const auto policy = overBudget ? LLaMAQuantizedExecutionPolicy::Reject
+			                               : LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize;
+			if (overBudget)
+			{
+				plan.lowerable = false;
+			}
+			plan.decisions.push_back({
+			    .format = format,
+			    .tensorCount = stats.tensorCount,
+			    .storedBytes = stats.storedBytes,
+			    .dequantizedBytes = stats.dequantizedBytes,
+			    .selectedPolicy = policy,
+			    .blocking = overBudget,
+			    .reason = overBudget
+			                  ? std::format("dequantized bytes {} exceed budget {}", stats.dequantizedBytes,
+			                                dequantizedMemoryBudgetBytes)
+			                  : "current LiteNN lowering uses CPU reference dequantize into floating-point tensors; "
+			                    "CUDA native quantized kernels are not selected yet",
+			});
+		}
+		return plan;
+	}
+
 	LLaMACompatibilityReport AnalyzeLLaMACompatibility(const Graph& archive, LLaMACompatibilityProfileKind kind)
 	{
 		LLaMACompatibilityReport report{
@@ -784,40 +888,30 @@ namespace LiteNN::GGUF
 			              "RoPE dimension count must be an even value in [2, headDim] for current lowering.", true);
 		}
 
-		std::map<QuantizedBlockFormat, std::pair<std::size_t, std::size_t>> quantizedFormats;
-		for (std::size_t variableIndex = 0; variableIndex < archive.VariableCount(); ++variableIndex)
-		{
-			const auto& variable = *archive.GetVariable(variableIndex);
-			if (!variable.IsQuantized())
-			{
-				continue;
-			}
-			const auto& params = *variable.Quantization();
-			const auto bytes = variable.Data().NumElements() * ElementByteSize(variable.Data().DType());
-			auto& [count, totalBytes] = quantizedFormats[params.blockFormat];
-			++count;
-			totalBytes += bytes;
-		}
-		if (!quantizedFormats.empty())
+		const auto quantizedExecution = PlanLLaMAQuantizedWeightExecution(archive);
+		if (!quantizedExecution.decisions.empty())
 		{
 			std::string summary;
-			for (const auto& [format, stats] : quantizedFormats)
+			for (const auto& decision : quantizedExecution.decisions)
 			{
 				if (!summary.empty())
 				{
 					summary += ", ";
 				}
 				summary +=
-				    std::format("{}:{} tensors/{} bytes", QuantizedBlockFormatName(format), stats.first, stats.second);
+				    std::format("{}:{} tensors/stored={} bytes/dequantized={} bytes/policy={}",
+				                QuantizedBlockFormatName(decision.format), decision.tensorCount, decision.storedBytes,
+				                decision.dequantizedBytes, LLaMAQuantizedExecutionPolicyName(decision.selectedPolicy));
 			}
 			addDiagnostic("quantization.mix",
 			              std::format("GGUF archive contains block-quantized weights: {}. Current LLaMA/Qwen lowering "
-			                          "uses reference dequantized-float materialization; native quantized CUDA is not "
-			                          "yet selected.",
+			                          "uses the reported fallback policy; native quantized CUDA is not yet selected.",
 			                          summary),
 			              false);
 		}
-		if (quantizedFormats.contains(QuantizedBlockFormat::GGML_Q4_K))
+		if (std::ranges::any_of(quantizedExecution.decisions, [](const auto& decision) {
+			    return decision.format == QuantizedBlockFormat::GGML_Q4_K;
+		    }))
 		{
 			addDiagnostic("quantization.q4_k_m",
 			              "Detected GGML_Q4_K tensors, which are part of common Q4_K_M model mixes. Full-speed CUDA "

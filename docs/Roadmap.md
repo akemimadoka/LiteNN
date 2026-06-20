@@ -2447,12 +2447,12 @@ placement and fallback policy.
 
 - [ ] Keep GGML block-quantized weights external and quantized through packaging instead of always materializing them as
       Float32 during lowering.
-- [ ] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
+- [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
       reporting.
 - [ ] Add parity tests comparing native quantized projection with ggml dequantize-plus-float reference.
-- [ ] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
+- [x] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
 
 #### G16.5 CUDA Native Coverage for Full Decode
 

@@ -892,6 +892,28 @@ TEST(GGUFLLaMAArtifacts, RejectsCacheCapacitySmallerThanDecodePosition)
 	             std::runtime_error);
 }
 
+TEST(GGUFLLaMAQuantizedExecution, PlansReferenceDequantizedFallbackAndBudgetRejection)
+{
+	const auto archive = BuildTinyQwen2ArchiveWithQ4KPayload();
+	const auto plan = GGUF::PlanLLaMAQuantizedWeightExecution(archive);
+
+	EXPECT_TRUE(plan.lowerable);
+	EXPECT_EQ(plan.tensorCount, 1u);
+	EXPECT_EQ(plan.storedBytes, 144u);
+	EXPECT_EQ(plan.dequantizedBytes, 1024u);
+	ASSERT_EQ(plan.decisions.size(), 1u);
+	EXPECT_EQ(plan.decisions[0].format, QuantizedBlockFormat::GGML_Q4_K);
+	EXPECT_EQ(plan.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize);
+	EXPECT_EQ(GGUF::LLaMAQuantizedExecutionPolicyName(plan.decisions[0].selectedPolicy), "cpu-reference-dequantize");
+	EXPECT_FALSE(plan.decisions[0].blocking);
+
+	const auto rejected = GGUF::PlanLLaMAQuantizedWeightExecution(archive, 512);
+	EXPECT_FALSE(rejected.lowerable);
+	ASSERT_EQ(rejected.decisions.size(), 1u);
+	EXPECT_EQ(rejected.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::Reject);
+	EXPECT_TRUE(rejected.decisions[0].blocking);
+}
+
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 {
 	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),
@@ -901,7 +923,7 @@ TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.mix" &&
 		       diagnostic.message.find("GGML_Q4_K") != std::string::npos &&
-		       diagnostic.message.find("reference dequantized-float") != std::string::npos;
+		       diagnostic.message.find("policy=cpu-reference-dequantize") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.q4_k_m" &&
