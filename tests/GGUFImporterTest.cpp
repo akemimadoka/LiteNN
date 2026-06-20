@@ -845,6 +845,44 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.currentPosition->effects, std::string("increment")));
 }
 
+TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
+{
+	const auto archive = BuildTinyQwen2Archive();
+	const auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(
+	    archive, { .prefillSequenceLength = 4, .decodePastLength = 3, .maxCacheLength = 8 });
+
+	ASSERT_EQ(schedule.states.size(), 2u);
+	EXPECT_EQ(schedule.states[0].name, "kv.layer0");
+	EXPECT_EQ(schedule.states[1].name, "decode.position");
+	ASSERT_EQ(schedule.stateValueBindings.size(), 4u);
+	const auto cacheBuffer = *schedule.states[0].memoryBuffer;
+	const auto& subgraph = schedule.module.plan.subgraphs[schedule.module.plan.forward];
+	const auto findParam = [&](std::size_t paramIndex) {
+		const auto node = std::ranges::find_if(subgraph.nodes, [&](const auto& entry) {
+			const auto* param = std::get_if<ParamRefNode>(&entry.node);
+			return param != nullptr && param->paramIndex == paramIndex;
+		});
+		return NodeOutput{ node->sourceNode, 0 };
+	};
+	const auto* keyInput = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, findParam(1));
+	const auto* valueInput = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, findParam(2));
+	const auto* keyOutput = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, subgraph.results[1]);
+	const auto* valueOutput = FindMemoryAssignment(schedule.memory, subgraph.sourceSubgraph, subgraph.results[2]);
+	ASSERT_NE(keyInput, nullptr);
+	ASSERT_NE(valueInput, nullptr);
+	ASSERT_NE(keyOutput, nullptr);
+	ASSERT_NE(valueOutput, nullptr);
+	EXPECT_EQ(keyInput->buffer, cacheBuffer);
+	EXPECT_EQ(keyInput->offset, 0u);
+	EXPECT_EQ(valueInput->buffer, cacheBuffer);
+	EXPECT_EQ(valueInput->offset, 64u);
+	EXPECT_EQ(keyOutput->buffer, cacheBuffer);
+	EXPECT_EQ(keyOutput->offset, 0u);
+	EXPECT_EQ(valueOutput->buffer, cacheBuffer);
+	EXPECT_EQ(valueOutput->offset, 64u);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+}
+
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)
 {
 	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), 4, 3);

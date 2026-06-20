@@ -116,6 +116,8 @@ namespace LiteNN::GGUF
 	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, const LLaMAArtifactPlanningOptions& options);
 	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
 	                                     std::size_t decodePastLength);
+	Runtime::RuntimeSchedule BuildLLaMADecodeRuntimeSchedule(const Graph& archive,
+	                                                         const LLaMAArtifactPlanningOptions& options);
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
 	                                          const LLaMAHyperparameters& hyperparameters, std::size_t blockIndex);
 	NodeOutput AddLLaMADecoderBlock(Subgraph& subgraph, const LLaMADecoderBlock& block,

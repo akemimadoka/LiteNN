@@ -1057,4 +1057,19 @@ namespace LiteNN::GGUF
 		graph.SetOutputNames(std::move(outputNames));
 		return graph;
 	}
+	Runtime::RuntimeSchedule BuildLLaMADecodeRuntimeSchedule(const Graph& archive,
+	                                                         const LLaMAArtifactPlanningOptions& options)
+	{
+		const auto artifacts = PlanLLaMAArtifacts(archive, options);
+		auto graph = LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength);
+		auto module = Detail::BuildExecutableModuleFromGraph(graph);
+		auto states = artifacts.decodeStateABI.kvCaches;
+		if (artifacts.decodeStateABI.currentPosition)
+		{
+			states.push_back(*artifacts.decodeStateABI.currentPosition);
+		}
+		return Runtime::BuildRuntimeSchedule(std::move(module), std::move(states),
+		                                     artifacts.decodeStep.stateValueBindings);
+	}
+
 } // namespace LiteNN::GGUF
