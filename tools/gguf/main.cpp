@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
@@ -441,20 +442,30 @@ namespace
 			throw std::runtime_error("decode-loop steps must be positive");
 		}
 		const auto imported = LiteNN::GGUF::ImportGGUFArchive(std::string(inputPath));
+		std::vector<LiteNN::ExecutablePlan> decodePlans;
+		decodePlans.reserve(steps);
+		const auto buildStart = std::chrono::steady_clock::now();
+		for (std::size_t step = 0; step < steps; ++step)
+		{
+			const auto pastLength = step + 1;
+			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
+			                                                    pastLength, { .preserveQuantizedWeights = true });
+			decodePlans.push_back(LiteNN::Detail::BuildExecutablePlanFromGraph(graph));
+		}
+		const auto buildEnd = std::chrono::steady_clock::now();
+
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
 		LiteNN::GGUF::LLMSamplerState sampler;
 		std::vector<std::int32_t> history{ initialTokenId };
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
 		std::int32_t currentToken = initialTokenId;
-		std::size_t pastLength = 1;
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
 
+		const auto runStart = std::chrono::steady_clock::now();
 		for (std::size_t step = 0; step < steps; ++step)
 		{
-			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
-			                                                    pastLength, { .preserveQuantizedWeights = true });
-			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(graph);
+			const auto& plan = decodePlans[step];
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, plan));
 			if (caches.empty())
@@ -497,11 +508,15 @@ namespace
 			{
 				caches.push_back(std::move(outputs[i]));
 			}
-			++pastLength;
 		}
+		const auto runEnd = std::chrono::steady_clock::now();
+
+		const auto buildMs = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
+		const auto runMs = std::chrono::duration<double, std::milli>(runEnd - runStart).count();
 
 		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << steps
+		          << " cached_plans=" << decodePlans.size() << " build_ms=" << buildMs << " run_ms=" << runMs
 		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
 		std::cout << " generated=";
