@@ -53,11 +53,11 @@ namespace
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N]\n"
+		             "[--seed N] [--ignore-eos]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N]\n"
+		             "[--seed N] [--ignore-eos]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -183,6 +183,7 @@ namespace
 		std::size_t steps{};
 		std::optional<std::string> outputPath;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
+		bool stopAtEos{ true };
 	};
 
 	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
@@ -225,6 +226,10 @@ namespace
 			else if (arg == "--seed")
 			{
 				options.sampling.seed = ParseU64(requireValue(arg), "seed");
+			}
+			else if (arg == "--ignore-eos")
+			{
+				options.stopAtEos = false;
 			}
 			else if (!arg.starts_with("--") && !options.outputPath)
 			{
@@ -590,11 +595,19 @@ namespace
 		{
 			throw std::runtime_error("decode-loop requires at least one initial token");
 		}
-		const auto runCount = initialTokenIds.size() + options.steps - 1;
+		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(imported.model.UnsafeGraphView());
+		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(imported.model.UnsafeGraphView());
+		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
+		if (hyperparameters.contextLength > 0 && requestedTokenCount > hyperparameters.contextLength)
+		{
+			throw std::runtime_error(std::format("decode-loop requested {} total tokens but model context length is {}",
+			                                     requestedTokenCount, hyperparameters.contextLength));
+		}
+		const auto maxRunCount = requestedTokenCount - 1;
 		std::vector<LiteNN::ExecutablePlan> decodePlans;
-		decodePlans.reserve(runCount);
+		decodePlans.reserve(maxRunCount);
 		const auto buildStart = std::chrono::steady_clock::now();
-		for (std::size_t step = 0; step < runCount; ++step)
+		for (std::size_t step = 0; step < maxRunCount; ++step)
 		{
 			const auto pastLength = step + 1;
 			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
@@ -610,9 +623,11 @@ namespace
 		std::int32_t currentToken = initialTokenIds.front();
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
+		std::size_t generatedTokenCount = 0;
+		bool stoppedOnEos = false;
 
 		const auto runStart = std::chrono::steady_clock::now();
-		for (std::size_t step = 0; step < runCount; ++step)
+		for (std::size_t step = 0; step < maxRunCount; ++step)
 		{
 			const auto& plan = decodePlans[step];
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
@@ -657,12 +672,22 @@ namespace
 			{
 				currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history);
 				history.push_back(currentToken);
+				++generatedTokenCount;
+				if (options.stopAtEos && tokenizer.eosTokenId &&
+				    currentToken == static_cast<std::int32_t>(*tokenizer.eosTokenId))
+				{
+					stoppedOnEos = true;
+				}
 			}
 			lastOutputCount = outputs.size();
 			caches.reserve(outputs.size() - 1);
 			for (std::size_t i = 1; i < outputs.size(); ++i)
 			{
 				caches.push_back(std::move(outputs[i]));
+			}
+			if (stoppedOnEos)
+			{
+				break;
 			}
 		}
 		const auto runEnd = std::chrono::steady_clock::now();
@@ -672,8 +697,10 @@ namespace
 
 		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
-		          << " cached_plans=" << decodePlans.size() << " build_ms=" << buildMs << " run_ms=" << runMs
-		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
+		          << " prompt_tokens=" << initialTokenIds.size() << " generated_tokens=" << generatedTokenCount
+		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << " cached_plans=" << decodePlans.size()
+		          << " build_ms=" << buildMs << " run_ms=" << runMs << " outputs_per_step=" << lastOutputCount
+		          << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
 		std::cout << " generated=";
 		PrintTokenList(history);
@@ -687,7 +714,9 @@ namespace
 				throw std::runtime_error("Failed to open decode-loop output file: " + *options.outputPath);
 			}
 			output << TokenListText(history) << '\n'
-			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n';
+			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n'
+			       << "generated_tokens=" << generatedTokenCount
+			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + *options.outputPath);

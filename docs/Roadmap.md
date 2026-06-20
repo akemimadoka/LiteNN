@@ -2505,6 +2505,8 @@ placement and fallback policy.
 - [x] Add an exact-prompt decode-loop smoke CLI: `--run-llama-prompt-decode-loop` tokenizes a fixture/diagnostic prompt,
       fills KV state through static decode steps, then generates the requested number of new tokens with the configured
       sampler.
+- [x] Add decode-loop generation guards for EOS early stop, explicit `--ignore-eos`, prompt/generated-token accounting,
+      and model context-length rejection before plan construction.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
