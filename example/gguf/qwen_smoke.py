@@ -17,7 +17,8 @@ Examples:
     --llama-debug third_party/llama.cpp/build/bin/llama-debug.exe \
     --llama-cli third_party/llama.cpp/build/bin/llama-cli.exe \
     --prompt "hello" \
-    --compare-logits
+    --compare-logits \
+    --compare-text
 """
 
 from __future__ import annotations
@@ -96,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
+    parser.add_argument("--compare-text", action="store_true")
     parser.add_argument("--llama-debug", type=Path)
     parser.add_argument("--llama-cli", type=Path)
     parser.add_argument("--allow-analysis-failure", action="store_true")
@@ -108,6 +110,8 @@ def main() -> int:
         raise SystemExit("--steps must be positive")
     if args.capture_llamacpp and not args.prompt:
         raise SystemExit("--capture-llamacpp requires --prompt")
+    if (args.compare_logits or args.compare_text) and not args.capture_llamacpp:
+        raise SystemExit("--compare-logits/--compare-text require --capture-llamacpp")
     if not args.token_ids and not args.capture_llamacpp:
         raise SystemExit("provide --token-ids or enable --capture-llamacpp")
     if args.output is not None and not args.token_ids:
@@ -179,6 +183,19 @@ def main() -> int:
             compare = run_step("compare_prefill_logits", compare_cmd, workdir)
             steps.append(compare)
             require_ok(compare)
+
+        if args.compare_text:
+            compare_text_cmd = [
+                sys.executable,
+                str(root / "scripts" / "gguf_compare_generation_text.py"),
+                "--manifest",
+                str(capture_dir / "manifest.json"),
+                "--replay-manifest",
+                str(capture_dir / "litenn_decode_manifest.json"),
+            ]
+            compare_text = run_step("compare_generation_text", compare_text_cmd, workdir)
+            steps.append(compare_text)
+            require_ok(compare_text)
 
     if token_ids:
         decode_output = args.output if args.output is not None else workdir / "litenn_decode_tokens.txt"

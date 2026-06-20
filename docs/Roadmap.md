@@ -2494,8 +2494,11 @@ placement and fallback policy.
 - [x] Add automated LiteNN-vs-llama.cpp prefill-logits comparison:
       `scripts/gguf_compare_llamacpp_logits.py` replays captured prompt token ids through LiteNN, dumps last-token logits,
       compares against llama-debug `index: value` logits, and emits max-error/mismatch JSON.
-- [ ] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits, multi-token decode, and final
-      generated text for fixed prompts.
+- [ ] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits and multi-token decode logits for
+      fixed prompts.
+- [x] Add generated-text comparison for fixed llama.cpp captures:
+      `scripts/gguf_compare_generation_text.py` compares llama-cli captured stdout with LiteNN replay output pieces and
+      writes a JSON pass/fail report; full tokenizer parity remains a separate acceptance gate.
 - [x] Add a Qwen2.5-Coder/Qwen-family smoke example:
       `example/gguf/qwen_smoke.py` accepts a GGUF path, externally tokenized prompt ids or an optional llama.cpp prompt
       capture, backend policy (`cpu-interpreter` for the current driver), max generated-token count, and an output file,

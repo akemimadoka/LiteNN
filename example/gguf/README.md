@@ -140,6 +140,18 @@ The comparison script replays the captured prompt token ids through
 writes `logits_compare.json` with max absolute/relative errors and the largest
 mismatches.
 
+Compare generated text after replay:
+
+```powershell
+python311 scripts\gguf_compare_generation_text.py `
+  --manifest build\gguf_golden\hello\manifest.json `
+  --replay-manifest build\gguf_golden\hello\litenn_decode_manifest.json
+```
+
+This comparison reads llama-cli stdout from the capture manifest and joins the
+generated token pieces from LiteNN's replay output. It is useful as an automated
+acceptance harness, while full tokenizer parity remains a separate requirement.
+
 Run a Qwen/Qwen2.5-style end-to-end smoke sequence from a GGUF path:
 
 ```powershell
@@ -163,6 +175,7 @@ python311 example\gguf\qwen_smoke.py `
   --prompt "hello" `
   --capture-llamacpp `
   --compare-logits `
+  --compare-text `
   --llama-debug third_party\llama.cpp\build\bin\llama-debug.exe `
   --llama-cli third_party\llama.cpp\build\bin\llama-cli.exe `
   --max-tokens 16
