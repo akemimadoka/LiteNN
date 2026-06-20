@@ -41,6 +41,10 @@ namespace LiteNN::Serialization
 	void SaveVNextModelPackage(const Runtime::RuntimeSchedule& schedule, const std::filesystem::path& path,
 	                           std::vector<VNextArtifactRef> artifacts = {}, VNextPackageLayout layout = {},
 	                           std::vector<VNextAdapterRef> adapters = {});
+	void SaveVNextModelPackageExternalWeights(const Runtime::RuntimeSchedule& schedule,
+	                                          const std::filesystem::path& path,
+	                                          const std::filesystem::path& externalWeightsPath,
+	                                          const ExternalWeightSaveOptions& externalOptions = {});
 	void SaveVNextModelPackageExternalWeights(const Graph& graph, const std::filesystem::path& path,
 	                                          const std::filesystem::path& externalWeightsPath,
 	                                          const ExternalWeightSaveOptions& externalOptions = {});

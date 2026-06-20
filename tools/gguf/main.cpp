@@ -35,7 +35,8 @@ namespace
 		          << "  " << executable
 		          << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
 		          << "  " << executable
-		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <past-length> <max-cache-length>\n"
+		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
+		             "<max-cache-length>\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -518,18 +519,18 @@ int main(int argc, char** argv)
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama-decode-stateful")
 		{
-			if (argc != 6)
+			if (argc != 7)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
-			const auto pastLength = ParseSize(argv[4], "past-length", true);
-			const auto maxCacheLength = ParseSize(argv[5], "max-cache-length");
+			const auto pastLength = ParseSize(argv[5], "past-length", true);
+			const auto maxCacheLength = ParseSize(argv[6], "max-cache-length");
 			auto schedule = LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(
 			    imported.model.UnsafeGraphView(),
 			    { .prefillSequenceLength = 1, .decodePastLength = pastLength, .maxCacheLength = maxCacheLength });
-			LiteNN::Serialization::SaveVNextModelPackage(schedule, argv[3]);
+			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(schedule, argv[3], argv[4]);
 			std::cout << "Lowered stateful LLaMA decode package with " << schedule.states.size()
 			          << " runtime states and " << schedule.stateValueBindings.size() << " value bindings\n";
 			return 0;

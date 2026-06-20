@@ -1643,6 +1643,100 @@ namespace LiteNN::Serialization
 		WriteVNextModelPackageFile(path, manifest, schedule.module.plan);
 	}
 
+	void SaveVNextModelPackageExternalWeights(const Runtime::RuntimeSchedule& sourceSchedule,
+	                                          const std::filesystem::path& path,
+	                                          const std::filesystem::path& externalWeightsPath,
+	                                          const ExternalWeightSaveOptions& externalOptions)
+	{
+		if (std::filesystem::absolute(externalWeightsPath).lexically_normal() ==
+		    std::filesystem::absolute(path).lexically_normal())
+		{
+			throw std::runtime_error("LiteNN vNext external weight file must be different from the package file");
+		}
+
+		auto schedule = sourceSchedule;
+		std::ofstream weights(externalWeightsPath, std::ios::binary);
+		if (!weights)
+		{
+			throw std::runtime_error("Failed to open LiteNN vNext external weight file for writing: " +
+			                         externalWeightsPath.string());
+		}
+		std::error_code ec;
+		auto relativePath = std::filesystem::relative(externalWeightsPath, path.parent_path(), ec);
+		const auto externalPathText = ec ? externalWeightsPath.string() : relativePath.string();
+		const auto alignment = std::max<std::uint64_t>(externalOptions.alignment, 1);
+
+		for (std::size_t i = 0; i < schedule.module.plan.variables.size(); ++i)
+		{
+			const auto bindingName = schedule.bufferBindings.at(i).name;
+			auto& storage = schedule.module.plan.variables[i];
+			const auto byteCount = storage.region.byteSize;
+			if (storage.region.data == nullptr && byteCount != 0)
+			{
+				throw std::runtime_error("Runtime schedule variable has no payload data: " + storage.region.name);
+			}
+			const auto rawPosition = weights.tellp();
+			if (rawPosition == std::streampos(-1))
+			{
+				throw std::runtime_error("Failed to determine LiteNN vNext external weight output offset");
+			}
+			const auto rawOffset = static_cast<std::uint64_t>(rawPosition);
+			const auto alignedOffset = ((rawOffset + alignment - 1) / alignment) * alignment;
+			std::vector<char> padding(static_cast<std::size_t>(alignedOffset - rawOffset), '\0');
+			if (!padding.empty())
+			{
+				weights.write(padding.data(), static_cast<std::streamsize>(padding.size()));
+			}
+			const auto* payload = static_cast<const char*>(storage.region.data) + storage.storageOffsetBytes;
+			weights.write(payload, static_cast<std::streamsize>(byteCount));
+			if (!weights)
+			{
+				throw std::runtime_error("Failed to write LiteNN vNext external weight payload");
+			}
+
+			storage.region.ownership = BufferOwnership::External;
+			storage.region.externalKind = ExternalBufferKind::User;
+			storage.region.name = externalPathText;
+			storage.region.data = nullptr;
+			storage.region.byteOffset = static_cast<std::size_t>(alignedOffset);
+			storage.region.alignment = static_cast<std::size_t>(alignment);
+			storage.region.mutability = BufferMutability::Immutable;
+			storage.region.rebindPolicy = BufferRebindPolicy::ExactMetadataAndChecksum;
+			storage.storageOffsetBytes = 0;
+
+			auto& memoryBuffer = schedule.memory.buffers.at(i);
+			memoryBuffer.kind = MemoryBufferKind::External;
+			memoryBuffer.alignment = static_cast<std::size_t>(alignment);
+			schedule.bufferBindings.at(i) =
+			    ToRuntimeBufferBinding(bindingName.empty() ? std::format("variable.{}", i) : bindingName,
+			                           schedule.module.plan.variables[i], i);
+		}
+
+		schedule.memory.workspaceBytes = 0;
+		schedule.memory.persistentBytes = 0;
+		schedule.memory.externalBytes = 0;
+		schedule.memory.constantBytes = 0;
+		for (const auto& buffer : schedule.memory.buffers)
+		{
+			switch (buffer.kind)
+			{
+			case MemoryBufferKind::Workspace:
+				schedule.memory.workspaceBytes += buffer.byteSize;
+				break;
+			case MemoryBufferKind::Persistent:
+				schedule.memory.persistentBytes += buffer.byteSize;
+				break;
+			case MemoryBufferKind::External:
+				schedule.memory.externalBytes += buffer.byteSize;
+				break;
+			case MemoryBufferKind::Constant:
+				schedule.memory.constantBytes += buffer.byteSize;
+				break;
+			}
+		}
+		SaveVNextModelPackage(schedule, path);
+	}
+
 	void SaveVNextModelPackageExternalWeights(const Graph& graph, const std::filesystem::path& path,
 	                                          const std::filesystem::path& externalWeightsPath,
 	                                          const ExternalWeightSaveOptions& externalOptions)

@@ -915,13 +915,19 @@ TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	const auto path = MakeTempFixturePath("litenn_llama_decode_schedule", ".ltnn");
-	Serialization::SaveVNextModelPackage(schedule, path);
+	const auto weightsPath = MakeTempFixturePath("litenn_llama_decode_schedule", ".weights.bin");
+	Serialization::SaveVNextModelPackageExternalWeights(schedule, path, weightsPath);
 	const auto loaded = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
+	std::filesystem::remove(weightsPath);
 	ASSERT_EQ(loaded.manifest.runtimeStates.size(), 2u);
 	ASSERT_EQ(loaded.manifest.stateValueBindings.size(), 4u);
 	EXPECT_EQ(loaded.manifest.stateValueBindings[1].stateName, "kv.layer0");
 	EXPECT_EQ(loaded.manifest.stateValueBindings[1].stateByteOffset, 64u);
+	ASSERT_FALSE(loaded.plan.variables.empty());
+	EXPECT_NE(loaded.plan.variables[0].region.data, nullptr);
+	EXPECT_EQ(loaded.manifest.tensors[0].name, "token_embd.weight");
+	EXPECT_EQ(loaded.manifest.tensors[0].kind, ExternalBufferKind::User);
 }
 
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)

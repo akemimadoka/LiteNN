@@ -568,7 +568,10 @@ namespace LiteNN
 		{
 			const auto& storage = schedule.module.plan.variables[i];
 			manifest.tensors.push_back(ToVNextExternalTensorRef(
-			    storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name, storage));
+			    i < manifest.bufferBindings.size() && !manifest.bufferBindings[i].name.empty()
+			        ? manifest.bufferBindings[i].name
+			        : (storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name),
+			    storage));
 		}
 		return manifest;
 	}
