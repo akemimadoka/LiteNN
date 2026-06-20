@@ -297,7 +297,10 @@ namespace LiteNN::Runtime
 		{
 			const auto& variable = schedule.module.plan.variables[i];
 			schedule.bufferBindings.push_back(ToRuntimeBufferBinding(
-			    variable.region.name.empty() ? std::format("variable.{}", i) : variable.region.name, variable, i));
+			    i < schedule.module.plan.variableNames.size() && !schedule.module.plan.variableNames[i].empty()
+			        ? schedule.module.plan.variableNames[i]
+			        : (variable.region.name.empty() ? std::format("variable.{}", i) : variable.region.name),
+			    variable, i));
 		}
 		for (const auto& state : schedule.states)
 		{

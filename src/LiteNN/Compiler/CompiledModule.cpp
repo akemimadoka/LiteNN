@@ -13009,7 +13009,7 @@ namespace
 		variableNames.reserve(plan.variables.size());
 		for (std::size_t i = 0; i < plan.variables.size(); ++i)
 		{
-			const auto& name = plan.variables[i].region.name;
+			const auto& name = i < plan.variableNames.size() ? plan.variableNames[i] : plan.variables[i].region.name;
 			variableNames.push_back(name.empty() ? std::format("variable{}", i) : name);
 		}
 		graph.SetVariableNames(std::move(variableNames));

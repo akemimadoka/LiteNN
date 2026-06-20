@@ -478,7 +478,9 @@ namespace LiteNN::Serialization
 				}
 				TensorStorageRefJson(out, plan.variables[i]);
 			}
-			out << "],\"activationSlots\":[";
+			out << "],\"variableNames\":";
+			StringListJson(out, plan.variableNames);
+			out << ",\"activationSlots\":[";
 			for (std::size_t i = 0; i < plan.activationSlots.size(); ++i)
 			{
 				if (i != 0)
@@ -1352,6 +1354,8 @@ namespace LiteNN::Serialization
 			{
 				plan.variables.push_back(ParseTensorStorageRef(item, "plan.variables"));
 			}
+			plan.variableNames =
+			    StringList(Member(object, "variableNames", "plan.variableNames"), "plan.variableNames");
 			plan.activationSlots =
 			    TensorTypeList(Member(object, "activationSlots", "plan.activationSlots"), "plan.activationSlots");
 			plan.tapeSlots = TensorTypeList(Member(object, "tapeSlots", "plan.tapeSlots"), "plan.tapeSlots");

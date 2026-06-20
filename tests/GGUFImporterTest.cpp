@@ -928,6 +928,24 @@ TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
 	EXPECT_NE(loaded.plan.variables[0].region.data, nullptr);
 	EXPECT_EQ(loaded.manifest.tensors[0].name, "token_embd.weight");
 	EXPECT_EQ(loaded.manifest.tensors[0].kind, ExternalBufferKind::User);
+
+#ifdef LITENN_ENABLE_MLIR
+	const std::vector<float> zeroCache(6, 0.0f);
+	std::array<Tensor<CPU>, 3> inputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 3, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 3, 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(loaded.plan, inputs);
+	auto compiled = Compiler<CPU>::CompileArtifact(loaded.plan).Load();
+	const auto actual = compiled.RunTensors(inputs);
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < actual.size(); ++i)
+	{
+		ExpectTensorNear(actual[i], expected[i], GGUF::GetLLaMAParityTolerance(DataType::Float32));
+	}
+#endif
 }
 
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)

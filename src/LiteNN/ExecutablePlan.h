@@ -96,6 +96,7 @@ namespace LiteNN
 		std::optional<SubgraphId> backward;
 		std::vector<ExecutablePlanSubgraph> subgraphs;
 		std::vector<TensorStorageRef> variables;
+		std::vector<std::string> variableNames;
 		std::vector<TensorType> activationSlots;
 		std::vector<TensorType> tapeSlots;
 		std::vector<ExecutablePlanValue> inputs;
@@ -636,6 +637,11 @@ namespace LiteNN
 				throw std::runtime_error(std::format("variable {} storage view exceeds its buffer region", i));
 			}
 		}
+		if (!plan.variableNames.empty() && plan.variableNames.size() != plan.variables.size())
+		{
+			throw std::runtime_error(std::format("ExecutablePlan has {} variable names for {} variables",
+			                                     plan.variableNames.size(), plan.variables.size()));
+		}
 		for (std::size_t i = 0; i < plan.activationSlots.size(); ++i)
 		{
 			ValidateExecutableTensorType(plan.activationSlots[i], std::format("activation slot {}", i));
@@ -902,6 +908,7 @@ namespace LiteNN
 			}
 
 			plan.variables.reserve(graph.VariableCount());
+			plan.variableNames.reserve(graph.VariableCount());
 			for (std::size_t i = 0; i < graph.VariableCount(); ++i)
 			{
 				const auto& tensor = graph.GetVariable(i)->Data();
@@ -913,6 +920,7 @@ namespace LiteNN
 				    MakeBorrowedBufferRegion(tensor.UnsafeRawData(), storage.type.ByteSize().value_or(0), memorySpace);
 				storage.region.name = graph.VariableName(i);
 				plan.variables.push_back(std::move(storage));
+				plan.variableNames.push_back(graph.VariableName(i));
 			}
 
 			plan.activationSlots.reserve(graph.ActivationSlotCount());
