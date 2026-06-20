@@ -56,15 +56,15 @@ namespace
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -189,6 +189,7 @@ namespace
 		std::optional<std::string> exactPrompt;
 		std::size_t steps{};
 		std::optional<std::string> outputPath;
+		std::optional<std::string> logitsOutputPath;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
 	};
@@ -209,6 +210,10 @@ namespace
 			if (arg == "--output")
 			{
 				options.outputPath = std::string(requireValue(arg));
+			}
+			else if (arg == "--logits-output")
+			{
+				options.logitsOutputPath = std::string(requireValue(arg));
 			}
 			else if (arg == "--sample")
 			{
@@ -705,6 +710,10 @@ namespace
 				throw std::runtime_error("decode-loop produced no outputs");
 			}
 			lastLogitsShape = outputs.front().Shape().ToOwned();
+			if (options.logitsOutputPath)
+			{
+				WriteLastTokenLogitsText(outputs.front(), *options.logitsOutputPath);
+			}
 			if (step + 1 < initialTokenIds.size())
 			{
 				currentToken = initialTokenIds[step + 1];
@@ -743,6 +752,10 @@ namespace
 		          << " build_ms=" << buildMs << " run_ms=" << runMs << " outputs_per_step=" << lastOutputCount
 		          << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
+		if (options.logitsOutputPath)
+		{
+			std::cout << " logits_output=" << *options.logitsOutputPath;
+		}
 		std::cout << " generated=";
 		PrintTokenList(history);
 		std::cout << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), history);

@@ -2499,6 +2499,9 @@ placement and fallback policy.
 - [x] Add generated-text comparison for fixed llama.cpp captures:
       `scripts/gguf_compare_generation_text.py` compares llama-cli captured stdout with LiteNN replay output pieces and
       writes a JSON pass/fail report; full tokenizer parity remains a separate acceptance gate.
+- [x] Add LiteNN decode-loop logits dump support:
+      decode-loop commands accept `--logits-output <output.txt>` and write the final step's last-token logits in the same
+      `index: value` text format as prefill logits dumping.
 - [x] Add a Qwen2.5-Coder/Qwen-family smoke example:
       `example/gguf/qwen_smoke.py` accepts a GGUF path, externally tokenized prompt ids or an optional llama.cpp prompt
       capture, backend policy (`cpu-interpreter` for the current driver), max generated-token count, and an output file,
