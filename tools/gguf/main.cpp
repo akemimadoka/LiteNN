@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -48,6 +49,8 @@ namespace
 		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
 		             "<max-cache-length>\n"
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
+		          << "  " << executable
+		          << " --dump-llama-token-id-logits <input.gguf> <comma-token-ids> <output.txt> [position-offset]\n"
 		          << "  " << executable << " --run-llama-prompt <input.gguf> <prompt> [position-offset]\n"
 		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
 		          << "  " << executable
@@ -504,6 +507,25 @@ namespace
 			std::cout << shape[i];
 		}
 		std::cout << ']';
+	}
+
+	void WriteLastTokenLogitsText(const LiteNN::Tensor<LiteNN::CPU>& logits, std::string_view outputPath)
+	{
+		const auto lastTokenLogits = LiteNN::GGUF::ExtractLastTokenLogits(logits);
+		std::ofstream output(std::string(outputPath), std::ios::binary);
+		if (!output)
+		{
+			throw std::runtime_error("Failed to open logits output file: " + std::string(outputPath));
+		}
+		output << std::setprecision(9);
+		for (std::size_t i = 0; i < lastTokenLogits.size(); ++i)
+		{
+			output << i << ": " << lastTokenLogits[i] << '\n';
+		}
+		if (!output)
+		{
+			throw std::runtime_error("Failed to write logits output file: " + std::string(outputPath));
+		}
 	}
 
 	void PrintLLMArtifactPlan(const LiteNN::GGUF::LLaMAArtifactPlan& plan)
@@ -1064,6 +1086,36 @@ int main(int argc, char** argv)
 			          << " logits_shape=";
 			PrintTensorShape(logits.Shape());
 			std::cout << " next_token=" << nextToken << '\n';
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--dump-llama-token-id-logits")
+		{
+			if (argc != 5 && argc != 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto tokenIds = ParseTokenIds(argv[3]);
+			const auto positionOffset = argc == 6 ? ParseSize(argv[5], "position-offset", true) : 0uz;
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), tokenIds.size(),
+			                                                positionOffset, { .preserveQuantizedWeights = true });
+			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
+			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(tokenIds, plan));
+			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
+			const auto outputs = interpreter.RunForward(plan, inputs);
+			if (outputs.empty())
+			{
+				throw std::runtime_error("LLM package produced no outputs");
+			}
+			WriteLastTokenLogitsText(outputs.front(), argv[4]);
+			std::cout << "Dumped LLaMA GGUF last-token logits tensors=" << imported.summary.tensorCount
+			          << " metadata=" << imported.summary.metadataCount << " token_ids=";
+			PrintTokenList(tokenIds);
+			std::cout << " logits_shape=";
+			PrintTensorShape(outputs.front().Shape());
+			std::cout << " output=" << argv[4] << '\n';
 			return 0;
 		}
 

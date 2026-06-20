@@ -2497,6 +2497,9 @@ placement and fallback policy.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
       logits shape plus greedy next token.
+- [x] Add a LiteNN prefill-logits dump CLI:
+      `--dump-llama-token-id-logits` runs fixed-length token-id prefill and emits last-token logits as llama-debug-style
+      `index: value` text for external golden comparison.
 - [x] Add an exact-prompt GGUF smoke CLI: `--run-llama-prompt` tokenizes with the limited exact-vocabulary bridge, runs
       fixed-length prefill, and reports token ids, token pieces, logits shape, and greedy next token.
 - [x] Hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from saved package descriptors for direct

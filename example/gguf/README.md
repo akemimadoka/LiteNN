@@ -30,6 +30,7 @@ build\tools\gguf\litenn_gguf_convert.exe --lower-llama-quantized model.gguf mode
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.segment.ltnn 4 16
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.decode.ltnn 1 16
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-token-ids model.gguf 1,2,3,4
+build\tools\gguf\litenn_gguf_convert.exe --dump-llama-token-id-logits model.gguf 1,2,3,4 litenn_last_logits.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt model.gguf "hello"
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 generated_token_ids.txt
@@ -44,6 +45,9 @@ lowers a fixed-length prefill graph with quantized weights preserved, executes
 with the CPU interpreter plus the GGML quantized MatMul adapter, and prints the
 logits shape plus the greedy next token. Production tokenizer parity and
 full prompt-to-decode generation are tracked in `docs/Roadmap.md`.
+`--dump-llama-token-id-logits` runs the same fixed-length prefill path and writes
+the last-token logits as `index: value` lines, matching llama-debug text output
+for golden comparison tooling.
 `--run-llama-prompt` uses a deliberately limited exact-vocabulary tokenizer
 bridge over `tokenizer.ggml.tokens`; it is useful for fixtures and diagnostics
 but does not replace GPT2/BPE or llama.cpp tokenizer parity.
