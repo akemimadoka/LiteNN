@@ -14,6 +14,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -26,6 +27,8 @@ namespace
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
 		          << "  " << executable
 		          << " --analyze-llm <input.gguf> [profile] [--dequantized-budget-bytes N|--dequantized-budget-mib N]\n"
+		          << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
+		          << "[max-cache-length]\n"
 		          << "  " << executable
 		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable
@@ -142,6 +145,78 @@ namespace
 		{
 			std::cout << (diagnostic.blocking ? "blocking" : "note") << " subject=" << diagnostic.subject << ": "
 			          << diagnostic.message << '\n';
+		}
+	}
+
+	void PrintStringList(std::span<const std::string> values, std::size_t maxItems = 12)
+	{
+		std::cout << '[';
+		const auto shown = std::min(values.size(), maxItems);
+		for (std::size_t i = 0; i < shown; ++i)
+		{
+			if (i != 0)
+			{
+				std::cout << ',';
+			}
+			std::cout << values[i];
+		}
+		if (shown < values.size())
+		{
+			if (shown != 0)
+			{
+				std::cout << ',';
+			}
+			std::cout << "...+" << (values.size() - shown) << " more";
+		}
+		std::cout << ']';
+	}
+
+	void PrintSizeList(std::span<const std::size_t> values)
+	{
+		std::cout << '[';
+		for (std::size_t i = 0; i < values.size(); ++i)
+		{
+			if (i != 0)
+			{
+				std::cout << ',';
+			}
+			std::cout << values[i];
+		}
+		std::cout << ']';
+	}
+
+	void PrintLLMArtifactPlan(const LiteNN::GGUF::LLaMAArtifactPlan& plan)
+	{
+		std::cout << "LLM artifact plan architecture=" << plan.hyperparameters.architecture
+		          << " dtype=" << LiteNN::DataTypeName(plan.dtype) << " vocab=" << plan.vocabSize
+		          << " blocks=" << plan.hyperparameters.blockCount << '\n';
+		const auto printEntry = [](const LiteNN::GGUF::LLaMAArtifactEntry& entry) {
+			std::cout << "entry name=" << entry.name << " sequence_length=" << entry.sequenceLength
+			          << " past_length=" << entry.pastLength << " max_cache_length=" << entry.maxCacheLength
+			          << " inputs=";
+			PrintStringList(entry.inputNames);
+			std::cout << " outputs=";
+			PrintStringList(entry.outputNames);
+			std::cout << " kv_caches=" << entry.kvCaches.size() << '\n';
+		};
+		printEntry(plan.prefill);
+		printEntry(plan.decodeStep);
+		if (!plan.decodeStep.kvCaches.empty())
+		{
+			const auto& firstCache = plan.decodeStep.kvCaches.front();
+			std::cout << "kv_cache sample name=" << firstCache.stateBinding.name
+			          << " dtype=" << LiteNN::DataTypeName(firstCache.stateType.dtype) << " state_shape=";
+			const auto stateShape = firstCache.stateType.StaticShape();
+			PrintSizeList(stateShape);
+			std::cout << " key_offset=" << firstCache.keyByteOffset << " value_offset=" << firstCache.valueByteOffset
+			          << " layer_stride=" << firstCache.layerByteStride
+			          << " token_stride=" << firstCache.tokenByteStride << '\n';
+		}
+		for (const auto& layout : plan.tensorLayouts)
+		{
+			std::cout << "layout name=" << layout.name << " domain=" << layout.domain << " axes=";
+			PrintStringList(layout.axes);
+			std::cout << " layout=" << layout.layout << '\n';
 		}
 	}
 
@@ -278,6 +353,26 @@ int main(int argc, char** argv)
 			const auto summary = LiteNN::GGUF::ConvertGGUFArchive(argv[1], argv[2]);
 			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
 			          << " metadata entries\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--plan-llm")
+		{
+			if (argc != 5 && argc != 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto prefillSequenceLength = ParseSize(argv[3], "prefill-sequence-length");
+			const auto decodePastLength = ParseSize(argv[4], "decode-past-length", true);
+			const auto maxCacheLength = argc == 6 ? ParseSize(argv[5], "max-cache-length", true) : decodePastLength;
+			PrintLLMArtifactPlan(LiteNN::GGUF::PlanLLaMAArtifacts(imported.model.UnsafeGraphView(),
+			                                                      LiteNN::GGUF::LLaMAArtifactPlanningOptions{
+			                                                          .prefillSequenceLength = prefillSequenceLength,
+			                                                          .decodePastLength = decodePastLength,
+			                                                          .maxCacheLength = maxCacheLength,
+			                                                      }));
 			return 0;
 		}
 
