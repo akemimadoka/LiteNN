@@ -107,4 +107,18 @@ The capture script writes `manifest.json`, llama.cpp stdout/stderr logs,
 for future LiteNN-vs-llama.cpp parity checks; generated captures should stay in
 build/output directories rather than source control.
 
+Replay the captured llama.cpp prompt token ids through LiteNN:
+
+```powershell
+python311 scripts\gguf_run_litenn_from_golden.py `
+  --manifest build\gguf_golden\hello\manifest.json `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --steps 16 --sample greedy
+```
+
+The replay script reads the llama-debug `*-prompt.txt` artifact, extracts the
+`token ids:` line, runs `--run-llama-decode-loop-token-ids`, and writes
+`litenn_decode_manifest.json` plus LiteNN stdout/stderr/output files next to the
+golden capture. Numerical logits comparison is still a separate acceptance step.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

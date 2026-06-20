@@ -2488,6 +2488,9 @@ placement and fallback policy.
 - [x] Add an external llama.cpp golden capture harness:
       `scripts/gguf_capture_llamacpp_golden.py` records `llama-debug --save-logits` prompt/logit artifacts plus optional
       fixed-seed `llama-cli` generated text into a manifest-backed artifact directory.
+- [x] Add a LiteNN replay harness for captured llama.cpp prompts:
+      `scripts/gguf_run_litenn_from_golden.py` reads `*-prompt.txt` token ids from the capture manifest and runs
+      `--run-llama-decode-loop-token-ids`, producing a colocated LiteNN replay manifest and output files.
 - [ ] Add automated LiteNN-vs-llama.cpp golden comparison for prefill logits, first decode logits, multi-token decode,
       and final generated text for fixed prompts.
 - [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
