@@ -1,9 +1,12 @@
+#include "GGMLQuantizedKernels.h"
 #include "GGUFImporter.h"
+#include "LLMGeneration.h"
 #include "LLaMABuilder.h"
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
+#include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
@@ -18,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -33,10 +37,14 @@ namespace
 		          << "  " << executable
 		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable
+		          << " --lower-llama-quantized <input.gguf> <output.ltnn> <weights.bin> <sequence-length> "
+		             "[position-offset]\n"
+		          << "  " << executable
 		          << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
 		          << "  " << executable
 		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
 		             "<max-cache-length>\n"
+		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -56,6 +64,41 @@ namespace
 			                         (allowZero ? " must be a non-negative integer" : " must be a positive integer"));
 		}
 		return value;
+	}
+
+	std::vector<std::int32_t> ParseTokenIds(std::string_view text)
+	{
+		if (text.empty())
+		{
+			throw std::runtime_error("comma-token-ids must not be empty");
+		}
+		std::vector<std::int32_t> ids;
+		std::size_t offset = 0;
+		while (offset <= text.size())
+		{
+			const auto comma = text.find(',', offset);
+			const auto end = comma == std::string_view::npos ? text.size() : comma;
+			const auto token = text.substr(offset, end - offset);
+			if (token.empty())
+			{
+				throw std::runtime_error("comma-token-ids contains an empty item");
+			}
+			std::int32_t value{};
+			const auto* first = token.data();
+			const auto* last = token.data() + token.size();
+			const auto result = std::from_chars(first, last, value);
+			if (result.ec != std::errc{} || result.ptr != last || value < 0)
+			{
+				throw std::runtime_error("comma-token-ids must contain non-negative int32 values");
+			}
+			ids.push_back(value);
+			if (comma == std::string_view::npos)
+			{
+				break;
+			}
+			offset = comma + 1;
+		}
+		return ids;
 	}
 
 	LiteNN::GGUF::LLaMACompatibilityProfileKind ParseLLMProfile(std::string_view text)
@@ -189,6 +232,20 @@ namespace
 		std::cout << ']';
 	}
 
+	void PrintTensorShape(LiteNN::ShapeView shape)
+	{
+		std::cout << '[';
+		for (std::size_t i = 0; i < shape.NumDim(); ++i)
+		{
+			if (i != 0)
+			{
+				std::cout << ',';
+			}
+			std::cout << shape[i];
+		}
+		std::cout << ']';
+	}
+
 	void PrintLLMArtifactPlan(const LiteNN::GGUF::LLaMAArtifactPlan& plan)
 	{
 		std::cout << "LLM artifact plan architecture=" << plan.hyperparameters.architecture
@@ -222,6 +279,55 @@ namespace
 			PrintStringList(layout.axes);
 			std::cout << " layout=" << layout.layout << '\n';
 		}
+	}
+
+	LiteNN::Tensor<LiteNN::CPU> MakeTokenIdTensor(std::span<const std::int32_t> tokenIds,
+	                                              const LiteNN::ExecutablePlan& plan)
+	{
+		if (plan.inputs.empty())
+		{
+			throw std::runtime_error("LLM package has no inputs");
+		}
+		const auto& input = plan.inputs.front();
+		if (input.type.dtype != LiteNN::DataType::Int32)
+		{
+			throw std::runtime_error(std::format("LLM package first input must be Int32 token ids, got {}",
+			                                     LiteNN::DataTypeName(input.type.dtype)));
+		}
+		if (!input.type.IsFullyStatic())
+		{
+			throw std::runtime_error("LLM package first input must have a static shape");
+		}
+		const auto shape = input.type.StaticShape();
+		const auto expected = LiteNN::Detail::Product(shape);
+		if (expected != tokenIds.size())
+		{
+			throw std::runtime_error(
+			    std::format("LLM token id count mismatch: package expects {}, got {}", expected, tokenIds.size()));
+		}
+		LiteNN::CPU cpu;
+		LiteNN::Tensor<LiteNN::CPU> tensor(LiteNN::Uninitialized, shape, LiteNN::DataType::Int32, cpu);
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, tensor.UnsafeRawData(),
+		                                               LiteNN::DataType::Int32, tokenIds.data(), tokenIds.size());
+		return tensor;
+	}
+
+	std::vector<LiteNN::Tensor<LiteNN::CPU>> MakeZeroStateInputs(const LiteNN::ExecutablePlan& plan,
+	                                                             LiteNN::Tensor<LiteNN::CPU> tokenIds)
+	{
+		std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
+		inputs.push_back(std::move(tokenIds));
+		LiteNN::CPU cpu;
+		for (std::size_t i = 1; i < plan.inputs.size(); ++i)
+		{
+			const auto& input = plan.inputs[i];
+			if (!input.type.IsFullyStatic())
+			{
+				throw std::runtime_error(std::format("LLM package input {} must have a static shape", i));
+			}
+			inputs.emplace_back(input.type.StaticShape(), input.type.dtype, cpu);
+		}
+		return inputs;
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
@@ -495,6 +601,56 @@ int main(int argc, char** argv)
 			                                             argv[3]);
 			std::cout << "Lowered LLaMA graph from " << imported.summary.tensorCount << " tensors and "
 			          << imported.summary.metadataCount << " metadata entries\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--lower-llama-quantized")
+		{
+			if (argc != 6 && argc != 7)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto sequenceLength = ParseSize(argv[5], "sequence-length");
+			const auto positionOffset = argc == 7 ? ParseSize(argv[6], "position-offset", true) : 0uz;
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), sequenceLength,
+			                                                positionOffset, { .preserveQuantizedWeights = true });
+			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(lowered, argv[3], argv[4]);
+			std::cout << "Lowered quantized LLaMA graph from " << imported.summary.tensorCount << " tensors and "
+			          << imported.summary.metadataCount << " metadata entries using external quantized weights\n";
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-token-ids")
+		{
+			if (argc != 4 && argc != 5)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto tokenIds = ParseTokenIds(argv[3]);
+			const auto positionOffset = argc == 5 ? ParseSize(argv[4], "position-offset", true) : 0uz;
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), tokenIds.size(),
+			                                                positionOffset, { .preserveQuantizedWeights = true });
+			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
+			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(tokenIds, plan));
+			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
+			const auto outputs = interpreter.RunForward(plan, inputs);
+			if (outputs.empty())
+			{
+				throw std::runtime_error("LLM package produced no outputs");
+			}
+			const auto& logits = outputs.front();
+			LiteNN::GGUF::LLMSamplerState sampler;
+			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, tokenIds);
+			std::cout << "Ran LLaMA GGUF token-id smoke tensors=" << imported.summary.tensorCount
+			          << " metadata=" << imported.summary.metadataCount << " inputs=" << plan.inputs.size()
+			          << " outputs=" << outputs.size() << " logits_dtype=" << LiteNN::DataTypeName(logits.DType())
+			          << " logits_shape=";
+			PrintTensorShape(logits.Shape());
+			std::cout << " next_token=" << nextToken << '\n';
 			return 0;
 		}
 
