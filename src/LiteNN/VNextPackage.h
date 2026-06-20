@@ -253,6 +253,7 @@ namespace LiteNN
 		std::vector<ExecutablePartition> partitions;
 		MemoryPlan memory;
 		std::vector<Runtime::RuntimeStateBinding> runtimeStates;
+		std::vector<Runtime::RuntimeStateValueBinding> stateValueBindings;
 		std::vector<RuntimeBufferBinding> bufferBindings;
 		std::vector<Runtime::RuntimeExecutionSegment> runtimeSegments;
 		std::vector<Runtime::RuntimeScheduleStep> runtimeSteps;
@@ -269,6 +270,7 @@ namespace LiteNN
 		VNextVersionSet versions;
 		std::vector<std::string> functions;
 		std::vector<std::string> runtimeStates;
+		std::vector<std::string> stateValueBindings;
 		std::vector<std::string> runtimeSegments;
 		std::vector<std::string> runtimeStepRecords;
 		std::vector<std::string> bufferBindings;
@@ -317,6 +319,14 @@ namespace LiteNN
 			summary.runtimeStates.push_back(state.name);
 		}
 
+		summary.stateValueBindings.reserve(manifest.stateValueBindings.size());
+		for (const auto& binding : manifest.stateValueBindings)
+		{
+			summary.stateValueBindings.push_back(std::format("{}:{}:{}:{}", binding.stateName, binding.function,
+			                                                 Runtime::RuntimeStateValueKindName(binding.kind),
+			                                                 binding.valueIndex));
+		}
+
 		summary.runtimeSegments.reserve(manifest.runtimeSegments.size());
 		for (const auto& segment : manifest.runtimeSegments)
 		{
@@ -338,6 +348,49 @@ namespace LiteNN
 		}
 
 		summary.bufferBindings.reserve(manifest.bufferBindings.size());
+		for (std::size_t i = 0; i < manifest.stateValueBindings.size(); ++i)
+		{
+			const auto& binding = manifest.stateValueBindings[i];
+			const auto state = std::ranges::find_if(
+			    manifest.runtimeStates, [&](const auto& candidate) { return candidate.name == binding.stateName; });
+			if (state == manifest.runtimeStates.end())
+			{
+				throw std::runtime_error("vNext state value binding references an unknown state: " + binding.stateName);
+			}
+			if (binding.function >= manifest.functions.size())
+			{
+				throw std::runtime_error("vNext state value binding references an unknown function");
+			}
+			const auto& function = manifest.functions[binding.function];
+			const auto& values =
+			    binding.kind == Runtime::RuntimeStateValueKind::FunctionInput ? function.inputs : function.outputs;
+			if (binding.valueIndex >= values.size())
+			{
+				throw std::runtime_error("vNext state value binding references an unknown function value");
+			}
+			const auto& valueType = values[binding.valueIndex];
+			if (valueType.dtype != state->type.dtype || valueType.memorySpace != state->type.memorySpace)
+			{
+				throw std::runtime_error("vNext state value binding type is incompatible with state: " +
+				                         binding.stateName);
+			}
+			const auto valueBytes = valueType.ByteSize();
+			const auto stateBytes = state->type.ByteSize();
+			if (!valueBytes || !stateBytes || binding.stateByteOffset > *stateBytes ||
+			    *valueBytes > *stateBytes - binding.stateByteOffset)
+			{
+				throw std::runtime_error("vNext state value binding exceeds state capacity: " + binding.stateName);
+			}
+			for (std::size_t j = 0; j < i; ++j)
+			{
+				const auto& previous = manifest.stateValueBindings[j];
+				if (previous.function == binding.function && previous.kind == binding.kind &&
+				    previous.valueIndex == binding.valueIndex)
+				{
+					throw std::runtime_error("vNext state value binding duplicates a function endpoint");
+				}
+			}
+		}
 		for (const auto& binding : manifest.bufferBindings)
 		{
 			summary.bufferBindings.push_back(binding.name);
@@ -503,6 +556,7 @@ namespace LiteNN
 		manifest.partitions = schedule.module.partitions;
 		manifest.memory = std::move(schedule.memory);
 		manifest.runtimeStates = std::move(schedule.states);
+		manifest.stateValueBindings = std::move(schedule.stateValueBindings);
 		manifest.bufferBindings = std::move(schedule.bufferBindings);
 		manifest.runtimeSegments = std::move(schedule.segments);
 		manifest.runtimeSteps = std::move(schedule.steps);

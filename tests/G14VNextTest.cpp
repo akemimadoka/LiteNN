@@ -578,6 +578,33 @@ TEST(G14VNext, VNextModelPackageRoundTripsPackedNibbleQuantizationMetadata)
 	std::filesystem::remove(weightsPath);
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsRuntimeStateValueBindings)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2 });
+	forward.SetResults({ { input, 0 } });
+	graph.AddSubgraph(std::move(forward));
+	graph.SetForward(0);
+
+	auto state = Runtime::MakeKVCacheState("kv.cache.0", TensorType::Dense(DataType::Float32, ShapeView{ 4 }));
+	const std::vector<Runtime::RuntimeStateValueBinding> aliases{
+		{ "kv.cache.0", 0, Runtime::RuntimeStateValueKind::FunctionInput, 0, sizeof(float) * 2 },
+	};
+	const auto schedule =
+	    Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { std::move(state) }, aliases);
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_state_value_binding.json";
+	Serialization::SaveVNextModelPackage(schedule, path);
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(package.manifest.stateValueBindings.size(), 1u);
+	EXPECT_EQ(package.manifest.stateValueBindings[0].stateName, "kv.cache.0");
+	EXPECT_EQ(package.manifest.stateValueBindings[0].kind, Runtime::RuntimeStateValueKind::FunctionInput);
+	EXPECT_EQ(package.manifest.stateValueBindings[0].stateByteOffset, sizeof(float) * 2);
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
 TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
 {
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_legacy.json";

@@ -401,6 +401,15 @@ namespace LiteNN::Serialization
 			out << '}';
 		}
 
+		void RuntimeStateValueBindingJson(std::ostream& out, const Runtime::RuntimeStateValueBinding& binding)
+		{
+			out << "{\"stateName\":";
+			JsonString(out, binding.stateName);
+			out << ",\"function\":" << binding.function << ",\"kind\":" << EnumValue(binding.kind)
+			    << ",\"valueIndex\":" << binding.valueIndex << ",\"stateByteOffset\":" << binding.stateByteOffset
+			    << '}';
+		}
+
 		void RuntimeExecutionSegmentJson(std::ostream& out, const Runtime::RuntimeExecutionSegment& segment)
 		{
 			out << "{\"id\":" << segment.id << ",\"subgraph\":" << segment.subgraph << ",\"backend\":";
@@ -688,6 +697,15 @@ namespace LiteNN::Serialization
 					out << ',';
 				}
 				RuntimeStateBindingJson(out, manifest.runtimeStates[i]);
+			}
+			out << "],\"stateValueBindings\":[";
+			for (std::size_t i = 0; i < manifest.stateValueBindings.size(); ++i)
+			{
+				if (i != 0)
+				{
+					out << ',';
+				}
+				RuntimeStateValueBindingJson(out, manifest.stateValueBindings[i]);
 			}
 			out << "],\"bufferBindings\":[";
 			for (std::size_t i = 0; i < manifest.bufferBindings.size(); ++i)
@@ -1216,6 +1234,19 @@ namespace LiteNN::Serialization
 			return binding;
 		}
 
+		Runtime::RuntimeStateValueBinding ParseRuntimeStateValueBinding(simdjson::dom::element value,
+		                                                                std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			return {
+				.stateName = AsString(Member(object, "stateName", label), label),
+				.function = static_cast<FunctionId>(AsUInt(Member(object, "function", label), label)),
+				.kind = static_cast<Runtime::RuntimeStateValueKind>(AsUInt(Member(object, "kind", label), label)),
+				.valueIndex = static_cast<std::size_t>(AsUInt(Member(object, "valueIndex", label), label)),
+				.stateByteOffset = static_cast<std::size_t>(AsUInt(Member(object, "stateByteOffset", label), label)),
+			};
+		}
+
 		Runtime::RuntimeExecutionSegment ParseRuntimeExecutionSegment(simdjson::dom::element value,
 		                                                              std::string_view label)
 		{
@@ -1417,6 +1448,12 @@ namespace LiteNN::Serialization
 			     AsArray(Member(object, "runtimeStates", "manifest.runtimeStates"), "manifest.runtimeStates"))
 			{
 				manifest.runtimeStates.push_back(ParseRuntimeStateBinding(item, "manifest.runtimeStates"));
+			}
+			for (const auto item : AsArray(Member(object, "stateValueBindings", "manifest.stateValueBindings"),
+			                               "manifest.stateValueBindings"))
+			{
+				manifest.stateValueBindings.push_back(
+				    ParseRuntimeStateValueBinding(item, "manifest.stateValueBindings"));
 			}
 			for (const auto item :
 			     AsArray(Member(object, "bufferBindings", "manifest.bufferBindings"), "manifest.bufferBindings"))
