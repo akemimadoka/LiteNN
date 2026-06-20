@@ -194,14 +194,6 @@ int main(int argc, char** argv)
 			}
 		}
 
-		if (argc == 3)
-		{
-			const auto summary = LiteNN::GGUF::ConvertGGUFArchive(argv[1], argv[2]);
-			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
-			          << " metadata entries\n";
-			return 0;
-		}
-
 		if (argc >= 2 && std::string_view(argv[1]) == "--import")
 		{
 			if (argc != 4)
@@ -228,6 +220,14 @@ int main(int argc, char** argv)
 			const auto report = LiteNN::GGUF::AnalyzeLLaMACompatibility(imported.model.UnsafeGraphView(), profile);
 			PrintLLMCompatibilityReport(report);
 			return report.lowerable ? 0 : 2;
+		}
+
+		if (argc == 3 && !std::string_view(argv[1]).starts_with("--"))
+		{
+			const auto summary = LiteNN::GGUF::ConvertGGUFArchive(argv[1], argv[2]);
+			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
+			          << " metadata entries\n";
+			return 0;
 		}
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cpu")
