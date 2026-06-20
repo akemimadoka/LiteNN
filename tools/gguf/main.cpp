@@ -10,6 +10,7 @@
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -22,6 +23,7 @@ namespace
 	{
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
+		          << "  " << executable << " --analyze-llm <input.gguf> [profile]\n"
 		          << "  " << executable
 		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
 		          << "  " << executable
@@ -45,6 +47,47 @@ namespace
 			                         (allowZero ? " must be a non-negative integer" : " must be a positive integer"));
 		}
 		return value;
+	}
+
+	LiteNN::GGUF::LLaMACompatibilityProfileKind ParseLLMProfile(std::string_view text)
+	{
+		for (const auto& profile : LiteNN::GGUF::QueryLLaMACompatibilityProfiles())
+		{
+			if (text == profile.name)
+			{
+				return profile.kind;
+			}
+		}
+		throw std::runtime_error(std::format("Unknown LLM compatibility profile '{}'", text));
+	}
+
+	LiteNN::GGUF::LLaMACompatibilityProfileKind InferLLMProfile(const LiteNN::Graph& archive)
+	{
+		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(archive);
+		if (hyperparameters.architecture == "qwen2")
+		{
+			return LiteNN::GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM;
+		}
+		if (hyperparameters.architecture == "llama")
+		{
+			return LiteNN::GGUF::LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM;
+		}
+		throw std::runtime_error(
+		    std::format("No default LLM compatibility profile for GGUF architecture '{}'; pass an explicit profile",
+		                hyperparameters.architecture));
+	}
+
+	void PrintLLMCompatibilityReport(const LiteNN::GGUF::LLaMACompatibilityReport& report)
+	{
+		std::cout << "LLM compatibility profile=" << report.profile.name
+		          << " architecture=" << report.profile.architecture
+		          << " lowerable=" << (report.lowerable ? "true" : "false")
+		          << " external_golden_required=" << (report.externalGoldenRequired ? "true" : "false") << '\n';
+		for (const auto& diagnostic : report.diagnostics)
+		{
+			std::cout << (diagnostic.blocking ? "blocking" : "note") << " subject=" << diagnostic.subject << ": "
+			          << diagnostic.message << '\n';
+		}
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
@@ -170,6 +213,21 @@ int main(int argc, char** argv)
 			std::cout << "Imported archive with " << summary.tensorCount << " tensors and " << summary.metadataCount
 			          << " metadata entries\n";
 			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--analyze-llm")
+		{
+			if (argc != 3 && argc != 4)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
+			const auto profile =
+			    argc == 4 ? ParseLLMProfile(argv[3]) : InferLLMProfile(imported.model.UnsafeGraphView());
+			const auto report = LiteNN::GGUF::AnalyzeLLaMACompatibility(imported.model.UnsafeGraphView(), profile);
+			PrintLLMCompatibilityReport(report);
+			return report.lowerable ? 0 : 2;
 		}
 
 		if (argc >= 2 && std::string_view(argv[1]) == "--compile-cpu")

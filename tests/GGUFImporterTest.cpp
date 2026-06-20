@@ -270,6 +270,26 @@ namespace
 		return graph;
 	}
 
+	Graph BuildTinyQwen2Archive()
+	{
+		auto graph = BuildTinyLLaMAArchive();
+		graph.SetMetadata({
+		    { "general.architecture", std::string("qwen2") },
+		    { "qwen2.context_length", std::uint64_t{ 8 } },
+		    { "qwen2.embedding_length", std::uint64_t{ 4 } },
+		    { "qwen2.block_count", std::uint64_t{ 1 } },
+		    { "qwen2.feed_forward_length", std::uint64_t{ 8 } },
+		    { "qwen2.attention.head_count", std::uint64_t{ 2 } },
+		    { "qwen2.attention.head_count_kv", std::uint64_t{ 1 } },
+		    { "qwen2.attention.layer_norm_rms_epsilon", 1.0e-6 },
+		    { "qwen2.rope.freq_base", 10000.0 },
+		    { "tokenizer.ggml.model", std::string("gpt2") },
+		    { "tokenizer.chat_template",
+		      std::string("{% for message in messages %}{{ message.content }}{% endfor %}") },
+		});
+		return graph;
+	}
+
 	Graph BuildQuantizedFriendlyLLaMAArchive()
 	{
 		constexpr std::size_t kEmbeddingLength = 32;
@@ -591,7 +611,7 @@ TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
 {
 	const auto profiles = GGUF::QueryLLaMACompatibilityProfiles();
-	ASSERT_GE(profiles.size(), 3u);
+	ASSERT_GE(profiles.size(), 4u);
 
 	const auto tiny = GGUF::QueryLLaMACompatibilityProfile(GGUF::LLaMACompatibilityProfileKind::TinyFixture);
 	EXPECT_EQ(tiny.name, "tiny-fixture");
@@ -609,6 +629,17 @@ TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
 	EXPECT_TRUE(llama2.requiresExternalLLaMACppGolden);
 	EXPECT_NE(llama2.unsupportedPolicy.find("rejected"), std::string_view::npos);
 	EXPECT_NE(llama2.acceptancePolicy.find("llama.cpp golden"), std::string_view::npos);
+
+	const auto qwen2 = GGUF::QueryLLaMACompatibilityProfile(GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM);
+	EXPECT_EQ(qwen2.name, "qwen2-like-causal-lm");
+	EXPECT_EQ(qwen2.architecture, "qwen2");
+	EXPECT_FALSE(qwen2.selectedProductionProfile);
+	EXPECT_TRUE(qwen2.supportsPrefill);
+	EXPECT_TRUE(qwen2.supportsDecode);
+	EXPECT_TRUE(qwen2.supportsYaRNOrLongRoPE);
+	EXPECT_TRUE(qwen2.requiresExternalLLaMACppGolden);
+	EXPECT_NE(qwen2.unsupportedPolicy.find("Q4_K_M"), std::string_view::npos);
+	EXPECT_NE(qwen2.acceptancePolicy.find("Qwen2.5"), std::string_view::npos);
 }
 
 TEST(GGUFLLaMACompatibility, AnalyzesTinyArchiveAgainstProductionProfile)
@@ -636,6 +667,27 @@ TEST(GGUFLLaMACompatibility, ReportsUnsupportedRopeVariantAsBlockingDiagnostic)
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return diagnostic.blocking && diagnostic.subject == "llama.rope.scaling.type" &&
 		       diagnostic.message.find("only executes none/linear") != std::string::npos;
+	}));
+}
+
+TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnostics)
+{
+	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2Archive(),
+	                                                    GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM);
+
+	EXPECT_TRUE(report.lowerable);
+	EXPECT_TRUE(report.externalGoldenRequired);
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return !diagnostic.blocking && diagnostic.subject == "qwen2.tokenizer" &&
+		       diagnostic.message.find("token-id parity") != std::string::npos;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return !diagnostic.blocking && diagnostic.subject == "qwen2.quantized-cuda" &&
+		       diagnostic.message.find("Q4_K_M CUDA") != std::string::npos;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
+		return !diagnostic.blocking && diagnostic.subject == "qwen2.decode-loop" &&
+		       diagnostic.message.find("runtime decode loop") != std::string::npos;
 	}));
 }
 

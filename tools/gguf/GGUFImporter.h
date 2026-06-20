@@ -58,6 +58,7 @@ namespace LiteNN::GGUF
 		TinyFixture,
 		LLaMA2LikeCausalLM,
 		LLaMA3LikeCausalLM,
+		Qwen2LikeCausalLM,
 	};
 
 	struct LLaMACompatibilityProfileDescriptor

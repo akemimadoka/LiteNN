@@ -513,6 +513,8 @@ namespace LiteNN::GGUF
 			return "llama2-like-causal-lm";
 		case LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM:
 			return "llama3-like-causal-lm";
+		case LLaMACompatibilityProfileKind::Qwen2LikeCausalLM:
+			return "qwen2-like-causal-lm";
 		}
 		return "unknown";
 	}
@@ -574,6 +576,25 @@ namespace LiteNN::GGUF
 				     "and unsupported block layouts remain blocking diagnostics.",
 				     "Acceptance requires external llama.cpp golden logits for representative prompt, prefill, and "
 				     "decode cases before claiming production support." };
+		case LLaMACompatibilityProfileKind::Qwen2LikeCausalLM:
+			return { kind,
+				     LLaMACompatibilityProfileName(kind),
+				     "qwen2",
+				     false,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     true,
+				     "Qwen2/Qwen2.5-style causal LM GGUF archives that use the LLaMA-like decoder skeleton but require "
+				     "Qwen-specific tokenizer/config validation, RoPE scaling semantics, native quantized projection "
+				     "execution, and external logits before production use.",
+				     "Current LiteNN support is an analysis/lowering target only: tokenizer runtime, chat template, "
+				     "Q4_K_M native CUDA projection kernels, long-context RoPE variants, and full decode-loop ABI must "
+				     "remain explicit diagnostics.",
+				     "Acceptance requires a real Qwen2.5 GGUF fixture, llama.cpp golden prefill/decode logits, "
+				     "tokenizer/chat-template parity, and CUDA/native or explicitly configured fallback evidence." };
 		}
 		return { kind,
 			     "unknown",
@@ -596,6 +617,7 @@ namespace LiteNN::GGUF
 			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::TinyFixture),
 			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM),
 			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM),
+			QueryLLaMACompatibilityProfile(LLaMACompatibilityProfileKind::Qwen2LikeCausalLM),
 		};
 	}
 
@@ -636,6 +658,22 @@ namespace LiteNN::GGUF
 			              std::format("Profile '{}' expects architecture '{}', got '{}'", report.profile.name,
 			                          report.profile.architecture, hyperparameters->architecture),
 			              true);
+		}
+		if (kind == LLaMACompatibilityProfileKind::Qwen2LikeCausalLM)
+		{
+			addDiagnostic("qwen2.tokenizer",
+			              "Qwen2 production execution requires tokenizer.ggml metadata, chat-template handling, and "
+			              "token-id parity against llama.cpp; current LiteNN lowering accepts token ids directly.",
+			              false);
+			addDiagnostic("qwen2.quantized-cuda",
+			              "Qwen2 Q4_K_M CUDA execution requires native GGML block-quantized projection kernels or an "
+			              "explicit dequantized-float fallback budget; current LLaMA lowering materializes quantized "
+			              "weights as floating-point tensors.",
+			              false);
+			addDiagnostic("qwen2.decode-loop",
+			              "Full Qwen2 generation requires a runtime decode loop with tokenizer, sampler, KV-cache "
+			              "rebinding, EOS handling, and external llama.cpp golden logits for acceptance.",
+			              false);
 		}
 		if (hyperparameters->ropeScalingType != "none" && hyperparameters->ropeScalingType != "linear")
 		{

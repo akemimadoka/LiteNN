@@ -2394,6 +2394,79 @@ Hidden requirements:
 - Vulkan artifacts should not inherit CPU object-file assumptions. SPIR-V belongs in the instruction region, while
   constants and weights remain separated package regions.
 
+### G16 Full LLM Runtime: GGUF/Qwen2.5 to CUDA-Capable Generation
+
+Purpose: turn the current GGUF importer and tiny LLaMA-family lowering into a practical full causal-LM runtime path. The
+acceptance target is a real GGUF model such as `Qwen2.5-Coder-14B-Instruct-Q4_K_M`: import, diagnose, lower, validate
+against llama.cpp golden logits, compile/load artifacts, and run a complete token generation loop with explicit CPU/CUDA
+placement and fallback policy.
+
+#### G16.1 Compatibility Profiles and Diagnostics
+
+- [x] Add an explicit Qwen2/Qwen2.5 compatibility profile rather than treating it as generic LLaMA.
+      `Qwen2LikeCausalLM` now records tokenizer/chat-template, Q4_K_M CUDA, and decode-loop requirements as actionable
+      diagnostics while preserving the current token-id lowering boundary.
+- [x] Add a `litenn_gguf_convert --analyze-llm <input.gguf> [profile]` command that prints blocking/non-blocking
+      diagnostics before import/lowering/compile. The command infers `qwen2-like-causal-lm` for `general.architecture =
+      qwen2`, accepts explicit profile names, and exits non-zero only for blocking compatibility failures.
+- [ ] Add model-family aliases for common GGUF `general.architecture` values: `llama`, `qwen2`, `qwen2moe`, `mistral`,
+      `gemma`, and reject unsupported families with a profile suggestion.
+- [ ] Detect real GGUF quantization mixes, especially `Q4_K_M`, and report whether the chosen execution path is
+      native-quantized, reference-dequantized, or rejected by memory budget.
+
+#### G16.2 Tokenizer, Prompt, and Sampler Runtime
+
+- [ ] Preserve and expose tokenizer metadata needed by Qwen chat templates, BOS/EOS handling, special tokens, and byte
+      fallback rules.
+- [ ] Add a minimal tokenizer bridge: first allow caller-provided token ids, then add tokenizer execution or a llama.cpp
+      tokenizer adapter behind an explicit optional target.
+- [ ] Implement a generation loop API that owns prompt prefill, one-token decode, EOS detection, logits post-processing,
+      and sampler state.
+- [ ] Support temperature, top-k, top-p, repeat penalty, seedable sampling, and greedy mode with deterministic tests.
+
+#### G16.3 Lowering and State ABI
+
+- [ ] Split LLM lowering into named artifact entries: `prefill`, `decode_step`, optional `logits_postprocess`, and
+      metadata/state descriptors.
+- [ ] Replace fully materialized KV cache tensors with explicit mutable KV-cache buffer bindings and per-layer offsets.
+- [ ] Support variable prompt length and decode position without recompiling for every `pastLength`.
+- [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
+      golden logits before enabling production profiles.
+- [ ] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
+      layout must each be inspectable.
+
+#### G16.4 Quantized Weight Execution
+
+- [ ] Keep GGML block-quantized weights external and quantized through packaging instead of always materializing them as
+      Float32 during lowering.
+- [ ] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
+      diagnostics for large models.
+- [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
+      reporting.
+- [ ] Add parity tests comparing native quantized projection with ggml dequantize-plus-float reference.
+- [ ] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
+
+#### G16.5 CUDA Native Coverage for Full Decode
+
+- [ ] Cover the full decode-step operator set in CUDA native or explicit bridge form: embedding/get-rows, RMSNorm, RoPE,
+      Q/K/V projections, KV append/view, attention score, causal mask, softmax, value aggregation, SwiGLU, residuals, and
+      output projection.
+- [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
+      and quantized Linear epilogues.
+- [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.
+- [ ] Record per-token latency, launch count, memory bandwidth, and fallback count in benchmark/profile output.
+
+#### G16.6 Golden Validation and User-Facing Example
+
+- [ ] Add external llama.cpp golden capture scripts for prefill logits, first decode logits, multi-token decode, and final
+      generated text for fixed prompts.
+- [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
+- [ ] Add artifact compile/load examples for CPU, CUDA bridge, CUDA native, and separated regions.
+- [ ] Gate “production supported” status on matching golden logits within dtype/quantization tolerance and on a non-hidden
+      fallback report.
+- [ ] Add benchmark rows comparing LiteNN CPU, LiteNN CUDA native/bridge, llama.cpp CPU/GPU where locally available, and
+      PyTorch/HF only when an equivalent model source is available.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,
@@ -2410,8 +2483,9 @@ or backend architecture decisions before implementation would be meaningful.
 - Deferred: Vulkan production work that is not selected into the current G15.5 implementation slice, especially broad
   real-device/mobile coverage matrices, large fused-kernel families, and profile tables populated from multiple Vulkan
   devices.
-- Deferred: broad external llama.cpp parity fixtures for real LLaMA-family models, especially CUDA artifact parity and
-  multi-token prefill/decode validation against external logits.
+- Deferred: broad non-Qwen external llama.cpp parity fixtures for additional real LLaMA-family models, especially CUDA
+  artifact parity and multi-token prefill/decode validation against external logits. The Qwen2.5 path is now tracked as
+  the active G16 production LLM target.
 - Deferred: full compiled AOT training steps with named `forward` / `loss` / `backward` / `optimizer_step` artifact
   entries, mutable parameter/state rebinding, and saved-activation/tape ABI. G14 closes the compatibility-breaking Trainer
   API split; the production compiled train-step implementation remains the G13 AOT-training project.
