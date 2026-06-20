@@ -2473,7 +2473,9 @@ placement and fallback policy.
 - [ ] Add external llama.cpp golden capture scripts for prefill logits, first decode logits, multi-token decode, and final
       generated text for fixed prompts.
 - [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
-- [ ] Add artifact compile/load examples for CPU, CUDA bridge, CUDA native, and separated regions.
+- [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
+      weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
+- [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
 - [ ] Gate “production supported” status on matching golden logits within dtype/quantization tolerance and on a non-hidden
       fallback report.
 - [ ] Add benchmark rows comparing LiteNN CPU, LiteNN CUDA native/bridge, llama.cpp CPU/GPU where locally available, and
