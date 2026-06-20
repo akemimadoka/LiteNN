@@ -30,6 +30,7 @@ build\tools\gguf\litenn_gguf_convert.exe --lower-llama-quantized model.gguf mode
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama model.gguf model.segment.ltnn 4 16
 build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.decode.ltnn 1 16
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-token-ids model.gguf 1,2,3,4
+build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 ```
 
 `--run-llama-token-ids` is a token-id level smoke path. It imports the GGUF file,
@@ -37,6 +38,8 @@ lowers a fixed-length prefill graph with quantized weights preserved, executes
 with the CPU interpreter plus the GGML quantized MatMul adapter, and prints the
 logits shape plus the greedy next token. Full tokenizer text input and
 multi-token decode-loop generation are tracked in `docs/Roadmap.md`.
+`--run-llama-package-token-ids` runs an already lowered `.ltnn` package and is
+useful for validating conversion artifacts without re-importing the GGUF file.
 
 When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
 emitted as carrier objects with exported rodata/instruction symbols:

@@ -45,6 +45,7 @@ namespace
 		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
 		             "<max-cache-length>\n"
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
+		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -647,6 +648,33 @@ int main(int argc, char** argv)
 			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, tokenIds);
 			std::cout << "Ran LLaMA GGUF token-id smoke tensors=" << imported.summary.tensorCount
 			          << " metadata=" << imported.summary.metadataCount << " inputs=" << plan.inputs.size()
+			          << " outputs=" << outputs.size() << " logits_dtype=" << LiteNN::DataTypeName(logits.DType())
+			          << " logits_shape=";
+			PrintTensorShape(logits.Shape());
+			std::cout << " next_token=" << nextToken << '\n';
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-package-token-ids")
+		{
+			if (argc != 4)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			const auto package = LiteNN::Serialization::LoadVNextModelPackage(argv[2]);
+			const auto tokenIds = ParseTokenIds(argv[3]);
+			auto inputs = MakeZeroStateInputs(package.plan, MakeTokenIdTensor(tokenIds, package.plan));
+			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
+			const auto outputs = interpreter.RunForward(package.plan, inputs);
+			if (outputs.empty())
+			{
+				throw std::runtime_error("LLM package produced no outputs");
+			}
+			const auto& logits = outputs.front();
+			LiteNN::GGUF::LLMSamplerState sampler;
+			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, tokenIds);
+			std::cout << "Ran LLaMA package token-id smoke inputs=" << package.plan.inputs.size()
 			          << " outputs=" << outputs.size() << " logits_dtype=" << LiteNN::DataTypeName(logits.DType())
 			          << " logits_shape=";
 			PrintTensorShape(logits.Shape());

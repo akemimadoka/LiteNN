@@ -2491,6 +2491,8 @@ placement and fallback policy.
       logits shape plus greedy next token.
 - [x] Hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from saved package descriptors for direct
       Interpreter execution of saved `.ltnn` graphs with inline constants.
+- [x] Add a saved-package token-id smoke CLI: `--run-llama-package-token-ids` loads a lowered `.ltnn` package, binds
+      caller-provided token ids, executes through the same quantized MatMul callback path, and reports greedy next token.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
