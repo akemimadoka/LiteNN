@@ -125,4 +125,19 @@ The replay script reads the llama-debug `*-prompt.txt` artifact, extracts the
 `litenn_decode_manifest.json` plus LiteNN stdout/stderr/output files next to the
 golden capture. Numerical logits comparison is still a separate acceptance step.
 
+Compare LiteNN last-token prefill logits against the llama-debug logits text
+artifact:
+
+```powershell
+python311 scripts\gguf_compare_llamacpp_logits.py `
+  --manifest build\gguf_golden\hello\manifest.json `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --abs-tol 1e-4 --rel-tol 1e-4
+```
+
+The comparison script replays the captured prompt token ids through
+`--dump-llama-token-id-logits`, reads llama-debug `index: value` logits, and
+writes `logits_compare.json` with max absolute/relative errors and the largest
+mismatches.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

@@ -2491,8 +2491,11 @@ placement and fallback policy.
 - [x] Add a LiteNN replay harness for captured llama.cpp prompts:
       `scripts/gguf_run_litenn_from_golden.py` reads `*-prompt.txt` token ids from the capture manifest and runs
       `--run-llama-decode-loop-token-ids`, producing a colocated LiteNN replay manifest and output files.
-- [ ] Add automated LiteNN-vs-llama.cpp golden comparison for prefill logits, first decode logits, multi-token decode,
-      and final generated text for fixed prompts.
+- [x] Add automated LiteNN-vs-llama.cpp prefill-logits comparison:
+      `scripts/gguf_compare_llamacpp_logits.py` replays captured prompt token ids through LiteNN, dumps last-token logits,
+      compares against llama-debug `index: value` logits, and emits max-error/mismatch JSON.
+- [ ] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits, multi-token decode, and final
+      generated text for fixed prompts.
 - [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
