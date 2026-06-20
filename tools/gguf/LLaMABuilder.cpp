@@ -461,12 +461,16 @@ namespace LiteNN::GGUF
 		}
 	}
 
-	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
-	                                     std::size_t decodePastLength)
+	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, const LLaMAArtifactPlanningOptions& options)
 	{
-		if (prefillSequenceLength == 0)
+		if (options.prefillSequenceLength == 0)
 		{
 			throw std::runtime_error("LLaMA artifact plan requires prefillSequenceLength > 0");
+		}
+		const auto maxCacheLength = options.maxCacheLength == 0 ? options.decodePastLength : options.maxCacheLength;
+		if (maxCacheLength < options.decodePastLength)
+		{
+			throw std::runtime_error("LLaMA artifact plan requires maxCacheLength >= decodePastLength");
 		}
 		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
 		const auto tokenEmbeddingIndex = archive.FindVariable("token_embd.weight");
@@ -504,19 +508,22 @@ namespace LiteNN::GGUF
 		}
 		const auto vocabSize = vocabMajor ? embeddingShape[0] : embeddingShape[1];
 		const auto headDim = hyperparameters.HeadDimension();
-		const std::vector<std::size_t> cacheShape{ decodePastLength, hyperparameters.attentionHeadCountKV, headDim };
+		const std::vector<std::size_t> cacheShape{ options.decodePastLength, hyperparameters.attentionHeadCountKV,
+			                                       headDim };
 		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
-		const std::vector<std::size_t> stateShape{ 2, decodePastLength, hyperparameters.attentionHeadCountKV, headDim };
+		const std::vector<std::size_t> stateShape{ 2, maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
 		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
-		const auto cacheByteSize = cacheType.ByteSize().value_or(0);
+		const auto cacheCapacityPerPlaneBytes =
+		    maxCacheLength * hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 		const auto stateByteSize = stateType.ByteSize().value_or(0);
 		const auto tokenByteStride = hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 
 		LLaMAArtifactEntry prefill{
 			.kind = LLaMAArtifactKind::Prefill,
 			.name = "prefill",
-			.sequenceLength = prefillSequenceLength,
+			.sequenceLength = options.prefillSequenceLength,
 			.pastLength = 0,
+			.maxCacheLength = maxCacheLength,
 			.positionOffset = 0,
 			.inputNames = { "token_ids" },
 			.outputNames = { "logits" },
@@ -527,8 +534,9 @@ namespace LiteNN::GGUF
 			.kind = LLaMAArtifactKind::DecodeStep,
 			.name = "decode_step",
 			.sequenceLength = 1,
-			.pastLength = decodePastLength,
-			.positionOffset = decodePastLength,
+			.pastLength = options.decodePastLength,
+			.maxCacheLength = maxCacheLength,
+			.positionOffset = options.decodePastLength,
 			.inputNames = { "token_ids" },
 			.outputNames = { "logits" },
 			.kvCaches = {},
@@ -557,7 +565,7 @@ namespace LiteNN::GGUF
 			    .stateType = stateType,
 			    .stateBinding = stateBinding,
 			    .keyByteOffset = 0,
-			    .valueByteOffset = cacheByteSize,
+			    .valueByteOffset = cacheCapacityPerPlaneBytes,
 			    .layerByteStride = stateByteSize,
 			    .tokenByteStride = tokenByteStride,
 			});
@@ -582,6 +590,14 @@ namespace LiteNN::GGUF
 			.decodeStep = std::move(decode),
 			.decodeStateABI = std::move(decodeStateABI),
 		};
+	}
+
+	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
+	                                     std::size_t decodePastLength)
+	{
+		return PlanLLaMAArtifacts(archive, { .prefillSequenceLength = prefillSequenceLength,
+		                                     .decodePastLength = decodePastLength,
+		                                     .maxCacheLength = decodePastLength });
 	}
 
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,

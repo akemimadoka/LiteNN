@@ -839,6 +839,35 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.currentPosition->effects, std::string("increment")));
 }
 
+TEST(GGUFLLaMAArtifacts, SeparatesDecodePositionFromCacheCapacity)
+{
+	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), GGUF::LLaMAArtifactPlanningOptions{
+	                                                                        .prefillSequenceLength = 4,
+	                                                                        .decodePastLength = 3,
+	                                                                        .maxCacheLength = 8,
+	                                                                    });
+
+	EXPECT_EQ(plan.prefill.maxCacheLength, 8u);
+	EXPECT_EQ(plan.decodeStep.pastLength, 3u);
+	EXPECT_EQ(plan.decodeStep.maxCacheLength, 8u);
+	ASSERT_EQ(plan.decodeStep.kvCaches.size(), 1u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 3, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateType.StaticShape(), std::vector<std::size_t>({ 2, 8, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].valueByteOffset, 64u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].layerByteStride, 128u);
+}
+
+TEST(GGUFLLaMAArtifacts, RejectsCacheCapacitySmallerThanDecodePosition)
+{
+	EXPECT_THROW(static_cast<void>(GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(),
+	                                                        GGUF::LLaMAArtifactPlanningOptions{
+	                                                            .prefillSequenceLength = 4,
+	                                                            .decodePastLength = 3,
+	                                                            .maxCacheLength = 2,
+	                                                        })),
+	             std::runtime_error);
+}
+
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 {
 	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),

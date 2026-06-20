@@ -2435,7 +2435,9 @@ placement and fallback policy.
 - [x] Expose explicit mutable KV-cache runtime-state bindings and per-layer key/value byte offsets in the LLM artifact
       plan.
 - [ ] Replace functional decode graph cache inputs/outputs with in-place runtime-state rebinding.
-- [ ] Support variable prompt length and decode position without recompiling for every `pastLength`.
+- [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
+- [ ] Support variable prompt length and decode position in executable lowering without recompiling for every
+      `pastLength`.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
       golden logits before enabling production profiles.
 - [ ] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache

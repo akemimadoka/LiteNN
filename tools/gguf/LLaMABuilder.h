@@ -76,6 +76,7 @@ namespace LiteNN::GGUF
 		std::string name;
 		std::size_t sequenceLength{};
 		std::size_t pastLength{};
+		std::size_t maxCacheLength{};
 		std::size_t positionOffset{};
 		std::vector<std::string> inputNames;
 		std::vector<std::string> outputNames;
@@ -92,8 +93,16 @@ namespace LiteNN::GGUF
 		Runtime::LLMDecodeStateABI decodeStateABI;
 	};
 
+	struct LLaMAArtifactPlanningOptions
+	{
+		std::size_t prefillSequenceLength{};
+		std::size_t decodePastLength{};
+		std::size_t maxCacheLength{};
+	};
+
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,
 	                                             std::optional<QuantizedBlockFormat> blockFormat = std::nullopt);
+	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, const LLaMAArtifactPlanningOptions& options);
 	LLaMAArtifactPlan PlanLLaMAArtifacts(const Graph& archive, std::size_t prefillSequenceLength,
 	                                     std::size_t decodePastLength);
 	LLaMADecoderBlock CreateLLaMADecoderBlock(Graph& graph, const Graph& archive,
