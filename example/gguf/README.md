@@ -85,4 +85,22 @@ library, shared library, memory-mapped file, or in-memory span. Applications
 that prefer raw files can use `CompiledModuleSeparatedArtifact::WriteRegionFiles`
 after compiling through the C++ API.
 
+Capture llama.cpp golden artifacts for a fixed prompt:
+
+```powershell
+python311 scripts\gguf_capture_llamacpp_golden.py `
+  --model model.gguf `
+  --prompt "hello" `
+  --out-dir build\gguf_golden\hello `
+  --llama-debug third_party\llama.cpp\build\bin\llama-debug.exe `
+  --llama-cli third_party\llama.cpp\build\bin\llama-cli.exe `
+  --predict 16 --seed 42
+```
+
+The capture script writes `manifest.json`, llama.cpp stdout/stderr logs,
+`llama-debug --save-logits` prompt/logit files, and optional fixed-seed
+`llama-cli` generated text. Those artifacts are the external acceptance input
+for future LiteNN-vs-llama.cpp parity checks; generated captures should stay in
+build/output directories rather than source control.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

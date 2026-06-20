@@ -2485,8 +2485,11 @@ placement and fallback policy.
 
 #### G16.6 Golden Validation and User-Facing Example
 
-- [ ] Add external llama.cpp golden capture scripts for prefill logits, first decode logits, multi-token decode, and final
-      generated text for fixed prompts.
+- [x] Add an external llama.cpp golden capture harness:
+      `scripts/gguf_capture_llamacpp_golden.py` records `llama-debug --save-logits` prompt/logit artifacts plus optional
+      fixed-seed `llama-cli` generated text into a manifest-backed artifact directory.
+- [ ] Add automated LiteNN-vs-llama.cpp golden comparison for prefill logits, first decode logits, multi-token decode,
+      and final generated text for fixed prompts.
 - [ ] Add a Qwen2.5-Coder smoke example that accepts a GGUF path, prompt, backend policy, max tokens, and output file.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
       quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
