@@ -54,9 +54,10 @@ but does not replace GPT2/BPE or llama.cpp tokenizer parity.
 `--run-llama-package-token-ids` runs an already lowered `.ltnn` package and is
 useful for validating conversion artifacts without re-importing the GGUF file.
 `--run-llama-decode-loop-token-id` is a decode-loop smoke path: it prebuilds the
-static-shape decode plans for each cache length, carries updated KV-cache tensors
-between steps, and prints build/run timing, generated token ids, and tokenizer
-pieces when `tokenizer.ggml.tokens` is available. If an output path is supplied,
+single max-capacity decode plan, advances an Int64 runtime position, carries
+full-capacity KV-cache tensors between steps, and prints build/run timing,
+generated token ids, and tokenizer pieces when `tokenizer.ggml.tokens` is
+available. If an output path is supplied,
 it writes both lists to that file. The decode loop defaults to greedy sampling;
 `--sample random` enables seedable temperature/top-k/top-p sampling with an
 optional repeat penalty. Generation stops early on `tokenizer.ggml.eos_token_id`
@@ -117,6 +118,10 @@ python311 example\gguf\build_stateful_artifacts.py `
 CUDA request produced a CPU bridge. `native-required` rejects bridges;
 `bridge-allowed` permits but exposes them; `optional` also records unavailable
 CUDA builds; `disabled` emits CPU artifacts only.
+The stateful package uses the same capacity ABI: `token_ids`,
+`current_position`, and one full key/value plane per layer are inputs; logits,
+`next_position`, and updated planes are outputs. A caller may therefore reuse
+one compiled artifact for every decode position below `max-cache-length`.
 
 Capture llama.cpp golden artifacts for a fixed prompt:
 

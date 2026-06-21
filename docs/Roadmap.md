@@ -2454,8 +2454,16 @@ placement and fallback policy.
       map function input/output values directly onto byte ranges of persistent state buffers, and LLaMA artifact plans
       emit key/value bindings for every decoder layer while enforcing capacity for the appended token.
 - [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
-- [ ] Support variable prompt length and decode position in executable lowering without recompiling for every
-      `pastLength`.
+- [x] Support runtime decode position without recompiling for every `pastLength`:
+      capacity decode accepts `current_position` plus full-capacity KV tensors, writes the new K/V row through
+      single-index Scatter, masks inactive cache suffixes, computes RoPE from the runtime position, returns
+      `next_position`, and aliases all mutable state through the package ABI. The Interpreter decode loop now builds one
+      capacity plan instead of one static graph per token; CPU AOT parity, two-position reuse, and package roundtrip are
+      covered by `GGUFImporterTest`.
+- [ ] Support variable prompt length in executable prefill lowering without recompiling for each prompt shape; this needs
+      a max-capacity token/mask contract and dynamic selection of the final valid logits/cache extent.
+- [x] Lower single-index `ScatterNode` through MLIR for race-free capacity-cache updates, while continuing to reject
+      unsupported multi-index compiled Scatter forms explicitly.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
       golden logits before enabling production profiles.
 - [x] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
@@ -2545,8 +2553,9 @@ placement and fallback policy.
 - [x] Add a saved-package token-id smoke CLI: `--run-llama-package-token-ids` loads a lowered `.ltnn` package, binds
       caller-provided token ids, executes through the same quantized MatMul callback path, and reports greedy next token.
 - [x] Add a token-id decode-loop smoke CLI: `--run-llama-decode-loop-token-id` repeatedly executes static decode graphs,
-      prebuilds static decode plans for each cache length, carries updated KV-cache tensors between steps, and reports
-      build/run timing plus generated token ids and tokenizer pieces when `tokenizer.ggml.tokens` is available.
+      builds one max-capacity decode plan, advances the runtime position state, carries full-capacity KV-cache tensors
+      between steps, and reports build/run timing plus generated token ids and tokenizer pieces when
+      `tokenizer.ggml.tokens` is available.
 - [x] Add an externally tokenized prompt decode-loop CLI:
       `--run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps>` bridges real tokenizer parity work by
       accepting full prompt token-id sequences before the optional llama.cpp tokenizer adapter is available.
