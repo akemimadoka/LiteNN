@@ -364,6 +364,85 @@ namespace
 		return graph;
 	}
 
+	std::int8_t Q6KScale(std::size_t out, std::size_t halfBlock, std::size_t segment, std::size_t laneInSegment)
+	{
+		auto value = static_cast<int>((out * 3 + halfBlock * 5 + segment * 2 + laneInSegment / 16) % 5) - 2;
+		return static_cast<std::int8_t>(value == 0 ? 1 : value);
+	}
+
+	std::int8_t Q6KQuant(std::size_t out, std::size_t lane)
+	{
+		return static_cast<std::int8_t>(static_cast<int>((out * 7 + lane * 5) % 64) - 32);
+	}
+
+	Graph BuildGGMLQ6_KQuantizedMatMulGraph()
+	{
+		constexpr std::size_t batch = 1;
+		constexpr std::size_t inFeatures = 256;
+		constexpr std::size_t outFeatures = 2;
+		constexpr float dValue = 0.125F;
+		const auto d = EncodeF16(dValue);
+		std::vector<std::byte> storage(outFeatures * 210);
+		for (std::size_t out = 0; out < outFeatures; ++out)
+		{
+			const auto blockBase = out * 210;
+			for (std::size_t lane = 0; lane < inFeatures; ++lane)
+			{
+				const auto halfBlock = lane / 128;
+				const auto local = lane % 128;
+				const auto segment = local / 32;
+				const auto laneInSegment = local % 32;
+				const auto encoded = static_cast<std::uint8_t>(Q6KQuant(out, lane) + 32);
+				const auto lowFour = static_cast<std::uint8_t>(encoded & 0x0Fu);
+				const auto highTwo = static_cast<std::uint8_t>((encoded >> 4) & 0x03u);
+
+				const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+				auto& ql = storage[blockBase + qlOffset];
+				const auto qlCurrent = std::to_integer<std::uint8_t>(ql);
+				ql = segment < 2 ? static_cast<std::byte>((qlCurrent & 0xF0u) | lowFour)
+				                 : static_cast<std::byte>((qlCurrent & 0x0Fu) | (lowFour << 4));
+
+				const auto qhOffset = 128 + halfBlock * 32 + laneInSegment;
+				auto& qh = storage[blockBase + qhOffset];
+				const auto qhCurrent = std::to_integer<std::uint8_t>(qh);
+				qh = static_cast<std::byte>((qhCurrent & ~(0x03u << (segment * 2))) | (highTwo << (segment * 2)));
+			}
+			for (std::size_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+			{
+				for (std::size_t segment = 0; segment < 4; ++segment)
+				{
+					for (std::size_t laneGroup = 0; laneGroup < 2; ++laneGroup)
+					{
+						const auto scaleOffset = 192 + halfBlock * 8 + laneGroup + segment * 2;
+						const auto scale = Q6KScale(out, halfBlock, segment, laneGroup == 0 ? 0uz : 16uz);
+						storage[blockBase + scaleOffset] = static_cast<std::byte>(static_cast<std::uint8_t>(scale));
+					}
+				}
+			}
+			storage[blockBase + 208] = d[0];
+			storage[blockBase + 209] = d[1];
+		}
+
+		auto tensor = Tensor<CPU>(Uninitialized, { outFeatures, 210 }, DataType::UInt8);
+		std::memcpy(tensor.UnsafeRawData(), storage.data(), storage.size());
+		auto params =
+		    BlockQuantization(QuantizedBlockFormat::GGML_Q6_K, { outFeatures, inFeatures }, DataType::Float32);
+
+		Graph graph;
+		const auto weight = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(tensor), params));
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, inFeatures });
+		const auto weightRef =
+		    sg.AddNode(VariableRefNode{ weight }, { OutputInfo{ DataType::UInt8, { outFeatures, 210 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weightRef, 0 }, params, true },
+		                               { OutputInfo{ DataType::Float32, { batch, outFeatures } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
 		ModelBuilder builder;
@@ -559,6 +638,23 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 	}
 
 	{
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildGGMLQ6_KQuantizedMatMulGraph()));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::GGMLQ6_KMatMulF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		const auto& kernel = payload.kernels[0];
+		EXPECT_EQ(kernel.name, CUDANativeGGMLBlockMatMulF32KernelName(QuantizedBlockFormat::GGML_Q6_K));
+		ASSERT_EQ(kernel.arguments.size(), 4u);
+		EXPECT_EQ(kernel.arguments[2].kind, CUDANativeArgumentKind::ConstantTensor);
+		EXPECT_EQ(payload.constantData.size(), 2u * 210u);
+	}
+
+	{
 		const std::array outputShape{ 2uz, 3uz };
 		auto artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildBinaryGraph(
 		    BinaryOp::Divide, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape, "broadcast_divide")));
@@ -719,6 +815,51 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ4_KQuantizedMatMulOnCUDA)
 		{
 			const auto q = static_cast<float>((out + k) % 16);
 			sum += ReadFloat(input, k) * 0.25F * q;
+		}
+		expected[out] = sum;
+	}
+	ExpectTensorNear(actual, expected, 1.0e-3F);
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeGGMLQ6_KQuantizedMatMulOnCUDA)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	auto graph = BuildGGMLQ6_KQuantizedMatMulGraph();
+	auto module = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph)).Load(CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	std::vector<double> inputValues(256);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<double>(static_cast<int>(i % 13) - 6) * 0.125;
+	}
+	auto input = Tensor<CPU>(inputValues, { 1, 256 }, DataType::Float32);
+	std::array<Tensor<CUDA>, 1> cudaInputs = { input.CopyToDevice(CUDA{}) };
+	auto outputs = module.RunTensors(cudaInputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	auto actual = outputs[0].CopyToDevice(CPU{});
+
+	std::array<float, 2> expected{};
+	for (std::size_t out = 0; out < 2; ++out)
+	{
+		float sum = 0.0F;
+		for (std::size_t k = 0; k < 256; ++k)
+		{
+			const auto halfBlock = k / 128;
+			const auto local = k % 128;
+			const auto segment = local / 32;
+			const auto laneInSegment = local % 32;
+			const auto scale = static_cast<float>(Q6KScale(out, halfBlock, segment, laneInSegment));
+			const auto quant = static_cast<float>(Q6KQuant(out, k));
+			sum += ReadFloat(input, k) * 0.125F * scale * quant;
 		}
 		expected[out] = sum;
 	}

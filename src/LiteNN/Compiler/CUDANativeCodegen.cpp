@@ -783,7 +783,8 @@ namespace LiteNN
 			{
 				const auto layout = GetQuantizedBlockLayout(spec.format);
 				if (!layout || spec.m == 0 || spec.k == 0 || spec.n == 0 || spec.k % layout->elementsPerBlock != 0 ||
-				    (spec.format != QuantizedBlockFormat::GGML_Q8_0 && spec.format != QuantizedBlockFormat::GGML_Q4_K))
+				    (spec.format != QuantizedBlockFormat::GGML_Q8_0 && spec.format != QuantizedBlockFormat::GGML_Q4_K &&
+				     spec.format != QuantizedBlockFormat::GGML_Q6_K))
 				{
 					throw std::runtime_error(
 					    "CUDA native GGML block MatMul requires supported format, non-zero m/n, and aligned k");
@@ -811,8 +812,11 @@ namespace LiteNN
 					auto blockBase = EmitI32Mul(
 					    EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), EmitI32Constant(blockIndex)),
 					    EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
+					const auto dOffset = spec.format == QuantizedBlockFormat::GGML_Q6_K
+					                         ? EmitI32Add(blockBase, EmitI32Constant(208))
+					                         : blockBase;
 					auto scaleRaw =
-					    EmitLoad(EmitTypedGEP(rhs, f16Type, EmitI32UDiv(blockBase, EmitI32Constant(2))), f16Type);
+					    EmitLoad(EmitTypedGEP(rhs, f16Type, EmitI32UDiv(dOffset, EmitI32Constant(2))), f16Type);
 					auto scale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, scaleRaw).getResult();
 
 					mlir::Value minScale;
@@ -841,7 +845,9 @@ namespace LiteNN
 						}
 						else
 						{
-							weight = EmitGGMLQ4_KWeightF32(rhs, blockBase, scale, minScale, lane);
+							weight = spec.format == QuantizedBlockFormat::GGML_Q6_K
+							             ? EmitGGMLQ6_KWeightF32(rhs, blockBase, scale, lane)
+							             : EmitGGMLQ4_KWeightF32(rhs, blockBase, scale, minScale, lane);
 						}
 						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, weight));
 					}
@@ -858,6 +864,23 @@ namespace LiteNN
 				auto i8Type = builder_.getIntegerType(8);
 				auto raw = EmitLoad(EmitTypedGEP(base, i8Type, byteOffset), i8Type);
 				return builder_.create<mlir::arith::ExtUIOp>(loc_, i32Type_, raw).getResult();
+			}
+
+			mlir::Value EmitLoadI8AsI32(mlir::Value base, mlir::Value byteOffset)
+			{
+				auto i8Type = builder_.getIntegerType(8);
+				auto raw = EmitLoad(EmitTypedGEP(base, i8Type, byteOffset), i8Type);
+				return builder_.create<mlir::arith::ExtSIOp>(loc_, i32Type_, raw).getResult();
+			}
+
+			mlir::Value EmitI32ToF32(mlir::Value value)
+			{
+				return builder_.create<mlir::arith::SIToFPOp>(loc_, f32Type_, value).getResult();
+			}
+
+			mlir::Value EmitU32ToF32(mlir::Value value)
+			{
+				return builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, value).getResult();
 			}
 
 			mlir::Value EmitGGMLQ4_KWeightF32(mlir::Value rhs, mlir::Value blockBase, mlir::Value d, mlir::Value dmin,
@@ -911,11 +934,48 @@ namespace LiteNN
 				auto nibble = lane % 64 >= 32
 				                  ? builder_.create<mlir::arith::ShRUIOp>(loc_, quantByte, shift4).getResult()
 				                  : builder_.create<mlir::arith::AndIOp>(loc_, quantByte, mask15).getResult();
-				auto scaleF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, scale).getResult();
-				auto minF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, minimum).getResult();
-				auto quantF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, nibble).getResult();
+				auto scaleF32 = EmitU32ToF32(scale);
+				auto minF32 = EmitU32ToF32(minimum);
+				auto quantF32 = EmitU32ToF32(nibble);
 				auto scaled = EmitF32Mul(EmitF32Mul(d, scaleF32), quantF32);
 				return builder_.create<mlir::arith::SubFOp>(loc_, scaled, EmitF32Mul(dmin, minF32)).getResult();
+			}
+
+			mlir::Value EmitGGMLQ6_KWeightF32(mlir::Value rhs, mlir::Value blockBase, mlir::Value d, std::uint32_t lane)
+			{
+				const auto halfBlock = lane / 128;
+				const auto local = lane % 128;
+				const auto segment = local / 32;
+				const auto laneInSegment = local % 32;
+				const auto oddSegment = segment % 2;
+				const auto qlOffset = halfBlock * 64 + laneInSegment + oddSegment * 32;
+				auto ql = EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(qlOffset)));
+				auto shift4 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 4);
+				auto mask15 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 15);
+				auto lowFour = segment >= 2 ? builder_.create<mlir::arith::ShRUIOp>(loc_, ql, shift4).getResult()
+				                            : builder_.create<mlir::arith::AndIOp>(loc_, ql, mask15).getResult();
+
+				const auto qhOffset = 128 + halfBlock * 32 + laneInSegment;
+				auto qh = EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(qhOffset)));
+				auto shift = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, segment * 2);
+				auto highTwo =
+				    builder_
+				        .create<mlir::arith::AndIOp>(loc_, builder_.create<mlir::arith::ShRUIOp>(loc_, qh, shift),
+				                                     builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 3))
+				        .getResult();
+				auto quant = builder_
+				                 .create<mlir::arith::SubIOp>(
+				                     loc_,
+				                     builder_
+				                         .create<mlir::arith::OrIOp>(
+				                             loc_, lowFour, builder_.create<mlir::arith::ShLIOp>(loc_, highTwo, shift4))
+				                         .getResult(),
+				                     builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 32))
+				                 .getResult();
+
+				const auto scaleOffset = 192 + halfBlock * 8 + (laneInSegment / 16) + segment * 2;
+				auto scale = EmitLoadI8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(scaleOffset)));
+				return EmitF32Mul(EmitF32Mul(d, EmitI32ToF32(scale)), EmitI32ToF32(quant));
 			}
 
 			void EmitMatMulBiasEpilogue(mlir::gpu::GPUModuleOp gpuModule,
@@ -1699,6 +1759,8 @@ namespace LiteNN
 			return "litenn_ggml_q8_0_matmul_f32";
 		case QuantizedBlockFormat::GGML_Q4_K:
 			return "litenn_ggml_q4_k_matmul_f32";
+		case QuantizedBlockFormat::GGML_Q6_K:
+			return "litenn_ggml_q6_k_matmul_f32";
 		default:
 			throw std::runtime_error("Unsupported CUDA native GGML block MatMul format");
 		}
