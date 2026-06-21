@@ -313,6 +313,57 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGGMLQ4_KQuantizedMatMulGraph()
+	{
+		constexpr std::size_t batch = 1;
+		constexpr std::size_t inFeatures = 256;
+		constexpr std::size_t outFeatures = 2;
+		const auto d = EncodeF16(0.25F);
+		const auto dmin = EncodeF16(0.125F);
+		std::vector<std::byte> storage(outFeatures * 144);
+		for (std::size_t out = 0; out < outFeatures; ++out)
+		{
+			const auto blockBase = out * 144;
+			storage[blockBase] = d[0];
+			storage[blockBase + 1] = d[1];
+			storage[blockBase + 2] = dmin[0];
+			storage[blockBase + 3] = dmin[1];
+			for (std::size_t i = 0; i < 4; ++i)
+			{
+				storage[blockBase + 4 + i] = std::byte{ 1 };
+				storage[blockBase + 12 + i] = std::byte{ 1 };
+			}
+			for (std::size_t lane = 0; lane < inFeatures; ++lane)
+			{
+				const auto nibble = static_cast<std::uint8_t>((out + lane) % 16);
+				const auto quantOffset = (lane / 64) * 32 + lane % 32;
+				auto& byte = storage[blockBase + 16 + quantOffset];
+				const auto current = std::to_integer<std::uint8_t>(byte);
+				byte = lane % 64 < 32 ? static_cast<std::byte>((current & 0xF0u) | nibble)
+				                      : static_cast<std::byte>((current & 0x0Fu) | (nibble << 4));
+			}
+		}
+
+		auto tensor = Tensor<CPU>(Uninitialized, { outFeatures, 144 }, DataType::UInt8);
+		std::memcpy(tensor.UnsafeRawData(), storage.data(), storage.size());
+		auto params =
+		    BlockQuantization(QuantizedBlockFormat::GGML_Q4_K, { outFeatures, inFeatures }, DataType::Float32);
+
+		Graph graph;
+		const auto weight = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(tensor), params));
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, inFeatures });
+		const auto weightRef =
+		    sg.AddNode(VariableRefNode{ weight }, { OutputInfo{ DataType::UInt8, { outFeatures, 144 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weightRef, 0 }, params, true },
+		                               { OutputInfo{ DataType::Float32, { batch, outFeatures } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildTinyMLPGraph(std::size_t batch, DataType dtype = DataType::Float32)
 	{
 		ModelBuilder builder;
@@ -481,13 +532,30 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeStableCUDANativeABI)
 		ASSERT_FALSE(payload.binary.empty());
 		ASSERT_EQ(payload.kernels.size(), 1u);
 		const auto& kernel = payload.kernels[0];
-		EXPECT_EQ(kernel.name, CUDANativeGGMLQ8_0MatMulF32KernelName());
+		EXPECT_EQ(kernel.name, CUDANativeGGMLBlockMatMulF32KernelName(QuantizedBlockFormat::GGML_Q8_0));
 		ASSERT_EQ(kernel.arguments.size(), 4u);
 		EXPECT_EQ(kernel.arguments[0].kind, CUDANativeArgumentKind::OutputTensor);
 		EXPECT_EQ(kernel.arguments[1].kind, CUDANativeArgumentKind::InputTensor);
 		EXPECT_EQ(kernel.arguments[2].kind, CUDANativeArgumentKind::ConstantTensor);
 		EXPECT_EQ(kernel.arguments[3].kind, CUDANativeArgumentKind::Scalar);
 		EXPECT_EQ(payload.constantData.size(), 3u * 34u);
+	}
+
+	{
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildGGMLQ4_KQuantizedMatMulGraph()));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::GGMLQ4_KMatMulF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		const auto& kernel = payload.kernels[0];
+		EXPECT_EQ(kernel.name, CUDANativeGGMLBlockMatMulF32KernelName(QuantizedBlockFormat::GGML_Q4_K));
+		ASSERT_EQ(kernel.arguments.size(), 4u);
+		EXPECT_EQ(kernel.arguments[2].kind, CUDANativeArgumentKind::ConstantTensor);
+		EXPECT_EQ(payload.constantData.size(), 2u * 144u);
 	}
 
 	{
@@ -613,6 +681,46 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ8_0QuantizedMatMulOnCUDA)
 			}
 			expected[row * 3 + out] = sum;
 		}
+	}
+	ExpectTensorNear(actual, expected, 1.0e-3F);
+}
+
+TEST(CompiledModuleCUDATest, RunsNativeGGMLQ4_KQuantizedMatMulOnCUDA)
+{
+	if (!IsCUDADeviceAvailable())
+	{
+		GTEST_SKIP() << "CUDA device is not available";
+	}
+	if (!IsCUDADriverAvailable())
+	{
+		GTEST_SKIP() << "CUDA driver is not available";
+	}
+
+	auto graph = BuildGGMLQ4_KQuantizedMatMulGraph();
+	auto module = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph)).Load(CUDA{});
+	ASSERT_EQ(module.Backend(), CompiledModuleBackend::CUDANative);
+
+	std::vector<double> inputValues(256);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<double>(static_cast<int>(i % 11) - 5) * 0.25;
+	}
+	auto input = Tensor<CPU>(inputValues, { 1, 256 }, DataType::Float32);
+	std::array<Tensor<CUDA>, 1> cudaInputs = { input.CopyToDevice(CUDA{}) };
+	auto outputs = module.RunTensors(cudaInputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	auto actual = outputs[0].CopyToDevice(CPU{});
+
+	std::array<float, 2> expected{};
+	for (std::size_t out = 0; out < 2; ++out)
+	{
+		float sum = 0.0F;
+		for (std::size_t k = 0; k < 256; ++k)
+		{
+			const auto q = static_cast<float>((out + k) % 16);
+			sum += ReadFloat(input, k) * 0.25F * q;
+		}
+		expected[out] = sum;
 	}
 	ExpectTensorNear(actual, expected, 1.0e-3F);
 }

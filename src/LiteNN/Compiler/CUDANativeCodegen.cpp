@@ -778,24 +778,28 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
-			mlir::OwningOpRef<mlir::ModuleOp> BuildGGMLQ8_0MatMulF32(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+			mlir::OwningOpRef<mlir::ModuleOp>
+			BuildGGMLBlockMatMulF32(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec)
 			{
-				if (spec.m == 0 || spec.k == 0 || spec.n == 0 || spec.k % 32 != 0)
+				const auto layout = GetQuantizedBlockLayout(spec.format);
+				if (!layout || spec.m == 0 || spec.k == 0 || spec.n == 0 || spec.k % layout->elementsPerBlock != 0 ||
+				    (spec.format != QuantizedBlockFormat::GGML_Q8_0 && spec.format != QuantizedBlockFormat::GGML_Q4_K))
 				{
 					throw std::runtime_error(
-					    "CUDA native GGML Q8_0 MatMul requires non-zero m/n and k divisible by 32");
+					    "CUDA native GGML block MatMul requires supported format, non-zero m/n, and aligned k");
 				}
 
 				auto kernelModule = CreateKernelModule();
 				llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_, ptrType_, i32Type_ };
-				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeGGMLQ8_0MatMulF32KernelName(), argTypes);
+				auto func = CreateKernelFunc(kernelModule.gpuModule,
+				                             CUDANativeGGMLBlockMatMulF32KernelName(spec.format), argTypes);
 				auto blocks = EmitLinearIndexGuard(func, 3);
 
 				builder_.setInsertionPointToStart(blocks.body);
 				auto out = blocks.entry->getArgument(0);
 				auto lhs = blocks.entry->getArgument(1);
 				auto rhs = blocks.entry->getArgument(2);
-				const auto blocksPerRow = spec.k / 32;
+				const auto blocksPerRow = spec.k / layout->elementsPerBlock;
 				auto row = EmitI32UDiv(blocks.index32, EmitI32Constant(spec.n));
 				auto column = EmitI32URem(blocks.index32, EmitI32Constant(spec.n));
 				auto accumulator = EmitF32Constant(0.0F);
@@ -806,20 +810,40 @@ namespace LiteNN
 				{
 					auto blockBase = EmitI32Mul(
 					    EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), EmitI32Constant(blockIndex)),
-					    EmitI32Constant(34));
+					    EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
 					auto scaleRaw =
 					    EmitLoad(EmitTypedGEP(rhs, f16Type, EmitI32UDiv(blockBase, EmitI32Constant(2))), f16Type);
 					auto scale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, scaleRaw).getResult();
 
-					for (std::uint32_t lane = 0; lane < 32; ++lane)
+					mlir::Value minScale;
+					if (spec.format == QuantizedBlockFormat::GGML_Q4_K)
 					{
-						auto lhsOffset = EmitI32Add(EmitI32Mul(row, EmitI32Constant(spec.k)),
-						                            EmitI32Constant(blockIndex * 32 + lane));
-						auto qOffset = EmitI32Add(blockBase, EmitI32Constant(2 + lane));
+						auto minRaw = EmitLoad(
+						    EmitTypedGEP(rhs, f16Type,
+						                 EmitI32UDiv(EmitI32Add(blockBase, EmitI32Constant(2)), EmitI32Constant(2))),
+						    f16Type);
+						minScale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, minRaw).getResult();
+					}
+
+					for (std::uint32_t lane = 0; lane < layout->elementsPerBlock; ++lane)
+					{
+						auto lhsOffset = EmitI32Add(
+						    EmitI32Mul(row, EmitI32Constant(spec.k)),
+						    EmitI32Constant(blockIndex * static_cast<std::uint32_t>(layout->elementsPerBlock) + lane));
 						auto lhsValue = EmitLoadF32(EmitF32GEP(lhs, lhsOffset));
-						auto qRaw = EmitLoad(EmitTypedGEP(rhs, i8Type, qOffset), i8Type);
-						auto qValue = builder_.create<mlir::arith::SIToFPOp>(loc_, f32Type_, qRaw).getResult();
-						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, EmitF32Mul(scale, qValue)));
+						mlir::Value weight;
+						if (spec.format == QuantizedBlockFormat::GGML_Q8_0)
+						{
+							auto qOffset = EmitI32Add(blockBase, EmitI32Constant(2 + lane));
+							auto qRaw = EmitLoad(EmitTypedGEP(rhs, i8Type, qOffset), i8Type);
+							auto qValue = builder_.create<mlir::arith::SIToFPOp>(loc_, f32Type_, qRaw).getResult();
+							weight = EmitF32Mul(scale, qValue);
+						}
+						else
+						{
+							weight = EmitGGMLQ4_KWeightF32(rhs, blockBase, scale, minScale, lane);
+						}
+						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, weight));
 					}
 				}
 
@@ -829,6 +853,71 @@ namespace LiteNN
 			}
 
 		private:
+			mlir::Value EmitLoadU8AsI32(mlir::Value base, mlir::Value byteOffset)
+			{
+				auto i8Type = builder_.getIntegerType(8);
+				auto raw = EmitLoad(EmitTypedGEP(base, i8Type, byteOffset), i8Type);
+				return builder_.create<mlir::arith::ExtUIOp>(loc_, i32Type_, raw).getResult();
+			}
+
+			mlir::Value EmitGGMLQ4_KWeightF32(mlir::Value rhs, mlir::Value blockBase, mlir::Value d, mlir::Value dmin,
+			                                  std::uint32_t lane)
+			{
+				const auto subblock = lane / 32;
+				const auto belowFour = subblock < 4;
+				const auto scalesBase = EmitI32Add(blockBase, EmitI32Constant(4));
+				const auto scaleLowOffset = belowFour ? subblock : subblock + 4;
+				auto scaleLow = EmitLoadU8AsI32(rhs, EmitI32Add(scalesBase, EmitI32Constant(scaleLowOffset)));
+				auto minLow = EmitLoadU8AsI32(rhs, EmitI32Add(scalesBase, EmitI32Constant(subblock + 4)));
+				mlir::Value scale;
+				mlir::Value minimum;
+				if (belowFour)
+				{
+					scale = builder_
+					            .create<mlir::arith::AndIOp>(
+					                loc_, scaleLow, builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 63))
+					            .getResult();
+					minimum = builder_
+					              .create<mlir::arith::AndIOp>(
+					                  loc_, minLow, builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 63))
+					              .getResult();
+				}
+				else
+				{
+					auto highSource = EmitLoadU8AsI32(rhs, EmitI32Add(scalesBase, EmitI32Constant(subblock - 4)));
+					auto minHighSource = EmitLoadU8AsI32(rhs, EmitI32Add(scalesBase, EmitI32Constant(subblock)));
+					auto shift4 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 4);
+					auto shift6 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 6);
+					auto mask15 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 15);
+					scale = builder_
+					            .create<mlir::arith::OrIOp>(
+					                loc_, builder_.create<mlir::arith::AndIOp>(loc_, scaleLow, mask15),
+					                builder_.create<mlir::arith::ShLIOp>(
+					                    loc_, builder_.create<mlir::arith::ShRUIOp>(loc_, highSource, shift6), shift4))
+					            .getResult();
+					minimum =
+					    builder_
+					        .create<mlir::arith::OrIOp>(
+					            loc_, builder_.create<mlir::arith::ShRUIOp>(loc_, minLow, shift4),
+					            builder_.create<mlir::arith::ShLIOp>(
+					                loc_, builder_.create<mlir::arith::ShRUIOp>(loc_, minHighSource, shift6), shift4))
+					        .getResult();
+				}
+
+				const auto quantOffset = (lane / 64) * 32 + lane % 32;
+				auto quantByte = EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(16 + quantOffset)));
+				auto shift4 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 4);
+				auto mask15 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 15);
+				auto nibble = lane % 64 >= 32
+				                  ? builder_.create<mlir::arith::ShRUIOp>(loc_, quantByte, shift4).getResult()
+				                  : builder_.create<mlir::arith::AndIOp>(loc_, quantByte, mask15).getResult();
+				auto scaleF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, scale).getResult();
+				auto minF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, minimum).getResult();
+				auto quantF32 = builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, nibble).getResult();
+				auto scaled = EmitF32Mul(EmitF32Mul(d, scaleF32), quantF32);
+				return builder_.create<mlir::arith::SubFOp>(loc_, scaled, EmitF32Mul(dmin, minF32)).getResult();
+			}
+
 			void EmitMatMulBiasEpilogue(mlir::gpu::GPUModuleOp gpuModule,
 			                            const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
 			{
@@ -1490,10 +1579,10 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildMatMulBiasEpilogues(specs); });
 		}
 
-		std::string EmitGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+		std::string EmitGGMLBlockMatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
-			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildGGMLQ8_0MatMulF32(spec); });
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildGGMLBlockMatMulF32(spec); });
 		}
 	} // namespace
 
@@ -1602,9 +1691,17 @@ namespace LiteNN
 		                   CUDANativeDataTypeShortName(dstType));
 	}
 
-	std::string_view CUDANativeGGMLQ8_0MatMulF32KernelName()
+	std::string_view CUDANativeGGMLBlockMatMulF32KernelName(QuantizedBlockFormat format)
 	{
-		return "litenn_ggml_q8_0_matmul_f32";
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q8_0:
+			return "litenn_ggml_q8_0_matmul_f32";
+		case QuantizedBlockFormat::GGML_Q4_K:
+			return "litenn_ggml_q4_k_matmul_f32";
+		default:
+			throw std::runtime_error("Unsupported CUDA native GGML block MatMul format");
+		}
 	}
 
 	std::string CUDANativeNVPTXTargetChip()
@@ -1797,17 +1894,17 @@ namespace LiteNN
 		}
 	}
 
-	std::string CUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+	std::string CUDANativeGGMLBlockMatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec)
 	{
-		return EmitGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(spec);
+		return EmitGGMLBlockMatMulF32PTXFromMLIRNVPTX(spec);
 	}
 
 	std::optional<std::string>
-	TryCUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+	TryCUDANativeGGMLBlockMatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec)
 	{
 		try
 		{
-			return CUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(spec);
+			return CUDANativeGGMLBlockMatMulF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{

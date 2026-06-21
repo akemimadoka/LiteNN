@@ -2,6 +2,7 @@
 #define LITENN_COMPILER_CUDA_NATIVE_CODEGEN_H
 
 #include <LiteNN/Operators.h>
+#include <LiteNN/Quantization.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -66,8 +67,9 @@ namespace LiteNN
 		DataType dstType{ DataType::Float32 };
 	};
 
-	struct CUDANativeGGMLQ8_0MatMulF32CodegenSpec
+	struct CUDANativeGGMLBlockMatMulF32CodegenSpec
 	{
+		QuantizedBlockFormat format{ QuantizedBlockFormat::GGML_Q8_0 };
 		std::uint32_t m{};
 		std::uint32_t k{};
 		std::uint32_t n{};
@@ -82,7 +84,7 @@ namespace LiteNN
 	std::string CUDANativeMatMulBiasEpilogueKernelName(DataType dtype, bool relu);
 	bool CUDANativeSupportsCast(DataType srcType, DataType dstType);
 	std::string CUDANativeCastKernelName(DataType srcType, DataType dstType);
-	std::string_view CUDANativeGGMLQ8_0MatMulF32KernelName();
+	std::string_view CUDANativeGGMLBlockMatMulF32KernelName(QuantizedBlockFormat format);
 	std::string CUDANativeNVPTXTargetChip();
 	std::string CUDANativeNVPTXTargetChip(std::string_view requestedTarget);
 
@@ -118,9 +120,9 @@ namespace LiteNN
 	CUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs);
 	std::optional<std::string>
 	TryCUDANativeMatMulBiasEpiloguesPTXFromMLIRNVPTX(std::span<const CUDANativeMatMulBiasEpilogueCodegenSpec> specs);
-	std::string CUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec);
+	std::string CUDANativeGGMLBlockMatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec);
 	std::optional<std::string>
-	TryCUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec);
+	TryCUDANativeGGMLBlockMatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLBlockMatMulF32CodegenSpec& spec);
 
 	/**
 	 * Generates a minimal CUDA unary f32 kernel by lowering MLIR GPU/NVVM dialects to NVPTX PTX.
