@@ -155,8 +155,8 @@ llama.cpp API helper. This is intentionally a separate CMake project so the
 LiteNN build does not acquire a runtime or link dependency on llama.cpp:
 
 ```powershell
-cmake -S tools\llamacpp-golden -B build-llamacpp-golden -DCMAKE_BUILD_TYPE=Release
-cmake --build build-llamacpp-golden --target litenn_llamacpp_decode_golden --parallel
+cmake -S tools\llamacpp-adapter -B build-llamacpp-adapter -DCMAKE_BUILD_TYPE=Release
+cmake --build build-llamacpp-adapter --target litenn_llamacpp_adapter --parallel
 ```
 
 Capture reference logits for a fixed token stream and compare every common
@@ -164,7 +164,7 @@ decode step:
 
 ```powershell
 python311 scripts\gguf_capture_llamacpp_decode_logits.py `
-  --tool build-llamacpp-golden\litenn_llamacpp_decode_golden.exe `
+  --tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
   --model model.gguf --prompt-token-ids 1,2,3 --generated-token-ids 4,5,6 `
   --out-dir build\gguf_golden\hello\llamacpp_decode_logits
 python311 scripts\gguf_compare_llamacpp_decode_logits.py `
@@ -175,6 +175,37 @@ python311 scripts\gguf_compare_llamacpp_decode_logits.py `
 The comparison rejects mismatched prompt ids and generated-token prefixes
 before reading logits. `qwen_smoke.py --llamacpp-decode-golden-tool <path>`
 automates capture and comparison after its regular replay.
+
+The same isolated adapter provides production tokenizer parity without linking
+llama.cpp into LiteNN. Tokenize and detokenize through the manifest-backed
+driver:
+
+```powershell
+python311 scripts\gguf_tokenizer_adapter.py tokenize `
+  --tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
+  --model model.gguf --text "hello" `
+  --workdir build\gguf_tokenizer --output build\gguf_tokenizer\tokens.json
+python311 scripts\gguf_tokenizer_adapter.py detokenize `
+  --tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
+  --model model.gguf --token-ids 14990 `
+  --workdir build\gguf_tokenizer --output build\gguf_tokenizer\text.bin
+```
+
+`tokens.json` records the exact token ids plus the model's BOS and special-token
+policy. Detokenized text is binary-safe so byte-fallback output is not damaged
+by an intermediate locale conversion. The adapter also exposes `chat-template`
+for a single user turn and appends the assistant-generation marker using the
+GGUF model's default template. The Qwen smoke driver can run the full
+prompt/template/token boundary directly:
+
+```powershell
+python311 example\gguf\qwen_smoke.py `
+  --model model.gguf --prompt "hello" `
+  --llamacpp-tokenizer-tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
+  --apply-chat-template `
+  --steps 8 --output build\qwen_smoke\tokens.txt `
+  --text-output build\qwen_smoke\generated.txt
+```
 
 Compare generated text after replay:
 

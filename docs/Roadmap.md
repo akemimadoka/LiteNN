@@ -2425,7 +2425,21 @@ placement and fallback policy.
 - [x] Add a minimal tokenizer bridge for caller-provided token ids with tokenizer-vocabulary validation.
 - [x] Add a deliberately limited exact-vocabulary prompt bridge over `tokenizer.ggml.tokens` for fixtures and diagnostic
       CLI runs; this does not replace GPT2/BPE or llama.cpp tokenizer parity.
-- [ ] Add tokenizer execution or a llama.cpp tokenizer adapter behind an explicit optional target.
+- [x] Add tokenizer execution through an explicit optional llama.cpp adapter target:
+      the isolated `tools/llamacpp-adapter` target exposes `tokenize` and binary-safe `detokenize` subcommands using the
+      model's real GGUF vocabulary, BOS policy, special-token parsing, and byte fallback behavior without linking
+      llama.cpp into LiteNN runtime targets.
+- [x] Add a manifest-backed tokenizer adapter driver:
+      `scripts/gguf_tokenizer_adapter.py` handles Windows runtime-library discovery, command evidence, output paths, and
+      operation manifests for tokenization, binary-safe detokenization, and model-default single-user chat-template
+      application.
+- [x] Wire real tokenizer execution into the Qwen smoke flow:
+      `--llamacpp-tokenizer-tool` converts `--prompt` into validated token ids for direct LiteNN decode, then
+      detokenizes generated ids to `--text-output` (or a work-directory default) through the same vocabulary;
+      `--apply-chat-template` formats an instruct-model user turn and assistant-generation marker before tokenization.
+- [x] Validate the optional adapter against a real Qwen2.5-Coder-14B-Instruct Q4_K_M GGUF:
+      on 2026-06-21, `hello` tokenized to id `14990` with `addBos=false` and detokenized byte-for-byte back to `hello`;
+      the default chat template produced Qwen's user/assistant markers and the expected nine-token prompt sequence.
 - [x] Implement the graph-external generation loop control API for token history, EOS detection, logits
       post-processing, and sampler state.
 - [x] Support temperature, top-k, top-p, repeat penalty, seedable sampling, and greedy mode with deterministic tests.
@@ -2499,7 +2513,8 @@ placement and fallback policy.
       prompt-intermediate dumps; replay manifests classify prefill and one-based decode steps; the comparator verifies
       exact prompt/generated token prefixes before comparing all common full-vocabulary logits artifacts.
 - [x] Add an API-level llama.cpp decode-logits capture helper as an isolated CMake project:
-      `tools/llamacpp-golden` consumes exact prompt/generated token ids, calls `llama_decode` token by token, and emits
+      `tools/llamacpp-adapter` builds `litenn_llamacpp_adapter`, which consumes exact prompt/generated token ids, calls
+      `llama_decode` token by token, and emits
       one full-vocabulary logits file after each generated token without adding llama.cpp to LiteNN's build graph.
 - [x] Add a manifest-backed llama.cpp decode capture driver:
       `gguf_capture_llamacpp_decode_logits.py` runs the isolated helper and records model, prompt ids, generated ids,
