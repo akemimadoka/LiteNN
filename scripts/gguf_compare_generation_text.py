@@ -15,9 +15,10 @@ import sys
 from pathlib import Path
 
 
-def load_json(path: Path, expected_schema: str) -> dict[str, object]:
+def load_json(path: Path, expected_schema: str | tuple[str, ...]) -> dict[str, object]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema") != expected_schema:
+    schemas = (expected_schema,) if isinstance(expected_schema, str) else expected_schema
+    if data.get("schema") not in schemas:
         raise SystemExit(f"unsupported schema in {path}: {data.get('schema')!r}")
     return data
 
@@ -80,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     golden = load_json(args.manifest, "litenn.llamacpp_golden_capture.v1")
-    replay = load_json(args.replay_manifest, "litenn.golden_replay.v1")
+    replay = load_json(args.replay_manifest, ("litenn.golden_replay.v1", "litenn.golden_replay.v2"))
     golden_base = args.manifest.parent
     stdout_path = find_llamacpp_stdout(golden, golden_base)
 

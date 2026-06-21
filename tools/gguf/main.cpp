@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <iomanip>
@@ -56,15 +57,15 @@ namespace
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--ignore-eos]\n"
+		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -190,6 +191,7 @@ namespace
 		std::size_t steps{};
 		std::optional<std::string> outputPath;
 		std::optional<std::string> logitsOutputPath;
+		std::optional<std::string> logitsOutputDirectory;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
 	};
@@ -214,6 +216,10 @@ namespace
 			else if (arg == "--logits-output")
 			{
 				options.logitsOutputPath = std::string(requireValue(arg));
+			}
+			else if (arg == "--logits-output-dir")
+			{
+				options.logitsOutputDirectory = std::string(requireValue(arg));
 			}
 			else if (arg == "--sample")
 			{
@@ -671,6 +677,10 @@ namespace
 		std::vector<std::size_t> lastLogitsShape;
 		std::size_t generatedTokenCount = 0;
 		bool stoppedOnEos = false;
+		if (options.logitsOutputDirectory)
+		{
+			std::filesystem::create_directories(*options.logitsOutputDirectory);
+		}
 
 		const auto runStart = std::chrono::steady_clock::now();
 		for (std::size_t step = 0; step < maxRunCount; ++step)
@@ -710,6 +720,12 @@ namespace
 				throw std::runtime_error("decode-loop produced no outputs");
 			}
 			lastLogitsShape = outputs.front().Shape().ToOwned();
+			if (options.logitsOutputDirectory && step + 1 >= initialTokenIds.size())
+			{
+				const auto path =
+				    std::filesystem::path(*options.logitsOutputDirectory) / std::format("position-{:06}.txt", step + 1);
+				WriteLastTokenLogitsText(outputs.front(), path.string());
+			}
 			if (options.logitsOutputPath)
 			{
 				WriteLastTokenLogitsText(outputs.front(), *options.logitsOutputPath);
@@ -755,6 +771,10 @@ namespace
 		if (options.logitsOutputPath)
 		{
 			std::cout << " logits_output=" << *options.logitsOutputPath;
+		}
+		if (options.logitsOutputDirectory)
+		{
+			std::cout << " logits_output_dir=" << *options.logitsOutputDirectory;
 		}
 		std::cout << " generated=";
 		PrintTokenList(history);
