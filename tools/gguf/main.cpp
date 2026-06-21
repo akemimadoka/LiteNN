@@ -547,7 +547,7 @@ namespace
 		const auto printEntry = [](const LiteNN::GGUF::LLaMAArtifactEntry& entry) {
 			std::cout << "entry name=" << entry.name << " sequence_length=" << entry.sequenceLength
 			          << " past_length=" << entry.pastLength << " max_cache_length=" << entry.maxCacheLength
-			          << " inputs=";
+			          << " dynamic_position=" << (entry.dynamicPosition ? "true" : "false") << " inputs=";
 			PrintStringList(entry.inputNames);
 			std::cout << " outputs=";
 			PrintStringList(entry.outputNames);
@@ -629,6 +629,20 @@ namespace
 		return MakeTokenIdTensor(ids, plan);
 	}
 
+	LiteNN::Tensor<LiteNN::CPU> MakeDecodePositionTensor(std::int64_t position, const LiteNN::ExecutablePlan& plan)
+	{
+		if (plan.inputs.size() < 2 || plan.inputs[1].type.dtype != LiteNN::DataType::Int64 ||
+		    plan.inputs[1].type.StaticShape() != std::vector<std::size_t>{ 1 })
+		{
+			throw std::runtime_error("Capacity decode plan requires Int64 current_position input with shape [1]");
+		}
+		LiteNN::CPU cpu;
+		LiteNN::Tensor<LiteNN::CPU> tensor(LiteNN::Uninitialized, { 1 }, LiteNN::DataType::Int64, cpu);
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int64, tensor.UnsafeRawData(),
+		                                               LiteNN::DataType::Int64, &position, 1);
+		return tensor;
+	}
+
 	void RunDecodeLoopFromGGUF(const DecodeLoopCommandOptions& options)
 	{
 		if (options.steps == 0)
@@ -656,22 +670,17 @@ namespace
 			                                     requestedTokenCount, hyperparameters.contextLength));
 		}
 		const auto maxRunCount = requestedTokenCount - 1;
-		std::vector<LiteNN::ExecutablePlan> decodePlans;
-		decodePlans.reserve(maxRunCount);
 		const auto buildStart = std::chrono::steady_clock::now();
-		for (std::size_t step = 0; step < maxRunCount; ++step)
-		{
-			const auto pastLength = step + 1;
-			auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecode(imported.model.UnsafeGraphView(), 1, pastLength,
-			                                                    pastLength, { .preserveQuantizedWeights = true });
-			decodePlans.push_back(LiteNN::Detail::BuildExecutablePlanFromGraph(graph));
-		}
+		auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(
+		    imported.model.UnsafeGraphView(), requestedTokenCount, { .preserveQuantizedWeights = true });
+		auto decodePlan = LiteNN::Detail::BuildExecutablePlanFromGraph(graph);
 		const auto buildEnd = std::chrono::steady_clock::now();
 
 		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
+		auto currentPosition = MakeDecodePositionTensor(0, decodePlan);
 		std::int32_t currentToken = initialTokenIds.front();
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
@@ -685,15 +694,15 @@ namespace
 		const auto runStart = std::chrono::steady_clock::now();
 		for (std::size_t step = 0; step < maxRunCount; ++step)
 		{
-			const auto& plan = decodePlans[step];
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
-			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, plan));
+			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
+			inputs.push_back(std::move(currentPosition));
 			if (caches.empty())
 			{
 				LiteNN::CPU cpu;
-				for (std::size_t i = 1; i < plan.inputs.size(); ++i)
+				for (std::size_t i = 2; i < decodePlan.inputs.size(); ++i)
 				{
-					const auto& input = plan.inputs[i];
+					const auto& input = decodePlan.inputs[i];
 					if (!input.type.IsFullyStatic())
 					{
 						throw std::runtime_error("decode-loop cache inputs must have static shapes");
@@ -703,7 +712,7 @@ namespace
 			}
 			else
 			{
-				if (caches.size() + 1 != plan.inputs.size())
+				if (caches.size() + 2 != decodePlan.inputs.size())
 				{
 					throw std::runtime_error("decode-loop cache count does not match decode graph inputs");
 				}
@@ -714,8 +723,8 @@ namespace
 				caches.clear();
 			}
 
-			auto outputs = interpreter.RunForward(plan, inputs);
-			if (outputs.empty())
+			auto outputs = interpreter.RunForward(decodePlan, inputs);
+			if (outputs.size() < 2)
 			{
 				throw std::runtime_error("decode-loop produced no outputs");
 			}
@@ -746,8 +755,9 @@ namespace
 				}
 			}
 			lastOutputCount = outputs.size();
-			caches.reserve(outputs.size() - 1);
-			for (std::size_t i = 1; i < outputs.size(); ++i)
+			currentPosition = std::move(outputs[1]);
+			caches.reserve(outputs.size() - 2);
+			for (std::size_t i = 2; i < outputs.size(); ++i)
 			{
 				caches.push_back(std::move(outputs[i]));
 			}
@@ -764,7 +774,7 @@ namespace
 		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
 		          << " prompt_tokens=" << initialTokenIds.size() << " generated_tokens=" << generatedTokenCount
-		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << " cached_plans=" << decodePlans.size()
+		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << " cached_plans=1"
 		          << " build_ms=" << buildMs << " run_ms=" << runMs << " outputs_per_step=" << lastOutputCount
 		          << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
@@ -1265,7 +1275,8 @@ int main(int argc, char** argv)
 			                                                              { .prefillSequenceLength = 1,
 			                                                                .decodePastLength = pastLength,
 			                                                                .maxCacheLength = maxCacheLength,
-			                                                                .preserveQuantizedWeights = true });
+			                                                                .preserveQuantizedWeights = true,
+			                                                                .dynamicDecodePosition = true });
 			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(schedule, argv[3], argv[4]);
 			std::cout << "Lowered stateful LLaMA decode package with " << schedule.states.size()
 			          << " runtime states and " << schedule.stateValueBindings.size() << " value bindings\n";
