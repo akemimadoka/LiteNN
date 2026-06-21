@@ -386,9 +386,11 @@ def main() -> int:
                 text_output.write_bytes(b"")
 
     report = {
-        "schema": "litenn.gguf_qwen_smoke.v1",
+        "schema": "litenn.gguf_qwen_smoke.v2",
         "model": str(args.model),
         "backend_policy": args.backend_policy,
+        "fallback_used": False,
+        "production_candidate": args.backend_policy == "cuda-native",
         "workdir": str(workdir),
         "token_output": str(resolved_token_output) if resolved_token_output is not None else None,
         "text_output": str(resolved_text_output) if resolved_text_output is not None else None,
