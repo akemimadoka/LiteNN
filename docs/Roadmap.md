@@ -2528,6 +2528,8 @@ placement and fallback policy.
 - [ ] Cover the full decode-step operator set in CUDA native or explicit bridge form: embedding/get-rows, RMSNorm, RoPE,
       Q/K/V projections, KV append/view, attention score, causal mask, softmax, value aggregation, SwiGLU, residuals, and
       output projection.
+      - [x] Softmax f32 now has a CUDA native MLIR/NVPTX correctness slice with artifact feature reporting and runtime
+            parity for both last-axis and non-last-axis static shapes.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

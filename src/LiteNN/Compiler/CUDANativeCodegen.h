@@ -44,6 +44,12 @@ namespace LiteNN
 		std::size_t start{};
 	};
 
+	struct CUDANativeSoftmaxF32CodegenSpec
+	{
+		std::span<const std::size_t> inputShape;
+		std::size_t axis{};
+	};
+
 	struct CUDANativeMatMulBiasEpilogueF32CodegenSpec
 	{
 		std::string kernelName;
@@ -80,6 +86,7 @@ namespace LiteNN
 	std::string_view CUDANativeReduceF32KernelName(ReduceOp op);
 	std::string CUDANativeConcatF32KernelName(std::size_t inputIndex);
 	std::string_view CUDANativeSliceF32KernelName();
+	std::string_view CUDANativeSoftmaxF32KernelName();
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu);
 	std::string CUDANativeMatMulBiasEpilogueKernelName(DataType dtype, bool relu);
 	bool CUDANativeSupportsCast(DataType srcType, DataType dstType);
@@ -104,6 +111,8 @@ namespace LiteNN
 	std::optional<std::string> TryCUDANativeConcatF32PTXFromMLIRNVPTX(const CUDANativeConcatF32CodegenSpec& spec);
 	std::string CUDANativeSliceF32PTXFromMLIRNVPTX(const CUDANativeSliceF32CodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeSliceF32PTXFromMLIRNVPTX(const CUDANativeSliceF32CodegenSpec& spec);
+	std::string CUDANativeSoftmaxF32PTXFromMLIRNVPTX(const CUDANativeSoftmaxF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeSoftmaxF32PTXFromMLIRNVPTX(const CUDANativeSoftmaxF32CodegenSpec& spec);
 	std::string CUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec);
 	std::string CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);

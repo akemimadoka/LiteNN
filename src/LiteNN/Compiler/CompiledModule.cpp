@@ -3642,6 +3642,14 @@ namespace
 		std::vector<std::size_t> outputShape;
 	};
 
+	struct CUDANativeSoftmaxPlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+		std::size_t axis{};
+		std::vector<std::size_t> inputShape;
+	};
+
 	struct CUDANativeConcatPlan
 	{
 		std::uint32_t outputElementCount{};
@@ -4616,6 +4624,48 @@ namespace
 		}
 		return CUDANativeReducePlan{ reduce->op,   *inputIndex, *inputElementCount, *outputElementCount,
 			                         reduce->axis, input.shape, output.shape };
+	}
+
+	std::optional<CUDANativeSoftmaxPlan> MatchCUDANativeSoftmaxF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* softmax = std::get_if<SoftmaxNode>(&resultEntry.node);
+		if (!softmax || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, softmax->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape ||
+		    softmax->axis >= input.shape.size())
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = ShapeNumElementsU32(input.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+		return CUDANativeSoftmaxPlan{ *inputIndex, *elementCount, softmax->axis, input.shape };
 	}
 
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
@@ -5595,6 +5645,63 @@ namespace
 		          .index = plan->inputIndex,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->inputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+			                            std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeSoftmaxF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeSoftmaxF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeSoftmaxF32PTXFromMLIRNVPTX({
+		    .inputShape = plan->inputShape,
+		    .axis = plan->axis,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::SoftmaxF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->elementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeSoftmaxF32KernelName()),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
 		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
 		    },
 		});
@@ -13478,6 +13585,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeReduceF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeSoftmaxF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

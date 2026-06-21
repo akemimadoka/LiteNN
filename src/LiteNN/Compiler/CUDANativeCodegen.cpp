@@ -579,6 +579,62 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildSoftmaxF32(const CUDANativeSoftmaxF32CodegenSpec& spec)
+			{
+				ValidateShapeDimsU32(spec.inputShape);
+				if (spec.axis >= spec.inputShape.size())
+				{
+					throw std::runtime_error("CUDA native softmax axis is out of range");
+				}
+				const auto elementCount = NumElementsU32(spec.inputShape, "softmax input");
+				const auto axisSize = static_cast<std::uint32_t>(spec.inputShape[spec.axis]);
+				const auto innerSize = AxisInnerSizeU32(spec.inputShape, spec.axis);
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeSoftmaxF32KernelName(), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 2);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto in = blocks.entry->getArgument(1);
+				auto outputIndex = blocks.index32;
+				auto inner = EmitI32Constant(innerSize);
+				auto axis = EmitI32Constant(axisSize);
+				auto outerIndex = EmitI32UDiv(outputIndex, EmitI32Mul(axis, inner));
+				auto axisIndex = EmitI32URem(EmitI32UDiv(outputIndex, inner), axis);
+				auto innerIndex = EmitI32URem(outputIndex, inner);
+				auto base = EmitI32Add(EmitI32Mul(EmitI32Mul(outerIndex, axis), inner), innerIndex);
+
+				auto maximum = EmitF32Constant(-std::numeric_limits<float>::infinity());
+				for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+				{
+					auto offset = EmitI32Add(base, EmitI32Mul(EmitI32Constant(reduceIndex), inner));
+					auto value = EmitLoadF32(EmitF32GEP(in, offset));
+					maximum = EmitF32Intrinsic("llvm.nvvm.fmax.ftz.f", mlir::ValueRange{ maximum, value });
+				}
+
+				auto sum = EmitF32Constant(0.0F);
+				for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
+				{
+					auto offset = EmitI32Add(base, EmitI32Mul(EmitI32Constant(reduceIndex), inner));
+					auto value = EmitLoadF32(EmitF32GEP(in, offset));
+					auto shifted = EmitF32Sub(value, maximum);
+					sum = EmitF32Add(sum, EmitExpF32(shifted));
+				}
+
+				auto valueOffset = EmitI32Add(base, EmitI32Mul(axisIndex, inner));
+				auto value = EmitLoadF32(EmitF32GEP(in, valueOffset));
+				auto numerator = EmitExpF32(EmitF32Sub(value, maximum));
+				auto result =
+				    builder_.create<mlir::LLVM::FDivOp>(loc_, f32Type_, mlir::ValueRange{ numerator, sum }).getResult();
+				EmitStoreF32(result, EmitF32GEP(out, outputIndex));
+				FinishLinearKernel(blocks);
+
+				(void) elementCount;
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 			mlir::OwningOpRef<mlir::ModuleOp> BuildConcatF32(const CUDANativeConcatF32CodegenSpec& spec)
 			{
 				if (spec.inputShapes.empty())
@@ -1159,6 +1215,11 @@ namespace LiteNN
 				return builder_.create<mlir::LLVM::FMulOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
 			}
 
+			mlir::Value EmitF32Sub(mlir::Value lhs, mlir::Value rhs)
+			{
+				return builder_.create<mlir::LLVM::FSubOp>(loc_, f32Type_, mlir::ValueRange{ lhs, rhs }).getResult();
+			}
+
 			mlir::Value EmitF32Intrinsic(std::string_view name, mlir::ValueRange args)
 			{
 				return builder_
@@ -1440,11 +1501,8 @@ namespace LiteNN
 					return EmitF32Intrinsic("llvm.nvvm.fabs.ftz.f", mlir::ValueRange{ value });
 				case UnaryOp::Sqrt:
 					return EmitF32Intrinsic("llvm.nvvm.sqrt.rn.ftz.f", mlir::ValueRange{ value });
-				case UnaryOp::Exp: {
-					const auto log2e = EmitF32Constant(1.4426950408889634f);
-					auto scaled = EmitF32Mul(value, log2e);
-					return EmitF32Intrinsic("llvm.nvvm.ex2.approx.ftz.f", mlir::ValueRange{ scaled });
-				}
+				case UnaryOp::Exp:
+					return EmitExpF32(value);
 				case UnaryOp::Log: {
 					auto log2Value = EmitF32Intrinsic("llvm.nvvm.lg2.approx.ftz.f", mlir::ValueRange{ value });
 					const auto ln2 = EmitF32Constant(0.6931471805599453f);
@@ -1457,6 +1515,13 @@ namespace LiteNN
 				default:
 					throw std::runtime_error("Unsupported MLIR NVPTX CUDA native unary op");
 				}
+			}
+
+			mlir::Value EmitExpF32(mlir::Value value)
+			{
+				const auto log2e = EmitF32Constant(1.4426950408889634f);
+				auto scaled = EmitF32Mul(value, log2e);
+				return EmitF32Intrinsic("llvm.nvvm.ex2.approx.ftz.f", mlir::ValueRange{ scaled });
 			}
 
 			mlir::Value EmitBinaryF32Result(BinaryOp op, mlir::Value lhs, mlir::Value rhs)
@@ -1626,6 +1691,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildSliceF32(spec); });
 		}
 
+		std::string EmitSoftmaxF32PTXFromMLIRNVPTX(const CUDANativeSoftmaxF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildSoftmaxF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -1733,6 +1804,11 @@ namespace LiteNN
 	std::string_view CUDANativeSliceF32KernelName()
 	{
 		return "litenn_slice_f32";
+	}
+
+	std::string_view CUDANativeSoftmaxF32KernelName()
+	{
+		return "litenn_softmax_f32";
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -1876,6 +1952,23 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeSliceF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeSoftmaxF32PTXFromMLIRNVPTX(const CUDANativeSoftmaxF32CodegenSpec& spec)
+	{
+		return EmitSoftmaxF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string> TryCUDANativeSoftmaxF32PTXFromMLIRNVPTX(const CUDANativeSoftmaxF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeSoftmaxF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{

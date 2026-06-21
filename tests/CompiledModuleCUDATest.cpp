@@ -203,6 +203,20 @@ namespace
 		return graph;
 	}
 
+	Graph BuildSoftmaxGraph(std::vector<std::size_t> shape, std::size_t axis, std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, shape);
+		const auto output = sg.AddNode(SoftmaxNode{ { input, 0 }, axis }, { OutputInfo{ DataType::Float32, shape } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildConcatGraph(std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
 	                       std::vector<std::size_t> outputShape, std::size_t axis, std::string outputName)
 	{
@@ -1425,6 +1439,18 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
+		    Detail::BuildExecutablePlanFromGraph(BuildSoftmaxGraph({ 2, 3 }, 1, "softmax_axis1")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::SoftmaxF32));
+		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeSoftmaxF32KernelName());
+	}
+
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(
 		    Detail::BuildExecutablePlanFromGraph(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
@@ -1979,6 +2005,20 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "reduce_min_axis1",
 	    .graph = BuildReduceGraph(ReduceOp::Min, 1, { 2 }, "min_axis1"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 7.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } } },
+	});
+	cases.push_back(Case{
+	    .name = "softmax_axis1",
+	    .graph = BuildSoftmaxGraph({ 2, 3 }, 1, "softmax_axis1"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 0.5, -1.0, 4.0 }, .shape = { 2, 3 } } },
+	    .runCPUAOT = false,
+	    .tolerance = 1.0e-5F,
+	});
+	cases.push_back(Case{
+	    .name = "softmax_axis0",
+	    .graph = BuildSoftmaxGraph({ 2, 3 }, 0, "softmax_axis0"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 0.5, -1.0, 4.0 }, .shape = { 2, 3 } } },
+	    .runCPUAOT = false,
+	    .tolerance = 1.0e-5F,
 	});
 	cases.push_back(Case{
 	    .name = "concat_axis0",
