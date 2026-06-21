@@ -327,6 +327,16 @@ namespace
 		return graph;
 	}
 
+	Graph BuildTinyQwen2ArchiveWithQ4_0Payload()
+	{
+		auto graph = BuildTinyQwen2Archive();
+		Tensor<CPU> storage(Uninitialized, { 18 }, DataType::UInt8);
+		const auto variable = graph.AddVariable(Variable::CreateQuantized(
+		    std::move(storage), BlockQuantization(QuantizedBlockFormat::GGML_Q4_0, { 32 }, DataType::Float32)));
+		graph.SetVariableName(variable, "diagnostic.q4_0.weight");
+		return graph;
+	}
+
 	Graph BuildQuantizedFriendlyLLaMAArchive()
 	{
 		constexpr std::size_t kEmbeddingLength = 32;
@@ -774,7 +784,7 @@ TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnos
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.decode-loop" &&
-		       diagnostic.message.find("runtime decode loop") != std::string::npos;
+		       diagnostic.message.find("decode-loop tooling") != std::string::npos;
 	}));
 }
 
@@ -1069,7 +1079,7 @@ TEST(GGUFLLaMAArtifacts, RejectsCacheCapacitySmallerThanDecodePosition)
 	             std::runtime_error);
 }
 
-TEST(GGUFLLaMAQuantizedExecution, PlansReferenceDequantizedFallbackAndBudgetRejection)
+TEST(GGUFLLaMAQuantizedExecution, PlansNativeAndReferenceQuantizedPolicies)
 {
 	const auto archive = BuildTinyQwen2ArchiveWithQ4KPayload();
 	const auto plan = GGUF::PlanLLaMAQuantizedWeightExecution(archive);
@@ -1080,11 +1090,15 @@ TEST(GGUFLLaMAQuantizedExecution, PlansReferenceDequantizedFallbackAndBudgetReje
 	EXPECT_EQ(plan.dequantizedBytes, 1024u);
 	ASSERT_EQ(plan.decisions.size(), 1u);
 	EXPECT_EQ(plan.decisions[0].format, QuantizedBlockFormat::GGML_Q4_K);
-	EXPECT_EQ(plan.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize);
-	EXPECT_EQ(GGUF::LLaMAQuantizedExecutionPolicyName(plan.decisions[0].selectedPolicy), "cpu-reference-dequantize");
+	EXPECT_EQ(plan.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUNativeQuantized);
+	EXPECT_EQ(GGUF::LLaMAQuantizedExecutionPolicyName(plan.decisions[0].selectedPolicy), "cpu-native-quantized");
 	EXPECT_FALSE(plan.decisions[0].blocking);
 
-	const auto rejected = GGUF::PlanLLaMAQuantizedWeightExecution(archive, 512);
+	const auto nativeUnderBudget = GGUF::PlanLLaMAQuantizedWeightExecution(archive, 512);
+	EXPECT_TRUE(nativeUnderBudget.lowerable);
+	EXPECT_EQ(nativeUnderBudget.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUNativeQuantized);
+
+	const auto rejected = GGUF::PlanLLaMAQuantizedWeightExecution(BuildTinyQwen2ArchiveWithQ4_0Payload(), 64);
 	EXPECT_FALSE(rejected.lowerable);
 	ASSERT_EQ(rejected.decisions.size(), 1u);
 	EXPECT_EQ(rejected.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::Reject);
@@ -1248,7 +1262,7 @@ TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.mix" &&
 		       diagnostic.message.find("GGML_Q4_K") != std::string::npos &&
-		       diagnostic.message.find("policy=cpu-reference-dequantize") != std::string::npos;
+		       diagnostic.message.find("policy=cpu-native-quantized") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.q4_k_m" &&
@@ -1258,8 +1272,8 @@ TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 
 TEST(GGUFLLaMACompatibility, AppliesQuantizedDequantizationBudgetAsBlockingDiagnostic)
 {
-	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4KPayload(),
-	                                                    GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM, 512);
+	const auto report = GGUF::AnalyzeLLaMACompatibility(BuildTinyQwen2ArchiveWithQ4_0Payload(),
+	                                                    GGUF::LLaMACompatibilityProfileKind::Qwen2LikeCausalLM, 64);
 
 	EXPECT_FALSE(report.lowerable);
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {

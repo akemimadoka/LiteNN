@@ -113,6 +113,7 @@ namespace LiteNN::GGUF
 	{
 		None,
 		Reject,
+		CPUNativeQuantized,
 		CPUReferenceDequantize,
 		CUDADequantizeThenGEMM,
 		CUDANativeQuantized

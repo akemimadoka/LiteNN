@@ -2494,8 +2494,8 @@ placement and fallback policy.
       - [x] CPU AOT directly decodes output-major `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_0` block payloads inside the generated
             MLIR reduction. Package-loaded external Q4_K weights and dequantize-reference Q5_K/Q6_K/Q8_0 parity are
             covered without introducing a compiler-to-ggml link dependency.
-      - [ ] Validate the target model's complete tensor-format inventory and add any format outside the covered
-            Q4_K/Q5_K/Q6_K/Q8_0 set.
+      - [x] Validate the target model's complete tensor-format inventory: the Qwen2.5-Coder 14B Q4_K_M acceptance model
+            contains 289 Q4_K and 49 Q6_K tensors, both covered by CPU AOT; no additional block format is required.
       - [ ] Add the corresponding CUDA native block projection path; CUDA must not silently relabel a CPU bridge as native.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
@@ -2683,6 +2683,9 @@ These improvements do not require a compatibility break and should not block vNe
 - Added MLIR Builder-generated CPU AOT block decoding for output-major GGML Q4_K, Q5_K, Q6_K, and Q8_0 quantized MatMul.
   Generated objects consume the original UInt8 payload directly, including package-loaded external Q4_K weights, and do
   not materialize a complete Float32 weight tensor or depend on ggml runtime symbols.
+- Updated GGUF compatibility planning to report Q4_K/Q5_K/Q6_K/Q8_0 as `cpu-native-quantized`; dequantized-memory budgets
+  now reject only formats that actually require a Float32 fallback, and Qwen diagnostics no longer claim that preserved
+  block weights are materialized during lowering.
 
 ### 2026-06-02
 
