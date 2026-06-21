@@ -83,9 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workdir", type=Path, default=Path("build/gguf_qwen_smoke"))
     parser.add_argument("--token-ids", help="Externally tokenized prompt ids, comma-separated")
     parser.add_argument("--prompt", help="Text prompt for llama.cpp capture")
+    parser.add_argument(
+        "--llamacpp-tokenizer-tool",
+        type=Path,
+        help="Optional API-level llama.cpp tokenizer adapter for direct prompt execution",
+    )
+    parser.add_argument("--apply-chat-template", action="store_true", help="Format --prompt as one user turn")
     parser.add_argument("--steps", dest="steps", type=int, default=8)
     parser.add_argument("--max-tokens", dest="steps", type=int, help="Alias for --steps")
     parser.add_argument("--output", type=Path, help="Generated token-id output path for LiteNN token-id decode")
+    parser.add_argument("--text-output", type=Path, help="Detokenized generated text output")
     parser.add_argument("--profile", default="qwen2-like-causal-lm")
     parser.add_argument(
         "--backend-policy",
@@ -122,6 +129,14 @@ def main() -> int:
         raise SystemExit("--llamacpp-decode-golden-tool requires at least two generated steps")
     if args.capture_llamacpp and not args.prompt:
         raise SystemExit("--capture-llamacpp requires --prompt")
+    if args.llamacpp_tokenizer_tool and not args.prompt:
+        raise SystemExit("--llamacpp-tokenizer-tool requires --prompt")
+    if args.llamacpp_tokenizer_tool and args.token_ids:
+        raise SystemExit("provide either --token-ids or --llamacpp-tokenizer-tool")
+    if args.text_output and not args.llamacpp_tokenizer_tool:
+        raise SystemExit("--text-output requires --llamacpp-tokenizer-tool")
+    if args.apply_chat_template and not args.llamacpp_tokenizer_tool:
+        raise SystemExit("--apply-chat-template requires --llamacpp-tokenizer-tool")
     if (
         args.compare_logits
         or args.compare_text
@@ -131,10 +146,10 @@ def main() -> int:
         raise SystemExit("logits/text comparisons require --capture-llamacpp")
     if args.decode_logits_reference and args.llamacpp_decode_golden_tool:
         raise SystemExit("provide either --decode-logits-reference or --llamacpp-decode-golden-tool")
-    if not args.token_ids and not args.capture_llamacpp:
-        raise SystemExit("provide --token-ids or enable --capture-llamacpp")
-    if args.output is not None and not args.token_ids:
-        raise SystemExit("--output is only used with --token-ids in this smoke driver")
+    if not args.token_ids and not args.capture_llamacpp and not args.llamacpp_tokenizer_tool:
+        raise SystemExit("provide --token-ids, --llamacpp-tokenizer-tool, or enable --capture-llamacpp")
+    if args.output is not None and not (args.token_ids or args.llamacpp_tokenizer_tool):
+        raise SystemExit("--output is only used by the direct token-id decode path")
 
     root = repo_root()
     workdir: Path = args.workdir
@@ -148,6 +163,63 @@ def main() -> int:
         require_ok(analyze)
 
     token_ids = args.token_ids
+    resolved_token_output: Path | None = None
+    resolved_text_output: Path | None = None
+    tokenizer_prompt_ids: list[int] | None = None
+    if args.llamacpp_tokenizer_tool is not None:
+        tokenizer_dir = workdir / "llamacpp_tokenizer"
+        tokenizer_output = tokenizer_dir / "prompt_tokens.json"
+        tokenizer_text = args.prompt
+        if args.apply_chat_template:
+            formatted_prompt = tokenizer_dir / "formatted_prompt.bin"
+            template_cmd = [
+                sys.executable,
+                str(root / "scripts" / "gguf_tokenizer_adapter.py"),
+                "chat-template",
+                "--tool",
+                str(args.llamacpp_tokenizer_tool),
+                "--model",
+                str(args.model),
+                "--workdir",
+                str(tokenizer_dir),
+                "--output",
+                str(formatted_prompt),
+                "--text",
+                args.prompt,
+            ]
+            apply_template = run_step("apply_chat_template", template_cmd, workdir)
+            steps.append(apply_template)
+            require_ok(apply_template)
+            tokenizer_text = formatted_prompt.read_text(encoding="utf-8")
+        tokenize_cmd = [
+            sys.executable,
+            str(root / "scripts" / "gguf_tokenizer_adapter.py"),
+            "tokenize",
+            "--tool",
+            str(args.llamacpp_tokenizer_tool),
+            "--model",
+            str(args.model),
+            "--workdir",
+            str(tokenizer_dir),
+            "--output",
+            str(tokenizer_output),
+            "--text",
+            tokenizer_text,
+        ]
+        tokenize = run_step("tokenize_prompt", tokenize_cmd, workdir)
+        steps.append(tokenize)
+        require_ok(tokenize)
+        token_document = json.loads(tokenizer_output.read_text(encoding="utf-8"))
+        if token_document.get("schema") != "litenn.llamacpp_tokens.v1":
+            raise SystemExit("llama.cpp tokenizer adapter returned an unsupported token schema")
+        tokenizer_prompt_ids = token_document.get("tokenIds")
+        if (
+            not isinstance(tokenizer_prompt_ids, list)
+            or not tokenizer_prompt_ids
+            or any(not isinstance(token_id, int) or token_id < 0 for token_id in tokenizer_prompt_ids)
+        ):
+            raise SystemExit("llama.cpp tokenizer adapter returned invalid or empty token ids")
+        token_ids = ",".join(str(token_id) for token_id in tokenizer_prompt_ids)
     capture_dir = workdir / "llamacpp_capture"
     if args.capture_llamacpp:
         capture_cmd = [
@@ -260,6 +332,7 @@ def main() -> int:
 
     if token_ids:
         decode_output = args.output if args.output is not None else workdir / "litenn_decode_tokens.txt"
+        resolved_token_output = decode_output
         decode_output.parent.mkdir(parents=True, exist_ok=True)
         decode = run_step(
             "litenn_decode_token_ids",
@@ -280,13 +353,45 @@ def main() -> int:
         )
         steps.append(decode)
         require_ok(decode)
+        if args.llamacpp_tokenizer_tool is not None:
+            replay_lines = decode_output.read_text(encoding="utf-8").splitlines()
+            replay_ids = json.loads(replay_lines[0]) if replay_lines else []
+            if not isinstance(replay_ids, list) or any(not isinstance(token_id, int) for token_id in replay_ids):
+                raise SystemExit("LiteNN direct decode output contains an invalid token-id line")
+            generated_ids = replay_ids[len(tokenizer_prompt_ids or []) :]
+            text_output = args.text_output if args.text_output is not None else workdir / "generated_text.bin"
+            resolved_text_output = text_output
+            if generated_ids:
+                detokenize_dir = workdir / "llamacpp_detokenizer"
+                detokenize_cmd = [
+                    sys.executable,
+                    str(root / "scripts" / "gguf_tokenizer_adapter.py"),
+                    "detokenize",
+                    "--tool",
+                    str(args.llamacpp_tokenizer_tool),
+                    "--model",
+                    str(args.model),
+                    "--workdir",
+                    str(detokenize_dir),
+                    "--output",
+                    str(text_output),
+                    "--token-ids",
+                    ",".join(str(token_id) for token_id in generated_ids),
+                ]
+                detokenize = run_step("detokenize_generation", detokenize_cmd, workdir)
+                steps.append(detokenize)
+                require_ok(detokenize)
+            else:
+                text_output.parent.mkdir(parents=True, exist_ok=True)
+                text_output.write_bytes(b"")
 
     report = {
         "schema": "litenn.gguf_qwen_smoke.v1",
         "model": str(args.model),
         "backend_policy": args.backend_policy,
         "workdir": str(workdir),
-        "token_output": str(args.output) if args.output is not None else None,
+        "token_output": str(resolved_token_output) if resolved_token_output is not None else None,
+        "text_output": str(resolved_text_output) if resolved_text_output is not None else None,
         "steps": steps,
     }
     report_path = workdir / "qwen_smoke_report.json"
