@@ -2491,10 +2491,11 @@ placement and fallback policy.
       weight tensor. The MLIR lowering decodes nibbles from UInt8 payload bytes inside the reduction loop.
 - [ ] Execute GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight
       tensor:
-      - [x] CPU AOT directly decodes output-major `Q4_K`, `Q6_K`, and `Q8_0` block payloads inside the generated MLIR
-            reduction. Package-loaded external Q4_K weights and dequantize-reference Q6_K/Q8_0 parity are covered without
-            introducing a compiler-to-ggml link dependency.
-      - [ ] Extend CPU AOT coverage to `Q5_K` and any additional formats observed in the target model's real tensor mix.
+      - [x] CPU AOT directly decodes output-major `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_0` block payloads inside the generated
+            MLIR reduction. Package-loaded external Q4_K weights and dequantize-reference Q5_K/Q6_K/Q8_0 parity are
+            covered without introducing a compiler-to-ggml link dependency.
+      - [ ] Validate the target model's complete tensor-format inventory and add any format outside the covered
+            Q4_K/Q5_K/Q6_K/Q8_0 set.
       - [ ] Add the corresponding CUDA native block projection path; CUDA must not silently relabel a CPU bridge as native.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
@@ -2679,7 +2680,7 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-06-21
 
-- Added MLIR Builder-generated CPU AOT block decoding for output-major GGML Q4_K, Q6_K, and Q8_0 quantized MatMul.
+- Added MLIR Builder-generated CPU AOT block decoding for output-major GGML Q4_K, Q5_K, Q6_K, and Q8_0 quantized MatMul.
   Generated objects consume the original UInt8 payload directly, including package-loaded external Q4_K weights, and do
   not materialize a complete Float32 weight tensor or depend on ggml runtime symbols.
 

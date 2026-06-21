@@ -1120,6 +1120,7 @@ namespace litenn
 				                                           IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat);
 				const auto isGGMLBlockQuantizedMatMul = node.params.scheme == QuantizationScheme::Block &&
 				                                        (node.params.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
+				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
 				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K ||
 				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0);
 				if (node.transposeRhs && !isGGMLBlockQuantizedMatMul)
@@ -1132,10 +1133,9 @@ namespace litenn
 				                                  node.params.granularity != QuantizationGranularity::Grouped)) &&
 				    !isPackedNibbleQuantizedMatMul && !isGGMLBlockQuantizedMatMul)
 				{
-					throw std::runtime_error(
-					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports "
-					    "affine per-tensor/per-axis/grouped, packed-nibble, GGML_Q4_K, GGML_Q6_K, and "
-					    "GGML_Q8_0 weights only");
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports "
+					                         "affine per-tensor/per-axis/grouped, packed-nibble, GGML_Q4_K, GGML_Q5_K, "
+					                         "GGML_Q6_K, and GGML_Q8_0 weights only");
 				}
 				if (isAffineQuantizedMatMul && node.params.storageType != DataType::Int8 &&
 				    node.params.storageType != DataType::UInt8)
@@ -1403,9 +1403,12 @@ namespace litenn
 							                 .getResult(),
 							             b.create<arith::RemUIOp>(l, withinBlock, index(32)).getResult())
 							            .getResult();
+							    const auto quantBaseOffset =
+							        node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ? 48 : 16;
 							    auto quantByte = byteToI32(byteAt(
 							        b.create<arith::AddIOp>(
-							             l, b.create<arith::AddIOp>(l, blockBase, index(16)).getResult(), quantOffset)
+							             l, b.create<arith::AddIOp>(l, blockBase, index(quantBaseOffset)).getResult(),
+							             quantOffset)
 							            .getResult()));
 							    auto highNibble =
 							        b.create<arith::CmpIOp>(
@@ -1417,6 +1420,22 @@ namespace litenn
 							             l, highNibble, b.create<arith::ShRUIOp>(l, quantByte, shift4).getResult(),
 							             b.create<arith::AndIOp>(l, quantByte, mask15).getResult())
 							            .getResult();
+							    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K)
+							    {
+								    auto highBits = byteToI32(
+								        byteAt(b.create<arith::AddIOp>(
+								                    l, b.create<arith::AddIOp>(l, blockBase, index(16)).getResult(),
+								                    b.create<arith::RemUIOp>(l, withinBlock, index(32)).getResult())
+								                   .getResult()));
+								    auto subblockI32 = b.create<arith::IndexCastOp>(l, i32, subblock).getResult();
+								    auto highBit =
+								        b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, highBits, subblockI32),
+								                                b.create<arith::ConstantIntOp>(l, i32, 1))
+								            .getResult();
+								    nibble =
+								        b.create<arith::OrIOp>(l, nibble, b.create<arith::ShLIOp>(l, highBit, shift4))
+								            .getResult();
+							    }
 							    auto scaleF32 = b.create<arith::UIToFPOp>(l, b.getF32Type(), scale).getResult();
 							    auto minF32 = b.create<arith::UIToFPOp>(l, b.getF32Type(), minimum).getResult();
 							    auto quantF32 = b.create<arith::UIToFPOp>(l, b.getF32Type(), nibble).getResult();

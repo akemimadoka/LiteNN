@@ -1171,11 +1171,12 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 }
 
 #ifdef LITENN_ENABLE_MLIR
-TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ6KAndQ8_0MatMulWithoutMaterializingWeight)
+TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutMaterializingWeight)
 {
 	constexpr std::size_t inFeatures = 256;
 	constexpr std::size_t outFeatures = 3;
 	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q5_K, QuantizedBlockFormat::GGML_Q5_K, "q5_k.weight" },
 		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
 		std::tuple{ GGML_TYPE_Q8_0, QuantizedBlockFormat::GGML_Q8_0, "q8_0.weight" },
 	};
