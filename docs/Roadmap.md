@@ -2559,11 +2559,20 @@ placement and fallback policy.
       and model context-length rejection before plan construction.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
-- [ ] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands.
-- [ ] Gate “production supported” status on matching golden logits within dtype/quantization tolerance and on a non-hidden
-      fallback report.
-- [ ] Add benchmark rows comparing LiteNN CPU, LiteNN CUDA native/bridge, llama.cpp CPU/GPU where locally available, and
-      PyTorch/HF only when an equivalent model source is available.
+- [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:
+      `example/gguf/build_stateful_artifacts.py` lowers a package with external weights, emits separated CPU and optional
+      CUDA carrier objects, records the actual compiler backend, and supports `native-required`, `bridge-allowed`,
+      `optional`, and `disabled` CUDA policies without hiding CPU bridge selection.
+- [x] Gate “production supported” status on matching golden logits within dtype/quantization tolerance and on a non-hidden
+      fallback report: `scripts/gguf_production_gate.py` defaults to CUDA-native, requires explicit no-fallback evidence,
+      validates requested prefill/decode/text comparison reports, emits a machine-readable decision, and fails closed
+      when artifact or parity evidence is missing.
+- [x] Add evidence-driven LLM decode comparison-table tooling:
+      `benchmark/gguf_decode_compare.py` consumes LiteNN Qwen smoke reports, llama-bench JSON, and equivalent PyTorch/HF
+      rows, then emits JSON/CSV/Markdown with ms/token, token/s, fallback state, and same-device-class percentage deltas.
+      It intentionally omits unavailable backends instead of relabeling bridge or synthetic data.
+- [ ] Populate the comparison table with real LiteNN CUDA-native/bridge decode rows after G16.5 exposes an executable
+      CUDA stateful decode runner; current Qwen smoke execution remains explicitly `cpu-interpreter`.
 
 ### Long-Term Deferred Queue
 

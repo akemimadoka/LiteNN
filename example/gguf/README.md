@@ -101,6 +101,23 @@ library, shared library, memory-mapped file, or in-memory span. Applications
 that prefer raw files can use `CompiledModuleSeparatedArtifact::WriteRegionFiles`
 after compiling through the C++ API.
 
+Build a stateful decode package and separated CPU/CUDA artifacts with explicit
+fallback policy:
+
+```powershell
+python311 example\gguf\build_stateful_artifacts.py `
+  --model model.gguf `
+  --litenn build-cuda\tools\gguf\litenn_gguf_convert.exe `
+  --out-dir build\qwen_stateful `
+  --past-length 0 --max-cache-length 4096 `
+  --cuda-policy native-required
+```
+
+`artifact_manifest.json` records the actual compiler backend and whether the
+CUDA request produced a CPU bridge. `native-required` rejects bridges;
+`bridge-allowed` permits but exposes them; `optional` also records unavailable
+CUDA builds; `disabled` emits CPU artifacts only.
+
 Capture llama.cpp golden artifacts for a fixed prompt:
 
 ```powershell
@@ -175,6 +192,34 @@ python311 scripts\gguf_compare_llamacpp_decode_logits.py `
 The comparison rejects mismatched prompt ids and generated-token prefixes
 before reading logits. `qwen_smoke.py --llamacpp-decode-golden-tool <path>`
 automates capture and comparison after its regular replay.
+
+Production support is an evidence gate rather than a model-name allowlist:
+
+```powershell
+python311 scripts\gguf_production_gate.py `
+  --smoke-report build\qwen_smoke\qwen_smoke_report.json `
+  --artifact-manifest build\qwen_stateful\artifact_manifest.json `
+  --require-prefill --require-decode --require-text
+```
+
+The default gate requires `cuda-native`, successful compatibility analysis,
+explicitly absent fallback, and requested golden comparisons. It writes
+`production_gate.json` and exits non-zero when evidence is missing or failed.
+
+Create an honest decode comparison table from available evidence:
+
+```powershell
+python311 benchmark\gguf_decode_compare.py `
+  --litenn-smoke-report build\qwen_smoke\qwen_smoke_report.json `
+  --llama-bench-json build\llama_bench.json `
+  --pytorch-json build\pytorch_decode.json `
+  --output-dir build\qwen_decode_compare
+```
+
+The collector emits JSON, CSV, and Markdown rows with `ms/token`, token/s,
+fallback state, and percentage differences against same-device-class
+llama.cpp and PyTorch/HF baselines. Missing backends remain absent rather than
+being represented by bridge or synthetic measurements.
 
 The same isolated adapter provides production tokenizer parity without linking
 llama.cpp into LiteNN. Tokenize and detokenize through the manifest-backed
