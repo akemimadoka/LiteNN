@@ -1161,7 +1161,82 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 	{
 		EXPECT_FLOAT_EQ(ReadFloat(graphOutputs[0], i), ReadFloat(actual, i));
 	}
+
+#ifdef LITENN_ENABLE_MLIR
+	auto compiled = Compiler<CPU>::CompileArtifact(loaded.plan).Load();
+	const auto compiledOutputs = compiled.RunTensors(inputs);
+	ASSERT_EQ(compiledOutputs.size(), 1u);
+	ExpectTensorNear(compiledOutputs[0], actual, { .absolute = 1.0e-3, .relative = 1.0e-5 });
+#endif
 }
+
+#ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ6KAndQ8_0MatMulWithoutMaterializingWeight)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 3;
+	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
+		std::tuple{ GGML_TYPE_Q8_0, QuantizedBlockFormat::GGML_Q8_0, "q8_0.weight" },
+	};
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		SCOPED_TRACE(name);
+		std::vector<float> weightValues(outFeatures * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>(i % 13) - 6) * 0.25F;
+		}
+		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+
+		Graph graph;
+		const auto weightVariable = graph.AddVariable(quantizedWeight);
+		const Layer::LinearLayer layer{
+			.weightVariable = weightVariable,
+			.inFeatures = inFeatures,
+			.outFeatures = outFeatures,
+			.dtype = DataType::Float32,
+			.weightQuantization = *quantizedWeight->Quantization(),
+			.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+			.transposeWeight = true,
+		};
+		Subgraph forward;
+		const auto inputNode = forward.AddParam(DataType::Float32, { 2, inFeatures });
+		const auto output = Layer::AddLinear(forward, layer, { inputNode, 0 });
+		forward.SetResults({ output });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+
+		std::vector<float> inputValues(2 * inFeatures);
+		for (std::size_t i = 0; i < inputValues.size(); ++i)
+		{
+			inputValues[i] = static_cast<float>(static_cast<int>(i % 9) - 4) * 0.5F;
+		}
+		std::array<Tensor<CPU>, 1> inputs = { MakeFloatTensor(inputValues, { 2, inFeatures }) };
+		const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+		const auto dequantized = GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, name);
+		Tensor<CPU> expected(Uninitialized, { 2, outFeatures }, DataType::Float32);
+		const auto* weightData = static_cast<const float*>(dequantized.UnsafeRawData());
+		auto* expectedData = static_cast<float*>(expected.UnsafeRawData());
+		for (std::size_t row = 0; row < 2; ++row)
+		{
+			for (std::size_t column = 0; column < outFeatures; ++column)
+			{
+				float sum = 0.0F;
+				for (std::size_t reduction = 0; reduction < inFeatures; ++reduction)
+				{
+					sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
+				}
+				expectedData[row * outFeatures + column] = sum;
+			}
+		}
+		auto compiled = Compiler<CPU>::CompileArtifact(plan).Load();
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), 1u);
+		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+}
+#endif
 
 TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 {
