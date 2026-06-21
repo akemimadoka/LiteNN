@@ -385,6 +385,69 @@ namespace
 		return graph;
 	}
 
+	Graph BuildAffineQuantizedMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerTensorAffineQuantization(DataType::Int8, 0.25F, -2);
+		params.expressedShape = { 3, 2 };
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		Tensor<CPU> storage({ -2.0, 2.0, 6.0, -6.0, 0.0, 10.0 }, { 3, 2 }, DataType::Int8);
+		const auto weight =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::Int8, { 3, 2 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
+	Graph BuildPerAxisAffineQuantizedMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = PerAxisAffineQuantization(DataType::UInt8, 1, { 0.5F, 0.25F }, { 4, 8 });
+		params.expressedShape = { 3, 2 };
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		Tensor<CPU> storage({ 4.0, 12.0, 6.0, 4.0, 10.0, 16.0 }, { 3, 2 }, DataType::UInt8);
+		const auto weight =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 3, 2 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
+	Graph BuildPackedQuantizedMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params =
+		    PackedNibbleQuantization(PackedNibbleFormat::UInt4, { 3, 2 }, 0.25F, 8, PackedNibbleOrder::LowThenHigh);
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		Tensor<CPU> storage({ 0xf1, 0x02, 0x34 }, { 3 }, DataType::UInt8);
+		const auto weight =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 3 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildPerAxisAffineQuantizeInputGraph()
 	{
 		Graph graph;
@@ -1633,6 +1696,40 @@ TEST(CompiledModuleTest, CPUDynamicGroupedAffineQuantizeArtifactMatchesInterpret
 	    Tensor<CPU>({ -0.5, 0.125, 0.0, 1.0, 9.0, 3.0, -2.0, 0.5, 0.875, -12.0 }, { 2, 5 }, DataType::Float32));
 
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUAffineQuantizedMatMulArtifactMatchesInterpreter)
+{
+	auto graph = BuildAffineQuantizedMatMulGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0, -2.0, 0.5, 0.25, 3.0, -1.5 }, { 2, 3 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUPerAxisAffineQuantizedMatMulArtifactMatchesInterpreter)
+{
+	auto graph = BuildPerAxisAffineQuantizedMatMulGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0, -2.0, 0.5, 0.25, 3.0, -1.5 }, { 2, 3 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, PackedQuantizedMatMulAOTDiagnosticMentionsAffineSupport)
+{
+	auto graph = BuildPackedQuantizedMatMulGraph();
+	try
+	{
+		(void) Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+		FAIL() << "Expected packed QuantizedMatMulNode compilation to fail";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("QuantizedMatMulNode"), std::string::npos);
+		EXPECT_NE(message.find("affine"), std::string::npos);
+	}
 }
 
 TEST(CompiledModuleTest, CUDANativeInstructionPayloadRoundTripsLaunchMetadata)

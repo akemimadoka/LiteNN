@@ -2479,9 +2479,12 @@ placement and fallback policy.
       while constructing the model. Quantized projections now emit first-class `QuantizedMatMulNode` operations, token
       embeddings keep explicit quantized storage semantics, and tied vocab-major embeddings preserve the same layout
       contract for the LM head.
-- [ ] Execute `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight tensor.
-      Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are complete; native compiled
-      lowering remains open.
+- [x] Execute affine `QuantizedMatMulNode` directly in CPU AOT without materializing a full Float32 weight tensor.
+      The MLIR lowering now keeps Int8/UInt8 weight storage in the reduction loop and broadcasts per-tensor/per-axis
+      scale/zero-point metadata as small constants.
+- [ ] Execute packed-nibble/GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full
+      Float32 weight tensor. Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are
+      complete; native compiled block-format lowering remains open.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
       and related block rows without materializing the complete Float32 weight.
@@ -2492,7 +2495,9 @@ placement and fallback policy.
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
       reporting.
-- [ ] Add parity tests comparing native quantized projection with ggml dequantize-plus-float reference.
+- [x] Add CPU AOT parity tests for affine quantized projection lowering and an explicit diagnostic test for unsupported
+      packed-nibble compiled lowering.
+- [ ] Add parity tests comparing native GGML/CUDA quantized projection with ggml dequantize-plus-float reference.
 - [x] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
 
 #### G16.5 CUDA Native Coverage for Full Decode

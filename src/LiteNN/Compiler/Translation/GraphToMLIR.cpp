@@ -847,6 +847,33 @@ namespace litenn
 				throw std::runtime_error("GraphToMLIR expected floating-point scalar");
 			}
 
+			Value emitIntegerScalarToF32(OpBuilder& b, Location loc, Value value, bool isUnsigned)
+			{
+				auto f32 = b.getF32Type();
+				return isUnsigned ? b.create<arith::UIToFPOp>(loc, f32, value).getResult()
+				                  : b.create<arith::SIToFPOp>(loc, f32, value).getResult();
+			}
+
+			Value emitScalarFromF32(OpBuilder& b, Location loc, Value value, Type targetType)
+			{
+				if (value.getType() == targetType)
+				{
+					return value;
+				}
+				auto targetFloatType = dyn_cast<FloatType>(targetType);
+				if (!targetFloatType)
+				{
+					throw std::runtime_error("GraphToMLIR expected floating-point output scalar");
+				}
+				const auto sourceWidth = value.getType().getIntOrFloatBitWidth();
+				const auto targetWidth = targetType.getIntOrFloatBitWidth();
+				if (sourceWidth < targetWidth)
+				{
+					return b.create<arith::ExtFOp>(loc, targetType, value).getResult();
+				}
+				return b.create<arith::TruncFOp>(loc, targetType, value).getResult();
+			}
+
 			Value emitScalarZero(OpBuilder& b, Location loc, Type elemType)
 			{
 				return emitScalarConstant(b, loc, elemType, 0.0);
@@ -1084,12 +1111,116 @@ namespace litenn
 					                                 output.shape) };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const QuantizedMatMulNode&, std::span<const OutputInfo>,
-			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const QuantizedMatMulNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error("GraphToMLIR QuantizedMatMulNode requires backend-native lowering or an "
-				                         "explicit reference legalization");
+				if (node.transposeRhs)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently requires non-transposed rhs");
+				}
+				if (node.params.scheme != QuantizationScheme::Affine ||
+				    (node.params.granularity != QuantizationGranularity::PerTensor &&
+				     node.params.granularity != QuantizationGranularity::PerAxis))
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports "
+					                         "affine per-tensor/per-axis weights only");
+				}
+				if (node.params.storageType != DataType::Int8 && node.params.storageType != DataType::UInt8)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports Int8/UInt8 storage");
+				}
+				if (outputInfos.size() != 1)
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode expected one output");
+				}
+				const auto lhsInfo = sg.GetOutputInfo(node.lhs);
+				const auto rhsInfo = sg.GetOutputInfo(node.rhsStorage);
+				if (lhsInfo.shape.size() != 2 || outputInfos[0].shape.size() != 2)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering requires rank-2 tensors");
+				}
+				const auto rhsShape = node.params.expressedShape.empty() ? rhsInfo.shape : node.params.expressedShape;
+				if (rhsShape.size() != 2 || rhsShape[0] != lhsInfo.shape[1] || rhsShape[1] != outputInfos[0].shape[1] ||
+				    lhsInfo.shape[0] != outputInfos[0].shape[0])
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode shape metadata is inconsistent");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				if (!isa<FloatType>(resultType.getElementType()))
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode output must be floating-point");
+				}
+				auto lhs = getVal(valueMap, node.lhs);
+				auto rhs = getVal(valueMap, node.rhsStorage);
+				const auto k = lhsInfo.shape[1];
+				const auto n = outputInfos[0].shape[1];
+				if (rhsInfo.shape.size() != 2 || rhsInfo.shape[0] != k || rhsInfo.shape[1] != n)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode affine storage shape must match expressed rhs shape");
+				}
+
+				std::vector<std::size_t> parameterShape{ 1 };
+				AffineExpr parameterExpr = getAffineConstantExpr(0, &ctx_);
+				if (node.params.granularity == QuantizationGranularity::PerAxis)
+				{
+					const auto axis = QuantizationDetail::NormalizeAxis(node.params.axis, ShapeView{ rhsShape });
+					parameterShape[0] = rhsShape[axis];
+					parameterExpr = axis == 0 ? getAffineDimExpr(2, &ctx_) : getAffineDimExpr(1, &ctx_);
+				}
+				if (node.params.scales.size() != parameterShape[0] ||
+				    (!node.params.zeroPoints.empty() && node.params.zeroPoints.size() != parameterShape[0]))
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode quantization parameter count mismatch");
+				}
+
+				std::vector<double> scales;
+				scales.reserve(node.params.scales.size());
+				for (const auto scale : node.params.scales)
+				{
+					scales.push_back(static_cast<double>(scale));
+				}
+				std::vector<double> zeroPoints(parameterShape[0], 0.0);
+				for (std::size_t i = 0; i < node.params.zeroPoints.size(); ++i)
+				{
+					zeroPoints[i] = static_cast<double>(node.params.zeroPoints[i]);
+				}
+				auto scaleValue = emitDenseConstant(DataType::Float32, parameterShape, scales);
+				auto zeroPointValue = emitDenseConstant(DataType::Float32, parameterShape, zeroPoints);
+
+				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+				auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+				auto filled =
+				    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+
+				auto lhsMap = AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(2, &ctx_) }, &ctx_);
+				auto rhsMap = AffineMap::get(3, 0, { getAffineDimExpr(2, &ctx_), getAffineDimExpr(1, &ctx_) }, &ctx_);
+				auto parameterMap = AffineMap::get(3, 0, { parameterExpr }, &ctx_);
+				auto outputMap =
+				    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(1, &ctx_) }, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType }, ValueRange{ lhs, rhs, scaleValue, zeroPointValue },
+				    ValueRange{ filled },
+				    SmallVector<AffineMap>{ lhsMap, rhsMap, parameterMap, parameterMap, outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
+				                                      utils::IteratorType::reduction },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    const auto lhsF32 = emitScalarToF32(b, l, args[0]);
+					    auto rhsF32 = emitIntegerScalarToF32(b, l, args[1], node.params.storageType == DataType::UInt8);
+					    rhsF32 = b.create<arith::SubFOp>(l, rhsF32, args[3]).getResult();
+					    rhsF32 = b.create<arith::MulFOp>(l, rhsF32, args[2]).getResult();
+					    auto product = b.create<arith::MulFOp>(l, lhsF32, rhsF32).getResult();
+					    auto accumulator = emitScalarToF32(b, l, args[4]);
+					    auto sum = b.create<arith::AddFOp>(l, accumulator, product).getResult();
+					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+				    });
+				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,
