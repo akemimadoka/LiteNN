@@ -38,6 +38,53 @@ namespace LiteNN::Layer
 			}
 			return Tensor<CPU>(std::span<const double>(values), { sequenceLength, halfDim, 1 }, dtype);
 		}
+
+		inline Tensor<CPU> MakeRoPEInverseFrequencyTable(std::size_t halfDim, DataType dtype, double base,
+		                                                 double frequencyScale)
+		{
+			std::vector<double> values;
+			values.reserve(halfDim);
+			for (std::size_t dim = 0; dim < halfDim; ++dim)
+			{
+				const auto exponent = -2.0 * static_cast<double>(dim) / static_cast<double>(halfDim * 2);
+				values.push_back(std::pow(base, exponent) * frequencyScale);
+			}
+			return Tensor<CPU>(std::span<const double>(values), { 1, halfDim, 1 }, dtype);
+		}
+
+		inline NodeOutput AddRoPEWithTables(Subgraph& subgraph, NodeOutput input, NodeOutput cosTable,
+		                                    NodeOutput sinTable)
+		{
+			const auto info = subgraph.GetOutputInfo(input);
+			const auto sequenceLength = info.shape[0];
+			const auto halfDim = info.shape[1] / 2;
+			const std::vector<std::size_t> pairShape{ sequenceLength, halfDim, 2 };
+			const std::vector<std::size_t> laneShape{ sequenceLength, halfDim, 1 };
+			const auto reshaped =
+			    subgraph.AddNode(ReshapeNode{ input, pairShape }, { OutputInfo{ info.dtype, pairShape } });
+			const auto first =
+			    subgraph.AddNode(SliceNode{ { reshaped, 0 }, 2, 0, 1 }, { OutputInfo{ info.dtype, laneShape } });
+			const auto second =
+			    subgraph.AddNode(SliceNode{ { reshaped, 0 }, 2, 1, 1 }, { OutputInfo{ info.dtype, laneShape } });
+			const auto firstCos = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, cosTable },
+			                                       { OutputInfo{ info.dtype, laneShape } });
+			const auto secondSin = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { second, 0 }, sinTable },
+			                                        { OutputInfo{ info.dtype, laneShape } });
+			const auto rotatedFirst =
+			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, { firstCos, 0 }, { secondSin, 0 } },
+			                     { OutputInfo{ info.dtype, laneShape } });
+			const auto firstSin = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, sinTable },
+			                                       { OutputInfo{ info.dtype, laneShape } });
+			const auto secondCos = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { second, 0 }, cosTable },
+			                                        { OutputInfo{ info.dtype, laneShape } });
+			const auto rotatedSecond =
+			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { firstSin, 0 }, { secondCos, 0 } },
+			                     { OutputInfo{ info.dtype, laneShape } });
+			const auto concatenated = subgraph.AddNode(ConcatNode{ { { rotatedFirst, 0 }, { rotatedSecond, 0 } }, 2 },
+			                                           { OutputInfo{ info.dtype, pairShape } });
+			const auto restored = subgraph.AddNode(ReshapeNode{ { concatenated, 0 }, info.shape }, { info });
+			return { restored, 0 };
+		}
 	} // namespace Detail
 
 	// Rotary Position Embedding helper.
@@ -70,17 +117,6 @@ namespace LiteNN::Layer
 		const auto sequenceLength = info.shape[0];
 		const auto featureSize = info.shape[1];
 		const auto halfDim = featureSize / 2;
-		const std::vector<std::size_t> pairShape{ sequenceLength, halfDim, 2 };
-		const std::vector<std::size_t> laneShape{ sequenceLength, halfDim, 1 };
-
-		const auto reshaped =
-		    subgraph.AddNode(ReshapeNode{ input, pairShape }, { OutputInfo{ info.dtype, pairShape } });
-
-		const auto first =
-		    subgraph.AddNode(SliceNode{ { reshaped, 0 }, 2, 0, 1 }, { OutputInfo{ info.dtype, laneShape } });
-		const auto second =
-		    subgraph.AddNode(SliceNode{ { reshaped, 0 }, 2, 1, 1 }, { OutputInfo{ info.dtype, laneShape } });
-
 		const auto cosTable = Detail::AddConstant(
 		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, frequencyScale,
 		                                         positionOffset, Detail::RoPETrig::Cos));
@@ -88,27 +124,43 @@ namespace LiteNN::Layer
 		    subgraph, Detail::MakeRoPEAngleTable(sequenceLength, halfDim, info.dtype, base, frequencyScale,
 		                                         positionOffset, Detail::RoPETrig::Sin));
 
-		const auto firstCos = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { cosTable, 0 } },
-		                                       { OutputInfo{ info.dtype, laneShape } });
-		const auto secondSin = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { second, 0 }, { sinTable, 0 } },
-		                                        { OutputInfo{ info.dtype, laneShape } });
-		const auto rotatedFirst =
-		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, { firstCos, 0 }, { secondSin, 0 } },
-		                     { OutputInfo{ info.dtype, laneShape } });
+		return Detail::AddRoPEWithTables(subgraph, input, { cosTable, 0 }, { sinTable, 0 });
+	}
 
-		const auto firstSin = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { first, 0 }, { sinTable, 0 } },
-		                                       { OutputInfo{ info.dtype, laneShape } });
-		const auto secondCos = subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { second, 0 }, { cosTable, 0 } },
-		                                        { OutputInfo{ info.dtype, laneShape } });
-		const auto rotatedSecond = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { firstSin, 0 }, { secondCos, 0 } },
-		                                            { OutputInfo{ info.dtype, laneShape } });
-
-		const auto concatenated = subgraph.AddNode(ConcatNode{ { { rotatedFirst, 0 }, { rotatedSecond, 0 } }, 2 },
-		                                           { OutputInfo{ info.dtype, pairShape } });
-		const auto restored =
-		    subgraph.AddNode(ReshapeNode{ { concatenated, 0 }, info.shape }, { OutputInfo{ info.dtype, info.shape } });
-
-		return { restored, 0 };
+	/// Applies RoPE using one runtime position per input row.
+	inline NodeOutput AddRoPEAtPositions(Subgraph& subgraph, NodeOutput input, NodeOutput positions,
+	                                     double base = 10000.0, double frequencyScale = 1.0)
+	{
+		const auto info = subgraph.GetOutputInfo(input);
+		const auto positionInfo = subgraph.GetOutputInfo(positions);
+		if (info.shape.size() != 2 || (info.shape[1] % 2) != 0 || !IsFloatingDataType(info.dtype))
+		{
+			throw std::runtime_error("Dynamic RoPE input must be floating-point [sequenceLength, evenFeatureSize]");
+		}
+		if ((positionInfo.dtype != DataType::Int32 && positionInfo.dtype != DataType::Int64) ||
+		    positionInfo.shape != std::vector<std::size_t>{ info.shape[0] })
+		{
+			throw std::runtime_error("Dynamic RoPE positions must be Int32/Int64 [sequenceLength]");
+		}
+		if (!(std::isfinite(base) && base > 0.0 && std::isfinite(frequencyScale) && frequencyScale > 0.0))
+		{
+			throw std::runtime_error("Dynamic RoPE base and frequencyScale must be finite and greater than zero");
+		}
+		const auto halfDim = info.shape[1] / 2;
+		const auto castPositions =
+		    subgraph.AddNode(CastNode{ positions, info.dtype }, { OutputInfo{ info.dtype, positionInfo.shape } });
+		const auto shapedPositions = subgraph.AddNode(ReshapeNode{ { castPositions, 0 }, { info.shape[0], 1, 1 } },
+		                                              { OutputInfo{ info.dtype, { info.shape[0], 1, 1 } } });
+		const auto frequencies = Detail::AddConstant(
+		    subgraph, Detail::MakeRoPEInverseFrequencyTable(halfDim, info.dtype, base, frequencyScale));
+		const auto angles =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { shapedPositions, 0 }, { frequencies, 0 } },
+		                     { OutputInfo{ info.dtype, { info.shape[0], halfDim, 1 } } });
+		const auto cosTable = subgraph.AddNode(UnaryOpNode{ UnaryOp::Cos, { angles, 0 } },
+		                                       { OutputInfo{ info.dtype, { info.shape[0], halfDim, 1 } } });
+		const auto sinTable = subgraph.AddNode(UnaryOpNode{ UnaryOp::Sin, { angles, 0 } },
+		                                       { OutputInfo{ info.dtype, { info.shape[0], halfDim, 1 } } });
+		return Detail::AddRoPEWithTables(subgraph, input, { cosTable, 0 }, { sinTable, 0 });
 	}
 
 	inline SubgraphId BuildRoPE(ModelBuilder& builder, DataType dtype, ShapeView shape, double base = 10000.0,
