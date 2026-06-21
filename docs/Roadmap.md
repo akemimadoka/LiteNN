@@ -2494,8 +2494,19 @@ placement and fallback policy.
 - [x] Add automated LiteNN-vs-llama.cpp prefill-logits comparison:
       `scripts/gguf_compare_llamacpp_logits.py` replays captured prompt token ids through LiteNN, dumps last-token logits,
       compares against llama-debug `index: value` logits, and emits max-error/mismatch JSON.
-- [ ] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits and multi-token decode logits for
-      fixed prompts.
+- [x] Extend automated LiteNN-vs-llama.cpp golden comparison to first decode logits and multi-token decode logits:
+      decode loops emit full-prompt and subsequent decode positions through `--logits-output-dir` while omitting costly
+      prompt-intermediate dumps; replay manifests classify prefill and one-based decode steps; the comparator verifies
+      exact prompt/generated token prefixes before comparing all common full-vocabulary logits artifacts.
+- [x] Add an API-level llama.cpp decode-logits capture helper as an isolated CMake project:
+      `tools/llamacpp-golden` consumes exact prompt/generated token ids, calls `llama_decode` token by token, and emits
+      one full-vocabulary logits file after each generated token without adding llama.cpp to LiteNN's build graph.
+- [x] Add a manifest-backed llama.cpp decode capture driver:
+      `gguf_capture_llamacpp_decode_logits.py` runs the isolated helper and records model, prompt ids, generated ids,
+      decode-step positions, producer, and artifact paths using `litenn.llamacpp_decode_logits.v1`.
+- [x] Wire exact-token decode parity into the Qwen smoke flow:
+      `qwen_smoke.py --llamacpp-decode-golden-tool <path>` captures llama.cpp references from LiteNN's fixed replay
+      token stream and runs first/multi-token numerical comparison in the same evidence report.
 - [x] Add generated-text comparison for fixed llama.cpp captures:
       `scripts/gguf_compare_generation_text.py` compares llama-cli captured stdout with LiteNN replay output pieces and
       writes a JSON pass/fail report; full tokenizer parity remains a separate acceptance gate.

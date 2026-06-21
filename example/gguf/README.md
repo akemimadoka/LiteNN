@@ -66,6 +66,11 @@ the model context length.
 `--logits-output` can be added to any decode-loop command to write the final
 step's last-token logits as `index: value` lines, matching the prefill dump
 format used by golden-comparison tooling.
+`--logits-output-dir` writes the full-prompt position and every later decode
+position as `position-NNNNNN.txt`; prompt-intermediate positions are omitted to
+avoid enormous full-vocabulary dumps. The replay harness classifies the
+full-prompt position as `prefill` and later positions as one-based `decodeStep`
+entries in `litenn_decode_manifest.json`.
 `--run-llama-decode-loop-token-ids` accepts an externally tokenized prompt as
 comma-separated token ids, which is the preferred bridge for real tokenizer
 parity work until the optional llama.cpp tokenizer adapter is wired in.
@@ -125,8 +130,10 @@ python311 scripts\gguf_run_litenn_from_golden.py `
 
 The replay script reads the llama-debug `*-prompt.txt` artifact, extracts the
 `token ids:` line, runs `--run-llama-decode-loop-token-ids`, and writes
-`litenn_decode_manifest.json` plus LiteNN stdout/stderr/output files next to the
-golden capture. Numerical logits comparison is still a separate acceptance step.
+`litenn_decode_manifest.json` plus LiteNN stdout/stderr/output and per-position
+logits metadata next to the golden capture. Add `--capture-decode-logits` (or an
+explicit `--logits-output-dir`) when numerical decode comparison is needed;
+full-vocabulary dumps are opt-in because they can be large.
 
 Compare LiteNN last-token prefill logits against the llama-debug logits text
 artifact:
@@ -142,6 +149,32 @@ The comparison script replays the captured prompt token ids through
 `--dump-llama-token-id-logits`, reads llama-debug `index: value` logits, and
 writes `logits_compare.json` with max absolute/relative errors and the largest
 mismatches.
+
+For exact first-token and multi-token decode comparison, build the isolated
+llama.cpp API helper. This is intentionally a separate CMake project so the
+LiteNN build does not acquire a runtime or link dependency on llama.cpp:
+
+```powershell
+cmake -S tools\llamacpp-golden -B build-llamacpp-golden -DCMAKE_BUILD_TYPE=Release
+cmake --build build-llamacpp-golden --target litenn_llamacpp_decode_golden --parallel
+```
+
+Capture reference logits for a fixed token stream and compare every common
+decode step:
+
+```powershell
+python311 scripts\gguf_capture_llamacpp_decode_logits.py `
+  --tool build-llamacpp-golden\litenn_llamacpp_decode_golden.exe `
+  --model model.gguf --prompt-token-ids 1,2,3 --generated-token-ids 4,5,6 `
+  --out-dir build\gguf_golden\hello\llamacpp_decode_logits
+python311 scripts\gguf_compare_llamacpp_decode_logits.py `
+  --reference-manifest build\gguf_golden\hello\llamacpp_decode_logits\manifest.json `
+  --replay-manifest build\gguf_golden\hello\litenn_decode_manifest.json
+```
+
+The comparison rejects mismatched prompt ids and generated-token prefixes
+before reading logits. `qwen_smoke.py --llamacpp-decode-golden-tool <path>`
+automates capture and comparison after its regular replay.
 
 Compare generated text after replay:
 

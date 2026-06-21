@@ -97,6 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
+    parser.add_argument(
+        "--decode-logits-reference",
+        type=Path,
+        help="Exact-token llama.cpp decode-logits manifest to compare after replay",
+    )
+    parser.add_argument(
+        "--llamacpp-decode-golden-tool",
+        type=Path,
+        help="API-level helper used to capture and compare exact-token llama.cpp decode logits",
+    )
     parser.add_argument("--compare-text", action="store_true")
     parser.add_argument("--llama-debug", type=Path)
     parser.add_argument("--llama-cli", type=Path)
@@ -108,10 +118,19 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.steps <= 0:
         raise SystemExit("--steps must be positive")
+    if args.llamacpp_decode_golden_tool and args.steps < 2:
+        raise SystemExit("--llamacpp-decode-golden-tool requires at least two generated steps")
     if args.capture_llamacpp and not args.prompt:
         raise SystemExit("--capture-llamacpp requires --prompt")
-    if (args.compare_logits or args.compare_text) and not args.capture_llamacpp:
-        raise SystemExit("--compare-logits/--compare-text require --capture-llamacpp")
+    if (
+        args.compare_logits
+        or args.compare_text
+        or args.decode_logits_reference
+        or args.llamacpp_decode_golden_tool
+    ) and not args.capture_llamacpp:
+        raise SystemExit("logits/text comparisons require --capture-llamacpp")
+    if args.decode_logits_reference and args.llamacpp_decode_golden_tool:
+        raise SystemExit("provide either --decode-logits-reference or --llamacpp-decode-golden-tool")
     if not args.token_ids and not args.capture_llamacpp:
         raise SystemExit("provide --token-ids or enable --capture-llamacpp")
     if args.output is not None and not args.token_ids:
@@ -167,6 +186,8 @@ def main() -> int:
             "--seed",
             str(args.seed),
         ]
+        if args.decode_logits_reference is not None or args.llamacpp_decode_golden_tool is not None:
+            replay_cmd.append("--capture-decode-logits")
         replay = run_step("litenn_replay_from_golden", replay_cmd, workdir)
         steps.append(replay)
         require_ok(replay)
@@ -196,6 +217,46 @@ def main() -> int:
             compare_text = run_step("compare_generation_text", compare_text_cmd, workdir)
             steps.append(compare_text)
             require_ok(compare_text)
+
+        decode_logits_reference = args.decode_logits_reference
+        if args.llamacpp_decode_golden_tool is not None:
+            replay_manifest = json.loads((capture_dir / "litenn_decode_manifest.json").read_text(encoding="utf-8"))
+            prompt_ids = replay_manifest.get("tokenIds")
+            generated_ids = replay_manifest.get("generatedTokenIds")
+            if not prompt_ids or not generated_ids:
+                raise SystemExit("LiteNN replay did not produce prompt/generated token ids for decode-logits capture")
+            reference_dir = capture_dir / "llamacpp_decode_logits"
+            capture_decode_cmd = [
+                sys.executable,
+                str(root / "scripts" / "gguf_capture_llamacpp_decode_logits.py"),
+                "--tool",
+                str(args.llamacpp_decode_golden_tool),
+                "--model",
+                str(args.model),
+                "--prompt-token-ids",
+                ",".join(str(token_id) for token_id in prompt_ids),
+                "--generated-token-ids",
+                ",".join(str(token_id) for token_id in generated_ids),
+                "--out-dir",
+                str(reference_dir),
+            ]
+            capture_decode = run_step("capture_llamacpp_decode_logits", capture_decode_cmd, workdir)
+            steps.append(capture_decode)
+            require_ok(capture_decode)
+            decode_logits_reference = reference_dir / "manifest.json"
+
+        if decode_logits_reference is not None:
+            compare_decode_cmd = [
+                sys.executable,
+                str(root / "scripts" / "gguf_compare_llamacpp_decode_logits.py"),
+                "--reference-manifest",
+                str(decode_logits_reference),
+                "--replay-manifest",
+                str(capture_dir / "litenn_decode_manifest.json"),
+            ]
+            compare_decode = run_step("compare_decode_logits", compare_decode_cmd, workdir)
+            steps.append(compare_decode)
+            require_ok(compare_decode)
 
     if token_ids:
         decode_output = args.output if args.output is not None else workdir / "litenn_decode_tokens.txt"
