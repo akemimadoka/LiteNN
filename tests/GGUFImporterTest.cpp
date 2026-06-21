@@ -722,7 +722,7 @@ TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
 	EXPECT_TRUE(qwen2.supportsDecode);
 	EXPECT_TRUE(qwen2.supportsYaRNOrLongRoPE);
 	EXPECT_TRUE(qwen2.requiresExternalLLaMACppGolden);
-	EXPECT_NE(qwen2.unsupportedPolicy.find("Q4_K_M"), std::string_view::npos);
+	EXPECT_NE(qwen2.unsupportedPolicy.find("native CUDA quantized"), std::string_view::npos);
 	EXPECT_NE(qwen2.acceptancePolicy.find("Qwen2.5"), std::string_view::npos);
 }
 
@@ -780,7 +780,7 @@ TEST(GGUFLLaMACompatibility, AnalyzesQwen2ArchiveWithActionableProductionDiagnos
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.quantized-cuda" &&
-		       diagnostic.message.find("Q4_K_M CUDA") != std::string::npos;
+		       diagnostic.message.find("native CUDA quantized paths") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "qwen2.decode-loop" &&
@@ -1090,13 +1090,13 @@ TEST(GGUFLLaMAQuantizedExecution, PlansNativeAndReferenceQuantizedPolicies)
 	EXPECT_EQ(plan.dequantizedBytes, 1024u);
 	ASSERT_EQ(plan.decisions.size(), 1u);
 	EXPECT_EQ(plan.decisions[0].format, QuantizedBlockFormat::GGML_Q4_K);
-	EXPECT_EQ(plan.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUNativeQuantized);
-	EXPECT_EQ(GGUF::LLaMAQuantizedExecutionPolicyName(plan.decisions[0].selectedPolicy), "cpu-native-quantized");
+	EXPECT_EQ(plan.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CUDANativeQuantized);
+	EXPECT_EQ(GGUF::LLaMAQuantizedExecutionPolicyName(plan.decisions[0].selectedPolicy), "cuda-native-quantized");
 	EXPECT_FALSE(plan.decisions[0].blocking);
 
 	const auto nativeUnderBudget = GGUF::PlanLLaMAQuantizedWeightExecution(archive, 512);
 	EXPECT_TRUE(nativeUnderBudget.lowerable);
-	EXPECT_EQ(nativeUnderBudget.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CPUNativeQuantized);
+	EXPECT_EQ(nativeUnderBudget.decisions[0].selectedPolicy, GGUF::LLaMAQuantizedExecutionPolicy::CUDANativeQuantized);
 
 	const auto rejected = GGUF::PlanLLaMAQuantizedWeightExecution(BuildTinyQwen2ArchiveWithQ4_0Payload(), 64);
 	EXPECT_FALSE(rejected.lowerable);
@@ -1262,11 +1262,11 @@ TEST(GGUFLLaMACompatibility, ReportsQuantizationMixAndQ4KDiagnostic)
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.mix" &&
 		       diagnostic.message.find("GGML_Q4_K") != std::string::npos &&
-		       diagnostic.message.find("policy=cpu-native-quantized") != std::string::npos;
+		       diagnostic.message.find("policy=cuda-native-quantized") != std::string::npos;
 	}));
 	EXPECT_TRUE(std::ranges::any_of(report.diagnostics, [](const GGUF::LLaMACompatibilityDiagnostic& diagnostic) {
 		return !diagnostic.blocking && diagnostic.subject == "quantization.q4_k_m" &&
-		       diagnostic.message.find("native K-quant projection kernels") != std::string::npos;
+		       diagnostic.message.find("CUDA native K-quant projection kernels") != std::string::npos;
 	}));
 }
 

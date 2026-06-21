@@ -2515,8 +2515,9 @@ placement and fallback policy.
       weight dequantization.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
-- [ ] Add production-tuned CUDA native quantized projection kernels for `Q4_K`/`Q5_K`/`Q6_K`/`Q8_0`, including
-      complete `Q4_K_M` mixed-model reporting.
+- [ ] Add production-tuned CUDA native quantized projection kernels for `Q4_K`/`Q5_K`/`Q6_K`/`Q8_0`.
+- [x] Report `Q4_K_M` mixed-model coverage as CUDA-native quantized for Q4_K/Q6_K projection formats while keeping
+      full-model decode-loop and golden-logit acceptance gates explicit.
 - [x] Add CPU AOT parity tests for affine and packed-nibble quantized projection lowering, plus an explicit diagnostic
       test for unsupported FP4 packed MatMul lowering.
 - [ ] Add parity tests comparing native GGML/CUDA quantized projection with ggml dequantize-plus-float reference.

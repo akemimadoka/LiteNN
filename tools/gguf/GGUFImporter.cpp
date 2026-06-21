@@ -593,8 +593,8 @@ namespace LiteNN::GGUF
 				     "Qwen-specific tokenizer/config validation, RoPE scaling semantics, native quantized projection "
 				     "execution, and external logits before production use.",
 				     "Current LiteNN support is an analysis/lowering target only: tokenizer runtime, chat template, "
-				     "Q4_K_M native CUDA projection kernels, long-context RoPE variants, and full decode-loop ABI must "
-				     "remain explicit diagnostics.",
+				     "long-context RoPE variants, full decode-loop ABI, and external golden-logit evidence must remain "
+				     "explicit diagnostics. Q4_K_M projection formats are now reported as native CUDA quantized paths.",
 				     "Acceptance requires a real Qwen2.5 GGUF fixture, llama.cpp golden prefill/decode logits, "
 				     "tokenizer/chat-template parity, and CUDA/native or explicitly configured fallback evidence." };
 		}
@@ -787,14 +787,14 @@ namespace LiteNN::GGUF
 			plan.tensorCount = addChecked(plan.tensorCount, stats.tensorCount, "tensor");
 			plan.storedBytes = addChecked(plan.storedBytes, stats.storedBytes, "stored");
 			plan.dequantizedBytes = addChecked(plan.dequantizedBytes, stats.dequantizedBytes, "dequantized");
-			const auto cpuNative =
+			const auto nativeKQuant =
 			    format == QuantizedBlockFormat::GGML_Q4_K || format == QuantizedBlockFormat::GGML_Q5_K ||
 			    format == QuantizedBlockFormat::GGML_Q6_K || format == QuantizedBlockFormat::GGML_Q8_0;
-			const auto overBudget = !cpuNative && dequantizedMemoryBudgetBytes != 0 &&
+			const auto overBudget = !nativeKQuant && dequantizedMemoryBudgetBytes != 0 &&
 			                        stats.dequantizedBytes > dequantizedMemoryBudgetBytes;
-			const auto policy = overBudget  ? LLaMAQuantizedExecutionPolicy::Reject
-			                    : cpuNative ? LLaMAQuantizedExecutionPolicy::CPUNativeQuantized
-			                                : LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize;
+			const auto policy = overBudget     ? LLaMAQuantizedExecutionPolicy::Reject
+			                    : nativeKQuant ? LLaMAQuantizedExecutionPolicy::CUDANativeQuantized
+			                                   : LLaMAQuantizedExecutionPolicy::CPUReferenceDequantize;
 			if (overBudget)
 			{
 				plan.lowerable = false;
@@ -806,9 +806,9 @@ namespace LiteNN::GGUF
 			    .dequantizedBytes = stats.dequantizedBytes,
 			    .selectedPolicy = policy,
 			    .blocking = overBudget,
-			    .reason = cpuNative
-			                  ? "CPU Interpreter and AOT consume the original GGML block payload directly; CUDA native "
-			                    "quantized kernels are not selected yet"
+			    .reason = nativeKQuant
+			                  ? "CPU Interpreter/AOT and CUDA native projection kernels consume the original GGML "
+			                    "block payload directly"
 			              : overBudget
 			                  ? std::format("dequantized bytes {} exceed budget {}", stats.dequantizedBytes,
 			                                dequantizedMemoryBudgetBytes)
@@ -872,9 +872,9 @@ namespace LiteNN::GGUF
 			                tokenizer.hasUnknownTokenId ? "yes" : "no"),
 			    false);
 			addDiagnostic("qwen2.quantized-cuda",
-			              "Qwen2 Q4_K_M CUDA execution requires native GGML block-quantized projection kernels or an "
-			              "explicit bridge. CPU Interpreter/AOT preserve and directly execute Q4_K/Q6_K payloads; "
-			              "CUDA native quantized projection remains open.",
+			              "Qwen2 Q4_K_M projection formats (Q4_K/Q6_K, plus Q5_K/Q8_0 coverage) are reported as "
+			              "native CUDA quantized paths for projection kernels. Full-model acceptance still requires "
+			              "decode-loop coverage, tokenizer parity, and external golden-logit evidence.",
 			              false);
 			addDiagnostic("qwen2.decode-loop",
 			              "LiteNN provides tokenizer-adapter integration, sampler control, mutable KV-cache rebinding, "
@@ -917,7 +917,7 @@ namespace LiteNN::GGUF
 			addDiagnostic(
 			    "quantization.mix",
 			    std::format("GGUF archive contains block-quantized weights: {}. LiteNN preserves block payloads "
-			                "for reported native policies; native quantized CUDA is not yet selected.",
+			                "for reported native policies; unsupported formats still require explicit fallback.",
 			                summary),
 			    !quantizedExecution.lowerable);
 		}
@@ -927,8 +927,8 @@ namespace LiteNN::GGUF
 		{
 			addDiagnostic("quantization.q4_k_m",
 			              "Detected GGML_Q4_K tensors, which are part of common Q4_K_M model mixes. CPU native block "
-			              "execution is available; CUDA execution still needs native K-quant projection kernels or an "
-			              "explicit bridge policy.",
+			              "execution and CUDA native K-quant projection kernels are available for Q4_K/Q6_K payloads; "
+			              "full-model production still needs golden-logit and decode-loop gates.",
 			              false);
 		}
 
