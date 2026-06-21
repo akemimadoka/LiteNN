@@ -1628,6 +1628,13 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityPrefillOnceAndExposesMaxCapacityLogits)
 	auto compiled = artifact.Load();
 	ASSERT_EQ(compiled.InputSpecs().size(), 1u);
 	ASSERT_EQ(compiled.OutputSpecs().size(), 1u);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 0, 1, 0, 0 }, { 4 }) };
+	const auto expected = interpreter.RunForward(plan, inputs);
+	const auto actual = compiled.RunTensors(inputs);
+	ASSERT_EQ(actual.size(), expected.size());
+	ExpectTensorNear(actual[0], expected[0], GGUF::GetLLaMAParityTolerance(DataType::Float32));
 }
 
 TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)

@@ -2463,10 +2463,10 @@ placement and fallback policy.
 - [x] Support variable prompt length in executable prefill lowering without recompiling for each prompt shape.
       `LowerLLaMACausalLMPrefillCapacity` accepts max-capacity padded `token_ids` and returns full max-capacity logits;
       the caller/runtime schedule keeps the prompt length and selects `prompt_length - 1` on the host side for the final
-      valid logits. Interpreter reuse and CPU AOT compile/load signature tests cover the capacity artifact contract.
-- [ ] Finish CPU AOT execution for multi-token LLaMA prefill graphs. Capacity decode AOT execution is covered, but
-      running the max-capacity prefill artifact currently exits inside the generated/JIT path; dynamic final-row
-      selection inside MLIR should wait until this ABI/lifetime gap is fixed.
+      valid logits. Interpreter reuse and CPU AOT parity tests cover the capacity artifact contract.
+- [x] Finish CPU AOT execution for multi-token LLaMA prefill graphs. Capacity decode and capacity prefill AOT execution
+      are both covered; the generated path now registers MLIR's unranked `memrefCopy` runtime ABI instead of jumping
+      through an unresolved JIT symbol.
 - [x] Lower single-index `ScatterNode` through MLIR for race-free capacity-cache updates, while continuing to reject
       unsupported multi-index compiled Scatter forms explicitly.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp

@@ -97,6 +97,7 @@
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 using namespace LiteNN;
 
@@ -3127,6 +3128,101 @@ namespace
 		EntryFn entry{};
 	};
 
+	struct MLIRUnrankedMemRefDescriptor
+	{
+		std::int64_t rank{};
+		void* descriptor{};
+	};
+
+	struct MLIRMemRefView
+	{
+		std::byte* aligned{};
+		std::int64_t offset{};
+		std::vector<std::int64_t> sizes;
+		std::vector<std::int64_t> strides;
+	};
+
+	template <typename T>
+	T ReadMLIRDescriptorField(const std::byte* base, std::size_t offset)
+	{
+		T value{};
+		std::memcpy(&value, base + offset, sizeof(T));
+		return value;
+	}
+
+	MLIRMemRefView ReadMLIRMemRefView(const MLIRUnrankedMemRefDescriptor& descriptor)
+	{
+		MLIRMemRefView view;
+		if (descriptor.descriptor == nullptr || descriptor.rank < 0)
+		{
+			return view;
+		}
+
+		const auto rank = static_cast<std::size_t>(descriptor.rank);
+		const auto* raw = static_cast<const std::byte*>(descriptor.descriptor);
+		constexpr std::size_t pointerSize = sizeof(void*);
+		constexpr std::size_t indexSize = sizeof(std::int64_t);
+		view.aligned = static_cast<std::byte*>(ReadMLIRDescriptorField<void*>(raw, pointerSize));
+		view.offset = ReadMLIRDescriptorField<std::int64_t>(raw, pointerSize * 2);
+		const auto sizesOffset = pointerSize * 2 + indexSize;
+		const auto stridesOffset = sizesOffset + rank * indexSize;
+		view.sizes.resize(rank);
+		view.strides.resize(rank);
+		for (std::size_t i = 0; i < rank; ++i)
+		{
+			view.sizes[i] = ReadMLIRDescriptorField<std::int64_t>(raw, sizesOffset + i * indexSize);
+			view.strides[i] = ReadMLIRDescriptorField<std::int64_t>(raw, stridesOffset + i * indexSize);
+		}
+		return view;
+	}
+
+	void CopyMLIRMemRefRecursive(const MLIRMemRefView& source, const MLIRMemRefView& target,
+	                             std::size_t elementSizeBytes, std::size_t dimension, std::int64_t sourceElementOffset,
+	                             std::int64_t targetElementOffset)
+	{
+		if (dimension == source.sizes.size())
+		{
+			std::memcpy(target.aligned + targetElementOffset * static_cast<std::int64_t>(elementSizeBytes),
+			            source.aligned + sourceElementOffset * static_cast<std::int64_t>(elementSizeBytes),
+			            elementSizeBytes);
+			return;
+		}
+
+		for (std::int64_t i = 0; i < source.sizes[dimension]; ++i)
+		{
+			CopyMLIRMemRefRecursive(source, target, elementSizeBytes, dimension + 1,
+			                        sourceElementOffset + i * source.strides[dimension],
+			                        targetElementOffset + i * target.strides[dimension]);
+		}
+	}
+
+	extern "C" void LiteNNRuntimeMemRefCopy(std::int64_t elementSizeBytes, void* rawSource, void* rawTarget)
+	{
+		if (elementSizeBytes <= 0 || rawSource == nullptr || rawTarget == nullptr)
+		{
+			return;
+		}
+
+		const auto* sourceDescriptor = static_cast<const MLIRUnrankedMemRefDescriptor*>(rawSource);
+		const auto* targetDescriptor = static_cast<const MLIRUnrankedMemRefDescriptor*>(rawTarget);
+		auto source = ReadMLIRMemRefView(*sourceDescriptor);
+		auto target = ReadMLIRMemRefView(*targetDescriptor);
+		if (source.aligned == nullptr || target.aligned == nullptr || source.sizes.size() != target.sizes.size())
+		{
+			return;
+		}
+		for (std::size_t i = 0; i < source.sizes.size(); ++i)
+		{
+			if (source.sizes[i] < 0 || target.sizes[i] != source.sizes[i])
+			{
+				return;
+			}
+		}
+
+		CopyMLIRMemRefRecursive(source, target, static_cast<std::size_t>(elementSizeBytes), 0, source.offset,
+		                        target.offset);
+	}
+
 	void RegisterJITRuntimeSymbol(std::string_view name, void* address)
 	{
 		const auto symbolName = std::string(name);
@@ -3199,6 +3295,7 @@ namespace
 		    "memcpy", reinterpret_cast<void*>(static_cast<void* (*) (void*, const void*, std::size_t)>(&std::memcpy)));
 		RegisterJITRuntimeSymbol(
 		    "memset", reinterpret_cast<void*>(static_cast<void* (*) (void*, int, std::size_t)>(&std::memset)));
+		RegisterJITRuntimeSymbol("memrefCopy", reinterpret_cast<void*>(&LiteNNRuntimeMemRefCopy));
 		RegisterJITRuntimeSymbol("expf", reinterpret_cast<void*>(&LiteNNRuntimeExpF));
 		RegisterJITRuntimeSymbol("logf", reinterpret_cast<void*>(&LiteNNRuntimeLogF));
 		RegisterJITRuntimeSymbol("sqrtf", reinterpret_cast<void*>(&LiteNNRuntimeSqrtF));
