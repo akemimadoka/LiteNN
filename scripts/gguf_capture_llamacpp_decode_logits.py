@@ -12,7 +12,7 @@ from pathlib import Path
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", required=True, type=Path, help="litenn_llamacpp_decode_golden executable")
+    parser.add_argument("--tool", required=True, type=Path, help="litenn_llamacpp_adapter executable")
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--prompt-token-ids", required=True)
     parser.add_argument("--generated-token-ids", required=True)
@@ -25,6 +25,7 @@ def main() -> int:
     logits_dir = args.out_dir / "logits"
     command = [
         str(args.tool),
+        "decode-logits",
         str(args.model),
         args.prompt_token_ids,
         args.generated_token_ids,
@@ -52,7 +53,7 @@ def main() -> int:
         "--output",
         str(args.out_dir / "manifest.json"),
         "--producer",
-        "llama.cpp API via litenn_llamacpp_decode_golden",
+        "llama.cpp API via litenn_llamacpp_adapter",
     ]
     for step in range(1, generated_count + 1):
         manifest_command += ["--logits", f"{step}={logits_dir / f'decode-step-{step}.txt'}"]
