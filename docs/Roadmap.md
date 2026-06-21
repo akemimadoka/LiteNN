@@ -2503,7 +2503,8 @@ placement and fallback policy.
             MLIR/NVPTX block-kernel path and has CUDA runtime parity coverage against a deterministic Q4_K fixture.
       - [x] Extend the CUDA native correctness slice to `Q6_K`: target-model output-major Q6_K projection now uses the
             MLIR/NVPTX block-kernel path and has CUDA runtime parity coverage against packed low/high-bit scale payloads.
-      - [ ] Extend the CUDA native block projection path to `Q5_K`, the remaining non-target K-quant coverage gap.
+      - [x] Extend the CUDA native correctness slice to `Q5_K`: the Q4_K metadata decoder is shared with Q5_K high-bit
+            plane handling, with artifact and CUDA runtime parity coverage.
       - [ ] Replace the initial unrolled CUDA Q8_0/Q4_K dot codegen with a loop/tiled kernel before using very large
             hidden sizes as the benchmark target.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
@@ -2514,7 +2515,7 @@ placement and fallback policy.
       weight dequantization.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
-- [ ] Add CUDA native quantized projection kernels for `Q5_K` and production-tuned `Q4_K`/`Q6_K`/`Q8_0`, including
+- [ ] Add production-tuned CUDA native quantized projection kernels for `Q4_K`/`Q5_K`/`Q6_K`/`Q8_0`, including
       complete `Q4_K_M` mixed-model reporting.
 - [x] Add CPU AOT parity tests for affine and packed-nibble quantized projection lowering, plus an explicit diagnostic
       test for unsupported FP4 packed MatMul lowering.

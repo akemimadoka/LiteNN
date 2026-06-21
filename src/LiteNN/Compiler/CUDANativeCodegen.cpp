@@ -784,7 +784,7 @@ namespace LiteNN
 				const auto layout = GetQuantizedBlockLayout(spec.format);
 				if (!layout || spec.m == 0 || spec.k == 0 || spec.n == 0 || spec.k % layout->elementsPerBlock != 0 ||
 				    (spec.format != QuantizedBlockFormat::GGML_Q8_0 && spec.format != QuantizedBlockFormat::GGML_Q4_K &&
-				     spec.format != QuantizedBlockFormat::GGML_Q6_K))
+				     spec.format != QuantizedBlockFormat::GGML_Q5_K && spec.format != QuantizedBlockFormat::GGML_Q6_K))
 				{
 					throw std::runtime_error(
 					    "CUDA native GGML block MatMul requires supported format, non-zero m/n, and aligned k");
@@ -820,7 +820,8 @@ namespace LiteNN
 					auto scale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, scaleRaw).getResult();
 
 					mlir::Value minScale;
-					if (spec.format == QuantizedBlockFormat::GGML_Q4_K)
+					if (spec.format == QuantizedBlockFormat::GGML_Q4_K ||
+					    spec.format == QuantizedBlockFormat::GGML_Q5_K)
 					{
 						auto minRaw = EmitLoad(
 						    EmitTypedGEP(rhs, f16Type,
@@ -847,7 +848,7 @@ namespace LiteNN
 						{
 							weight = spec.format == QuantizedBlockFormat::GGML_Q6_K
 							             ? EmitGGMLQ6_KWeightF32(rhs, blockBase, scale, lane)
-							             : EmitGGMLQ4_KWeightF32(rhs, blockBase, scale, minScale, lane);
+							             : EmitGGMLQ4Or5_KWeightF32(rhs, blockBase, scale, minScale, spec.format, lane);
 						}
 						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, weight));
 					}
@@ -883,8 +884,8 @@ namespace LiteNN
 				return builder_.create<mlir::arith::UIToFPOp>(loc_, f32Type_, value).getResult();
 			}
 
-			mlir::Value EmitGGMLQ4_KWeightF32(mlir::Value rhs, mlir::Value blockBase, mlir::Value d, mlir::Value dmin,
-			                                  std::uint32_t lane)
+			mlir::Value EmitGGMLQ4Or5_KWeightF32(mlir::Value rhs, mlir::Value blockBase, mlir::Value d,
+			                                     mlir::Value dmin, QuantizedBlockFormat format, std::uint32_t lane)
 			{
 				const auto subblock = lane / 32;
 				const auto belowFour = subblock < 4;
@@ -928,12 +929,30 @@ namespace LiteNN
 				}
 
 				const auto quantOffset = (lane / 64) * 32 + lane % 32;
-				auto quantByte = EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(16 + quantOffset)));
+				const auto quantBaseOffset = format == QuantizedBlockFormat::GGML_Q5_K ? 48 : 16;
+				auto quantByte =
+				    EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(quantBaseOffset + quantOffset)));
 				auto shift4 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 4);
 				auto mask15 = builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 15);
 				auto nibble = lane % 64 >= 32
 				                  ? builder_.create<mlir::arith::ShRUIOp>(loc_, quantByte, shift4).getResult()
 				                  : builder_.create<mlir::arith::AndIOp>(loc_, quantByte, mask15).getResult();
+				if (format == QuantizedBlockFormat::GGML_Q5_K)
+				{
+					auto highBits = EmitLoadU8AsI32(rhs, EmitI32Add(blockBase, EmitI32Constant(16 + lane % 32)));
+					auto highBit = builder_
+					                   .create<mlir::arith::AndIOp>(
+					                       loc_,
+					                       builder_.create<mlir::arith::ShRUIOp>(
+					                           loc_, highBits,
+					                           builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, lane / 32)),
+					                       builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 1))
+					                   .getResult();
+					nibble = builder_
+					             .create<mlir::arith::OrIOp>(
+					                 loc_, nibble, builder_.create<mlir::arith::ShLIOp>(loc_, highBit, shift4))
+					             .getResult();
+				}
 				auto scaleF32 = EmitU32ToF32(scale);
 				auto minF32 = EmitU32ToF32(minimum);
 				auto quantF32 = EmitU32ToF32(nibble);
@@ -1759,6 +1778,8 @@ namespace LiteNN
 			return "litenn_ggml_q8_0_matmul_f32";
 		case QuantizedBlockFormat::GGML_Q4_K:
 			return "litenn_ggml_q4_k_matmul_f32";
+		case QuantizedBlockFormat::GGML_Q5_K:
+			return "litenn_ggml_q5_k_matmul_f32";
 		case QuantizedBlockFormat::GGML_Q6_K:
 			return "litenn_ggml_q6_k_matmul_f32";
 		default:

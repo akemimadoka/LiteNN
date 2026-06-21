@@ -4270,7 +4270,7 @@ namespace
 	bool IsSupportedCUDANativeGGMLBlockMatMulFormat(QuantizedBlockFormat format)
 	{
 		return format == QuantizedBlockFormat::GGML_Q8_0 || format == QuantizedBlockFormat::GGML_Q4_K ||
-		       format == QuantizedBlockFormat::GGML_Q6_K;
+		       format == QuantizedBlockFormat::GGML_Q5_K || format == QuantizedBlockFormat::GGML_Q6_K;
 	}
 
 	CUDANativeFeature CUDANativeGGMLBlockMatMulFeature(QuantizedBlockFormat format)
@@ -4281,6 +4281,8 @@ namespace
 			return CUDANativeFeature::GGMLQ8_0MatMulF32;
 		case QuantizedBlockFormat::GGML_Q4_K:
 			return CUDANativeFeature::GGMLQ4_KMatMulF32;
+		case QuantizedBlockFormat::GGML_Q5_K:
+			return CUDANativeFeature::GGMLQ5_KMatMulF32;
 		case QuantizedBlockFormat::GGML_Q6_K:
 			return CUDANativeFeature::GGMLQ6_KMatMulF32;
 		default:
