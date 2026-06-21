@@ -723,6 +723,68 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildRoPEF32(const CUDANativeRoPEF32CodegenSpec& spec)
+			{
+				if (spec.featureSize == 0 || (spec.featureSize % 2) != 0 ||
+				    (spec.positionType && *spec.positionType != DataType::Int32 &&
+				     *spec.positionType != DataType::Int64))
+				{
+					throw std::runtime_error(
+					    "CUDA native RoPE requires an even feature size and optional Int32/Int64 positions");
+				}
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 5> argTypes{ ptrType_, ptrType_, ptrType_ };
+				if (spec.positionType)
+				{
+					argTypes.push_back(ptrType_);
+				}
+				argTypes.push_back(i32Type_);
+				auto func =
+				    CreateKernelFunc(kernelModule.gpuModule, CUDANativeRoPEF32KernelName(spec.positionType), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, spec.positionType ? 4 : 3);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto in = blocks.entry->getArgument(1);
+				auto frequencies = blocks.entry->getArgument(2);
+				auto featureSize = EmitI32Constant(spec.featureSize);
+				auto row = EmitI32UDiv(blocks.index32, featureSize);
+				auto column = EmitI32URem(blocks.index32, featureSize);
+				auto pair = EmitI32UDiv(column, EmitI32Constant(2));
+				auto pairBase = EmitI32Add(EmitI32Mul(row, featureSize), EmitI32Mul(pair, EmitI32Constant(2)));
+				auto first = EmitLoadF32(EmitF32GEP(in, pairBase));
+				auto second = EmitLoadF32(EmitF32GEP(in, EmitI32Add(pairBase, EmitI32Constant(1))));
+				mlir::Value position;
+				if (spec.positionType)
+				{
+					auto positions = blocks.entry->getArgument(3);
+					auto positionType = GetCastScalarType(*spec.positionType);
+					auto raw = EmitLoad(EmitTypedGEP(positions, positionType, row), positionType);
+					position = builder_.create<mlir::arith::SIToFPOp>(loc_, f32Type_, raw).getResult();
+				}
+				else
+				{
+					position = EmitU32ToF32(EmitI32Add(row, EmitI32Constant(spec.positionOffset)));
+				}
+				auto frequency = EmitLoadF32(EmitF32GEP(frequencies, pair));
+				auto angle = EmitF32Mul(position, frequency);
+				auto cosine = EmitF32Intrinsic("llvm.nvvm.cos.approx.ftz.f", mlir::ValueRange{ angle });
+				auto sine = EmitF32Intrinsic("llvm.nvvm.sin.approx.ftz.f", mlir::ValueRange{ angle });
+				auto rotatedFirst = EmitF32Sub(EmitF32Mul(first, cosine), EmitF32Mul(second, sine));
+				auto rotatedSecond = EmitF32Add(EmitF32Mul(first, sine), EmitF32Mul(second, cosine));
+				auto isFirst =
+				    builder_
+				        .create<mlir::LLVM::ICmpOp>(loc_, mlir::LLVM::ICmpPredicate::eq,
+				                                    EmitI32URem(column, EmitI32Constant(2)), EmitI32Constant(0))
+				        .getResult();
+				auto result =
+				    builder_.create<mlir::arith::SelectOp>(loc_, isFirst, rotatedFirst, rotatedSecond).getResult();
+				EmitStoreF32(result, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 			mlir::OwningOpRef<mlir::ModuleOp> BuildConcatF32(const CUDANativeConcatF32CodegenSpec& spec)
 			{
 				if (spec.inputShapes.empty())
@@ -1797,6 +1859,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildRMSNormF32(spec); });
 		}
 
+		std::string EmitRoPEF32PTXFromMLIRNVPTX(const CUDANativeRoPEF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildRoPEF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -1923,6 +1991,16 @@ namespace LiteNN
 	std::string_view CUDANativeRMSNormF32KernelName(bool hasScale)
 	{
 		return hasScale ? "litenn_rms_norm_scale_f32" : "litenn_rms_norm_f32";
+	}
+
+	std::string CUDANativeRoPEF32KernelName(std::optional<DataType> positionType)
+	{
+		if (positionType && *positionType != DataType::Int32 && *positionType != DataType::Int64)
+		{
+			throw std::runtime_error("CUDA native RoPE positions must be Int32 or Int64");
+		}
+		return positionType ? std::format("litenn_rope_f32_{}", *positionType == DataType::Int32 ? "i32" : "i64")
+		                    : "litenn_rope_f32_static";
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -2117,6 +2195,23 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeRMSNormF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeRoPEF32PTXFromMLIRNVPTX(const CUDANativeRoPEF32CodegenSpec& spec)
+	{
+		return EmitRoPEF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string> TryCUDANativeRoPEF32PTXFromMLIRNVPTX(const CUDANativeRoPEF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeRoPEF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{

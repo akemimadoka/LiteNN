@@ -1428,6 +1428,26 @@ TEST(LayerRoPE, AppliesFrequencyScale)
 	EXPECT_NEAR(ReadFloat(result, 3), std::sin(angle), 1e-5f);
 }
 
+TEST(LayerRoPE, UsesRuntimePositions)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+	const auto positions = sg.AddParam(DataType::Int64, { 2 });
+	const auto out = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, 1.0);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array inputs{ Tensor<CPU>({ 1.0, 0.0, 1.0, 0.0 }, { 2, 2 }, DataType::Float32),
+		               Tensor<CPU>({ 3.0, 1.0 }, { 2 }, DataType::Int64) };
+	const auto result = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs)[0];
+	EXPECT_NEAR(ReadFloat(result, 0), std::cos(3.0f), 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 1), std::sin(3.0f), 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 2), std::cos(1.0f), 1e-5f);
+	EXPECT_NEAR(ReadFloat(result, 3), std::sin(1.0f), 1e-5f);
+}
+
 TEST(LayerRoPE, RejectsOddFeatureSize)
 {
 	Graph graph;

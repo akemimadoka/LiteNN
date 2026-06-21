@@ -873,6 +873,60 @@ namespace LiteNN::Detail
 		return result;
 	}
 
+	inline Tensor<CPU> EvalRoPE(const Tensor<CPU>& input, const Tensor<CPU>* positions, double base,
+	                            double frequencyScale, std::size_t positionOffset)
+	{
+		if (!IsFloatingDataType(input.DType()) || input.Shape().NumDim() != 2 || (input.Shape()[1] % 2) != 0)
+		{
+			throw std::runtime_error("RoPE requires a floating-point [sequence, evenFeature] input");
+		}
+		if (!std::isfinite(base) || base <= 0.0 || !std::isfinite(frequencyScale) || frequencyScale <= 0.0)
+		{
+			throw std::runtime_error("RoPE base and frequencyScale must be finite and positive");
+		}
+		const auto sequenceLength = input.Shape()[0];
+		const auto featureSize = input.Shape()[1];
+		std::vector<std::int64_t> runtimePositions;
+		if (positions)
+		{
+			if ((positions->DType() != DataType::Int32 && positions->DType() != DataType::Int64) ||
+			    positions->Shape() != ShapeView{ { sequenceLength } })
+			{
+				throw std::runtime_error("RoPE runtime positions must be Int32/Int64 [sequence]");
+			}
+			runtimePositions.resize(sequenceLength);
+			CPU cpu;
+			DeviceTraits<CPU>::ConvertTo(cpu, positions->DType(), positions->UnsafeRawData(), sequenceLength,
+			                             DataType::Int64, runtimePositions.data());
+		}
+
+		Tensor<CPU> result(Uninitialized, input.Shape(), input.DType());
+		EnumDispatch(input.DType(), [&]<DataType TypeValue> {
+			using T = typename DeviceTraits<CPU>::template DataTypeMapping<TypeValue>;
+			const auto* src = static_cast<const T*>(input.UnsafeRawData());
+			auto* dst = static_cast<T*>(result.UnsafeRawData());
+			for (std::size_t row = 0; row < sequenceLength; ++row)
+			{
+				const auto position =
+				    positions ? static_cast<double>(runtimePositions[row]) : static_cast<double>(positionOffset + row);
+				for (std::size_t pair = 0; pair < featureSize / 2; ++pair)
+				{
+					const auto angle =
+					    position * std::pow(base, -2.0 * static_cast<double>(pair) / static_cast<double>(featureSize)) *
+					    frequencyScale;
+					const auto cosine = std::cos(angle);
+					const auto sine = std::sin(angle);
+					const auto offset = row * featureSize + pair * 2;
+					const auto first = static_cast<double>(src[offset]);
+					const auto second = static_cast<double>(src[offset + 1]);
+					dst[offset] = static_cast<T>(first * cosine - second * sine);
+					dst[offset + 1] = static_cast<T>(first * sine + second * cosine);
+				}
+			}
+		});
+		return result;
+	}
+
 	inline Tensor<CPU> EvalSSMScan(const Tensor<CPU>& state, const Tensor<CPU>& dt, const Tensor<CPU>& a,
 	                               const Tensor<CPU>& b, const Tensor<CPU>& c, const Tensor<CPU>* d)
 	{

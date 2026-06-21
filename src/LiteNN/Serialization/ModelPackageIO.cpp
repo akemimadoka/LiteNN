@@ -1289,6 +1289,21 @@ namespace LiteNN::Serialization
 			{
 				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis") };
 			}
+			if (op.kind == "RoPENode")
+			{
+				const auto hasPositions = PlanAttributeBool(op, "hasPositions");
+				if (inputs.size() != (hasPositions ? 2u : 1u))
+				{
+					throw std::runtime_error("vNext RoPENode descriptor has unexpected inputs");
+				}
+				return RoPENode{ .input = RequireNodeInput(inputs, 0, op.kind),
+					             .positions = hasPositions
+					                              ? std::optional<NodeOutput>{ RequireNodeInput(inputs, 1, op.kind) }
+					                              : std::nullopt,
+					             .base = PlanAttributeDouble(op, "base"),
+					             .frequencyScale = PlanAttributeDouble(op, "frequencyScale"),
+					             .positionOffset = PlanAttributeSize(op, "positionOffset") };
+			}
 			if (op.kind == "GetRowsNode")
 			{
 				return GetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind) };

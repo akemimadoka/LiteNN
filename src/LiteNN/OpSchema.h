@@ -478,6 +478,13 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<RoPENode> : NodeSchemaTraits<UnaryOpNode>
+		{
+			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
+			static constexpr std::size_t MaxInputs = 2;
+		};
+
+		template <>
 		struct NodeSchemaTraits<CrossEntropyLossNode> : NodeSchemaTraits<BinaryOpNode>
 		{
 			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
@@ -761,6 +768,15 @@ namespace LiteNN
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {
 				    return { value.logits, value.labels };
+			    }
+			    else if constexpr (std::same_as<T, RoPENode>)
+			    {
+				    std::vector<NodeOutput> inputs{ value.input };
+				    if (value.positions)
+				    {
+					    inputs.push_back(*value.positions);
+				    }
+				    return inputs;
 			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
 			    {

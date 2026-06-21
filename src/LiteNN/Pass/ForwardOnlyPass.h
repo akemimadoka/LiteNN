@@ -211,6 +211,14 @@ namespace LiteNN
 						    {
 							    return SoftmaxNode{ remapOutput(node.input), node.axis };
 						    }
+						    else if constexpr (std::same_as<T, RoPENode>)
+						    {
+							    return RoPENode{ remapOutput(node.input),
+								                 node.positions
+								                     ? std::optional<NodeOutput>{ remapOutput(*node.positions) }
+								                     : std::nullopt,
+								                 node.base, node.frequencyScale, node.positionOffset };
+						    }
 						    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 						    {
 							    return CrossEntropyLossNode{ remapOutput(node.logits), remapOutput(node.labels) };

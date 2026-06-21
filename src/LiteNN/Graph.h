@@ -323,6 +323,17 @@ namespace LiteNN
 			std::size_t axis;
 		};
 
+		// Rotary position embedding over adjacent pairs in a 2D [sequence, feature] tensor.
+		// Runtime positions, when present, override the static positionOffset + row convention.
+		struct RoPENode
+		{
+			NodeOutput input;
+			std::optional<NodeOutput> positions;
+			double base{ 10000.0 };
+			double frequencyScale{ 1.0 };
+			std::size_t positionOffset{};
+		};
+
 		// ggml-compatible soft-label cross entropy over the last dimension.
 		// logits and labels have the same Float32 shape [..., classes];
 		// output is a single-element Float32 tensor containing mean loss.

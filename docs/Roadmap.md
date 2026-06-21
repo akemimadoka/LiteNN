@@ -2536,6 +2536,9 @@ placement and fallback policy.
       - [x] Last-axis RMSNorm f32 now has a CUDA native MLIR/NVPTX correctness slice with optional per-channel scale,
             frozen-scale artifact constants, and runtime parity. Warp-reduction tuning and RMSNorm+Linear fusion remain
             performance work after full decode correctness is connected.
+      - [x] RoPE is now a first-class graph node instead of a Reshape/Slice/trigonometric expansion; static offsets and
+            runtime Int32/Int64 positions share Interpreter, CPU AOT, package, validation, and CUDA native semantics.
+            CUDA artifacts carry inverse-frequency tables as constant data and cover static/dynamic runtime parity.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

@@ -1270,6 +1270,33 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const RoPENode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto input = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.input, "RoPENode input", true);
+			if (!IsFloatingDataType(input.dtype) || input.shape.size() != 2 || (input.shape[1] % 2) != 0)
+			{
+				Fail(subgraphId, nodeId, "RoPENode requires a floating-point [sequence, evenFeature] input");
+			}
+			if (!std::isfinite(node.base) || node.base <= 0.0 || !std::isfinite(node.frequencyScale) ||
+			    node.frequencyScale <= 0.0)
+			{
+				Fail(subgraphId, nodeId, "RoPENode base and frequencyScale must be finite and positive");
+			}
+			if (node.positions)
+			{
+				const auto positions =
+				    ValidateNodeOutput(subgraph, subgraphId, nodeId, *node.positions, "RoPENode positions", true);
+				if ((positions.dtype != DataType::Int32 && positions.dtype != DataType::Int64) ||
+				    positions.shape != std::vector<std::size_t>{ input.shape[0] })
+				{
+					Fail(subgraphId, nodeId, "RoPENode positions must be Int32/Int64 [sequence]");
+				}
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { input.dtype, input.shape }, "RoPENode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const BatchMatMulNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);

@@ -491,6 +491,13 @@ namespace LiteNN::Debug
 					                       FormatOptionalValueRef(value.bias), NormalizationModeToString(value.mode),
 					                       value.axis, value.groupCount, value.epsilon);
 				    }
+				    else if constexpr (std::same_as<T, RoPENode>)
+				    {
+					    return std::format(
+					        "RoPENode(input={}, positions={}, base={}, frequencyScale={}, positionOffset={})",
+					        FormatValueRef(value.input), FormatOptionalValueRef(value.positions), value.base,
+					        value.frequencyScale, value.positionOffset);
+				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
 					    return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),

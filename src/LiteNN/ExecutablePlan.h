@@ -475,6 +475,16 @@ namespace LiteNN
 		return attrs;
 	}
 
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const RoPENode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "hasPositions", node.positions.has_value());
+		AddPlanAttribute(attrs, "base", node.base);
+		AddPlanAttribute(attrs, "frequencyScale", node.frequencyScale);
+		AddPlanAttribute(attrs, "positionOffset", node.positionOffset);
+		return attrs;
+	}
+
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const NormalizationNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;

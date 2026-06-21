@@ -266,6 +266,29 @@ namespace
 		return graph;
 	}
 
+	Graph BuildRoPEGraph(std::optional<DataType> positionType, std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 3, 4 });
+		NodeOutput output;
+		if (positionType)
+		{
+			const auto positions = sg.AddParam(*positionType, { 3 });
+			output = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, 100.0, 0.5);
+		}
+		else
+		{
+			output = Layer::AddRoPE(sg, { input, 0 }, 100.0, 2, 0.5);
+		}
+		sg.SetResults({ output });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames(positionType ? std::vector<std::string>{ "input", "positions" }
+		                                 : std::vector<std::string>{ "input" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildConcatGraph(std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
 	                       std::vector<std::size_t> outputShape, std::size_t axis, std::string outputName)
 	{
@@ -1530,6 +1553,21 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		EXPECT_EQ(payload.kernels[0].arguments.size(), withScale ? 4u : 3u);
 	}
 
+	for (const auto positionType :
+	     { std::optional<DataType>{}, std::optional{ DataType::Int32 }, std::optional{ DataType::Int64 } })
+	{
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildRoPEGraph(positionType, "rope")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::RoPEF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
+		EXPECT_EQ(payload.constantData.size(), 2u * sizeof(float));
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeRoPEF32KernelName(positionType));
+		EXPECT_EQ(payload.kernels[0].arguments.size(), positionType ? 5u : 4u);
+	}
+
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
 		    Detail::BuildExecutablePlanFromGraph(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1")));
@@ -2404,7 +2442,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	};
 
 	std::vector<Case> cases;
-	cases.reserve(26);
+	cases.reserve(29);
 
 	const std::array unaryCases = {
 		std::pair{ UnaryOp::Negate, std::string_view{ "unary_negate" } },
@@ -2508,6 +2546,24 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 		    .inputs = { TensorInputSpec{ .values = { 1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 3.5 }, .shape = { 2, 4 } } },
 		    .tolerance = 2.0e-5F,
 		});
+	}
+	for (const auto positionType :
+	     { std::optional<DataType>{}, std::optional{ DataType::Int32 }, std::optional{ DataType::Int64 } })
+	{
+		std::vector<TensorInputSpec> inputs{
+			TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.0, -3.0, 4.0, 1.0, -2.0, 0.25 },
+			                 .shape = { 3, 4 } },
+		};
+		if (positionType)
+		{
+			inputs.push_back(TensorInputSpec{ .values = { 5.0, 1.0, 7.0 }, .shape = { 3 }, .dtype = *positionType });
+		}
+		cases.push_back(Case{ .name = !positionType                      ? "rope_static"
+		                              : *positionType == DataType::Int32 ? "rope_i32"
+		                                                                 : "rope_i64",
+		                      .graph = BuildRoPEGraph(positionType, "rope"),
+		                      .inputs = std::move(inputs),
+		                      .tolerance = 3.0e-3F });
 	}
 	cases.push_back(Case{
 	    .name = "pow_bridge_fallback",

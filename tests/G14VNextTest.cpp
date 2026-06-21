@@ -645,6 +645,42 @@ TEST(G14VNext, VNextModelPackageRoundTripsConstantPayloadsForInterpreter)
 	EXPECT_FLOAT_EQ(values[3], 44.0F);
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsRoPEWithRuntimePositions)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2, 2 });
+	const auto positions = forward.AddParam(DataType::Int64, { 2 });
+	const auto output = Layer::AddRoPEAtPositions(forward, { input, 0 }, { positions, 0 }, 100.0, 0.5);
+	forward.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	graph.SetInputNames({ "input", "positions" });
+	graph.SetOutputNames({ "rotated" });
+
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_rope.json";
+	Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(graph), path);
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	const auto& node = package.plan.subgraphs[package.plan.forward].nodes.back();
+	ASSERT_TRUE(std::holds_alternative<RoPENode>(node.node));
+	const auto& rope = std::get<RoPENode>(node.node);
+	ASSERT_TRUE(rope.positions.has_value());
+	EXPECT_DOUBLE_EQ(rope.base, 100.0);
+	EXPECT_DOUBLE_EQ(rope.frequencyScale, 0.5);
+
+	Runtime::Interpreter<CPU> interpreter;
+	std::array inputs{ Tensor<CPU>({ 1.0, 0.0, 1.0, 0.0 }, { 2, 2 }, DataType::Float32),
+		               Tensor<CPU>({ 2.0, 6.0 }, { 2 }, DataType::Int64) };
+	const auto outputs = interpreter.RunForward(package.plan, inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	const auto* values = static_cast<const float*>(outputs[0].UnsafeRawData());
+	EXPECT_NEAR(values[0], std::cos(1.0), 1.0e-5);
+	EXPECT_NEAR(values[1], std::sin(1.0), 1.0e-5);
+	EXPECT_NEAR(values[2], std::cos(3.0), 1.0e-5);
+	EXPECT_NEAR(values[3], std::sin(3.0), 1.0e-5);
+}
+
 TEST(G14VNext, VNextModelPackageRoundTripsRuntimeStateValueBindings)
 {
 	Graph graph;

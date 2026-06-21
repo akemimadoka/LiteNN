@@ -316,6 +316,14 @@ namespace LiteNN
 					    {
 						    ++counts[{ node.input.node, node.input.port }];
 					    }
+					    else if constexpr (std::same_as<T, RoPENode>)
+					    {
+						    ++counts[{ node.input.node, node.input.port }];
+						    if (node.positions)
+						    {
+							    ++counts[{ node.positions->node, node.positions->port }];
+						    }
+					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 					    {
 						    ++counts[{ node.logits.node, node.logits.port }];
@@ -529,7 +537,7 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
-					                       std::same_as<T, CrossEntropyLossBackwardNode> ||
+					                       std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
 					                       std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
 					                       std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
@@ -858,6 +866,16 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    return SoftmaxNode{ { nodeMap[n.input.node], n.input.port }, n.axis };
+				    }
+				    else if constexpr (std::same_as<T, RoPENode>)
+				    {
+					    return RoPENode{ { nodeMap[n.input.node], n.input.port },
+						                 n.positions ? std::optional<NodeOutput>{ NodeOutput{
+						                                   nodeMap[n.positions->node], n.positions->port } }
+						                             : std::nullopt,
+						                 n.base,
+						                 n.frequencyScale,
+						                 n.positionOffset };
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
@@ -1323,6 +1341,10 @@ namespace LiteNN
 					    {
 						    throw std::runtime_error(
 						        "AutogradPass: SoftmaxNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, RoPENode>)
+					    {
+						    throw std::runtime_error("AutogradPass: RoPENode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 					    {

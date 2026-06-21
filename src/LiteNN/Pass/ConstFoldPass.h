@@ -415,6 +415,12 @@ namespace LiteNN
 				    {
 					    return SoftmaxNode{ remap(n.input), n.axis };
 				    }
+				    else if constexpr (std::same_as<T, RoPENode>)
+				    {
+					    return RoPENode{ remap(n.input),
+						                 n.positions ? std::optional<NodeOutput>{ remap(*n.positions) } : std::nullopt,
+						                 n.base, n.frequencyScale, n.positionOffset };
+				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
 					    return CrossEntropyLossNode{ remap(n.logits), remap(n.labels) };
@@ -712,6 +718,14 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    markInput(node.input);
+				    }
+				    else if constexpr (std::same_as<T, RoPENode>)
+				    {
+					    markInput(node.input);
+					    if (node.positions)
+					    {
+						    markInput(*node.positions);
+					    }
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
@@ -1050,6 +1064,18 @@ namespace LiteNN
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
 							    constValues[nodeId] = EvalSoftmax(input, node);
+						    }
+					    }
+					    else if constexpr (std::same_as<T, RoPENode>)
+					    {
+						    if (isConst[node.input.node] && (!node.positions || isConst[node.positions->node]))
+						    {
+							    isConst[nodeId] = true;
+							    const auto* positions =
+							        node.positions ? &GetConstValue(constValues, *node.positions) : nullptr;
+							    constValues[nodeId] =
+							        Detail::EvalRoPE(GetConstValue(constValues, node.input), positions, node.base,
+							                         node.frequencyScale, node.positionOffset);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)

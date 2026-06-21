@@ -736,6 +736,25 @@ namespace litenn
 				return op.getResult();
 			}
 
+			Value emitSliceValue(Value input, DataType dtype, std::span<const std::size_t> shape, std::size_t axis,
+			                     std::size_t start, std::size_t length)
+			{
+				auto resultType = convertTensorType(ctx_, dtype, shape);
+				return builder_
+				    .create<SliceOp>(builder_.getUnknownLoc(), resultType, input, static_cast<std::uint64_t>(axis),
+				                     static_cast<std::uint64_t>(start), static_cast<std::uint64_t>(length))
+				    .getResult();
+			}
+
+			Value emitConcatValue(ValueRange inputs, DataType dtype, std::span<const std::size_t> shape,
+			                      std::size_t axis)
+			{
+				auto resultType = convertTensorType(ctx_, dtype, shape);
+				return builder_
+				    .create<ConcatOp>(builder_.getUnknownLoc(), resultType, inputs, static_cast<std::uint64_t>(axis))
+				    .getResult();
+			}
+
 			Value emitSoftmaxValueTyped(Value input, DataType dtype, std::span<const std::size_t> shape,
 			                            std::size_t axis)
 			{
@@ -2234,6 +2253,72 @@ namespace litenn
 				}
 
 				valueMap[nodeId] = { emitMaybeCastValue(normalized, computeDType, dtype, outputInfos[0].shape) };
+			}
+
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const RoPENode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
+			{
+				const auto& inputInfo = sg.GetOutputInfo(node.input);
+				const auto dtype = outputInfos[0].dtype;
+				const auto sequenceLength = inputInfo.shape[0];
+				const auto featureSize = inputInfo.shape[1];
+				const auto halfDim = featureSize / 2;
+				const std::vector<std::size_t> pairShape{ sequenceLength, halfDim, 2 };
+				const std::vector<std::size_t> laneShape{ sequenceLength, halfDim, 1 };
+				auto input = getVal(valueMap, node.input);
+
+				Value angles;
+				if (node.positions)
+				{
+					const auto& positionInfo = sg.GetOutputInfo(*node.positions);
+					auto positions = emitMaybeCastValue(getVal(valueMap, *node.positions), positionInfo.dtype, dtype,
+					                                    positionInfo.shape);
+					const std::array positionShape{ sequenceLength, 1uz, 1uz };
+					positions = emitReshapeValue(positions, dtype, positionShape);
+					std::vector<double> frequencies(halfDim);
+					for (std::size_t pair = 0; pair < halfDim; ++pair)
+					{
+						frequencies[pair] =
+						    std::pow(node.base, -2.0 * static_cast<double>(pair) / static_cast<double>(featureSize)) *
+						    node.frequencyScale;
+					}
+					const std::array frequencyShape{ 1uz, halfDim, 1uz };
+					auto frequencyTable = emitDenseConstant(dtype, frequencyShape, frequencies);
+					angles = emitBinaryValue(LiteNN::BinaryOp::Multiply, positions, frequencyTable, dtype, laneShape);
+				}
+				else
+				{
+					std::vector<double> angleValues;
+					angleValues.reserve(sequenceLength * halfDim);
+					for (std::size_t row = 0; row < sequenceLength; ++row)
+					{
+						for (std::size_t pair = 0; pair < halfDim; ++pair)
+						{
+							angleValues.push_back(static_cast<double>(node.positionOffset + row) *
+							                      std::pow(node.base, -2.0 * static_cast<double>(pair) /
+							                                              static_cast<double>(featureSize)) *
+							                      node.frequencyScale);
+						}
+					}
+					angles = emitDenseConstant(dtype, laneShape, angleValues);
+				}
+
+				auto cosine = emitUnaryValue(LiteNN::UnaryOp::Cos, angles, dtype, laneShape);
+				auto sine = emitUnaryValue(LiteNN::UnaryOp::Sin, angles, dtype, laneShape);
+				auto pairs = emitReshapeValue(input, dtype, pairShape);
+				auto first = emitSliceValue(pairs, dtype, laneShape, 2, 0, 1);
+				auto second = emitSliceValue(pairs, dtype, laneShape, 2, 1, 1);
+				auto rotatedFirst = emitBinaryValue(
+				    LiteNN::BinaryOp::Subtract,
+				    emitBinaryValue(LiteNN::BinaryOp::Multiply, first, cosine, dtype, laneShape),
+				    emitBinaryValue(LiteNN::BinaryOp::Multiply, second, sine, dtype, laneShape), dtype, laneShape);
+				auto rotatedSecond = emitBinaryValue(
+				    LiteNN::BinaryOp::Add, emitBinaryValue(LiteNN::BinaryOp::Multiply, first, sine, dtype, laneShape),
+				    emitBinaryValue(LiteNN::BinaryOp::Multiply, second, cosine, dtype, laneShape), dtype, laneShape);
+				SmallVector<Value> rotatedValues{ rotatedFirst, rotatedSecond };
+				auto concatenated = emitConcatValue(rotatedValues, dtype, pairShape, 2);
+				valueMap[nodeId] = { emitReshapeValue(concatenated, dtype, outputInfos[0].shape) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const BatchMatMulNode& node,

@@ -901,6 +901,25 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const RoPENode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			const Tensor<D>* positions = node.positions ? &GetValue(slots, *node.positions) : nullptr;
+			const auto cpuPositions = positions ? std::optional{ positions->CopyToDevice(CPU{}) } : std::nullopt;
+			auto cpuResult = Detail::EvalRoPE(GetValue(slots, node.input).CopyToDevice(CPU{}),
+			                                  cpuPositions ? &*cpuPositions : nullptr, node.base, node.frequencyScale,
+			                                  node.positionOffset);
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		template <typename ExecutionModel>
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
 		             const CrossEntropyLossNode& node, std::vector<std::vector<Tensor<D>>>& slots,
 		             std::span<const Tensor<D>> inputs, D& device)

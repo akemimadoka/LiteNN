@@ -2025,6 +2025,15 @@ namespace
 				    }
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, RoPENode>)
+			    {
+				    copy.input = remap(copy.input);
+				    if (copy.positions)
+				    {
+					    copy.positions = remap(*copy.positions);
+				    }
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, BatchMatMulNode> || std::same_as<T, OutProdNode>)
 			    {
 				    copy.lhs = remap(copy.lhs);
@@ -3625,6 +3634,18 @@ namespace
 		float epsilon{};
 	};
 
+	struct CUDANativeRoPEPlan
+	{
+		std::uint32_t inputIndex{};
+		std::optional<std::uint32_t> positionsInputIndex;
+		std::optional<DataType> positionType;
+		std::uint32_t featureSize{};
+		std::uint32_t elementCount{};
+		std::uint32_t positionOffset{};
+		double base{};
+		double frequencyScale{};
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -4926,6 +4947,76 @@ namespace
 			                          .epsilon = static_cast<float>(norm->epsilon) };
 	}
 
+	std::optional<CUDANativeRoPEPlan> MatchCUDANativeRoPEF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1 || subgraph.NodeCount() < 2 || subgraph.NodeCount() > 3)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* rope = std::get_if<RoPENode>(&resultEntry.node);
+		if (!rope || resultEntry.outputInfos.size() != 1 || !std::isfinite(rope->base) || rope->base <= 0.0 ||
+		    !std::isfinite(rope->frequencyScale) || rope->frequencyScale <= 0.0 ||
+		    rope->positionOffset > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, rope->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape ||
+		    input.shape.size() != 2 || input.shape[1] == 0 || (input.shape[1] % 2) != 0 ||
+		    input.shape[1] > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = ShapeNumElementsU32(input.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		std::optional<std::uint32_t> positionsInputIndex;
+		std::optional<DataType> positionType;
+		if (rope->positions)
+		{
+			positionsInputIndex = GetParamIndex(subgraph, *rope->positions);
+			if (!positionsInputIndex)
+			{
+				return std::nullopt;
+			}
+			const auto& positions = subgraph.Params()[*positionsInputIndex];
+			if ((positions.dtype != DataType::Int32 && positions.dtype != DataType::Int64) ||
+			    positions.shape != std::vector<std::size_t>{ input.shape[0] })
+			{
+				return std::nullopt;
+			}
+			positionType = positions.dtype;
+		}
+		return CUDANativeRoPEPlan{ .inputIndex = *inputIndex,
+			                       .positionsInputIndex = positionsInputIndex,
+			                       .positionType = positionType,
+			                       .featureSize = static_cast<std::uint32_t>(input.shape[1]),
+			                       .elementCount = *elementCount,
+			                       .positionOffset = static_cast<std::uint32_t>(rope->positionOffset),
+			                       .base = rope->base,
+			                       .frequencyScale = rope->frequencyScale };
+	}
+
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
 	{
 		if (!IsCUDANativeSingleForwardGraph(graph))
@@ -6088,6 +6179,89 @@ namespace
 		payload.kernels.push_back({
 		    .name = std::string(CUDANativeRMSNormF32KernelName(plan->scale.has_value())),
 		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = std::move(arguments),
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+			                            std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeRoPEF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeRoPEF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeRoPEF32PTXFromMLIRNVPTX({
+		    .featureSize = plan->featureSize,
+		    .positionOffset = plan->positionOffset,
+		    .positionType = plan->positionType,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::ConstantTensor, CUDANativeFeature::RoPEF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		std::vector<double> frequencyValues(plan->featureSize / 2);
+		for (std::uint32_t pair = 0; pair < plan->featureSize / 2; ++pair)
+		{
+			frequencyValues[pair] =
+			    std::pow(plan->base, -2.0 * static_cast<double>(pair) / static_cast<double>(plan->featureSize)) *
+			    plan->frequencyScale;
+		}
+		const Tensor<CPU> frequencyTensor(std::span<const double>(frequencyValues), { plan->featureSize / 2 },
+		                                  DataType::Float32);
+		const auto polymorphicFrequency = frequencyTensor.CopyToDevice(PolymorphicDevice{ CPU{} });
+		const auto frequencyOffset = AppendCUDANativeConstantTensor(payload, polymorphicFrequency);
+		AppendU32(payload.scalarData, plan->elementCount);
+
+		std::vector<CUDANativeArgumentSpec> arguments{
+			{ .kind = CUDANativeArgumentKind::OutputTensor,
+			  .index = 0,
+			  .byteOffset = 0,
+			  .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+			{ .kind = CUDANativeArgumentKind::InputTensor,
+			  .index = plan->inputIndex,
+			  .byteOffset = 0,
+			  .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+			{ .kind = CUDANativeArgumentKind::ConstantTensor,
+			  .index = 0,
+			  .byteOffset = frequencyOffset,
+			  .byteSize = static_cast<std::uint64_t>(plan->featureSize / 2) * sizeof(float) },
+		};
+		if (plan->positionsInputIndex)
+		{
+			const auto sequenceLength = plan->elementCount / plan->featureSize;
+			arguments.push_back(
+			    { .kind = CUDANativeArgumentKind::InputTensor,
+			      .index = *plan->positionsInputIndex,
+			      .byteOffset = 0,
+			      .byteSize = static_cast<std::uint64_t>(sequenceLength) * ElementByteSize(*plan->positionType) });
+		}
+		arguments.push_back(
+		    { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) });
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		payload.kernels.push_back({
+		    .name = CUDANativeRoPEF32KernelName(plan->positionType),
+		    .grid = { .x = (plan->elementCount + blockSize - 1) / blockSize, .y = 1, .z = 1 },
 		    .block = { .x = blockSize, .y = 1, .z = 1 },
 		    .arguments = std::move(arguments),
 		});
@@ -13992,6 +14166,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeRMSNormF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeRoPEF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

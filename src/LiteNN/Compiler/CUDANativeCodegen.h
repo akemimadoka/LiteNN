@@ -63,6 +63,13 @@ namespace LiteNN
 		bool hasScale{};
 	};
 
+	struct CUDANativeRoPEF32CodegenSpec
+	{
+		std::uint32_t featureSize{};
+		std::uint32_t positionOffset{};
+		std::optional<DataType> positionType;
+	};
+
 	struct CUDANativeMatMulBiasEpilogueF32CodegenSpec
 	{
 		std::string kernelName;
@@ -102,6 +109,7 @@ namespace LiteNN
 	std::string_view CUDANativeSoftmaxF32KernelName();
 	std::string CUDANativeGetRowsF32KernelName(DataType indexType);
 	std::string_view CUDANativeRMSNormF32KernelName(bool hasScale);
+	std::string CUDANativeRoPEF32KernelName(std::optional<DataType> positionType);
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu);
 	std::string CUDANativeMatMulBiasEpilogueKernelName(DataType dtype, bool relu);
 	bool CUDANativeSupportsCast(DataType srcType, DataType dstType);
@@ -132,6 +140,8 @@ namespace LiteNN
 	std::optional<std::string> TryCUDANativeGetRowsF32PTXFromMLIRNVPTX(const CUDANativeGetRowsF32CodegenSpec& spec);
 	std::string CUDANativeRMSNormF32PTXFromMLIRNVPTX(const CUDANativeRMSNormF32CodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeRMSNormF32PTXFromMLIRNVPTX(const CUDANativeRMSNormF32CodegenSpec& spec);
+	std::string CUDANativeRoPEF32PTXFromMLIRNVPTX(const CUDANativeRoPEF32CodegenSpec& spec);
+	std::optional<std::string> TryCUDANativeRoPEF32PTXFromMLIRNVPTX(const CUDANativeRoPEF32CodegenSpec& spec);
 	std::string CUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec);
 	std::optional<std::string> TryCUDANativeCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec);
 	std::string CUDANativeMatMulBiasEpilogueF32PTXFromMLIRNVPTX(const CUDANativeMatMulBiasEpilogueF32CodegenSpec& spec);
