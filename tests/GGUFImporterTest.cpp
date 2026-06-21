@@ -107,6 +107,15 @@ namespace
 		return tensor;
 	}
 
+	Tensor<CPU> MakeInt64Tensor(std::initializer_list<std::int64_t> values, std::initializer_list<std::size_t> shape)
+	{
+		CPU device;
+		Tensor<CPU> tensor(Uninitialized, shape, DataType::Int64, device);
+		DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int64, tensor.UnsafeRawData(), DataType::Int64, values.begin(),
+		                               values.size());
+		return tensor;
+	}
+
 	Tensor<CPU> MakeFloatTensor(std::span<const float> values, std::initializer_list<std::size_t> shape)
 	{
 		CPU device;
@@ -973,6 +982,29 @@ TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
 #endif
 }
 
+TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
+{
+	const auto plan = GGUF::PlanLLaMAArtifacts(
+	    BuildTinyQwen2Archive(),
+	    { .prefillSequenceLength = 4, .decodePastLength = 0, .maxCacheLength = 8, .dynamicDecodePosition = true });
+
+	EXPECT_TRUE(plan.decodeStep.dynamicPosition);
+	EXPECT_EQ(plan.decodeStep.inputNames,
+	          std::vector<std::string>({ "token_ids", "current_position", "past_key_0", "past_value_0" }));
+	EXPECT_EQ(plan.decodeStep.outputNames,
+	          std::vector<std::string>({ "logits", "next_position", "updated_key_0", "updated_value_0" }));
+	ASSERT_EQ(plan.decodeStep.kvCaches.size(), 1u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 8, 1, 2 }));
+	ASSERT_EQ(plan.decodeStep.stateValueBindings.size(), 6u);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[0].valueIndex, 2u);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[2].valueIndex, 2u);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[4].stateName, "decode.position");
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[4].kind, Runtime::RuntimeStateValueKind::FunctionInput);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[4].valueIndex, 1u);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[5].kind, Runtime::RuntimeStateValueKind::FunctionOutput);
+	EXPECT_EQ(plan.decodeStep.stateValueBindings[5].valueIndex, 1u);
+}
+
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)
 {
 	const auto plan = GGUF::PlanLLaMAArtifacts(BuildTinyQwen2Archive(), 4, 3);
@@ -1415,6 +1447,66 @@ TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenDecodeLogitsAndCacheUpdate)
 	EXPECT_EQ(outputs[2].Shape().ToOwned(), std::vector<std::size_t>({ 2, 1, 2 }));
 }
 
+TEST(GGUFLLaMACausalLM, ReusesCapacityDecodeGraphAcrossRuntimePositions)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto capacityDecode = GGUF::LowerLLaMACausalLMDecodeCapacity(archive, 4);
+	const auto fullPrefill = GGUF::LowerLLaMACausalLM(archive, 2);
+	const auto capacityPlan = Detail::BuildExecutablePlanFromGraph(capacityDecode);
+	Runtime::Interpreter<CPU> interpreter;
+	const std::vector<float> zeroCache(8, 0.0f);
+	std::array<Tensor<CPU>, 4> firstInputs = {
+		MakeInt32Tensor({ 0 }, { 1 }),
+		MakeInt64Tensor({ 0 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	const auto firstOutputs = interpreter.RunForward(capacityPlan, firstInputs);
+	ASSERT_EQ(firstOutputs.size(), 4u);
+	EXPECT_EQ(firstOutputs[1].DType(), DataType::Int64);
+	EXPECT_EQ(static_cast<const std::int64_t*>(firstOutputs[1].UnsafeRawData())[0], 1);
+
+	std::array<Tensor<CPU>, 4> secondInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		firstOutputs[1],
+		firstOutputs[2],
+		firstOutputs[3],
+	};
+	const auto secondOutputs = interpreter.RunForward(capacityPlan, secondInputs);
+	ASSERT_EQ(secondOutputs.size(), 4u);
+	EXPECT_EQ(static_cast<const std::int64_t*>(secondOutputs[1].UnsafeRawData())[0], 2);
+
+	std::array<Tensor<CPU>, 1> fullInputs = { MakeInt32Tensor({ 0, 1 }, { 2 }) };
+	const auto fullOutputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(fullPrefill), fullInputs);
+	const std::array<float, 3> fullSecondLogit = {
+		ReadFloat(fullOutputs[0], 3),
+		ReadFloat(fullOutputs[0], 4),
+		ReadFloat(fullOutputs[0], 5),
+	};
+	ExpectTensorNear(secondOutputs[0], fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+}
+
+TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBindings)
+{
+	const auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(
+	    BuildTinyQwen2Archive(),
+	    { .prefillSequenceLength = 1, .decodePastLength = 0, .maxCacheLength = 4, .dynamicDecodePosition = true });
+	ASSERT_EQ(schedule.states.size(), 2u);
+	ASSERT_EQ(schedule.stateValueBindings.size(), 6u);
+	EXPECT_EQ(schedule.module.functions[0].inputs[1].dtype, DataType::Int64);
+	EXPECT_EQ(schedule.module.functions[0].inputs[2].StaticShape(), std::vector<std::size_t>({ 4, 1, 2 }));
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	const auto path = MakeTempFixturePath("litenn_llama_capacity_decode", ".ltnn");
+	Serialization::SaveVNextModelPackage(schedule, path);
+	const auto loaded = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+	ASSERT_EQ(loaded.manifest.runtimeStates.size(), 2u);
+	ASSERT_EQ(loaded.manifest.stateValueBindings.size(), 6u);
+	EXPECT_EQ(loaded.manifest.stateValueBindings[4].stateName, "decode.position");
+	EXPECT_EQ(loaded.manifest.stateValueBindings[5].kind, Runtime::RuntimeStateValueKind::FunctionOutput);
+}
+
 TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 {
 	const auto archive = BuildTinyLLaMAArchive();
@@ -1446,6 +1538,29 @@ TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 }
 
 #ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntimePosition)
+{
+	const auto lowered = GGUF::LowerLLaMACausalLMDecodeCapacity(BuildTinyLLaMAArchive(), 4);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
+	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+	const std::vector<float> zeroCache(8, 0.0f);
+	std::array<Tensor<CPU>, 4> inputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeInt64Tensor({ 0 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(plan, inputs);
+	auto compiled = Compiler<CPU>::CompileArtifact(plan).Load();
+	const auto actual = compiled.RunTensors(inputs);
+	ASSERT_EQ(actual.size(), expected.size());
+	ExpectTensorNear(actual[0], expected[0], tolerance);
+	EXPECT_EQ(static_cast<const std::int64_t*>(actual[1].UnsafeRawData())[0], 1);
+	ExpectTensorNear(actual[2], expected[2], tolerance);
+	ExpectTensorNear(actual[3], expected[3], tolerance);
+}
+
 TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)
 {
 	const auto archive = BuildTinyLLaMAArchive();
