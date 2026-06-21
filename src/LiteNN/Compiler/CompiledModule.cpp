@@ -3616,6 +3616,15 @@ namespace
 		std::uint32_t outputElementCount{};
 	};
 
+	struct CUDANativeRMSNormPlan
+	{
+		std::uint32_t inputIndex{};
+		std::optional<CUDANativeTensorRef> scale;
+		std::uint32_t rowSize{};
+		std::uint32_t elementCount{};
+		float epsilon{};
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -4800,6 +4809,123 @@ namespace
 			                          .outputElementCount = *outputElementCount };
 	}
 
+	std::optional<CUDANativeRMSNormPlan> MatchCUDANativeRMSNormF32(const Graph& graph,
+	                                                               CUDANativeInstructionPayload& payload)
+	{
+		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.ActivationSlotCount() != 0 ||
+		    graph.TapeSlotCount() != 0)
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1 || subgraph.NodeCount() < 2 || subgraph.NodeCount() > 3)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* norm = std::get_if<NormalizationNode>(&resultEntry.node);
+		if (!norm || norm->mode != NormalizationMode::RMSNorm || norm->bias || norm->groupCount != 1 ||
+		    resultEntry.outputInfos.size() != 1 || !std::isfinite(norm->epsilon) || norm->epsilon <= 0.0)
+		{
+			return std::nullopt;
+		}
+		const auto inputIndex = GetParamIndex(subgraph, norm->input);
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape ||
+		    input.shape.empty() || norm->axis != input.shape.size() - 1 || input.shape.back() == 0 ||
+		    input.shape.back() > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = ShapeNumElementsU32(input.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		std::optional<CUDANativeTensorRef> scaleRef;
+		if (norm->scale)
+		{
+			if (norm->scale->port != 0 || norm->scale->node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+			const auto& scaleEntry = subgraph.GetNodeEntry(norm->scale->node);
+			if (scaleEntry.outputInfos.size() != 1)
+			{
+				return std::nullopt;
+			}
+			const auto& scaleInfo = scaleEntry.outputInfos[0];
+			const auto scaleElementCount = ShapeNumElementsU32(scaleInfo.shape);
+			if (scaleInfo.dtype != DataType::Float32 || !scaleElementCount || *scaleElementCount != input.shape.back())
+			{
+				return std::nullopt;
+			}
+			if (const auto scaleInputIndex = GetParamIndex(subgraph, *norm->scale))
+			{
+				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::InputTensor,
+					                            .index = *scaleInputIndex,
+					                            .byteOffset = 0,
+					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+					                            .dtype = scaleInfo.dtype,
+					                            .shape = scaleInfo.shape };
+			}
+			else if (const auto* variable = std::get_if<VariableRefNode>(&scaleEntry.node))
+			{
+				if (variable->variableIndex >= graph.VariableCount())
+				{
+					return std::nullopt;
+				}
+				const auto& graphVariable = graph.GetVariable(variable->variableIndex);
+				const auto& tensor = graphVariable->Data();
+				if (graphVariable->HasGradStorage() || tensor.DType() != scaleInfo.dtype ||
+				    tensor.Shape() != scaleInfo.shape)
+				{
+					return std::nullopt;
+				}
+				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
+					                            .index = 0,
+					                            .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
+					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+					                            .dtype = scaleInfo.dtype,
+					                            .shape = scaleInfo.shape };
+			}
+			else if (const auto* constant = std::get_if<ConstantNode>(&scaleEntry.node))
+			{
+				if (constant->value.DType() != scaleInfo.dtype || constant->value.Shape() != scaleInfo.shape)
+				{
+					return std::nullopt;
+				}
+				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
+					                            .index = 0,
+					                            .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
+					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+					                            .dtype = scaleInfo.dtype,
+					                            .shape = scaleInfo.shape };
+			}
+			else
+			{
+				return std::nullopt;
+			}
+		}
+
+		return CUDANativeRMSNormPlan{ .inputIndex = *inputIndex,
+			                          .scale = std::move(scaleRef),
+			                          .rowSize = static_cast<std::uint32_t>(input.shape.back()),
+			                          .elementCount = *elementCount,
+			                          .epsilon = static_cast<float>(norm->epsilon) };
+	}
+
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
 	{
 		if (!IsCUDANativeSingleForwardGraph(graph))
@@ -5897,6 +6023,73 @@ namespace
 		          .byteSize = static_cast<std::uint64_t>(plan->indexCount) * ElementByteSize(plan->indexType) },
 		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
 		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+			                            std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeRMSNormF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.target = CUDANativeNVPTXTargetChip();
+		const auto plan = MatchCUDANativeRMSNormF32(graph, payload);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeRMSNormF32PTXFromMLIRNVPTX({
+		    .rowSize = plan->rowSize,
+		    .epsilon = plan->epsilon,
+		    .hasScale = plan->scale.has_value(),
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::RMSNormF32);
+		if (!payload.constantData.empty())
+		{
+			payload.featureSet.AddFeature(CUDANativeFeature::ConstantTensor);
+		}
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->elementCount);
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
+		std::vector<CUDANativeArgumentSpec> arguments{
+			{ .kind = CUDANativeArgumentKind::OutputTensor,
+			  .index = 0,
+			  .byteOffset = 0,
+			  .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+			{ .kind = CUDANativeArgumentKind::InputTensor,
+			  .index = plan->inputIndex,
+			  .byteOffset = 0,
+			  .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+		};
+		if (plan->scale)
+		{
+			arguments.push_back(ToCUDANativeArgument(*plan->scale));
+		}
+		arguments.push_back(
+		    { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) });
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeRMSNormF32KernelName(plan->scale.has_value())),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = std::move(arguments),
 		});
 
 		auto inputSpecs = BuildInputSpecs(graph);
@@ -13792,6 +13985,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeGetRowsF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeRMSNormF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

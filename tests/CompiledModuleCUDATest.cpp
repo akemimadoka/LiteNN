@@ -234,6 +234,38 @@ namespace
 		return graph;
 	}
 
+	Graph BuildRMSNormGraph(bool withScale, std::string outputName)
+	{
+		Graph graph;
+		std::optional<std::size_t> scale;
+		if (withScale)
+		{
+			scale = graph.AddVariable(
+			    Variable::CreateFrozen(Tensor<CPU>({ 1.0, 0.5, 2.0, -1.0 }, { 1, 4 }, DataType::Float32)));
+		}
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 4 });
+		std::optional<NodeOutput> scaleRef;
+		if (scale)
+		{
+			const auto node = sg.AddNode(VariableRefNode{ *scale }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+			scaleRef = NodeOutput{ node, 0 };
+		}
+		const auto output = sg.AddNode(NormalizationNode{ .input = { input, 0 },
+		                                                  .scale = scaleRef,
+		                                                  .bias = std::nullopt,
+		                                                  .mode = NormalizationMode::RMSNorm,
+		                                                  .axis = 1,
+		                                                  .groupCount = 1,
+		                                                  .epsilon = 1.0e-5 },
+		                               { OutputInfo{ DataType::Float32, { 2, 4 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildConcatGraph(std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
 	                       std::vector<std::size_t> outputShape, std::size_t axis, std::string outputName)
 	{
@@ -1484,6 +1516,20 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		          4u * (indexType == DataType::Int32 ? sizeof(std::int32_t) : sizeof(std::int64_t)));
 	}
 
+	for (const bool withScale : { false, true })
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(
+		    Detail::BuildExecutablePlanFromGraph(BuildRMSNormGraph(withScale, "rms_norm")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::RMSNormF32));
+		EXPECT_EQ(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor), withScale);
+		EXPECT_EQ(payload.constantData.size(), withScale ? 4u * sizeof(float) : 0u);
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeRMSNormF32KernelName(withScale));
+		EXPECT_EQ(payload.kernels[0].arguments.size(), withScale ? 4u : 3u);
+	}
+
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
 		    Detail::BuildExecutablePlanFromGraph(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1")));
@@ -2358,7 +2404,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	};
 
 	std::vector<Case> cases;
-	cases.reserve(24);
+	cases.reserve(26);
 
 	const std::array unaryCases = {
 		std::pair{ UnaryOp::Negate, std::string_view{ "unary_negate" } },
@@ -2452,6 +2498,15 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 		    .name = indexType == DataType::Int32 ? "get_rows_i32" : "get_rows_i64",
 		    .graph = BuildGetRowsGraph(indexType, "embedding"),
 		    .inputs = { TensorInputSpec{ .values = { 2.0, 0.0, 3.0, 1.0 }, .shape = { 2, 2 }, .dtype = indexType } },
+		});
+	}
+	for (const bool withScale : { false, true })
+	{
+		cases.push_back(Case{
+		    .name = withScale ? "rms_norm_scale" : "rms_norm",
+		    .graph = BuildRMSNormGraph(withScale, "rms_norm"),
+		    .inputs = { TensorInputSpec{ .values = { 1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 3.5 }, .shape = { 2, 4 } } },
+		    .tolerance = 2.0e-5F,
 		});
 	}
 	cases.push_back(Case{

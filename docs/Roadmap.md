@@ -2533,6 +2533,9 @@ placement and fallback policy.
       - [x] Embedding/GetRows f32 now has a CUDA native MLIR/NVPTX correctness slice for Int32 and Int64 token ids;
             frozen embedding tables are carried as artifact constant data and runtime parity covers rank-2 token-id
             batches. Runtime out-of-range index reporting remains part of the full decode validation work.
+      - [x] Last-axis RMSNorm f32 now has a CUDA native MLIR/NVPTX correctness slice with optional per-channel scale,
+            frozen-scale artifact constants, and runtime parity. Warp-reduction tuning and RMSNorm+Linear fusion remain
+            performance work after full decode correctness is connected.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

@@ -68,6 +68,7 @@ namespace LiteNN
 		GGMLQ5_KMatMulF32,
 		SoftmaxF32,
 		GetRowsF32,
+		RMSNormF32,
 	};
 
 	constexpr std::uint64_t FeatureToFlag(std::same_as<CUDANativeFeature> auto... feature)

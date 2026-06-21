@@ -34,6 +34,7 @@
 #include <cuda_runtime_api.h>
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -664,6 +665,60 @@ namespace LiteNN
 				auto tableOffset = EmitI32Add(EmitI32Mul(row, rowSize), column);
 				auto value = EmitLoadF32(EmitF32GEP(table, tableOffset));
 				EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
+			mlir::OwningOpRef<mlir::ModuleOp> BuildRMSNormF32(const CUDANativeRMSNormF32CodegenSpec& spec)
+			{
+				if (spec.rowSize == 0 || !std::isfinite(spec.epsilon) || spec.epsilon <= 0.0F)
+				{
+					throw std::runtime_error(
+					    "CUDA native RMSNorm requires a non-empty row and positive finite epsilon");
+				}
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_ };
+				if (spec.hasScale)
+				{
+					argTypes.push_back(ptrType_);
+				}
+				argTypes.push_back(i32Type_);
+				auto func =
+				    CreateKernelFunc(kernelModule.gpuModule, CUDANativeRMSNormF32KernelName(spec.hasScale), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, spec.hasScale ? 3 : 2);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto in = blocks.entry->getArgument(1);
+				auto rowSize = EmitI32Constant(spec.rowSize);
+				auto column = EmitI32URem(blocks.index32, rowSize);
+				auto rowBase = EmitI32Mul(EmitI32UDiv(blocks.index32, rowSize), rowSize);
+				auto sumSquares = EmitF32Constant(0.0F);
+				for (std::uint32_t i = 0; i < spec.rowSize; ++i)
+				{
+					auto value = EmitLoadF32(EmitF32GEP(in, EmitI32Add(rowBase, EmitI32Constant(i))));
+					sumSquares = EmitF32Add(sumSquares, EmitF32Mul(value, value));
+				}
+				auto meanSquares =
+				    builder_
+				        .create<mlir::LLVM::FDivOp>(
+				            loc_, f32Type_,
+				            mlir::ValueRange{ sumSquares, EmitF32Constant(static_cast<float>(spec.rowSize)) })
+				        .getResult();
+				auto denominator =
+				    EmitF32Intrinsic("llvm.nvvm.sqrt.rn.ftz.f",
+				                     mlir::ValueRange{ EmitF32Add(meanSquares, EmitF32Constant(spec.epsilon)) });
+				auto value = EmitLoadF32(EmitF32GEP(in, blocks.index32));
+				auto normalized =
+				    builder_.create<mlir::LLVM::FDivOp>(loc_, f32Type_, mlir::ValueRange{ value, denominator })
+				        .getResult();
+				if (spec.hasScale)
+				{
+					auto scale = blocks.entry->getArgument(2);
+					normalized = EmitF32Mul(normalized, EmitLoadF32(EmitF32GEP(scale, column)));
+				}
+				EmitStoreF32(normalized, EmitF32GEP(out, blocks.index32));
 				FinishLinearKernel(blocks);
 				return FinalizeModule(std::move(kernelModule.module));
 			}
@@ -1736,6 +1791,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildGetRowsF32(spec); });
 		}
 
+		std::string EmitRMSNormF32PTXFromMLIRNVPTX(const CUDANativeRMSNormF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildRMSNormF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -1857,6 +1918,11 @@ namespace LiteNN
 			throw std::runtime_error("CUDA native GetRows requires Int32 or Int64 indices");
 		}
 		return std::format("litenn_get_rows_f32_{}", indexType == DataType::Int32 ? "i32" : "i64");
+	}
+
+	std::string_view CUDANativeRMSNormF32KernelName(bool hasScale)
+	{
+		return hasScale ? "litenn_rms_norm_scale_f32" : "litenn_rms_norm_f32";
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -2034,6 +2100,23 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeGetRowsF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeRMSNormF32PTXFromMLIRNVPTX(const CUDANativeRMSNormF32CodegenSpec& spec)
+	{
+		return EmitRMSNormF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string> TryCUDANativeRMSNormF32PTXFromMLIRNVPTX(const CUDANativeRMSNormF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeRMSNormF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{
