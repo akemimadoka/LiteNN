@@ -778,6 +778,56 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildGGMLQ8_0MatMulF32(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+			{
+				if (spec.m == 0 || spec.k == 0 || spec.n == 0 || spec.k % 32 != 0)
+				{
+					throw std::runtime_error(
+					    "CUDA native GGML Q8_0 MatMul requires non-zero m/n and k divisible by 32");
+				}
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeGGMLQ8_0MatMulF32KernelName(), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 3);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto lhs = blocks.entry->getArgument(1);
+				auto rhs = blocks.entry->getArgument(2);
+				const auto blocksPerRow = spec.k / 32;
+				auto row = EmitI32UDiv(blocks.index32, EmitI32Constant(spec.n));
+				auto column = EmitI32URem(blocks.index32, EmitI32Constant(spec.n));
+				auto accumulator = EmitF32Constant(0.0F);
+				auto i8Type = builder_.getIntegerType(8);
+				auto f16Type = builder_.getF16Type();
+
+				for (std::uint32_t blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex)
+				{
+					auto blockBase = EmitI32Mul(
+					    EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), EmitI32Constant(blockIndex)),
+					    EmitI32Constant(34));
+					auto scaleRaw =
+					    EmitLoad(EmitTypedGEP(rhs, f16Type, EmitI32UDiv(blockBase, EmitI32Constant(2))), f16Type);
+					auto scale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, scaleRaw).getResult();
+
+					for (std::uint32_t lane = 0; lane < 32; ++lane)
+					{
+						auto lhsOffset = EmitI32Add(EmitI32Mul(row, EmitI32Constant(spec.k)),
+						                            EmitI32Constant(blockIndex * 32 + lane));
+						auto qOffset = EmitI32Add(blockBase, EmitI32Constant(2 + lane));
+						auto lhsValue = EmitLoadF32(EmitF32GEP(lhs, lhsOffset));
+						auto qRaw = EmitLoad(EmitTypedGEP(rhs, i8Type, qOffset), i8Type);
+						auto qValue = builder_.create<mlir::arith::SIToFPOp>(loc_, f32Type_, qRaw).getResult();
+						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, EmitF32Mul(scale, qValue)));
+					}
+				}
+
+				EmitStoreF32(accumulator, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 		private:
 			void EmitMatMulBiasEpilogue(mlir::gpu::GPUModuleOp gpuModule,
 			                            const CUDANativeMatMulBiasEpilogueCodegenSpec& spec)
@@ -1439,6 +1489,12 @@ namespace LiteNN
 			return BuildAndEmitMLIRGPUToNVPTX(
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildMatMulBiasEpilogues(specs); });
 		}
+
+		std::string EmitGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildGGMLQ8_0MatMulF32(spec); });
+		}
 	} // namespace
 
 	std::string_view CUDANativeBinaryF32KernelName(BinaryOp op, bool broadcast)
@@ -1544,6 +1600,11 @@ namespace LiteNN
 		}
 		return std::format("litenn_cast_{}_to_{}", CUDANativeDataTypeShortName(srcType),
 		                   CUDANativeDataTypeShortName(dstType));
+	}
+
+	std::string_view CUDANativeGGMLQ8_0MatMulF32KernelName()
+	{
+		return "litenn_ggml_q8_0_matmul_f32";
 	}
 
 	std::string CUDANativeNVPTXTargetChip()
@@ -1732,6 +1793,24 @@ namespace LiteNN
 		catch (const std::exception& ex)
 		{
 			(void) ex;
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+	{
+		return EmitGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string>
+	TryCUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(const CUDANativeGGMLQ8_0MatMulF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
 			return std::nullopt;
 		}
 	}

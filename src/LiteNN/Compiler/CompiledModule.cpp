@@ -3596,6 +3596,16 @@ namespace
 		DataType dstType{ DataType::Float32 };
 	};
 
+	struct CUDANativeTensorRef
+	{
+		CUDANativeArgumentKind kind{ CUDANativeArgumentKind::InputTensor };
+		std::uint32_t index{};
+		std::uint64_t byteOffset{};
+		std::uint64_t byteSize{};
+		DataType dtype{ DataType::Float32 };
+		std::vector<std::size_t> shape;
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -3605,6 +3615,18 @@ namespace
 		std::uint32_t n{};
 		std::uint32_t lhsElementCount{};
 		std::uint32_t rhsElementCount{};
+		std::uint32_t outputElementCount{};
+	};
+
+	struct CUDANativeGGMLQ8_0MatMulPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		CUDANativeTensorRef rhsStorage;
+		std::uint32_t m{};
+		std::uint32_t k{};
+		std::uint32_t n{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsStorageElementCount{};
 		std::uint32_t outputElementCount{};
 	};
 
@@ -3656,16 +3678,6 @@ namespace
 		std::vector<std::size_t> outputShape;
 		std::vector<std::size_t> biasShape;
 		bool relu{};
-	};
-
-	struct CUDANativeTensorRef
-	{
-		CUDANativeArgumentKind kind{ CUDANativeArgumentKind::InputTensor };
-		std::uint32_t index{};
-		std::uint64_t byteOffset{};
-		std::uint64_t byteSize{};
-		DataType dtype{ DataType::Float32 };
-		std::vector<std::size_t> shape;
 	};
 
 	struct CUDANativeLinearChainPlan
@@ -4196,6 +4208,149 @@ namespace
 			.n = static_cast<std::uint32_t>(n),
 			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
 			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
+			.outputElementCount = static_cast<std::uint32_t>(outputElementCount),
+		};
+	}
+
+	std::optional<CUDANativeTensorRef> GetCUDANativeQuantizedRhsStorageRef(const Graph& graph, const Subgraph& subgraph,
+	                                                                       NodeOutput output,
+	                                                                       CUDANativeInstructionPayload& payload)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& entry = subgraph.GetNodeEntry(output.node);
+		if (entry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto& info = entry.outputInfos[0];
+		if (info.dtype != DataType::UInt8)
+		{
+			return std::nullopt;
+		}
+		if (const auto inputIndex = GetParamIndex(subgraph, output))
+		{
+			return CUDANativeTensorRef{
+				.kind = CUDANativeArgumentKind::InputTensor,
+				.index = *inputIndex,
+				.byteOffset = 0,
+				.byteSize = TensorByteSize(info.dtype, info.shape),
+				.dtype = info.dtype,
+				.shape = info.shape,
+			};
+		}
+		if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
+		{
+			if (variable->variableIndex >= graph.VariableCount())
+			{
+				return std::nullopt;
+			}
+			const auto& graphVariable = graph.GetVariable(variable->variableIndex);
+			const auto& storage = graphVariable->Data();
+			if (storage.DType() != DataType::UInt8 || storage.Shape() != ShapeView{ info.shape })
+			{
+				return std::nullopt;
+			}
+			const auto offset = AppendCUDANativeConstantTensor(payload, storage);
+			return CUDANativeTensorRef{
+				.kind = CUDANativeArgumentKind::ConstantTensor,
+				.index = 0,
+				.byteOffset = offset,
+				.byteSize = TensorByteSize(info.dtype, info.shape),
+				.dtype = info.dtype,
+				.shape = info.shape,
+			};
+		}
+		return std::nullopt;
+	}
+
+	std::optional<CUDANativeGGMLQ8_0MatMulPlan>
+	MatchCUDANativeGGMLQ8_0QuantizedMatMul(const Graph& graph, CUDANativeInstructionPayload& payload)
+	{
+		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.ActivationSlotCount() != 0 ||
+		    graph.TapeSlotCount() != 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		if (resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto* matmul = std::get_if<QuantizedMatMulNode>(&resultEntry.node);
+		if (!matmul || !matmul->transposeRhs || matmul->params.scheme != QuantizationScheme::Block ||
+		    matmul->params.blockFormat != QuantizedBlockFormat::GGML_Q8_0 ||
+		    matmul->params.storageType != DataType::UInt8 || matmul->params.expressedType != DataType::Float32)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetParamIndex(subgraph, matmul->lhs);
+		if (!lhsInputIndex)
+		{
+			return std::nullopt;
+		}
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhsParam.dtype != DataType::Float32 || output.dtype != DataType::Float32 || lhsParam.shape.size() != 2 ||
+		    output.shape.size() != 2 || matmul->params.expressedShape.size() != 2)
+		{
+			return std::nullopt;
+		}
+
+		const auto m = lhsParam.shape[0];
+		const auto k = lhsParam.shape[1];
+		const auto n = output.shape[1];
+		const auto logicalK = matmul->params.expressedShape[1];
+		const auto logicalN = matmul->params.expressedShape[0];
+		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q8_0);
+		if (!layout || m == 0 || k == 0 || n == 0 || k % layout->elementsPerBlock != 0 || logicalK != k ||
+		    logicalN != n || output.shape[0] != m)
+		{
+			return std::nullopt;
+		}
+
+		const auto rhsStorage = GetCUDANativeQuantizedRhsStorageRef(graph, subgraph, matmul->rhsStorage, payload);
+		if (!rhsStorage || rhsStorage->shape.size() != 2 || rhsStorage->shape[0] != n ||
+		    rhsStorage->shape[1] != (k / layout->elementsPerBlock) * layout->bytesPerBlock)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = ShapeView{ lhsParam.shape }.NumElements();
+		const auto rhsElementCount = ShapeView{ rhsStorage->shape }.NumElements();
+		const auto outputElementCount = ShapeView{ output.shape }.NumElements();
+		if (m > std::numeric_limits<std::uint32_t>::max() || k > std::numeric_limits<std::uint32_t>::max() ||
+		    n > std::numeric_limits<std::uint32_t>::max() ||
+		    lhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    rhsElementCount > std::numeric_limits<std::uint32_t>::max() ||
+		    outputElementCount > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeGGMLQ8_0MatMulPlan{
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsStorage = *rhsStorage,
+			.m = static_cast<std::uint32_t>(m),
+			.k = static_cast<std::uint32_t>(k),
+			.n = static_cast<std::uint32_t>(n),
+			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
+			.rhsStorageElementCount = static_cast<std::uint32_t>(rhsElementCount),
 			.outputElementCount = static_cast<std::uint32_t>(outputElementCount),
 		};
 	}
@@ -5214,6 +5369,74 @@ namespace
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeGGMLQ8_0QuantizedMatMul(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::GGMLQ8_0MatMulF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+
+		const auto plan = MatchCUDANativeGGMLQ8_0QuantizedMatMul(graph, payload);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		if (!payload.constantData.empty())
+		{
+			payload.featureSet.AddFeature(CUDANativeFeature::ConstantTensor);
+		}
+
+		const auto ptx = TryCUDANativeGGMLQ8_0MatMulF32PTXFromMLIRNVPTX({
+		    .m = plan->m,
+		    .k = plan->k,
+		    .n = plan->n,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->outputElementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeGGMLQ8_0MatMulF32KernelName()),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float) },
+		        ToCUDANativeArgument(plan->rhsStorage),
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
 	}
 
 	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulBias(const Graph& graph)
@@ -13180,6 +13403,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeGGMLQ8_0QuantizedMatMul(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

@@ -62,6 +62,7 @@ namespace LiteNN
 		MatMulCUBLASLowPrecision,
 		MatMulBiasAddLowPrecision,
 		MatMulBiasAddReLULowPrecision,
+		GGMLQ8_0MatMulF32,
 	};
 
 	constexpr std::uint64_t FeatureToFlag(std::same_as<CUDANativeFeature> auto... feature)
