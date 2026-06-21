@@ -2530,6 +2530,9 @@ placement and fallback policy.
       output projection.
       - [x] Softmax f32 now has a CUDA native MLIR/NVPTX correctness slice with artifact feature reporting and runtime
             parity for both last-axis and non-last-axis static shapes.
+      - [x] Embedding/GetRows f32 now has a CUDA native MLIR/NVPTX correctness slice for Int32 and Int64 token ids;
+            frozen embedding tables are carried as artifact constant data and runtime parity covers rank-2 token-id
+            batches. Runtime out-of-range index reporting remains part of the full decode validation work.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

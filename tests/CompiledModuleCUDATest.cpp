@@ -217,6 +217,23 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGetRowsGraph(DataType indexType, std::string outputName)
+	{
+		Graph graph;
+		const auto table = graph.AddVariable(Variable::CreateFrozen(Tensor<CPU>(
+		    { 1.0, 2.0, 3.0, 10.0, 20.0, 30.0, -1.0, -2.0, -3.0, 4.0, 5.0, 6.0 }, { 4, 3 }, DataType::Float32)));
+		Subgraph sg;
+		const auto indices = sg.AddParam(indexType, { 2, 2 });
+		const auto tableRef = sg.AddNode(VariableRefNode{ table }, { OutputInfo{ DataType::Float32, { 4, 3 } } });
+		const auto output = sg.AddNode(GetRowsNode{ { tableRef, 0 }, { indices, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2, 3 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "indices" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildConcatGraph(std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
 	                       std::vector<std::size_t> outputShape, std::size_t axis, std::string outputName)
 	{
@@ -1449,6 +1466,24 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		EXPECT_EQ(payload.kernels[0].name, CUDANativeSoftmaxF32KernelName());
 	}
 
+	for (const auto indexType : { DataType::Int32, DataType::Int64 })
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(
+		    Detail::BuildExecutablePlanFromGraph(BuildGetRowsGraph(indexType, "embedding")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::GetRowsF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
+		EXPECT_EQ(payload.constantData.size(), 12u * sizeof(float));
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeGetRowsF32KernelName(indexType));
+		ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+		EXPECT_EQ(payload.kernels[0].arguments[1].kind, CUDANativeArgumentKind::ConstantTensor);
+		EXPECT_EQ(payload.kernels[0].arguments[2].kind, CUDANativeArgumentKind::InputTensor);
+		EXPECT_EQ(payload.kernels[0].arguments[2].byteSize,
+		          4u * (indexType == DataType::Int32 ? sizeof(std::int32_t) : sizeof(std::int64_t)));
+	}
+
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
 		    Detail::BuildExecutablePlanFromGraph(BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1")));
@@ -2323,7 +2358,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	};
 
 	std::vector<Case> cases;
-	cases.reserve(22);
+	cases.reserve(24);
 
 	const std::array unaryCases = {
 		std::pair{ UnaryOp::Negate, std::string_view{ "unary_negate" } },
@@ -2411,6 +2446,14 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0 }, .shape = { 2, 2 } },
 	                TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 2, 2 } } },
 	});
+	for (const auto indexType : { DataType::Int32, DataType::Int64 })
+	{
+		cases.push_back(Case{
+		    .name = indexType == DataType::Int32 ? "get_rows_i32" : "get_rows_i64",
+		    .graph = BuildGetRowsGraph(indexType, "embedding"),
+		    .inputs = { TensorInputSpec{ .values = { 2.0, 0.0, 3.0, 1.0 }, .shape = { 2, 2 }, .dtype = indexType } },
+		});
+	}
 	cases.push_back(Case{
 	    .name = "pow_bridge_fallback",
 	    .graph = BuildSimplePowGraph(),

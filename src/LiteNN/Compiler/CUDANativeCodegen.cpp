@@ -635,6 +635,39 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildGetRowsF32(const CUDANativeGetRowsF32CodegenSpec& spec)
+			{
+				if ((spec.indexType != DataType::Int32 && spec.indexType != DataType::Int64) || spec.rowSize == 0)
+				{
+					throw std::runtime_error("CUDA native GetRows requires Int32/Int64 indices and a non-empty row");
+				}
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_, ptrType_, i32Type_ };
+				auto func =
+				    CreateKernelFunc(kernelModule.gpuModule, CUDANativeGetRowsF32KernelName(spec.indexType), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 3);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto table = blocks.entry->getArgument(1);
+				auto indices = blocks.entry->getArgument(2);
+				auto rowSize = EmitI32Constant(spec.rowSize);
+				auto indexSlot = EmitI32UDiv(blocks.index32, rowSize);
+				auto column = EmitI32URem(blocks.index32, rowSize);
+				auto indexType = GetCastScalarType(spec.indexType);
+				auto row = EmitLoad(EmitTypedGEP(indices, indexType, indexSlot), indexType);
+				if (spec.indexType == DataType::Int64)
+				{
+					row = builder_.create<mlir::arith::TruncIOp>(loc_, i32Type_, row).getResult();
+				}
+				auto tableOffset = EmitI32Add(EmitI32Mul(row, rowSize), column);
+				auto value = EmitLoadF32(EmitF32GEP(table, tableOffset));
+				EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 			mlir::OwningOpRef<mlir::ModuleOp> BuildConcatF32(const CUDANativeConcatF32CodegenSpec& spec)
 			{
 				if (spec.inputShapes.empty())
@@ -1697,6 +1730,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildSoftmaxF32(spec); });
 		}
 
+		std::string EmitGetRowsF32PTXFromMLIRNVPTX(const CUDANativeGetRowsF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildGetRowsF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -1809,6 +1848,15 @@ namespace LiteNN
 	std::string_view CUDANativeSoftmaxF32KernelName()
 	{
 		return "litenn_softmax_f32";
+	}
+
+	std::string CUDANativeGetRowsF32KernelName(DataType indexType)
+	{
+		if (indexType != DataType::Int32 && indexType != DataType::Int64)
+		{
+			throw std::runtime_error("CUDA native GetRows requires Int32 or Int64 indices");
+		}
+		return std::format("litenn_get_rows_f32_{}", indexType == DataType::Int32 ? "i32" : "i64");
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -1969,6 +2017,23 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeSoftmaxF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeGetRowsF32PTXFromMLIRNVPTX(const CUDANativeGetRowsF32CodegenSpec& spec)
+	{
+		return EmitGetRowsF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string> TryCUDANativeGetRowsF32PTXFromMLIRNVPTX(const CUDANativeGetRowsF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeGetRowsF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{

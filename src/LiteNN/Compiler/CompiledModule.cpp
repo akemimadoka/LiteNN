@@ -3606,6 +3606,16 @@ namespace
 		std::vector<std::size_t> shape;
 	};
 
+	struct CUDANativeGetRowsPlan
+	{
+		CUDANativeTensorRef table;
+		std::uint32_t indicesInputIndex{};
+		DataType indexType{ DataType::Int32 };
+		std::uint32_t rowSize{};
+		std::uint32_t indexCount{};
+		std::uint32_t outputElementCount{};
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -4668,6 +4678,128 @@ namespace
 		return CUDANativeSoftmaxPlan{ *inputIndex, *elementCount, softmax->axis, input.shape };
 	}
 
+	std::optional<CUDANativeGetRowsPlan> MatchCUDANativeGetRowsF32(const Graph& graph,
+	                                                               CUDANativeInstructionPayload& payload)
+	{
+		if (graph.SubgraphCount() != 1 || graph.Backward().has_value() || graph.ActivationSlotCount() != 0 ||
+		    graph.TapeSlotCount() != 0)
+		{
+			return std::nullopt;
+		}
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* getRows = std::get_if<GetRowsNode>(&resultEntry.node);
+		if (!getRows || resultEntry.outputInfos.size() != 1 || getRows->data.port != 0 ||
+		    getRows->data.node >= subgraph.NodeCount() || getRows->indices.port != 0 ||
+		    getRows->indices.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& tableEntry = subgraph.GetNodeEntry(getRows->data.node);
+		const auto& indicesEntry = subgraph.GetNodeEntry(getRows->indices.node);
+		if (tableEntry.outputInfos.size() != 1 || indicesEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto& tableInfo = tableEntry.outputInfos[0];
+		const auto& indicesInfo = indicesEntry.outputInfos[0];
+		const auto& outputInfo = resultEntry.outputInfos[0];
+		if (tableInfo.dtype != DataType::Float32 || outputInfo.dtype != DataType::Float32 || tableInfo.shape.empty() ||
+		    (indicesInfo.dtype != DataType::Int32 && indicesInfo.dtype != DataType::Int64))
+		{
+			return std::nullopt;
+		}
+		auto expectedShape = indicesInfo.shape;
+		expectedShape.insert(expectedShape.end(), tableInfo.shape.begin() + 1, tableInfo.shape.end());
+		if (expectedShape != outputInfo.shape)
+		{
+			return std::nullopt;
+		}
+		const auto tableElementCount = ShapeNumElementsU32(tableInfo.shape);
+		const auto indexCount = ShapeNumElementsU32(indicesInfo.shape);
+		const auto outputElementCount = ShapeNumElementsU32(outputInfo.shape);
+		if (!tableElementCount || !indexCount || !outputElementCount || tableInfo.shape[0] == 0 ||
+		    *tableElementCount % tableInfo.shape[0] != 0)
+		{
+			return std::nullopt;
+		}
+		const auto rowSize64 = static_cast<std::uint64_t>(*tableElementCount) / tableInfo.shape[0];
+		if (rowSize64 == 0 || rowSize64 > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeTensorRef tableRef;
+		if (const auto tableInputIndex = GetParamIndex(subgraph, getRows->data))
+		{
+			tableRef = { .kind = CUDANativeArgumentKind::InputTensor,
+				         .index = *tableInputIndex,
+				         .byteOffset = 0,
+				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+				         .dtype = tableInfo.dtype,
+				         .shape = tableInfo.shape };
+		}
+		else if (const auto* variable = std::get_if<VariableRefNode>(&tableEntry.node))
+		{
+			if (variable->variableIndex >= graph.VariableCount())
+			{
+				return std::nullopt;
+			}
+			const auto& graphVariable = graph.GetVariable(variable->variableIndex);
+			const auto& tensor = graphVariable->Data();
+			if (graphVariable->HasGradStorage() || tensor.DType() != tableInfo.dtype ||
+			    tensor.Shape() != tableInfo.shape)
+			{
+				return std::nullopt;
+			}
+			tableRef = { .kind = CUDANativeArgumentKind::ConstantTensor,
+				         .index = 0,
+				         .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
+				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+				         .dtype = tableInfo.dtype,
+				         .shape = tableInfo.shape };
+		}
+		else if (const auto* constant = std::get_if<ConstantNode>(&tableEntry.node))
+		{
+			if (constant->value.DType() != tableInfo.dtype || constant->value.Shape() != tableInfo.shape)
+			{
+				return std::nullopt;
+			}
+			tableRef = { .kind = CUDANativeArgumentKind::ConstantTensor,
+				         .index = 0,
+				         .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
+				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+				         .dtype = tableInfo.dtype,
+				         .shape = tableInfo.shape };
+		}
+		else
+		{
+			return std::nullopt;
+		}
+
+		const auto indicesInputIndex = GetParamIndex(subgraph, getRows->indices);
+		if (!indicesInputIndex)
+		{
+			return std::nullopt;
+		}
+		return CUDANativeGetRowsPlan{ .table = std::move(tableRef),
+			                          .indicesInputIndex = *indicesInputIndex,
+			                          .indexType = indicesInfo.dtype,
+			                          .rowSize = static_cast<std::uint32_t>(rowSize64),
+			                          .indexCount = *indexCount,
+			                          .outputElementCount = *outputElementCount };
+	}
+
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
 	{
 		if (!IsCUDANativeSingleForwardGraph(graph))
@@ -5702,6 +5834,67 @@ namespace
 		          .index = plan->inputIndex,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+			                            std::move(outputSpecs) };
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeGetRowsF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.target = CUDANativeNVPTXTargetChip();
+		const auto plan = MatchCUDANativeGetRowsF32(graph, payload);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeGetRowsF32PTXFromMLIRNVPTX({
+		    .indexType = plan->indexType,
+		    .rowSize = plan->rowSize,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::GetRowsF32);
+		if (!payload.constantData.empty())
+		{
+			payload.featureSet.AddFeature(CUDANativeFeature::ConstantTensor);
+		}
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->outputElementCount);
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = CUDANativeGetRowsF32KernelName(plan->indexType),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		        ToCUDANativeArgument(plan->table),
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->indicesInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->indexCount) * ElementByteSize(plan->indexType) },
 		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
 		    },
 		});
@@ -13592,6 +13785,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeSoftmaxF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeGetRowsF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),
