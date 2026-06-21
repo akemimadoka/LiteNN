@@ -1293,6 +1293,12 @@ namespace LiteNN::Serialization
 			{
 				return GetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind) };
 			}
+			if (op.kind == "ScatterNode")
+			{
+				return ScatterNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
+					                RequireNodeInput(inputs, 2, op.kind), PlanAttributeSize(op, "axis"),
+					                PlanAttributeEnum<ScatterMode>(op, "mode") };
+			}
 			if (op.kind == "NormalizationNode")
 			{
 				const auto hasScale = PlanAttributeBool(op, "hasScale");

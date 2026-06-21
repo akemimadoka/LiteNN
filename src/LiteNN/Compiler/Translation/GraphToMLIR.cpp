@@ -1489,11 +1489,56 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const ScatterNode&, std::span<const OutputInfo>,
-			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const ScatterNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error("GraphToMLIR does not support ScatterNode yet; use the interpreter path");
+				const auto indicesInfo = sg.GetOutputInfo(node.indices);
+				if (indicesInfo.shape != std::vector<std::size_t>{ 1 })
+				{
+					throw std::runtime_error("GraphToMLIR currently supports ScatterNode only for one index");
+				}
+				auto loc = builder_.getUnknownLoc();
+				auto data = getVal(valueMap, node.data);
+				auto indices = getVal(valueMap, node.indices);
+				auto updates = getVal(valueMap, node.updates);
+				auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				const auto rank = resultType.getRank();
+				auto identity = AffineMap::getMultiDimIdentityMap(rank, &ctx_);
+				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+				SmallVector<utils::IteratorType> iterTypes(rank, utils::IteratorType::parallel);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType }, ValueRange{ data }, ValueRange{ empty },
+				    SmallVector<AffineMap>{ identity, identity }, iterTypes,
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto zero = b.create<arith::ConstantIndexOp>(l, 0).getResult();
+					    auto scatterIndex = b.create<tensor::ExtractOp>(l, indices, ValueRange{ zero }).getResult();
+					    if (!isa<IndexType>(scatterIndex.getType()))
+					    {
+						    scatterIndex = b.create<arith::IndexCastOp>(l, b.getIndexType(), scatterIndex).getResult();
+					    }
+					    auto axisIndex = b.create<linalg::IndexOp>(l, static_cast<int64_t>(node.axis)).getResult();
+					    auto matches = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, axisIndex, scatterIndex);
+					    SmallVector<Value> updateCoords;
+					    updateCoords.reserve(rank);
+					    for (int64_t dim = 0; dim < rank; ++dim)
+					    {
+						    updateCoords.push_back(static_cast<std::size_t>(dim) == node.axis
+						                               ? zero
+						                               : b.create<linalg::IndexOp>(l, dim).getResult());
+					    }
+					    auto update = b.create<tensor::ExtractOp>(l, updates, updateCoords).getResult();
+					    Value replacement = update;
+					    if (node.mode == ScatterMode::Add)
+					    {
+						    replacement = isa<FloatType>(update.getType())
+						                      ? b.create<arith::AddFOp>(l, args[0], update).getResult()
+						                      : b.create<arith::AddIOp>(l, args[0], update).getResult();
+					    }
+					    b.create<linalg::YieldOp>(
+					        l, b.create<arith::SelectOp>(l, matches, replacement, args[0]).getResult());
+				    });
+				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId, const ScanNode&, std::span<const OutputInfo>,
