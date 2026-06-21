@@ -3,7 +3,10 @@
 
 #include <LiteNN/Layer/LayerUtils.h>
 
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -277,6 +280,59 @@ namespace LiteNN::GGUF
 			return { subgraph.AddNode(ConcatNode{ { rotated, tail }, 1 }, { info }), 0 };
 		}
 
+		NodeOutput AddLLaMARoPEAtPositions(Subgraph& subgraph, NodeOutput input, NodeOutput positions,
+		                                   const LLaMAHyperparameters& hyperparameters)
+		{
+			const auto info = subgraph.GetOutputInfo(input);
+			if (info.shape.size() != 2 || hyperparameters.ropeDimensionCount > info.shape[1] ||
+			    (hyperparameters.ropeDimensionCount % 2) != 0)
+			{
+				throw std::runtime_error(
+				    "Dynamic LLaMA RoPE requires a 2D input and a valid even rope.dimension_count");
+			}
+			const auto rotatedPrefix =
+			    hyperparameters.ropeDimensionCount == info.shape[1]
+			        ? input
+			        : NodeOutput{
+				          subgraph.AddNode(
+				              SliceNode{ input, 1, 0, hyperparameters.ropeDimensionCount },
+				              { OutputInfo{ info.dtype, { info.shape[0], hyperparameters.ropeDimensionCount } } }),
+				          0
+			          };
+			const auto rotated =
+			    Layer::AddRoPEAtPositions(subgraph, rotatedPrefix, positions, hyperparameters.ropeFrequencyBase,
+			                              hyperparameters.ropeFrequencyScale);
+			if (hyperparameters.ropeDimensionCount == info.shape[1])
+			{
+				return rotated;
+			}
+			const auto tailWidth = info.shape[1] - hyperparameters.ropeDimensionCount;
+			const auto tail = NodeOutput{
+				subgraph.AddNode(SliceNode{ input, 1, hyperparameters.ropeDimensionCount, tailWidth },
+				                 { OutputInfo{ info.dtype, { info.shape[0], tailWidth } } }),
+				0,
+			};
+			return { subgraph.AddNode(ConcatNode{ { rotated, tail }, 1 }, { info }), 0 };
+		}
+
+		NodeOutput AddActiveCacheMask(Subgraph& subgraph, NodeOutput currentPosition, std::size_t maxCacheLength,
+		                              DataType dtype)
+		{
+			std::vector<double> positions(maxCacheLength);
+			std::iota(positions.begin(), positions.end(), 0.0);
+			const auto positionTable = Layer::Detail::AddConstant(
+			    subgraph, Tensor<CPU>(std::span<const double>(positions), { 1, maxCacheLength }, DataType::Int64));
+			const auto inactive =
+			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Greater, { positionTable, 0 }, currentPosition },
+			                     { OutputInfo{ DataType::Bool, { 1, maxCacheLength } } });
+			const auto typedMask =
+			    subgraph.AddNode(CastNode{ { inactive, 0 }, dtype }, { OutputInfo{ dtype, { 1, maxCacheLength } } });
+			const auto negative = Layer::Detail::AddConstant(subgraph, Layer::Detail::MakeScalarTensor(dtype, -1.0e9));
+			return { subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { typedMask, 0 }, { negative, 0 } },
+				                      { OutputInfo{ dtype, { 1, maxCacheLength } } }),
+				     0 };
+		}
+
 		NodeOutput AddSingleHeadAttention(Subgraph& subgraph, NodeOutput queries, NodeOutput keys, NodeOutput values,
 		                                  const LLaMAHyperparameters& hyperparameters, std::size_t positionOffset)
 		{
@@ -330,6 +386,27 @@ namespace LiteNN::GGUF
 			options.causal = true;
 			options.keyPositionOffset = 0;
 			options.queryPositionOffset = queryPositionOffset;
+			return Layer::AddFlashAttnExt(subgraph, rotatedQueries, rotatedKeys, values, options);
+		}
+
+		NodeOutput AddSingleHeadAttentionAtPosition(Subgraph& subgraph, NodeOutput queries, NodeOutput rotatedKeys,
+		                                            NodeOutput values, NodeOutput currentPosition,
+		                                            NodeOutput activeMask, const LLaMAHyperparameters& hyperparameters)
+		{
+			ValidateSupportedRoPE(hyperparameters, "dynamic decode");
+			const auto queryInfo = subgraph.GetOutputInfo(queries);
+			const auto keyInfo = subgraph.GetOutputInfo(rotatedKeys);
+			const auto valueInfo = subgraph.GetOutputInfo(values);
+			if (queryInfo.shape.size() != 2 || queryInfo.shape[0] != 1 || keyInfo.shape.size() != 2 ||
+			    keyInfo.shape[1] != queryInfo.shape[1] || valueInfo.shape.size() != 2 ||
+			    valueInfo.shape[0] != keyInfo.shape[0])
+			{
+				throw std::runtime_error("Dynamic decode attention received incompatible query/key/value shapes");
+			}
+			const auto rotatedQueries = AddLLaMARoPEAtPositions(subgraph, queries, currentPosition, hyperparameters);
+			Layer::FlashAttnExtOptions options;
+			options.scale = 1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1]));
+			options.mask = activeMask;
 			return Layer::AddFlashAttnExt(subgraph, rotatedQueries, rotatedKeys, values, options);
 		}
 
@@ -466,8 +543,11 @@ namespace LiteNN::GGUF
 		}
 		const auto vocabSize = vocabMajor ? embeddingShape[0] : embeddingShape[1];
 		const auto headDim = hyperparameters.HeadDimension();
-		const std::vector<std::size_t> cacheShape{ options.decodePastLength, hyperparameters.attentionHeadCountKV,
-			                                       headDim };
+		const std::vector<std::size_t> cacheShape{
+			options.dynamicDecodePosition ? maxCacheLength : options.decodePastLength,
+			hyperparameters.attentionHeadCountKV,
+			headDim,
+		};
 		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
 		const std::vector<std::size_t> stateShape{ 2, maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
 		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
@@ -483,6 +563,7 @@ namespace LiteNN::GGUF
 			.pastLength = 0,
 			.maxCacheLength = maxCacheLength,
 			.positionOffset = 0,
+			.dynamicPosition = false,
 			.inputNames = { "token_ids" },
 			.outputNames = { "logits" },
 			.kvCaches = {},
@@ -495,8 +576,11 @@ namespace LiteNN::GGUF
 			.pastLength = options.decodePastLength,
 			.maxCacheLength = maxCacheLength,
 			.positionOffset = options.decodePastLength,
-			.inputNames = { "token_ids" },
-			.outputNames = { "logits" },
+			.dynamicPosition = options.dynamicDecodePosition,
+			.inputNames = options.dynamicDecodePosition ? std::vector<std::string>{ "token_ids", "current_position" }
+			                                            : std::vector<std::string>{ "token_ids" },
+			.outputNames = options.dynamicDecodePosition ? std::vector<std::string>{ "logits", "next_position" }
+			                                             : std::vector<std::string>{ "logits" },
 			.kvCaches = {},
 		};
 		decode.kvCaches.reserve(hyperparameters.blockCount);
@@ -528,9 +612,10 @@ namespace LiteNN::GGUF
 			    .tokenByteStride = tokenByteStride,
 			});
 			const auto stateName = decode.kvCaches.back().stateBinding.name;
-			const auto keyInput = 1 + blockIndex * 2;
+			const auto valueBase = options.dynamicDecodePosition ? 2uz : 1uz;
+			const auto keyInput = valueBase + blockIndex * 2;
 			const auto valueInput = keyInput + 1;
-			const auto keyOutput = 1 + blockIndex * 2;
+			const auto keyOutput = valueBase + blockIndex * 2;
 			const auto valueOutput = keyOutput + 1;
 			decode.stateValueBindings.push_back(
 			    { stateName, 0, Runtime::RuntimeStateValueKind::FunctionInput, keyInput, 0 });
@@ -552,6 +637,13 @@ namespace LiteNN::GGUF
 		    "decode.position", Runtime::RuntimeStateKind::KVCache, "current-position",
 		    TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{ 1 } }), BufferMutability::Mutable,
 		    { "read", "write", "increment" });
+		if (options.dynamicDecodePosition)
+		{
+			decode.stateValueBindings.push_back(
+			    { decodeStateABI.currentPosition->name, 0, Runtime::RuntimeStateValueKind::FunctionInput, 1, 0 });
+			decode.stateValueBindings.push_back(
+			    { decodeStateABI.currentPosition->name, 0, Runtime::RuntimeStateValueKind::FunctionOutput, 1, 0 });
+		}
 
 		std::vector<LLaMATensorLayoutRecord> tensorLayouts{
 			{
@@ -822,6 +914,108 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	BlockDecodeResult AddLLaMADecoderBlockDecodeCapacity(Subgraph& subgraph, const LLaMADecoderBlock& block,
+	                                                     const LLaMAHyperparameters& hyperparameters,
+	                                                     NodeOutput hiddenState, Layer::KVCachePair cache,
+	                                                     NodeOutput currentPosition, std::size_t maxCacheLength)
+	{
+		const auto hiddenInfo = subgraph.GetOutputInfo(hiddenState);
+		const auto positionInfo = subgraph.GetOutputInfo(currentPosition);
+		const auto headDim = hyperparameters.HeadDimension();
+		const std::vector<std::size_t> cacheShape{ maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
+		if (hiddenInfo.shape != std::vector<std::size_t>{ 1, hyperparameters.embeddingLength } ||
+		    positionInfo.dtype != DataType::Int64 || positionInfo.shape != std::vector<std::size_t>{ 1 } ||
+		    subgraph.GetOutputInfo(cache.keys).shape != cacheShape ||
+		    subgraph.GetOutputInfo(cache.values).shape != cacheShape)
+		{
+			throw std::runtime_error(
+			    "Capacity decode requires one token, Int64 position[1], and full-capacity KV tensors");
+		}
+
+		const auto normalizedAttentionInput = Layer::AddRMSNorm(subgraph, block.attentionNorm, hiddenState);
+		const auto queries = Layer::AddLinear(subgraph, block.queryProjection, normalizedAttentionInput);
+		const auto keys = Layer::AddLinear(subgraph, block.keyProjection, normalizedAttentionInput);
+		const auto values = Layer::AddLinear(subgraph, block.valueProjection, normalizedAttentionInput);
+		const auto keys3D = Reshape3D(subgraph, keys, 1, hyperparameters.attentionHeadCountKV, headDim);
+		const auto values3D = Reshape3D(subgraph, values, 1, hyperparameters.attentionHeadCountKV, headDim);
+
+		std::vector<NodeOutput> rotatedKeyHeads;
+		rotatedKeyHeads.reserve(hyperparameters.attentionHeadCountKV);
+		for (std::size_t kvHeadIndex = 0; kvHeadIndex < hyperparameters.attentionHeadCountKV; ++kvHeadIndex)
+		{
+			const auto keyHead3D = NodeOutput{
+				subgraph.AddNode(SliceNode{ keys3D, 1, kvHeadIndex, 1 },
+				                 { OutputInfo{ hiddenInfo.dtype, { 1, 1, headDim } } }),
+				0,
+			};
+			const auto keyHead2D = Reshape2D(subgraph, keyHead3D, 1, headDim);
+			const auto rotatedKey = AddLLaMARoPEAtPositions(subgraph, keyHead2D, currentPosition, hyperparameters);
+			rotatedKeyHeads.push_back(Reshape3D(subgraph, rotatedKey, 1, 1, headDim));
+		}
+		NodeOutput rotatedKeys3D = rotatedKeyHeads.front();
+		if (rotatedKeyHeads.size() > 1)
+		{
+			rotatedKeys3D = { subgraph.AddNode(ConcatNode{ rotatedKeyHeads, 1 },
+				                               { OutputInfo{ hiddenInfo.dtype,
+				                                             { 1, hyperparameters.attentionHeadCountKV, headDim } } }),
+				              0 };
+		}
+		const Layer::KVCachePair updatedCache{
+			Layer::AddScatter(subgraph, cache.keys, currentPosition, rotatedKeys3D, 0),
+			Layer::AddScatter(subgraph, cache.values, currentPosition, values3D, 0),
+		};
+		const auto activeMask = AddActiveCacheMask(subgraph, currentPosition, maxCacheLength, hiddenInfo.dtype);
+
+		std::vector<NodeOutput> headContexts;
+		headContexts.reserve(hyperparameters.attentionHeadCount);
+		const auto queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead();
+		for (std::size_t headIndex = 0; headIndex < hyperparameters.attentionHeadCount; ++headIndex)
+		{
+			const auto kvHeadIndex = headIndex / queryGroupsPerKVHead;
+			const auto queryHead = NodeOutput{
+				subgraph.AddNode(SliceNode{ queries, 1, headIndex * headDim, headDim },
+				                 { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } }),
+				0,
+			};
+			const auto keyHead3D = NodeOutput{
+				subgraph.AddNode(SliceNode{ updatedCache.keys, 1, kvHeadIndex, 1 },
+				                 { OutputInfo{ hiddenInfo.dtype, { maxCacheLength, 1, headDim } } }),
+				0,
+			};
+			const auto valueHead3D = NodeOutput{
+				subgraph.AddNode(SliceNode{ updatedCache.values, 1, kvHeadIndex, 1 },
+				                 { OutputInfo{ hiddenInfo.dtype, { maxCacheLength, 1, headDim } } }),
+				0,
+			};
+			headContexts.push_back(AddSingleHeadAttentionAtPosition(
+			    subgraph, queryHead, Reshape2D(subgraph, keyHead3D, maxCacheLength, headDim),
+			    Reshape2D(subgraph, valueHead3D, maxCacheLength, headDim), currentPosition, activeMask,
+			    hyperparameters));
+		}
+
+		NodeOutput mergedContext = headContexts.front();
+		if (headContexts.size() > 1)
+		{
+			mergedContext = { subgraph.AddNode(
+				                  ConcatNode{ headContexts, 1 },
+				                  { OutputInfo{ hiddenInfo.dtype, { 1, hyperparameters.embeddingLength } } }),
+				              0 };
+		}
+		const auto attentionOutput = Layer::AddLinear(subgraph, block.outputProjection, mergedContext);
+		const auto attentionResidual = NodeOutput{
+			subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, hiddenState, attentionOutput }, { hiddenInfo }),
+			0,
+		};
+		const auto normalizedFeedForwardInput = Layer::AddRMSNorm(subgraph, block.feedForwardNorm, attentionResidual);
+		const auto feedForwardOutput = Layer::AddSwiGLUMLP(subgraph, block.mlp, normalizedFeedForwardInput);
+		return {
+			.hiddenState = { subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, attentionResidual, feedForwardOutput },
+			                                  { hiddenInfo }),
+			                 0 },
+			.updatedCache = updatedCache,
+		};
+	}
+
 	SubgraphId BuildLLaMADecoderBlock(Graph& graph, const LLaMADecoderBlock& block,
 	                                  const LLaMAHyperparameters& hyperparameters, std::size_t sequenceLength,
 	                                  std::size_t positionOffset)
@@ -993,6 +1187,34 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	LLaMADecodeResult AddLLaMACausalLMDecodeCapacity(Subgraph& subgraph, const LLaMACausalLM& model,
+	                                                 const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
+	                                                 NodeOutput currentPosition,
+	                                                 std::span<const Layer::KVCachePair> caches,
+	                                                 std::size_t maxCacheLength)
+	{
+		if (caches.size() != model.blocks.size())
+		{
+			throw std::runtime_error("Capacity decode requires one full KV cache pair per decoder block");
+		}
+		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
+		std::vector<Layer::KVCachePair> updatedCaches;
+		updatedCaches.reserve(model.blocks.size());
+		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
+		{
+			auto blockResult =
+			    AddLLaMADecoderBlockDecodeCapacity(subgraph, model.blocks[blockIndex], hyperparameters, hiddenState,
+			                                       caches[blockIndex], currentPosition, maxCacheLength);
+			hiddenState = blockResult.hiddenState;
+			updatedCaches.push_back(blockResult.updatedCache);
+		}
+		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
+		return {
+			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
+			.updatedCaches = std::move(updatedCaches),
+		};
+	}
+
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
 	                              std::size_t sequenceLength, std::size_t positionOffset)
 	{
@@ -1064,12 +1286,71 @@ namespace LiteNN::GGUF
 		graph.SetOutputNames(std::move(outputNames));
 		return graph;
 	}
+
+	Graph LowerLLaMACausalLMDecodeCapacity(const Graph& archive, std::size_t maxCacheLength,
+	                                       const LLaMALoweringOptions& options)
+	{
+		if (maxCacheLength == 0)
+		{
+			throw std::runtime_error("Capacity LLaMA decode requires maxCacheLength > 0");
+		}
+		auto graph = Graph{};
+		graph.SetMetadata(CopyMetadata(archive));
+		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
+		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
+		const auto headDim = hyperparameters.HeadDimension();
+
+		Subgraph subgraph;
+		const auto tokenIds = subgraph.AddParam(DataType::Int32, { 1 });
+		const auto currentPosition = subgraph.AddParam(DataType::Int64, { 1 });
+		std::vector<Layer::KVCachePair> caches;
+		caches.reserve(model.blocks.size());
+		std::vector<std::string> inputNames{ "token_ids", "current_position" };
+		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
+		{
+			const std::vector<std::size_t> cacheShape{ maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
+			const auto keys = subgraph.AddParam(model.dtype, cacheShape);
+			const auto values = subgraph.AddParam(model.dtype, cacheShape);
+			caches.push_back({ { keys, 0 }, { values, 0 } });
+			inputNames.push_back(std::format("past_key_{}", blockIndex));
+			inputNames.push_back(std::format("past_value_{}", blockIndex));
+		}
+
+		const auto result = AddLLaMACausalLMDecodeCapacity(subgraph, model, hyperparameters, { tokenIds, 0 },
+		                                                   { currentPosition, 0 }, caches, maxCacheLength);
+		const std::array<double, 1> one{ 1.0 };
+		const auto oneValue =
+		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
+		const auto nextPosition =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { currentPosition, 0 }, { oneValue, 0 } },
+		                     { OutputInfo{ DataType::Int64, { 1 } } });
+		std::vector<NodeOutput> outputs{ result.hiddenState, NodeOutput{ nextPosition, 0 } };
+		std::vector<std::string> outputNames{ "logits", "next_position" };
+		for (std::size_t blockIndex = 0; blockIndex < result.updatedCaches.size(); ++blockIndex)
+		{
+			outputs.push_back(result.updatedCaches[blockIndex].keys);
+			outputs.push_back(result.updatedCaches[blockIndex].values);
+			outputNames.push_back(std::format("updated_key_{}", blockIndex));
+			outputNames.push_back(std::format("updated_value_{}", blockIndex));
+		}
+		subgraph.SetResults(std::move(outputs));
+		const auto forward = graph.AddSubgraph(std::move(subgraph));
+		graph.SetForward(forward);
+		graph.SetInputNames(std::move(inputNames));
+		graph.SetOutputNames(std::move(outputNames));
+		return graph;
+	}
+
 	Runtime::RuntimeSchedule BuildLLaMADecodeRuntimeSchedule(const Graph& archive,
 	                                                         const LLaMAArtifactPlanningOptions& options)
 	{
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
-		auto graph = LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
-		                                      { .preserveQuantizedWeights = options.preserveQuantizedWeights });
+		auto graph =
+		    options.dynamicDecodePosition
+		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
+		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights })
+		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
+		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
 		PromoteConstantsToVariables(graph);
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
 		auto states = artifacts.decodeStateABI.kvCaches;

@@ -80,6 +80,7 @@ namespace LiteNN::GGUF
 		std::size_t pastLength{};
 		std::size_t maxCacheLength{};
 		std::size_t positionOffset{};
+		bool dynamicPosition{};
 		std::vector<std::string> inputNames;
 		std::vector<std::string> outputNames;
 		std::vector<LLaMAKVCacheBinding> kvCaches;
@@ -112,6 +113,8 @@ namespace LiteNN::GGUF
 		std::size_t decodePastLength{};
 		std::size_t maxCacheLength{};
 		bool preserveQuantizedWeights{};
+		/// Build a max-capacity decode graph whose current position is a runtime state value.
+		bool dynamicDecodePosition{};
 	};
 
 	struct LLaMALoweringOptions
@@ -151,6 +154,9 @@ namespace LiteNN::GGUF
 	                         const LLaMALoweringOptions& options = {});
 	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
 	                               std::size_t positionOffset, const LLaMALoweringOptions& options = {});
+	/// Lowers one-token decode with full-capacity caches and a runtime Int64 position input.
+	Graph LowerLLaMACausalLMDecodeCapacity(const Graph& archive, std::size_t maxCacheLength,
+	                                       const LLaMALoweringOptions& options = {});
 } // namespace LiteNN::GGUF
 
 #endif
