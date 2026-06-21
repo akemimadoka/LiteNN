@@ -1239,6 +1239,29 @@ namespace LiteNN::GGUF
 		return graph;
 	}
 
+	Graph LowerLLaMACausalLMPrefillCapacity(const Graph& archive, std::size_t maxSequenceLength,
+	                                        const LLaMALoweringOptions& options)
+	{
+		if (maxSequenceLength == 0)
+		{
+			throw std::runtime_error("LLaMA capacity prefill requires maxSequenceLength > 0");
+		}
+		auto graph = Graph{};
+		graph.SetMetadata(CopyMetadata(archive));
+		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
+		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
+
+		Subgraph subgraph;
+		const auto tokenIds = subgraph.AddParam(DataType::Int32, { maxSequenceLength });
+		const auto logits = AddLLaMACausalLM(subgraph, model, hyperparameters, { tokenIds, 0 }, 0);
+		subgraph.SetResults({ logits });
+		const auto forward = graph.AddSubgraph(std::move(subgraph));
+		graph.SetForward(forward);
+		graph.SetInputNames({ "token_ids" });
+		graph.SetOutputNames({ "logits" });
+		return graph;
+	}
+
 	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
 	                               std::size_t positionOffset, const LLaMALoweringOptions& options)
 	{

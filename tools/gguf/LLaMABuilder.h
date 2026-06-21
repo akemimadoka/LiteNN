@@ -113,6 +113,8 @@ namespace LiteNN::GGUF
 		std::size_t decodePastLength{};
 		std::size_t maxCacheLength{};
 		bool preserveQuantizedWeights{};
+		/// Build a max-capacity prefill graph; the caller tracks prompt length and selects the final row.
+		bool dynamicPrefillLength{};
 		/// Build a max-capacity decode graph whose current position is a runtime state value.
 		bool dynamicDecodePosition{};
 	};
@@ -152,6 +154,9 @@ namespace LiteNN::GGUF
 	                              std::size_t sequenceLength, std::size_t positionOffset = 0);
 	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset = 0,
 	                         const LLaMALoweringOptions& options = {});
+	/// Lowers a max-capacity prefill graph; callers select the final valid logits row from the returned full logits.
+	Graph LowerLLaMACausalLMPrefillCapacity(const Graph& archive, std::size_t maxSequenceLength,
+	                                        const LLaMALoweringOptions& options = {});
 	Graph LowerLLaMACausalLMDecode(const Graph& archive, std::size_t sequenceLength, std::size_t pastLength,
 	                               std::size_t positionOffset, const LLaMALoweringOptions& options = {});
 	/// Lowers one-token decode with full-capacity caches and a runtime Int64 position input.

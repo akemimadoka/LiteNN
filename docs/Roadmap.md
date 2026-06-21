@@ -2460,8 +2460,13 @@ placement and fallback policy.
       `next_position`, and aliases all mutable state through the package ABI. The Interpreter decode loop now builds one
       capacity plan instead of one static graph per token; CPU AOT parity, two-position reuse, and package roundtrip are
       covered by `GGUFImporterTest`.
-- [ ] Support variable prompt length in executable prefill lowering without recompiling for each prompt shape; this needs
-      a max-capacity token/mask contract and dynamic selection of the final valid logits/cache extent.
+- [x] Support variable prompt length in executable prefill lowering without recompiling for each prompt shape.
+      `LowerLLaMACausalLMPrefillCapacity` accepts max-capacity padded `token_ids` and returns full max-capacity logits;
+      the caller/runtime schedule keeps the prompt length and selects `prompt_length - 1` on the host side for the final
+      valid logits. Interpreter reuse and CPU AOT compile/load signature tests cover the capacity artifact contract.
+- [ ] Finish CPU AOT execution for multi-token LLaMA prefill graphs. Capacity decode AOT execution is covered, but
+      running the max-capacity prefill artifact currently exits inside the generated/JIT path; dynamic final-row
+      selection inside MLIR should wait until this ABI/lifetime gap is fixed.
 - [x] Lower single-index `ScatterNode` through MLIR for race-free capacity-cache updates, while continuing to reject
       unsupported multi-index compiled Scatter forms explicitly.
 - [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
@@ -2482,9 +2487,11 @@ placement and fallback policy.
 - [x] Execute affine `QuantizedMatMulNode` directly in CPU AOT without materializing a full Float32 weight tensor.
       The MLIR lowering now keeps Int8/UInt8 weight storage in the reduction loop and broadcasts
       per-tensor/per-axis/grouped scale/zero-point metadata as small constants.
-- [ ] Execute packed-nibble/GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full
-      Float32 weight tensor. Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are
-      complete; native compiled block-format lowering remains open.
+- [x] Execute packed-nibble Int4/UInt4 `QuantizedMatMulNode` directly in CPU AOT without materializing a full Float32
+      weight tensor. The MLIR lowering decodes nibbles from UInt8 payload bytes inside the reduction loop.
+- [ ] Execute GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight
+      tensor. Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are complete; native
+      compiled GGML block-format lowering remains open.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
       and related block rows without materializing the complete Float32 weight.
@@ -2495,8 +2502,8 @@ placement and fallback policy.
       diagnostics for large models.
 - [ ] Add CUDA native quantized projection kernels for `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_K`, including `Q4_K_M` mixed-model
       reporting.
-- [x] Add CPU AOT parity tests for affine quantized projection lowering and an explicit diagnostic test for unsupported
-      packed-nibble compiled lowering.
+- [x] Add CPU AOT parity tests for affine and packed-nibble quantized projection lowering, plus an explicit diagnostic
+      test for unsupported FP4 packed MatMul lowering.
 - [ ] Add parity tests comparing native GGML/CUDA quantized projection with ggml dequantize-plus-float reference.
 - [x] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
 

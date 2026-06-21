@@ -98,6 +98,17 @@ namespace
 		}
 	}
 
+	void ExpectValuesNear(std::span<const float> actual, std::span<const float> expected,
+	                      GGUF::LLaMAParityTolerance tolerance)
+	{
+		ASSERT_EQ(actual.size(), expected.size());
+		for (std::size_t i = 0; i < expected.size(); ++i)
+		{
+			const auto allowed = tolerance.absolute + tolerance.relative * std::fabs(expected[i]);
+			EXPECT_LE(std::fabs(actual[i] - expected[i]), allowed) << "at element " << i;
+		}
+	}
+
 	Tensor<CPU> MakeInt32Tensor(std::initializer_list<std::int32_t> values, std::initializer_list<std::size_t> shape)
 	{
 		CPU device;
@@ -1486,6 +1497,49 @@ TEST(GGUFLLaMACausalLM, ReusesCapacityDecodeGraphAcrossRuntimePositions)
 	ExpectTensorNear(secondOutputs[0], fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
 }
 
+TEST(GGUFLLaMACausalLM, ReusesCapacityPrefillGraphAcrossPromptLengths)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto capacityPrefill = GGUF::LowerLLaMACausalLMPrefillCapacity(archive, 4);
+	const auto fullOne = GGUF::LowerLLaMACausalLM(archive, 1);
+	const auto fullTwo = GGUF::LowerLLaMACausalLM(archive, 2);
+	const auto capacityPlan = Detail::BuildExecutablePlanFromGraph(capacityPrefill);
+	Runtime::Interpreter<CPU> interpreter;
+
+	std::array<Tensor<CPU>, 1> oneInputs = {
+		MakeInt32Tensor({ 2, 0, 0, 0 }, { 4 }),
+	};
+	const auto oneOutputs = interpreter.RunForward(capacityPlan, oneInputs);
+	ASSERT_EQ(oneOutputs.size(), 1u);
+	const auto fullOneOutputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(fullOne),
+	                                                   std::array{ MakeInt32Tensor({ 2 }, { 1 }) });
+	const std::array<float, 3> capacityFirstLogit = {
+		ReadFloat(oneOutputs[0], 0),
+		ReadFloat(oneOutputs[0], 1),
+		ReadFloat(oneOutputs[0], 2),
+	};
+	ExpectTensorNear(fullOneOutputs[0], capacityFirstLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+
+	std::array<Tensor<CPU>, 1> twoInputs = {
+		MakeInt32Tensor({ 0, 1, 0, 0 }, { 4 }),
+	};
+	const auto twoOutputs = interpreter.RunForward(capacityPlan, twoInputs);
+	ASSERT_EQ(twoOutputs.size(), 1u);
+	const auto fullTwoOutputs = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(fullTwo),
+	                                                   std::array{ MakeInt32Tensor({ 0, 1 }, { 2 }) });
+	const std::array<float, 3> fullSecondLogit = {
+		ReadFloat(fullTwoOutputs[0], 3),
+		ReadFloat(fullTwoOutputs[0], 4),
+		ReadFloat(fullTwoOutputs[0], 5),
+	};
+	const std::array<float, 3> capacitySecondLogit = {
+		ReadFloat(twoOutputs[0], 3),
+		ReadFloat(twoOutputs[0], 4),
+		ReadFloat(twoOutputs[0], 5),
+	};
+	ExpectValuesNear(capacitySecondLogit, fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
+}
+
 TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBindings)
 {
 	const auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(
@@ -1559,6 +1613,21 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntime
 	EXPECT_EQ(static_cast<const std::int64_t*>(actual[1].UnsafeRawData())[0], 1);
 	ExpectTensorNear(actual[2], expected[2], tolerance);
 	ExpectTensorNear(actual[3], expected[3], tolerance);
+}
+
+TEST(GGUFLLaMACausalLM, CompilesCapacityPrefillOnceAndExposesMaxCapacityLogits)
+{
+	const auto lowered = GGUF::LowerLLaMACausalLMPrefillCapacity(BuildTinyLLaMAArchive(), 4);
+	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
+	auto artifact = Compiler<CPU>::CompileArtifact(plan);
+	ASSERT_EQ(artifact.InputSpecs().size(), 1u);
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	EXPECT_EQ(artifact.InputSpecs()[0].name, "token_ids");
+	EXPECT_EQ(artifact.OutputSpecs()[0].name, "logits");
+	EXPECT_EQ(artifact.OutputSpecs()[0].type.StaticShape(), std::vector<std::size_t>({ 4, 3 }));
+	auto compiled = artifact.Load();
+	ASSERT_EQ(compiled.InputSpecs().size(), 1u);
+	ASSERT_EQ(compiled.OutputSpecs().size(), 1u);
 }
 
 TEST(GGUFLLaMACausalLM, CompilesTwoTokenFullGraphToCPUArtifactAndLoads)

@@ -1120,18 +1120,32 @@ namespace litenn
 					throw std::runtime_error(
 					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently requires non-transposed rhs");
 				}
-				if (node.params.scheme != QuantizationScheme::Affine ||
-				    (node.params.granularity != QuantizationGranularity::PerTensor &&
-				     node.params.granularity != QuantizationGranularity::PerAxis &&
-				     node.params.granularity != QuantizationGranularity::Grouped))
+				const auto isAffineQuantizedMatMul = node.params.scheme == QuantizationScheme::Affine;
+				const auto isPackedNibbleQuantizedMatMul = node.params.scheme == QuantizationScheme::Block &&
+				                                           IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat);
+				if ((!isAffineQuantizedMatMul || (node.params.granularity != QuantizationGranularity::PerTensor &&
+				                                  node.params.granularity != QuantizationGranularity::PerAxis &&
+				                                  node.params.granularity != QuantizationGranularity::Grouped)) &&
+				    !isPackedNibbleQuantizedMatMul)
 				{
 					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports "
-					                         "affine per-tensor/per-axis/grouped weights only");
+					                         "affine per-tensor/per-axis/grouped and packed-nibble weights only");
 				}
-				if (node.params.storageType != DataType::Int8 && node.params.storageType != DataType::UInt8)
+				if (isAffineQuantizedMatMul && node.params.storageType != DataType::Int8 &&
+				    node.params.storageType != DataType::UInt8)
 				{
 					throw std::runtime_error(
 					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports Int8/UInt8 storage");
+				}
+				if (isPackedNibbleQuantizedMatMul &&
+				    (node.params.storageType != DataType::UInt8 ||
+				     !IsIntegerPackedNibbleFormat(node.params.packedFormat) ||
+				     node.params.granularity != QuantizationGranularity::PerTensor || node.params.scales.size() != 1 ||
+				     (!node.params.zeroPoints.empty() && node.params.zeroPoints.size() != 1)))
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports per-tensor Int4/UInt4 "
+					    "packed-nibble weights only");
 				}
 				if (outputInfos.size() != 1)
 				{
@@ -1161,10 +1175,102 @@ namespace litenn
 				auto rhs = getVal(valueMap, node.rhsStorage);
 				const auto k = lhsInfo.shape[1];
 				const auto n = outputInfos[0].shape[1];
-				if (rhsInfo.shape.size() != 2 || rhsInfo.shape[0] != k || rhsInfo.shape[1] != n)
+				if (isAffineQuantizedMatMul &&
+				    (rhsInfo.shape.size() != 2 || rhsInfo.shape[0] != k || rhsInfo.shape[1] != n))
 				{
 					throw std::runtime_error(
 					    "GraphToMLIR QuantizedMatMulNode affine storage shape must match expressed rhs shape");
+				}
+				if (isPackedNibbleQuantizedMatMul &&
+				    (rhsInfo.dtype != DataType::UInt8 || rhsInfo.shape.size() != 1 ||
+				     rhsInfo.shape[0] != QuantizationDetail::CeilDiv(k * n, std::size_t{ 2 })))
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedMatMulNode packed-nibble storage shape must match expressed rhs shape");
+				}
+
+				if (isPackedNibbleQuantizedMatMul)
+				{
+					const auto scale = node.params.scales[0];
+					const auto zeroPoint = node.params.zeroPoints.empty() ? 0 : node.params.zeroPoints[0];
+					const auto lowThenHigh = node.params.packedOrder == PackedNibbleOrder::LowThenHigh;
+					const auto signedInt4 = node.params.packedFormat == PackedNibbleFormat::Int4;
+					auto empty =
+					    builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+					auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+					auto filled =
+					    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+					auto lhsMap =
+					    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(2, &ctx_) }, &ctx_);
+					auto outputMap =
+					    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(1, &ctx_) }, &ctx_);
+					auto generic = builder_.create<linalg::GenericOp>(
+					    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
+					    SmallVector<AffineMap>{ lhsMap, outputMap },
+					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
+					                                      utils::IteratorType::reduction },
+					    [&](OpBuilder& b, Location l, ValueRange args) {
+						    const auto i32 = b.getI32Type();
+						    const auto lhsF32 = emitScalarToF32(b, l, args[0]);
+						    const auto rowIndex = b.create<linalg::IndexOp>(l, 2).getResult();
+						    const auto colIndex = b.create<linalg::IndexOp>(l, 1).getResult();
+						    auto nIndex = b.create<arith::ConstantIndexOp>(l, n).getResult();
+						    auto elementIndex =
+						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, rowIndex, nIndex).getResult(),
+						                                colIndex)
+						            .getResult();
+						    auto twoIndex = b.create<arith::ConstantIndexOp>(l, 2).getResult();
+						    auto byteIndex = b.create<arith::DivUIOp>(l, elementIndex, twoIndex).getResult();
+						    auto nibbleOffset = b.create<arith::RemUIOp>(l, elementIndex, twoIndex).getResult();
+						    auto byte = b.create<tensor::ExtractOp>(l, rhs, ValueRange{ byteIndex }).getResult();
+						    auto byteI32 = b.create<arith::ExtUIOp>(l, i32, byte).getResult();
+						    auto low = b.create<arith::AndIOp>(l, byteI32, b.create<arith::ConstantIntOp>(l, i32, 15))
+						                   .getResult();
+						    auto high =
+						        b.create<arith::AndIOp>(
+						             l,
+						             b.create<arith::ShRUIOp>(l, byteI32, b.create<arith::ConstantIntOp>(l, i32, 4))
+						                 .getResult(),
+						             b.create<arith::ConstantIntOp>(l, i32, 15))
+						            .getResult();
+						    auto oneIndex = b.create<arith::ConstantIndexOp>(l, 1).getResult();
+						    auto takeSecond =
+						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, nibbleOffset, oneIndex)
+						            .getResult();
+						    Value nibble = lowThenHigh
+						                       ? b.create<arith::SelectOp>(l, takeSecond, high, low).getResult()
+						                       : b.create<arith::SelectOp>(l, takeSecond, low, high).getResult();
+						    if (signedInt4)
+						    {
+							    auto isNegative = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, nibble,
+							                                              b.create<arith::ConstantIntOp>(l, i32, 8))
+							                          .getResult();
+							    nibble =
+							        b.create<arith::SelectOp>(
+							             l, isNegative,
+							             b.create<arith::SubIOp>(l, nibble, b.create<arith::ConstantIntOp>(l, i32, 16))
+							                 .getResult(),
+							             nibble)
+							            .getResult();
+						    }
+						    auto rhsF32 = emitIntegerScalarToF32(b, l, nibble, false);
+						    rhsF32 = b.create<arith::SubFOp>(
+						                  l, rhsF32,
+						                  b.create<arith::ConstantFloatOp>(
+						                      l, b.getF32Type(), llvm::APFloat(static_cast<float>(zeroPoint))))
+						                 .getResult();
+						    rhsF32 = b.create<arith::MulFOp>(
+						                  l, rhsF32,
+						                  b.create<arith::ConstantFloatOp>(l, b.getF32Type(),
+						                                                   llvm::APFloat(static_cast<float>(scale))))
+						                 .getResult();
+						    auto product = b.create<arith::MulFOp>(l, lhsF32, rhsF32).getResult();
+						    auto accumulator = emitScalarToF32(b, l, args[1]);
+						    auto sum = b.create<arith::AddFOp>(l, accumulator, product).getResult();
+						    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+					    });
+					valueMap[nodeId] = { generic.getResult(0) };
+					return;
 				}
 
 				std::vector<std::size_t> parameterShape{ 1 };

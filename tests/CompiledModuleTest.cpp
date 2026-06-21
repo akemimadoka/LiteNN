@@ -469,6 +469,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPackedFP4QuantizedMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params =
+		    PackedNibbleQuantization(PackedNibbleFormat::FP4E2M1, { 3, 2 }, 0.5F, 0, PackedNibbleOrder::LowThenHigh);
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		Tensor<CPU> storage({ 0x21, 0x43, 0x65 }, { 3 }, DataType::UInt8);
+		const auto weight =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 3 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildPerAxisAffineQuantizeInputGraph()
 	{
 		Graph graph;
@@ -1746,19 +1767,28 @@ TEST(CompiledModuleTest, CPUGroupedAffineQuantizedMatMulArtifactMatchesInterpret
 	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
 }
 
-TEST(CompiledModuleTest, PackedQuantizedMatMulAOTDiagnosticMentionsAffineSupport)
+TEST(CompiledModuleTest, CPUPackedQuantizedMatMulArtifactMatchesInterpreter)
 {
 	auto graph = BuildPackedQuantizedMatMulGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0, -2.0, 0.5, 0.25, 3.0, -1.5 }, { 2, 3 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, PackedFP4QuantizedMatMulAOTDiagnosticMentionsInt4Support)
+{
+	auto graph = BuildPackedFP4QuantizedMatMulGraph();
 	try
 	{
 		(void) Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
-		FAIL() << "Expected packed QuantizedMatMulNode compilation to fail";
+		FAIL() << "Expected FP4 packed QuantizedMatMulNode compilation to fail";
 	}
 	catch (const std::runtime_error& ex)
 	{
 		const std::string message = ex.what();
 		EXPECT_NE(message.find("QuantizedMatMulNode"), std::string::npos);
-		EXPECT_NE(message.find("affine"), std::string::npos);
+		EXPECT_NE(message.find("Int4/UInt4"), std::string::npos);
 	}
 }
 
