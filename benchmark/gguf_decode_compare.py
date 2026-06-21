@@ -11,7 +11,8 @@ import sys
 from pathlib import Path
 
 
-RUN_RE = re.compile(r"\brun_ms=(?P<run_ms>[0-9.eE+-]+).*\bgenerated_tokens=(?P<tokens>\d+)\b")
+RUN_MS_RE = re.compile(r"\brun_ms=(?P<value>[0-9.eE+-]+)\b")
+GENERATED_TOKENS_RE = re.compile(r"\bgenerated_tokens=(?P<value>\d+)\b")
 
 
 def load_json(path: Path) -> object:
@@ -43,11 +44,13 @@ def litenn_row(path: Path) -> dict[str, object]:
     if step is None or step.get("returncode") != 0:
         raise SystemExit(f"LiteNN smoke report has no successful decode step: {path}")
     stdout = resolve_evidence_path(step.get("stdout"), path)
-    match = RUN_RE.search(stdout.read_text(encoding="utf-8"))
-    if match is None:
+    stdout_text = stdout.read_text(encoding="utf-8")
+    run_match = RUN_MS_RE.search(stdout_text)
+    tokens_match = GENERATED_TOKENS_RE.search(stdout_text)
+    if run_match is None or tokens_match is None:
         raise SystemExit(f"LiteNN decode stdout has no run_ms/generated_tokens metrics: {stdout}")
-    run_ms = float(match.group("run_ms"))
-    token_count = int(match.group("tokens"))
+    run_ms = float(run_match.group("value"))
+    token_count = int(tokens_match.group("value"))
     if run_ms <= 0 or token_count <= 0:
         raise SystemExit(f"LiteNN decode metrics must be positive: {stdout}")
     tokens_per_second = token_count * 1000.0 / run_ms
