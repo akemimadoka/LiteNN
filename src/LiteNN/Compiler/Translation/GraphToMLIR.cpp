@@ -1122,10 +1122,11 @@ namespace litenn
 				}
 				if (node.params.scheme != QuantizationScheme::Affine ||
 				    (node.params.granularity != QuantizationGranularity::PerTensor &&
-				     node.params.granularity != QuantizationGranularity::PerAxis))
+				     node.params.granularity != QuantizationGranularity::PerAxis &&
+				     node.params.granularity != QuantizationGranularity::Grouped))
 				{
 					throw std::runtime_error("GraphToMLIR QuantizedMatMulNode CPU AOT lowering currently supports "
-					                         "affine per-tensor/per-axis weights only");
+					                         "affine per-tensor/per-axis/grouped weights only");
 				}
 				if (node.params.storageType != DataType::Int8 && node.params.storageType != DataType::UInt8)
 				{
@@ -1168,11 +1169,37 @@ namespace litenn
 
 				std::vector<std::size_t> parameterShape{ 1 };
 				AffineExpr parameterExpr = getAffineConstantExpr(0, &ctx_);
-				if (node.params.granularity == QuantizationGranularity::PerAxis)
+				bool groupedParameters = false;
+				std::size_t groupedAxis = 0;
+				std::size_t groupedGroupsPerLine = 0;
+				std::size_t groupedGroupSize = 0;
+				if (node.params.granularity == QuantizationGranularity::PerAxis ||
+				    node.params.granularity == QuantizationGranularity::Grouped)
 				{
 					const auto axis = QuantizationDetail::NormalizeAxis(node.params.axis, ShapeView{ rhsShape });
-					parameterShape[0] = rhsShape[axis];
-					parameterExpr = axis == 0 ? getAffineDimExpr(2, &ctx_) : getAffineDimExpr(1, &ctx_);
+					if (axis > 1)
+					{
+						throw std::runtime_error("GraphToMLIR QuantizedMatMulNode expected rank-2 quantization axis");
+					}
+					if (node.params.granularity == QuantizationGranularity::PerAxis)
+					{
+						parameterShape[0] = rhsShape[axis];
+						parameterExpr = axis == 0 ? getAffineDimExpr(2, &ctx_) : getAffineDimExpr(1, &ctx_);
+					}
+					else
+					{
+						if (node.params.groupSize == 0)
+						{
+							throw std::runtime_error("GraphToMLIR QuantizedMatMulNode grouped quantization requires "
+							                         "groupSize > 0");
+						}
+						const auto groupsPerLine = QuantizationDetail::CeilDiv(rhsShape[axis], node.params.groupSize);
+						parameterShape[0] = (ShapeView{ rhsShape }.NumElements() / rhsShape[axis]) * groupsPerLine;
+						groupedParameters = true;
+						groupedAxis = axis;
+						groupedGroupsPerLine = groupsPerLine;
+						groupedGroupSize = node.params.groupSize;
+					}
 				}
 				if (node.params.scales.size() != parameterShape[0] ||
 				    (!node.params.zeroPoints.empty() && node.params.zeroPoints.size() != parameterShape[0]))
@@ -1213,8 +1240,26 @@ namespace litenn
 				    [&](OpBuilder& b, Location l, ValueRange args) {
 					    const auto lhsF32 = emitScalarToF32(b, l, args[0]);
 					    auto rhsF32 = emitIntegerScalarToF32(b, l, args[1], node.params.storageType == DataType::UInt8);
-					    rhsF32 = b.create<arith::SubFOp>(l, rhsF32, args[3]).getResult();
-					    rhsF32 = b.create<arith::MulFOp>(l, rhsF32, args[2]).getResult();
+					    Value scale = args[2];
+					    Value zeroPoint = args[3];
+					    if (groupedParameters)
+					    {
+						    const auto rowIndex = b.create<linalg::IndexOp>(l, 2).getResult();
+						    const auto colIndex = b.create<linalg::IndexOp>(l, 1).getResult();
+						    const auto axisCoord = groupedAxis == 0 ? rowIndex : colIndex;
+						    const auto line = groupedAxis == 0 ? colIndex : rowIndex;
+						    auto groupsPerLine = b.create<arith::ConstantIndexOp>(l, groupedGroupsPerLine).getResult();
+						    auto groupSize = b.create<arith::ConstantIndexOp>(l, groupedGroupSize).getResult();
+						    auto lineOffset = b.create<arith::MulIOp>(l, line, groupsPerLine).getResult();
+						    auto groupIndex = b.create<arith::DivUIOp>(l, axisCoord, groupSize).getResult();
+						    auto parameterIndex = b.create<arith::AddIOp>(l, lineOffset, groupIndex).getResult();
+						    scale =
+						        b.create<tensor::ExtractOp>(l, scaleValue, ValueRange{ parameterIndex }).getResult();
+						    zeroPoint = b.create<tensor::ExtractOp>(l, zeroPointValue, ValueRange{ parameterIndex })
+						                    .getResult();
+					    }
+					    rhsF32 = b.create<arith::SubFOp>(l, rhsF32, zeroPoint).getResult();
+					    rhsF32 = b.create<arith::MulFOp>(l, rhsF32, scale).getResult();
 					    auto product = b.create<arith::MulFOp>(l, lhsF32, rhsF32).getResult();
 					    auto accumulator = emitScalarToF32(b, l, args[4]);
 					    auto sum = b.create<arith::AddFOp>(l, accumulator, product).getResult();

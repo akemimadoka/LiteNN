@@ -427,6 +427,27 @@ namespace
 		return graph;
 	}
 
+	Graph BuildGroupedAffineQuantizedMatMulGraph()
+	{
+		Graph graph;
+		Subgraph sg;
+		auto params = GroupedAffineQuantization(DataType::UInt8, 0, 2, { 0.5F, 0.25F, 1.0F, 2.0F }, { 4, 8, 1, 2 });
+		params.expressedShape = { 3, 2 };
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		Tensor<CPU> storage({ 4.0, 12.0, 6.0, 4.0, 10.0, 16.0 }, { 3, 2 }, DataType::UInt8);
+		const auto weight =
+		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
+		               { OutputInfo{ DataType::UInt8, { 3, 2 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildPackedQuantizedMatMulGraph()
 	{
 		Graph graph;
@@ -1710,6 +1731,15 @@ TEST(CompiledModuleTest, CPUAffineQuantizedMatMulArtifactMatchesInterpreter)
 TEST(CompiledModuleTest, CPUPerAxisAffineQuantizedMatMulArtifactMatchesInterpreter)
 {
 	auto graph = BuildPerAxisAffineQuantizedMatMulGraph();
+	std::vector<Tensor<CPU>> inputs;
+	inputs.emplace_back(Tensor<CPU>({ 1.0, -2.0, 0.5, 0.25, 3.0, -1.5 }, { 2, 3 }, DataType::Float32));
+
+	ExpectCompiledMatchesInterpreter(graph, std::span<const Tensor<CPU>>(inputs));
+}
+
+TEST(CompiledModuleTest, CPUGroupedAffineQuantizedMatMulArtifactMatchesInterpreter)
+{
+	auto graph = BuildGroupedAffineQuantizedMatMulGraph();
 	std::vector<Tensor<CPU>> inputs;
 	inputs.emplace_back(Tensor<CPU>({ 1.0, -2.0, 0.5, 0.25, 3.0, -1.5 }, { 2, 3 }, DataType::Float32));
 

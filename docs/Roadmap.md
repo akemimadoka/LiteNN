@@ -2480,8 +2480,8 @@ placement and fallback policy.
       embeddings keep explicit quantized storage semantics, and tied vocab-major embeddings preserve the same layout
       contract for the LM head.
 - [x] Execute affine `QuantizedMatMulNode` directly in CPU AOT without materializing a full Float32 weight tensor.
-      The MLIR lowering now keeps Int8/UInt8 weight storage in the reduction loop and broadcasts per-tensor/per-axis
-      scale/zero-point metadata as small constants.
+      The MLIR lowering now keeps Int8/UInt8 weight storage in the reduction loop and broadcasts
+      per-tensor/per-axis/grouped scale/zero-point metadata as small constants.
 - [ ] Execute packed-nibble/GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full
       Float32 weight tensor. Core affine/packed-nibble Interpreter execution and injected GGML CPU execution are
       complete; native compiled block-format lowering remains open.
