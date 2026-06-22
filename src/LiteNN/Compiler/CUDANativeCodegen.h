@@ -116,6 +116,7 @@ namespace LiteNN
 
 	std::string_view CUDANativeBinaryF32KernelName(BinaryOp op, bool broadcast = false);
 	std::string_view CUDANativeUnaryF32KernelName(UnaryOp op);
+	std::string_view CUDANativeSiLUF32KernelName();
 	std::string_view CUDANativeReduceF32KernelName(ReduceOp op);
 	std::string CUDANativeConcatF32KernelName(std::size_t inputIndex);
 	std::string_view CUDANativeSliceF32KernelName();
@@ -140,6 +141,8 @@ namespace LiteNN
 	 */
 	std::string CUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op);
 	std::optional<std::string> TryCUDANativeBinaryF32PTXFromMLIRNVPTX(BinaryOp op);
+	std::string CUDANativeSiLUF32PTXFromMLIRNVPTX();
+	std::optional<std::string> TryCUDANativeSiLUF32PTXFromMLIRNVPTX();
 	std::string CUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec);
 	std::optional<std::string>
 	TryCUDANativeBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec);

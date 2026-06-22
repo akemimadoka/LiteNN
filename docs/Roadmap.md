@@ -2547,6 +2547,9 @@ placement and fallback policy.
       - [x] KV-cache capacity update now has a CUDA native `ScatterNode` correctness slice for f32 axis-0 single-index
             `Update` writes with Int32/Int64 positions. It removes the immediate CPU bridge from the decode cache write
             path; multi-index scatter, scatter-add, and fused in-place KV writeback remain performance/fusion follow-ups.
+      - [x] SiLU now has a CUDA native MLIR/NVPTX correctness slice by recognizing the standard `Layer::AddSiLU`
+            expansion and lowering it to one elementwise kernel. Full SwiGLU MLP fusion across gate/up/down projections
+            remains a separate fused-kernel target.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

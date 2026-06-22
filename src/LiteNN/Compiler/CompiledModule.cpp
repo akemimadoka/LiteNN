@@ -3603,6 +3603,12 @@ namespace
 		std::uint32_t elementCount{};
 	};
 
+	struct CUDANativeSiLUPlan
+	{
+		std::uint32_t inputIndex{};
+		std::uint32_t elementCount{};
+	};
+
 	struct CUDANativeCastPlan
 	{
 		std::uint32_t inputIndex{};
@@ -4042,6 +4048,144 @@ namespace
 			.inputIndex = *inputIndex,
 			.elementCount = static_cast<std::uint32_t>(elementCount),
 		};
+	}
+
+	bool IsCUDANativeScalarConstant(const Subgraph& subgraph, NodeOutput output, double expected)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return false;
+		}
+		const auto& entry = subgraph.GetNodeEntry(output.node);
+		const auto* constant = std::get_if<ConstantNode>(&entry.node);
+		if (!constant || entry.outputInfos.size() != 1 || entry.outputInfos[0].shape != std::vector<std::size_t>{ 1 })
+		{
+			return false;
+		}
+		const auto cpuTensor = constant->value.CopyToDevice(CPU{});
+		if (cpuTensor.NumElements() != 1)
+		{
+			return false;
+		}
+		double value = 0.0;
+		CPU cpu;
+		DeviceTraits<CPU>::ConvertTo(cpu, cpuTensor.DType(), cpuTensor.UnsafeRawData(), 1, DataType::Float64, &value);
+		return value == expected;
+	}
+
+	std::optional<CUDANativeSiLUPlan> MatchCUDANativeSiLUF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 1 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 7)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* multiply = std::get_if<BinaryOpNode>(&resultEntry.node);
+		if (!multiply || multiply->op != BinaryOp::Multiply || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto tryMatchSigmoid = [&](NodeOutput maybeInput,
+		                                 NodeOutput maybeSigmoid) -> std::optional<std::uint32_t> {
+			const auto inputIndex = GetParamIndex(subgraph, maybeInput);
+			if (!inputIndex || maybeSigmoid.port != 0 || maybeSigmoid.node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+
+			const auto& divideEntry = subgraph.GetNodeEntry(maybeSigmoid.node);
+			const auto* divide = std::get_if<BinaryOpNode>(&divideEntry.node);
+			if (!divide || divide->op != BinaryOp::Divide || divideEntry.outputInfos.size() != 1 ||
+			    !IsCUDANativeScalarConstant(subgraph, divide->lhs, 1.0))
+			{
+				return std::nullopt;
+			}
+
+			const auto denom = divide->rhs;
+			if (denom.port != 0 || denom.node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+			const auto& denomEntry = subgraph.GetNodeEntry(denom.node);
+			const auto* add = std::get_if<BinaryOpNode>(&denomEntry.node);
+			if (!add || add->op != BinaryOp::Add || denomEntry.outputInfos.size() != 1)
+			{
+				return std::nullopt;
+			}
+
+			NodeOutput expOutput{};
+			if (IsCUDANativeScalarConstant(subgraph, add->lhs, 1.0))
+			{
+				expOutput = add->rhs;
+			}
+			else if (IsCUDANativeScalarConstant(subgraph, add->rhs, 1.0))
+			{
+				expOutput = add->lhs;
+			}
+			else
+			{
+				return std::nullopt;
+			}
+
+			if (expOutput.port != 0 || expOutput.node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+			const auto& expEntry = subgraph.GetNodeEntry(expOutput.node);
+			const auto* exp = std::get_if<UnaryOpNode>(&expEntry.node);
+			if (!exp || exp->op != UnaryOp::Exp || expEntry.outputInfos.size() != 1 || exp->input.port != 0 ||
+			    exp->input.node >= subgraph.NodeCount())
+			{
+				return std::nullopt;
+			}
+
+			const auto& negateEntry = subgraph.GetNodeEntry(exp->input.node);
+			const auto* negate = std::get_if<UnaryOpNode>(&negateEntry.node);
+			if (!negate || negate->op != UnaryOp::Negate || negateEntry.outputInfos.size() != 1 ||
+			    negate->input != maybeInput)
+			{
+				return std::nullopt;
+			}
+			return inputIndex;
+		};
+
+		auto inputIndex = tryMatchSigmoid(multiply->lhs, multiply->rhs);
+		if (!inputIndex)
+		{
+			inputIndex = tryMatchSigmoid(multiply->rhs, multiply->lhs);
+		}
+		if (!inputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& input = subgraph.Params()[*inputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (input.dtype != DataType::Float32 || output.dtype != DataType::Float32 || input.shape != output.shape)
+		{
+			return std::nullopt;
+		}
+		const auto elementCount = ShapeNumElementsU32(output.shape);
+		if (!elementCount)
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeSiLUPlan{ .inputIndex = *inputIndex, .elementCount = *elementCount };
 	}
 
 	std::optional<CUDANativeBinaryPlan> MatchCUDANativeBinaryF32(const Graph& graph,
@@ -5749,6 +5893,60 @@ namespace
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeSiLUF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeSiLUF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeSiLUF32PTXFromMLIRNVPTX();
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::ElementwiseSiLUF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->elementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->elementCount, 256);
+		const auto gridSize = (plan->elementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeSiLUF32KernelName()),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->inputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->elementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
+			                            std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14448,6 +14646,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeUnaryF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeSiLUF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

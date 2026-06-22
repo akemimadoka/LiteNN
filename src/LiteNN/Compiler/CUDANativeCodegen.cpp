@@ -547,6 +547,29 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildSiLUF32()
+			{
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 3> argTypes{ ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeSiLUF32KernelName(), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 2);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto in = blocks.entry->getArgument(1);
+				auto value = EmitLoadF32(EmitF32GEP(in, blocks.index32));
+				auto negated =
+				    builder_.create<mlir::LLVM::FNegOp>(loc_, f32Type_, mlir::ValueRange{ value }).getResult();
+				auto denominator = EmitF32Add(EmitF32Constant(1.0F), EmitExpF32(negated));
+				auto result =
+				    builder_.create<mlir::LLVM::FDivOp>(loc_, f32Type_, mlir::ValueRange{ value, denominator })
+				        .getResult();
+				EmitStoreF32(result, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 			mlir::OwningOpRef<mlir::ModuleOp> BuildBinaryF32(BinaryOp op)
 			{
 				auto kernelModule = CreateKernelModule();
@@ -2006,6 +2029,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildBinaryF32(op); });
 		}
 
+		std::string EmitSiLUF32PTXFromMLIRNVPTX()
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildSiLUF32(); });
+		}
+
 		std::string EmitBinaryBroadcastF32PTXFromMLIRNVPTX(const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -2149,6 +2178,11 @@ namespace LiteNN
 		}
 	}
 
+	std::string_view CUDANativeSiLUF32KernelName()
+	{
+		return "litenn_silu_f32";
+	}
+
 	std::string_view CUDANativeReduceF32KernelName(ReduceOp op)
 	{
 		switch (op)
@@ -2290,6 +2324,23 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeBinaryF32PTXFromMLIRNVPTX(op);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeSiLUF32PTXFromMLIRNVPTX()
+	{
+		return EmitSiLUF32PTXFromMLIRNVPTX();
+	}
+
+	std::optional<std::string> TryCUDANativeSiLUF32PTXFromMLIRNVPTX()
+	{
+		try
+		{
+			return CUDANativeSiLUF32PTXFromMLIRNVPTX();
 		}
 		catch (const std::exception&)
 		{
