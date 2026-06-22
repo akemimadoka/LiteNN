@@ -13,6 +13,11 @@ from pathlib import Path
 
 RUN_MS_RE = re.compile(r"\brun_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATED_TOKENS_RE = re.compile(r"\bgenerated_tokens=(?P<value>\d+)\b")
+BACKEND_RE = re.compile(r"\bbackend=(?P<value>[A-Za-z0-9_.-]+)\b")
+FALLBACK_RE = re.compile(r"\bfallback=(?P<value>true|false)\b")
+FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
+MS_PER_GENERATED_TOKEN_RE = re.compile(r"\bms_per_generated_token=(?P<value>[0-9.eE+-]+)\b")
+GENERATED_TOKENS_PER_SECOND_RE = re.compile(r"\bgenerated_tokens_per_second=(?P<value>[0-9.eE+-]+)\b")
 
 
 def load_json(path: Path) -> object:
@@ -53,15 +58,30 @@ def litenn_row(path: Path) -> dict[str, object]:
     token_count = int(tokens_match.group("value"))
     if run_ms <= 0 or token_count <= 0:
         raise SystemExit(f"LiteNN decode metrics must be positive: {stdout}")
-    tokens_per_second = token_count * 1000.0 / run_ms
+    backend_match = BACKEND_RE.search(stdout_text)
+    fallback_match = FALLBACK_RE.search(stdout_text)
+    fallback_count_match = FALLBACK_COUNT_RE.search(stdout_text)
+    ms_per_token_match = MS_PER_GENERATED_TOKEN_RE.search(stdout_text)
+    tokens_per_second_match = GENERATED_TOKENS_PER_SECOND_RE.search(stdout_text)
+    tokens_per_second = (
+        float(tokens_per_second_match.group("value"))
+        if tokens_per_second_match is not None
+        else token_count * 1000.0 / run_ms
+    )
+    ms_per_token = (
+        float(ms_per_token_match.group("value"))
+        if ms_per_token_match is not None
+        else run_ms / token_count
+    )
     return {
         "implementation": "LiteNN",
-        "backend": report.get("backend_policy"),
+        "backend": backend_match.group("value") if backend_match is not None else report.get("backend_policy"),
         "tokens": token_count,
         "totalMs": run_ms,
-        "msPerToken": run_ms / token_count,
+        "msPerToken": ms_per_token,
         "tokensPerSecond": tokens_per_second,
-        "fallbackUsed": report.get("fallback_used"),
+        "fallbackUsed": fallback_match.group("value") == "true" if fallback_match is not None else report.get("fallback_used"),
+        "fallbackCount": int(fallback_count_match.group("value")) if fallback_count_match is not None else None,
         "source": str(path),
     }
 
@@ -87,6 +107,7 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "msPerToken": 1000.0 / tokens_per_second,
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": False,
+                "fallbackCount": 0,
                 "source": str(path),
             }
         )
@@ -114,6 +135,7 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "msPerToken": 1000.0 / tokens_per_second,
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": entry.get("fallbackUsed", False),
+                "fallbackCount": entry.get("fallbackCount"),
                 "source": str(path),
             }
         )
@@ -158,15 +180,15 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
         lines.append(
             f"| {row['implementation']} | {row['backend']} | {float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
-            f"{format_delta(row['vsPyTorchPercent'])} | {row['fallbackUsed']} |"
+            f"{format_delta(row['vsPyTorchPercent'])} | {row['fallbackUsed']} | {row.get('fallbackCount')} |"
         )
     (output_dir / "gguf_decode_compare.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

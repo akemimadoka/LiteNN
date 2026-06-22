@@ -2620,6 +2620,9 @@ placement and fallback policy.
       `--run-llama-*-decode-loop` summaries now include backend, fallback count, executed steps, per-step min/avg/max,
       ms/generated-token, and generated tokens/s for the current CPU Interpreter runner. CUDA-native/bridge rows remain
       gated on the executable CUDA stateful decode runner.
+- [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
+      backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
+      deriving throughput from `run_ms`.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:
