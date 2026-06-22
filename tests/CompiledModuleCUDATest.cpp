@@ -352,6 +352,21 @@ namespace
 		return graph;
 	}
 
+	Graph BuildScatterUpdateGraph(DataType indexType, std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto data = sg.AddParam(DataType::Float32, { 3, 2, 2 });
+		const auto indices = sg.AddParam(indexType, { 1 });
+		const auto updates = sg.AddParam(DataType::Float32, { 1, 2, 2 });
+		const auto y = Layer::AddScatter(sg, { data, 0 }, { indices, 0 }, { updates, 0 }, 0, ScatterMode::Update);
+		sg.SetResults({ y });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "data", "indices", "updates" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildMatMulBiasGraph(bool relu, DataType dtype = DataType::Float32, std::size_t m = 2, std::size_t k = 3,
 	                           std::size_t n = 2)
 	{
@@ -1587,6 +1602,26 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	for (const auto indexType : { DataType::Int32, DataType::Int64 })
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
+		    Detail::BuildExecutablePlanFromGraph(BuildScatterUpdateGraph(indexType, "scatter_update")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ScatterUpdateF32));
+		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeScatterUpdateF32KernelName(indexType));
+		ASSERT_EQ(payload.kernels[0].arguments.size(), 5u);
+		EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 12u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 12u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[2].byteSize,
+		          indexType == DataType::Int32 ? sizeof(std::int32_t) : sizeof(std::int64_t));
+		EXPECT_EQ(payload.kernels[0].arguments[3].byteSize, 4u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[4].kind, CUDANativeArgumentKind::Scalar);
+	}
+
+	for (const auto indexType : { DataType::Int32, DataType::Int64 })
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(
 		    Detail::BuildExecutablePlanFromGraph(BuildGetRowsGraph(indexType, "embedding")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
 		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
@@ -2227,6 +2262,18 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .runCPUAOT = false,
 	    .tolerance = 1.0e-5F,
 	});
+	for (const auto indexType : { DataType::Int32, DataType::Int64 })
+	{
+		cases.push_back(Case{
+		    .name = indexType == DataType::Int32 ? "scatter_update_i32" : "scatter_update_i64",
+		    .graph = BuildScatterUpdateGraph(indexType, "scatter_update"),
+		    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0 },
+		                                 .shape = { 3, 2, 2 } },
+		                TensorInputSpec{ .values = { 1.0 }, .shape = { 1 }, .dtype = indexType },
+		                TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 1, 2, 2 } } },
+		    .runCPUAOT = false,
+		});
+	}
 	cases.push_back(Case{
 	    .name = "concat_axis0",
 	    .graph = BuildConcatGraph({ 1, 3 }, { 2, 3 }, { 3, 3 }, 0, "concat_axis0"),

@@ -936,6 +936,44 @@ namespace LiteNN
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
+			mlir::OwningOpRef<mlir::ModuleOp> BuildScatterUpdateF32(const CUDANativeScatterUpdateF32CodegenSpec& spec)
+			{
+				if (spec.rowSize == 0 || (spec.indexType != DataType::Int32 && spec.indexType != DataType::Int64))
+				{
+					throw std::runtime_error(
+					    "CUDA native ScatterUpdate requires a positive row size and Int32/Int64 index");
+				}
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 5> argTypes{ ptrType_, ptrType_, ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule,
+				                             CUDANativeScatterUpdateF32KernelName(spec.indexType), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 4);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto data = blocks.entry->getArgument(1);
+				auto indices = blocks.entry->getArgument(2);
+				auto updates = blocks.entry->getArgument(3);
+				const auto scalarType = GetCastScalarType(spec.indexType);
+				auto rawTarget = EmitLoad(EmitTypedGEP(indices, scalarType, EmitI32Constant(0)), scalarType);
+				auto targetRow = spec.indexType == DataType::Int64
+				                     ? builder_.create<mlir::arith::TruncIOp>(loc_, i32Type_, rawTarget).getResult()
+				                     : rawTarget;
+				auto rowSize = EmitI32Constant(spec.rowSize);
+				auto row = EmitI32UDiv(blocks.index32, rowSize);
+				auto column = EmitI32URem(blocks.index32, rowSize);
+				auto isUpdatedRow =
+				    builder_.create<mlir::LLVM::ICmpOp>(loc_, mlir::LLVM::ICmpPredicate::eq, row, targetRow)
+				        .getResult();
+				auto oldValue = EmitLoadF32(EmitF32GEP(data, blocks.index32));
+				auto newValue = EmitLoadF32(EmitF32GEP(updates, column));
+				auto value = builder_.create<mlir::arith::SelectOp>(loc_, isUpdatedRow, newValue, oldValue).getResult();
+				EmitStoreF32(value, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
 			mlir::OwningOpRef<mlir::ModuleOp> BuildConcatF32(const CUDANativeConcatF32CodegenSpec& spec)
 			{
 				if (spec.inputShapes.empty())
@@ -2022,6 +2060,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildBatchMatMulF32(spec); });
 		}
 
+		std::string EmitScatterUpdateF32PTXFromMLIRNVPTX(const CUDANativeScatterUpdateF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildScatterUpdateF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -2163,6 +2207,15 @@ namespace LiteNN
 	std::string_view CUDANativeBatchMatMulF32KernelName()
 	{
 		return "litenn_batch_matmul_f32";
+	}
+
+	std::string CUDANativeScatterUpdateF32KernelName(DataType indexType)
+	{
+		if (indexType != DataType::Int32 && indexType != DataType::Int64)
+		{
+			throw std::runtime_error("CUDA native ScatterUpdate requires Int32 or Int64 indices");
+		}
+		return std::format("litenn_scatter_update_f32_{}", indexType == DataType::Int32 ? "i32" : "i64");
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -2392,6 +2445,24 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeBatchMatMulF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeScatterUpdateF32PTXFromMLIRNVPTX(const CUDANativeScatterUpdateF32CodegenSpec& spec)
+	{
+		return EmitScatterUpdateF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string>
+	TryCUDANativeScatterUpdateF32PTXFromMLIRNVPTX(const CUDANativeScatterUpdateF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeScatterUpdateF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{

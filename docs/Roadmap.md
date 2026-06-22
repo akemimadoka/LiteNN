@@ -2544,6 +2544,9 @@ placement and fallback policy.
             building blocks while tiled/shared-memory or cuBLAS batched GEMM remains a performance follow-up.
       - [x] CUDA native binary f32 now accepts runtime input, frozen variable, or constant tensor operands, so static
             causal/additive masks can stay in native CUDA artifact constant data instead of forcing a CPU bridge.
+      - [x] KV-cache capacity update now has a CUDA native `ScatterNode` correctness slice for f32 axis-0 single-index
+            `Update` writes with Int32/Int64 positions. It removes the immediate CPU bridge from the decode cache write
+            path; multi-index scatter, scatter-add, and fused in-place KV writeback remain performance/fusion follow-ups.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

@@ -71,6 +71,7 @@ namespace LiteNN
 		RMSNormF32,
 		RoPEF32,
 		BatchMatMulF32,
+		ScatterUpdateF32,
 	};
 
 	constexpr std::uint64_t FeatureToFlag(std::same_as<CUDANativeFeature> auto... feature)

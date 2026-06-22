@@ -3654,6 +3654,18 @@ namespace
 		std::vector<std::size_t> outputShape;
 	};
 
+	struct CUDANativeScatterUpdatePlan
+	{
+		std::uint32_t dataInputIndex{};
+		std::uint32_t indicesInputIndex{};
+		std::uint32_t updatesInputIndex{};
+		DataType indexType{ DataType::Int64 };
+		std::uint32_t rowSize{};
+		std::uint32_t dataElementCount{};
+		std::uint32_t indexElementCount{};
+		std::uint32_t updateElementCount{};
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -4243,6 +4255,87 @@ namespace
 			.lhsShape = lhsParam.shape,
 			.rhsShape = rhsParam.shape,
 			.outputShape = output.shape,
+		};
+	}
+
+	std::optional<CUDANativeScatterUpdatePlan> MatchCUDANativeScatterUpdateF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 3 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 4)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* scatter = std::get_if<ScatterNode>(&resultEntry.node);
+		if (!scatter || resultEntry.outputInfos.size() != 1 || scatter->axis != 0 ||
+		    scatter->mode != ScatterMode::Update)
+		{
+			return std::nullopt;
+		}
+
+		const auto dataInputIndex = GetParamIndex(subgraph, scatter->data);
+		const auto indicesInputIndex = GetParamIndex(subgraph, scatter->indices);
+		const auto updatesInputIndex = GetParamIndex(subgraph, scatter->updates);
+		if (!dataInputIndex || !indicesInputIndex || !updatesInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& data = subgraph.Params()[*dataInputIndex];
+		const auto& indices = subgraph.Params()[*indicesInputIndex];
+		const auto& updates = subgraph.Params()[*updatesInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (data.dtype != DataType::Float32 || updates.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || data.shape.empty() || data.shape != output.shape ||
+		    (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64) ||
+		    indices.shape != std::vector<std::size_t>{ 1 } || updates.shape.size() != data.shape.size())
+		{
+			return std::nullopt;
+		}
+
+		auto expectedUpdatesShape = data.shape;
+		expectedUpdatesShape[0] = 1;
+		if (updates.shape != expectedUpdatesShape)
+		{
+			return std::nullopt;
+		}
+
+		const auto dataElementCount = ShapeNumElementsU32(data.shape);
+		const auto indexElementCount = ShapeNumElementsU32(indices.shape);
+		const auto updateElementCount = ShapeNumElementsU32(updates.shape);
+		if (!dataElementCount || !indexElementCount || !updateElementCount || data.shape[0] == 0 ||
+		    *dataElementCount % data.shape[0] != 0)
+		{
+			return std::nullopt;
+		}
+
+		const auto rowSize64 = static_cast<std::uint64_t>(*dataElementCount) / data.shape[0];
+		if (rowSize64 == 0 || rowSize64 > std::numeric_limits<std::uint32_t>::max())
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeScatterUpdatePlan{
+			.dataInputIndex = *dataInputIndex,
+			.indicesInputIndex = *indicesInputIndex,
+			.updatesInputIndex = *updatesInputIndex,
+			.indexType = indices.dtype,
+			.rowSize = static_cast<std::uint32_t>(rowSize64),
+			.dataElementCount = *dataElementCount,
+			.indexElementCount = *indexElementCount,
+			.updateElementCount = *updateElementCount,
 		};
 	}
 
@@ -5908,6 +6001,76 @@ namespace
 		          .index = plan->rhsInputIndex,
 		          .byteOffset = 0,
 		          .byteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeScatterUpdateF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeScatterUpdateF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeScatterUpdateF32PTXFromMLIRNVPTX({
+		    .indexType = plan->indexType,
+		    .rowSize = plan->rowSize,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::ScatterUpdateF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->dataElementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->dataElementCount, 256);
+		const auto gridSize = (plan->dataElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = CUDANativeScatterUpdateF32KernelName(plan->indexType),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->dataElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->dataInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->dataElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->indicesInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->indexElementCount) *
+		                      (plan->indexType == DataType::Int32 ? sizeof(std::int32_t) : sizeof(std::int64_t)) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->updatesInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->updateElementCount) * sizeof(float) },
 		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
 		    },
 		});
@@ -14320,6 +14483,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeBatchMatMulF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeScatterUpdateF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),
