@@ -2542,6 +2542,8 @@ placement and fallback policy.
       - [x] BatchMatMul f32 now has a CUDA native MLIR/NVPTX correctness slice with broadcast batch-dimension support,
             artifact feature reporting, and runtime parity. This covers the unfused attention score and value-aggregation
             building blocks while tiled/shared-memory or cuBLAS batched GEMM remains a performance follow-up.
+      - [x] CUDA native binary f32 now accepts runtime input, frozen variable, or constant tensor operands, so static
+            causal/additive masks can stay in native CUDA artifact constant data instead of forcing a CPU bridge.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

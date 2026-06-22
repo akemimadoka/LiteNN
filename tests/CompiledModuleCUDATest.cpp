@@ -234,6 +234,19 @@ namespace
 		return graph;
 	}
 
+	Graph BuildCausalMaskGraph(std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
+		const auto output = Layer::AddCausalMask(sg, { input, 0 }, -100.0, 0, 1);
+		sg.SetResults({ output });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "scores" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildGetRowsGraph(DataType indexType, std::string outputName)
 	{
 		Graph graph;
@@ -1539,6 +1552,22 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 	}
 
 	{
+		auto artifact =
+		    Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(BuildCausalMaskGraph("causal_mask")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ElementwiseAddF32));
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::ConstantTensor));
+		EXPECT_EQ(payload.constantData.size(), 6u * sizeof(float));
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeBinaryF32KernelName(BinaryOp::Add));
+		ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+		EXPECT_EQ(payload.kernels[0].arguments[1].kind, CUDANativeArgumentKind::InputTensor);
+		EXPECT_EQ(payload.kernels[0].arguments[2].kind, CUDANativeArgumentKind::ConstantTensor);
+	}
+
+	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(
 		    BuildBatchMatMulGraph({ 2, 2, 3 }, { 2, 3, 2 }, { 2, 2, 2 }, "batch_matmul")));
 		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
@@ -2172,6 +2201,12 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 0.5, -1.0, 4.0 }, .shape = { 2, 3 } } },
 	    .runCPUAOT = false,
 	    .tolerance = 1.0e-5F,
+	});
+	cases.push_back(Case{
+	    .name = "causal_mask_constant_add",
+	    .graph = BuildCausalMaskGraph("causal_mask"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 10.0, 20.0, 30.0 }, .shape = { 2, 3 } } },
+	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "batch_matmul",
