@@ -3646,6 +3646,18 @@ namespace
 		double frequencyScale{};
 	};
 
+	struct CUDANativeBatchMatMulPlan
+	{
+		std::uint32_t lhsInputIndex{};
+		std::uint32_t rhsInputIndex{};
+		std::uint32_t lhsElementCount{};
+		std::uint32_t rhsElementCount{};
+		std::uint32_t outputElementCount{};
+		std::vector<std::size_t> lhsShape;
+		std::vector<std::size_t> rhsShape;
+		std::vector<std::size_t> outputShape;
+	};
+
 	struct CUDANativeMatMulPlan
 	{
 		std::uint32_t lhsInputIndex{};
@@ -4116,6 +4128,73 @@ namespace
 			.lhsElementCount = static_cast<std::uint32_t>(lhsElementCount),
 			.rhsElementCount = static_cast<std::uint32_t>(rhsElementCount),
 			.outputElementCount = static_cast<std::uint32_t>(outputElementCount),
+		};
+	}
+
+	std::optional<CUDANativeBatchMatMulPlan> MatchCUDANativeBatchMatMulF32(const Graph& graph)
+	{
+		if (!IsCUDANativeSingleForwardGraph(graph))
+		{
+			return std::nullopt;
+		}
+
+		const auto& subgraph = graph.GetSubgraph(graph.Forward());
+		if (subgraph.Params().size() != 2 || subgraph.Results().size() != 1 || subgraph.NodeCount() != 3)
+		{
+			return std::nullopt;
+		}
+
+		const auto result = subgraph.Results()[0];
+		if (result.port != 0 || result.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+
+		const auto& resultEntry = subgraph.GetNodeEntry(result.node);
+		const auto* batchMatMul = std::get_if<BatchMatMulNode>(&resultEntry.node);
+		if (!batchMatMul || resultEntry.outputInfos.size() != 1)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsInputIndex = GetParamIndex(subgraph, batchMatMul->lhs);
+		const auto rhsInputIndex = GetParamIndex(subgraph, batchMatMul->rhs);
+		if (!lhsInputIndex || !rhsInputIndex)
+		{
+			return std::nullopt;
+		}
+
+		const auto& lhsParam = subgraph.Params()[*lhsInputIndex];
+		const auto& rhsParam = subgraph.Params()[*rhsInputIndex];
+		const auto& output = resultEntry.outputInfos[0];
+		if (lhsParam.dtype != DataType::Float32 || rhsParam.dtype != DataType::Float32 ||
+		    output.dtype != DataType::Float32 || lhsParam.shape.size() < 3 || rhsParam.shape.size() < 3 ||
+		    output.shape.size() < 3)
+		{
+			return std::nullopt;
+		}
+		if (Detail::BatchMatMulOutputShape(lhsParam.shape, rhsParam.shape) != output.shape)
+		{
+			return std::nullopt;
+		}
+
+		const auto lhsElementCount = ShapeNumElementsU32(lhsParam.shape);
+		const auto rhsElementCount = ShapeNumElementsU32(rhsParam.shape);
+		const auto outputElementCount = ShapeNumElementsU32(output.shape);
+		if (!lhsElementCount || !rhsElementCount || !outputElementCount)
+		{
+			return std::nullopt;
+		}
+
+		return CUDANativeBatchMatMulPlan{
+			.lhsInputIndex = *lhsInputIndex,
+			.rhsInputIndex = *rhsInputIndex,
+			.lhsElementCount = *lhsElementCount,
+			.rhsElementCount = *rhsElementCount,
+			.outputElementCount = *outputElementCount,
+			.lhsShape = lhsParam.shape,
+			.rhsShape = rhsParam.shape,
+			.outputShape = output.shape,
 		};
 	}
 
@@ -5738,6 +5817,72 @@ namespace
 			.inputSpecs = std::move(inputSpecs),
 			.outputSpecs = std::move(outputSpecs),
 		};
+	}
+
+	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeBatchMatMulF32(const Graph& graph)
+	{
+#ifdef LITENN_ENABLE_CUDA_DRIVER
+		const auto plan = MatchCUDANativeBatchMatMulF32(graph);
+		if (!plan)
+		{
+			return std::nullopt;
+		}
+		const auto ptx = TryCUDANativeBatchMatMulF32PTXFromMLIRNVPTX({
+		    .lhsShape = plan->lhsShape,
+		    .rhsShape = plan->rhsShape,
+		    .outputShape = plan->outputShape,
+		});
+		if (!ptx)
+		{
+			return std::nullopt;
+		}
+
+		CUDANativeInstructionPayload payload;
+		payload.binaryKind = CUDANativeBinaryKind::PTX;
+		payload.featureSet.AddFeature(CUDANativeFeature::StaticShape, CUDANativeFeature::SingleSubgraph,
+		                              CUDANativeFeature::BatchMatMulF32);
+		payload.target = CUDANativeNVPTXTargetChip();
+		payload.binary = CUDANativeTextBytes(*ptx);
+		AppendU32(payload.scalarData, plan->outputElementCount);
+
+		const auto blockSize = std::min<std::uint32_t>(plan->outputElementCount, 256);
+		const auto gridSize = (plan->outputElementCount + blockSize - 1) / blockSize;
+		payload.kernels.push_back({
+		    .name = std::string(CUDANativeBatchMatMulF32KernelName()),
+		    .grid = { .x = gridSize, .y = 1, .z = 1 },
+		    .block = { .x = blockSize, .y = 1, .z = 1 },
+		    .arguments = {
+		        { .kind = CUDANativeArgumentKind::OutputTensor,
+		          .index = 0,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->outputElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->lhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->lhsElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::InputTensor,
+		          .index = plan->rhsInputIndex,
+		          .byteOffset = 0,
+		          .byteSize = static_cast<std::uint64_t>(plan->rhsElementCount) * sizeof(float) },
+		        { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) },
+		    },
+		});
+
+		auto inputSpecs = BuildInputSpecs(graph);
+		auto outputSpecs = BuildOutputSpecs(graph);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, llvm::sys::getDefaultTargetTriple(),
+		                              CompiledModuleBackend::CUDANative);
+		auto instructions = SerializeCUDANativeInstructionPayload(payload);
+		return CUDANativeArtifactParts{
+			.rodata = std::move(rodata),
+			.instructions = std::move(instructions),
+			.inputSpecs = std::move(inputSpecs),
+			.outputSpecs = std::move(outputSpecs),
+		};
+#else
+		(void) graph;
+		return std::nullopt;
+#endif
 	}
 
 	std::optional<CUDANativeArtifactParts> TryCompileCUDANativeMatMulLowPrecision(const Graph& graph)
@@ -14124,6 +14269,13 @@ namespace
 				                                 CompiledModuleBackend::CUDANative);
 			}
 			if (auto nativeParts = TryCompileCUDANativeMatMulF32(graph))
+			{
+				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
+				                                 std::move(nativeParts->inputSpecs),
+				                                 std::move(nativeParts->outputSpecs),
+				                                 CompiledModuleBackend::CUDANative);
+			}
+			if (auto nativeParts = TryCompileCUDANativeBatchMatMulF32(graph))
 			{
 				return MakeCompiledArtifactParts(std::move(nativeParts->rodata), std::move(nativeParts->instructions),
 				                                 std::move(nativeParts->inputSpecs),

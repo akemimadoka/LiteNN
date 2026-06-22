@@ -2539,6 +2539,9 @@ placement and fallback policy.
       - [x] RoPE is now a first-class graph node instead of a Reshape/Slice/trigonometric expansion; static offsets and
             runtime Int32/Int64 positions share Interpreter, CPU AOT, package, validation, and CUDA native semantics.
             CUDA artifacts carry inverse-frequency tables as constant data and cover static/dynamic runtime parity.
+      - [x] BatchMatMul f32 now has a CUDA native MLIR/NVPTX correctness slice with broadcast batch-dimension support,
+            artifact feature reporting, and runtime parity. This covers the unfused attention score and value-aggregation
+            building blocks while tiled/shared-memory or cuBLAS batched GEMM remains a performance follow-up.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
 - [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.

@@ -183,6 +183,23 @@ namespace
 		return graph;
 	}
 
+	Graph BuildBatchMatMulGraph(std::vector<std::size_t> lhsShape, std::vector<std::size_t> rhsShape,
+	                            std::vector<std::size_t> outputShape, std::string outputName)
+	{
+		Graph graph;
+		Subgraph sg;
+		const auto lhs = sg.AddParam(DataType::Float32, lhsShape);
+		const auto rhs = sg.AddParam(DataType::Float32, rhsShape);
+		const auto y =
+		    sg.AddNode(BatchMatMulNode{ { lhs, 0 }, { rhs, 0 } }, { OutputInfo{ DataType::Float32, outputShape } });
+		sg.SetResults({ { y, 0 } });
+		graph.AddSubgraph(std::move(sg));
+		graph.SetForward(0);
+		graph.SetInputNames({ "lhs", "rhs" });
+		graph.SetOutputNames({ std::move(outputName) });
+		return graph;
+	}
+
 	Graph BuildSimplePowGraph()
 	{
 		return BuildSimpleBinaryGraph(BinaryOp::Pow, "pow");
@@ -1521,6 +1538,23 @@ TEST(CompiledModuleCUDATest, CompilerArtifactsExposeP3NativePayloads)
 		EXPECT_EQ(payload.kernels[0].name, CUDANativeSoftmaxF32KernelName());
 	}
 
+	{
+		auto artifact = Compiler<CUDA>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(
+		    BuildBatchMatMulGraph({ 2, 2, 3 }, { 2, 3, 2 }, { 2, 2, 2 }, "batch_matmul")));
+		ASSERT_EQ(artifact.Backend(), CompiledModuleBackend::CUDANative);
+		const auto payload = DeserializeCUDANativeInstructionPayload(artifact.Instructions());
+		EXPECT_EQ(payload.binaryKind, CUDANativeBinaryKind::PTX);
+		EXPECT_TRUE(payload.featureSet.HasFeature(CUDANativeFeature::BatchMatMulF32));
+		EXPECT_EQ(payload.target, CUDANativeNVPTXTargetChip());
+		ASSERT_EQ(payload.kernels.size(), 1u);
+		EXPECT_EQ(payload.kernels[0].name, CUDANativeBatchMatMulF32KernelName());
+		ASSERT_EQ(payload.kernels[0].arguments.size(), 4u);
+		EXPECT_EQ(payload.kernels[0].arguments[0].byteSize, 8u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[1].byteSize, 12u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[2].byteSize, 12u * sizeof(float));
+		EXPECT_EQ(payload.kernels[0].arguments[3].kind, CUDANativeArgumentKind::Scalar);
+	}
+
 	for (const auto indexType : { DataType::Int32, DataType::Int64 })
 	{
 		auto artifact = Compiler<CUDA>::CompileArtifact(
@@ -2136,6 +2170,25 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "softmax_axis0",
 	    .graph = BuildSoftmaxGraph({ 2, 3 }, 0, "softmax_axis0"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 0.5, -1.0, 4.0 }, .shape = { 2, 3 } } },
+	    .runCPUAOT = false,
+	    .tolerance = 1.0e-5F,
+	});
+	cases.push_back(Case{
+	    .name = "batch_matmul",
+	    .graph = BuildBatchMatMulGraph({ 2, 2, 3 }, { 2, 3, 2 }, { 2, 2, 2 }, "batch_matmul"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, 0.5, 2.0, 3.0, -2.0, 1.0 },
+	                                 .shape = { 2, 2, 3 } },
+	                TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0, -2.0, 1.0, 3.0, 0.5, 1.0, -1.0 },
+	                                 .shape = { 2, 3, 2 } } },
+	    .runCPUAOT = false,
+	    .tolerance = 1.0e-5F,
+	});
+	cases.push_back(Case{
+	    .name = "batch_matmul_broadcast_rhs",
+	    .graph = BuildBatchMatMulGraph({ 2, 2, 3 }, { 1, 3, 2 }, { 2, 2, 2 }, "batch_matmul_broadcast_rhs"),
+	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, 0.5, 2.0, 3.0, -2.0, 1.0 },
+	                                 .shape = { 2, 2, 3 } },
+	                TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0 }, .shape = { 1, 3, 2 } } },
 	    .runCPUAOT = false,
 	    .tolerance = 1.0e-5F,
 	});

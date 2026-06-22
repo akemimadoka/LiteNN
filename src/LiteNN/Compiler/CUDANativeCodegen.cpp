@@ -400,6 +400,15 @@ namespace LiteNN
 			std::vector<std::uint32_t> rhs;
 		};
 
+		struct CUDANativeBatchMatMulStrides
+		{
+			std::vector<std::uint32_t> outputLead;
+			std::vector<std::uint32_t> lhsLead;
+			std::vector<std::uint32_t> rhsLead;
+			std::size_t lhsLeadDelta{};
+			std::size_t rhsLeadDelta{};
+		};
+
 		CUDANativeBroadcastStrides ComputeBroadcastStrides(const CUDANativeBroadcastBinaryF32CodegenSpec& spec)
 		{
 			if (spec.outputShape.size() != spec.lhsShape.size() || spec.outputShape.size() != spec.rhsShape.size())
@@ -427,6 +436,67 @@ namespace LiteNN
 			}
 			return CUDANativeBroadcastStrides{ std::move(*outputStrides), std::move(*lhsStrides),
 				                               std::move(*rhsStrides) };
+		}
+
+		CUDANativeBatchMatMulStrides ComputeBatchMatMulStrides(const CUDANativeBatchMatMulF32CodegenSpec& spec)
+		{
+			if (spec.lhsShape.size() < 3 || spec.rhsShape.size() < 3 || spec.outputShape.size() < 3)
+			{
+				throw std::runtime_error("CUDA native BatchMatMul requires rank >= 3 tensors");
+			}
+			if (spec.lhsShape[spec.lhsShape.size() - 1] != spec.rhsShape[spec.rhsShape.size() - 2] ||
+			    spec.outputShape[spec.outputShape.size() - 2] != spec.lhsShape[spec.lhsShape.size() - 2] ||
+			    spec.outputShape[spec.outputShape.size() - 1] != spec.rhsShape[spec.rhsShape.size() - 1])
+			{
+				throw std::runtime_error("CUDA native BatchMatMul received incompatible matrix dimensions");
+			}
+
+			const auto outputLeadRank = spec.outputShape.size() - 2;
+			const auto lhsLeadRank = spec.lhsShape.size() - 2;
+			const auto rhsLeadRank = spec.rhsShape.size() - 2;
+			if (lhsLeadRank > outputLeadRank || rhsLeadRank > outputLeadRank)
+			{
+				throw std::runtime_error("CUDA native BatchMatMul leading ranks are incompatible");
+			}
+			const auto lhsLeadDelta = outputLeadRank - lhsLeadRank;
+			const auto rhsLeadDelta = outputLeadRank - rhsLeadRank;
+			for (std::size_t dim = 0; dim < outputLeadRank; ++dim)
+			{
+				const auto outDim = spec.outputShape[dim];
+				if (dim >= lhsLeadDelta)
+				{
+					const auto lhsDim = spec.lhsShape[dim - lhsLeadDelta];
+					if (lhsDim != 1 && lhsDim != outDim)
+					{
+						throw std::runtime_error("CUDA native BatchMatMul lhs batch dimension is not broadcastable");
+					}
+				}
+				if (dim >= rhsLeadDelta)
+				{
+					const auto rhsDim = spec.rhsShape[dim - rhsLeadDelta];
+					if (rhsDim != 1 && rhsDim != outDim)
+					{
+						throw std::runtime_error("CUDA native BatchMatMul rhs batch dimension is not broadcastable");
+					}
+				}
+			}
+
+			auto outputLeadStrides = ContiguousStridesU32(spec.outputShape.subspan(0, outputLeadRank));
+			auto lhsStrides = ContiguousStridesU32(spec.lhsShape);
+			auto rhsStrides = ContiguousStridesU32(spec.rhsShape);
+			if (!outputLeadStrides || !lhsStrides || !rhsStrides)
+			{
+				throw std::runtime_error("CUDA native BatchMatMul shape is too large for u32 indexing");
+			}
+			std::vector<std::uint32_t> lhsLeadStrides(lhsStrides->begin(), lhsStrides->begin() + lhsLeadRank);
+			std::vector<std::uint32_t> rhsLeadStrides(rhsStrides->begin(), rhsStrides->begin() + rhsLeadRank);
+			return CUDANativeBatchMatMulStrides{
+				.outputLead = std::move(*outputLeadStrides),
+				.lhsLead = std::move(lhsLeadStrides),
+				.rhsLead = std::move(rhsLeadStrides),
+				.lhsLeadDelta = lhsLeadDelta,
+				.rhsLeadDelta = rhsLeadDelta,
+			};
 		}
 
 		struct CUDANativeMLIRKernelModule
@@ -782,6 +852,87 @@ namespace LiteNN
 				    builder_.create<mlir::arith::SelectOp>(loc_, isFirst, rotatedFirst, rotatedSecond).getResult();
 				EmitStoreF32(result, EmitF32GEP(out, blocks.index32));
 				FinishLinearKernel(blocks);
+				return FinalizeModule(std::move(kernelModule.module));
+			}
+
+			mlir::OwningOpRef<mlir::ModuleOp> BuildBatchMatMulF32(const CUDANativeBatchMatMulF32CodegenSpec& spec)
+			{
+				ValidateShapeDimsU32(spec.lhsShape);
+				ValidateShapeDimsU32(spec.rhsShape);
+				ValidateShapeDimsU32(spec.outputShape);
+				const auto outputElementCount = NumElementsU32(spec.outputShape, "batch matmul output");
+				const auto strides = ComputeBatchMatMulStrides(spec);
+				const auto outputRank = spec.outputShape.size();
+				const auto outputLeadRank = outputRank - 2;
+				const auto m = static_cast<std::uint32_t>(spec.outputShape[outputRank - 2]);
+				const auto n = static_cast<std::uint32_t>(spec.outputShape[outputRank - 1]);
+				const auto k = static_cast<std::uint32_t>(spec.lhsShape[spec.lhsShape.size() - 1]);
+				const auto lhsMatrixStride = m * k;
+				const auto rhsMatrixStride = k * n;
+				const auto outputMatrixStride = m * n;
+
+				auto kernelModule = CreateKernelModule();
+				llvm::SmallVector<mlir::Type, 4> argTypes{ ptrType_, ptrType_, ptrType_, i32Type_ };
+				auto func = CreateKernelFunc(kernelModule.gpuModule, CUDANativeBatchMatMulF32KernelName(), argTypes);
+				auto blocks = EmitLinearIndexGuard(func, 3);
+
+				builder_.setInsertionPointToStart(blocks.body);
+				auto out = blocks.entry->getArgument(0);
+				auto lhs = blocks.entry->getArgument(1);
+				auto rhs = blocks.entry->getArgument(2);
+				auto matrixStride = EmitI32Constant(outputMatrixStride);
+				auto matrixIndex = EmitI32UDiv(blocks.index32, matrixStride);
+				auto innerIndex = EmitI32URem(blocks.index32, matrixStride);
+				auto row = EmitI32UDiv(innerIndex, EmitI32Constant(n));
+				auto column = EmitI32URem(innerIndex, EmitI32Constant(n));
+
+				auto lhsBatchBase = EmitI32Constant(0);
+				auto rhsBatchBase = EmitI32Constant(0);
+				for (std::size_t dim = 0; dim < outputLeadRank; ++dim)
+				{
+					auto coord = EmitI32Constant(0);
+					if (!strides.outputLead.empty())
+					{
+						coord = EmitI32URem(EmitI32UDiv(matrixIndex, EmitI32Constant(strides.outputLead[dim])),
+						                    EmitI32Constant(static_cast<std::uint32_t>(spec.outputShape[dim])));
+					}
+					if (dim >= strides.lhsLeadDelta)
+					{
+						const auto lhsDimIndex = dim - strides.lhsLeadDelta;
+						if (spec.lhsShape[lhsDimIndex] != 1)
+						{
+							lhsBatchBase = EmitI32Add(lhsBatchBase,
+							                          EmitI32Mul(coord, EmitI32Constant(strides.lhsLead[lhsDimIndex])));
+						}
+					}
+					if (dim >= strides.rhsLeadDelta)
+					{
+						const auto rhsDimIndex = dim - strides.rhsLeadDelta;
+						if (spec.rhsShape[rhsDimIndex] != 1)
+						{
+							rhsBatchBase = EmitI32Add(rhsBatchBase,
+							                          EmitI32Mul(coord, EmitI32Constant(strides.rhsLead[rhsDimIndex])));
+						}
+					}
+				}
+
+				auto accumulator = EmitF32Constant(0.0F);
+				for (std::uint32_t reduceIndex = 0; reduceIndex < k; ++reduceIndex)
+				{
+					auto lhsOffset = EmitI32Add(
+					    lhsBatchBase, EmitI32Add(EmitI32Mul(row, EmitI32Constant(k)), EmitI32Constant(reduceIndex)));
+					auto rhsOffset = EmitI32Add(
+					    rhsBatchBase, EmitI32Add(EmitI32Mul(EmitI32Constant(reduceIndex), EmitI32Constant(n)), column));
+					auto lhsValue = EmitLoadF32(EmitF32GEP(lhs, lhsOffset));
+					auto rhsValue = EmitLoadF32(EmitF32GEP(rhs, rhsOffset));
+					accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, rhsValue));
+				}
+				EmitStoreF32(accumulator, EmitF32GEP(out, blocks.index32));
+				FinishLinearKernel(blocks);
+
+				(void) outputElementCount;
+				(void) lhsMatrixStride;
+				(void) rhsMatrixStride;
 				return FinalizeModule(std::move(kernelModule.module));
 			}
 
@@ -1865,6 +2016,12 @@ namespace LiteNN
 			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildRoPEF32(spec); });
 		}
 
+		std::string EmitBatchMatMulF32PTXFromMLIRNVPTX(const CUDANativeBatchMatMulF32CodegenSpec& spec)
+		{
+			return BuildAndEmitMLIRGPUToNVPTX(
+			    [&](CUDANativeMLIRKernelBuilder& builder) { return builder.BuildBatchMatMulF32(spec); });
+		}
+
 		std::string EmitCastPTXFromMLIRNVPTX(const CUDANativeCastCodegenSpec& spec)
 		{
 			return BuildAndEmitMLIRGPUToNVPTX(
@@ -2001,6 +2158,11 @@ namespace LiteNN
 		}
 		return positionType ? std::format("litenn_rope_f32_{}", *positionType == DataType::Int32 ? "i32" : "i64")
 		                    : "litenn_rope_f32_static";
+	}
+
+	std::string_view CUDANativeBatchMatMulF32KernelName()
+	{
+		return "litenn_batch_matmul_f32";
 	}
 
 	std::string_view CUDANativeMatMulBiasEpilogueF32KernelName(bool relu)
@@ -2212,6 +2374,24 @@ namespace LiteNN
 		try
 		{
 			return CUDANativeRoPEF32PTXFromMLIRNVPTX(spec);
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	std::string CUDANativeBatchMatMulF32PTXFromMLIRNVPTX(const CUDANativeBatchMatMulF32CodegenSpec& spec)
+	{
+		return EmitBatchMatMulF32PTXFromMLIRNVPTX(spec);
+	}
+
+	std::optional<std::string>
+	TryCUDANativeBatchMatMulF32PTXFromMLIRNVPTX(const CUDANativeBatchMatMulF32CodegenSpec& spec)
+	{
+		try
+		{
+			return CUDANativeBatchMatMulF32PTXFromMLIRNVPTX(spec);
 		}
 		catch (const std::exception&)
 		{
