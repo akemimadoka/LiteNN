@@ -2616,6 +2616,10 @@ placement and fallback policy.
       sampler.
 - [x] Add decode-loop generation guards for EOS early stop, explicit `--ignore-eos`, prompt/generated-token accounting,
       and model context-length rejection before plan construction.
+- [x] Add decode-loop backend/timing observability to the GGUF CLI:
+      `--run-llama-*-decode-loop` summaries now include backend, fallback count, executed steps, per-step min/avg/max,
+      ms/generated-token, and generated tokens/s for the current CPU Interpreter runner. CUDA-native/bridge rows remain
+      gated on the executable CUDA stateful decode runner.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:

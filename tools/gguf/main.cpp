@@ -686,6 +686,8 @@ namespace
 		std::vector<std::size_t> lastLogitsShape;
 		std::size_t generatedTokenCount = 0;
 		bool stoppedOnEos = false;
+		std::vector<double> stepTimesMs;
+		stepTimesMs.reserve(maxRunCount);
 		if (options.logitsOutputDirectory)
 		{
 			std::filesystem::create_directories(*options.logitsOutputDirectory);
@@ -694,6 +696,7 @@ namespace
 		const auto runStart = std::chrono::steady_clock::now();
 		for (std::size_t step = 0; step < maxRunCount; ++step)
 		{
+			const auto stepStart = std::chrono::steady_clock::now();
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
 			inputs.push_back(std::move(currentPosition));
@@ -761,6 +764,8 @@ namespace
 			{
 				caches.push_back(std::move(outputs[i]));
 			}
+			const auto stepEnd = std::chrono::steady_clock::now();
+			stepTimesMs.push_back(std::chrono::duration<double, std::milli>(stepEnd - stepStart).count());
 			if (stoppedOnEos)
 			{
 				break;
@@ -770,13 +775,28 @@ namespace
 
 		const auto buildMs = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
 		const auto runMs = std::chrono::duration<double, std::milli>(runEnd - runStart).count();
+		const auto executedSteps = stepTimesMs.size();
+		double stepMsSum = 0.0;
+		for (const auto stepMs : stepTimesMs)
+		{
+			stepMsSum += stepMs;
+		}
+		const auto stepMsAvg = executedSteps == 0 ? 0.0 : stepMsSum / static_cast<double>(executedSteps);
+		const auto [stepMsMinIt, stepMsMaxIt] = std::ranges::minmax_element(stepTimesMs);
+		const auto stepMsMin = stepTimesMs.empty() ? 0.0 : *stepMsMinIt;
+		const auto stepMsMax = stepTimesMs.empty() ? 0.0 : *stepMsMaxIt;
+		const auto msPerToken = generatedTokenCount == 0 ? 0.0 : runMs / static_cast<double>(generatedTokenCount);
+		const auto tokensPerSecond = runMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / runMs;
 
 		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
 		          << " prompt_tokens=" << initialTokenIds.size() << " generated_tokens=" << generatedTokenCount
-		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << " cached_plans=1"
-		          << " build_ms=" << buildMs << " run_ms=" << runMs << " outputs_per_step=" << lastOutputCount
-		          << " last_logits_shape=";
+		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
+		          << " backend=cpu_interpreter fallback_count=0 fallback=false cached_plans=1 executed_steps="
+		          << executedSteps << " build_ms=" << buildMs << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg
+		          << " step_ms_min=" << stepMsMin << " step_ms_max=" << stepMsMax
+		          << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
+		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
 		if (options.logitsOutputPath)
 		{
@@ -800,7 +820,10 @@ namespace
 			output << TokenListText(history) << '\n'
 			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n'
 			       << "generated_tokens=" << generatedTokenCount
-			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false") << '\n';
+			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
+			       << " backend=cpu_interpreter fallback_count=0 executed_steps=" << executedSteps
+			       << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg << " ms_per_generated_token=" << msPerToken
+			       << " generated_tokens_per_second=" << tokensPerSecond << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + *options.outputPath);
