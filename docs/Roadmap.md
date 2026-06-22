@@ -2527,7 +2527,7 @@ placement and fallback policy.
 
 #### G16.5 CUDA Native Coverage for Full Decode
 
-- [ ] Cover the full decode-step operator set in CUDA native or explicit bridge form: embedding/get-rows, RMSNorm, RoPE,
+- [x] Cover the full decode-step operator set in CUDA native or explicit bridge form: embedding/get-rows, RMSNorm, RoPE,
       Q/K/V projections, KV append/view, attention score, causal mask, softmax, value aggregation, SwiGLU, residuals, and
       output projection.
       - [x] Softmax f32 now has a CUDA native MLIR/NVPTX correctness slice with artifact feature reporting and runtime
