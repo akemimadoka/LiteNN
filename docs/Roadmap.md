@@ -2520,7 +2520,9 @@ placement and fallback policy.
       full-model decode-loop and golden-logit acceptance gates explicit.
 - [x] Add CPU AOT parity tests for affine and packed-nibble quantized projection lowering, plus an explicit diagnostic
       test for unsupported FP4 packed MatMul lowering.
-- [ ] Add parity tests comparing native GGML/CUDA quantized projection with ggml dequantize-plus-float reference.
+- [x] Add parity tests comparing native GGML/CUDA quantized projection with ggml dequantize-plus-float reference:
+      CUDA Q8_0/Q4_K/Q5_K/Q6_K projection tests now build the expected output by materializing a dequantized float
+      weight matrix and running the normal float MatMul reference.
 - [x] Add a fallback policy matrix: reject, CPU reference dequantize, CUDA dequantize-then-GEMM, or native quantized CUDA.
 
 #### G16.5 CUDA Native Coverage for Full Decode

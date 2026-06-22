@@ -417,9 +417,49 @@ namespace
 		return bytes;
 	}
 
+	Tensor<CPU> MakeGGMLQ8_0WeightStorage();
+
+	template <typename DecodeWeight>
+	Tensor<CPU> EvalDequantizedMatMulReference(const Tensor<CPU>& input, std::size_t outFeatures,
+	                                           std::size_t inFeatures, DecodeWeight decodeWeight)
+	{
+		std::vector<double> transposedWeight(inFeatures * outFeatures);
+		for (std::size_t k = 0; k < inFeatures; ++k)
+		{
+			for (std::size_t out = 0; out < outFeatures; ++out)
+			{
+				transposedWeight[k * outFeatures + out] = static_cast<double>(decodeWeight(out, k));
+			}
+		}
+		return Detail::EvalBatchMatMul(input,
+		                               Tensor<CPU>(transposedWeight, { inFeatures, outFeatures }, DataType::Float32));
+	}
+
 	Graph BuildGGMLQ8_0QuantizedMatMulGraph()
 	{
 		constexpr std::size_t batch = 2;
+		constexpr std::size_t inFeatures = 32;
+		constexpr std::size_t outFeatures = 3;
+		auto params =
+		    BlockQuantization(QuantizedBlockFormat::GGML_Q8_0, { outFeatures, inFeatures }, DataType::Float32);
+
+		Graph graph;
+		const auto weight = graph.AddVariable(Variable::CreateFrozenQuantized(MakeGGMLQ8_0WeightStorage(), params));
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { batch, inFeatures });
+		const auto weightRef =
+		    sg.AddNode(VariableRefNode{ weight }, { OutputInfo{ DataType::UInt8, { outFeatures, 34 } } });
+		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weightRef, 0 }, params, true },
+		                               { OutputInfo{ DataType::Float32, { batch, outFeatures } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
+	Tensor<CPU> MakeGGMLQ8_0WeightStorage()
+	{
 		constexpr std::size_t inFeatures = 32;
 		constexpr std::size_t outFeatures = 3;
 		constexpr float scale = 0.25F;
@@ -439,22 +479,7 @@ namespace
 
 		auto tensor = Tensor<CPU>(Uninitialized, { outFeatures, 34 }, DataType::UInt8);
 		std::memcpy(tensor.UnsafeRawData(), storage.data(), storage.size());
-		auto params =
-		    BlockQuantization(QuantizedBlockFormat::GGML_Q8_0, { outFeatures, inFeatures }, DataType::Float32);
-
-		Graph graph;
-		const auto weight = graph.AddVariable(Variable::CreateFrozenQuantized(std::move(tensor), params));
-		Subgraph sg;
-		const auto input = sg.AddParam(DataType::Float32, { batch, inFeatures });
-		const auto weightRef =
-		    sg.AddNode(VariableRefNode{ weight }, { OutputInfo{ DataType::UInt8, { outFeatures, 34 } } });
-		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weightRef, 0 }, params, true },
-		                               { OutputInfo{ DataType::Float32, { batch, outFeatures } } });
-		sg.SetResults({ { output, 0 } });
-		graph.SetForward(graph.AddSubgraph(std::move(sg)));
-		graph.SetInputNames({ "input" });
-		graph.SetOutputNames({ "output" });
-		return graph;
+		return tensor;
 	}
 
 	Graph BuildGGMLQ4_KQuantizedMatMulGraph()
@@ -981,20 +1006,10 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ8_0QuantizedMatMulOnCUDA)
 	ASSERT_EQ(outputs.size(), 1u);
 	auto actual = outputs[0].CopyToDevice(CPU{});
 
-	std::array<float, 6> expected{};
-	for (std::size_t row = 0; row < 2; ++row)
-	{
-		for (std::size_t out = 0; out < 3; ++out)
-		{
-			float sum = 0.0F;
-			for (std::size_t k = 0; k < 32; ++k)
-			{
-				const auto q = static_cast<float>(static_cast<int>((out + k) % 17) - 8);
-				sum += ReadFloat(input, row * 32 + k) * 0.25F * q;
-			}
-			expected[row * 3 + out] = sum;
-		}
-	}
+	const auto expected = EvalDequantizedMatMulReference(input, 3, 32, [](std::size_t out, std::size_t k) {
+		const auto q = static_cast<float>(static_cast<int>((out + k) % 17) - 8);
+		return 0.25F * q;
+	});
 	ExpectTensorNear(actual, expected, 1.0e-3F);
 }
 
@@ -1024,17 +1039,10 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ4_KQuantizedMatMulOnCUDA)
 	ASSERT_EQ(outputs.size(), 1u);
 	auto actual = outputs[0].CopyToDevice(CPU{});
 
-	std::array<float, 2> expected{};
-	for (std::size_t out = 0; out < 2; ++out)
-	{
-		float sum = 0.0F;
-		for (std::size_t k = 0; k < 256; ++k)
-		{
-			const auto q = static_cast<float>((out + k) % 16);
-			sum += ReadFloat(input, k) * 0.25F * q;
-		}
-		expected[out] = sum;
-	}
+	const auto expected = EvalDequantizedMatMulReference(input, 2, 256, [](std::size_t out, std::size_t k) {
+		const auto q = static_cast<float>((out + k) % 16);
+		return 0.25F * q;
+	});
 	ExpectTensorNear(actual, expected, 1.0e-3F);
 }
 
@@ -1064,17 +1072,10 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ5_KQuantizedMatMulOnCUDA)
 	ASSERT_EQ(outputs.size(), 1u);
 	auto actual = outputs[0].CopyToDevice(CPU{});
 
-	std::array<float, 2> expected{};
-	for (std::size_t out = 0; out < 2; ++out)
-	{
-		float sum = 0.0F;
-		for (std::size_t k = 0; k < 256; ++k)
-		{
-			const auto q = static_cast<float>((out * 3 + k) % 32);
-			sum += ReadFloat(input, k) * 0.125F * q;
-		}
-		expected[out] = sum;
-	}
+	const auto expected = EvalDequantizedMatMulReference(input, 2, 256, [](std::size_t out, std::size_t k) {
+		const auto q = static_cast<float>((out * 3 + k) % 32);
+		return 0.125F * q;
+	});
 	ExpectTensorNear(actual, expected, 1.0e-3F);
 }
 
@@ -1104,22 +1105,15 @@ TEST(CompiledModuleCUDATest, RunsNativeGGMLQ6_KQuantizedMatMulOnCUDA)
 	ASSERT_EQ(outputs.size(), 1u);
 	auto actual = outputs[0].CopyToDevice(CPU{});
 
-	std::array<float, 2> expected{};
-	for (std::size_t out = 0; out < 2; ++out)
-	{
-		float sum = 0.0F;
-		for (std::size_t k = 0; k < 256; ++k)
-		{
-			const auto halfBlock = k / 128;
-			const auto local = k % 128;
-			const auto segment = local / 32;
-			const auto laneInSegment = local % 32;
-			const auto scale = static_cast<float>(Q6KScale(out, halfBlock, segment, laneInSegment));
-			const auto quant = static_cast<float>(Q6KQuant(out, k));
-			sum += ReadFloat(input, k) * 0.125F * scale * quant;
-		}
-		expected[out] = sum;
-	}
+	const auto expected = EvalDequantizedMatMulReference(input, 2, 256, [](std::size_t out, std::size_t k) {
+		const auto halfBlock = k / 128;
+		const auto local = k % 128;
+		const auto segment = local / 32;
+		const auto laneInSegment = local % 32;
+		const auto scale = static_cast<float>(Q6KScale(out, halfBlock, segment, laneInSegment));
+		const auto quant = static_cast<float>(Q6KQuant(out, k));
+		return 0.125F * scale * quant;
+	});
 	ExpectTensorNear(actual, expected, 1.0e-3F);
 }
 #endif
