@@ -1659,13 +1659,250 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const QuantizedGetRowsNode&, std::span<const OutputInfo>,
-			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const QuantizedGetRowsNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error(
-				    "GraphToMLIR QuantizedGetRowsNode lowering is not implemented; use Interpreter token embedding "
-				    "smoke or add a native quantized embedding gather kernel");
+				if (outputInfos.size() != 1 || node.params.scheme != QuantizationScheme::Block ||
+				    node.params.expressedType != DataType::Float32 || node.params.storageType != DataType::UInt8 ||
+				    !IsGGMLQuantizedBlockFormat(node.params.blockFormat))
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedGetRowsNode currently supports GGML block-quantized Float32 rows only");
+				}
+				if (node.params.blockFormat != QuantizedBlockFormat::GGML_Q4_K &&
+				    node.params.blockFormat != QuantizedBlockFormat::GGML_Q5_K &&
+				    node.params.blockFormat != QuantizedBlockFormat::GGML_Q6_K &&
+				    node.params.blockFormat != QuantizedBlockFormat::GGML_Q8_0)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedGetRowsNode supports GGML_Q4_K, GGML_Q5_K, GGML_Q6_K, and GGML_Q8_0");
+				}
+
+				const auto storageInfo = sg.GetOutputInfo(node.storage);
+				const auto indicesInfo = sg.GetOutputInfo(node.indices);
+				const auto& outputInfo = outputInfos[0];
+				const auto layout = GetQuantizedBlockLayout(node.params.blockFormat);
+				if (!layout || node.params.expressedShape.size() != 2 || indicesInfo.shape.size() != 1 ||
+				    (indicesInfo.dtype != DataType::Int32 && indicesInfo.dtype != DataType::Int64) ||
+				    storageInfo.dtype != DataType::UInt8 || storageInfo.shape.size() != 1 ||
+				    outputInfo.shape.size() != 2 || outputInfo.shape[0] != indicesInfo.shape[0] ||
+				    outputInfo.shape[1] != node.params.expressedShape[1])
+				{
+					throw std::runtime_error("GraphToMLIR QuantizedGetRowsNode shape metadata is inconsistent");
+				}
+				const auto rowCount = node.params.expressedShape[0];
+				const auto rowWidth = node.params.expressedShape[1];
+				if (rowWidth % layout->elementsPerBlock != 0 ||
+				    storageInfo.shape[0] != rowCount * (rowWidth / layout->elementsPerBlock) * layout->bytesPerBlock)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR QuantizedGetRowsNode storage size does not match the expressed table shape");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				auto storage = getVal(valueMap, node.storage);
+				auto indices = getVal(valueMap, node.indices);
+				auto resultType = convertTensorType(ctx_, outputInfo.dtype, outputInfo.shape);
+				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+				auto indicesMap = AffineMap::get(2, 0, { getAffineDimExpr(0, &ctx_) }, &ctx_);
+				auto outputMap = AffineMap::getMultiDimIdentityMap(2, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty },
+				    SmallVector<AffineMap>{ indicesMap, outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    const auto i16 = b.getI16Type();
+					    const auto i32 = b.getI32Type();
+					    auto index = [&](std::int64_t value) {
+						    return b.create<arith::ConstantIndexOp>(l, value).getResult();
+					    };
+					    auto byteAt = [&](Value byteIndex) {
+						    return b.create<tensor::ExtractOp>(l, storage, ValueRange{ byteIndex }).getResult();
+					    };
+					    auto byteToI32 = [&](Value byte) { return b.create<arith::ExtUIOp>(l, i32, byte).getResult(); };
+					    auto fp16At = [&](Value byteIndex) {
+						    auto low = b.create<arith::ExtUIOp>(l, i16, byteAt(byteIndex)).getResult();
+						    auto high =
+						        b.create<arith::ExtUIOp>(
+						             l, i16, byteAt(b.create<arith::AddIOp>(l, byteIndex, index(1)).getResult()))
+						            .getResult();
+						    auto bits = b.create<arith::OrIOp>(l, low,
+						                                       b.create<arith::ShLIOp>(
+						                                           l, high, b.create<arith::ConstantIntOp>(l, i16, 8)))
+						                    .getResult();
+						    return b
+						        .create<arith::ExtFOp>(l, b.getF32Type(),
+						                               b.create<arith::BitcastOp>(l, b.getF16Type(), bits).getResult())
+						        .getResult();
+					    };
+
+					    auto row = b.create<arith::IndexCastOp>(l, b.getIndexType(), args[0]).getResult();
+					    auto column = b.create<linalg::IndexOp>(l, 1).getResult();
+					    auto blockInRow =
+					        b.create<arith::DivUIOp>(l, column, index(layout->elementsPerBlock)).getResult();
+					    auto rowBlock =
+					        b.create<arith::AddIOp>(
+					             l, b.create<arith::MulIOp>(l, row, index(rowWidth / layout->elementsPerBlock)),
+					             blockInRow)
+					            .getResult();
+					    auto blockBase = b.create<arith::MulIOp>(l, rowBlock, index(layout->bytesPerBlock)).getResult();
+					    auto withinBlock =
+					        b.create<arith::RemUIOp>(l, column, index(layout->elementsPerBlock)).getResult();
+					    auto d = fp16At(node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K
+					                        ? b.create<arith::AddIOp>(l, blockBase, index(208)).getResult()
+					                        : blockBase);
+					    Value value;
+					    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0)
+					    {
+						    auto quantIndex =
+						        b.create<arith::AddIOp>(l, b.create<arith::AddIOp>(l, blockBase, index(2)), withinBlock)
+						            .getResult();
+						    auto quant = b.create<arith::ExtSIOp>(l, i32, byteAt(quantIndex)).getResult();
+						    value = b.create<arith::MulFOp>(l, d, b.create<arith::SIToFPOp>(l, b.getF32Type(), quant))
+						                .getResult();
+					    }
+					    else if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K)
+					    {
+						    auto halfBlock = b.create<arith::DivUIOp>(l, withinBlock, index(128)).getResult();
+						    auto local = b.create<arith::RemUIOp>(l, withinBlock, index(128)).getResult();
+						    auto segment = b.create<arith::DivUIOp>(l, local, index(32)).getResult();
+						    auto lane = b.create<arith::RemUIOp>(l, local, index(32)).getResult();
+						    auto oddSegment = b.create<arith::RemUIOp>(l, segment, index(2)).getResult();
+						    auto qlOffset =
+						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, halfBlock, index(64)),
+						                                b.create<arith::AddIOp>(
+						                                    l, lane, b.create<arith::MulIOp>(l, oddSegment, index(32))))
+						            .getResult();
+						    auto ql = byteToI32(byteAt(b.create<arith::AddIOp>(l, blockBase, qlOffset)));
+						    auto highNibble =
+						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::uge, segment, index(2)).getResult();
+						    auto shift4 = b.create<arith::ConstantIntOp>(l, i32, 4);
+						    auto mask15 = b.create<arith::ConstantIntOp>(l, i32, 15);
+						    auto lowFour =
+						        b.create<arith::SelectOp>(l, highNibble, b.create<arith::ShRUIOp>(l, ql, shift4),
+						                                  b.create<arith::AndIOp>(l, ql, mask15))
+						            .getResult();
+						    auto qhOffset =
+						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, halfBlock, index(32)), lane)
+						            .getResult();
+						    auto qh = byteToI32(byteAt(b.create<arith::AddIOp>(
+						        l, b.create<arith::AddIOp>(l, blockBase, index(128)), qhOffset)));
+						    auto segmentI32 = b.create<arith::IndexCastOp>(l, i32, segment).getResult();
+						    auto shift =
+						        b.create<arith::MulIOp>(l, segmentI32, b.create<arith::ConstantIntOp>(l, i32, 2))
+						            .getResult();
+						    auto highTwo = b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, qh, shift),
+						                                           b.create<arith::ConstantIntOp>(l, i32, 3))
+						                       .getResult();
+						    auto quant =
+						        b.create<arith::SubIOp>(
+						             l, b.create<arith::OrIOp>(l, lowFour, b.create<arith::ShLIOp>(l, highTwo, shift4)),
+						             b.create<arith::ConstantIntOp>(l, i32, 32))
+						            .getResult();
+						    auto scaleOffset =
+						        b.create<arith::AddIOp>(
+						             l, b.create<arith::MulIOp>(l, halfBlock, index(8)),
+						             b.create<arith::AddIOp>(l, b.create<arith::DivUIOp>(l, lane, index(16)),
+						                                     b.create<arith::MulIOp>(l, segment, index(2))))
+						            .getResult();
+						    auto scale = b.create<arith::ExtSIOp>(
+						                      l, i32,
+						                      byteAt(b.create<arith::AddIOp>(
+						                          l, b.create<arith::AddIOp>(l, blockBase, index(192)), scaleOffset)))
+						                     .getResult();
+						    value =
+						        b.create<arith::MulFOp>(
+						             l,
+						             b.create<arith::MulFOp>(l, d, b.create<arith::SIToFPOp>(l, b.getF32Type(), scale)),
+						             b.create<arith::SIToFPOp>(l, b.getF32Type(), quant))
+						            .getResult();
+					    }
+					    else
+					    {
+						    auto dmin = fp16At(b.create<arith::AddIOp>(l, blockBase, index(2)).getResult());
+						    auto subblock = b.create<arith::DivUIOp>(l, withinBlock, index(32)).getResult();
+						    auto belowFour =
+						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::ult, subblock, index(4)).getResult();
+						    auto scalesBase = b.create<arith::AddIOp>(l, blockBase, index(4)).getResult();
+						    auto scaleLowOffset =
+						        b.create<arith::SelectOp>(l, belowFour, subblock,
+						                                  b.create<arith::AddIOp>(l, subblock, index(4)))
+						            .getResult();
+						    auto scaleLow = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, scaleLowOffset)));
+						    auto minLow = byteToI32(byteAt(b.create<arith::AddIOp>(
+						        l, scalesBase, b.create<arith::AddIOp>(l, subblock, index(4)))));
+						    auto mask63 = b.create<arith::ConstantIntOp>(l, i32, 63);
+						    auto scaleDirect = b.create<arith::AndIOp>(l, scaleLow, mask63).getResult();
+						    auto minDirect = b.create<arith::AndIOp>(l, minLow, mask63).getResult();
+						    auto highOffset = b.create<arith::SelectOp>(l, belowFour, index(0),
+						                                                b.create<arith::SubIOp>(l, subblock, index(4)))
+						                          .getResult();
+						    auto highSource = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, highOffset)));
+						    auto minHighSource = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, subblock)));
+						    auto shift4 = b.create<arith::ConstantIntOp>(l, i32, 4);
+						    auto shift6 = b.create<arith::ConstantIntOp>(l, i32, 6);
+						    auto mask15 = b.create<arith::ConstantIntOp>(l, i32, 15);
+						    auto scaleExtended =
+						        b.create<arith::OrIOp>(l, b.create<arith::AndIOp>(l, scaleLow, mask15),
+						                               b.create<arith::ShLIOp>(
+						                                   l, b.create<arith::ShRUIOp>(l, highSource, shift6), shift4))
+						            .getResult();
+						    auto minExtended = b.create<arith::OrIOp>(
+						                            l, b.create<arith::ShRUIOp>(l, minLow, shift4),
+						                            b.create<arith::ShLIOp>(
+						                                l, b.create<arith::ShRUIOp>(l, minHighSource, shift6), shift4))
+						                           .getResult();
+						    auto scale =
+						        b.create<arith::SelectOp>(l, belowFour, scaleDirect, scaleExtended).getResult();
+						    auto minimum = b.create<arith::SelectOp>(l, belowFour, minDirect, minExtended).getResult();
+						    auto quantOffset =
+						        b.create<arith::AddIOp>(
+						             l,
+						             b.create<arith::MulIOp>(l, b.create<arith::DivUIOp>(l, withinBlock, index(64)),
+						                                     index(32)),
+						             b.create<arith::RemUIOp>(l, withinBlock, index(32)))
+						            .getResult();
+						    const auto quantBaseOffset =
+						        node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ? 48 : 16;
+						    auto quantByte = byteToI32(byteAt(b.create<arith::AddIOp>(
+						        l, b.create<arith::AddIOp>(l, blockBase, index(quantBaseOffset)), quantOffset)));
+						    auto highNibble =
+						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::uge,
+						                                b.create<arith::RemUIOp>(l, withinBlock, index(64)), index(32))
+						            .getResult();
+						    auto nibble =
+						        b.create<arith::SelectOp>(l, highNibble, b.create<arith::ShRUIOp>(l, quantByte, shift4),
+						                                  b.create<arith::AndIOp>(l, quantByte, mask15))
+						            .getResult();
+						    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K)
+						    {
+							    auto highBits = byteToI32(byteAt(
+							        b.create<arith::AddIOp>(l, b.create<arith::AddIOp>(l, blockBase, index(16)),
+							                                b.create<arith::RemUIOp>(l, withinBlock, index(32)))));
+							    auto subblockI32 = b.create<arith::IndexCastOp>(l, i32, subblock).getResult();
+							    auto highBit =
+							        b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, highBits, subblockI32),
+							                                b.create<arith::ConstantIntOp>(l, i32, 1))
+							            .getResult();
+							    nibble = b.create<arith::OrIOp>(l, nibble, b.create<arith::ShLIOp>(l, highBit, shift4))
+							                 .getResult();
+						    }
+						    auto scaled =
+						        b.create<arith::MulFOp>(
+						             l,
+						             b.create<arith::MulFOp>(l, d, b.create<arith::UIToFPOp>(l, b.getF32Type(), scale)),
+						             b.create<arith::UIToFPOp>(l, b.getF32Type(), nibble))
+						            .getResult();
+						    value = b.create<arith::SubFOp>(
+						                 l, scaled,
+						                 b.create<arith::MulFOp>(l, dmin,
+						                                         b.create<arith::UIToFPOp>(l, b.getF32Type(), minimum)))
+						                .getResult();
+					    }
+					    b.create<linalg::YieldOp>(l, value);
+				    });
+				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,

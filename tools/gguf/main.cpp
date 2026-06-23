@@ -6,7 +6,6 @@
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
-#include <LiteNN/Runtime/Interpreter.h>
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
@@ -643,8 +642,17 @@ namespace
 		return tensor;
 	}
 
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	LiteNN::CompilerOptions CompilerOptionsFromEnvironment();
+#endif
+
 	void RunDecodeLoopFromGGUF(const DecodeLoopCommandOptions& options)
 	{
+#ifndef LITENN_GGUF_CONVERT_ENABLE_AOT
+		(void) options;
+		throw std::runtime_error(
+		    "LLaMA decode execution requires the AOT compiler; configure with LITENN_ENABLE_MLIR=ON");
+#else
 		if (options.steps == 0)
 		{
 			throw std::runtime_error("decode-loop steps must be positive");
@@ -674,9 +682,11 @@ namespace
 		auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(
 		    imported.model.UnsafeGraphView(), requestedTokenCount, { .preserveQuantizedWeights = true });
 		auto decodePlan = LiteNN::Detail::BuildExecutablePlanFromGraph(graph);
+		auto compilerOptions = CompilerOptionsFromEnvironment();
+		compilerOptions.enableCPUAOTExternalRegions = true;
+		auto decodeModule = LiteNN::Compiler<LiteNN::CPU>::Compile(decodePlan, compilerOptions);
 		const auto buildEnd = std::chrono::steady_clock::now();
 
-		LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
@@ -726,7 +736,7 @@ namespace
 				caches.clear();
 			}
 
-			auto outputs = interpreter.RunForward(decodePlan, inputs);
+			auto outputs = decodeModule.RunTensors(inputs);
 			if (outputs.size() < 2)
 			{
 				throw std::runtime_error("decode-loop produced no outputs");
@@ -792,7 +802,7 @@ namespace
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
 		          << " prompt_tokens=" << initialTokenIds.size() << " generated_tokens=" << generatedTokenCount
 		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
-		          << " backend=cpu_interpreter fallback_count=0 fallback=false cached_plans=1 executed_steps="
+		          << " backend=cpu_aot fallback_count=0 fallback=false cached_modules=1 executed_steps="
 		          << executedSteps << " build_ms=" << buildMs << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg
 		          << " step_ms_min=" << stepMsMin << " step_ms_max=" << stepMsMax
 		          << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
@@ -821,14 +831,15 @@ namespace
 			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n'
 			       << "generated_tokens=" << generatedTokenCount
 			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
-			       << " backend=cpu_interpreter fallback_count=0 executed_steps=" << executedSteps
-			       << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg << " ms_per_generated_token=" << msPerToken
+			       << " backend=cpu_aot fallback_count=0 executed_steps=" << executedSteps << " run_ms=" << runMs
+			       << " step_ms_avg=" << stepMsAvg << " ms_per_generated_token=" << msPerToken
 			       << " generated_tokens_per_second=" << tokensPerSecond << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + *options.outputPath);
 			}
 		}
+#endif
 	}
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
@@ -919,6 +930,21 @@ namespace
 		          << " bytes instructions=" << artifact.Instructions().size() << " bytes\n";
 	}
 #endif
+
+	std::vector<LiteNN::Tensor<LiteNN::CPU>> RunCPUModelAOT(const LiteNN::ExecutablePlan& plan,
+	                                                        std::span<const LiteNN::Tensor<LiteNN::CPU>> inputs)
+	{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+		auto options = CompilerOptionsFromEnvironment();
+		options.enableCPUAOTExternalRegions = true;
+		auto module = LiteNN::Compiler<LiteNN::CPU>::Compile(plan, options);
+		return module.RunTensors(inputs);
+#else
+		(void) plan;
+		(void) inputs;
+		throw std::runtime_error("GGUF model execution requires LITENN_ENABLE_MLIR=ON");
+#endif
+	}
 } // namespace
 
 int main(int argc, char** argv)
@@ -1137,8 +1163,7 @@ int main(int argc, char** argv)
 			                                                positionOffset, { .preserveQuantizedWeights = true });
 			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
 			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(tokenIds, plan));
-			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
-			const auto outputs = interpreter.RunForward(plan, inputs);
+			const auto outputs = RunCPUModelAOT(plan, inputs);
 			if (outputs.empty())
 			{
 				throw std::runtime_error("LLM package produced no outputs");
@@ -1169,8 +1194,7 @@ int main(int argc, char** argv)
 			                                                positionOffset, { .preserveQuantizedWeights = true });
 			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
 			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(tokenIds, plan));
-			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
-			const auto outputs = interpreter.RunForward(plan, inputs);
+			const auto outputs = RunCPUModelAOT(plan, inputs);
 			if (outputs.empty())
 			{
 				throw std::runtime_error("LLM package produced no outputs");
@@ -1200,8 +1224,7 @@ int main(int argc, char** argv)
 			                                                positionOffset, { .preserveQuantizedWeights = true });
 			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
 			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(prompt.tokenIds, plan));
-			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
-			const auto outputs = interpreter.RunForward(plan, inputs);
+			const auto outputs = RunCPUModelAOT(plan, inputs);
 			if (outputs.empty())
 			{
 				throw std::runtime_error("LLM package produced no outputs");
@@ -1230,8 +1253,7 @@ int main(int argc, char** argv)
 			const auto package = LiteNN::Serialization::LoadVNextModelPackage(argv[2]);
 			const auto tokenIds = ParseTokenIds(argv[3]);
 			auto inputs = MakeZeroStateInputs(package.plan, MakeTokenIdTensor(tokenIds, package.plan));
-			LiteNN::Runtime::Interpreter<LiteNN::CPU> interpreter(LiteNN::GGUF::TryEvalGGMLQuantizedMatMul);
-			const auto outputs = interpreter.RunForward(package.plan, inputs);
+			const auto outputs = RunCPUModelAOT(package.plan, inputs);
 			if (outputs.empty())
 			{
 				throw std::runtime_error("LLM package produced no outputs");

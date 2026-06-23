@@ -2121,6 +2121,18 @@ namespace
 		}
 
 		CPUMLIRExternalizedGraph result;
+		std::uint64_t projectedWeightBytes = 0;
+		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
+		{
+			const auto& data = graph.GetVariable(variableIndex)->Data();
+			projectedWeightBytes = AlignUpU64(projectedWeightBytes, 64);
+			projectedWeightBytes += static_cast<std::uint64_t>(data.NumElements()) * ElementByteSize(data.DType());
+		}
+		if (projectedWeightBytes > std::numeric_limits<std::size_t>::max())
+		{
+			throw std::runtime_error("CPU MLIR external weight region exceeds the host address space");
+		}
+		result.weights.reserve(static_cast<std::size_t>(projectedWeightBytes));
 		std::unordered_map<std::size_t, std::size_t> variableExternalIdMap;
 		std::vector<std::vector<std::optional<std::size_t>>> directExternalByNode(graph.SubgraphCount());
 		std::vector<std::vector<std::size_t>> externalDepsBySubgraph(graph.SubgraphCount());
@@ -12694,6 +12706,14 @@ CompiledModule<CPU> CompiledModuleArtifact::Load() const
 	return module;
 }
 
+CompiledModule<CPU> CompiledModuleArtifact::Load() &&
+{
+	auto module = CompiledModule<CPU>::Load(Image());
+	module.impl_->externalConstants = std::move(constants_);
+	module.impl_->externalWeights = std::move(weights_);
+	return module;
+}
+
 CompiledModuleImage CompiledModuleArtifact::Image() const
 {
 	return {
@@ -14501,15 +14521,15 @@ namespace
 			const auto shape = storage.type.StaticShape();
 			const auto* bytes = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset +
 			                    storage.storageOffsetBytes;
-			auto hostView = Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape },
-			                                            storage.type.dtype, CPU{});
+			auto hostView = Tensor<PolymorphicDevice>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape },
+			                                                          storage.type.dtype, PolymorphicDevice{ CPU{} });
 			if (storage.quantization)
 			{
-				graph.AddVariable(Variable::CreateFrozenQuantized(hostView, *storage.quantization));
+				graph.AddVariable(Variable::CreateFrozenQuantized(std::move(hostView), *storage.quantization));
 			}
 			else
 			{
-				graph.AddVariable(Variable::CreateFrozen(hostView));
+				graph.AddVariable(Variable::CreateFrozen(std::move(hostView)));
 			}
 		}
 
@@ -14824,7 +14844,8 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan)
 
 CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan, const CompilerOptions& options)
 {
-	return CompileArtifact(plan, options).Load();
+	auto artifact = CompileArtifact(plan, options);
+	return std::move(artifact).Load();
 }
 
 #ifdef LITENN_ENABLE_CUDA

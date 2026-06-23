@@ -2601,10 +2601,10 @@ placement and fallback policy.
       `index: value` text format as prefill logits dumping.
 - [x] Add a Qwen2.5-Coder/Qwen-family smoke example:
       `example/gguf/qwen_smoke.py` accepts a GGUF path, externally tokenized prompt ids or an optional llama.cpp prompt
-      capture, backend policy (`cpu-interpreter` for the current driver), max generated-token count, and an output file,
+      capture, backend policy (`cpu-aot` for the current driver), max generated-token count, and an output file,
       then writes a manifest-style smoke report with all command/stdout/stderr evidence.
 - [x] Add a token-id level GGUF smoke CLI: `--run-llama-token-ids` imports a GGUF file, lowers fixed-length prefill with
-      quantized weights preserved, executes through the CPU Interpreter plus GGML quantized MatMul adapter, and reports
+      quantized weights preserved, executes through CPU AOT with external weight regions, and reports
       logits shape plus greedy next token.
 - [x] Add a LiteNN prefill-logits dump CLI:
       `--dump-llama-token-id-logits` runs fixed-length token-id prefill and emits last-token logits as llama-debug-style
@@ -2614,7 +2614,7 @@ placement and fallback policy.
 - [x] Hydrate vNext `ConstantNode` / `QuantizedConstantNode` payloads from saved package descriptors for direct
       Interpreter execution of saved `.ltnn` graphs with inline constants.
 - [x] Add a saved-package token-id smoke CLI: `--run-llama-package-token-ids` loads a lowered `.ltnn` package, binds
-      caller-provided token ids, executes through the same quantized MatMul callback path, and reports greedy next token.
+      caller-provided token ids, executes through the same CPU AOT path, and reports greedy next token.
 - [x] Add a token-id decode-loop smoke CLI: `--run-llama-decode-loop-token-id` repeatedly executes static decode graphs,
       builds one max-capacity decode plan, advances the runtime position state, carries full-capacity KV-cache tensors
       between steps, and reports build/run timing plus generated token ids and tokenizer pieces when
@@ -2631,8 +2631,15 @@ placement and fallback policy.
       and model context-length rejection before plan construction.
 - [x] Add decode-loop backend/timing observability to the GGUF CLI:
       `--run-llama-*-decode-loop` summaries now include backend, fallback count, executed steps, per-step min/avg/max,
-      ms/generated-token, and generated tokens/s for the current CPU Interpreter runner. CUDA-native/bridge rows remain
+      ms/generated-token, and generated tokens/s for the current CPU AOT runner. CUDA-native/bridge rows remain
       gated on the executable CUDA stateful decode runner.
+- [x] Remove Interpreter execution from GGUF model-running CLI paths, add CPU AOT lowering for Q4_K/Q5_K/Q6_K/Q8_0
+      quantized embedding gathers, and keep large model weights borrowed while constructing the compiler graph.
+      External weight regions now reserve once and move from temporary artifacts into loaded modules; a real 14B Q4_K_M
+      compile held private memory near 25.7 GiB instead of growing beyond 44 GiB.
+- [ ] Replace generic MLIR expansion of GGML K-quant MatMul/GetRows with calls to reusable native CPU kernels so a real
+      14B decode module compiles in production-acceptable time. The current O1 smoke remained in compilation after about
+      five minutes and was stopped before execution; this is compile latency, not an Interpreter fallback.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

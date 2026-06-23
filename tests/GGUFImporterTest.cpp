@@ -1185,6 +1185,56 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 }
 
 #ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMAQuantizedExecution, CompilesQ4KTokenEmbeddingGatherWithoutInterpreter)
+{
+	constexpr std::size_t rowCount = 3;
+	constexpr std::size_t rowWidth = 256;
+	std::vector<float> tableValues(rowCount * rowWidth);
+	for (std::size_t i = 0; i < tableValues.size(); ++i)
+	{
+		tableValues[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.0625F;
+	}
+	const auto plainTable = Variable::Create(MakeFloatTensor(tableValues, { rowCount, rowWidth }));
+	const auto quantizedTable = QuantizeGGMLVariable(*plainTable, GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K);
+	const auto dequantized = GGUF::DequantizeGGMLBlockVariable(*quantizedTable, "q4_k.embedding");
+
+	Graph graph;
+	const auto tableVariable = graph.AddVariable(quantizedTable);
+	Subgraph forward;
+	const auto indices = forward.AddParam(DataType::Int32, { 2 });
+	const auto storage =
+	    forward.AddNode(VariableRefNode{ tableVariable },
+	                    std::vector<OutputInfo>{
+	                        OutputInfo{ quantizedTable->Data().DType(), quantizedTable->Data().Shape().ToOwned() } });
+	const auto rows =
+	    forward.AddNode(QuantizedGetRowsNode{ { storage, 0 }, { indices, 0 }, *quantizedTable->Quantization() },
+	                    std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { 2, rowWidth } } });
+	forward.SetResults(std::vector<NodeOutput>{ { rows, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	graph.SetInputNames({ "token_ids" });
+	graph.SetOutputNames({ "embeddings" });
+
+	Tensor<CPU> tokenIds(Uninitialized, { 2 }, DataType::Int32);
+	const std::array<std::int32_t, 2> tokenIdValues{ 2, 0 };
+	CPU cpu;
+	DeviceTraits<CPU>::CopyFromCPU(cpu, DataType::Int32, tokenIds.UnsafeRawData(), DataType::Int32,
+	                               tokenIdValues.data(), tokenIdValues.size());
+	const std::array<Tensor<CPU>, 1> inputs{ tokenIds };
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+	const auto outputs = compiled.RunTensors(inputs);
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].Shape(), (ShapeView{ 2, rowWidth }));
+	const auto* expected = static_cast<const float*>(dequantized.UnsafeRawData());
+	for (std::size_t column = 0; column < rowWidth; ++column)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], column), expected[2 * rowWidth + column], 1.0e-6F);
+		EXPECT_NEAR(ReadFloat(outputs[0], rowWidth + column), expected[column], 1.0e-6F);
+	}
+}
+#endif
+
+#ifdef LITENN_ENABLE_MLIR
 TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutMaterializingWeight)
 {
 	constexpr std::size_t inFeatures = 256;

@@ -54,7 +54,8 @@ but does not replace GPT2/BPE or llama.cpp tokenizer parity.
 `--run-llama-package-token-ids` runs an already lowered `.ltnn` package and is
 useful for validating conversion artifacts without re-importing the GGUF file.
 `--run-llama-decode-loop-token-id` is a decode-loop smoke path: it prebuilds the
-single max-capacity decode plan, advances an Int64 runtime position, carries
+single max-capacity decode plan, compiles it once through CPU AOT with external
+weight regions, advances an Int64 runtime position, carries
 full-capacity KV-cache tensors between steps, and prints build/run timing,
 generated token ids, and tokenizer pieces when `tokenizer.ggml.tokens` is
 available. If an output path is supplied,
@@ -77,7 +78,10 @@ comma-separated token ids, which is the preferred bridge for real tokenizer
 parity work until the optional llama.cpp tokenizer adapter is wired in.
 `--run-llama-prompt-decode-loop` feeds the exact-vocabulary prompt tokens through
 the same static decode loop first, then generates the requested number of new
-tokens.
+tokens. All GGUF model execution commands require an MLIR-enabled build and use
+CPU AOT; the Interpreter remains a correctness-test reference and is not a CLI
+model runtime. Large K-quant graphs currently have high first-compile latency
+because quantized MatMul is expanded into generic MLIR.
 
 When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
 emitted as carrier objects with exported rodata/instruction symbols:
@@ -276,7 +280,7 @@ python311 example\gguf\qwen_smoke.py `
   --model model.gguf `
   --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
   --token-ids 1,2,3,4 `
-  --backend-policy cpu-interpreter `
+  --backend-policy cpu-aot `
   --max-tokens 16 `
   --output build\gguf_qwen_smoke\generated_token_ids.txt `
   --workdir build\gguf_qwen_smoke
@@ -301,7 +305,7 @@ python311 example\gguf\qwen_smoke.py `
 `qwen_smoke.py` first runs the LiteNN LLM compatibility analyzer, then executes
 the selected token-id or llama.cpp-capture path and writes
 `qwen_smoke_report.json` with command, stdout, stderr, and return-code evidence.
-The current backend policy is intentionally limited to `cpu-interpreter`; CUDA
-and AOT decode policies are tracked as follow-up runtime integration work.
+The current backend policy is intentionally limited to `cpu-aot`; CUDA native
+and bridge decode policies are tracked as follow-up runtime integration work.
 
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.

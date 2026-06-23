@@ -96,9 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default="qwen2-like-causal-lm")
     parser.add_argument(
         "--backend-policy",
-        choices=("cpu-interpreter",),
-        default="cpu-interpreter",
-        help="Execution policy for this smoke driver; CUDA/AOT policies are tracked separately",
+        choices=("cpu-aot",),
+        default="cpu-aot",
+        help="Execution policy for this smoke driver; CUDA policies are tracked separately",
     )
     parser.add_argument("--sample", choices=("greedy", "random"), default="greedy")
     parser.add_argument("--seed", type=int, default=42)

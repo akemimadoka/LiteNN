@@ -285,6 +285,8 @@ namespace LiteNN
 
 		/// Loads the artifact into a runnable module. The artifact remains valid after loading.
 		CompiledModule<CPU> Load() const;
+		/// Loads the artifact and transfers owned external regions into the runnable module.
+		CompiledModule<CPU> Load() &&;
 #ifdef LITENN_ENABLE_CUDA
 		/// Loads the artifact into a CUDA module. CPU-native artifacts bridge through CPU AOT;
 		/// CUDA-native artifacts load their embedded CUDA instruction payload.
