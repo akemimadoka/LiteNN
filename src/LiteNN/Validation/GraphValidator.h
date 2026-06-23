@@ -743,6 +743,41 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const QuantizedGetRowsNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto storage =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.storage, "QuantizedGetRowsNode storage", true);
+			const auto indices =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.indices, "QuantizedGetRowsNode indices", true);
+			if (indices.dtype != DataType::Int32 && indices.dtype != DataType::Int64)
+			{
+				Fail(subgraphId, nodeId,
+				     std::format("QuantizedGetRowsNode indices must have dtype Int32 or Int64, got {}",
+				                 DataTypeName(indices.dtype)));
+			}
+			try
+			{
+				ValidateQuantizationParams(node.params, ShapeView{ storage.shape }, storage.dtype);
+			}
+			catch (const std::runtime_error& ex)
+			{
+				Fail(subgraphId, nodeId, std::format("QuantizedGetRowsNode metadata is invalid: {}", ex.what()));
+			}
+			if (node.params.expressedShape.size() != 2)
+			{
+				Fail(subgraphId, nodeId, "QuantizedGetRowsNode requires 2D expressed table metadata");
+			}
+			auto outputShape = indices.shape;
+			if (node.params.expressedShape.size() == 2)
+			{
+				outputShape.push_back(node.params.expressedShape[1]);
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { node.params.expressedType, outputShape },
+			           "QuantizedGetRowsNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const CondNode& node) const
 		{
 			const auto cond =

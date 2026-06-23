@@ -1934,9 +1934,9 @@ TEST(GGUFLLaMACausalLM, ImportsQwenProjectionBiasesWithVectorShapes)
 	ASSERT_TRUE(model.blocks[0].queryProjection.biasVariable.has_value());
 	ASSERT_TRUE(model.blocks[0].keyProjection.biasVariable.has_value());
 	ASSERT_TRUE(model.blocks[0].valueProjection.biasVariable.has_value());
-	EXPECT_EQ(model.blocks[0].queryProjection.biasShape, (std::vector<std::size_t>{ 4 }));
-	EXPECT_EQ(model.blocks[0].keyProjection.biasShape, (std::vector<std::size_t>{ 2 }));
-	EXPECT_EQ(model.blocks[0].valueProjection.biasShape, (std::vector<std::size_t>{ 2 }));
+	EXPECT_EQ(model.blocks[0].queryProjection.biasShape, (std::vector<std::size_t>{ 1, 4 }));
+	EXPECT_EQ(model.blocks[0].keyProjection.biasShape, (std::vector<std::size_t>{ 1, 2 }));
+	EXPECT_EQ(model.blocks[0].valueProjection.biasShape, (std::vector<std::size_t>{ 1, 2 }));
 
 	const auto forward = GGUF::BuildLLaMACausalLM(lowered, model, hyperparameters, 1);
 	lowered.SetForward(forward);

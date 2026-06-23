@@ -171,6 +171,14 @@ namespace LiteNN
 			bool transposeRhs{};
 		};
 
+		// 从量化二维表中按第一维取行，避免先物化完整浮点 embedding table。
+		struct QuantizedGetRowsNode
+		{
+			NodeOutput storage;
+			NodeOutput indices;
+			QuantizationParams params;
+		};
+
 		// 条件节点：根据 condition 选择执行 thenBranch 或 elseBranch
 		// 两个分支的子图必须有相同数量和类型的输出
 		// condition 必须是标量 Bool

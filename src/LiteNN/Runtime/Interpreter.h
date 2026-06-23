@@ -569,20 +569,27 @@ namespace LiteNN::Runtime
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const DequantizeNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
-			if (node.params.scheme != QuantizationScheme::Affine)
-			{
-				if (node.params.scheme != QuantizationScheme::Block ||
-				    !IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))
-				{
-					throw std::runtime_error(
-					    "Interpreter DequantizeNode currently supports affine and packed nibble quantization only");
-				}
-			}
 			const auto& input = GetValue(slots, node.input);
 			const auto cpuInput = input.CopyToDevice(CPU{});
-			auto dequantized = node.params.scheme == QuantizationScheme::Affine
-			                       ? DequantizeAffine(cpuInput, node.params, node.targetType)
-			                       : DequantizePackedNibble(cpuInput, node.params, node.targetType);
+			Tensor<CPU> dequantized = [&] {
+				if (node.params.scheme == QuantizationScheme::Affine)
+				{
+					return DequantizeAffine(cpuInput, node.params, node.targetType);
+				}
+				if (node.params.scheme == QuantizationScheme::Block &&
+				    IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))
+				{
+					return DequantizePackedNibble(cpuInput, node.params, node.targetType);
+				}
+				if (node.params.scheme == QuantizationScheme::Block &&
+				    IsGGMLQuantizedBlockFormat(node.params.blockFormat))
+				{
+					return DequantizeGGMLBlock(cpuInput, node.params, node.targetType);
+				}
+				throw std::runtime_error(
+				    "Interpreter DequantizeNode currently supports affine, packed nibble, and selected GGML block "
+				    "quantization only");
+			}();
 			slots[nodeId].push_back(dequantized.CopyToDevice(device));
 		}
 
@@ -615,6 +622,75 @@ namespace LiteNN::Runtime
 			{
 				slots[nodeId].push_back(cpuResult->CopyToDevice(device));
 			}
+		}
+
+		template <typename IdT>
+		static void FillQuantizedRows(const Tensor<CPU>& storage, const Tensor<CPU>& indices,
+		                              const QuantizationParams& params, Tensor<CPU>& result)
+		{
+			const auto* ids = static_cast<const IdT*>(indices.UnsafeRawData());
+			auto* output = static_cast<float*>(result.UnsafeRawData());
+			const auto rowCount = params.expressedShape[0];
+			const auto rowWidth = params.expressedShape[1];
+			std::vector<float> row(rowWidth);
+			for (std::size_t i = 0; i < indices.NumElements(); ++i)
+			{
+				const auto rawId = ids[i];
+				if constexpr (std::is_signed_v<IdT>)
+				{
+					if (rawId < 0)
+					{
+						throw std::runtime_error("QuantizedGetRowsNode index must be non-negative");
+					}
+				}
+				const auto rowIndex = static_cast<std::size_t>(rawId);
+				if (rowIndex >= rowCount)
+				{
+					throw std::runtime_error("QuantizedGetRowsNode index is out of range");
+				}
+				if (params.scheme == QuantizationScheme::Block && IsGGMLQuantizedBlockFormat(params.blockFormat))
+				{
+					DequantizeGGMLBlockRowToFloat32(storage, params, rowIndex, row.data());
+				}
+				else
+				{
+					const auto full =
+					    params.scheme == QuantizationScheme::Affine
+					        ? DequantizeAffine(storage, params, DataType::Float32)
+					    : IsPackedNibbleQuantizedBlockFormat(params.blockFormat)
+					        ? DequantizePackedNibble(storage, params, DataType::Float32)
+					        : throw std::runtime_error("QuantizedGetRowsNode unsupported quantization format");
+					const auto* fullData = static_cast<const float*>(full.UnsafeRawData());
+					std::copy_n(fullData + rowIndex * rowWidth, rowWidth, row.data());
+				}
+				std::copy_n(row.data(), rowWidth, output + i * rowWidth);
+			}
+		}
+
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const QuantizedGetRowsNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto storage = GetValue(slots, node.storage).CopyToDevice(CPU{});
+			const auto indices = GetValue(slots, node.indices).CopyToDevice(CPU{});
+			if (node.params.expressedType != DataType::Float32)
+			{
+				throw std::runtime_error("Interpreter QuantizedGetRowsNode currently emits Float32 rows only");
+			}
+			Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, DataType::Float32);
+			switch (indices.DType())
+			{
+			case DataType::Int32:
+				FillQuantizedRows<std::int32_t>(storage, indices, node.params, cpuResult);
+				break;
+			case DataType::Int64:
+				FillQuantizedRows<std::int64_t>(storage, indices, node.params, cpuResult);
+				break;
+			default:
+				throw std::runtime_error("QuantizedGetRowsNode indices must have dtype Int32 or Int64");
+			}
+			slots[nodeId].push_back(cpuResult.CopyToDevice(device));
 		}
 
 		template <typename ExecutionModel>

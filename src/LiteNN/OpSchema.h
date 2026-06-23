@@ -370,6 +370,11 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<QuantizedGetRowsNode> : NodeSchemaTraits<BinaryOpNode>
+		{
+		};
+
+		template <>
 		struct NodeSchemaTraits<CallNode>
 		{
 			static constexpr OpCategory Category = OpCategory::ControlFlow;
@@ -719,11 +724,16 @@ namespace LiteNN
 				    return { value.timesteps };
 			    }
 			    else if constexpr (std::same_as<T, BinaryOpNode> || std::same_as<T, QuantizedMatMulNode> ||
-			                       std::same_as<T, BatchMatMulNode> || std::same_as<T, OutProdNode>)
+			                       std::same_as<T, QuantizedGetRowsNode> || std::same_as<T, BatchMatMulNode> ||
+			                       std::same_as<T, OutProdNode>)
 			    {
 				    if constexpr (std::same_as<T, QuantizedMatMulNode>)
 				    {
 					    return { value.lhs, value.rhsStorage };
+				    }
+				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
+				    {
+					    return { value.storage, value.indices };
 				    }
 				    else
 				    {

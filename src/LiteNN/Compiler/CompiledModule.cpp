@@ -1970,6 +1970,12 @@ namespace
 				    copy.indices = remap(copy.indices);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
+			    {
+				    copy.storage = remap(copy.storage);
+				    copy.indices = remap(copy.indices);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, ScatterNode>)
 			    {
 				    copy.data = remap(copy.data);

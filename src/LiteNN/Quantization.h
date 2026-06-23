@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -410,6 +411,100 @@ namespace LiteNN
 			const auto nibble =
 			    params.packedOrder == PackedNibbleOrder::LowThenHigh ? (even ? low : high) : (even ? high : low);
 			return DecodePackedNibble(nibble, params);
+		}
+
+		inline float Float16BitsToFloat32(std::uint16_t bits)
+		{
+			const auto sign = (bits & 0x8000U) != 0 ? -1.0F : 1.0F;
+			const auto exponent = static_cast<int>((bits >> 10U) & 0x1fU);
+			const auto mantissa = static_cast<int>(bits & 0x03ffU);
+			if (exponent == 0)
+			{
+				return mantissa == 0 ? sign * 0.0F : sign * std::ldexp(static_cast<float>(mantissa), -24);
+			}
+			if (exponent == 31)
+			{
+				return mantissa == 0 ? sign * std::numeric_limits<float>::infinity()
+				                     : std::numeric_limits<float>::quiet_NaN();
+			}
+			return sign * std::ldexp(1.0F + static_cast<float>(mantissa) / 1024.0F, exponent - 15);
+		}
+
+		inline float ReadGGMLF16(const std::uint8_t* bytes)
+		{
+			const auto bits = static_cast<std::uint16_t>(bytes[0]) |
+			                  static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[1]) << 8U);
+			return Float16BitsToFloat32(bits);
+		}
+
+		inline float DecodeGGMLQ4Or5KElement(const std::uint8_t* block, QuantizedBlockFormat format, std::size_t lane)
+		{
+			const auto d = ReadGGMLF16(block);
+			const auto dmin = ReadGGMLF16(block + 2);
+			const auto subblock = lane / 32;
+			const auto belowFour = subblock < 4;
+			const auto* scales = block + 4;
+			const auto scaleLowOffset = belowFour ? subblock : subblock + 4;
+			const auto scaleLow = static_cast<std::uint32_t>(scales[scaleLowOffset]);
+			const auto minLow = static_cast<std::uint32_t>(scales[subblock + 4]);
+			std::uint32_t scale = scaleLow & 63U;
+			std::uint32_t minimum = minLow & 63U;
+			if (!belowFour)
+			{
+				const auto highOffset = subblock - 4;
+				const auto highSource = static_cast<std::uint32_t>(scales[highOffset]);
+				const auto minHighSource = static_cast<std::uint32_t>(scales[subblock]);
+				scale = (scaleLow & 15U) | ((highSource >> 6U) << 4U);
+				minimum = (minLow >> 4U) | ((minHighSource >> 6U) << 4U);
+			}
+
+			const auto quantOffset = (lane / 64) * 32 + (lane % 32);
+			const auto quantBaseOffset = format == QuantizedBlockFormat::GGML_Q5_K ? 48 : 16;
+			const auto quantByte = static_cast<std::uint32_t>(block[quantBaseOffset + quantOffset]);
+			auto nibble = (lane % 64) >= 32 ? (quantByte >> 4U) & 15U : quantByte & 15U;
+			if (format == QuantizedBlockFormat::GGML_Q5_K)
+			{
+				const auto highBits = static_cast<std::uint32_t>(block[16 + (lane % 32)]);
+				const auto highBit = (highBits >> subblock) & 1U;
+				nibble |= highBit << 4U;
+			}
+			return d * static_cast<float>(scale) * static_cast<float>(nibble) - dmin * static_cast<float>(minimum);
+		}
+
+		inline float DecodeGGMLQ6KElement(const std::uint8_t* block, std::size_t lane)
+		{
+			const auto d = ReadGGMLF16(block + 208);
+			const auto halfBlock = lane / 128;
+			const auto local = lane % 128;
+			const auto segment = local / 32;
+			const auto laneInSegment = local % 32;
+			const auto oddSegment = segment % 2;
+			const auto qlOffset = halfBlock * 64 + laneInSegment + oddSegment * 32;
+			const auto ql = static_cast<std::uint32_t>(block[qlOffset]);
+			const auto lowFour = segment >= 2 ? (ql >> 4U) & 15U : ql & 15U;
+			const auto qhOffset = halfBlock * 32 + laneInSegment;
+			const auto qh = static_cast<std::uint32_t>(block[128 + qhOffset]);
+			const auto highTwo = (qh >> (segment * 2)) & 3U;
+			const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+			const auto scaleOffset = halfBlock * 8 + (laneInSegment / 16) + segment * 2;
+			const auto scale = static_cast<std::int8_t>(block[192 + scaleOffset]);
+			return d * static_cast<float>(scale) * static_cast<float>(quant);
+		}
+
+		inline float DecodeGGMLBlockElement(const std::uint8_t* block, QuantizedBlockFormat format, std::size_t lane)
+		{
+			switch (format)
+			{
+			case QuantizedBlockFormat::GGML_Q8_0:
+				return ReadGGMLF16(block) * static_cast<float>(static_cast<std::int8_t>(block[2 + lane]));
+			case QuantizedBlockFormat::GGML_Q4_K:
+			case QuantizedBlockFormat::GGML_Q5_K:
+				return DecodeGGMLQ4Or5KElement(block, format, lane);
+			case QuantizedBlockFormat::GGML_Q6_K:
+				return DecodeGGMLQ6KElement(block, lane);
+			default:
+				throw std::runtime_error("Unsupported GGML block format for reference dequantization");
+			}
 		}
 	} // namespace QuantizationDetail
 
@@ -890,6 +985,105 @@ namespace LiteNN
 			}
 		});
 		return output;
+	}
+
+	inline Tensor<CPU> DequantizeGGMLBlock(const Tensor<CPU>& storage, const QuantizationParams& params,
+	                                       DataType targetType = DataType::Float32)
+	{
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+		if (!IsFloatingDataType(targetType))
+		{
+			throw std::runtime_error("DequantizeGGMLBlock target type must be floating-point");
+		}
+		if (!IsGGMLQuantizedBlockFormat(params.blockFormat))
+		{
+			throw std::runtime_error("DequantizeGGMLBlock requires GGML block quantization");
+		}
+		if (storage.DType() != DataType::UInt8 || params.storageType != DataType::UInt8)
+		{
+			throw std::runtime_error("DequantizeGGMLBlock requires UInt8 storage");
+		}
+		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
+		if (!layout || (params.blockFormat != QuantizedBlockFormat::GGML_Q8_0 &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q4_K &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q5_K &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q6_K))
+		{
+			throw std::runtime_error("DequantizeGGMLBlock currently supports GGML_Q4_K/Q5_K/Q6_K/Q8_0 only");
+		}
+		const auto total = ShapeView{ params.expressedShape }.NumElements();
+		if (total == 0 || total % layout->elementsPerBlock != 0)
+		{
+			throw std::runtime_error("DequantizeGGMLBlock expressed shape is not aligned to the block size");
+		}
+		const auto blockCount = total / layout->elementsPerBlock;
+		if (storage.NumElements() != blockCount * layout->bytesPerBlock)
+		{
+			throw std::runtime_error("DequantizeGGMLBlock storage byte count does not match expressed shape");
+		}
+
+		Tensor<CPU> output(Uninitialized, params.expressedShape, targetType);
+		EnumDispatch(targetType, [&]<DataType TargetTypeValue> {
+			if constexpr (IsFloatingDataType(TargetTypeValue))
+			{
+				using TargetT = typename DeviceTraits<CPU>::template DataTypeMapping<TargetTypeValue>;
+				const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+				auto* dst = static_cast<TargetT*>(output.UnsafeRawData());
+				for (std::size_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
+				{
+					const auto* block = src + blockIndex * layout->bytesPerBlock;
+					for (std::size_t lane = 0; lane < layout->elementsPerBlock; ++lane)
+					{
+						dst[blockIndex * layout->elementsPerBlock + lane] = static_cast<TargetT>(
+						    QuantizationDetail::DecodeGGMLBlockElement(block, params.blockFormat, lane));
+					}
+				}
+			}
+		});
+		return output;
+	}
+
+	inline void DequantizeGGMLBlockRowToFloat32(const Tensor<CPU>& storage, const QuantizationParams& params,
+	                                            std::size_t row, float* output)
+	{
+		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
+		if (params.scheme != QuantizationScheme::Block || !IsGGMLQuantizedBlockFormat(params.blockFormat) ||
+		    storage.DType() != DataType::UInt8 || params.storageType != DataType::UInt8 ||
+		    params.expressedShape.size() != 2)
+		{
+			throw std::runtime_error("DequantizeGGMLBlockRowToFloat32 requires 2D UInt8 GGML block storage");
+		}
+		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
+		if (!layout || (params.blockFormat != QuantizedBlockFormat::GGML_Q8_0 &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q4_K &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q5_K &&
+		                params.blockFormat != QuantizedBlockFormat::GGML_Q6_K))
+		{
+			throw std::runtime_error(
+			    "DequantizeGGMLBlockRowToFloat32 currently supports GGML_Q4_K/Q5_K/Q6_K/Q8_0 only");
+		}
+		const auto rowCount = params.expressedShape[0];
+		const auto rowWidth = params.expressedShape[1];
+		if (row >= rowCount || rowWidth == 0 || rowWidth % layout->elementsPerBlock != 0)
+		{
+			throw std::runtime_error("DequantizeGGMLBlockRowToFloat32 row or width is out of range");
+		}
+		const auto blocksPerRow = rowWidth / layout->elementsPerBlock;
+		if (storage.NumElements() != rowCount * blocksPerRow * layout->bytesPerBlock)
+		{
+			throw std::runtime_error("DequantizeGGMLBlockRowToFloat32 storage byte count does not match row layout");
+		}
+		const auto* src = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+		const auto rowBase = row * blocksPerRow * layout->bytesPerBlock;
+		for (std::size_t blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex)
+		{
+			const auto* block = src + rowBase + blockIndex * layout->bytesPerBlock;
+			for (std::size_t lane = 0; lane < layout->elementsPerBlock; ++lane)
+			{
+				output[blockIndex * layout->elementsPerBlock + lane] =
+				    QuantizationDetail::DecodeGGMLBlockElement(block, params.blockFormat, lane);
+			}
+		}
 	}
 
 	inline std::vector<std::size_t> QuantizedMatMulOutputShape(ShapeView lhsShape, const QuantizationParams& rhsParams,

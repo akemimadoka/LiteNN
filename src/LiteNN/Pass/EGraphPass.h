@@ -545,6 +545,10 @@ namespace LiteNN
 				    {
 					    return QuantizedMatMulNode{ remap(n.lhs), remap(n.rhsStorage), n.params, n.transposeRhs };
 				    }
+				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
+				    {
+					    return QuantizedGetRowsNode{ remap(n.storage), remap(n.indices), n.params };
+				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
 					    return CallNode{ n.callee, remapVector(n.args) };

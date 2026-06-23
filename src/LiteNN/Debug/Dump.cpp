@@ -382,6 +382,12 @@ namespace LiteNN::Debug
 					                       FormatValueRef(value.lhs), FormatValueRef(value.rhsStorage),
 					                       QuantizedBlockFormatName(value.params.blockFormat), value.transposeRhs);
 				    }
+				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
+				    {
+					    return std::format("QuantizedGetRowsNode(storage={}, indices={}, format={})",
+					                       FormatValueRef(value.storage), FormatValueRef(value.indices),
+					                       QuantizedBlockFormatName(value.params.blockFormat));
+				    }
 				    else if constexpr (std::same_as<T, CondNode>)
 				    {
 					    return std::format("CondNode(condition={}, then=@{}, else=@{}, args={})",

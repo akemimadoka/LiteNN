@@ -83,9 +83,15 @@ namespace LiteNN::GGUF
 				throw std::runtime_error(std::format("GGUF Linear bias '{}' must have shape [{}] or [1, {}]", biasName,
 				                                     outFeatures, outFeatures));
 			}
+			if (shape == std::vector<std::size_t>{ outFeatures })
+			{
+				auto data = materialized->Data().CopyToDevice(CPU{});
+				data.Reshape({ 1, outFeatures });
+				materialized = Variable::Create(std::move(data));
+			}
 			const auto variable = target.AddVariable(std::move(materialized));
 			target.SetVariableName(variable, biasName);
-			return ImportedLinearBias{ variable, shape };
+			return ImportedLinearBias{ variable, { 1, outFeatures } };
 		}
 
 		const Variable& RequirePlainFloatingVariable(const Graph& graph, std::size_t variableIndex,
@@ -1126,12 +1132,17 @@ namespace LiteNN::GGUF
 			{
 				throw std::runtime_error("Quantized LLaMA token embedding metadata is inconsistent");
 			}
+			if (!model.tokenEmbeddingIsVocabMajor)
+			{
+				throw std::runtime_error("Quantized LLaMA token embedding currently requires vocab-major storage");
+			}
 			const auto storage =
 			    subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
 			                     { OutputInfo{ params.storageType, model.tokenEmbeddingStorageShape } });
-			const auto dequantized = subgraph.AddNode(DequantizeNode{ { storage, 0 }, params, model.dtype },
-			                                          { OutputInfo{ model.dtype, tokenEmbeddingShape } });
-			tokenEmbedding = { dequantized, 0 };
+			const auto rows =
+			    subgraph.AddNode(QuantizedGetRowsNode{ { storage, 0 }, tokenIds, params },
+			                     { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
+			return { rows, 0 };
 		}
 		else
 		{

@@ -356,6 +356,13 @@ namespace LiteNN
 		return attrs;
 	}
 
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizedGetRowsNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanQuantizationAttributes(attrs, node.params);
+		return attrs;
+	}
+
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const CondNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;

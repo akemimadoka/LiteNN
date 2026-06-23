@@ -1659,6 +1659,15 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
+			void emitNode(const PlanSubgraphView&, NodeId, const QuantizedGetRowsNode&, std::span<const OutputInfo>,
+			              std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+			              std::map<std::size_t, Value>&)
+			{
+				throw std::runtime_error(
+				    "GraphToMLIR QuantizedGetRowsNode lowering is not implemented; use Interpreter token embedding "
+				    "smoke or add a native quantized embedding gather kernel");
+			}
+
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const CallNode& node,
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)

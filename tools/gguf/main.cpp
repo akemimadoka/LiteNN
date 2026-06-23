@@ -699,7 +699,7 @@ namespace
 			const auto stepStart = std::chrono::steady_clock::now();
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
-			inputs.push_back(std::move(currentPosition));
+			inputs.push_back(currentPosition);
 			if (caches.empty())
 			{
 				LiteNN::CPU cpu;
