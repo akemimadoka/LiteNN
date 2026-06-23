@@ -73,13 +73,9 @@ namespace LiteNN::GGUF
 			std::size_t rowBytes{};
 		};
 
-		GGMLBlockLayout ValidateGGMLBlockVariable(const Variable& variable, std::string_view name)
+		GGMLBlockLayout ValidateGGMLBlockStorage(const Tensor<CPU>& storage, const QuantizationParams& params,
+		                                         std::string_view name)
 		{
-			if (!variable.IsQuantized())
-			{
-				throw std::runtime_error(std::format("GGUF tensor '{}' is not quantized", name));
-			}
-			const auto& params = *variable.Quantization();
 			if (params.scheme != QuantizationScheme::Block || !IsFloatingDataType(params.expressedType))
 			{
 				throw std::runtime_error(std::format(
@@ -109,13 +105,21 @@ namespace LiteNN::GGUF
 			}
 			const auto rowCount = totalElements / rowSize;
 			const auto rowBytes = ggml_row_size(*ggmlType, static_cast<std::int64_t>(rowSize));
-			const auto storage = variable.Data().CopyToDevice(CPU{});
 			if (storage.DType() != DataType::UInt8 || storage.NumElements() != rowCount * rowBytes)
 			{
 				throw std::runtime_error(std::format(
 				    "GGUF tensor '{}' payload byte count or storage dtype does not match its block layout", name));
 			}
 			return { *ggmlType, traits, rowCount, rowSize, rowBytes };
+		}
+
+		GGMLBlockLayout ValidateGGMLBlockVariable(const Variable& variable, std::string_view name)
+		{
+			if (!variable.IsQuantized())
+			{
+				throw std::runtime_error(std::format("GGUF tensor '{}' is not quantized", name));
+			}
+			return ValidateGGMLBlockStorage(variable.Data().CopyToDevice(CPU{}), *variable.Quantization(), name);
 		}
 	} // namespace
 
@@ -146,8 +150,15 @@ namespace LiteNN::GGUF
 
 	Tensor<CPU> EvalGGMLQuantizedMatMul(const Tensor<CPU>& input, const Variable& weight, bool transposeWeight)
 	{
-		const auto layout = ValidateGGMLBlockVariable(weight, "quantized MatMul weight");
 		const auto& params = *weight.Quantization();
+		const auto storage = weight.Data().CopyToDevice(CPU{});
+		return EvalGGMLQuantizedMatMul(input, storage, params, transposeWeight);
+	}
+
+	Tensor<CPU> EvalGGMLQuantizedMatMul(const Tensor<CPU>& input, const Tensor<CPU>& weightStorage,
+	                                    const QuantizationParams& params, bool transposeWeight)
+	{
+		const auto layout = ValidateGGMLBlockStorage(weightStorage, params, "quantized MatMul weight");
 		if (input.DType() != DataType::Float32 || input.Shape().NumDim() != 2 ||
 		    params.expressedType != DataType::Float32 || params.expressedShape.size() != 2)
 		{
@@ -184,8 +195,7 @@ namespace LiteNN::GGUF
 
 		const auto inputRowBytes = ggml_row_size(cpuTraits->vec_dot_type, static_cast<std::int64_t>(inFeatures));
 		std::vector<std::byte> quantizedInput(inputRowBytes);
-		const auto storage = weight.Data().CopyToDevice(CPU{});
-		const auto* weightBytes = static_cast<const std::byte*>(storage.UnsafeRawData());
+		const auto* weightBytes = static_cast<const std::byte*>(weightStorage.UnsafeRawData());
 		const auto* inputValues = static_cast<const float*>(input.UnsafeRawData());
 		Tensor<CPU> result(Uninitialized, { batch, outFeatures }, DataType::Float32);
 		auto* output = static_cast<float*>(result.UnsafeRawData());
@@ -210,7 +220,6 @@ namespace LiteNN::GGUF
 		{
 			return std::nullopt;
 		}
-		const auto weight = Variable::CreateFrozenQuantized(Tensor<CPU>(weightStorage), params);
-		return EvalGGMLQuantizedMatMul(input, *weight, transposeWeight);
+		return EvalGGMLQuantizedMatMul(input, weightStorage, params, transposeWeight);
 	}
 } // namespace LiteNN::GGUF

@@ -278,7 +278,14 @@ namespace LiteNN::Runtime
 			{
 				auto hostView = Tensor<CPU>::UnsafeBorrowed(const_cast<std::byte*>(bytes), ShapeView{ shape },
 				                                            storage.type.dtype, CPU{});
-				return hostView.CopyToDevice(device);
+				if constexpr (std::same_as<D, CPU>)
+				{
+					return hostView;
+				}
+				else
+				{
+					return hostView.CopyToDevice(device);
+				}
 			}
 
 			if constexpr (std::same_as<D, CPU>)
@@ -598,21 +605,33 @@ namespace LiteNN::Runtime
 		             const QuantizedMatMulNode& node, std::vector<std::vector<Tensor<D>>>& slots,
 		             std::span<const Tensor<D>> inputs, D& device)
 		{
-			const auto lhs = GetValue(slots, node.lhs).CopyToDevice(CPU{});
-			const auto rhsStorage = GetValue(slots, node.rhsStorage).CopyToDevice(CPU{});
-			std::optional<Tensor<CPU>> cpuResult;
-			if (quantizedMatMulCallback_)
-			{
-				cpuResult = quantizedMatMulCallback_(lhs, rhsStorage, node.params, node.transposeRhs);
-			}
-			if (!cpuResult)
-			{
-				if (node.transposeRhs)
+			auto evalOnCPU = [&](const Tensor<CPU>& lhs, const Tensor<CPU>& rhsStorage) {
+				std::optional<Tensor<CPU>> cpuResult;
+				if (quantizedMatMulCallback_)
 				{
-					throw std::runtime_error(
-					    "Interpreter QuantizedMatMulNode requires a backend callback for transposed block weights");
+					cpuResult = quantizedMatMulCallback_(lhs, rhsStorage, node.params, node.transposeRhs);
 				}
-				cpuResult = EvalQuantizedMatMul(lhs, rhsStorage, node.params, node.params.expressedType);
+				if (!cpuResult)
+				{
+					if (node.transposeRhs)
+					{
+						throw std::runtime_error(
+						    "Interpreter QuantizedMatMulNode requires a backend callback for transposed block weights");
+					}
+					cpuResult = EvalQuantizedMatMul(lhs, rhsStorage, node.params, node.params.expressedType);
+				}
+				return std::move(*cpuResult);
+			};
+			std::optional<Tensor<CPU>> cpuResult;
+			if constexpr (std::same_as<D, CPU>)
+			{
+				cpuResult = evalOnCPU(GetValue(slots, node.lhs), GetValue(slots, node.rhsStorage));
+			}
+			else
+			{
+				const auto lhs = GetValue(slots, node.lhs).CopyToDevice(CPU{});
+				const auto rhsStorage = GetValue(slots, node.rhsStorage).CopyToDevice(CPU{});
+				cpuResult = evalOnCPU(lhs, rhsStorage);
 			}
 			if constexpr (std::same_as<D, CPU>)
 			{
@@ -672,25 +691,44 @@ namespace LiteNN::Runtime
 		             const QuantizedGetRowsNode& node, std::vector<std::vector<Tensor<D>>>& slots,
 		             std::span<const Tensor<D>> inputs, D& device)
 		{
-			const auto storage = GetValue(slots, node.storage).CopyToDevice(CPU{});
-			const auto indices = GetValue(slots, node.indices).CopyToDevice(CPU{});
+			const auto runOnCPU = [&](const Tensor<CPU>& storage, const Tensor<CPU>& indices) {
+				Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, DataType::Float32);
+				switch (indices.DType())
+				{
+				case DataType::Int32:
+					FillQuantizedRows<std::int32_t>(storage, indices, node.params, cpuResult);
+					break;
+				case DataType::Int64:
+					FillQuantizedRows<std::int64_t>(storage, indices, node.params, cpuResult);
+					break;
+				default:
+					throw std::runtime_error("QuantizedGetRowsNode indices must have dtype Int32 or Int64");
+				}
+				return cpuResult;
+			};
 			if (node.params.expressedType != DataType::Float32)
 			{
 				throw std::runtime_error("Interpreter QuantizedGetRowsNode currently emits Float32 rows only");
 			}
-			Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, DataType::Float32);
-			switch (indices.DType())
+			std::optional<Tensor<CPU>> cpuResult;
+			if constexpr (std::same_as<D, CPU>)
 			{
-			case DataType::Int32:
-				FillQuantizedRows<std::int32_t>(storage, indices, node.params, cpuResult);
-				break;
-			case DataType::Int64:
-				FillQuantizedRows<std::int64_t>(storage, indices, node.params, cpuResult);
-				break;
-			default:
-				throw std::runtime_error("QuantizedGetRowsNode indices must have dtype Int32 or Int64");
+				cpuResult = runOnCPU(GetValue(slots, node.storage), GetValue(slots, node.indices));
 			}
-			slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			else
+			{
+				const auto storage = GetValue(slots, node.storage).CopyToDevice(CPU{});
+				const auto indices = GetValue(slots, node.indices).CopyToDevice(CPU{});
+				cpuResult = runOnCPU(storage, indices);
+			}
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(*cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult->CopyToDevice(device));
+			}
 		}
 
 		template <typename ExecutionModel>
