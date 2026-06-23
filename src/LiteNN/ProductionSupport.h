@@ -801,7 +801,6 @@ namespace LiteNN
 				     "Requires CUDA build support, library availability, and dtype-specific native MatMul capability.",
 				     "Unsupported dtype/device pairs must remain explicit fallback or rejection cases." };
 		case ProductionCUDANativeCapability::Attention:
-		case ProductionCUDANativeCapability::QuantizedProjection:
 			return {
 				capability,
 				ProductionCUDANativeCapabilityName(capability),
@@ -818,6 +817,21 @@ namespace LiteNN
 				"Requires explicit kernel implementation, device capability checks, and benchmark/parity evidence.",
 				"Until implemented, these workloads must not be advertised as CUDA native production support."
 			};
+		case ProductionCUDANativeCapability::QuantizedProjection:
+			return { capability,
+				     ProductionCUDANativeCapabilityName(capability),
+				     ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable,
+				     ProductionBuildHasCUDA(),
+				     true,
+				     true,
+				     false,
+				     true,
+				     false,
+				     "Native CUDA GGML-block quantized projection kernels cover Q4_K, Q5_K, Q6_K, and Q8_0 without "
+				     "materializing Float32 weights.",
+				     "Full LLM production use still requires matching llama.cpp golden logits, explicit no-fallback "
+				     "decode evidence, and comparison-table benchmark rows for the chosen model/profile.",
+				     "Unsupported block formats or hidden fallback must reject the CUDA-native production profile." };
 		}
 		return { capability,
 			     ProductionCUDANativeCapabilityName(capability),
@@ -915,19 +929,21 @@ namespace LiteNN
 				     "Quantized packages must be inspectable and rebound before execution.",
 				     "Loaders must reject incomplete or inconsistent quantization metadata instead of guessing." };
 		case ProductionQuantizationCapability::NativeQuantizedLinearMatMul:
-			return { capability,
-				     ProductionQuantizationCapabilityName(capability),
-				     ProductionSupportLevel::Experimental,
-				     true,
-				     false,
-				     true,
-				     true,
-				     "CPU direct quantized MatMul/Linear covers affine and packed-nibble weight storage with parity "
-				     "tests against dequantize-plus-float execution.",
-				     "CUDA/Vulkan/AOT lowering, broader GGML block formats, packed-weight benchmarks, and "
-				     "workload-specific tolerances are still required before production throughput claims.",
-				     "Unsupported quantized formats still fail explicitly or use reference dequantize plus existing "
-				     "float execution when the caller chooses that path." };
+			return {
+				capability,
+				ProductionQuantizationCapabilityName(capability),
+				ProductionSupportLevel::Supported,
+				true,
+				false,
+				true,
+				true,
+				"CPU AOT direct quantized MatMul covers affine, packed-nibble, and GGML block storage; CUDA native "
+				"projection covers Q4_K/Q5_K/Q6_K/Q8_0 with artifact and runtime parity tests.",
+				"Model-level production claims still require workload-specific golden logits, benchmark rows, and "
+				"fallback-free decode evidence.",
+				"Unsupported quantized formats still fail explicitly or use reference dequantize plus existing "
+				"float execution when the caller chooses that path."
+			};
 		}
 		return { capability,
 			     ProductionQuantizationCapabilityName(capability),

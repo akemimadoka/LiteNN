@@ -205,8 +205,11 @@ TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
 	const auto quantizedProjection =
 	    QueryProductionCUDANativeCapability(ProductionCUDANativeCapability::QuantizedProjection);
 	EXPECT_TRUE(quantizedProjection.highValueKernelPriority);
-	EXPECT_NE(quantizedProjection.level, ProductionSupportLevel::Supported);
-	EXPECT_TRUE(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"));
+	EXPECT_EQ(quantizedProjection.level,
+	          ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable);
+	EXPECT_TRUE(Contains(quantizedProjection.verifiedScope, "Q4_K"));
+	EXPECT_TRUE(Contains(quantizedProjection.capabilityGate, "golden logits"));
+	EXPECT_FALSE(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"));
 }
 
 TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
@@ -243,17 +246,17 @@ TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
 
 	const auto native =
 	    QueryProductionQuantizationCapability(ProductionQuantizationCapability::NativeQuantizedLinearMatMul);
-	EXPECT_EQ(native.level, ProductionSupportLevel::Experimental);
+	EXPECT_EQ(native.level, ProductionSupportLevel::Supported);
 	EXPECT_TRUE(native.availableInBuild);
 	EXPECT_FALSE(native.semanticFoundation);
 	EXPECT_TRUE(native.nativeKernel);
 	EXPECT_TRUE(native.requiresExternalMetadata);
-	EXPECT_TRUE(Contains(native.verifiedScope, "CPU direct"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "CPU AOT direct"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "CUDA native"));
 	EXPECT_TRUE(Contains(native.verifiedScope, "affine"));
-	EXPECT_TRUE(Contains(native.verifiedScope, "packed-nibble"));
-	EXPECT_TRUE(Contains(native.productionGate, "CUDA"));
-	EXPECT_TRUE(Contains(native.productionGate, "Vulkan"));
-	EXPECT_TRUE(Contains(native.productionGate, "benchmarks"));
+	EXPECT_TRUE(Contains(native.verifiedScope, "GGML block"));
+	EXPECT_TRUE(Contains(native.productionGate, "golden logits"));
+	EXPECT_TRUE(Contains(native.productionGate, "benchmark"));
 	EXPECT_TRUE(HasQuantizationCapabilityDiagnostic("NativeQuantizedLinearMatMul"));
 	EXPECT_FALSE(HasQuantizationCapabilityDiagnostic("PackedFourBitStorage"));
 }

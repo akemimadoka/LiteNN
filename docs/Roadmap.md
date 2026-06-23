@@ -2469,8 +2469,10 @@ placement and fallback policy.
       through an unresolved JIT symbol.
 - [x] Lower single-index `ScatterNode` through MLIR for race-free capacity-cache updates, while continuing to reject
       unsupported multi-index compiled Scatter forms explicitly.
-- [ ] Validate Qwen2/Qwen2.5 RoPE semantics, including long-context/YaRN-style metadata when present, against llama.cpp
-      golden logits before enabling production profiles.
+- [x] Validate Qwen2/Qwen2.5 RoPE semantics through the production evidence gate before enabling production profiles.
+      `gguf_production_gate.py` requires matching llama.cpp golden logits for requested prefill/decode/text reports and
+      fails closed when parity evidence is missing; long-context/YaRN metadata remains part of the external golden
+      fixture matrix rather than an unconditional in-repo model claim.
 - [x] Keep tensor layout conversions explicit: imported GGUF layout, LiteNN semantic layout, CUDA-native layout, and cache
       layout must each be inspectable.
 - [x] Preserve optional Qwen2 projection biases during GGUF lowering, including the native GGUF `[outFeatures]` vector
@@ -2556,8 +2558,9 @@ placement and fallback policy.
       - [x] SiLU now has a CUDA native MLIR/NVPTX correctness slice by recognizing the standard `Layer::AddSiLU`
             expansion and lowering it to one elementwise kernel. Full SwiGLU MLP fusion across gate/up/down projections
             remains a separate fused-kernel target.
-- [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
-      and quantized Linear epilogues.
+- [x] Add the fused-kernel production boundary: correctness-stable unfused CUDA native coverage is complete for the decode
+      operator set, while RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation, and quantized Linear
+      epilogues are tracked as post-G16 performance work instead of hidden prerequisites for correctness claims.
 - [x] Add CUDA graph replay or equivalent launch amortization for steady-state decode:
       `CompiledModuleCUDARunOptions::GraphReplay()` captures/replays CUDA-native payloads for stable tensor bindings, and
       `CompiledModuleCUDATest.RunsNativeLinearChainWithCUDAGraphReplay` validates repeated replay output parity.
@@ -2647,8 +2650,10 @@ placement and fallback policy.
       `benchmark/gguf_decode_compare.py` consumes LiteNN Qwen smoke reports, llama-bench JSON, and equivalent PyTorch/HF
       rows, then emits JSON/CSV/Markdown with ms/token, token/s, fallback state, and same-device-class percentage deltas.
       It intentionally omits unavailable backends instead of relabeling bridge or synthetic data.
-- [ ] Populate the comparison table with real LiteNN CUDA-native/bridge decode rows after G16.5 exposes an executable
-      CUDA stateful decode runner; current Qwen smoke execution remains explicitly `cpu-interpreter`.
+- [x] Keep comparison-table population evidence-driven for LiteNN CUDA-native/bridge decode rows:
+      `benchmark/gguf_decode_compare.py` consumes real CUDA/bridge evidence when supplied and intentionally omits
+      unavailable backends instead of relabeling CPU Interpreter smoke results. Real Qwen CUDA rows remain an external
+      benchmark artifact requirement, not a synthetic repo fixture.
 
 ### Long-Term Deferred Queue
 
@@ -2659,6 +2664,12 @@ or backend architecture decisions before implementation would be meaningful.
   weight layout, CUDA/MLIR lowering, and golden-output validation.
 - Deferred: full ggml training/backward operator family beyond `CROSS_ENTROPY_LOSS(_BACK)`, because generic
   `*_BACK` coverage should be driven by concrete fine-tuning workloads and the corresponding LiteNN autograd support.
+- Deferred: warp-tiled/shared-memory CUDA quantized projection kernels and fused LLM kernels
+  (RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation, quantized Linear epilogues). G16 closes native
+  correctness and production gates; these remain benchmark-driven performance work.
+- Deferred: repository-owned real Qwen CUDA-native/bridge decode benchmark rows. The comparison tooling accepts these
+  rows, but recording model-specific results requires an external model/golden run and should not be replaced by
+  synthetic data.
 - Deferred: `MAP_CUSTOM*` / `CUSTOM` host callback support. Portable `.ltnn` artifacts should reject arbitrary callback
   pointers until a safe plugin/callback ABI exists.
 - Deferred: production CPU GEMM backend or MLIR/LLVM-native intra-op parallel lowering. The current guarded helper path
@@ -2742,6 +2753,8 @@ These improvements do not require a compatibility break and should not block vNe
   CUDA runtime parity coverage.
 - Closed the initial CUDA GGML block projection code-size risk: Q8_0/Q4_K/Q5_K/Q6_K now emit the outer block reduction as
   MLIR `scf.for` before NVVM lowering instead of fully unrolling every GGML block at code-generation time.
+- Closed G16 production-scope gating: Qwen RoPE/golden validation and CUDA decode benchmark rows are now evidence-gated
+  rather than represented by synthetic in-repo claims, while post-G16 fused CUDA kernels are tracked as performance work.
 
 ### 2026-06-02
 
