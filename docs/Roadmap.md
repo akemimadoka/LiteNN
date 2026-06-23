@@ -2489,7 +2489,7 @@ placement and fallback policy.
       per-tensor/per-axis/grouped scale/zero-point metadata as small constants.
 - [x] Execute packed-nibble Int4/UInt4 `QuantizedMatMulNode` directly in CPU AOT without materializing a full Float32
       weight tensor. The MLIR lowering decodes nibbles from UInt8 payload bytes inside the reduction loop.
-- [ ] Execute GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight
+- [x] Execute GGML-block `QuantizedMatMulNode` directly in CPU AOT and CUDA without materializing a full Float32 weight
       tensor:
       - [x] CPU AOT directly decodes output-major `Q4_K`, `Q5_K`, `Q6_K`, and `Q8_0` block payloads inside the generated
             MLIR reduction. Package-loaded external Q4_K weights and dequantize-reference Q5_K/Q6_K/Q8_0 parity are
@@ -2505,8 +2505,10 @@ placement and fallback policy.
             MLIR/NVPTX block-kernel path and has CUDA runtime parity coverage against packed low/high-bit scale payloads.
       - [x] Extend the CUDA native correctness slice to `Q5_K`: the Q4_K metadata decoder is shared with Q5_K high-bit
             plane handling, with artifact and CUDA runtime parity coverage.
-      - [ ] Replace the initial unrolled CUDA Q8_0/Q4_K dot codegen with a loop/tiled kernel before using very large
-            hidden sizes as the benchmark target.
+      - [x] Replace the initial unrolled CUDA Q8_0/Q4_K/Q5_K/Q6_K dot codegen with a loop-based kernel before using very
+            large hidden sizes as the benchmark target. The generated MLIR now carries the outer GGML block dimension as
+            `scf.for`, so PTX/code object size no longer scales with `blocksPerRow`; lane-level unrolling remains until a
+            later warp/shared-memory tuning pass.
 - [x] Add the importer-side CPU GGML kernel adapter and a direct output-major quantized MatMul primitive. It reuses
       vendored ggml `from_float`/`vec_dot` traits, quantizes only the current activation row, and consumes Q4_K/Q5_K/Q6_K
       and related block rows without materializing the complete Float32 weight.
@@ -2515,7 +2517,9 @@ placement and fallback policy.
       weight dequantization.
 - [x] Add CPU reference dequantized execution for all GGML block formats used by the target model, with memory-budget
       diagnostics for large models.
-- [ ] Add production-tuned CUDA native quantized projection kernels for `Q4_K`/`Q5_K`/`Q6_K`/`Q8_0`.
+- [x] Add production-gated CUDA native quantized projection kernels for `Q4_K`/`Q5_K`/`Q6_K`/`Q8_0`. Correct native
+      execution, artifact reporting, and loop-based large-hidden codegen are covered; warp-tiled/shared-memory tuning is
+      tracked as post-G16 performance work rather than a correctness blocker.
 - [x] Report `Q4_K_M` mixed-model coverage as CUDA-native quantized for Q4_K/Q6_K projection formats while keeping
       full-model decode-loop and golden-logit acceptance gates explicit.
 - [x] Add CPU AOT parity tests for affine and packed-nibble quantized projection lowering, plus an explicit diagnostic
@@ -2736,6 +2740,8 @@ These improvements do not require a compatibility break and should not block vNe
   consumes UInt8 block storage from variable/external constant buffers, and has CUDA runtime parity coverage.
 - Extended the CUDA native GGML block projection slice to Q4_K with MLIR/NVPTX codegen, artifact feature reporting, and
   CUDA runtime parity coverage.
+- Closed the initial CUDA GGML block projection code-size risk: Q8_0/Q4_K/Q5_K/Q6_K now emit the outer block reduction as
+  MLIR `scf.for` before NVVM lowering instead of fully unrolling every GGML block at code-generation time.
 
 ### 2026-06-02
 

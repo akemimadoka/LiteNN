@@ -1,10 +1,14 @@
 #include "CUDANativeCodegen.h"
 
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -1221,15 +1225,22 @@ namespace LiteNN
 				const auto blocksPerRow = spec.k / layout->elementsPerBlock;
 				auto row = EmitI32UDiv(blocks.index32, EmitI32Constant(spec.n));
 				auto column = EmitI32URem(blocks.index32, EmitI32Constant(spec.n));
-				auto accumulator = EmitF32Constant(0.0F);
 				auto i8Type = builder_.getIntegerType(8);
 				auto f16Type = builder_.getF16Type();
 
-				for (std::uint32_t blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex)
+				auto zero = builder_.create<mlir::arith::ConstantIndexOp>(loc_, 0);
+				auto upper = builder_.create<mlir::arith::ConstantIndexOp>(loc_, blocksPerRow);
+				auto step = builder_.create<mlir::arith::ConstantIndexOp>(loc_, 1);
+				auto loop = builder_.create<mlir::scf::ForOp>(loc_, zero, upper, step,
+				                                              mlir::ValueRange{ EmitF32Constant(0.0F) });
+				builder_.setInsertionPointToStart(loop.getBody());
+				auto blockIndex =
+				    builder_.create<mlir::arith::IndexCastOp>(loc_, i32Type_, loop.getInductionVar()).getResult();
+				mlir::Value accumulator = loop.getRegionIterArgs().front();
 				{
-					auto blockBase = EmitI32Mul(
-					    EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), EmitI32Constant(blockIndex)),
-					    EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
+					auto blockBase =
+					    EmitI32Mul(EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), blockIndex),
+					               EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
 					const auto dOffset = spec.format == QuantizedBlockFormat::GGML_Q6_K
 					                         ? EmitI32Add(blockBase, EmitI32Constant(208))
 					                         : blockBase;
@@ -1250,9 +1261,11 @@ namespace LiteNN
 
 					for (std::uint32_t lane = 0; lane < layout->elementsPerBlock; ++lane)
 					{
-						auto lhsOffset = EmitI32Add(
-						    EmitI32Mul(row, EmitI32Constant(spec.k)),
-						    EmitI32Constant(blockIndex * static_cast<std::uint32_t>(layout->elementsPerBlock) + lane));
+						auto lhsOffset =
+						    EmitI32Add(EmitI32Mul(row, EmitI32Constant(spec.k)),
+						               EmitI32Add(EmitI32Mul(blockIndex, EmitI32Constant(static_cast<std::uint32_t>(
+						                                                     layout->elementsPerBlock))),
+						                          EmitI32Constant(lane)));
 						auto lhsValue = EmitLoadF32(EmitF32GEP(lhs, lhsOffset));
 						mlir::Value weight;
 						if (spec.format == QuantizedBlockFormat::GGML_Q8_0)
@@ -1271,8 +1284,10 @@ namespace LiteNN
 						accumulator = EmitF32Add(accumulator, EmitF32Mul(lhsValue, weight));
 					}
 				}
+				builder_.create<mlir::scf::YieldOp>(loc_, accumulator);
+				builder_.setInsertionPointAfter(loop);
 
-				EmitStoreF32(accumulator, EmitF32GEP(out, blocks.index32));
+				EmitStoreF32(loop.getResult(0), EmitF32GEP(out, blocks.index32));
 				FinishLinearKernel(blocks);
 				return FinalizeModule(std::move(kernelModule.module));
 			}
@@ -1974,8 +1989,8 @@ namespace LiteNN
 		mlir::DialectRegistry CreateCUDANativeMLIRRegistry()
 		{
 			mlir::DialectRegistry registry;
-			registry.insert<mlir::arith::ArithDialect, mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-			                mlir::NVVM::NVVMDialect>();
+			registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect, mlir::gpu::GPUDialect,
+			                mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect, mlir::scf::SCFDialect>();
 			mlir::registerBuiltinDialectTranslation(registry);
 			mlir::registerLLVMDialectTranslation(registry);
 			mlir::registerNVVMDialectTranslation(registry);
@@ -1987,7 +2002,9 @@ namespace LiteNN
 			auto* context = module->getContext();
 			mlir::PassManager passManager(context);
 			passManager.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToNVVMOps());
+			passManager.addPass(mlir::createSCFToControlFlowPass());
 			passManager.addPass(mlir::createArithToLLVMConversionPass());
+			passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
 			passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
 			if (mlir::failed(passManager.run(module.get())))
 			{
