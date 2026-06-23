@@ -903,6 +903,8 @@ struct Case
 	std::vector<std::size_t> outShape; // single-output models
 };
 
+static std::string CsvEscape(std::string_view value);
+
 #ifdef LITENN_ENABLE_CUDA
 struct CUDALaunchBreakdown
 {
@@ -915,12 +917,18 @@ struct CUDALaunchBreakdown
 	std::size_t libraryKernelCount{};
 	std::size_t ptxKernelCount{};
 	std::size_t workspaceBytes{};
+	std::size_t inputBytes{};
+	std::size_t outputBytes{};
+	std::size_t constantBytes{};
+	std::size_t estimatedBytesPerRun{};
 	double compileMs{};
 	double loadMs{};
 	double nativeFirstMs{};
 	double nativeMeanMs{};
 	double graphFirstMs{};
 	double graphMeanMs{};
+	double nativeEstimatedGBps{};
+	double graphEstimatedGBps{};
 	std::string message;
 };
 
@@ -938,6 +946,25 @@ static std::string CUDABinaryKindName(CUDANativeBinaryKind kind)
 		return "library";
 	}
 	return "unknown";
+}
+
+static std::size_t SumCompiledTensorBytes(std::span<const CompiledTensorSpec> specs)
+{
+	std::size_t bytes = 0;
+	for (const auto& spec : specs)
+	{
+		bytes += spec.type.ByteSize().value_or(0);
+	}
+	return bytes;
+}
+
+static double EstimatedGBps(std::size_t bytes, double milliseconds)
+{
+	if (bytes == 0 || milliseconds <= 0.0)
+	{
+		return 0.0;
+	}
+	return static_cast<double>(bytes) / (milliseconds * 1.0e6);
 }
 
 static std::vector<Tensor<CUDA>> MakeCUDAProfileInputs(std::size_t batch)
@@ -1001,6 +1028,9 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		result.featureFlags = payload.featureSet.flags;
 		result.kernelCount = payload.kernels.size();
 		result.workspaceBytes = static_cast<std::size_t>(payload.workspaceBytes);
+		result.inputBytes = SumCompiledTensorBytes(artifact.InputSpecs());
+		result.outputBytes = SumCompiledTensorBytes(artifact.OutputSpecs());
+		result.constantBytes = payload.constantData.size();
 		if (payload.binaryKind == CUDANativeBinaryKind::LibraryCall)
 		{
 			result.libraryKernelCount = payload.kernels.size();
@@ -1013,6 +1043,8 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		{
 			result.workspaceBytes = std::max(result.workspaceBytes, static_cast<std::size_t>(kernel.workspaceBytes));
 		}
+		result.estimatedBytesPerRun =
+		    result.inputBytes + result.outputBytes + result.constantBytes + result.workspaceBytes;
 
 		auto loadBegin = Clock::now();
 		auto module = artifact.Load(CUDA{});
@@ -1033,12 +1065,14 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 			result.nativeFirstMs = TimedOnceMs(nativeRun);
 			const auto timing = TimedRepeated(nativeRun, result.batch, 300.0);
 			result.nativeMeanMs = timing.meanMs;
+			result.nativeEstimatedGBps = EstimatedGBps(result.estimatedBytesPerRun, result.nativeMeanMs);
 		}
 		{
 			const auto graphRun = [&] { runInto(true); };
 			result.graphFirstMs = TimedOnceMs(graphRun);
 			const auto timing = TimedRepeated(graphRun, result.batch, 300.0);
 			result.graphMeanMs = timing.meanMs;
+			result.graphEstimatedGBps = EstimatedGBps(result.estimatedBytesPerRun, result.graphMeanMs);
 		}
 		result.message = "ok";
 	}
@@ -1047,6 +1081,27 @@ static CUDALaunchBreakdown ProfileCUDALaunches(const Case& profileCase)
 		result.message = ex.what();
 	}
 	return result;
+}
+
+static void WriteCUDAProfileCsv(const std::filesystem::path& path, std::span<const CUDALaunchBreakdown> rows)
+{
+	std::ofstream out(path);
+	if (!out)
+	{
+		throw std::runtime_error(std::format("Failed to open CUDA profile CSV '{}'", path.string()));
+	}
+	out << "case,batch,backend,binary,kernels,library_kernels,ptx_kernels,workspace_bytes,input_bytes,output_bytes,"
+	       "constant_bytes,estimated_bytes_per_run,compile_ms,load_ms,native_first_ms,native_mean_ms,"
+	       "native_estimated_gbps,graph_first_ms,graph_mean_ms,graph_estimated_gbps,status\n";
+	for (const auto& row : rows)
+	{
+		out << CsvEscape(row.name) << ',' << row.batch << ',' << CsvEscape(row.backend) << ','
+		    << CsvEscape(row.binaryKind) << ',' << row.kernelCount << ',' << row.libraryKernelCount << ','
+		    << row.ptxKernelCount << ',' << row.workspaceBytes << ',' << row.inputBytes << ',' << row.outputBytes << ','
+		    << row.constantBytes << ',' << row.estimatedBytesPerRun << ',' << row.compileMs << ',' << row.loadMs << ','
+		    << row.nativeFirstMs << ',' << row.nativeMeanMs << ',' << row.nativeEstimatedGBps << ',' << row.graphFirstMs
+		    << ',' << row.graphMeanMs << ',' << row.graphEstimatedGBps << ',' << CsvEscape(row.message) << '\n';
+	}
 }
 #endif
 
@@ -1613,26 +1668,36 @@ int main(int argc, char** argv)
 	}
 	else
 	{
-		std::cout << std::format(
-		    "{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>12} {:>11} {:>10} {:>10} {}\n", "Case",
-		    "Batch", "Backend", "Binary", "Kernels", "Lib", "PTX", "Workspace", "Compile", "Load", "Native1",
-		    "NativeAvg", "Graph1", "GraphAvg", "Status");
-		std::cout << std::string(170, '-') << "\n";
+		std::vector<CUDALaunchBreakdown> cudaRows;
+		cudaRows.reserve(cases.size());
+		std::cout << std::format("{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>10} {:>10} {:>10} "
+		                         "{:>11} {:>10} {:>10} {:>10} {:>10} {}\n",
+		                         "Case", "Batch", "Backend", "Binary", "Kernels", "Lib", "PTX", "Workspace",
+		                         "Bytes/Run", "Compile", "Load", "Native1", "NativeAvg", "NativeGB/s", "GraphAvg",
+		                         "GraphGB/s", "Graph1", "Status");
+		std::cout << std::string(202, '-') << "\n";
 		for (const auto& c : cases)
 		{
 			const auto row = ProfileCUDALaunches(c);
-			std::cout << std::format("{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>8.2f}ms {:>8.2f}ms "
-			                         "{:>10.4f}ms {:>9.4f}ms {:>8.4f}ms {:>8.4f}ms {}\n",
+			cudaRows.push_back(row);
+			std::cout << std::format("{:<14} {:>8} {:<11} {:<8} {:>7} {:>7} {:>7} {:>10} {:>10} {:>8.2f}ms "
+			                         "{:>8.2f}ms {:>8.4f}ms {:>9.4f}ms {:>8.2f} {:>8.4f}ms {:>8.2f} "
+			                         "{:>8.4f}ms {}\n",
 			                         row.name, row.batch, row.backend.empty() ? "-" : row.backend,
 			                         row.binaryKind.empty() ? "-" : row.binaryKind, row.kernelCount,
-			                         row.libraryKernelCount, row.ptxKernelCount, row.workspaceBytes, row.compileMs,
-			                         row.loadMs, row.nativeFirstMs, row.nativeMeanMs, row.graphFirstMs, row.graphMeanMs,
-			                         row.message);
+			                         row.libraryKernelCount, row.ptxKernelCount, row.workspaceBytes,
+			                         row.estimatedBytesPerRun, row.compileMs, row.loadMs, row.nativeFirstMs,
+			                         row.nativeMeanMs, row.nativeEstimatedGBps, row.graphMeanMs, row.graphEstimatedGBps,
+			                         row.graphFirstMs, row.message);
 		}
 		std::cout
 		    << "Native1 is the first synchronized native RunInto. NativeAvg is steady synchronized native RunInto.\n";
 		std::cout
 		    << "Graph1 is first graph capture+run. GraphAvg is steady synchronized RunInto with graphReplay=Enabled.\n";
+		std::cout << "Bytes/Run is a payload-visible estimate: inputs + outputs + constants + max workspace.\n";
+		const auto csvPath = outDir / "cuda_profile.csv";
+		WriteCUDAProfileCsv(csvPath, cudaRows);
+		std::cout << "CUDA profile CSV written to: " << csvPath.string() << "\n";
 	}
 #else
 	std::cout << "Unavailable: LiteNN was built without LITENN_ENABLE_CUDA.\n";

@@ -2554,8 +2554,12 @@ placement and fallback policy.
             remains a separate fused-kernel target.
 - [ ] Add fused kernels where correctness is stable: RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation,
       and quantized Linear epilogues.
-- [ ] Add CUDA graph replay or equivalent launch amortization for steady-state decode.
-- [ ] Record per-token latency, launch count, memory bandwidth, and fallback count in benchmark/profile output.
+- [x] Add CUDA graph replay or equivalent launch amortization for steady-state decode:
+      `CompiledModuleCUDARunOptions::GraphReplay()` captures/replays CUDA-native payloads for stable tensor bindings, and
+      `CompiledModuleCUDATest.RunsNativeLinearChainWithCUDAGraphReplay` validates repeated replay output parity.
+- [x] Record per-token latency, launch count, memory bandwidth, and fallback count in benchmark/profile output:
+      GGUF decode-loop summaries expose per-token latency plus fallback count, and `litenn_profile` now writes
+      `cuda_profile.csv` with kernel/library/PTX launch counts, estimated bytes/run, and native-vs-graph replay GB/s.
 
 #### G16.6 Golden Validation and User-Facing Example
 
