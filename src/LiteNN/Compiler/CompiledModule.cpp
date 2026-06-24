@@ -578,12 +578,238 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	std::uint8_t GGMLBlockByte(const std::uint8_t* block, std::int64_t byteStride, std::uint64_t byteOffset)
+	{
+		return block[static_cast<std::int64_t>(byteOffset) * byteStride];
+	}
+
+	float ReadGGMLF16Strided(const std::uint8_t* block, std::int64_t byteStride, std::uint64_t byteOffset)
+	{
+		const auto low = static_cast<std::uint16_t>(GGMLBlockByte(block, byteStride, byteOffset));
+		const auto high = static_cast<std::uint16_t>(GGMLBlockByte(block, byteStride, byteOffset + 1));
+		return QuantizationDetail::Float16BitsToFloat32(static_cast<std::uint16_t>(low | (high << 8U)));
+	}
+
+	void GGMLQ4Or5KScaleMin(const std::uint8_t* block, std::int64_t byteStride, std::uint64_t subblock,
+	                        std::uint32_t& scale, std::uint32_t& minimum)
+	{
+		const auto belowFour = subblock < 4;
+		const auto scaleLowOffset = belowFour ? subblock : subblock + 4;
+		const auto scaleLow = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 4 + scaleLowOffset));
+		const auto minLow = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 4 + subblock + 4));
+		scale = scaleLow & 63U;
+		minimum = minLow & 63U;
+		if (!belowFour)
+		{
+			const auto highOffset = subblock - 4;
+			const auto highSource = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 4 + highOffset));
+			const auto minHighSource = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 4 + subblock));
+			scale = (scaleLow & 15U) | ((highSource >> 6U) << 4U);
+			minimum = (minLow >> 4U) | ((minHighSource >> 6U) << 4U);
+		}
+	}
+
+	float DotGGMLQ8_0BlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
+	                          std::int64_t lhsStride)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
+		float sum = 0.0F;
+		for (std::uint64_t lane = 0; lane < 32; ++lane)
+		{
+			sum += lhs[static_cast<std::int64_t>(lane) * lhsStride] *
+			       static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 2 + lane)));
+		}
+		return d * sum;
+	}
+
+	float DotGGMLQ4Or5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
+	                            std::int64_t lhsStride, QuantizedBlockFormat format)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
+		const auto dmin = ReadGGMLF16Strided(block, byteStride, 2);
+		const auto quantBaseOffset = format == QuantizedBlockFormat::GGML_Q5_K ? 48u : 16u;
+		float acc = 0.0F;
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale = 0;
+			std::uint32_t minimum = 0;
+			GGMLQ4Or5KScaleMin(block, byteStride, subblock, scale, minimum);
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			float quantSum = 0.0F;
+			float lhsSum = 0.0F;
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; ++laneInSubblock)
+			{
+				const auto lane = subblock * 32 + laneInSubblock;
+				const auto quantByte = static_cast<std::uint32_t>(
+				    GGMLBlockByte(block, byteStride, quantBaseOffset + quantPairOffset + laneInSubblock));
+				auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+				if (format == QuantizedBlockFormat::GGML_Q5_K)
+				{
+					const auto highBits =
+					    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 16 + laneInSubblock));
+					quant |= ((highBits >> subblock) & 1U) << 4U;
+				}
+				const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+				quantSum += lhsValue * static_cast<float>(quant);
+				lhsSum += lhsValue;
+			}
+			acc += d * static_cast<float>(scale) * quantSum - dmin * static_cast<float>(minimum) * lhsSum;
+		}
+		return acc;
+	}
+
+	float DotGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
+	                         std::int64_t lhsStride)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 208);
+		float acc = 0.0F;
+		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+		{
+			for (std::uint64_t segment = 0; segment < 4; ++segment)
+			{
+				for (std::uint64_t group = 0; group < 2; ++group)
+				{
+					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
+					const auto scale = static_cast<float>(
+					    static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 192 + scaleOffset)));
+					float quantSum = 0.0F;
+					for (std::uint64_t local = 0; local < 16; ++local)
+					{
+						const auto laneInSegment = group * 16 + local;
+						const auto lane = halfBlock * 128 + segment * 32 + laneInSegment;
+						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+						const auto ql = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, qlOffset));
+						const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+						const auto qhOffset = halfBlock * 32 + laneInSegment;
+						const auto qh = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 128 + qhOffset));
+						const auto highTwo = (qh >> (segment * 2)) & 3U;
+						const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+						quantSum += lhs[static_cast<std::int64_t>(lane) * lhsStride] * static_cast<float>(quant);
+					}
+					acc += d * scale * quantSum;
+				}
+			}
+		}
+		return acc;
+	}
+
+	float DotGGMLBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs, std::int64_t lhsStride,
+	                      QuantizedBlockFormat format)
+	{
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q8_0:
+			return DotGGMLQ8_0BlockF32(block, byteStride, lhs, lhsStride);
+		case QuantizedBlockFormat::GGML_Q4_K:
+		case QuantizedBlockFormat::GGML_Q5_K:
+			return DotGGMLQ4Or5KBlockF32(block, byteStride, lhs, lhsStride, format);
+		case QuantizedBlockFormat::GGML_Q6_K:
+			return DotGGMLQ6KBlockF32(block, byteStride, lhs, lhsStride);
+		default:
+			return 0.0F;
+		}
+	}
+
+	void DecodeGGMLQ8_0BlockF32(const std::uint8_t* block, std::int64_t byteStride, float* out, std::int64_t outStride)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
+		for (std::uint64_t lane = 0; lane < 32; ++lane)
+		{
+			out[static_cast<std::int64_t>(lane) * outStride] =
+			    d * static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 2 + lane)));
+		}
+	}
+
+	void DecodeGGMLQ4Or5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, float* out,
+	                              std::int64_t outStride, QuantizedBlockFormat format)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
+		const auto dmin = ReadGGMLF16Strided(block, byteStride, 2);
+		const auto quantBaseOffset = format == QuantizedBlockFormat::GGML_Q5_K ? 48u : 16u;
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale = 0;
+			std::uint32_t minimum = 0;
+			GGMLQ4Or5KScaleMin(block, byteStride, subblock, scale, minimum);
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			const auto scaleF32 = d * static_cast<float>(scale);
+			const auto minF32 = dmin * static_cast<float>(minimum);
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; ++laneInSubblock)
+			{
+				const auto lane = subblock * 32 + laneInSubblock;
+				const auto quantByte = static_cast<std::uint32_t>(
+				    GGMLBlockByte(block, byteStride, quantBaseOffset + quantPairOffset + laneInSubblock));
+				auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+				if (format == QuantizedBlockFormat::GGML_Q5_K)
+				{
+					const auto highBits =
+					    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 16 + laneInSubblock));
+					quant |= ((highBits >> subblock) & 1U) << 4U;
+				}
+				out[static_cast<std::int64_t>(lane) * outStride] = scaleF32 * static_cast<float>(quant) - minF32;
+			}
+		}
+	}
+
+	void DecodeGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, float* out, std::int64_t outStride)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 208);
+		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+		{
+			for (std::uint64_t segment = 0; segment < 4; ++segment)
+			{
+				for (std::uint64_t group = 0; group < 2; ++group)
+				{
+					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
+					const auto scale = d * static_cast<float>(static_cast<std::int8_t>(
+					                           GGMLBlockByte(block, byteStride, 192 + scaleOffset)));
+					for (std::uint64_t local = 0; local < 16; ++local)
+					{
+						const auto laneInSegment = group * 16 + local;
+						const auto lane = halfBlock * 128 + segment * 32 + laneInSegment;
+						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+						const auto ql = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, qlOffset));
+						const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+						const auto qhOffset = halfBlock * 32 + laneInSegment;
+						const auto qh = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 128 + qhOffset));
+						const auto highTwo = (qh >> (segment * 2)) & 3U;
+						const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+						out[static_cast<std::int64_t>(lane) * outStride] = scale * static_cast<float>(quant);
+					}
+				}
+			}
+		}
+	}
+
+	void DecodeGGMLBlockF32(const std::uint8_t* block, std::int64_t byteStride, float* out, std::int64_t outStride,
+	                        QuantizedBlockFormat format)
+	{
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q8_0:
+			DecodeGGMLQ8_0BlockF32(block, byteStride, out, outStride);
+			break;
+		case QuantizedBlockFormat::GGML_Q4_K:
+		case QuantizedBlockFormat::GGML_Q5_K:
+			DecodeGGMLQ4Or5KBlockF32(block, byteStride, out, outStride, format);
+			break;
+		case QuantizedBlockFormat::GGML_Q6_K:
+			DecodeGGMLQ6KBlockF32(block, byteStride, out, outStride);
+			break;
+		default:
+			break;
+		}
+	}
+
 	extern "C" void litenn_cpu_ggml_block_matmul_f32(
 	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
 	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
 	    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
-	    std::int64_t outColumnStride, std::uint64_t formatValue)
+	    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+	    std::uint64_t affinityPolicyValue)
 	{
 		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
 		const auto layout = GetQuantizedBlockLayout(format);
@@ -650,56 +876,35 @@ namespace
 				const auto* weightRow =
 				    ctx.rhsAligned + ctx.rhsOffset + column * static_cast<std::int64_t>(ctx.rowBytes) * ctx.rhsStride;
 				float acc = 0.0F;
-				const auto accumulate = [&](auto decode) {
-					for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
-					{
-						const auto* block = weightRow + blockIndex * ctx.bytesPerBlock * ctx.rhsStride;
-						const auto lhsBlockOffset =
-						    ctx.lhsOffset + row * ctx.lhsRowStride +
-						    static_cast<std::int64_t>(blockIndex * ctx.elementsPerBlock) * ctx.lhsColumnStride;
-						for (std::uint64_t lane = 0; lane < ctx.elementsPerBlock; ++lane)
-						{
-							const auto lhsValue =
-							    ctx.lhsAligned[lhsBlockOffset + static_cast<std::int64_t>(lane) * ctx.lhsColumnStride];
-							acc += lhsValue * decode(block, lane);
-						}
-					}
-				};
-				switch (ctx.format)
+				const auto* lhsRow = ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
+				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 				{
-				case QuantizedBlockFormat::GGML_Q8_0:
-					accumulate([](const std::uint8_t* block, std::uint64_t lane) {
-						return QuantizationDetail::ReadGGMLF16(block) *
-						       static_cast<float>(static_cast<std::int8_t>(block[2 + lane]));
-					});
-					break;
-				case QuantizedBlockFormat::GGML_Q4_K:
-				case QuantizedBlockFormat::GGML_Q5_K:
-					accumulate([&](const std::uint8_t* block, std::uint64_t lane) {
-						return QuantizationDetail::DecodeGGMLQ4Or5KElement(block, ctx.format, lane);
-					});
-					break;
-				case QuantizedBlockFormat::GGML_Q6_K:
-					accumulate([](const std::uint8_t* block, std::uint64_t lane) {
-						return QuantizationDetail::DecodeGGMLQ6KElement(block, lane);
-					});
-					break;
-				default:
-					break;
+					const auto* block = weightRow + blockIndex * ctx.bytesPerBlock * ctx.rhsStride;
+					const auto* lhsBlock =
+					    lhsRow + static_cast<std::int64_t>(blockIndex * ctx.elementsPerBlock) * ctx.lhsColumnStride;
+					acc += DotGGMLBlockF32(block, ctx.rhsStride, lhsBlock, ctx.lhsColumnStride, ctx.format);
 				}
 				ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
 				    static_cast<float>(acc);
 			}
 		};
 		const auto operations = outputElements * static_cast<std::uint64_t>(lhsColumns);
-		const auto threadCount = operations >= (1ull << 20) ? LiteNNCPUHardwareThreadCount() : std::uint64_t{ 1 };
+		const auto configuredThreadCount =
+		    requestedThreadCount == 0 ? LiteNNCPUHardwareThreadCount() : static_cast<std::size_t>(requestedThreadCount);
+		const auto threadCount =
+		    operations >= (1ull << 20)
+		        ? std::min<std::uint64_t>(static_cast<std::uint64_t>(configuredThreadCount), outputElements)
+		        : std::uint64_t{ 1 };
 		const auto grain = std::max<std::uint64_t>(1, outputElements / (std::max<std::uint64_t>(1, threadCount) * 8));
 		if (threadCount <= 1)
 		{
 			body(0, outputElements, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputElements, grain, body, &context, threadCount, CPUAOTAffinityPolicy::None);
+		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
+		                                ? CPUAOTAffinityPolicy::Compact
+		                                : CPUAOTAffinityPolicy::None;
+		LiteNNCPUParallelFor(0, outputElements, grain, body, &context, threadCount, affinityPolicy);
 	}
 
 	template <typename IndexT>
@@ -736,13 +941,14 @@ namespace
 			const auto* rowBase =
 			    storageAligned + storageOffset +
 			    static_cast<std::int64_t>(sourceRow) * static_cast<std::int64_t>(rowBytes) * storageStride;
-			for (std::int64_t column = 0; column < outColumns; ++column)
+			const auto blockCount = static_cast<std::uint64_t>(outColumns) / layout->elementsPerBlock;
+			auto* outRow = outAligned + outOffset + outputRow * outRowStride;
+			for (std::uint64_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
 			{
-				const auto blockIndex = static_cast<std::uint64_t>(column) / layout->elementsPerBlock;
-				const auto lane = static_cast<std::uint64_t>(column) % layout->elementsPerBlock;
 				const auto* block = rowBase + blockIndex * layout->bytesPerBlock * storageStride;
-				outAligned[outOffset + outputRow * outRowStride + column * outColumnStride] =
-				    QuantizationDetail::DecodeGGMLBlockElement(block, format, lane);
+				auto* outBlock =
+				    outRow + static_cast<std::int64_t>(blockIndex * layout->elementsPerBlock) * outColumnStride;
+				DecodeGGMLBlockF32(block, storageStride, outBlock, outColumnStride, format);
 			}
 		}
 	}
@@ -12430,7 +12636,11 @@ namespace
 		});
 		TimedCompileDiagnostic(options, "cpu-mlir lower LLVM dialect", [&] {
 			mlir::PassManager pm(&ctx);
-			litenn::addLLVMCodegenPipeline(pm);
+			litenn::addLLVMCodegenPipeline(
+			    pm, litenn::LLVMCodegenOptions{
+			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
+			            .ggmlBlockMatMulAffinityPolicy = static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy),
+			        });
 			if (mlir::failed(pm.run(*module)))
 			{
 				throw std::runtime_error("LiteNN LLVM codegen pipeline failed");

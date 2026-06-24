@@ -210,7 +210,8 @@ namespace litenn
 		}
 
 		mlir::LogicalResult rewriteGGMLBlockQuantizedMatMulCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
-		                                                        mlir::OpBuilder& builder)
+		                                                        mlir::OpBuilder& builder,
+		                                                        const LLVMCodegenOptions& options)
 		{
 			auto formatAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedMatMulAttr);
 			if (!formatAttr || op->getNumResults() != 0 || op.getInputs().size() != 1 || op.getOutputs().size() != 1)
@@ -254,7 +255,7 @@ namespace litenn
 			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                            outType.getElementType());
 			auto funcType = builder.getFunctionType(
-			    mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64 }, mlir::TypeRange{});
+			    mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64, i64 }, mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGGMLBlockMatMulHelper);
 			if (!helper)
 			{
@@ -269,11 +270,16 @@ namespace litenn
 			}
 
 			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
+			auto threadCount =
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulThreadCount, 64).getResult();
+			auto affinityPolicy =
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulAffinityPolicy, 64).getResult();
 			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
 			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
-			builder.create<mlir::func::CallOp>(loc, helper,
-			                                   mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format });
+			builder.create<mlir::func::CallOp>(
+			    loc, helper,
+			    mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format, threadCount, affinityPolicy });
 			op.erase();
 			return mlir::success();
 		}
@@ -1433,6 +1439,12 @@ namespace litenn
 
 		struct LowerNarrowMatMulPass : mlir::PassWrapper<LowerNarrowMatMulPass, mlir::OperationPass<mlir::ModuleOp>>
 		{
+			LowerNarrowMatMulPass() = default;
+
+			explicit LowerNarrowMatMulPass(LLVMCodegenOptions options) : options_(options)
+			{
+			}
+
 			llvm::StringRef getName() const override
 			{
 				return "LiteNNLowerMatMulMicroKernelPass";
@@ -1457,7 +1469,7 @@ namespace litenn
 					{
 						continue;
 					}
-					if (mlir::succeeded(rewriteGGMLBlockQuantizedMatMulCall(getOperation(), op, builder)))
+					if (mlir::succeeded(rewriteGGMLBlockQuantizedMatMulCall(getOperation(), op, builder, options_)))
 					{
 						continue;
 					}
@@ -1500,11 +1512,13 @@ namespace litenn
 					(void) rewriteNarrowMatMul(op, builder);
 				}
 			}
+
+			LLVMCodegenOptions options_{};
 		};
 
-		std::unique_ptr<mlir::Pass> createLowerNarrowMatMulPass()
+		std::unique_ptr<mlir::Pass> createLowerNarrowMatMulPass(const LLVMCodegenOptions& options)
 		{
-			return std::make_unique<LowerNarrowMatMulPass>();
+			return std::make_unique<LowerNarrowMatMulPass>(options);
 		}
 
 		struct EnableSIMDFastMathPass : mlir::PassWrapper<EnableSIMDFastMathPass, mlir::OperationPass<mlir::ModuleOp>>
@@ -1546,9 +1560,14 @@ namespace litenn
 
 	void addLLVMCodegenPipeline(mlir::PassManager& pm)
 	{
+		addLLVMCodegenPipeline(pm, LLVMCodegenOptions{});
+	}
+
+	void addLLVMCodegenPipeline(mlir::PassManager& pm, const LLVMCodegenOptions& options)
+	{
 		pm.addPass(mlir::createCanonicalizerPass());
 		pm.addPass(mlir::createCSEPass());
-		pm.addPass(createLowerNarrowMatMulPass());
+		pm.addPass(createLowerNarrowMatMulPass(options));
 		pm.addPass(mlir::createCanonicalizerPass());
 		pm.addPass(mlir::createCSEPass());
 		pm.addPass(mlir::createConvertLinalgToLoopsPass());

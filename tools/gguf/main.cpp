@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -887,6 +888,16 @@ namespace
 		if (const auto optLevel = ParseU64Env("LITENN_CPU_AOT_LLVM_OPT_LEVEL"))
 		{
 			options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
+		}
+		if (const char* affinity = std::getenv("LITENN_CPU_AOT_AFFINITY"))
+		{
+			std::string value{ affinity };
+			std::ranges::transform(value, value.begin(),
+			                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+			if (value == "compact" || value == "1" || value == "true" || value == "on")
+			{
+				options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Compact;
+			}
 		}
 		options.enableCPUAOTExternalRegions = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
 		                                      TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));

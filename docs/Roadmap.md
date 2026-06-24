@@ -2667,10 +2667,18 @@ placement and fallback policy.
       the helper now dispatches by GGML format outside the inner lane work, accumulates in float, and walks each
       quantized block once per output column without per-lane divide/modulo address recomputation. A real 14B Q4_K_M O0
       single-token smoke improved runtime further to ~7.8s with fallback_count=0.
-- [ ] Finish the production GGML CPU kernel layer with packed input row reuse, vec-dot/SIMD microkernels, explicit
-      thread policy hooks, and cache-friendly output tiling. Current 14B O0 smoke still spends ~59s in MLIR-to-LLVM
-      lowering and ~48s in object emission, so the next compile-time win is reducing the remaining non-quantized
-      function/output surface rather than changing Interpreter fallback behavior.
+- [x] Add the first production-shaped GGML CPU sidecar kernel layer:
+      `litenn_cpu_ggml_block_matmul_f32` now uses block-level Q4_K/Q5_K/Q6_K/Q8_0 dot kernels that parse scale/min
+      metadata once per block or subblock instead of calling element decoders for every lane; `QuantizedGetRowsNode`
+      sidecar output also decodes whole GGML blocks at a time. CPU LLVM codegen now passes `CompilerOptions`
+      thread-count and affinity-policy constants into the GGML MatMul helper, and the GGUF CLI accepts
+      `LITENN_CPU_AOT_AFFINITY=compact` through the same options path used by benchmarks. A real 14B Q4_K_M O0
+      single-token smoke improved runtime from ~7.8s to ~0.46s with fallback_count=0, while build time moved from
+      ~147s to ~139s.
+- [ ] Finish the remaining GGML CPU microkernel work with dedicated SIMD intrinsics, packed input-row reuse across
+      output columns, and cache-friendly output tiling. Current 14B O0 smoke still spends ~56s in MLIR-to-LLVM lowering
+      and ~47s in object emission, so the next compile-time win is reducing the remaining non-quantized function/output
+      surface rather than changing Interpreter fallback behavior.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

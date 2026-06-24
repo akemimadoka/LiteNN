@@ -1183,7 +1183,10 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 	}
 
 #ifdef LITENN_ENABLE_MLIR
-	const auto artifact = Compiler<CPU>::CompileArtifact(loaded.plan);
+	CompilerOptions compileOptions;
+	compileOptions.cpuAOTThreadCount = 2;
+	compileOptions.cpuAOTAffinityPolicy = CPUAOTAffinityPolicy::Compact;
+	const auto artifact = Compiler<CPU>::CompileArtifact(loaded.plan, compileOptions);
 	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_matmul_f32"));
 	auto compiled = artifact.Load();
 	const auto compiledOutputs = compiled.RunTensors(inputs);

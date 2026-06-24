@@ -1,5 +1,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassManager.h"
+#include <cstdint>
 #include <memory>
 
 #ifndef LITENN_COMPILER_PASS_LLVMCODEGENPIPELINE_H
@@ -18,6 +19,11 @@ namespace mlir
 
 namespace litenn
 {
+	struct LLVMCodegenOptions
+	{
+		std::uint64_t ggmlBlockMatMulThreadCount{};
+		std::uint64_t ggmlBlockMatMulAffinityPolicy{};
+	};
 
 	// Registers LLVM dialect translation interfaces (LLVMDialect + BuiltinDialect).
 	// Call before creating the MLIRContext, or via ctx.appendDialectRegistry().
@@ -38,6 +44,7 @@ namespace litenn
 	//  12. convert-control-flow-to-llvm
 	//  13. reconcile-unrealized-casts
 	void addLLVMCodegenPipeline(mlir::PassManager& pm);
+	void addLLVMCodegenPipeline(mlir::PassManager& pm, const LLVMCodegenOptions& options);
 
 	// Translates a fully lowered LLVM dialect ModuleOp to llvm::Module.
 	// Requires registerLLVMTranslations to have been called on the context's registry.
