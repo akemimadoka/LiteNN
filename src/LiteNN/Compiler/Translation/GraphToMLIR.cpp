@@ -1226,6 +1226,45 @@ namespace litenn
 						    "GraphToMLIR GGML QuantizedMatMulNode requires output-major UInt8 block storage");
 					}
 
+					{
+						auto empty =
+						    builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+						auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+						auto filled =
+						    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+						auto lhsMap =
+						    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(2, &ctx_) }, &ctx_);
+						auto outputMap =
+						    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(1, &ctx_) }, &ctx_);
+						auto generic = builder_.create<linalg::GenericOp>(
+						    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
+						    SmallVector<AffineMap>{ lhsMap, outputMap },
+						    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
+						                                      utils::IteratorType::parallel,
+						                                      utils::IteratorType::reduction },
+						    [&](OpBuilder& b, Location l, ValueRange args) {
+							    // Keep the UInt8 storage operand alive so the CPU LLVM pass can rewrite this
+							    // lightweight placeholder into a GGML sidecar call after bufferization.
+							    auto zeroIndex = b.create<arith::ConstantIndexOp>(l, 0).getResult();
+							    auto storageByte =
+							        b.create<tensor::ExtractOp>(l, rhs, ValueRange{ zeroIndex }).getResult();
+							    auto storageF32 =
+							        b.create<arith::UIToFPOp>(l, b.getF32Type(),
+							                                  b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
+							            .getResult();
+							    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+							    auto storageDependency = b.create<arith::MulFOp>(l, storageF32, zeroF32).getResult();
+							    auto accumulator = emitScalarToF32(b, l, args[1]);
+							    auto sum = b.create<arith::AddFOp>(l, accumulator, storageDependency).getResult();
+							    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+						    });
+						generic->setAttr(
+						    "litenn.ggml_block_quantized_matmul",
+						    builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
+						valueMap[nodeId] = { generic.getResult(0) };
+						return;
+					}
+
 					auto empty =
 					    builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
 					auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
@@ -1709,6 +1748,31 @@ namespace litenn
 				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
 				auto indicesMap = AffineMap::get(2, 0, { getAffineDimExpr(0, &ctx_) }, &ctx_);
 				auto outputMap = AffineMap::getMultiDimIdentityMap(2, &ctx_);
+				{
+					auto generic = builder_.create<linalg::GenericOp>(
+					    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty },
+					    SmallVector<AffineMap>{ indicesMap, outputMap },
+					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
+					                                      utils::IteratorType::parallel },
+					    [&](OpBuilder& b, Location l, ValueRange) {
+						    // Keep the UInt8 storage operand alive so the CPU LLVM pass can rewrite this
+						    // lightweight placeholder into a GGML sidecar call after bufferization.
+						    auto zeroIndex = b.create<arith::ConstantIndexOp>(l, 0).getResult();
+						    auto storageByte =
+						        b.create<tensor::ExtractOp>(l, storage, ValueRange{ zeroIndex }).getResult();
+						    auto storageF32 =
+						        b.create<arith::UIToFPOp>(l, b.getF32Type(),
+						                                  b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
+						            .getResult();
+						    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+						    auto value = b.create<arith::MulFOp>(l, storageF32, zeroF32).getResult();
+						    b.create<linalg::YieldOp>(l, value);
+					    });
+					generic->setAttr("litenn.ggml_block_quantized_get_rows",
+					                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
+					valueMap[nodeId] = { generic.getResult(0) };
+					return;
+				}
 				auto generic = builder_.create<linalg::GenericOp>(
 				    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty },
 				    SmallVector<AffineMap>{ indicesMap, outputMap },

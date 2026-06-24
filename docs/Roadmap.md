@@ -2650,6 +2650,11 @@ placement and fallback policy.
       instruction object while preserving CPU AOT parity. This creates the sidecar-kernel boundary needed to remove
       per-projection scalar IR expansion, but the first helper is correctness-first and not yet a speed win on the real
       14B O0 smoke.
+- [x] Keep GGML block quantized MatMul/GetRows MLIR lowering lightweight before helper replacement:
+      GraphToMLIR now emits dependency-carrying placeholder linalg ops for GGML_Q4_K/Q5_K/Q6_K/Q8_0 MatMul/GetRows
+      instead of expanding the full bitfield decode into MLIR and waiting for the LLVM pipeline to replace it. A real
+      14B Q4_K_M O0 single-token smoke improved from the previous sidecar path's ~256s build to ~147s build while
+      keeping fallback_count=0.
 - [x] Replace generic MLIR expansion of GGML K-quant GetRows with reusable CPU AOT helper calls:
       `QuantizedGetRowsNode` now lowers to `litenn_cpu_ggml_block_get_rows_i32_f32` /
       `litenn_cpu_ggml_block_get_rows_i64_f32` for GGML_Q4_K/Q5_K/Q6_K/Q8_0 token embedding gathers, with regression
@@ -2658,11 +2663,14 @@ placement and fallback policy.
       projections can split output columns across the existing CPU worker pool instead of running as a single host loop.
       The real 14B Q4_K_M O0 single-token smoke improved from the previous helper-call run's ~97.6s runtime to ~15.9s,
       while keeping fallback_count=0.
-- [ ] Upgrade `litenn_cpu_ggml_block_matmul_f32` from block-at-a-time decoding to a production kernel using packed input
-      rows / vec-dot style loops, explicit thread policy hooks, and cache-friendly output tiling.
-      Current 14B O0 smoke after the helper-call cutover still reports multi-minute build time, so optimized helper
-      internals and remaining non-quantized IR size are the next required work before claiming production CPU decode
-      performance.
+- [x] Upgrade the first `litenn_cpu_ggml_block_matmul_f32` hot loop from scalar `kk` decoding to block/lane traversal:
+      the helper now dispatches by GGML format outside the inner lane work, accumulates in float, and walks each
+      quantized block once per output column without per-lane divide/modulo address recomputation. A real 14B Q4_K_M O0
+      single-token smoke improved runtime further to ~7.8s with fallback_count=0.
+- [ ] Finish the production GGML CPU kernel layer with packed input row reuse, vec-dot/SIMD microkernels, explicit
+      thread policy hooks, and cache-friendly output tiling. Current 14B O0 smoke still spends ~59s in MLIR-to-LLVM
+      lowering and ~48s in object emission, so the next compile-time win is reducing the remaining non-quantized
+      function/output surface rather than changing Interpreter fallback behavior.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

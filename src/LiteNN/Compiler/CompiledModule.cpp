@@ -620,6 +620,7 @@ namespace
 			QuantizedBlockFormat format{};
 			std::uint64_t elementsPerBlock{};
 			std::uint64_t bytesPerBlock{};
+			std::uint64_t blockCount{};
 		};
 		Context context{ .lhsAligned = lhsAligned,
 			             .lhsOffset = lhsOffset,
@@ -637,7 +638,8 @@ namespace
 			             .rowBytes = rowBytes,
 			             .format = format,
 			             .elementsPerBlock = layout->elementsPerBlock,
-			             .bytesPerBlock = layout->bytesPerBlock };
+			             .bytesPerBlock = layout->bytesPerBlock,
+			             .blockCount = static_cast<std::uint64_t>(lhsColumns) / layout->elementsPerBlock };
 		const auto outputElements = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(outColumns);
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
@@ -647,16 +649,43 @@ namespace
 				const auto column = static_cast<std::int64_t>(outputIndex % static_cast<std::uint64_t>(ctx.outColumns));
 				const auto* weightRow =
 				    ctx.rhsAligned + ctx.rhsOffset + column * static_cast<std::int64_t>(ctx.rowBytes) * ctx.rhsStride;
-				double acc = 0.0;
-				for (std::int64_t kk = 0; kk < ctx.lhsColumns; ++kk)
+				float acc = 0.0F;
+				const auto accumulate = [&](auto decode) {
+					for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
+					{
+						const auto* block = weightRow + blockIndex * ctx.bytesPerBlock * ctx.rhsStride;
+						const auto lhsBlockOffset =
+						    ctx.lhsOffset + row * ctx.lhsRowStride +
+						    static_cast<std::int64_t>(blockIndex * ctx.elementsPerBlock) * ctx.lhsColumnStride;
+						for (std::uint64_t lane = 0; lane < ctx.elementsPerBlock; ++lane)
+						{
+							const auto lhsValue =
+							    ctx.lhsAligned[lhsBlockOffset + static_cast<std::int64_t>(lane) * ctx.lhsColumnStride];
+							acc += lhsValue * decode(block, lane);
+						}
+					}
+				};
+				switch (ctx.format)
 				{
-					const auto blockIndex = static_cast<std::uint64_t>(kk) / ctx.elementsPerBlock;
-					const auto lane = static_cast<std::uint64_t>(kk) % ctx.elementsPerBlock;
-					const auto* block = weightRow + blockIndex * ctx.bytesPerBlock * ctx.rhsStride;
-					const auto lhsValue =
-					    ctx.lhsAligned[ctx.lhsOffset + row * ctx.lhsRowStride + kk * ctx.lhsColumnStride];
-					acc += static_cast<double>(lhsValue) *
-					       static_cast<double>(QuantizationDetail::DecodeGGMLBlockElement(block, ctx.format, lane));
+				case QuantizedBlockFormat::GGML_Q8_0:
+					accumulate([](const std::uint8_t* block, std::uint64_t lane) {
+						return QuantizationDetail::ReadGGMLF16(block) *
+						       static_cast<float>(static_cast<std::int8_t>(block[2 + lane]));
+					});
+					break;
+				case QuantizedBlockFormat::GGML_Q4_K:
+				case QuantizedBlockFormat::GGML_Q5_K:
+					accumulate([&](const std::uint8_t* block, std::uint64_t lane) {
+						return QuantizationDetail::DecodeGGMLQ4Or5KElement(block, ctx.format, lane);
+					});
+					break;
+				case QuantizedBlockFormat::GGML_Q6_K:
+					accumulate([](const std::uint8_t* block, std::uint64_t lane) {
+						return QuantizationDetail::DecodeGGMLQ6KElement(block, lane);
+					});
+					break;
+				default:
+					break;
 				}
 				ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
 				    static_cast<float>(acc);
