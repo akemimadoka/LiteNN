@@ -1470,6 +1470,8 @@ namespace litenn
 						    auto sum = b.create<arith::AddFOp>(l, emitScalarToF32(b, l, args[1]), product).getResult();
 						    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
 					    });
+					generic->setAttr("litenn.ggml_block_quantized_matmul",
+					                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
 					valueMap[nodeId] = { generic.getResult(0) };
 					return;
 				}

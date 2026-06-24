@@ -2644,10 +2644,18 @@ placement and fallback policy.
       and control-flow lowering smaller. A real Qwen2.5-Coder-14B Q4_K_M single-token CPU AOT O0 smoke completed with
       fallback_count=0; the remaining bottleneck is runtime throughput and optimized-object emission, not an Interpreter
       fallback.
-- [ ] Replace generic MLIR expansion of GGML K-quant MatMul/GetRows with calls to reusable native CPU kernels for
-      production runtime speed and lower optimized-code generation cost. The current split-function path makes the real
-      14B decode module compile and run, but per-token runtime remains far too slow while each quantized projection is
-      scalar-expanded in generated IR.
+- [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
+      `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
+      replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the
+      instruction object while preserving CPU AOT parity. This creates the sidecar-kernel boundary needed to remove
+      per-projection scalar IR expansion, but the first helper is correctness-first and not yet a speed win on the real
+      14B O0 smoke.
+- [ ] Replace generic MLIR expansion of GGML K-quant GetRows with a reusable CPU AOT helper call so quantized token
+      embedding gathers stop expanding row dequantization into large compiler IR.
+- [ ] Upgrade `litenn_cpu_ggml_block_matmul_f32` from correctness-first block decoding to a production kernel using
+      packed input rows / vec-dot style loops, thread policy hooks, and cache-friendly output tiling.
+      Current 14B O0 smoke after the helper-call cutover still reports multi-minute build time and slower per-token
+      runtime, so this is the next required optimization before claiming production CPU decode performance.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

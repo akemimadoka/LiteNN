@@ -11,6 +11,7 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -34,6 +35,8 @@ namespace litenn
 	namespace
 	{
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
+		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 
 		bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
 		{
@@ -200,6 +203,66 @@ namespace litenn
 				return mlir::failure();
 			}
 
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteGGMLBlockQuantizedMatMulCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                                        mlir::OpBuilder& builder)
+		{
+			auto formatAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedMatMulAttr);
+			if (!formatAttr || op->getNumResults() != 0 || op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+
+			auto lhs = op.getInputs()[0];
+			auto out = op.getOutputs()[0];
+			auto lhsType = llvm::dyn_cast<mlir::MemRefType>(lhs.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!lhsType || !outType || lhsType.getRank() != 2 || outType.getRank() != 2 ||
+			    !lhsType.getElementType().isF32() || !outType.getElementType().isF32())
+			{
+				return mlir::failure();
+			}
+			mlir::Value rhs;
+			op.getRegion().walk([&](mlir::memref::LoadOp load) {
+				if (rhs)
+				{
+					return;
+				}
+				auto candidate = load.getMemRef();
+				auto candidateType = llvm::dyn_cast<mlir::MemRefType>(candidate.getType());
+				if (candidateType && candidateType.getRank() == 1 && candidateType.getElementType().isInteger(8))
+				{
+					rhs = candidate;
+				}
+			});
+			auto rhsType = rhs ? llvm::dyn_cast<mlir::MemRefType>(rhs.getType()) : mlir::MemRefType{};
+			if (!rhs || !rhsType)
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto i64 = builder.getI64Type();
+			auto funcType =
+			    builder.getFunctionType(mlir::TypeRange{ lhsType, rhsType, outType, i64 }, mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGGMLBlockMatMulHelper);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, kGGMLBlockMatMulHelper, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
+			builder.create<mlir::func::CallOp>(loc, helper, mlir::ValueRange{ lhs, rhs, out, format });
+			op.erase();
 			return mlir::success();
 		}
 
@@ -1304,6 +1367,10 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
+					if (mlir::succeeded(rewriteGGMLBlockQuantizedMatMulCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
 					if (mlir::succeeded(rewriteKPanelPackedWideMatMulRowTile(op, builder, 8, 2, 8)))
 					{
 						continue;

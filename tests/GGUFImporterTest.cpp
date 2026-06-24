@@ -68,6 +68,12 @@ namespace
 		return ReadFloat(tensor.CopyToDevice(CPU{}), index);
 	}
 
+	bool ByteSpanContains(std::span<const std::byte> bytes, std::string_view text)
+	{
+		const auto* begin = reinterpret_cast<const char*>(bytes.data());
+		return std::string_view(begin, bytes.size()).find(text) != std::string_view::npos;
+	}
+
 	template <Device D>
 	void ExpectTensorNear(const Tensor<D>& tensor, std::span<const float> expected,
 	                      GGUF::LLaMAParityTolerance tolerance)
@@ -1177,7 +1183,9 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 	}
 
 #ifdef LITENN_ENABLE_MLIR
-	auto compiled = Compiler<CPU>::CompileArtifact(loaded.plan).Load();
+	const auto artifact = Compiler<CPU>::CompileArtifact(loaded.plan);
+	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_matmul_f32"));
+	auto compiled = artifact.Load();
 	const auto compiledOutputs = compiled.RunTensors(inputs);
 	ASSERT_EQ(compiledOutputs.size(), 1u);
 	ExpectTensorNear(compiledOutputs[0], actual, { .absolute = 1.0e-3, .relative = 1.0e-5 });
@@ -1295,7 +1303,9 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 				expectedData[row * outFeatures + column] = sum;
 			}
 		}
-		auto compiled = Compiler<CPU>::CompileArtifact(plan).Load();
+		const auto artifact = Compiler<CPU>::CompileArtifact(plan);
+		EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_matmul_f32"));
+		auto compiled = artifact.Load();
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });

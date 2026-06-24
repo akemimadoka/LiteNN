@@ -578,6 +578,50 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	extern "C" void litenn_cpu_ggml_block_matmul_f32(
+	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+	    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, std::uint64_t formatValue)
+	{
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || lhsRows < 0 || lhsColumns < 0 || outRows < 0 || outColumns < 0 || rhsBytes < 0 ||
+		    lhsRows != outRows || lhsColumns == 0 || outColumns == 0 ||
+		    static_cast<std::uint64_t>(lhsColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+
+		const auto rowBytes =
+		    (static_cast<std::uint64_t>(lhsColumns) / layout->elementsPerBlock) * layout->bytesPerBlock;
+		if (static_cast<std::uint64_t>(rhsBytes) < static_cast<std::uint64_t>(outColumns) * rowBytes)
+		{
+			return;
+		}
+
+		for (std::int64_t row = 0; row < lhsRows; ++row)
+		{
+			for (std::int64_t column = 0; column < outColumns; ++column)
+			{
+				const auto* weightRow =
+				    rhsAligned + rhsOffset + column * static_cast<std::int64_t>(rowBytes) * rhsStride;
+				double acc = 0.0;
+				for (std::int64_t kk = 0; kk < lhsColumns; ++kk)
+				{
+					const auto blockIndex = static_cast<std::uint64_t>(kk) / layout->elementsPerBlock;
+					const auto lane = static_cast<std::uint64_t>(kk) % layout->elementsPerBlock;
+					const auto* block = weightRow + blockIndex * layout->bytesPerBlock * rhsStride;
+					const auto lhsValue = lhsAligned[lhsOffset + row * lhsRowStride + kk * lhsColumnStride];
+					acc += static_cast<double>(lhsValue) *
+					       static_cast<double>(QuantizationDetail::DecodeGGMLBlockElement(block, format, lane));
+				}
+				outAligned[outOffset + row * outRowStride + column * outColumnStride] = static_cast<float>(acc);
+			}
+		}
+	}
+
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
 	constexpr std::array<std::byte, 8> kRodataMagic = {
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
@@ -3336,6 +3380,8 @@ namespace
 		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_constants",
 		                         reinterpret_cast<void*>(&litenn_cpu_external_constants));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_weights", reinterpret_cast<void*>(&litenn_cpu_external_weights));
