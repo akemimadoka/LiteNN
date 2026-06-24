@@ -1904,6 +1904,8 @@ namespace litenn
 					    }
 					    b.create<linalg::YieldOp>(l, value);
 				    });
+				generic->setAttr("litenn.ggml_block_quantized_get_rows",
+				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 

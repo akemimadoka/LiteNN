@@ -601,25 +601,145 @@ namespace
 			return;
 		}
 
-		for (std::int64_t row = 0; row < lhsRows; ++row)
+		struct Context
 		{
+			const float* lhsAligned{};
+			std::int64_t lhsOffset{};
+			std::int64_t lhsColumns{};
+			std::int64_t lhsRowStride{};
+			std::int64_t lhsColumnStride{};
+			const std::uint8_t* rhsAligned{};
+			std::int64_t rhsOffset{};
+			std::int64_t rhsStride{};
+			float* outAligned{};
+			std::int64_t outOffset{};
+			std::int64_t outColumns{};
+			std::int64_t outRowStride{};
+			std::int64_t outColumnStride{};
+			std::uint64_t rowBytes{};
+			QuantizedBlockFormat format{};
+			std::uint64_t elementsPerBlock{};
+			std::uint64_t bytesPerBlock{};
+		};
+		Context context{ .lhsAligned = lhsAligned,
+			             .lhsOffset = lhsOffset,
+			             .lhsColumns = lhsColumns,
+			             .lhsRowStride = lhsRowStride,
+			             .lhsColumnStride = lhsColumnStride,
+			             .rhsAligned = rhsAligned,
+			             .rhsOffset = rhsOffset,
+			             .rhsStride = rhsStride,
+			             .outAligned = outAligned,
+			             .outOffset = outOffset,
+			             .outColumns = outColumns,
+			             .outRowStride = outRowStride,
+			             .outColumnStride = outColumnStride,
+			             .rowBytes = rowBytes,
+			             .format = format,
+			             .elementsPerBlock = layout->elementsPerBlock,
+			             .bytesPerBlock = layout->bytesPerBlock };
+		const auto outputElements = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(outColumns);
+		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
+			const auto& ctx = *static_cast<const Context*>(userData);
+			for (std::uint64_t outputIndex = begin; outputIndex < end; ++outputIndex)
+			{
+				const auto row = static_cast<std::int64_t>(outputIndex / static_cast<std::uint64_t>(ctx.outColumns));
+				const auto column = static_cast<std::int64_t>(outputIndex % static_cast<std::uint64_t>(ctx.outColumns));
+				const auto* weightRow =
+				    ctx.rhsAligned + ctx.rhsOffset + column * static_cast<std::int64_t>(ctx.rowBytes) * ctx.rhsStride;
+				double acc = 0.0;
+				for (std::int64_t kk = 0; kk < ctx.lhsColumns; ++kk)
+				{
+					const auto blockIndex = static_cast<std::uint64_t>(kk) / ctx.elementsPerBlock;
+					const auto lane = static_cast<std::uint64_t>(kk) % ctx.elementsPerBlock;
+					const auto* block = weightRow + blockIndex * ctx.bytesPerBlock * ctx.rhsStride;
+					const auto lhsValue =
+					    ctx.lhsAligned[ctx.lhsOffset + row * ctx.lhsRowStride + kk * ctx.lhsColumnStride];
+					acc += static_cast<double>(lhsValue) *
+					       static_cast<double>(QuantizationDetail::DecodeGGMLBlockElement(block, ctx.format, lane));
+				}
+				ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
+				    static_cast<float>(acc);
+			}
+		};
+		const auto operations = outputElements * static_cast<std::uint64_t>(lhsColumns);
+		const auto threadCount = operations >= (1ull << 20) ? LiteNNCPUHardwareThreadCount() : std::uint64_t{ 1 };
+		const auto grain = std::max<std::uint64_t>(1, outputElements / (std::max<std::uint64_t>(1, threadCount) * 8));
+		if (threadCount <= 1)
+		{
+			body(0, outputElements, &context);
+			return;
+		}
+		LiteNNCPUParallelFor(0, outputElements, grain, body, &context, threadCount, CPUAOTAffinityPolicy::None);
+	}
+
+	template <typename IndexT>
+	void LiteNNCPUGGMLBlockGetRowsF32(const std::uint8_t* storageAligned, std::int64_t storageOffset,
+	                                  std::int64_t storageBytes, std::int64_t storageStride,
+	                                  const IndexT* indicesAligned, std::int64_t indicesOffset,
+	                                  std::int64_t indicesCount, std::int64_t indicesStride, float* outAligned,
+	                                  std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	                                  std::int64_t outRowStride, std::int64_t outColumnStride,
+	                                  std::uint64_t formatValue)
+	{
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || storageBytes < 0 || indicesCount < 0 || outRows < 0 || outColumns < 0 ||
+		    indicesCount != outRows || outColumns == 0 ||
+		    static_cast<std::uint64_t>(outColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+		const auto rowBytes =
+		    (static_cast<std::uint64_t>(outColumns) / layout->elementsPerBlock) * layout->bytesPerBlock;
+		if (rowBytes == 0 || static_cast<std::uint64_t>(storageBytes) < rowBytes)
+		{
+			return;
+		}
+		const auto tableRows = static_cast<std::uint64_t>(storageBytes) / rowBytes;
+		for (std::int64_t outputRow = 0; outputRow < outRows; ++outputRow)
+		{
+			const auto sourceRow = indicesAligned[indicesOffset + outputRow * indicesStride];
+			if (sourceRow < 0 || static_cast<std::uint64_t>(sourceRow) >= tableRows)
+			{
+				return;
+			}
+			const auto* rowBase =
+			    storageAligned + storageOffset +
+			    static_cast<std::int64_t>(sourceRow) * static_cast<std::int64_t>(rowBytes) * storageStride;
 			for (std::int64_t column = 0; column < outColumns; ++column)
 			{
-				const auto* weightRow =
-				    rhsAligned + rhsOffset + column * static_cast<std::int64_t>(rowBytes) * rhsStride;
-				double acc = 0.0;
-				for (std::int64_t kk = 0; kk < lhsColumns; ++kk)
-				{
-					const auto blockIndex = static_cast<std::uint64_t>(kk) / layout->elementsPerBlock;
-					const auto lane = static_cast<std::uint64_t>(kk) % layout->elementsPerBlock;
-					const auto* block = weightRow + blockIndex * layout->bytesPerBlock * rhsStride;
-					const auto lhsValue = lhsAligned[lhsOffset + row * lhsRowStride + kk * lhsColumnStride];
-					acc += static_cast<double>(lhsValue) *
-					       static_cast<double>(QuantizationDetail::DecodeGGMLBlockElement(block, format, lane));
-				}
-				outAligned[outOffset + row * outRowStride + column * outColumnStride] = static_cast<float>(acc);
+				const auto blockIndex = static_cast<std::uint64_t>(column) / layout->elementsPerBlock;
+				const auto lane = static_cast<std::uint64_t>(column) % layout->elementsPerBlock;
+				const auto* block = rowBase + blockIndex * layout->bytesPerBlock * storageStride;
+				outAligned[outOffset + outputRow * outRowStride + column * outColumnStride] =
+				    QuantizationDetail::DecodeGGMLBlockElement(block, format, lane);
 			}
 		}
+	}
+
+	extern "C" void litenn_cpu_ggml_block_get_rows_i32_f32(
+	    const std::uint8_t*, const std::uint8_t* storageAligned, std::int64_t storageOffset, std::int64_t storageBytes,
+	    std::int64_t storageStride, const std::int32_t*, const std::int32_t* indicesAligned, std::int64_t indicesOffset,
+	    std::int64_t indicesCount, std::int64_t indicesStride, float*, float* outAligned, std::int64_t outOffset,
+	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+	    std::uint64_t formatValue)
+	{
+		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
+		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
+		                             outColumns, outRowStride, outColumnStride, formatValue);
+	}
+
+	extern "C" void litenn_cpu_ggml_block_get_rows_i64_f32(
+	    const std::uint8_t*, const std::uint8_t* storageAligned, std::int64_t storageOffset, std::int64_t storageBytes,
+	    std::int64_t storageStride, const std::int64_t*, const std::int64_t* indicesAligned, std::int64_t indicesOffset,
+	    std::int64_t indicesCount, std::int64_t indicesStride, float*, float* outAligned, std::int64_t outOffset,
+	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+	    std::uint64_t formatValue)
+	{
+		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
+		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
+		                             outColumns, outRowStride, outColumnStride, formatValue);
 	}
 
 	constexpr std::string_view kEntrySymbol = "litenn_forward";
@@ -3382,6 +3502,10 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_get_rows_i32_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_get_rows_i32_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_get_rows_i64_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_get_rows_i64_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_constants",
 		                         reinterpret_cast<void*>(&litenn_cpu_external_constants));
 		RegisterJITRuntimeSymbol("litenn_cpu_external_weights", reinterpret_cast<void*>(&litenn_cpu_external_weights));

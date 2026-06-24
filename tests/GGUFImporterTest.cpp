@@ -1228,7 +1228,9 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesQ4KTokenEmbeddingGatherWithoutInterpre
 	DeviceTraits<CPU>::CopyFromCPU(cpu, DataType::Int32, tokenIds.UnsafeRawData(), DataType::Int32,
 	                               tokenIdValues.data(), tokenIdValues.size());
 	const std::array<Tensor<CPU>, 1> inputs{ tokenIds };
-	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_get_rows_i32_f32"));
+	auto compiled = artifact.Load();
 	const auto outputs = compiled.RunTensors(inputs);
 
 	ASSERT_EQ(outputs.size(), 1u);

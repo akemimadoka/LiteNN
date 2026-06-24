@@ -2650,12 +2650,19 @@ placement and fallback policy.
       instruction object while preserving CPU AOT parity. This creates the sidecar-kernel boundary needed to remove
       per-projection scalar IR expansion, but the first helper is correctness-first and not yet a speed win on the real
       14B O0 smoke.
-- [ ] Replace generic MLIR expansion of GGML K-quant GetRows with a reusable CPU AOT helper call so quantized token
-      embedding gathers stop expanding row dequantization into large compiler IR.
-- [ ] Upgrade `litenn_cpu_ggml_block_matmul_f32` from correctness-first block decoding to a production kernel using
-      packed input rows / vec-dot style loops, thread policy hooks, and cache-friendly output tiling.
-      Current 14B O0 smoke after the helper-call cutover still reports multi-minute build time and slower per-token
-      runtime, so this is the next required optimization before claiming production CPU decode performance.
+- [x] Replace generic MLIR expansion of GGML K-quant GetRows with reusable CPU AOT helper calls:
+      `QuantizedGetRowsNode` now lowers to `litenn_cpu_ggml_block_get_rows_i32_f32` /
+      `litenn_cpu_ggml_block_get_rows_i64_f32` for GGML_Q4_K/Q5_K/Q6_K/Q8_0 token embedding gathers, with regression
+      coverage requiring the helper symbol in the instruction object.
+- [x] Add first CPU-side parallelism to `litenn_cpu_ggml_block_matmul_f32` so decode-shaped `m=1, n=large`
+      projections can split output columns across the existing CPU worker pool instead of running as a single host loop.
+      The real 14B Q4_K_M O0 single-token smoke improved from the previous helper-call run's ~97.6s runtime to ~15.9s,
+      while keeping fallback_count=0.
+- [ ] Upgrade `litenn_cpu_ggml_block_matmul_f32` from block-at-a-time decoding to a production kernel using packed input
+      rows / vec-dot style loops, explicit thread policy hooks, and cache-friendly output tiling.
+      Current 14B O0 smoke after the helper-call cutover still reports multi-minute build time, so optimized helper
+      internals and remaining non-quantized IR size are the next required work before claiming production CPU decode
+      performance.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

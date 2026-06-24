@@ -36,7 +36,10 @@ namespace litenn
 	{
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
+		constexpr llvm::StringLiteral kGGMLBlockQuantizedGetRowsAttr = "litenn.ggml_block_quantized_get_rows";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
 
 		bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
 		{
@@ -245,8 +248,13 @@ namespace litenn
 
 			const auto loc = op.getLoc();
 			auto i64 = builder.getI64Type();
-			auto funcType =
-			    builder.getFunctionType(mlir::TypeRange{ lhsType, rhsType, outType, i64 }, mlir::TypeRange{});
+			auto dynamicLhsType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                            lhsType.getElementType());
+			auto dynamicRhsType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, rhsType.getElementType());
+			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                            outType.getElementType());
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64 }, mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGGMLBlockMatMulHelper);
 			if (!helper)
 			{
@@ -261,7 +269,85 @@ namespace litenn
 			}
 
 			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
-			builder.create<mlir::func::CallOp>(loc, helper, mlir::ValueRange{ lhs, rhs, out, format });
+			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
+			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
+			builder.create<mlir::func::CallOp>(loc, helper,
+			                                   mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteGGMLBlockQuantizedGetRowsCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                                         mlir::OpBuilder& builder)
+		{
+			auto formatAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedGetRowsAttr);
+			if (!formatAttr || op->getNumResults() != 0 || op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+
+			auto indices = op.getInputs()[0];
+			auto out = op.getOutputs()[0];
+			auto indicesType = llvm::dyn_cast<mlir::MemRefType>(indices.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!indicesType || !outType || indicesType.getRank() != 1 || outType.getRank() != 2 ||
+			    !outType.getElementType().isF32() ||
+			    (!indicesType.getElementType().isInteger(32) && !indicesType.getElementType().isInteger(64)))
+			{
+				return mlir::failure();
+			}
+
+			mlir::Value storage;
+			op.getRegion().walk([&](mlir::memref::LoadOp load) {
+				if (storage)
+				{
+					return;
+				}
+				auto candidate = load.getMemRef();
+				auto candidateType = llvm::dyn_cast<mlir::MemRefType>(candidate.getType());
+				if (candidateType && candidateType.getRank() == 1 && candidateType.getElementType().isInteger(8))
+				{
+					storage = candidate;
+				}
+			});
+			auto storageType = storage ? llvm::dyn_cast<mlir::MemRefType>(storage.getType()) : mlir::MemRefType{};
+			if (!storage || !storageType)
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto i64 = builder.getI64Type();
+			auto dynamicStorageType =
+			    mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, storageType.getElementType());
+			auto dynamicIndicesType =
+			    mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, indicesType.getElementType());
+			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                            outType.getElementType());
+			const auto helperName =
+			    indicesType.getElementType().isInteger(32) ? kGGMLBlockGetRowsI32Helper : kGGMLBlockGetRowsI64Helper;
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicStorageType, dynamicIndicesType, dynamicOutType, i64 }, mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, helperName, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicStorage = builder.create<mlir::memref::CastOp>(loc, dynamicStorageType, storage).getResult();
+			auto dynamicIndices = builder.create<mlir::memref::CastOp>(loc, dynamicIndicesType, indices).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
+			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
+			builder.create<mlir::func::CallOp>(loc, helper,
+			                                   mlir::ValueRange{ dynamicStorage, dynamicIndices, dynamicOut, format });
 			op.erase();
 			return mlir::success();
 		}
@@ -1367,6 +1453,10 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
+					if (mlir::succeeded(rewriteGGMLBlockQuantizedGetRowsCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
 					if (mlir::succeeded(rewriteGGMLBlockQuantizedMatMulCall(getOperation(), op, builder)))
 					{
 						continue;
