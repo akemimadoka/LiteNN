@@ -81,7 +81,10 @@ the same static decode loop first, then generates the requested number of new
 tokens. All GGUF model execution commands require an MLIR-enabled build and use
 CPU AOT; the Interpreter remains a correctness-test reference and is not a CLI
 model runtime. Large K-quant graphs currently have high first-compile latency
-because quantized MatMul is expanded into generic MLIR.
+because quantized MatMul is expanded into generic MLIR. Set
+`LITENN_COMPILE_DIAGNOSTICS=1` to print coarse CPU AOT compile phases; for large
+LLM experiments, `LITENN_CPU_AOT_LLVM_OPT_LEVEL=0` is useful when validating
+pipeline correctness before paying for optimized object emission.
 
 When the MLIR compiler is enabled, converted or lowered `.ltnn` graphs can be
 emitted as carrier objects with exported rodata/instruction symbols:

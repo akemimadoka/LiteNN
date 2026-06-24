@@ -898,6 +898,7 @@ namespace
 		{
 			options.enableCUDANativeAOT = false;
 		}
+		options.enableCompileDiagnostics = TruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS"));
 		return options;
 	}
 

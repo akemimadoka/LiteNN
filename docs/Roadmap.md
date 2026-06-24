@@ -2637,9 +2637,17 @@ placement and fallback policy.
       quantized embedding gathers, and keep large model weights borrowed while constructing the compiler graph.
       External weight regions now reserve once and move from temporary artifacts into loaded modules; a real 14B Q4_K_M
       compile held private memory near 25.7 GiB instead of growing beyond 44 GiB.
-- [ ] Replace generic MLIR expansion of GGML K-quant MatMul/GetRows with calls to reusable native CPU kernels so a real
-      14B decode module compiles in production-acceptable time. The current O1 smoke remained in compilation after about
-      five minutes and was stopped before execution; this is compile latency, not an Interpreter fallback.
+- [x] Profile and reduce real 14B CPU AOT compile latency enough to complete the current decode smoke path:
+      `LITENN_COMPILE_DIAGNOSTICS=1` now exposes split MLIR CPU compile phases. Profiling showed the monolithic decode
+      graph spent excessive time in MLIR buffer deallocation alias analysis and then LLVM lowering/object emission. The
+      capacity decode graph now lowers each transformer block as a `CallNode` subgraph, keeping per-function allocation
+      and control-flow lowering smaller. A real Qwen2.5-Coder-14B Q4_K_M single-token CPU AOT O0 smoke completed with
+      fallback_count=0; the remaining bottleneck is runtime throughput and optimized-object emission, not an Interpreter
+      fallback.
+- [ ] Replace generic MLIR expansion of GGML K-quant MatMul/GetRows with calls to reusable native CPU kernels for
+      production runtime speed and lower optimized-code generation cost. The current split-function path makes the real
+      14B decode module compile and run, but per-token runtime remains far too slow while each quantized projection is
+      scalar-expanded in generated IR.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.

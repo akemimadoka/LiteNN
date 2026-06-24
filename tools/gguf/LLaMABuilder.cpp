@@ -1333,6 +1333,24 @@ namespace LiteNN::GGUF
 		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
 		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
 		const auto headDim = hyperparameters.HeadDimension();
+		const std::vector<std::size_t> cacheShape{ maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
+
+		std::vector<SubgraphId> blockSubgraphs;
+		blockSubgraphs.reserve(model.blocks.size());
+		for (const auto& block : model.blocks)
+		{
+			Subgraph blockSubgraph;
+			const auto hiddenState = blockSubgraph.AddParam(model.dtype, { 1, hyperparameters.embeddingLength });
+			const auto cacheKeys = blockSubgraph.AddParam(model.dtype, cacheShape);
+			const auto cacheValues = blockSubgraph.AddParam(model.dtype, cacheShape);
+			const auto currentPosition = blockSubgraph.AddParam(DataType::Int64, { 1 });
+			const auto result = AddLLaMADecoderBlockDecodeCapacity(
+			    blockSubgraph, block, hyperparameters, { hiddenState, 0 },
+			    Layer::KVCachePair{ { cacheKeys, 0 }, { cacheValues, 0 } }, { currentPosition, 0 }, maxCacheLength);
+			blockSubgraph.SetResults(
+			    std::vector<NodeOutput>{ result.hiddenState, result.updatedCache.keys, result.updatedCache.values });
+			blockSubgraphs.push_back(graph.AddSubgraph(std::move(blockSubgraph)));
+		}
 
 		Subgraph subgraph;
 		const auto tokenIds = subgraph.AddParam(DataType::Int32, { 1 });
@@ -1342,16 +1360,36 @@ namespace LiteNN::GGUF
 		std::vector<std::string> inputNames{ "token_ids", "current_position" };
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
-			const std::vector<std::size_t> cacheShape{ maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
 			const auto keys = subgraph.AddParam(model.dtype, cacheShape);
 			const auto values = subgraph.AddParam(model.dtype, cacheShape);
-			caches.push_back({ { keys, 0 }, { values, 0 } });
+			caches.push_back(Layer::KVCachePair{ { keys, 0 }, { values, 0 } });
 			inputNames.push_back(std::format("past_key_{}", blockIndex));
 			inputNames.push_back(std::format("past_value_{}", blockIndex));
 		}
 
-		const auto result = AddLLaMACausalLMDecodeCapacity(subgraph, model, hyperparameters, { tokenIds, 0 },
-		                                                   { currentPosition, 0 }, caches, maxCacheLength);
+		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, { tokenIds, 0 });
+		std::vector<Layer::KVCachePair> updatedCaches;
+		updatedCaches.reserve(model.blocks.size());
+		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
+		{
+			std::vector<NodeOutput> args{
+				hiddenState,
+				caches[blockIndex].keys,
+				caches[blockIndex].values,
+				{ currentPosition, 0 },
+			};
+			const auto call =
+			    subgraph.AddNode(CallNode{ blockSubgraphs[blockIndex], std::move(args) },
+			                     { OutputInfo{ model.dtype, { 1, hyperparameters.embeddingLength } },
+			                       OutputInfo{ model.dtype, cacheShape }, OutputInfo{ model.dtype, cacheShape } });
+			hiddenState = NodeOutput{ call, 0 };
+			updatedCaches.push_back(Layer::KVCachePair{ { call, 1 }, { call, 2 } });
+		}
+		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
+		const LLaMADecodeResult result{
+			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
+			.updatedCaches = std::move(updatedCaches),
+		};
 		const std::array<double, 1> one{ 1.0 };
 		const auto oneValue =
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
@@ -1392,8 +1430,12 @@ namespace LiteNN::GGUF
 		{
 			states.push_back(*artifacts.decodeStateABI.currentPosition);
 		}
-		return Runtime::BuildRuntimeSchedule(std::move(module), std::move(states),
-		                                     artifacts.decodeStep.stateValueBindings);
+		auto stateValueBindings = artifacts.decodeStep.stateValueBindings;
+		for (auto& binding : stateValueBindings)
+		{
+			binding.function = module.plan.forward;
+		}
+		return Runtime::BuildRuntimeSchedule(std::move(module), std::move(states), std::move(stateValueBindings));
 	}
 
 } // namespace LiteNN::GGUF

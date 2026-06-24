@@ -12202,22 +12202,41 @@ namespace
 	}
 #endif
 
-	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx)
+	mlir::OwningOpRef<mlir::ModuleOp> BuildLoweredMLIRModule(const Graph& graph, mlir::MLIRContext& ctx,
+	                                                         const CompilerOptions& options)
 	{
-		auto module = litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
+		auto module = TimedCompileDiagnostic(options, "cpu-mlir translate graph", [&] {
+			return litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
+		});
 		if (!module)
 		{
 			throw std::runtime_error("Failed to translate LiteNN executable plan to MLIR");
 		}
 
-		mlir::PassManager pm(&ctx);
-		pm.addPass(litenn::createLowerLiteNNPass());
-		litenn::addBufferizationPipeline(pm);
-		litenn::addLLVMCodegenPipeline(pm);
-		if (mlir::failed(pm.run(*module)))
-		{
-			throw std::runtime_error("LiteNN MLIR lowering/codegen pipeline failed");
-		}
+		TimedCompileDiagnostic(options, "cpu-mlir lower LiteNN dialect", [&] {
+			mlir::PassManager pm(&ctx);
+			pm.addPass(litenn::createLowerLiteNNPass());
+			if (mlir::failed(pm.run(*module)))
+			{
+				throw std::runtime_error("LiteNN dialect lowering pipeline failed");
+			}
+		});
+		TimedCompileDiagnostic(options, "cpu-mlir bufferize", [&] {
+			mlir::PassManager pm(&ctx);
+			litenn::addBufferizationPipeline(pm);
+			if (mlir::failed(pm.run(*module)))
+			{
+				throw std::runtime_error("LiteNN bufferization pipeline failed");
+			}
+		});
+		TimedCompileDiagnostic(options, "cpu-mlir lower LLVM dialect", [&] {
+			mlir::PassManager pm(&ctx);
+			litenn::addLLVMCodegenPipeline(pm);
+			if (mlir::failed(pm.run(*module)))
+			{
+				throw std::runtime_error("LiteNN LLVM codegen pipeline failed");
+			}
+		});
 		if (mlir::failed(mlir::verify(*module)))
 		{
 			throw std::runtime_error("LiteNN lowered MLIR module verification failed");
@@ -12262,8 +12281,7 @@ namespace
 
 		mlir::MLIRContext ctx;
 		TimedCompileDiagnostic(options, "cpu-mlir setup context", [&] { SetupCompilerMLIRContext(ctx); });
-		auto mlirModule = TimedCompileDiagnostic(options, "cpu-mlir build/lower module",
-		                                         [&] { return BuildLoweredMLIRModule(externalized->graph, ctx); });
+		auto mlirModule = BuildLoweredMLIRModule(externalized->graph, ctx, options);
 
 		llvm::LLVMContext llvmCtx;
 		auto llvmModule = TimedCompileDiagnostic(options, "cpu-mlir translate to LLVM IR",
@@ -14635,7 +14653,7 @@ namespace
 
 		mlir::MLIRContext ctx;
 		SetupCompilerMLIRContext(ctx);
-		auto mlirModule = BuildLoweredMLIRModule(graph, ctx);
+		auto mlirModule = BuildLoweredMLIRModule(graph, ctx, options);
 
 		llvm::LLVMContext llvmCtx;
 		auto llvmModule = litenn::translateToLLVMIR(*mlirModule, llvmCtx);

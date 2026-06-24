@@ -1249,6 +1249,11 @@ namespace LiteNN::Serialization
 				return BinaryOpNode{ PlanAttributeEnum<BinaryOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),
 					                 RequireNodeInput(inputs, 1, op.kind) };
 			}
+			if (op.kind == "CallNode")
+			{
+				return CallNode{ PlanAttributeSize(op, "callee"),
+					             std::vector<NodeOutput>(inputs.begin(), inputs.end()) };
+			}
 			if (op.kind == "CastNode")
 			{
 				return CastNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeEnum<DataType>(op, "targetType") };
@@ -1266,6 +1271,11 @@ namespace LiteNN::Serialization
 			{
 				return QuantizedMatMulNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
 					                        PlanQuantizationParams(op), PlanAttributeBool(op, "transposeRhs") };
+			}
+			if (op.kind == "QuantizedGetRowsNode")
+			{
+				return QuantizedGetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
+					                         PlanQuantizationParams(op) };
 			}
 			if (op.kind == "ReduceOpNode")
 			{

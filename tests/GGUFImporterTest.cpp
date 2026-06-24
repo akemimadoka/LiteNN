@@ -1602,6 +1602,13 @@ TEST(GGUFLLaMACausalLM, ReusesCapacityDecodeGraphAcrossRuntimePositions)
 {
 	const auto archive = BuildTinyLLaMAArchive();
 	const auto capacityDecode = GGUF::LowerLLaMACausalLMDecodeCapacity(archive, 4);
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(archive);
+	EXPECT_EQ(capacityDecode.SubgraphCount(), hyperparameters.blockCount + 1);
+	const auto& capacityForward = capacityDecode.GetSubgraph(capacityDecode.Forward());
+	EXPECT_EQ(
+	    std::ranges::count_if(capacityForward.Nodes(),
+	                          [](const NodeEntry& entry) { return std::holds_alternative<CallNode>(entry.node); }),
+	    hyperparameters.blockCount);
 	const auto fullPrefill = GGUF::LowerLLaMACausalLM(archive, 2);
 	const auto capacityPlan = Detail::BuildExecutablePlanFromGraph(capacityDecode);
 	Runtime::Interpreter<CPU> interpreter;
@@ -1687,8 +1694,9 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	    { .prefillSequenceLength = 1, .decodePastLength = 0, .maxCacheLength = 4, .dynamicDecodePosition = true });
 	ASSERT_EQ(schedule.states.size(), 2u);
 	ASSERT_EQ(schedule.stateValueBindings.size(), 6u);
-	EXPECT_EQ(schedule.module.functions[0].inputs[1].dtype, DataType::Int64);
-	EXPECT_EQ(schedule.module.functions[0].inputs[2].StaticShape(), std::vector<std::size_t>({ 4, 1, 2 }));
+	const auto forward = schedule.module.plan.forward;
+	EXPECT_EQ(schedule.module.functions[forward].inputs[1].dtype, DataType::Int64);
+	EXPECT_EQ(schedule.module.functions[forward].inputs[2].StaticShape(), std::vector<std::size_t>({ 4, 1, 2 }));
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	const auto path = MakeTempFixturePath("litenn_llama_capacity_decode", ".ltnn");
