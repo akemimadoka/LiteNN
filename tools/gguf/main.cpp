@@ -1337,11 +1337,22 @@ int main(int argc, char** argv)
 			const auto forward = schedule.module.plan.forward;
 			const auto stateOutputs = LiteNN::Runtime::RuntimeScheduleStateOutputIndices(schedule, forward);
 			const auto publicOutputs = LiteNN::Runtime::RuntimeSchedulePublicOutputIndices(schedule, forward);
+			const auto publicTypes = LiteNN::Runtime::RuntimeSchedulePublicOutputTypes(schedule, forward);
 			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(schedule, argv[3], argv[4]);
 			std::cout << "Lowered stateful LLaMA decode package with " << schedule.states.size()
 			          << " runtime states and " << schedule.stateValueBindings.size() << " value bindings"
 			          << " functional_outputs=" << schedule.module.functions[forward].outputs.size()
-			          << " state_outputs=" << stateOutputs.size() << " public_outputs=" << publicOutputs.size() << '\n';
+			          << " state_outputs=" << stateOutputs.size() << " public_outputs=" << publicOutputs.size()
+			          << " public_output_shape=";
+			if (publicTypes.empty())
+			{
+				PrintSizeList({});
+			}
+			else
+			{
+				PrintSizeList(publicTypes.front().StaticShape());
+			}
+			std::cout << '\n';
 			return 0;
 		}
 

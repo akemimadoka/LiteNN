@@ -509,6 +509,19 @@ namespace LiteNN::Runtime
 		return publicOutputs;
 	}
 
+	inline std::vector<TensorType> RuntimeSchedulePublicOutputTypes(const RuntimeSchedule& schedule,
+	                                                                FunctionId function)
+	{
+		const auto publicOutputIndices = RuntimeSchedulePublicOutputIndices(schedule, function);
+		std::vector<TensorType> types;
+		types.reserve(publicOutputIndices.size());
+		for (const auto outputIndex : publicOutputIndices)
+		{
+			types.push_back(schedule.module.functions[function].outputs[outputIndex]);
+		}
+		return types;
+	}
+
 	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)
 	{
 		if (std::ranges::find(buffers, buffer) == buffers.end())
