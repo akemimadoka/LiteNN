@@ -53,6 +53,14 @@ namespace LiteNN::Runtime
 		std::size_t stateByteOffset{};
 	};
 
+	struct RuntimeStateOutputAlias
+	{
+		std::size_t outputIndex{};
+		std::size_t inputIndex{};
+		std::string stateName;
+		std::size_t stateByteOffset{};
+	};
+
 	struct LLMDecodeStateABI
 	{
 		std::vector<RuntimeStateBinding> kvCaches;
@@ -520,6 +528,44 @@ namespace LiteNN::Runtime
 			types.push_back(schedule.module.functions[function].outputs[outputIndex]);
 		}
 		return types;
+	}
+
+	inline std::vector<RuntimeStateOutputAlias> RuntimeScheduleStateOutputAliases(const RuntimeSchedule& schedule,
+	                                                                              FunctionId function)
+	{
+		if (function >= schedule.module.functions.size())
+		{
+			throw std::runtime_error("Runtime schedule state-output alias query references an unknown function");
+		}
+		std::vector<RuntimeStateOutputAlias> aliases;
+		for (const auto& outputBinding : schedule.stateValueBindings)
+		{
+			if (outputBinding.function != function || outputBinding.kind != RuntimeStateValueKind::FunctionOutput)
+			{
+				continue;
+			}
+			const auto inputIt = std::ranges::find_if(schedule.stateValueBindings, [&](const auto& inputBinding) {
+				return inputBinding.function == function && inputBinding.kind == RuntimeStateValueKind::FunctionInput &&
+				       inputBinding.stateName == outputBinding.stateName &&
+				       inputBinding.stateByteOffset == outputBinding.stateByteOffset;
+			});
+			if (inputIt == schedule.stateValueBindings.end())
+			{
+				throw std::runtime_error("Runtime schedule state output has no matching input alias: " +
+				                         outputBinding.stateName);
+			}
+			if (outputBinding.valueIndex >= schedule.module.functions[function].outputs.size() ||
+			    inputIt->valueIndex >= schedule.module.functions[function].inputs.size())
+			{
+				throw std::runtime_error("Runtime schedule state-output alias references an unknown function value");
+			}
+			aliases.push_back({ .outputIndex = outputBinding.valueIndex,
+			                    .inputIndex = inputIt->valueIndex,
+			                    .stateName = outputBinding.stateName,
+			                    .stateByteOffset = outputBinding.stateByteOffset });
+		}
+		std::ranges::sort(aliases, {}, &RuntimeStateOutputAlias::outputIndex);
+		return aliases;
 	}
 
 	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)

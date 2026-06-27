@@ -1718,6 +1718,14 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	ASSERT_EQ(publicTypes.size(), 1u);
 	EXPECT_EQ(publicTypes[0].dtype, DataType::Float32);
 	EXPECT_EQ(publicTypes[0].StaticShape(), std::vector<std::size_t>({ 1, 3 }));
+	const auto stateAliases = Runtime::RuntimeScheduleStateOutputAliases(schedule, forward);
+	ASSERT_EQ(stateAliases.size(), 3u);
+	EXPECT_EQ(stateAliases[0].outputIndex, 1u);
+	EXPECT_EQ(stateAliases[0].inputIndex, 1u);
+	EXPECT_EQ(stateAliases[1].outputIndex, 2u);
+	EXPECT_EQ(stateAliases[1].inputIndex, 2u);
+	EXPECT_EQ(stateAliases[2].outputIndex, 3u);
+	EXPECT_EQ(stateAliases[2].inputIndex, 3u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	const auto path = MakeTempFixturePath("litenn_llama_capacity_decode", ".ltnn");
