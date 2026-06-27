@@ -165,16 +165,20 @@ namespace LiteNN
 		{
 			if (this != &other)
 			{
-				if (ownsData_)
+				if (ownsData_ || data_ == nullptr)
 				{
 					const auto numElements = NumElements();
-					DeviceTraits<D>::Deallocate(device_, data_, dtype_, numElements);
+					if (data_ != nullptr)
+					{
+						DeviceTraits<D>::Deallocate(device_, data_, dtype_, numElements);
+					}
 					shape_ = other.shape_;
 					strides_ = ComputeContiguousStrides(Shape());
 					dtype_ = other.dtype_;
 					device_ = other.device_;
 					allocatedNumElements_ = other.allocatedNumElements_;
 					data_ = DeviceTraits<D>::Allocate(device_, dtype_, other.NumElements());
+					ownsData_ = true;
 					DeviceTraits<D>::ConvertTo(device_, other.dtype_, other.data_, other.NumElements(), dtype_, data_);
 				}
 				else
@@ -197,10 +201,13 @@ namespace LiteNN
 		{
 			if (this != &other)
 			{
-				if (ownsData_)
+				if (ownsData_ || data_ == nullptr)
 				{
 					const auto numElements = NumElements();
-					DeviceTraits<D>::Deallocate(device_, data_, dtype_, numElements);
+					if (data_ != nullptr)
+					{
+						DeviceTraits<D>::Deallocate(device_, data_, dtype_, numElements);
+					}
 					shape_ = std::move(other.shape_);
 					strides_ = std::move(other.strides_);
 					dtype_ = other.dtype_;

@@ -187,6 +187,19 @@ TEST(Tensor, SwapExchangesOwningStorageWithDifferentShapes)
 	EXPECT_FLOAT_EQ(ReadFloat(rhs, 3), 4);
 }
 
+TEST(Tensor, StdSwapWorksAfterMoveWithDifferentShapes)
+{
+	Tensor<CPU> lhs({ 1, 2, 3, 4 }, { 2, 2 });
+	Tensor<CPU> rhs({ 10, 20, 30 }, { 3 });
+
+	std::swap(lhs, rhs);
+
+	EXPECT_EQ(lhs.Shape(), (ShapeView{ 3 }));
+	EXPECT_EQ(rhs.Shape(), (ShapeView{ 2, 2 }));
+	EXPECT_FLOAT_EQ(ReadFloat(lhs, 0), 10);
+	EXPECT_FLOAT_EQ(ReadFloat(rhs, 3), 4);
+}
+
 TEST(Tensor, ComparisonAndLogical)
 {
 	Tensor<CPU> tensor({ 1, 2, 3, 4, 5, 6 }, { 2, 3 });
