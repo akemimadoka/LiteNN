@@ -2689,6 +2689,13 @@ placement and fallback policy.
       deriving throughput from `run_ms`.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
+- [x] Add a CPU AOT state-aware entry wrapper for runtime schedules: `Compiler<CPU>::CompileArtifact(RuntimeSchedule)`
+      now exposes only public outputs in artifact metadata, while wrapper scratch buffers receive functional state outputs
+      and copy them back into the aliased input state buffers after the compiled call.
+- [ ] Fix promoted-variable GGUF stateful schedule parity under CPU AOT external regions:
+      direct non-variable capacity schedules validate the state-aware wrapper, but full schedules produced by
+      `BuildLLaMADecodeRuntimeSchedule` still need a separate correctness pass for promoted constant/variable payload
+      handling before real GGUF stateful packages can rely on logits-only CPU AOT entries.
 - [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:
       `example/gguf/build_stateful_artifacts.py` lowers a package with external weights, emits separated CPU and optional
       CUDA carrier objects, records the actual compiler backend, and supports `native-required`, `bridge-allowed`,

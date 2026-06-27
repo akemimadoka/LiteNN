@@ -7,6 +7,7 @@
 #endif
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/Tensor.h>
 
 #include <cstddef>
@@ -405,8 +406,13 @@ namespace LiteNN
 	public:
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan);
 		static CompiledModuleArtifact CompileArtifact(const ExecutablePlan& plan, const CompilerOptions& options);
+		static CompiledModuleArtifact CompileArtifact(const Runtime::RuntimeSchedule& schedule);
+		static CompiledModuleArtifact CompileArtifact(const Runtime::RuntimeSchedule& schedule,
+		                                              const CompilerOptions& options);
 		static CompiledModule<CPU> Compile(const ExecutablePlan& plan);
 		static CompiledModule<CPU> Compile(const ExecutablePlan& plan, const CompilerOptions& options);
+		static CompiledModule<CPU> Compile(const Runtime::RuntimeSchedule& schedule);
+		static CompiledModule<CPU> Compile(const Runtime::RuntimeSchedule& schedule, const CompilerOptions& options);
 	};
 
 #ifdef LITENN_ENABLE_CUDA

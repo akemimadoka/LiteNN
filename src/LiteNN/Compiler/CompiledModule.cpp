@@ -1996,6 +1996,33 @@ namespace
 		return specs;
 	}
 
+	std::vector<CompiledTensorSpec>
+	BuildProjectedOutputSpecs(std::span<const CompiledTensorSpec> functionalOutputs,
+	                          const Runtime::RuntimeScheduleOutputProjection& projection)
+	{
+		std::vector<CompiledTensorSpec> specs;
+		specs.reserve(projection.publicOutputIndices.size());
+		for (const auto outputIndex : projection.publicOutputIndices)
+		{
+			if (outputIndex >= functionalOutputs.size())
+			{
+				throw std::runtime_error("Runtime schedule output projection references an unknown output spec");
+			}
+			specs.push_back(functionalOutputs[outputIndex]);
+		}
+		return specs;
+	}
+
+	std::vector<CompiledTensorSpec> BuildEntryOutputSpecs(std::span<const CompiledTensorSpec> functionalOutputs,
+	                                                      const Runtime::RuntimeScheduleOutputProjection* projection)
+	{
+		if (!projection)
+		{
+			return std::vector<CompiledTensorSpec>(functionalOutputs.begin(), functionalOutputs.end());
+		}
+		return BuildProjectedOutputSpecs(functionalOutputs, *projection);
+	}
+
 	struct CompiledArtifactParts
 	{
 		std::vector<std::byte> rodata;
@@ -3296,18 +3323,24 @@ namespace
 		throw std::runtime_error(message);
 	}
 
-	void CopyDescriptorToOutput(llvm::IRBuilder<>& builder, llvm::Value* descriptor, llvm::Value* outputArray,
-	                            std::size_t outputIndex, const CompiledTensorSpec& spec)
+	void CopyDescriptorToArraySlot(llvm::IRBuilder<>& builder, llvm::Value* descriptor, llvm::Value* array,
+	                               std::size_t index, const CompiledTensorSpec& spec)
 	{
 		auto& ctx = builder.getContext();
 		auto* ptrTy = llvm::PointerType::get(ctx, 0);
-		auto* outputSlot = builder.CreateGEP(ptrTy, outputArray, builder.getInt64(outputIndex));
+		auto* outputSlot = builder.CreateGEP(ptrTy, array, builder.getInt64(index));
 		auto* outputData = builder.CreateLoad(ptrTy, outputSlot);
 		auto* descTy = llvm::cast<llvm::StructType>(descriptor->getType());
 		const unsigned dataField = descTy->getNumElements() == 5 ? 1 : 0;
 		auto* sourceData = builder.CreateExtractValue(descriptor, { dataField });
 		const auto byteCount = NumElements(spec) * LiteNN::ElementByteSize(spec.type.dtype);
 		builder.CreateMemCpy(outputData, llvm::Align(1), sourceData, llvm::Align(1), builder.getInt64(byteCount));
+	}
+
+	void CopyDescriptorToOutput(llvm::IRBuilder<>& builder, llvm::Value* descriptor, llvm::Value* outputArray,
+	                            std::size_t outputIndex, const CompiledTensorSpec& spec)
+	{
+		CopyDescriptorToArraySlot(builder, descriptor, outputArray, outputIndex, spec);
 	}
 
 	std::optional<std::size_t> FindStructRetParamIndex(const llvm::Function& function)
@@ -3332,14 +3365,48 @@ namespace
 		};
 	}
 
+	std::optional<std::size_t> FindPublicOutputSlot(const Runtime::RuntimeScheduleOutputProjection& projection,
+	                                                std::size_t functionalOutputIndex)
+	{
+		for (std::size_t slot = 0; slot < projection.publicOutputIndices.size(); ++slot)
+		{
+			if (projection.publicOutputIndices[slot] == functionalOutputIndex)
+			{
+				return slot;
+			}
+		}
+		return std::nullopt;
+	}
+
+	const Runtime::RuntimeStateOutputAlias*
+	FindStateOutputAlias(const Runtime::RuntimeScheduleOutputProjection& projection, std::size_t functionalOutputIndex)
+	{
+		const auto it = std::ranges::find_if(
+		    projection.stateAliases, [&](const auto& alias) { return alias.outputIndex == functionalOutputIndex; });
+		return it == projection.stateAliases.end() ? nullptr : &*it;
+	}
+
+	llvm::AllocaInst* CreateOutputScratch(llvm::IRBuilder<>& builder, const CompiledTensorSpec& spec)
+	{
+		auto& ctx = builder.getContext();
+		auto* scratch = builder.CreateAlloca(GetElementType(ctx, spec.type.dtype), builder.getInt64(NumElements(spec)));
+		scratch->setAlignment(llvm::Align(64));
+		return scratch;
+	}
+
 	void AddUniformEntryWrapper(llvm::Module& module, std::string_view calleeName,
 	                            std::span<const CompiledTensorSpec> inputs, std::span<const CompiledTensorSpec> outputs,
-	                            std::span<const CompiledModuleExternalTensorInfo> externalInputs = {})
+	                            std::span<const CompiledModuleExternalTensorInfo> externalInputs = {},
+	                            const Runtime::RuntimeScheduleOutputProjection* outputProjection = nullptr)
 	{
 		auto* callee = module.getFunction(calleeName);
 		if (!callee)
 		{
 			throw std::runtime_error("Compiled subgraph function was not found in LLVM module");
+		}
+		if (outputProjection && outputProjection->functionalOutputCount != outputs.size())
+		{
+			throw std::runtime_error("Compiled subgraph output projection does not match functional outputs");
 		}
 
 		auto& ctx = module.getContext();
@@ -3406,12 +3473,42 @@ namespace
 		}
 
 		std::vector<llvm::Value*> outputDescriptors;
+		std::vector<std::pair<std::size_t, llvm::Value*>> projectedScratchOutputs;
 		outputDescriptors.reserve(outputs.size());
 		for (std::size_t i = 0; i < outputs.size(); ++i)
 		{
-			auto* outputSlot = builder.CreateGEP(ptrTy, outputArray, builder.getInt64(i));
-			auto* outputData = builder.CreateLoad(ptrTy, outputSlot);
-			outputDescriptors.push_back(BuildMemRefDescriptor(builder, outputData, outputs[i]));
+			llvm::Value* outputData = nullptr;
+			if (outputProjection)
+			{
+				if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, i))
+				{
+					(void) publicSlot;
+					outputData = CreateOutputScratch(builder, outputs[i]);
+				}
+				else if (const auto* alias = FindStateOutputAlias(*outputProjection, i))
+				{
+					if (alias->inputIndex >= inputs.size())
+					{
+						throw std::runtime_error("Compiled subgraph output projection references an unknown input");
+					}
+					outputData = CreateOutputScratch(builder, outputs[i]);
+				}
+				else
+				{
+					throw std::runtime_error("Compiled subgraph output projection is missing a functional output");
+				}
+			}
+			else
+			{
+				auto* outputSlot = builder.CreateGEP(ptrTy, outputArray, builder.getInt64(i));
+				outputData = builder.CreateLoad(ptrTy, outputSlot);
+			}
+			auto* descriptor = BuildMemRefDescriptor(builder, outputData, outputs[i]);
+			if (outputProjection)
+			{
+				projectedScratchOutputs.push_back({ i, descriptor });
+			}
+			outputDescriptors.push_back(descriptor);
 		}
 		for (auto* descriptor : outputDescriptors)
 		{
@@ -3439,7 +3536,25 @@ namespace
 			if (outputs.size() == 1 && IsMemRefDescriptorType(ctx, sretType, outputs[0].type.Rank()))
 			{
 				auto* descriptor = builder.CreateLoad(sretType, sretStorage);
-				CopyDescriptorToOutput(builder, descriptor, outputArray, 0, outputs[0]);
+				if (outputProjection)
+				{
+					if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, 0))
+					{
+						CopyDescriptorToOutput(builder, descriptor, outputArray, *publicSlot, outputs[0]);
+					}
+					else if (const auto* alias = FindStateOutputAlias(*outputProjection, 0))
+					{
+						CopyDescriptorToArraySlot(builder, descriptor, inputArray, alias->inputIndex, outputs[0]);
+					}
+					else
+					{
+						throw std::runtime_error("Compiled subgraph output projection is missing a returned output");
+					}
+				}
+				else
+				{
+					CopyDescriptorToOutput(builder, descriptor, outputArray, 0, outputs[0]);
+				}
 				builder.CreateRetVoid();
 				return;
 			}
@@ -3454,7 +3569,25 @@ namespace
 			for (std::size_t i = 0; i < outputs.size(); ++i)
 			{
 				auto* descriptor = builder.CreateExtractValue(result, { static_cast<unsigned>(i) });
-				CopyDescriptorToOutput(builder, descriptor, outputArray, i, outputs[i]);
+				if (outputProjection)
+				{
+					if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, i))
+					{
+						CopyDescriptorToOutput(builder, descriptor, outputArray, *publicSlot, outputs[i]);
+					}
+					else if (const auto* alias = FindStateOutputAlias(*outputProjection, i))
+					{
+						CopyDescriptorToArraySlot(builder, descriptor, inputArray, alias->inputIndex, outputs[i]);
+					}
+					else
+					{
+						throw std::runtime_error("Compiled subgraph output projection is missing a returned output");
+					}
+				}
+				else
+				{
+					CopyDescriptorToOutput(builder, descriptor, outputArray, i, outputs[i]);
+				}
 			}
 			builder.CreateRetVoid();
 			return;
@@ -3462,6 +3595,23 @@ namespace
 
 		if (retTy->isVoidTy())
 		{
+			for (const auto& [functionalOutputIndex, descriptor] : projectedScratchOutputs)
+			{
+				if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, functionalOutputIndex))
+				{
+					CopyDescriptorToOutput(builder, descriptor, outputArray, *publicSlot,
+					                       outputs[functionalOutputIndex]);
+				}
+				else if (const auto* alias = FindStateOutputAlias(*outputProjection, functionalOutputIndex))
+				{
+					CopyDescriptorToArraySlot(builder, descriptor, inputArray, alias->inputIndex,
+					                          outputs[functionalOutputIndex]);
+				}
+				else
+				{
+					throw std::runtime_error("Compiled subgraph scratch output lost its projection");
+				}
+			}
 			builder.CreateRetVoid();
 			return;
 		}
@@ -3471,7 +3621,25 @@ namespace
 			auto* expectedDescTy = GetMemRefDescriptorType(ctx, outputs[0].type.Rank());
 			if (retTy == expectedDescTy)
 			{
-				CopyDescriptorToOutput(builder, call, outputArray, 0, outputs[0]);
+				if (outputProjection)
+				{
+					if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, 0))
+					{
+						CopyDescriptorToOutput(builder, call, outputArray, *publicSlot, outputs[0]);
+					}
+					else if (const auto* alias = FindStateOutputAlias(*outputProjection, 0))
+					{
+						CopyDescriptorToArraySlot(builder, call, inputArray, alias->inputIndex, outputs[0]);
+					}
+					else
+					{
+						throw std::runtime_error("Compiled subgraph output projection is missing a returned output");
+					}
+				}
+				else
+				{
+					CopyDescriptorToOutput(builder, call, outputArray, 0, outputs[0]);
+				}
 				builder.CreateRetVoid();
 				return;
 			}
@@ -3486,7 +3654,25 @@ namespace
 		for (std::size_t i = 0; i < outputs.size(); ++i)
 		{
 			auto* descriptor = builder.CreateExtractValue(call, { static_cast<unsigned>(i) });
-			CopyDescriptorToOutput(builder, descriptor, outputArray, i, outputs[i]);
+			if (outputProjection)
+			{
+				if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, i))
+				{
+					CopyDescriptorToOutput(builder, descriptor, outputArray, *publicSlot, outputs[i]);
+				}
+				else if (const auto* alias = FindStateOutputAlias(*outputProjection, i))
+				{
+					CopyDescriptorToArraySlot(builder, descriptor, inputArray, alias->inputIndex, outputs[i]);
+				}
+				else
+				{
+					throw std::runtime_error("Compiled subgraph output projection is missing a returned output");
+				}
+			}
+			else
+			{
+				CopyDescriptorToOutput(builder, descriptor, outputArray, i, outputs[i]);
+			}
 		}
 		builder.CreateRetVoid();
 	}
@@ -12668,8 +12854,9 @@ namespace
 		                mlir::scf::SCFDialect, mlir::tensor::TensorDialect, mlir::vector::VectorDialect>();
 	}
 
-	std::optional<CompiledArtifactParts> TryCompileCPUMLIRExternalRegions(const Graph& graph,
-	                                                                      const CompilerOptions& options)
+	std::optional<CompiledArtifactParts>
+	TryCompileCPUMLIRExternalRegions(const Graph& graph, const CompilerOptions& options,
+	                                 const Runtime::RuntimeScheduleOutputProjection* outputProjection = nullptr)
 	{
 		if (!IsCPUExternalRegionsEnabled(options))
 		{
@@ -12707,18 +12894,21 @@ namespace
 
 		auto inputSpecs =
 		    TimedCompileDiagnostic(options, "cpu-aot build input specs", [&] { return BuildInputSpecs(graph); });
-		auto outputSpecs =
+		auto functionalOutputSpecs =
 		    TimedCompileDiagnostic(options, "cpu-aot build output specs", [&] { return BuildOutputSpecs(graph); });
+		auto entryOutputSpecs = TimedCompileDiagnostic(options, "cpu-aot build entry output specs", [&] {
+			return BuildEntryOutputSpecs(functionalOutputSpecs, outputProjection);
+		});
 		TimedCompileDiagnostic(options, "cpu-aot add uniform entry wrapper", [&] {
-			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs,
-			                       externalized->entryExternalTensorInfos);
+			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs,
+			                       functionalOutputSpecs, externalized->entryExternalTensorInfos, outputProjection);
 		});
 		TimedCompileDiagnostic(
 		    options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
 		    [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
 
 		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
-			return SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+			return SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		});
 		auto instructions =
 		    TimedCompileDiagnostic(options, "cpu-aot emit object file", [&] { return EmitObjectFile(*llvmModule); });
@@ -12728,7 +12918,7 @@ namespace
 			                          std::move(externalized->weights),
 			                          std::move(externalized->externalTensorInfos),
 			                          std::move(inputSpecs),
-			                          std::move(outputSpecs) };
+			                          std::move(entryOutputSpecs) };
 	}
 } // namespace
 
@@ -15040,18 +15230,23 @@ namespace
 		return graph;
 	}
 
-	CompiledArtifactParts CompileCPUArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options)
+	CompiledArtifactParts
+	CompileCPUArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options,
+	                                 const Runtime::RuntimeScheduleOutputProjection* outputProjection = nullptr)
 	{
 		Validation::ValidateGraph(graph);
-		if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
+		if (!outputProjection)
 		{
-			return MakeCompiledArtifactParts(std::move(parallelParts->rodata), std::move(parallelParts->instructions),
-			                                 std::move(parallelParts->inputSpecs),
-			                                 std::move(parallelParts->outputSpecs), CompiledModuleBackend::CPUNative,
-			                                 std::move(parallelParts->constants), std::move(parallelParts->weights),
-			                                 std::move(parallelParts->externalTensorInfos));
+			if (auto parallelParts = TryCompileCPUParallelLinearChainF32WithExternalRegionFusion(graph, options))
+			{
+				return MakeCompiledArtifactParts(
+				    std::move(parallelParts->rodata), std::move(parallelParts->instructions),
+				    std::move(parallelParts->inputSpecs), std::move(parallelParts->outputSpecs),
+				    CompiledModuleBackend::CPUNative, std::move(parallelParts->constants),
+				    std::move(parallelParts->weights), std::move(parallelParts->externalTensorInfos));
+			}
 		}
-		if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options))
+		if (auto externalParts = TryCompileCPUMLIRExternalRegions(graph, options, outputProjection))
 		{
 			return MakeCompiledArtifactParts(std::move(externalParts->rodata), std::move(externalParts->instructions),
 			                                 std::move(externalParts->inputSpecs),
@@ -15075,13 +15270,15 @@ namespace
 		ConfigureForNativeObject(*llvmModule, config);
 
 		const auto inputSpecs = BuildInputSpecs(graph);
-		const auto outputSpecs = BuildOutputSpecs(graph);
-		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs, outputSpecs);
+		const auto functionalOutputSpecs = BuildOutputSpecs(graph);
+		const auto entryOutputSpecs = BuildEntryOutputSpecs(functionalOutputSpecs, outputProjection);
+		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs,
+		                       functionalOutputSpecs, {}, outputProjection);
 		OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel);
 
-		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto rodata = SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*llvmModule);
-		return MakeCompiledArtifactParts(std::move(rodata), std::move(instructions), inputSpecs, outputSpecs,
+		return MakeCompiledArtifactParts(std::move(rodata), std::move(instructions), inputSpecs, entryOutputSpecs,
 		                                 CompiledModuleBackend::CPUNative);
 	}
 
@@ -15264,6 +15461,28 @@ CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const ExecutablePlan& plan
 	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
 }
 
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Runtime::RuntimeSchedule& schedule)
+{
+	return CompileArtifact(schedule, CompilerOptions::Defaults());
+}
+
+CompiledModuleArtifact Compiler<CPU>::CompileArtifact(const Runtime::RuntimeSchedule& schedule,
+                                                      const CompilerOptions& options)
+{
+	Runtime::ValidateRuntimeSchedule(schedule);
+	auto scheduleOptions = options;
+	if (!schedule.module.plan.variables.empty())
+	{
+		scheduleOptions.enableCPUAOTExternalRegions = true;
+	}
+	const auto projection = Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, schedule.module.plan.forward);
+	auto parts = CompileCPUArtifactPartsFromGraph(BuildCompilerGraphFromPlan(schedule.module.plan), scheduleOptions,
+	                                              &projection);
+	return CompiledModuleArtifact(std::move(parts.rodata), std::move(parts.instructions), std::move(parts.inputSpecs),
+	                              std::move(parts.outputSpecs), parts.backend, std::move(parts.constants),
+	                              std::move(parts.weights), std::move(parts.externalTensorInfos));
+}
+
 CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan)
 {
 	return Compile(plan, CompilerOptions::Defaults());
@@ -15272,6 +15491,17 @@ CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan)
 CompiledModule<CPU> Compiler<CPU>::Compile(const ExecutablePlan& plan, const CompilerOptions& options)
 {
 	auto artifact = CompileArtifact(plan, options);
+	return std::move(artifact).Load();
+}
+
+CompiledModule<CPU> Compiler<CPU>::Compile(const Runtime::RuntimeSchedule& schedule)
+{
+	return Compile(schedule, CompilerOptions::Defaults());
+}
+
+CompiledModule<CPU> Compiler<CPU>::Compile(const Runtime::RuntimeSchedule& schedule, const CompilerOptions& options)
+{
+	auto artifact = CompileArtifact(schedule, options);
 	return std::move(artifact).Load();
 }
 
