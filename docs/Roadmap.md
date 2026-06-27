@@ -2454,8 +2454,8 @@ placement and fallback policy.
       map function input/output values directly onto byte ranges of persistent state buffers, and LLaMA artifact plans
       emit key/value bindings for every decoder layer while enforcing capacity for the appended token.
 - [x] Add runtime-schedule public-output projection helpers so state-written function outputs can be separated from
-      user-visible outputs. This makes the current decode ABI gap explicit: schedules can identify logits-only public
-      output and its `TensorType`/shape, while CPU AOT still needs a state-aware entry wrapper before
+      user-visible outputs. Runtime schedules now identify logits-only public output `TensorType`/shape and state-output
+      aliases back to their mutable input state buffers, while CPU AOT still needs a state-aware entry wrapper before
       `outputs_per_step` can drop from functional cache outputs to the public surface.
 - [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
 - [x] Support runtime decode position without recompiling for every `pastLength`:
