@@ -2453,6 +2453,10 @@ placement and fallback policy.
 - [x] Replace functional decode graph cache inputs/outputs with in-place runtime-state rebinding. Runtime schedules now
       map function input/output values directly onto byte ranges of persistent state buffers, and LLaMA artifact plans
       emit key/value bindings for every decoder layer while enforcing capacity for the appended token.
+- [x] Add runtime-schedule public-output projection helpers so state-written function outputs can be separated from
+      user-visible outputs. This makes the current decode ABI gap explicit: schedules can identify logits-only public
+      output, while CPU AOT still needs a state-aware entry wrapper before `outputs_per_step` can drop from functional
+      cache outputs to the public surface.
 - [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
 - [x] Support runtime decode position without recompiling for every `pastLength`:
       capacity decode accepts `current_position` plus full-capacity KV tensors, writes the new K/V row through

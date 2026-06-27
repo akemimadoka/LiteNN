@@ -1712,6 +1712,8 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	const auto forward = schedule.module.plan.forward;
 	EXPECT_EQ(schedule.module.functions[forward].inputs[1].dtype, DataType::Int64);
 	EXPECT_EQ(schedule.module.functions[forward].inputs[2].StaticShape(), std::vector<std::size_t>({ 4, 1, 2 }));
+	EXPECT_EQ(Runtime::RuntimeScheduleStateOutputIndices(schedule, forward), std::vector<std::size_t>({ 1, 2, 3 }));
+	EXPECT_EQ(Runtime::RuntimeSchedulePublicOutputIndices(schedule, forward), std::vector<std::size_t>({ 0 }));
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	const auto path = MakeTempFixturePath("litenn_llama_capacity_decode", ".ltnn");

@@ -461,6 +461,54 @@ namespace LiteNN::Runtime
 		return schedule;
 	}
 
+	inline std::vector<std::size_t> RuntimeScheduleStateOutputIndices(const RuntimeSchedule& schedule,
+	                                                                  FunctionId function)
+	{
+		if (function >= schedule.module.functions.size())
+		{
+			throw std::runtime_error("Runtime schedule state-output query references an unknown function");
+		}
+		std::vector<std::size_t> indices;
+		for (const auto& binding : schedule.stateValueBindings)
+		{
+			if (binding.function != function || binding.kind != RuntimeStateValueKind::FunctionOutput)
+			{
+				continue;
+			}
+			if (binding.valueIndex >= schedule.module.functions[function].outputs.size())
+			{
+				throw std::runtime_error("Runtime schedule state-output binding references an unknown function output");
+			}
+			if (!std::ranges::contains(indices, binding.valueIndex))
+			{
+				indices.push_back(binding.valueIndex);
+			}
+		}
+		std::ranges::sort(indices);
+		return indices;
+	}
+
+	inline std::vector<std::size_t> RuntimeSchedulePublicOutputIndices(const RuntimeSchedule& schedule,
+	                                                                   FunctionId function)
+	{
+		if (function >= schedule.module.functions.size())
+		{
+			throw std::runtime_error("Runtime schedule public-output query references an unknown function");
+		}
+		const auto stateOutputs = RuntimeScheduleStateOutputIndices(schedule, function);
+		std::vector<std::size_t> publicOutputs;
+		const auto outputCount = schedule.module.functions[function].outputs.size();
+		publicOutputs.reserve(outputCount);
+		for (std::size_t outputIndex = 0; outputIndex < outputCount; ++outputIndex)
+		{
+			if (!std::ranges::binary_search(stateOutputs, outputIndex))
+			{
+				publicOutputs.push_back(outputIndex);
+			}
+		}
+		return publicOutputs;
+	}
+
 	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)
 	{
 		if (std::ranges::find(buffers, buffer) == buffers.end())
