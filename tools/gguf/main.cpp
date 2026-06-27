@@ -1335,23 +1335,20 @@ int main(int argc, char** argv)
 			                                                                .preserveQuantizedWeights = true,
 			                                                                .dynamicDecodePosition = true });
 			const auto forward = schedule.module.plan.forward;
-			const auto stateOutputs = LiteNN::Runtime::RuntimeScheduleStateOutputIndices(schedule, forward);
-			const auto stateAliases = LiteNN::Runtime::RuntimeScheduleStateOutputAliases(schedule, forward);
-			const auto publicOutputs = LiteNN::Runtime::RuntimeSchedulePublicOutputIndices(schedule, forward);
-			const auto publicTypes = LiteNN::Runtime::RuntimeSchedulePublicOutputTypes(schedule, forward);
+			const auto projection = LiteNN::Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, forward);
 			LiteNN::Serialization::SaveVNextModelPackageExternalWeights(schedule, argv[3], argv[4]);
 			std::cout << "Lowered stateful LLaMA decode package with " << schedule.states.size()
 			          << " runtime states and " << schedule.stateValueBindings.size() << " value bindings"
-			          << " functional_outputs=" << schedule.module.functions[forward].outputs.size()
-			          << " state_outputs=" << stateOutputs.size() << " state_aliases=" << stateAliases.size()
-			          << " public_outputs=" << publicOutputs.size() << " public_output_shape=";
-			if (publicTypes.empty())
+			          << " functional_outputs=" << projection.functionalOutputCount
+			          << " state_aliases=" << projection.stateAliases.size()
+			          << " public_outputs=" << projection.publicOutputIndices.size() << " public_output_shape=";
+			if (projection.publicOutputTypes.empty())
 			{
 				PrintSizeList({});
 			}
 			else
 			{
-				PrintSizeList(publicTypes.front().StaticShape());
+				PrintSizeList(projection.publicOutputTypes.front().StaticShape());
 			}
 			std::cout << '\n';
 			return 0;

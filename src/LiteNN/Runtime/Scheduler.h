@@ -61,6 +61,14 @@ namespace LiteNN::Runtime
 		std::size_t stateByteOffset{};
 	};
 
+	struct RuntimeScheduleOutputProjection
+	{
+		std::size_t functionalOutputCount{};
+		std::vector<std::size_t> publicOutputIndices;
+		std::vector<TensorType> publicOutputTypes;
+		std::vector<RuntimeStateOutputAlias> stateAliases;
+	};
+
 	struct LLMDecodeStateABI
 	{
 		std::vector<RuntimeStateBinding> kvCaches;
@@ -566,6 +574,27 @@ namespace LiteNN::Runtime
 		}
 		std::ranges::sort(aliases, {}, &RuntimeStateOutputAlias::outputIndex);
 		return aliases;
+	}
+
+	inline RuntimeScheduleOutputProjection RuntimeScheduleOutputProjectionForFunction(const RuntimeSchedule& schedule,
+	                                                                                  FunctionId function)
+	{
+		if (function >= schedule.module.functions.size())
+		{
+			throw std::runtime_error("Runtime schedule output projection references an unknown function");
+		}
+		auto publicOutputs = RuntimeSchedulePublicOutputIndices(schedule, function);
+		auto publicTypes = RuntimeSchedulePublicOutputTypes(schedule, function);
+		auto aliases = RuntimeScheduleStateOutputAliases(schedule, function);
+		const auto functionalOutputCount = schedule.module.functions[function].outputs.size();
+		if (publicOutputs.size() + aliases.size() != functionalOutputCount)
+		{
+			throw std::runtime_error("Runtime schedule output projection does not cover every functional output");
+		}
+		return RuntimeScheduleOutputProjection{ .functionalOutputCount = functionalOutputCount,
+			                                    .publicOutputIndices = std::move(publicOutputs),
+			                                    .publicOutputTypes = std::move(publicTypes),
+			                                    .stateAliases = std::move(aliases) };
 	}
 
 	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)

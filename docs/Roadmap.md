@@ -2455,8 +2455,9 @@ placement and fallback policy.
       emit key/value bindings for every decoder layer while enforcing capacity for the appended token.
 - [x] Add runtime-schedule public-output projection helpers so state-written function outputs can be separated from
       user-visible outputs. Runtime schedules now identify logits-only public output `TensorType`/shape and state-output
-      aliases back to their mutable input state buffers, while CPU AOT still needs a state-aware entry wrapper before
-      `outputs_per_step` can drop from functional cache outputs to the public surface.
+      aliases back to their mutable input state buffers through one `RuntimeScheduleOutputProjection` contract, while
+      CPU AOT still needs a state-aware entry wrapper before `outputs_per_step` can drop from functional cache outputs
+      to the public surface.
 - [x] Separate decode position/current `pastLength` from max KV-cache capacity in the LLM artifact/state ABI.
 - [x] Support runtime decode position without recompiling for every `pastLength`:
       capacity decode accepts `current_position` plus full-capacity KV tensors, writes the new K/V row through
