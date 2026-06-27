@@ -2,6 +2,7 @@
 #include <concepts>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 #ifndef LITENN_TENSOR_H
 #define LITENN_TENSOR_H
@@ -221,6 +222,18 @@ namespace LiteNN
 				}
 			}
 			return *this;
+		}
+
+		constexpr void Swap(Tensor& other) noexcept
+		{
+			using std::swap;
+			swap(data_, other.data_);
+			swap(allocatedNumElements_, other.allocatedNumElements_);
+			swap(shape_, other.shape_);
+			swap(strides_, other.strides_);
+			swap(dtype_, other.dtype_);
+			swap(device_, other.device_);
+			swap(ownsData_, other.ownsData_);
 		}
 
 		constexpr auto& CurDevice(this auto&& self)
