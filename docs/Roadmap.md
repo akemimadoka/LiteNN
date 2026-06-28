@@ -2696,10 +2696,9 @@ placement and fallback policy.
       `constant.*` variables now lower through the same constant path as `ConstantNode` when they remain inline, and
       generic CPU externalization keeps promoted constants below `CompilerOptions::cpuAOTExternalConstantMinBytes`
       inside the MLIR module while still externalizing normal weights. `CompiledModuleTest` covers the mixed case.
-- [ ] Finish full promoted-variable GGUF stateful schedule parity:
-      direct capacity schedules validate the state-aware wrapper, but full schedules produced by
-      `BuildLLaMADecodeRuntimeSchedule` can still expose fixture-dependent NaN logits and need a separate correctness
-      pass before real GGUF stateful packages rely on logits-only CPU AOT entries.
+- [x] Finish full GGUF stateful schedule parity by removing constant promotion from the runtime schedule builder:
+      `BuildLLaMADecodeRuntimeSchedule` now leaves constants as constants and only real model variables participate in
+      external-weight packaging, which keeps logits-only CPU AOT entries aligned with the direct capacity schedule path.
 - [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:
       `example/gguf/build_stateful_artifacts.py` lowers a package with external weights, emits separated CPU and optional
       CUDA carrier objects, records the actual compiler backend, and supports `native-required`, `bridge-allowed`,

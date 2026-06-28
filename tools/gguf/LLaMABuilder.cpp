@@ -437,33 +437,6 @@ namespace LiteNN::GGUF
 			return { graph.Metadata().begin(), graph.Metadata().end() };
 		}
 
-		void PromoteConstantsToVariables(Graph& graph)
-		{
-			for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
-			{
-				auto& subgraph = graph.GetSubgraph(subgraphId);
-				for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
-				{
-					auto& node = subgraph.GetNodeEntry(nodeId).node;
-					if (auto* constant = std::get_if<ConstantNode>(&node))
-					{
-						auto value = std::move(constant->value);
-						const auto variable = graph.AddVariable(Variable::Create(std::move(value)));
-						graph.SetVariableName(variable, std::format("constant.{}.{}", subgraphId, nodeId));
-						node = VariableRefNode{ variable };
-					}
-					else if (auto* constant = std::get_if<QuantizedConstantNode>(&node))
-					{
-						auto storage = std::move(constant->storage);
-						auto params = std::move(constant->params);
-						const auto variable =
-						    graph.AddVariable(Variable::CreateFrozenQuantized(std::move(storage), std::move(params)));
-						graph.SetVariableName(variable, std::format("qconstant.{}.{}", subgraphId, nodeId));
-						node = VariableRefNode{ variable };
-					}
-				}
-			}
-		}
 	} // namespace
 
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype, std::optional<QuantizedBlockFormat> blockFormat)
@@ -1423,7 +1396,6 @@ namespace LiteNN::GGUF
 		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights })
 		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
 		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
-		PromoteConstantsToVariables(graph);
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
 		auto states = artifacts.decodeStateABI.kvCaches;
 		if (artifacts.decodeStateABI.currentPosition)
