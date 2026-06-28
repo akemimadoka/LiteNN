@@ -1864,6 +1864,13 @@ TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithPublicLogitsOnl
 	auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(
 	    BuildTinyLLaMAArchive(),
 	    { .prefillSequenceLength = 1, .decodePastLength = 0, .maxCacheLength = 4, .dynamicDecodePosition = true });
+	ASSERT_FALSE(schedule.module.plan.variables.empty());
+	for (const auto& variable : schedule.module.plan.variables)
+	{
+		EXPECT_EQ(variable.region.ownership, BufferOwnership::Owned);
+		EXPECT_NE(variable.region.owner, nullptr);
+		EXPECT_NE(variable.region.data, nullptr);
+	}
 	const auto plan = schedule.module.plan;
 	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
 	const std::vector<float> zeroCache(8, 0.0f);

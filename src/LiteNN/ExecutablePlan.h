@@ -6,6 +6,7 @@
 #include <LiteNN/Storage.h>
 #include <LiteNN/TensorType.h>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <optional>
@@ -1103,6 +1104,38 @@ namespace LiteNN
 		}
 		module.partitions.push_back(std::move(partition));
 		return module;
+	}
+
+	inline void OwnExecutablePlanVariableStorage(ExecutablePlan& plan)
+	{
+		for (auto& storage : plan.variables)
+		{
+			if (storage.IsExternal() || storage.region.owner || storage.region.memorySpace != TensorMemorySpace::Host)
+			{
+				continue;
+			}
+			const auto byteSize = storage.region.byteSize;
+			if (byteSize != 0 && storage.region.data == nullptr)
+			{
+				throw std::runtime_error("ExecutablePlan variable has no payload data to own: " + storage.region.name);
+			}
+			auto owned = std::make_shared<std::vector<std::byte>>(byteSize);
+			if (byteSize != 0)
+			{
+				const auto* source = static_cast<const std::byte*>(storage.region.data) + storage.region.byteOffset;
+				std::memcpy(owned->data(), source, byteSize);
+			}
+			storage.region.ownership = BufferOwnership::Owned;
+			storage.region.externalKind = ExternalBufferKind::None;
+			storage.region.data = owned->data();
+			storage.region.byteOffset = 0;
+			storage.region.owner = std::move(owned);
+		}
+	}
+
+	inline void OwnExecutableModuleVariableStorage(ExecutableModule& module)
+	{
+		OwnExecutablePlanVariableStorage(module.plan);
 	}
 
 	namespace Detail
