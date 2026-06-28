@@ -32,12 +32,14 @@ build\tools\gguf\litenn_gguf_convert.exe --lower-llama-decode model.gguf model.d
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-token-ids model.gguf 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --dump-llama-token-id-logits model.gguf 1,2,3,4 litenn_last_logits.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt model.gguf "hello"
+build\tools\gguf\litenn_gguf_convert.exe --tokenize-llama-prompt model.gguf "hello" tokens.json --chat-template
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-package-token-ids model.prefill.quantized.ltnn 1,2,3,4
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-ids model.gguf 1,2,3,4 8 generated_token_ids.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --sample random --temperature 0.7 --top-k 40 --top-p 0.9 --repeat-penalty 1.1 --seed 42 --output generated_token_ids.txt --logits-output final_decode_logits.txt
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-decode-loop-token-id model.gguf 1 8 --ignore-eos
 build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt-decode-loop model.gguf "hello" 8 --sample random --seed 42 --output generated_token_ids.txt
+build\tools\gguf\litenn_gguf_convert.exe --run-llama-prompt-decode-loop model.gguf "hello" 8 --chat-template --output generated_token_ids.txt
 ```
 
 `--run-llama-token-ids` is a token-id level smoke path. It imports the GGUF file,
@@ -51,6 +53,12 @@ for golden comparison tooling.
 `--run-llama-prompt` uses a deliberately limited exact-vocabulary tokenizer
 bridge over `tokenizer.ggml.tokens`; it is useful for fixtures and diagnostics
 but does not replace GPT2/BPE or llama.cpp tokenizer parity.
+When configured with `-DLITENN_ENABLE_LLAMA_CPP_TOKENIZER=ON`,
+`litenn_gguf_convert` links the isolated llama.cpp tokenizer adapter and the
+prompt commands can tokenize through the model's real GGUF tokenizer in-process.
+`--tokenize-llama-prompt` writes the same `litenn.llamacpp_tokens.v1` JSON schema
+as the standalone adapter, and `--chat-template` applies the model's default
+single-user chat template before tokenization.
 `--run-llama-package-token-ids` runs an already lowered `.ltnn` package and is
 useful for validating conversion artifacts without re-importing the GGUF file.
 `--run-llama-decode-loop-token-id` is a decode-loop smoke path: it prebuilds the

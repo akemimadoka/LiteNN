@@ -2433,6 +2433,10 @@ placement and fallback policy.
       the isolated `tools/llamacpp-adapter` target exposes `tokenize` and binary-safe `detokenize` subcommands using the
       model's real GGUF vocabulary, BOS policy, special-token parsing, and byte fallback behavior without linking
       llama.cpp into LiteNN runtime targets.
+- [x] Wire the optional tokenizer adapter into GGUF tools behind an explicit build option:
+      `LITENN_ENABLE_LLAMA_CPP_TOKENIZER=ON` links `LiteNNLlamaCppTokenizerAdapter` into `litenn_gguf_convert`, enabling
+      `--tokenize-llama-prompt`, `--run-llama-prompt --chat-template`, and prompt decode loops to use llama.cpp's
+      in-process tokenizer while keeping the default LiteNN runtime and tool build free of llama.cpp runtime linkage.
 - [x] Add a manifest-backed tokenizer adapter driver:
       `scripts/gguf_tokenizer_adapter.py` handles Windows runtime-library discovery, command evidence, output paths, and
       operation manifests for tokenization, binary-safe detokenization, and model-default single-user chat-template

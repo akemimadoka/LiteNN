@@ -6,6 +6,9 @@
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
+#ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
+#include <LlamaCppTokenizerAdapter.h>
+#endif
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
@@ -52,6 +55,8 @@ namespace
 		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
 		          << "  " << executable
 		          << " --dump-llama-token-id-logits <input.gguf> <comma-token-ids> <output.txt> [position-offset]\n"
+		          << "  " << executable
+		          << " --tokenize-llama-prompt <input.gguf> <prompt> <tokens.json> [--chat-template]\n"
 		          << "  " << executable << " --run-llama-prompt <input.gguf> <prompt> [position-offset]\n"
 		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
 		          << "  " << executable
@@ -188,6 +193,7 @@ namespace
 		std::string inputPath;
 		std::vector<std::int32_t> initialTokenIds;
 		std::optional<std::string> exactPrompt;
+		bool applyChatTemplate{};
 		std::size_t steps{};
 		std::optional<std::string> outputPath;
 		std::optional<std::string> logitsOutputPath;
@@ -248,6 +254,10 @@ namespace
 			else if (arg == "--ignore-eos")
 			{
 				options.stopAtEos = false;
+			}
+			else if (arg == "--chat-template")
+			{
+				options.applyChatTemplate = true;
 			}
 			else if (!arg.starts_with("--") && !options.outputPath)
 			{
@@ -506,6 +516,40 @@ namespace
 		return text;
 	}
 
+	std::vector<std::int32_t> TokenizePrompt(const std::filesystem::path& modelPath, std::string_view prompt,
+	                                         const LiteNN::Graph& archive, bool applyChatTemplate)
+	{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
+		const LiteNN::LlamaCppAdapter::Model model(modelPath);
+		const auto promptText = applyChatTemplate ? model.ApplyChatTemplate(prompt) : std::string(prompt);
+		return model.Tokenize(promptText).tokenIds;
+#else
+		(void) modelPath;
+		if (applyChatTemplate)
+		{
+			throw std::runtime_error(
+			    "llama.cpp chat-template tokenization requires LITENN_ENABLE_LLAMA_CPP_TOKENIZER=ON");
+		}
+		return LiteNN::GGUF::MakeExactVocabularyPromptTokens(prompt, archive).tokenIds;
+#endif
+	}
+
+	void WritePromptTokens(const std::filesystem::path& modelPath, std::string_view prompt,
+	                       const std::filesystem::path& outputPath, bool applyChatTemplate)
+	{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
+		const LiteNN::LlamaCppAdapter::Model model(modelPath);
+		const auto promptText = applyChatTemplate ? model.ApplyChatTemplate(prompt) : std::string(prompt);
+		LiteNN::LlamaCppAdapter::WriteTokensJson(model.Tokenize(promptText), outputPath);
+#else
+		(void) modelPath;
+		(void) prompt;
+		(void) outputPath;
+		(void) applyChatTemplate;
+		throw std::runtime_error("llama.cpp prompt tokenization requires LITENN_ENABLE_LLAMA_CPP_TOKENIZER=ON");
+#endif
+	}
+
 	void PrintTensorShape(LiteNN::ShapeView shape)
 	{
 		std::cout << '[';
@@ -662,9 +706,8 @@ namespace
 		auto initialTokenIds = options.initialTokenIds;
 		if (options.exactPrompt)
 		{
-			initialTokenIds =
-			    LiteNN::GGUF::MakeExactVocabularyPromptTokens(*options.exactPrompt, imported.model.UnsafeGraphView())
-			        .tokenIds;
+			initialTokenIds = TokenizePrompt(options.inputPath, *options.exactPrompt, imported.model.UnsafeGraphView(),
+			                                 options.applyChatTemplate);
 		}
 		if (initialTokenIds.empty())
 		{
@@ -1221,21 +1264,52 @@ int main(int argc, char** argv)
 			return 0;
 		}
 
-		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-prompt")
+		if (argc >= 2 && std::string_view(argv[1]) == "--tokenize-llama-prompt")
 		{
-			if (argc != 4 && argc != 5)
+			if (argc != 5 && argc != 6)
 			{
 				PrintUsage(argv[0]);
 				return 1;
 			}
-			const auto positionOffset = argc == 5 ? ParseSize(argv[4], "position-offset", true) : 0uz;
+			const bool applyChatTemplate = argc == 6 && std::string_view(argv[5]) == "--chat-template";
+			if (argc == 6 && !applyChatTemplate)
+			{
+				throw std::runtime_error("--tokenize-llama-prompt only accepts --chat-template as an optional flag");
+			}
+			WritePromptTokens(argv[2], argv[3], argv[4], applyChatTemplate);
+			std::cout << "Tokenized LLaMA prompt with llama.cpp backend output=" << argv[4]
+			          << " chat_template=" << (applyChatTemplate ? "true" : "false") << '\n';
+			return 0;
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--run-llama-prompt")
+		{
+			if (argc < 4 || argc > 6)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+			std::size_t positionOffset = 0;
+			bool applyChatTemplate = false;
+			for (int i = 4; i < argc; ++i)
+			{
+				const std::string_view arg = argv[i];
+				if (arg == "--chat-template")
+				{
+					applyChatTemplate = true;
+				}
+				else
+				{
+					positionOffset = ParseSize(arg, "position-offset", true);
+				}
+			}
 			const auto imported = LiteNN::GGUF::ImportGGUFArchive(argv[2]);
-			const auto prompt =
-			    LiteNN::GGUF::MakeExactVocabularyPromptTokens(argv[3], imported.model.UnsafeGraphView());
-			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), prompt.tokenIds.size(),
+			const auto promptTokenIds =
+			    TokenizePrompt(argv[2], argv[3], imported.model.UnsafeGraphView(), applyChatTemplate);
+			auto lowered = LiteNN::GGUF::LowerLLaMACausalLM(imported.model.UnsafeGraphView(), promptTokenIds.size(),
 			                                                positionOffset, { .preserveQuantizedWeights = true });
 			const auto plan = LiteNN::Detail::BuildExecutablePlanFromGraph(lowered);
-			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(prompt.tokenIds, plan));
+			auto inputs = MakeZeroStateInputs(plan, MakeTokenIdTensor(promptTokenIds, plan));
 			const auto outputs = RunCPUModelAOT(plan, inputs);
 			if (outputs.empty())
 			{
@@ -1243,11 +1317,18 @@ int main(int argc, char** argv)
 			}
 			const auto& logits = outputs.front();
 			LiteNN::GGUF::LLMSamplerState sampler;
-			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, prompt.tokenIds);
+			const auto nextToken = LiteNN::GGUF::SelectNextToken(logits, sampler, promptTokenIds);
 			std::cout << "Ran LLaMA GGUF exact-prompt smoke tensors=" << imported.summary.tensorCount
 			          << " metadata=" << imported.summary.metadataCount << " token_ids=";
-			PrintTokenList(prompt.tokenIds);
-			std::cout << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), prompt.tokenIds)
+			PrintTokenList(promptTokenIds);
+			std::cout << " tokenizer_backend="
+#ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
+			          << "llama.cpp"
+#else
+			          << "exact-vocabulary"
+#endif
+			          << " chat_template=" << (applyChatTemplate ? "true" : "false")
+			          << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), promptTokenIds)
 			          << " inputs=" << plan.inputs.size() << " outputs=" << outputs.size()
 			          << " logits_dtype=" << LiteNN::DataTypeName(logits.DType()) << " logits_shape=";
 			PrintTensorShape(logits.Shape());
