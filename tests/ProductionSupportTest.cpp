@@ -209,7 +209,7 @@ TEST(ProductionSupportTest, ReportsCUDANativeCapabilitiesAsGatedProfiles)
 	          ProductionBuildHasCUDA() ? ProductionSupportLevel::Supported : ProductionSupportLevel::Unavailable);
 	EXPECT_TRUE(Contains(quantizedProjection.verifiedScope, "Q4_K"));
 	EXPECT_TRUE(Contains(quantizedProjection.capabilityGate, "golden logits"));
-	EXPECT_FALSE(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"));
+	EXPECT_EQ(HasCUDANativeCapabilityDiagnostic("QuantizedProjection"), !ProductionBuildHasCUDA());
 }
 
 TEST(ProductionSupportTest, ReportsQuantizationCapabilitiesBeforeNativeKernels)
