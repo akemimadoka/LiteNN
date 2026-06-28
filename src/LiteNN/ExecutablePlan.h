@@ -1004,14 +1004,16 @@ namespace LiteNN
 			plan.variableNames.reserve(graph.VariableCount());
 			for (std::size_t i = 0; i < graph.VariableCount(); ++i)
 			{
-				const auto& tensor = graph.GetVariable(i)->Data();
+				const auto& variable = graph.GetVariable(i);
+				const auto& tensor = variable->Data();
 				TensorStorageRef storage;
 				const auto memorySpace = TensorMemorySpaceFor(tensor.CurDevice());
 				storage.type = TensorType::Dense(tensor.DType(), tensor.Shape(), memorySpace);
-				storage.quantization = graph.GetVariable(i)->Quantization();
+				storage.quantization = variable->Quantization();
 				storage.region =
 				    MakeBorrowedBufferRegion(tensor.UnsafeRawData(), storage.type.ByteSize().value_or(0), memorySpace);
 				storage.region.name = graph.VariableName(i);
+				storage.region.owner = variable;
 				plan.variables.push_back(std::move(storage));
 				plan.variableNames.push_back(graph.VariableName(i));
 			}

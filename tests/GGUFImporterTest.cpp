@@ -1867,7 +1867,7 @@ TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithPublicLogitsOnl
 	ASSERT_FALSE(schedule.module.plan.variables.empty());
 	for (const auto& variable : schedule.module.plan.variables)
 	{
-		EXPECT_EQ(variable.region.ownership, BufferOwnership::Owned);
+		EXPECT_EQ(variable.region.ownership, BufferOwnership::Borrowed);
 		EXPECT_NE(variable.region.owner, nullptr);
 		EXPECT_NE(variable.region.data, nullptr);
 	}

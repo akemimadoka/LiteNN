@@ -164,7 +164,7 @@ TEST(ExecutablePlanTest, RuntimeScheduleOwnsVariablesFromTemporaryGraphs)
 
 	ASSERT_EQ(schedule.module.plan.variables.size(), 1u);
 	const auto& variable = schedule.module.plan.variables[0];
-	EXPECT_EQ(variable.region.ownership, BufferOwnership::Owned);
+	EXPECT_EQ(variable.region.ownership, BufferOwnership::Borrowed);
 	EXPECT_NE(variable.region.owner, nullptr);
 	EXPECT_NE(variable.region.data, nullptr);
 }
