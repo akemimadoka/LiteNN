@@ -1397,7 +1397,6 @@ namespace LiteNN::GGUF
 		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
 		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
-		OwnExecutableModuleVariableStorage(module);
 		auto states = artifacts.decodeStateABI.kvCaches;
 		if (artifacts.decodeStateABI.currentPosition)
 		{

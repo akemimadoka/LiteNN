@@ -2696,6 +2696,10 @@ placement and fallback policy.
 - [x] Add a CPU AOT state-aware entry wrapper for runtime schedules: `Compiler<CPU>::CompileArtifact(RuntimeSchedule)`
       now exposes only public outputs in artifact metadata, while wrapper scratch buffers receive functional state outputs
       and copy them back into the aliased input state buffers after the compiled call.
+- [x] Make long-lived runtime schedules own borrowed host variable storage at construction time:
+      `Runtime::BuildRuntimeSchedule` now deep-copies non-external host variables into `BufferRegion::owner` before
+      memory/buffer bindings are built, so schedules created from temporary graphs or builder-local lowered graphs no
+      longer depend on graph lifetime.
 - [x] Fix the promoted-constant subset of CPU AOT external-region lowering:
       `constant.*` variables now lower through the same constant path as `ConstantNode` when they remain inline, and
       generic CPU externalization keeps promoted constants below `CompilerOptions::cpuAOTExternalConstantMinBytes`

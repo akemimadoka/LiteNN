@@ -273,6 +273,7 @@ namespace LiteNN::Runtime
 	                                            std::vector<RuntimeStateValueBinding> stateValueBindings = {})
 	{
 		ValidateExecutablePlan(module.plan);
+		OwnExecutableModuleVariableStorage(module);
 		RuntimeSchedule schedule;
 		schedule.memory = BuildMemoryPlan(module.plan);
 		ValidateMemoryPlan(module.plan, schedule.memory);

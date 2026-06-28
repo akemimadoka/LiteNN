@@ -158,6 +158,17 @@ TEST(ExecutablePlanTest, BuildsExecutableModuleWithFunctionsRegionsAndPartitions
 	EXPECT_EQ(module.partitions[0].regions[0], module.regions[0].id);
 }
 
+TEST(ExecutablePlanTest, RuntimeScheduleOwnsVariablesFromTemporaryGraphs)
+{
+	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(BuildSmallGraph()));
+
+	ASSERT_EQ(schedule.module.plan.variables.size(), 1u);
+	const auto& variable = schedule.module.plan.variables[0];
+	EXPECT_EQ(variable.region.ownership, BufferOwnership::Owned);
+	EXPECT_NE(variable.region.owner, nullptr);
+	EXPECT_NE(variable.region.data, nullptr);
+}
+
 TEST(ExecutablePlanTest, ValidationRejectsSchemaAndReferenceErrors)
 {
 	auto plan = Detail::BuildExecutablePlanFromGraph(BuildSmallGraph());
