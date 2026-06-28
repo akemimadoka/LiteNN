@@ -79,6 +79,10 @@ inline LiteNN::CompilerOptions LiteNNBenchCompilerOptionsFromEnvironment()
 	{
 		options.enableCUDANativeAOT = false;
 	}
+	if (LiteNNBenchTruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS")))
+	{
+		options.enableCompileDiagnostics = true;
+	}
 	return options;
 }
 

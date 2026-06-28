@@ -108,6 +108,9 @@ beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP s
   - Implementation: `TryCompileCPUParallelLinearChainF32` emits an object that calls
     `litenn_cpu_matmul_bias_relu_parallel_f32`.
   - Gating: `LITENN_CPU_AOT_THREADS=1` falls back to MLIR; `LITENN_CPU_AOT_PARALLEL_MIN_FLOPS` defaults to `1 << 28`.
+    Benchmark/profile entry points also honor `LITENN_COMPILE_DIAGNOSTICS=1` and forward it into
+    `CompilerOptions::enableCompileDiagnostics` so actual sidecar selection/rejection reasons can be compared with
+    `litenn_profile`'s predicted/object columns.
 - [x] Improve the helper's local kernel quality enough for the large benchmark to benefit.
   - Implementation: row-bias initialization uses `memcpy`; helper pointers carry restrict semantics; GCC is given
     ivdep hints for the inner contiguous column loops.
