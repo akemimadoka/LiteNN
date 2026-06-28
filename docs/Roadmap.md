@@ -629,6 +629,10 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
 - [ ] Productionize CPU AOT multithreading so T16 is not a regression on large-batch Linear/MLP shapes:
       tune helper microkernels, gating, thread grain policy, and eventually move the work into optimized MLIR/LLVM
       lowering or a production GEMM backend.
+      - [x] Make the actual CPU parallel linear-chain compiler path report sidecar selection/rejection reasons when
+            `CompilerOptions::enableCompileDiagnostics` is enabled, including selected fused layer count, total FLOPs,
+            thread count, and thread/shape/FLOP gate rejection reasons. This keeps `litenn_profile` predictions
+            auditable against emitted-object behavior while tuning T16 gates.
 - [x] Add an explicit CPU AOT worker-affinity policy hook for multithread experiments:
       `CompilerOptions::cpuAOTAffinityPolicy` defaults to no pinning, while benchmark/profile entry points can opt into
       compact worker pinning for local measurements.

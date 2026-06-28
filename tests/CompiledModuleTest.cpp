@@ -25,11 +25,13 @@
 #include <format>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <ranges>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -39,6 +41,31 @@ using namespace LiteNN;
 
 namespace
 {
+	class ScopedCerrCapture
+	{
+	public:
+		ScopedCerrCapture() : previous_(std::cerr.rdbuf(stream_.rdbuf()))
+		{
+		}
+
+		ScopedCerrCapture(const ScopedCerrCapture&) = delete;
+		ScopedCerrCapture& operator=(const ScopedCerrCapture&) = delete;
+
+		~ScopedCerrCapture()
+		{
+			std::cerr.rdbuf(previous_);
+		}
+
+		std::string Str() const
+		{
+			return stream_.str();
+		}
+
+	private:
+		std::ostringstream stream_;
+		std::streambuf* previous_{};
+	};
+
 	float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 	{
 		return static_cast<const float*>(t.UnsafeRawData())[i];
@@ -2621,6 +2648,39 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 	{
 		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
 	}
+}
+
+TEST(CompiledModuleTest, CPUParallelLinearChainDiagnosticsReportSelection)
+{
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 4;
+	options.cpuAOTParallelMinFlops = 1;
+	options.enableCompileDiagnostics = true;
+
+	auto graph = BuildWideLinearChainGraph(64);
+	FusionPass{}.Run(graph);
+	ScopedCerrCapture capture;
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	const auto diagnostics = capture.Str();
+	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+	                               artifact.Instructions().size());
+
+	EXPECT_NE(diagnostics.find("cpu-parallel linear-chain selected: fused_layers="), std::string::npos);
+	EXPECT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
+}
+
+TEST(CompiledModuleTest, CPUParallelLinearChainDiagnosticsReportThreadGate)
+{
+	CompilerOptions options;
+	options.cpuAOTThreadCount = 1;
+	options.enableCompileDiagnostics = true;
+
+	auto graph = BuildWideLinearChainGraph(64);
+	ScopedCerrCapture capture;
+	(void) Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	const auto diagnostics = capture.Str();
+
+	EXPECT_NE(diagnostics.find("cpu-parallel linear-chain rejected: thread_count<=1"), std::string::npos);
 }
 
 TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)

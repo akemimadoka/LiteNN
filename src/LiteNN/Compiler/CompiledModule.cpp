@@ -2883,27 +2883,31 @@ namespace
 	std::optional<CompiledArtifactParts> TryCompileCPUParallelLinearChainF32(const Graph& graph,
 	                                                                         const CompilerOptions& options)
 	{
+		const auto reject = [&](std::string_view reason) -> std::optional<CompiledArtifactParts> {
+			LogCompileDiagnostic(options, std::string("cpu-parallel linear-chain rejected: ") + std::string(reason));
+			return std::nullopt;
+		};
 		const auto threadCount = ResolveCPUAOTThreadCount(options);
 		if (threadCount <= 1)
 		{
-			return std::nullopt;
+			return reject("thread_count<=1");
 		}
 
 		if (graph.Backward().has_value() || graph.ActivationSlotCount() != 0 || graph.TapeSlotCount() != 0 ||
 		    graph.SubgraphCount() == 0)
 		{
-			return std::nullopt;
+			return reject("graph has backward/tape/activation state or no forward subgraph");
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
 		if (subgraph.Results().size() != 1)
 		{
-			return std::nullopt;
+			return reject("requires exactly one forward result");
 		}
 		const auto finalResult = subgraph.Results()[0];
 		if (finalResult.port != 0 || finalResult.node >= subgraph.NodeCount())
 		{
-			return std::nullopt;
+			return reject("forward result is not a single node output");
 		}
 
 		struct ValueRef
@@ -2964,7 +2968,7 @@ namespace
 			const auto& entryNode = subgraph.GetNodeEntry(nodeId);
 			if (entryNode.outputInfos.size() != 1)
 			{
-				return std::nullopt;
+				return reject("all chain nodes must have exactly one output");
 			}
 			const auto& output = entryNode.outputInfos[0];
 			if (const auto* param = std::get_if<ParamRefNode>(&entryNode.node))
@@ -2980,12 +2984,12 @@ namespace
 			{
 				if (variable->variableIndex >= graph.VariableCount())
 				{
-					return std::nullopt;
+					return reject("variable reference is out of range");
 				}
 				auto constantData = CopyF32TensorData(graph.GetVariable(variable->variableIndex)->Data(), output.shape);
 				if (!constantData)
 				{
-					return std::nullopt;
+					return reject("variable is not a static f32 tensor");
 				}
 				llvm::Value* ptr = nullptr;
 				if (useExternalRegions)
@@ -3014,7 +3018,7 @@ namespace
 				auto constantData = CopyF32TensorData(constant->value, output.shape);
 				if (!constantData)
 				{
-					return std::nullopt;
+					return reject("constant is not a static f32 tensor");
 				}
 				llvm::Value* ptr = nullptr;
 				if (useExternalRegions)
@@ -3045,7 +3049,7 @@ namespace
 			     fused->pattern != FusionPattern::MatMulBiasAddReLU) ||
 			    fused->args.size() < 3)
 			{
-				return std::nullopt;
+				return reject("encountered a non MatMulBiasAdd/ReLU fused node");
 			}
 			auto lhs = requireValue(fused->args[0]);
 			auto rhs = requireValue(fused->args[1]);
@@ -3057,7 +3061,7 @@ namespace
 			    output.shape[1] != rhs->shape[1] ||
 			    !IsSameRankBroadcastCompatibleShape(output.shape, bias->shape, output.shape))
 			{
-				return std::nullopt;
+				return reject("fused layer dtype/shape/bias contract is unsupported");
 			}
 
 			llvm::Value* outPtr = nullptr;
@@ -3077,7 +3081,7 @@ namespace
 			const auto layerFlops = SaturatedMulU64(SaturatedMulU64(SaturatedMulU64(m, k), n), 2);
 			if (!forceSidecarShapeGate && m > 256)
 			{
-				return std::nullopt;
+				return reject("m>256 keeps packed MLIR fallback");
 			}
 			const auto layerThreadCount = (forceSidecarShapeGate || ShouldUseCPUSidecarLinearLayer(m, k, n, layerFlops))
 			                                  ? static_cast<std::uint64_t>(threadCount)
@@ -3097,7 +3101,19 @@ namespace
 		if (fusedLayerCount == 0 || !hasParallelEligibleLayer || !values[finalResult.node] ||
 		    totalFlops < options.cpuAOTParallelMinFlops)
 		{
-			return std::nullopt;
+			if (fusedLayerCount == 0)
+			{
+				return reject("no fused MatMulBiasAdd/ReLU layers");
+			}
+			if (!hasParallelEligibleLayer)
+			{
+				return reject("no layer selected more than one helper thread");
+			}
+			if (!values[finalResult.node])
+			{
+				return reject("final result was not materialized by the chain");
+			}
+			return reject("total_flops below cpuAOTParallelMinFlops");
 		}
 		for (auto it = heapAllocations.rbegin(); it != heapAllocations.rend(); ++it)
 		{
@@ -3107,6 +3123,9 @@ namespace
 
 		const auto inputSpecs = BuildInputSpecs(graph);
 		const auto outputSpecs = BuildOutputSpecs(graph);
+		LogCompileDiagnostic(options, std::format("cpu-parallel linear-chain selected: fused_layers={} total_flops={} "
+		                                          "threads={}",
+		                                          fusedLayerCount, totalFlops, threadCount));
 		auto config = CreateNativeTargetMachine();
 		ConfigureForNativeObject(*module, config);
 		OptimizeLLVMModule(*module, *config.targetMachine, options.cpuAOTLLVMOptLevel);
