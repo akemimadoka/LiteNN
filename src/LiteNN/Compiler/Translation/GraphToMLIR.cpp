@@ -142,16 +142,21 @@ namespace litenn
 				throw std::runtime_error("MLIR translation requires host-backed executable plan variables");
 			}
 			const auto byteSize = storage.type.ByteSize().value_or(0);
-			if (storage.storageOffsetBytes > storage.region.byteSize ||
-			    byteSize > storage.region.byteSize - storage.storageOffsetBytes)
+			const auto sourceOffset = storage.region.byteOffset + storage.storageOffsetBytes;
+			if (sourceOffset > storage.region.byteSize || byteSize > storage.region.byteSize - sourceOffset)
 			{
 				throw std::runtime_error(
 				    "MLIR translation executable plan variable storage is smaller than tensor type");
 			}
 			Tensor<CPU> data(Uninitialized, storage.type.StaticShape(), storage.type.dtype);
-			std::memcpy(data.UnsafeRawData(),
-			            static_cast<const std::byte*>(storage.region.data) + storage.storageOffsetBytes, byteSize);
+			std::memcpy(data.UnsafeRawData(), static_cast<const std::byte*>(storage.region.data) + sourceOffset,
+			            byteSize);
 			return data.CopyToDevice(PolymorphicDevice{ CPU{} });
+		}
+
+		bool IsPromotedConstantVariableName(std::string_view name)
+		{
+			return name.starts_with("constant.");
 		}
 
 		// Extract tensor data to DenseElementsAttr
@@ -279,6 +284,11 @@ namespace litenn
 		private:
 			void emitVariable(std::size_t varIndex)
 			{
+				if (varIndex < plan_.variableNames.size() &&
+				    IsPromotedConstantVariableName(plan_.variableNames[varIndex]))
+				{
+					return;
+				}
 				const auto& variable = plan_.variables[varIndex];
 				auto tensorType = convertTensorType(ctx_, variable.type);
 				auto initialValue = convertTensorToAttr(ctx_, MakeHostTensorValue(variable));
@@ -1005,6 +1015,14 @@ namespace litenn
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
+				if (node.variableIndex < plan_.variableNames.size() &&
+				    IsPromotedConstantVariableName(plan_.variableNames[node.variableIndex]))
+				{
+					auto attr = convertTensorToAttr(ctx_, MakeHostTensorValue(plan_.variables[node.variableIndex]));
+					auto op = builder_.create<ConstantOp>(builder_.getUnknownLoc(), attr.getType(), attr);
+					valueMap[nodeId] = { op.getResult() };
+					return;
+				}
 				auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
 				auto name = "var_" + std::to_string(node.variableIndex);
 				auto op = builder_.create<GetVariableOp>(builder_.getUnknownLoc(), resultType,

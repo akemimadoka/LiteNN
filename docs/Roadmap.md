@@ -2692,10 +2692,14 @@ placement and fallback policy.
 - [x] Add a CPU AOT state-aware entry wrapper for runtime schedules: `Compiler<CPU>::CompileArtifact(RuntimeSchedule)`
       now exposes only public outputs in artifact metadata, while wrapper scratch buffers receive functional state outputs
       and copy them back into the aliased input state buffers after the compiled call.
-- [ ] Fix promoted-variable GGUF stateful schedule parity under CPU AOT external regions:
-      direct non-variable capacity schedules validate the state-aware wrapper, but full schedules produced by
-      `BuildLLaMADecodeRuntimeSchedule` still need a separate correctness pass for promoted constant/variable payload
-      handling before real GGUF stateful packages can rely on logits-only CPU AOT entries.
+- [x] Fix the promoted-constant subset of CPU AOT external-region lowering:
+      `constant.*` variables now lower through the same constant path as `ConstantNode` when they remain inline, and
+      generic CPU externalization keeps promoted constants below `CompilerOptions::cpuAOTExternalConstantMinBytes`
+      inside the MLIR module while still externalizing normal weights. `CompiledModuleTest` covers the mixed case.
+- [ ] Finish full promoted-variable GGUF stateful schedule parity:
+      direct capacity schedules validate the state-aware wrapper, but full schedules produced by
+      `BuildLLaMADecodeRuntimeSchedule` can still expose fixture-dependent NaN logits and need a separate correctness
+      pass before real GGUF stateful packages rely on logits-only CPU AOT entries.
 - [x] Add CUDA bridge/native stateful decode artifact examples and separated instruction/weight region commands:
       `example/gguf/build_stateful_artifacts.py` lowers a package with external weights, emits separated CPU and optional
       CUDA carrier objects, records the actual compiler backend, and supports `native-required`, `bridge-allowed`,

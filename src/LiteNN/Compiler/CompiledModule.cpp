@@ -2310,6 +2310,11 @@ namespace
 		return changed;
 	}
 
+	bool IsPromotedConstantVariableName(std::string_view name)
+	{
+		return name.starts_with("constant.");
+	}
+
 	std::vector<std::size_t> UnionExternalIds(std::span<const std::size_t> lhs, std::span<const std::size_t> rhs)
 	{
 		std::vector<std::size_t> result(lhs.begin(), lhs.end());
@@ -2560,8 +2565,22 @@ namespace
 		}
 		result.weights.reserve(static_cast<std::size_t>(projectedWeightBytes));
 		std::unordered_map<std::size_t, std::size_t> variableExternalIdMap;
+		std::vector<std::optional<std::size_t>> inlineVariableMap(graph.VariableCount());
 		std::vector<std::vector<std::optional<std::size_t>>> directExternalByNode(graph.SubgraphCount());
 		std::vector<std::vector<std::size_t>> externalDepsBySubgraph(graph.SubgraphCount());
+		const auto ensureInlineVariable = [&](std::size_t variableIndex) -> std::size_t {
+			if (variableIndex >= graph.VariableCount())
+			{
+				throw std::runtime_error("CPU MLIR externalization references an unknown inline variable");
+			}
+			if (!inlineVariableMap[variableIndex])
+			{
+				const auto newIndex = result.graph.AddVariable(graph.GetVariable(variableIndex));
+				result.graph.SetVariableName(newIndex, graph.VariableName(variableIndex));
+				inlineVariableMap[variableIndex] = newIndex;
+			}
+			return *inlineVariableMap[variableIndex];
+		};
 
 		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
 		{
@@ -2581,6 +2600,13 @@ namespace
 						return std::nullopt;
 					}
 					const auto output = entry.outputInfos[0];
+					const auto name = graph.VariableName(variable->variableIndex);
+					const auto byteSize = TensorByteSizeForShape(output.dtype, output.shape);
+					if (IsPromotedConstantVariableName(name) && byteSize < options.cpuAOTExternalConstantMinBytes)
+					{
+						ensureInlineVariable(variable->variableIndex);
+						continue;
+					}
 					auto [it, inserted] = variableExternalIdMap.emplace(variable->variableIndex, 0);
 					if (inserted)
 					{
@@ -2592,7 +2618,6 @@ namespace
 						{
 							return std::nullopt;
 						}
-						const auto name = graph.VariableName(variable->variableIndex);
 						it->second = result.externalTensorInfos.size();
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
 						    name, kWeightsRegionName, output.dtype, result.weights, output.shape, *offset,
@@ -2782,6 +2807,15 @@ namespace
 				}
 
 				auto remappedNode = RemapNodeInputs(entry.node, remapOutput);
+				if (auto* variable = std::get_if<VariableRefNode>(&remappedNode))
+				{
+					if (variable->variableIndex >= inlineVariableMap.size() ||
+					    !inlineVariableMap[variable->variableIndex])
+					{
+						return std::nullopt;
+					}
+					variable->variableIndex = *inlineVariableMap[variable->variableIndex];
+				}
 				if (auto* call = std::get_if<CallNode>(&remappedNode))
 				{
 					for (const auto externalId : externalDepsBySubgraph[call->callee])

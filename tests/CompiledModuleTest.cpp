@@ -166,6 +166,31 @@ namespace
 		return graph;
 	}
 
+	Graph BuildPromotedConstantExternalRegionGraph()
+	{
+		Graph graph;
+		const auto scaleIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.5, -0.5, 2.0, 0.25 }, { 2, 2 }, DataType::Float32)));
+		graph.SetVariableName(scaleIndex, "scale.weight");
+		const auto biasIndex =
+		    graph.AddVariable(Variable::Create(Tensor<CPU>({ 0.125, -0.25 }, { 1, 2 }, DataType::Float32)));
+		graph.SetVariableName(biasIndex, "constant.0.3");
+
+		Subgraph sg;
+		const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
+		const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto scaled = sg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { input, 0 }, { scale, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		const auto bias = sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, 2 } } });
+		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { scaled, 0 }, { bias, 0 } },
+		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		sg.SetResults({ { output, 0 } });
+		graph.SetForward(graph.AddSubgraph(std::move(sg)));
+		graph.SetInputNames({ "input" });
+		graph.SetOutputNames({ "output" });
+		return graph;
+	}
+
 	Graph BuildCallExternalRegionGraph()
 	{
 		Graph graph;
@@ -2846,6 +2871,33 @@ TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallConstantsInlineByDefault
 	ASSERT_EQ(inlineOutputs.size(), 1u);
 	ASSERT_EQ(externalOutputs.size(), 1u);
 	ExpectTensorNear(externalOutputs[0], inlineOutputs[0], 1e-5f);
+}
+
+TEST(CompiledModuleTest, CPUMlirExternalRegionsKeepSmallPromotedConstantsInlineByDefault)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+
+	auto graph = BuildPromotedConstantExternalRegionGraph();
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>({ 2.0, -4.0, 0.5, 8.0 }, { 2, 2 }, DataType::Float32),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected =
+	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), std::span<const Tensor<CPU>>(inputs));
+
+	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	auto separated = artifact.SeparateRodata();
+	const auto externalInfos = separated.ExternalTensorInfos();
+	ASSERT_EQ(externalInfos.size(), 1u);
+	EXPECT_EQ(externalInfos[0].name, "scale.weight");
+	EXPECT_EQ(externalInfos[0].region, "weights");
+	EXPECT_EQ(separated.Constants().size(), 0u);
+
+	auto loaded = artifact.Load();
+	const auto outputs = loaded.RunTensors(std::span<const Tensor<CPU>>(inputs));
+	ASSERT_EQ(outputs.size(), 1u);
+	ExpectTensorNear(outputs[0], expected[0], 1e-5f);
 }
 
 TEST(CompiledModuleTest, CPUMlirExternalRegionsPropagateThroughCallNode)
