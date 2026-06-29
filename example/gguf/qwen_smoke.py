@@ -73,7 +73,23 @@ def run_step(name: str, command: list[str], workdir: Path) -> dict[str, object]:
 
 def require_ok(step: dict[str, object]) -> None:
     if int(step["returncode"]) != 0:
-        raise SystemExit(f"step failed: {step['name']} (see {step['stderr']})")
+        stdout_path = Path(str(step["stdout"]))
+        stderr_path = Path(str(step["stderr"]))
+        stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
+        stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+        detail = stderr_text.strip() or stdout_text.strip()
+        if len(detail) > 2000:
+            detail = detail[:2000] + "\n... truncated ..."
+        message = (
+            f"step failed: {step['name']} returncode={step['returncode']}\n"
+            f"stdout: {stdout_path}\n"
+            f"stderr: {stderr_path}"
+        )
+        if detail:
+            message += f"\n\n{detail}"
+        else:
+            message += "\n\nNo stdout/stderr was captured; the process may have crashed or been terminated."
+        raise SystemExit(message)
 
 
 def build_parser() -> argparse.ArgumentParser:
