@@ -2697,6 +2697,7 @@ TEST(CompiledModuleTest, CPUExternalRegionDiagnosticsReportModuleStats)
 	EXPECT_NE(diagnostics.find("cpu-mlir after lower LiteNN dialect stats: ops="), std::string::npos);
 	EXPECT_NE(diagnostics.find("cpu-mlir after bufferize stats: ops="), std::string::npos);
 	EXPECT_NE(diagnostics.find("cpu-llvm after translate stats: funcs="), std::string::npos);
+	EXPECT_NE(diagnostics.find("cpu-llvm after translate top_function[0]: name="), std::string::npos);
 	EXPECT_NE(diagnostics.find("cpu-llvm after entry wrapper stats: funcs="), std::string::npos);
 	EXPECT_NE(diagnostics.find("cpu-aot object file bytes="), std::string::npos);
 }

@@ -2677,6 +2677,10 @@ placement and fallback policy.
             function/declaration/block/instruction/global counts after translation/wrapper/optimization, and emitted
             object bytes. This gives the next split-artifact/per-block compile pass hard evidence instead of relying only
             on coarse phase timers.
+            A real Qwen2.5-Coder-14B Q4_K_M stateful decode smoke showed about 3.76M lowered MLIR ops, 2.47M LLVM
+            instructions, 51 LLVM functions, and an 8.5MB object. The largest functions are repeated block functions
+            around 50.9k LLVM instructions each, so the next compile-time reduction should target reusable/per-block
+            decode artifacts or shared block functions rather than wrapper cleanup.
 - [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
       `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
       replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the

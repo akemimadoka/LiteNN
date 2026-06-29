@@ -181,6 +181,7 @@ namespace
 		std::size_t instructionCount{};
 		std::size_t globalVariableCount{};
 		std::size_t aliasCount{};
+		std::vector<std::pair<std::string, std::size_t>> largestFunctions;
 	};
 
 	LLVMModuleStats CollectLLVMModuleStats(const llvm::Module& module)
@@ -195,13 +196,22 @@ namespace
 			}
 			++stats.functionCount;
 			stats.basicBlockCount += function.size();
+			std::size_t functionInstructionCount = 0;
 			for (const auto& block : function)
 			{
 				stats.instructionCount += block.size();
+				functionInstructionCount += block.size();
 			}
+			stats.largestFunctions.emplace_back(function.getName().str(), functionInstructionCount);
 		}
 		stats.globalVariableCount = std::distance(module.global_begin(), module.global_end());
 		stats.aliasCount = std::distance(module.alias_begin(), module.alias_end());
+		std::ranges::sort(stats.largestFunctions,
+		                  [](const auto& lhs, const auto& rhs) { return lhs.second > rhs.second; });
+		if (stats.largestFunctions.size() > 5)
+		{
+			stats.largestFunctions.resize(5);
+		}
 		return stats;
 	}
 
@@ -227,6 +237,12 @@ namespace
 		                     std::format("{} stats: funcs={} decls={} blocks={} insts={} globals={} aliases={}", label,
 		                                 stats.functionCount, stats.declarationCount, stats.basicBlockCount,
 		                                 stats.instructionCount, stats.globalVariableCount, stats.aliasCount));
+		for (std::size_t i = 0; i < stats.largestFunctions.size(); ++i)
+		{
+			const auto& [name, instructions] = stats.largestFunctions[i];
+			LogCompileDiagnostic(options,
+			                     std::format("{} top_function[{}]: name={} insts={}", label, i, name, instructions));
+		}
 	}
 
 	thread_local const void* tCPUExternalConstants = nullptr;
