@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -56,16 +58,47 @@ def discover_litenn(explicit: Path | None) -> Path:
     raise SystemExit("litenn_gguf_convert executable was not found; pass --litenn")
 
 
-def run_step(name: str, command: list[str], workdir: Path) -> dict[str, object]:
-    completed = subprocess.run(command, text=True, capture_output=True)
+def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] | None = None) -> dict[str, object]:
     stdout = workdir / f"{name}.stdout.txt"
     stderr = workdir / f"{name}.stderr.txt"
-    stdout.write_text(completed.stdout, encoding="utf-8")
-    stderr.write_text(completed.stderr, encoding="utf-8")
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def pump(stream, sink: list[str], mirror) -> None:
+        try:
+            for line in stream:
+                sink.append(line)
+                encoding = mirror.encoding or "utf-8"
+                mirror.write(line.encode(encoding, errors="replace").decode(encoding, errors="replace"))
+                mirror.flush()
+        finally:
+            stream.close()
+
+    process = subprocess.Popen(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=env,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_thread = threading.Thread(target=pump, args=(process.stdout, stdout_chunks, sys.stdout), daemon=True)
+    stderr_thread = threading.Thread(target=pump, args=(process.stderr, stderr_chunks, sys.stderr), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+    stdout.write_text("".join(stdout_chunks), encoding="utf-8")
+    stderr.write_text("".join(stderr_chunks), encoding="utf-8")
     return {
         "name": name,
         "command": command,
-        "returncode": completed.returncode,
+        "returncode": returncode,
         "stdout": str(stdout),
         "stderr": str(stderr),
     }
@@ -118,6 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sample", choices=("greedy", "random"), default="greedy")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--llvm-opt-level",
+        type=int,
+        default=0,
+        choices=(0, 1, 2, 3),
+        help="CPU AOT LLVM optimization level for LiteNN decode smoke; default keeps first-run latency lower",
+    )
+    parser.add_argument(
+        "--no-compile-diagnostics",
+        action="store_true",
+        help="Suppress LiteNN decode compile/run progress diagnostics",
+    )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -172,6 +217,10 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
     litenn = discover_litenn(args.litenn)
     steps: list[dict[str, object]] = []
+    litenn_decode_env = os.environ.copy()
+    litenn_decode_env["LITENN_CPU_AOT_LLVM_OPT_LEVEL"] = str(args.llvm_opt_level)
+    if not args.no_compile_diagnostics:
+        litenn_decode_env["LITENN_COMPILE_DIAGNOSTICS"] = "1"
 
     analyze = run_step("analyze", [str(litenn), "--analyze-llm", str(args.model), args.profile], workdir)
     steps.append(analyze)
@@ -276,7 +325,7 @@ def main() -> int:
         ]
         if args.decode_logits_reference is not None or args.llamacpp_decode_golden_tool is not None:
             replay_cmd.append("--capture-decode-logits")
-        replay = run_step("litenn_replay_from_golden", replay_cmd, workdir)
+        replay = run_step("litenn_replay_from_golden", replay_cmd, workdir, env=litenn_decode_env)
         steps.append(replay)
         require_ok(replay)
 
@@ -366,6 +415,7 @@ def main() -> int:
                 str(args.seed),
             ],
             workdir,
+            env=litenn_decode_env,
         )
         steps.append(decode)
         require_ok(decode)

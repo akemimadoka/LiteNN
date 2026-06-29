@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -689,6 +690,36 @@ namespace
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 	LiteNN::CompilerOptions CompilerOptionsFromEnvironment();
+
+	void LogGGUFDiagnostic(bool enabled, std::string_view message)
+	{
+		if (enabled)
+		{
+			std::cerr << "[LiteNN gguf] " << message << '\n' << std::flush;
+		}
+	}
+
+	template <class F>
+	decltype(auto) TimedGGUFDiagnostic(bool enabled, std::string_view label, F&& f)
+	{
+		LogGGUFDiagnostic(enabled, std::format("{}...", label));
+		const auto start = std::chrono::steady_clock::now();
+		if constexpr (std::is_void_v<std::invoke_result_t<F>>)
+		{
+			std::forward<F>(f)();
+			const auto end = std::chrono::steady_clock::now();
+			LogGGUFDiagnostic(enabled, std::format("{}: ok {:.3f} ms", label,
+			                                       std::chrono::duration<double, std::milli>(end - start).count()));
+		}
+		else
+		{
+			auto result = std::forward<F>(f)();
+			const auto end = std::chrono::steady_clock::now();
+			LogGGUFDiagnostic(enabled, std::format("{}: ok {:.3f} ms", label,
+			                                       std::chrono::duration<double, std::milli>(end - start).count()));
+			return result;
+		}
+	}
 #endif
 
 	void RunDecodeLoopFromGGUF(const DecodeLoopCommandOptions& options)
@@ -702,12 +733,20 @@ namespace
 		{
 			throw std::runtime_error("decode-loop steps must be positive");
 		}
-		const auto imported = LiteNN::GGUF::ImportGGUFArchive(options.inputPath);
+		auto compilerOptions = CompilerOptionsFromEnvironment();
+		compilerOptions.enableCPUAOTExternalRegions = true;
+		const auto diagnostics = compilerOptions.enableCompileDiagnostics;
+		LogGGUFDiagnostic(diagnostics, std::format("decode-loop start input={} requested_steps={}", options.inputPath,
+		                                           options.steps));
+		const auto imported = TimedGGUFDiagnostic(diagnostics, "gguf import archive",
+		                                          [&] { return LiteNN::GGUF::ImportGGUFArchive(options.inputPath); });
 		auto initialTokenIds = options.initialTokenIds;
 		if (options.exactPrompt)
 		{
-			initialTokenIds = TokenizePrompt(options.inputPath, *options.exactPrompt, imported.model.UnsafeGraphView(),
-			                                 options.applyChatTemplate);
+			initialTokenIds = TimedGGUFDiagnostic(diagnostics, "gguf tokenize exact prompt", [&] {
+				return TokenizePrompt(options.inputPath, *options.exactPrompt, imported.model.UnsafeGraphView(),
+				                      options.applyChatTemplate);
+			});
 		}
 		if (initialTokenIds.empty())
 		{
@@ -721,14 +760,23 @@ namespace
 			throw std::runtime_error(std::format("decode-loop requested {} total tokens but model context length is {}",
 			                                     requestedTokenCount, hyperparameters.contextLength));
 		}
+		LogGGUFDiagnostic(diagnostics,
+		                  std::format("decode-loop tokens prompt={} generated_request={} max_cache_length={}",
+		                              initialTokenIds.size(), options.steps, requestedTokenCount));
 		const auto maxRunCount = requestedTokenCount - 1;
 		const auto buildStart = std::chrono::steady_clock::now();
-		auto graph = LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(
-		    imported.model.UnsafeGraphView(), requestedTokenCount, { .preserveQuantizedWeights = true });
-		auto decodePlan = LiteNN::Detail::BuildExecutablePlanFromGraph(graph);
-		auto compilerOptions = CompilerOptionsFromEnvironment();
-		compilerOptions.enableCPUAOTExternalRegions = true;
-		auto decodeModule = LiteNN::Compiler<LiteNN::CPU>::Compile(decodePlan, compilerOptions);
+		auto graph = TimedGGUFDiagnostic(diagnostics, "gguf lower decode-capacity graph", [&] {
+			return LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(imported.model.UnsafeGraphView(), requestedTokenCount,
+			                                                      { .preserveQuantizedWeights = true });
+		});
+		auto decodePlan = TimedGGUFDiagnostic(diagnostics, "gguf build executable plan",
+		                                      [&] { return LiteNN::Detail::BuildExecutablePlanFromGraph(graph); });
+		LogGGUFDiagnostic(diagnostics,
+		                  std::format("decode-plan inputs={} outputs={} variables={}", decodePlan.inputs.size(),
+		                              decodePlan.outputs.size(), decodePlan.variables.size()));
+		auto decodeModule = TimedGGUFDiagnostic(diagnostics, "gguf compile cpu aot decode module", [&] {
+			return LiteNN::Compiler<LiteNN::CPU>::Compile(decodePlan, compilerOptions);
+		});
 		const auto buildEnd = std::chrono::steady_clock::now();
 
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
@@ -748,8 +796,10 @@ namespace
 		}
 
 		const auto runStart = std::chrono::steady_clock::now();
+		LogGGUFDiagnostic(diagnostics, std::format("decode-loop run max_steps={}", maxRunCount));
 		for (std::size_t step = 0; step < maxRunCount; ++step)
 		{
+			LogGGUFDiagnostic(diagnostics, std::format("decode step {} begin position={}", step + 1, step));
 			const auto stepStart = std::chrono::steady_clock::now();
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 			inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
@@ -820,6 +870,7 @@ namespace
 			}
 			const auto stepEnd = std::chrono::steady_clock::now();
 			stepTimesMs.push_back(std::chrono::duration<double, std::milli>(stepEnd - stepStart).count());
+			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
 			{
 				break;

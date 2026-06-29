@@ -268,9 +268,15 @@ python311 example\gguf\qwen_smoke.py `
   --model model.gguf --prompt "hello" `
   --llamacpp-tokenizer-tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
   --apply-chat-template `
-  --steps 8 --output build\qwen_smoke\tokens.txt `
+  --steps 1 --output build\qwen_smoke\tokens.txt `
   --text-output build\qwen_smoke\generated.txt
 ```
+
+The smoke driver defaults LiteNN decode to `LITENN_COMPILE_DIAGNOSTICS=1` and
+`LITENN_CPU_AOT_LLVM_OPT_LEVEL=0`, because large GGUF first-run CPU AOT
+compilation is still measured in minutes. Increase `--steps` after the first
+single-token run succeeds; use `--llvm-opt-level 3` only when benchmarking
+steady-state optimized CPU AOT behavior.
 
 Compare generated text after replay:
 
