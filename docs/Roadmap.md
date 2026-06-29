@@ -2667,6 +2667,11 @@ placement and fallback policy.
       - [x] Remove the CPU AOT runtime-schedule wrapper's projected-output scratch buffers for state aliases:
             projected state outputs now write directly to the aliased input buffers, avoiding stack allocation of large
             KV-cache tensors and unblocking further stateful/logits-only decode experiments on large LLM cache shapes.
+      - [x] Expose the logits-only runtime-schedule decode path in the GGUF CLI with an explicit `--stateful` switch
+            and separate AOT cache keys. A real Qwen2.5-Coder-14B Q4_K_M single-generated-token smoke completed through
+            this path with `decode_mode=stateful`, `fallback_count=0`, generated token `Hello`, and no stack overflow;
+            build time was still about 170s and run time about 4.1s for the full prompt replay plus one generated token,
+            so this validates state alias execution but does not yet solve first-run interactivity.
 - [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
       `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
       replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the

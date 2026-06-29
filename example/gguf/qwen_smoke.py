@@ -168,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional LiteNN GGUF decode AOT artifact cache directory; disabled by default until large-object cache cost is reduced",
     )
+    parser.add_argument(
+        "--stateful",
+        action="store_true",
+        help="Run LiteNN direct token-id decode through the runtime-schedule stateful/logits-only AOT path",
+    )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -406,21 +411,24 @@ def main() -> int:
         decode_output = args.output if args.output is not None else workdir / "litenn_decode_tokens.txt"
         resolved_token_output = decode_output
         decode_output.parent.mkdir(parents=True, exist_ok=True)
+        decode_cmd = [
+            str(litenn),
+            "--run-llama-decode-loop-token-ids",
+            str(args.model),
+            token_ids,
+            str(args.steps),
+            "--output",
+            str(decode_output),
+            "--sample",
+            args.sample,
+            "--seed",
+            str(args.seed),
+        ]
+        if args.stateful:
+            decode_cmd.append("--stateful")
         decode = run_step(
             "litenn_decode_token_ids",
-            [
-                str(litenn),
-                "--run-llama-decode-loop-token-ids",
-                str(args.model),
-                token_ids,
-                str(args.steps),
-                "--output",
-                str(decode_output),
-                "--sample",
-                args.sample,
-                "--seed",
-                str(args.seed),
-            ],
+            decode_cmd,
             workdir,
             env=litenn_decode_env,
         )
@@ -462,6 +470,7 @@ def main() -> int:
         "schema": "litenn.gguf_qwen_smoke.v2",
         "model": str(args.model),
         "backend_policy": args.backend_policy,
+        "decode_mode": "stateful" if args.stateful else "functional",
         "fallback_used": False,
         "production_candidate": args.backend_policy == "cuda-native",
         "workdir": str(workdir),
