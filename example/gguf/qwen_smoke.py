@@ -163,6 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress LiteNN decode compile/run progress diagnostics",
     )
+    parser.add_argument(
+        "--aot-cache-dir",
+        type=Path,
+        help="Optional LiteNN GGUF decode AOT artifact cache directory; disabled by default until large-object cache cost is reduced",
+    )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -219,6 +224,8 @@ def main() -> int:
     steps: list[dict[str, object]] = []
     litenn_decode_env = os.environ.copy()
     litenn_decode_env["LITENN_CPU_AOT_LLVM_OPT_LEVEL"] = str(args.llvm_opt_level)
+    if args.aot_cache_dir is not None:
+        litenn_decode_env["LITENN_GGUF_AOT_CACHE_DIR"] = str(args.aot_cache_dir)
     if not args.no_compile_diagnostics:
         litenn_decode_env["LITENN_COMPILE_DIAGNOSTICS"] = "1"
 

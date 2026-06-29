@@ -720,6 +720,131 @@ namespace
 			return result;
 		}
 	}
+
+	std::vector<std::byte> ReadBinaryFile(const std::filesystem::path& path)
+	{
+		std::ifstream input(path, std::ios::binary);
+		if (!input)
+		{
+			throw std::runtime_error("failed to open cached artifact file: " + path.string());
+		}
+		input.seekg(0, std::ios::end);
+		const auto size = input.tellg();
+		if (size < 0)
+		{
+			throw std::runtime_error("failed to size cached artifact file: " + path.string());
+		}
+		input.seekg(0, std::ios::beg);
+		std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+		input.read(reinterpret_cast<char*>(bytes.data()), size);
+		if (!input && input.gcount() != size)
+		{
+			throw std::runtime_error("failed to read cached artifact file: " + path.string());
+		}
+		return bytes;
+	}
+
+	void WriteBinaryFile(const std::filesystem::path& path, std::span<const std::byte> bytes)
+	{
+		std::ofstream output(path, std::ios::binary);
+		if (!output)
+		{
+			throw std::runtime_error("failed to open cached artifact file for write: " + path.string());
+		}
+		output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		if (!output)
+		{
+			throw std::runtime_error("failed to write cached artifact file: " + path.string());
+		}
+	}
+
+	std::uint64_t FNV1a(std::string_view text)
+	{
+		std::uint64_t hash = 14695981039346656037ull;
+		for (const unsigned char ch : text)
+		{
+			hash ^= ch;
+			hash *= 1099511628211ull;
+		}
+		return hash;
+	}
+
+	std::optional<std::filesystem::path> DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
+	                                                        const LiteNN::CompilerOptions& options)
+	{
+		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
+		if (root == nullptr || std::string_view(root).empty())
+		{
+			return std::nullopt;
+		}
+		const std::filesystem::path model(modelPath);
+		std::error_code ec;
+		const auto modelSize = std::filesystem::file_size(model, ec);
+		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
+		const auto keyText =
+		    std::format("gguf-decode-functional-v2|{}|{}|{}|tokens={}|opt={}|external={}",
+		                std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
+		                options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0);
+		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
+	}
+
+	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan,
+	                                                              const LiteNN::CompilerOptions& options,
+	                                                              const std::optional<std::filesystem::path>& cachePath,
+	                                                              bool diagnostics)
+	{
+		if (cachePath)
+		{
+			const auto metadata = *cachePath / "metadata.bin";
+			const auto constants = *cachePath / "constants.bin";
+			const auto weights = *cachePath / "weights.bin";
+			const auto instructions = *cachePath / "instructions.bin";
+			const auto complete = *cachePath / "complete";
+			if (std::filesystem::exists(metadata) && std::filesystem::exists(constants) &&
+			    std::filesystem::exists(weights) && std::filesystem::exists(instructions) &&
+			    std::filesystem::exists(complete))
+			{
+				try
+				{
+					auto artifact = LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
+					    ReadBinaryFile(metadata), ReadBinaryFile(constants), ReadBinaryFile(weights),
+					    ReadBinaryFile(instructions));
+					LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
+					return artifact.Load();
+				}
+				catch (const std::exception& ex)
+				{
+					LogGGUFDiagnostic(diagnostics,
+					                  std::format("gguf decode aot cache: ignored invalid cache ({})", ex.what()));
+				}
+			}
+			else
+			{
+				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
+			}
+		}
+
+		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
+		if (cachePath)
+		{
+			try
+			{
+				std::filesystem::create_directories(*cachePath);
+				auto separated = artifact.SeparateRodata();
+				WriteBinaryFile(*cachePath / "metadata.bin", separated.Metadata());
+				WriteBinaryFile(*cachePath / "constants.bin", separated.Constants());
+				WriteBinaryFile(*cachePath / "weights.bin", separated.Weights());
+				WriteBinaryFile(*cachePath / "instructions.bin", separated.Instructions());
+				WriteBinaryFile(*cachePath / "complete", std::span<const std::byte>{});
+				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: wrote {}", cachePath->string()));
+			}
+			catch (const std::exception& ex)
+			{
+				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: write failed ({})", ex.what()));
+			}
+		}
+		return std::move(artifact).Load();
+	}
 #endif
 
 	void RunDecodeLoopFromGGUF(const DecodeLoopCommandOptions& options)
@@ -774,8 +899,9 @@ namespace
 		LogGGUFDiagnostic(diagnostics,
 		                  std::format("decode-plan inputs={} outputs={} variables={}", decodePlan.inputs.size(),
 		                              decodePlan.outputs.size(), decodePlan.variables.size()));
-		auto decodeModule = TimedGGUFDiagnostic(diagnostics, "gguf compile cpu aot decode module", [&] {
-			return LiteNN::Compiler<LiteNN::CPU>::Compile(decodePlan, compilerOptions);
+		const auto cachePath = DecodeAOTCachePath(options.inputPath, requestedTokenCount, compilerOptions);
+		auto decodeModule = TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot decode module", [&] {
+			return LoadOrCompileDecodeModule(decodePlan, compilerOptions, cachePath, diagnostics);
 		});
 		const auto buildEnd = std::chrono::steady_clock::now();
 

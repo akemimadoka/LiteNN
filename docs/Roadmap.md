@@ -2657,6 +2657,13 @@ placement and fallback policy.
       and control-flow lowering smaller. A real Qwen2.5-Coder-14B Q4_K_M single-token CPU AOT O0 smoke completed with
       fallback_count=0; the remaining bottleneck is runtime throughput and optimized-object emission, not an Interpreter
       fallback.
+- [ ] High priority: make real 14B GGUF first-token latency interactive instead of compile-bound:
+      the current CPU AOT path still spends minutes in LLVM lowering/object emission for the first decode artifact.
+      `litenn_gguf_convert` has an opt-in `LITENN_GGUF_AOT_CACHE_DIR` separated-artifact cache, but first-run cache
+      population is not yet suitable as a default because the instruction object is large. Preferred next cuts are
+      per-block/per-layer reusable decode artifacts, a persistent package-level compile cache that borrows GGUF weight
+      regions instead of rewriting them, and routing the user-facing smoke path to CUDA native once full decode evidence
+      is available.
 - [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
       `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
       replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the

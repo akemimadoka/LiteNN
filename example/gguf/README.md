@@ -277,6 +277,10 @@ The smoke driver defaults LiteNN decode to `LITENN_COMPILE_DIAGNOSTICS=1` and
 compilation is still measured in minutes. Increase `--steps` after the first
 single-token run succeeds; use `--llvm-opt-level 3` only when benchmarking
 steady-state optimized CPU AOT behavior.
+An experimental separated-artifact cache can be enabled with
+`--aot-cache-dir build\qwen_smoke\aot_cache`, but it is intentionally opt-in:
+the current 14B CPU AOT instruction object is large enough that first-run cache
+population is not yet a good default user experience.
 
 Compare generated text after replay:
 
