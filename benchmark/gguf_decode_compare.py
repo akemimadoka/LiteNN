@@ -19,6 +19,8 @@ FALLBACK_RE = re.compile(r"\bfallback=(?P<value>true|false)\b")
 FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
 MS_PER_GENERATED_TOKEN_RE = re.compile(r"\bms_per_generated_token=(?P<value>[0-9.eE+-]+)\b")
 GENERATED_TOKENS_PER_SECOND_RE = re.compile(r"\bgenerated_tokens_per_second=(?P<value>[0-9.eE+-]+)\b")
+PROMPT_REPLAY_MS_RE = re.compile(r"\bprompt_replay_ms=(?P<value>[0-9.eE+-]+)\b")
+GENERATION_MS_RE = re.compile(r"\bgeneration_ms=(?P<value>[0-9.eE+-]+)\b")
 
 
 def load_json(path: Path) -> object:
@@ -65,6 +67,8 @@ def litenn_row(path: Path) -> dict[str, object]:
     fallback_count_match = FALLBACK_COUNT_RE.search(stdout_text)
     ms_per_token_match = MS_PER_GENERATED_TOKEN_RE.search(stdout_text)
     tokens_per_second_match = GENERATED_TOKENS_PER_SECOND_RE.search(stdout_text)
+    prompt_replay_ms_match = PROMPT_REPLAY_MS_RE.search(stdout_text)
+    generation_ms_match = GENERATION_MS_RE.search(stdout_text)
     tokens_per_second = (
         float(tokens_per_second_match.group("value"))
         if tokens_per_second_match is not None
@@ -83,6 +87,8 @@ def litenn_row(path: Path) -> dict[str, object]:
         ),
         "tokens": token_count,
         "totalMs": run_ms,
+        "promptReplayMs": float(prompt_replay_ms_match.group("value")) if prompt_replay_ms_match is not None else None,
+        "generationMs": float(generation_ms_match.group("value")) if generation_ms_match is not None else None,
         "msPerToken": ms_per_token,
         "tokensPerSecond": tokens_per_second,
         "fallbackUsed": fallback_match.group("value") == "true" if fallback_match is not None else report.get("fallback_used"),
@@ -110,6 +116,8 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "decodeMode": entry.get("test", "decode"),
                 "tokens": int(entry["n_gen"]),
                 "totalMs": int(entry["n_gen"]) * 1000.0 / tokens_per_second,
+                "promptReplayMs": None,
+                "generationMs": int(entry["n_gen"]) * 1000.0 / tokens_per_second,
                 "msPerToken": 1000.0 / tokens_per_second,
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": False,
@@ -139,6 +147,8 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "decodeMode": str(entry.get("decodeMode", entry.get("mode", "decode"))),
                 "tokens": entry.get("tokens"),
                 "totalMs": entry.get("totalMs"),
+                "promptReplayMs": entry.get("promptReplayMs"),
+                "generationMs": entry.get("generationMs"),
                 "msPerToken": 1000.0 / tokens_per_second,
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": entry.get("fallbackUsed", False),
