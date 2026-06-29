@@ -3526,7 +3526,6 @@ namespace
 		}
 
 		std::vector<llvm::Value*> outputDescriptors;
-		std::vector<std::pair<std::size_t, llvm::Value*>> projectedScratchOutputs;
 		outputDescriptors.reserve(outputs.size());
 		for (std::size_t i = 0; i < outputs.size(); ++i)
 		{
@@ -3535,8 +3534,8 @@ namespace
 			{
 				if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, i))
 				{
-					(void) publicSlot;
-					outputData = CreateOutputScratch(builder, outputs[i]);
+					auto* outputSlot = builder.CreateGEP(ptrTy, outputArray, builder.getInt64(*publicSlot));
+					outputData = builder.CreateLoad(ptrTy, outputSlot);
 				}
 				else if (const auto* alias = FindStateOutputAlias(*outputProjection, i))
 				{
@@ -3544,7 +3543,12 @@ namespace
 					{
 						throw std::runtime_error("Compiled subgraph output projection references an unknown input");
 					}
-					outputData = CreateOutputScratch(builder, outputs[i]);
+					if (inputs[alias->inputIndex].type != outputs[i].type)
+					{
+						throw std::runtime_error("Compiled subgraph state-output projection type mismatch");
+					}
+					auto* inputSlot = builder.CreateGEP(ptrTy, inputArray, builder.getInt64(alias->inputIndex));
+					outputData = builder.CreateLoad(ptrTy, inputSlot);
 				}
 				else
 				{
@@ -3557,10 +3561,6 @@ namespace
 				outputData = builder.CreateLoad(ptrTy, outputSlot);
 			}
 			auto* descriptor = BuildMemRefDescriptor(builder, outputData, outputs[i]);
-			if (outputProjection)
-			{
-				projectedScratchOutputs.push_back({ i, descriptor });
-			}
 			outputDescriptors.push_back(descriptor);
 		}
 		for (auto* descriptor : outputDescriptors)
@@ -3648,23 +3648,6 @@ namespace
 
 		if (retTy->isVoidTy())
 		{
-			for (const auto& [functionalOutputIndex, descriptor] : projectedScratchOutputs)
-			{
-				if (const auto publicSlot = FindPublicOutputSlot(*outputProjection, functionalOutputIndex))
-				{
-					CopyDescriptorToOutput(builder, descriptor, outputArray, *publicSlot,
-					                       outputs[functionalOutputIndex]);
-				}
-				else if (const auto* alias = FindStateOutputAlias(*outputProjection, functionalOutputIndex))
-				{
-					CopyDescriptorToArraySlot(builder, descriptor, inputArray, alias->inputIndex,
-					                          outputs[functionalOutputIndex]);
-				}
-				else
-				{
-					throw std::runtime_error("Compiled subgraph scratch output lost its projection");
-				}
-			}
 			builder.CreateRetVoid();
 			return;
 		}

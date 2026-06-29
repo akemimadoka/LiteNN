@@ -2664,6 +2664,9 @@ placement and fallback policy.
       per-block/per-layer reusable decode artifacts, a persistent package-level compile cache that borrows GGUF weight
       regions instead of rewriting them, and routing the user-facing smoke path to CUDA native once full decode evidence
       is available.
+      - [x] Remove the CPU AOT runtime-schedule wrapper's projected-output scratch buffers for state aliases:
+            projected state outputs now write directly to the aliased input buffers, avoiding stack allocation of large
+            KV-cache tensors and unblocking further stateful/logits-only decode experiments on large LLM cache shapes.
 - [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
       `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
       replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the
