@@ -2710,6 +2710,9 @@ placement and fallback policy.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.
+      Decode-loop CLI output now also separates prompt replay from generation steps; `ms_per_generated_token` and
+      `generated_tokens_per_second` are based on generation-step time, while `run_ms` remains the end-to-end replay/run
+      wall time.
 - [x] Add a CPU stateful decode artifact path: `--lower-llama-decode-stateful` emits a vNext package plus external
       weights, and tests load that package, compile CPU AOT, execute it, and compare against Interpreter output.
 - [x] Add a CPU AOT state-aware entry wrapper for runtime schedules: `Compiler<CPU>::CompileArtifact(RuntimeSchedule)`

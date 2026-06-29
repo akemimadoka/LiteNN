@@ -1025,6 +1025,10 @@ namespace
 		bool stoppedOnEos = false;
 		std::vector<double> stepTimesMs;
 		stepTimesMs.reserve(maxRunCount);
+		std::size_t promptReplayStepCount = 0;
+		std::size_t generationStepCount = 0;
+		double promptReplayMs = 0.0;
+		double generationMs = 0.0;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulInputs;
 		if (options.statefulDecode)
 		{
@@ -1041,6 +1045,7 @@ namespace
 		{
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} begin position={}", step + 1, step));
 			const auto stepStart = std::chrono::steady_clock::now();
+			const bool isPromptReplayStep = step + 1 < initialTokenIds.size();
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
 			if (options.statefulDecode)
 			{
@@ -1094,7 +1099,7 @@ namespace
 			{
 				WriteLastTokenLogitsText(outputs.front(), *options.logitsOutputPath);
 			}
-			if (step + 1 < initialTokenIds.size())
+			if (isPromptReplayStep)
 			{
 				currentToken = initialTokenIds[step + 1];
 			}
@@ -1120,7 +1125,18 @@ namespace
 				}
 			}
 			const auto stepEnd = std::chrono::steady_clock::now();
-			stepTimesMs.push_back(std::chrono::duration<double, std::milli>(stepEnd - stepStart).count());
+			const auto stepMs = std::chrono::duration<double, std::milli>(stepEnd - stepStart).count();
+			stepTimesMs.push_back(stepMs);
+			if (isPromptReplayStep)
+			{
+				++promptReplayStepCount;
+				promptReplayMs += stepMs;
+			}
+			else
+			{
+				++generationStepCount;
+				generationMs += stepMs;
+			}
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
 			{
@@ -1141,8 +1157,10 @@ namespace
 		const auto [stepMsMinIt, stepMsMaxIt] = std::ranges::minmax_element(stepTimesMs);
 		const auto stepMsMin = stepTimesMs.empty() ? 0.0 : *stepMsMinIt;
 		const auto stepMsMax = stepTimesMs.empty() ? 0.0 : *stepMsMaxIt;
-		const auto msPerToken = generatedTokenCount == 0 ? 0.0 : runMs / static_cast<double>(generatedTokenCount);
-		const auto tokensPerSecond = runMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / runMs;
+		const auto msPerToken =
+		    generatedTokenCount == 0 ? 0.0 : generationMs / static_cast<double>(generatedTokenCount);
+		const auto tokensPerSecond =
+		    generationMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / generationMs;
 
 		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
 		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
@@ -1152,6 +1170,8 @@ namespace
 		          << " fallback_count=0 fallback=false cached_modules=1 executed_steps=" << executedSteps
 		          << " build_ms=" << buildMs << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg
 		          << " step_ms_min=" << stepMsMin << " step_ms_max=" << stepMsMax
+		          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
+		          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
 		          << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
 		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
@@ -1180,7 +1200,9 @@ namespace
 			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
 			       << " backend=cpu_aot decode_mode=" << decodeMode
 			       << " fallback_count=0 executed_steps=" << executedSteps << " run_ms=" << runMs
-			       << " step_ms_avg=" << stepMsAvg << " ms_per_generated_token=" << msPerToken
+			       << " step_ms_avg=" << stepMsAvg << " prompt_replay_steps=" << promptReplayStepCount
+			       << " prompt_replay_ms=" << promptReplayMs << " generation_steps=" << generationStepCount
+			       << " generation_ms=" << generationMs << " ms_per_generated_token=" << msPerToken
 			       << " generated_tokens_per_second=" << tokensPerSecond << '\n';
 			if (!output)
 			{
