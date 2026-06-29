@@ -14,6 +14,7 @@ from pathlib import Path
 RUN_MS_RE = re.compile(r"\brun_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATED_TOKENS_RE = re.compile(r"\bgenerated_tokens=(?P<value>\d+)\b")
 BACKEND_RE = re.compile(r"\bbackend=(?P<value>[A-Za-z0-9_.-]+)\b")
+DECODE_MODE_RE = re.compile(r"\bdecode_mode=(?P<value>[A-Za-z0-9_.-]+)\b")
 FALLBACK_RE = re.compile(r"\bfallback=(?P<value>true|false)\b")
 FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
 MS_PER_GENERATED_TOKEN_RE = re.compile(r"\bms_per_generated_token=(?P<value>[0-9.eE+-]+)\b")
@@ -59,6 +60,7 @@ def litenn_row(path: Path) -> dict[str, object]:
     if run_ms <= 0 or token_count <= 0:
         raise SystemExit(f"LiteNN decode metrics must be positive: {stdout}")
     backend_match = BACKEND_RE.search(stdout_text)
+    decode_mode_match = DECODE_MODE_RE.search(stdout_text)
     fallback_match = FALLBACK_RE.search(stdout_text)
     fallback_count_match = FALLBACK_COUNT_RE.search(stdout_text)
     ms_per_token_match = MS_PER_GENERATED_TOKEN_RE.search(stdout_text)
@@ -76,6 +78,9 @@ def litenn_row(path: Path) -> dict[str, object]:
     return {
         "implementation": "LiteNN",
         "backend": backend_match.group("value") if backend_match is not None else report.get("backend_policy"),
+        "decodeMode": (
+            decode_mode_match.group("value") if decode_mode_match is not None else report.get("decode_mode", "unknown")
+        ),
         "tokens": token_count,
         "totalMs": run_ms,
         "msPerToken": ms_per_token,
@@ -102,6 +107,7 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
             {
                 "implementation": "llama.cpp",
                 "backend": "gpu" if gpu_layers > 0 else "cpu",
+                "decodeMode": entry.get("test", "decode"),
                 "tokens": int(entry["n_gen"]),
                 "totalMs": int(entry["n_gen"]) * 1000.0 / tokens_per_second,
                 "msPerToken": 1000.0 / tokens_per_second,
@@ -130,6 +136,7 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
             {
                 "implementation": str(entry.get("implementation", "PyTorch/HF")),
                 "backend": str(entry.get("backend", "unknown")),
+                "decodeMode": str(entry.get("decodeMode", entry.get("mode", "decode"))),
                 "tokens": entry.get("tokens"),
                 "totalMs": entry.get("totalMs"),
                 "msPerToken": 1000.0 / tokens_per_second,
@@ -180,13 +187,14 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
         lines.append(
-            f"| {row['implementation']} | {row['backend']} | {float(row['msPerToken']):.4f} | "
+            f"| {row['implementation']} | {row['backend']} | {row.get('decodeMode', 'decode')} | "
+            f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row['fallbackUsed']} | {row.get('fallbackCount')} |"
         )
