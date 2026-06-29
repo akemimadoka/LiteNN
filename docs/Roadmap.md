@@ -2672,6 +2672,11 @@ placement and fallback policy.
             this path with `decode_mode=stateful`, `fallback_count=0`, generated token `Hello`, and no stack overflow;
             build time was still about 170s and run time about 4.1s for the full prompt replay plus one generated token,
             so this validates state alias execution but does not yet solve first-run interactivity.
+      - [x] Add CPU AOT MLIR/LLVM module-size diagnostics under `LITENN_COMPILE_DIAGNOSTICS=1`: the compiler now reports
+            MLIR op/function/block counts after LiteNN lowering, bufferization, and LLVM lowering, LLVM
+            function/declaration/block/instruction/global counts after translation/wrapper/optimization, and emitted
+            object bytes. This gives the next split-artifact/per-block compile pass hard evidence instead of relying only
+            on coarse phase timers.
 - [x] Replace generic MLIR expansion of GGML K-quant MatMul with a reusable CPU AOT helper call:
       `QuantizedMatMulNode` GGML_Q4_K/Q5_K/Q6_K/Q8_0 lowering now tags the generated op, the LLVM codegen pipeline
       replaces it with `litenn_cpu_ggml_block_matmul_f32`, and regression tests require the helper symbol in the

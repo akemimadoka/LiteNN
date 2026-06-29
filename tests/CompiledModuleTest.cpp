@@ -2683,6 +2683,24 @@ TEST(CompiledModuleTest, CPUParallelLinearChainDiagnosticsReportThreadGate)
 	EXPECT_NE(diagnostics.find("cpu-parallel linear-chain rejected: thread_count<=1"), std::string::npos);
 }
 
+TEST(CompiledModuleTest, CPUExternalRegionDiagnosticsReportModuleStats)
+{
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.enableCompileDiagnostics = true;
+
+	auto graph = BuildGenericExternalRegionGraph();
+	ScopedCerrCapture capture;
+	(void) Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	const auto diagnostics = capture.Str();
+
+	EXPECT_NE(diagnostics.find("cpu-mlir after lower LiteNN dialect stats: ops="), std::string::npos);
+	EXPECT_NE(diagnostics.find("cpu-mlir after bufferize stats: ops="), std::string::npos);
+	EXPECT_NE(diagnostics.find("cpu-llvm after translate stats: funcs="), std::string::npos);
+	EXPECT_NE(diagnostics.find("cpu-llvm after entry wrapper stats: funcs="), std::string::npos);
+	EXPECT_NE(diagnostics.find("cpu-aot object file bytes="), std::string::npos);
+}
+
 TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 {
 	CompilerOptions options;

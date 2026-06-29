@@ -89,6 +89,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -144,6 +145,88 @@ namespace
 			LogCompileDiagnostic(options, std::format("{}: ok {:.3f} ms", label, elapsed));
 			return result;
 		}
+	}
+
+	struct MLIRModuleStats
+	{
+		std::size_t operationCount{};
+		std::size_t functionCount{};
+		std::size_t blockCount{};
+	};
+
+	MLIRModuleStats CollectMLIRModuleStats(mlir::ModuleOp module)
+	{
+		MLIRModuleStats stats;
+		module.walk([&](mlir::Operation* op) {
+			++stats.operationCount;
+			stats.blockCount += op->getRegions().empty()
+			                        ? 0
+			                        : std::accumulate(op->getRegions().begin(), op->getRegions().end(), std::size_t{},
+			                                          [](std::size_t total, mlir::Region& region) {
+				                                          return total + std::distance(region.begin(), region.end());
+			                                          });
+			if (llvm::isa<mlir::func::FuncOp>(op))
+			{
+				++stats.functionCount;
+			}
+		});
+		return stats;
+	}
+
+	struct LLVMModuleStats
+	{
+		std::size_t functionCount{};
+		std::size_t declarationCount{};
+		std::size_t basicBlockCount{};
+		std::size_t instructionCount{};
+		std::size_t globalVariableCount{};
+		std::size_t aliasCount{};
+	};
+
+	LLVMModuleStats CollectLLVMModuleStats(const llvm::Module& module)
+	{
+		LLVMModuleStats stats;
+		for (const auto& function : module)
+		{
+			if (function.isDeclaration())
+			{
+				++stats.declarationCount;
+				continue;
+			}
+			++stats.functionCount;
+			stats.basicBlockCount += function.size();
+			for (const auto& block : function)
+			{
+				stats.instructionCount += block.size();
+			}
+		}
+		stats.globalVariableCount = std::distance(module.global_begin(), module.global_end());
+		stats.aliasCount = std::distance(module.alias_begin(), module.alias_end());
+		return stats;
+	}
+
+	void LogMLIRModuleStats(const CompilerOptions& options, std::string_view label, mlir::ModuleOp module)
+	{
+		if (!options.enableCompileDiagnostics)
+		{
+			return;
+		}
+		const auto stats = CollectMLIRModuleStats(module);
+		LogCompileDiagnostic(options, std::format("{} stats: ops={} funcs={} blocks={}", label, stats.operationCount,
+		                                          stats.functionCount, stats.blockCount));
+	}
+
+	void LogLLVMModuleStats(const CompilerOptions& options, std::string_view label, const llvm::Module& module)
+	{
+		if (!options.enableCompileDiagnostics)
+		{
+			return;
+		}
+		const auto stats = CollectLLVMModuleStats(module);
+		LogCompileDiagnostic(options,
+		                     std::format("{} stats: funcs={} decls={} blocks={} insts={} globals={} aliases={}", label,
+		                                 stats.functionCount, stats.declarationCount, stats.basicBlockCount,
+		                                 stats.instructionCount, stats.globalVariableCount, stats.aliasCount));
 	}
 
 	thread_local const void* tCPUExternalConstants = nullptr;
@@ -12848,6 +12931,7 @@ namespace
 				throw std::runtime_error("LiteNN dialect lowering pipeline failed");
 			}
 		});
+		LogMLIRModuleStats(options, "cpu-mlir after lower LiteNN dialect", *module);
 		TimedCompileDiagnostic(options, "cpu-mlir bufferize", [&] {
 			mlir::PassManager pm(&ctx);
 			litenn::addBufferizationPipeline(pm);
@@ -12856,6 +12940,7 @@ namespace
 				throw std::runtime_error("LiteNN bufferization pipeline failed");
 			}
 		});
+		LogMLIRModuleStats(options, "cpu-mlir after bufferize", *module);
 		TimedCompileDiagnostic(options, "cpu-mlir lower LLVM dialect", [&] {
 			mlir::PassManager pm(&ctx);
 			litenn::addLLVMCodegenPipeline(
@@ -12868,6 +12953,7 @@ namespace
 				throw std::runtime_error("LiteNN LLVM codegen pipeline failed");
 			}
 		});
+		LogMLIRModuleStats(options, "cpu-mlir after lower LLVM dialect", *module);
 		if (mlir::failed(mlir::verify(*module)))
 		{
 			throw std::runtime_error("LiteNN lowered MLIR module verification failed");
@@ -12922,6 +13008,7 @@ namespace
 		{
 			throw std::runtime_error("Failed to translate externalized LiteNN MLIR module to LLVM IR");
 		}
+		LogLLVMModuleStats(options, "cpu-llvm after translate", *llvmModule);
 
 		auto config = TimedCompileDiagnostic(options, "cpu-aot create target machine",
 		                                     [&] { return CreateNativeTargetMachine(); });
@@ -12939,15 +13026,18 @@ namespace
 			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs,
 			                       functionalOutputSpecs, externalized->entryExternalTensorInfos, outputProjection);
 		});
+		LogLLVMModuleStats(options, "cpu-llvm after entry wrapper", *llvmModule);
 		TimedCompileDiagnostic(
 		    options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
 		    [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
+		LogLLVMModuleStats(options, "cpu-llvm after optimize", *llvmModule);
 
 		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
 			return SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		});
 		auto instructions =
 		    TimedCompileDiagnostic(options, "cpu-aot emit object file", [&] { return EmitObjectFile(*llvmModule); });
+		LogCompileDiagnostic(options, std::format("cpu-aot object file bytes={}", instructions.size()));
 		return CompiledArtifactParts{ std::move(rodata),
 			                          std::move(instructions),
 			                          std::move(externalized->constants),
