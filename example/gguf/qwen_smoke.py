@@ -140,6 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--apply-chat-template", action="store_true", help="Format --prompt as one user turn")
     parser.add_argument("--steps", dest="steps", type=int, default=8)
     parser.add_argument("--max-tokens", dest="steps", type=int, help="Alias for --steps")
+    parser.add_argument(
+        "--until-eos",
+        action="store_true",
+        help="Keep decoding until EOS is generated, using --steps/--max-tokens as the safety cap",
+    )
+    parser.add_argument(
+        "--ignore-eos",
+        action="store_true",
+        help="Disable the default EOS stop condition and always run up to --steps/--max-tokens",
+    )
     parser.add_argument("--output", type=Path, help="Generated token-id output path for LiteNN token-id decode")
     parser.add_argument("--text-output", type=Path, help="Detokenized generated text output")
     parser.add_argument("--profile", default="qwen2-like-causal-lm")
@@ -169,10 +179,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional LiteNN GGUF decode AOT artifact cache directory; disabled by default until large-object cache cost is reduced",
     )
     parser.add_argument(
+        "--require-aot-cache-hit",
+        action="store_true",
+        help="Fail instead of compiling when the separated AOT cache is missing or invalid",
+    )
+    parser.add_argument(
         "--stateful",
         action="store_true",
         help="Run LiteNN direct token-id decode through the runtime-schedule stateful/logits-only AOT path",
     )
+    parser.add_argument("--stream-tokens", action="store_true", help="Mirror generated token events to stdout")
+    parser.add_argument("--stream-stats", action="store_true", help="Mirror per-step live decode statistics to stdout")
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -196,6 +213,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.steps <= 0:
         raise SystemExit("--steps must be positive")
+    if args.until_eos and args.ignore_eos:
+        raise SystemExit("--until-eos and --ignore-eos cannot be used together")
     if args.llamacpp_decode_golden_tool and args.steps < 2:
         raise SystemExit("--llamacpp-decode-golden-tool requires at least two generated steps")
     if args.capture_llamacpp and not args.prompt:
@@ -221,6 +240,8 @@ def main() -> int:
         raise SystemExit("provide --token-ids, --llamacpp-tokenizer-tool, or enable --capture-llamacpp")
     if args.output is not None and not (args.token_ids or args.llamacpp_tokenizer_tool):
         raise SystemExit("--output is only used by the direct token-id decode path")
+    if args.require_aot_cache_hit and args.aot_cache_dir is None:
+        raise SystemExit("--require-aot-cache-hit requires --aot-cache-dir")
 
     root = repo_root()
     workdir: Path = args.workdir
@@ -231,6 +252,8 @@ def main() -> int:
     litenn_decode_env["LITENN_CPU_AOT_LLVM_OPT_LEVEL"] = str(args.llvm_opt_level)
     if args.aot_cache_dir is not None:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_DIR"] = str(args.aot_cache_dir)
+    if args.require_aot_cache_hit:
+        litenn_decode_env["LITENN_GGUF_AOT_CACHE_REQUIRE_HIT"] = "1"
     if not args.no_compile_diagnostics:
         litenn_decode_env["LITENN_COMPILE_DIAGNOSTICS"] = "1"
 
@@ -426,6 +449,12 @@ def main() -> int:
         ]
         if args.stateful:
             decode_cmd.append("--stateful")
+        if args.ignore_eos:
+            decode_cmd.append("--ignore-eos")
+        if args.stream_tokens:
+            decode_cmd.append("--stream-tokens")
+        if args.stream_stats:
+            decode_cmd.append("--stream-stats")
         decode = run_step(
             "litenn_decode_token_ids",
             decode_cmd,
@@ -471,6 +500,11 @@ def main() -> int:
         "model": str(args.model),
         "backend_policy": args.backend_policy,
         "decode_mode": "stateful" if args.stateful else "functional",
+        "stop_mode": "ignore_eos" if args.ignore_eos else ("until_eos" if args.until_eos else "eos_or_token_cap"),
+        "aot_cache_dir": str(args.aot_cache_dir) if args.aot_cache_dir is not None else None,
+        "require_aot_cache_hit": args.require_aot_cache_hit,
+        "stream_tokens": args.stream_tokens,
+        "stream_stats": args.stream_stats,
         "fallback_used": False,
         "production_candidate": args.backend_policy == "cuda-native",
         "workdir": str(workdir),

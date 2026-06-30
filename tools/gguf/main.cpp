@@ -64,17 +64,17 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -205,6 +205,8 @@ namespace
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
 		bool statefulDecode{};
+		bool streamTokens{};
+		bool streamStats{};
 	};
 
 	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
@@ -263,6 +265,14 @@ namespace
 			else if (arg == "--stateful")
 			{
 				options.statefulDecode = true;
+			}
+			else if (arg == "--stream-tokens")
+			{
+				options.streamTokens = true;
+			}
+			else if (arg == "--stream-stats")
+			{
+				options.streamStats = true;
 			}
 			else if (arg == "--chat-template")
 			{
@@ -497,10 +507,23 @@ namespace
 		return escaped;
 	}
 
-	std::string TokenPiecesText(const LiteNN::Graph& archive, std::span<const std::int32_t> tokenIds)
+	std::string TokenPieceText(const LiteNN::Graph& archive, std::int32_t tokenId)
 	{
 		const auto* tokens = archive.FindMetadata("tokenizer.ggml.tokens");
 		const auto* tokenList = tokens == nullptr ? nullptr : std::get_if<std::vector<std::string>>(&tokens->value);
+		if (tokenList == nullptr)
+		{
+			return "<missing-tokenizer.ggml.tokens>";
+		}
+		if (tokenId < 0 || static_cast<std::size_t>(tokenId) >= tokenList->size())
+		{
+			return "<out-of-range>";
+		}
+		return (*tokenList)[static_cast<std::size_t>(tokenId)];
+	}
+
+	std::string TokenPiecesText(const LiteNN::Graph& archive, std::span<const std::int32_t> tokenIds)
+	{
 		std::string text = "[";
 		for (std::size_t i = 0; i < tokenIds.size(); ++i)
 		{
@@ -508,18 +531,7 @@ namespace
 			{
 				text += ',';
 			}
-			if (tokenList == nullptr)
-			{
-				text += "\"<missing-tokenizer.ggml.tokens>\"";
-			}
-			else if (tokenIds[i] < 0 || static_cast<std::size_t>(tokenIds[i]) >= tokenList->size())
-			{
-				text += "\"<out-of-range>\"";
-			}
-			else
-			{
-				text += EscapeTokenPiece((*tokenList)[static_cast<std::size_t>(tokenIds[i])]);
-			}
+			text += EscapeTokenPiece(TokenPieceText(archive, tokenIds[i]));
 		}
 		text += "]";
 		return text;
@@ -808,6 +820,31 @@ namespace
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
+	bool RequireDecodeAOTCacheHit()
+	{
+		const char* value = std::getenv("LITENN_GGUF_AOT_CACHE_REQUIRE_HIT");
+		if (value == nullptr)
+		{
+			return false;
+		}
+		const std::string_view text{ value };
+		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+	}
+
+	void ThrowDecodeAOTCacheMiss(const std::optional<std::filesystem::path>& cachePath)
+	{
+		if (RequireDecodeAOTCacheHit())
+		{
+			if (!cachePath)
+			{
+				throw std::runtime_error(
+				    "gguf decode aot cache hit is required but LITENN_GGUF_AOT_CACHE_DIR is not set");
+			}
+			throw std::runtime_error("gguf decode aot cache hit is required but cache is missing or invalid: " +
+			                         cachePath->string());
+		}
+	}
+
 	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan,
 	                                                              const LiteNN::CompilerOptions& options,
 	                                                              const std::optional<std::filesystem::path>& cachePath,
@@ -843,6 +880,7 @@ namespace
 				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
 			}
 		}
+		ThrowDecodeAOTCacheMiss(cachePath);
 
 		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
 		if (cachePath)
@@ -901,6 +939,7 @@ namespace
 				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
 			}
 		}
+		ThrowDecodeAOTCacheMiss(cachePath);
 
 		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(schedule, options);
 		if (cachePath)
@@ -1136,6 +1175,28 @@ namespace
 			{
 				++generationStepCount;
 				generationMs += stepMs;
+			}
+			if (options.streamTokens && !isPromptReplayStep)
+			{
+				std::cout << "stream token step=" << (step + 1) << " position=" << step << " token_id=" << currentToken
+				          << " piece="
+				          << EscapeTokenPiece(TokenPieceText(imported.model.UnsafeGraphView(), currentToken))
+				          << " generated_tokens=" << generatedTokenCount << " eos=" << (stoppedOnEos ? "true" : "false")
+				          << '\n';
+				std::cout.flush();
+			}
+			if (options.streamStats)
+			{
+				const auto liveTokensPerSecond =
+				    generationMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / generationMs;
+				std::cout << "stream stats step=" << (step + 1) << " position=" << step
+				          << " phase=" << (isPromptReplayStep ? "prompt_replay" : "generation") << " step_ms=" << stepMs
+				          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
+				          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
+				          << " generated_tokens=" << generatedTokenCount
+				          << " generated_tokens_per_second=" << liveTokensPerSecond
+				          << " eos=" << (stoppedOnEos ? "true" : "false") << '\n';
+				std::cout.flush();
 			}
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
