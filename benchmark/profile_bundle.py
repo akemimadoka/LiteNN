@@ -18,6 +18,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import platform
@@ -48,6 +49,12 @@ class StepResult:
     @property
     def duration_ms(self) -> float:
         return (self.end_ns - self.start_ns) / 1_000_000.0
+
+
+@dataclass(frozen=True)
+class CollapsedStack:
+    frames: tuple[str, ...]
+    samples: int
 
 
 def now_ns() -> int:
@@ -82,24 +89,24 @@ def discover_litenn_profile(explicit: Path | None) -> Path | None:
 
 
 def normalize_sensitive_paths(paths: Iterable[Path]) -> list[tuple[str, str]]:
-	replacements: list[tuple[str, str]] = []
-	for path in paths:
-		text = str(path)
-		if not text:
-			continue
-		label = "<path:redacted>"
-		variants = { text }
-		try:
-			resolved = str(path.resolve())
-		except OSError:
-			resolved = text
-		variants.add(resolved)
-		variants.add(text.replace("\\", "/"))
-		variants.add(resolved.replace("\\", "/"))
-		variants.add(text.replace("\\", "\\\\"))
-		variants.add(resolved.replace("\\", "\\\\"))
-		replacements.extend((variant, label) for variant in sorted(variants, key=len, reverse=True) if variant)
-	return replacements
+    replacements: list[tuple[str, str]] = []
+    for path in paths:
+        text = str(path)
+        if not text:
+            continue
+        label = "<path:redacted>"
+        variants = { text }
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            resolved = text
+        variants.add(resolved)
+        variants.add(text.replace("\\", "/"))
+        variants.add(resolved.replace("\\", "/"))
+        variants.add(text.replace("\\", "\\\\"))
+        variants.add(resolved.replace("\\", "\\\\"))
+        replacements.extend((variant, label) for variant in sorted(variants, key=len, reverse=True) if variant)
+    return replacements
 
 
 def redact_text(text: str, replacements: list[tuple[str, str]]) -> str:
@@ -116,6 +123,152 @@ def redact_command(command: list[str], replacements: list[tuple[str, str]]) -> l
 
 def write_redacted_text(path: Path, text: str, replacements: list[tuple[str, str]]) -> None:
     path.write_text(redact_text(text, replacements), encoding="utf-8")
+
+
+def read_collapsed_stacks(paths: Iterable[Path], replacements: list[tuple[str, str]]) -> list[CollapsedStack]:
+    merged: dict[tuple[str, ...], int] = {}
+    for path in paths:
+        for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = redact_text(raw_line.strip(), replacements)
+            if not line or line.startswith("#"):
+                continue
+            try:
+                stack_text, count_text = line.rsplit(maxsplit=1)
+            except ValueError as exc:
+                raise SystemExit(f"Invalid collapsed stack line in {path}: {raw_line!r}") from exc
+            try:
+                samples = int(count_text)
+            except ValueError as exc:
+                raise SystemExit(f"Invalid collapsed stack sample count in {path}: {raw_line!r}") from exc
+            frames = tuple(frame for frame in stack_text.split(";") if frame)
+            if not frames or samples <= 0:
+                continue
+            merged[frames] = merged.get(frames, 0) + samples
+    return [
+        CollapsedStack(frames=frames, samples=samples)
+        for frames, samples in sorted(merged.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def write_merged_collapsed_stacks(out_dir: Path, stacks: list[CollapsedStack]) -> Path:
+    path = out_dir / "collapsed_stacks.txt"
+    lines = [f"{';'.join(stack.frames)} {stack.samples}" for stack in stacks]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return path
+
+
+def write_speedscope(out_dir: Path, stacks: list[CollapsedStack]) -> Path:
+    frame_ids: dict[str, int] = {}
+    frames: list[dict[str, str]] = []
+
+    def frame_id(name: str) -> int:
+        if name not in frame_ids:
+            frame_ids[name] = len(frames)
+            frames.append({ "name": name })
+        return frame_ids[name]
+
+    samples = [[frame_id(frame) for frame in stack.frames] for stack in stacks]
+    weights = [stack.samples for stack in stacks]
+    total = sum(weights)
+    data = {
+        "$schema": "https://www.speedscope.app/file-format-schema.json",
+        "shared": { "frames": frames },
+        "profiles": [
+            {
+                "type": "sampled",
+                "name": "LiteNN collapsed stacks",
+                "unit": "samples",
+                "startValue": 0,
+                "endValue": total,
+                "samples": samples,
+                "weights": weights,
+            }
+        ],
+        "activeProfileIndex": 0,
+    }
+    path = out_dir / "speedscope.json"
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return path
+
+
+def flame_color(name: str) -> str:
+    value = 0
+    for ch in name:
+        value = (value * 131 + ord(ch)) & 0xFFFFFFFF
+    r = 180 + (value & 0x3F)
+    g = 80 + ((value >> 8) & 0x5F)
+    b = 40 + ((value >> 16) & 0x3F)
+    return f"rgb({r},{g},{b})"
+
+
+def build_flame_tree(stacks: list[CollapsedStack]) -> dict[str, object]:
+    root: dict[str, object] = { "name": "root", "samples": 0, "children": {} }
+    for stack in stacks:
+        root["samples"] = int(root["samples"]) + stack.samples
+        node = root
+        for frame in stack.frames:
+            children = node["children"]
+            assert isinstance(children, dict)
+            child = children.setdefault(frame, { "name": frame, "samples": 0, "children": {} })
+            child["samples"] = int(child["samples"]) + stack.samples
+            node = child
+    return root
+
+
+def flame_depth(node: dict[str, object]) -> int:
+    children = node["children"]
+    assert isinstance(children, dict)
+    if not children:
+        return 0
+    return 1 + max(flame_depth(child) for child in children.values())
+
+
+def write_flamegraph(out_dir: Path, stacks: list[CollapsedStack]) -> tuple[Path, Path]:
+    root = build_flame_tree(stacks)
+    total = max(int(root["samples"]), 1)
+    width = 1200
+    frame_height = 18
+    depth = flame_depth(root)
+    height = max(80, (depth + 2) * frame_height + 40)
+    svg_lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<style>text{font-family:Segoe UI,Arial,sans-serif;font-size:12px}.frame:hover{stroke:#111;stroke-width:1}</style>',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="8" y="18">LiteNN Flame Graph, samples={total}</text>',
+    ]
+
+    def render(node: dict[str, object], x: float, y: float, scale: float) -> None:
+        children = node["children"]
+        assert isinstance(children, dict)
+        cursor = x
+        for child in sorted(children.values(), key=lambda entry: (-int(entry["samples"]), str(entry["name"]))):
+            samples = int(child["samples"])
+            child_width = samples * scale
+            if child_width < 0.5:
+                continue
+            name = str(child["name"])
+            escaped = html.escape(name)
+            svg_lines.append(
+                f'<g><title>{escaped} ({samples} samples)</title>'
+                f'<rect class="frame" x="{cursor:.3f}" y="{y:.3f}" width="{child_width:.3f}" '
+                f'height="{frame_height - 1}" fill="{flame_color(name)}"/>'
+                f'<text x="{cursor + 3:.3f}" y="{y + 13:.3f}" fill="#111">{escaped[:80]}</text></g>'
+            )
+            render(child, cursor, y + frame_height, scale)
+            cursor += child_width
+
+    render(root, 0.0, 32.0, width / total)
+    svg_lines.append("</svg>")
+    svg_path = out_dir / "flamegraph.svg"
+    svg_path.write_text("\n".join(svg_lines), encoding="utf-8")
+
+    html_path = out_dir / "flamegraph.html"
+    html_path.write_text(
+        "<!doctype html><meta charset=\"utf-8\"><title>LiteNN Flame Graph</title>\n"
+        + svg_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return svg_path, html_path
 
 
 def maybe_wrap_sampler(command: list[str], sampler: str, step_dir: Path) -> tuple[list[str], list[Path], str]:
@@ -225,7 +378,12 @@ def chrome_trace_events(results: list[StepResult], metadata: dict[str, object]) 
     return { "traceEvents": events, "metadata": metadata }
 
 
-def write_manifest(out_dir: Path, results: list[StepResult], metadata: dict[str, object]) -> dict[str, object]:
+def write_manifest(
+    out_dir: Path,
+    results: list[StepResult],
+    metadata: dict[str, object],
+    stack_outputs: dict[str, object] | None = None,
+) -> dict[str, object]:
     manifest = {
         "format": "litenn-profile-bundle-v1",
         "metadata": metadata,
@@ -242,6 +400,8 @@ def write_manifest(out_dir: Path, results: list[StepResult], metadata: dict[str,
             for result in results
         ],
     }
+    if stack_outputs is not None:
+        manifest["stack_outputs"] = stack_outputs
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
@@ -265,6 +425,17 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
         step = dict(raw_step)
         outputs = f"`{step['stdout']}`, `{step['stderr']}`"
         lines.append(f"| `{step['name']}` | {float(step['duration_ms']):.3f} | {step['returncode']} | {outputs} |")
+    if not manifest["steps"]:
+        lines.append("| `none` | 0.000 | 0 | - |")
+
+    stack_outputs = manifest.get("stack_outputs")
+    if isinstance(stack_outputs, dict):
+        lines.extend(["", "## Stack Outputs", "", "| Artifact | Path |", "| --- | --- |"])
+        for key in ("collapsed_stacks", "speedscope", "flamegraph_svg", "flamegraph_html"):
+            if key in stack_outputs:
+                lines.append(f"| `{key}` | `{stack_outputs[key]}` |")
+        if "total_samples" in stack_outputs:
+            lines.append(f"| `total_samples` | `{stack_outputs['total_samples']}` |")
 
     lines.extend(
         [
@@ -272,7 +443,7 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
             "## Next Diagnostics",
             "",
             "- Open `trace.json` in `chrome://tracing` or Perfetto to inspect the current command-level waterfall.",
-            "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; Speedscope/flame graph conversion is the next slice.",
+            "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; convert it to collapsed stacks and pass `--collapsed-stacks` to generate Speedscope/flame graph output.",
             "- Pass private model files through `--sensitive-path` so manifest, summary, trace, stdout, and stderr redact them.",
             "",
         ]
@@ -304,6 +475,13 @@ def parse_args() -> argparse.Namespace:
         default=[],
         type=Path,
         help="Path to redact from manifest, trace, summary, stdout, and stderr; repeatable",
+    )
+    parser.add_argument(
+        "--collapsed-stacks",
+        action="append",
+        default=[],
+        type=Path,
+        help="Collapsed stack input in 'frame;frame count' format; repeatable",
     )
     return parser.parse_args()
 
@@ -337,7 +515,7 @@ def main() -> int:
             raise SystemExit("--command was provided without a command")
         commands.append(("command", command, None))
 
-    if not commands:
+    if not commands and not args.collapsed_stacks:
         raise SystemExit("No profile command was selected")
 
     metadata = {
@@ -355,7 +533,21 @@ def main() -> int:
         if result.returncode != 0:
             break
 
-    manifest = write_manifest(out_dir, results, metadata)
+    stack_outputs: dict[str, object] | None = None
+    if args.collapsed_stacks:
+        stacks = read_collapsed_stacks(args.collapsed_stacks, replacements)
+        collapsed_path = write_merged_collapsed_stacks(out_dir, stacks)
+        speedscope_path = write_speedscope(out_dir, stacks)
+        flamegraph_svg, flamegraph_html = write_flamegraph(out_dir, stacks)
+        stack_outputs = {
+            "collapsed_stacks": str(collapsed_path),
+            "speedscope": str(speedscope_path),
+            "flamegraph_svg": str(flamegraph_svg),
+            "flamegraph_html": str(flamegraph_html),
+            "total_samples": sum(stack.samples for stack in stacks),
+        }
+
+    manifest = write_manifest(out_dir, results, metadata, stack_outputs)
     trace = chrome_trace_events(results, metadata)
     (out_dir / "trace.json").write_text(json.dumps(trace, indent=2), encoding="utf-8")
     summarize(out_dir, manifest)

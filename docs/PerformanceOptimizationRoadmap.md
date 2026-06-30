@@ -32,11 +32,12 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
-  - [ ] Sampling normalization: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import adapters
-    normalize stacks into collapsed-stack and Speedscope JSON formats.
-  - Flame graph output: optional HTML/SVG rendering when an external renderer is available; raw normalized stacks remain
-    the portable fallback.
-  - Bundle output: raw logs, `trace.json`, `speedscope.json` or collapsed stacks, benchmark/profile CSVs, anonymized
+  - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
+  - [ ] Platform-native sampling import: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import
+    adapters normalize their own raw formats into the collapsed-stack path.
+  - [x] Flame graph output: collapsed-stack inputs render a simple built-in SVG/HTML flame graph; external renderers can
+    still be added later for richer presentation.
+  - Bundle output: raw logs, `trace.json`, `speedscope.json`, collapsed stacks, benchmark/profile CSVs, anonymized
     model/backend metadata, and a short Markdown bottleneck summary.
 
 ## P0: CUDA Native Hot-Path Fixed Costs

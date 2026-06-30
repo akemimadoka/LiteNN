@@ -656,8 +656,10 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             the bundle without making platform profilers mandatory.
       - [ ] Add full platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
             and a macOS Instruments-compatible import path when available.
-      - [ ] Normalize sampled stacks into collapsed-stack and Speedscope JSON outputs; optionally render SVG/HTML flame
-            graphs when the external renderer is installed.
+      - [x] Normalize collapsed-stack inputs into merged collapsed stacks and Speedscope JSON outputs; render a simple
+            built-in SVG/HTML flame graph for first-pass local diagnosis.
+      - [ ] Convert platform-native sampling outputs, such as Linux `perf.data`, Windows ETW/WPA exports, and macOS
+            Instruments exports, into the collapsed-stack input accepted by the bundle tool.
       - [ ] Correlate samples with waterfall spans by thread id and timestamp, preserving backend, model, shape,
             token-count, compiler-option, commit, and tool-version metadata in the bundle manifest.
       - [x] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
@@ -665,7 +667,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [ ] Acceptance: one command produces a profile directory containing raw tool logs, `trace.json`,
             `speedscope.json` or collapsed stacks, optional flame-graph HTML/SVG, benchmark/profile CSVs, and a short
             Markdown summary of top compile/runtime bottlenecks. Current first slice writes raw logs, `trace.json`,
-            `manifest.json`, and `summary.md`; stack normalization and flame graph rendering remain open.
+            `manifest.json`, `summary.md`, `speedscope.json`, and built-in flame graph outputs for collapsed-stack
+            inputs; platform-native stack import remains open.
 
 Completed notes:
 
