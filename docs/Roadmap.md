@@ -2789,6 +2789,37 @@ placement and fallback policy.
       unavailable backends instead of relabeling CPU Interpreter smoke results. Real Qwen CUDA rows remain an external
       benchmark artifact requirement, not a synthetic repo fixture.
 
+#### G16.7 Long-Context LLM Runtime Target: 1M Tokens
+
+Purpose: treat `max_tokens=2048` as a small smoke size, not a scalability ceiling. The production target is at least
+1M-token context with compile time, artifact size, cache population, and runtime memory all scaling by model structure
+and active KV pages rather than by a fully unrolled static max-cache-length graph.
+
+- [ ] Add first-class compile diagnostics for long-context smoke runs:
+      qwen smoke logs must stream to disk while running, preserve partial evidence after interruption, and emit
+      Chrome Trace / Perfetto-compatible waterfall JSON for import, tokenize, schedule build, MLIR/LLVM compile,
+      object emission, separated-cache population, JIT/load, prompt replay, and per-token decode phases.
+- [ ] Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
+      Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
+      per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
+- [ ] Decouple persistent AOT instruction cache from model-weight storage.
+      Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
+      source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
+- [ ] Replace dense full-capacity KV tensors with paged KV-cache state.
+      The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
+      policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.
+- [ ] Add long-context attention execution plans.
+      CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
+      attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
+      logits-only decode.
+- [ ] Add context-extension validation gates.
+      Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
+      tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production
+      readiness.
+- [ ] Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
+      The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
+      generated-token latency, peak memory, artifact bytes, and fallback count.
+
 ### Long-Term Deferred Queue
 
 These items are intentionally not active near-term checklist work. They need real models, external golden fixtures,

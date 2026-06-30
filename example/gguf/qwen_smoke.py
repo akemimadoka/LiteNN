@@ -26,11 +26,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
+
+
+TRACE_PID = 1
+TIMED_LINE_RE = re.compile(r"^\[LiteNN (?P<category>compile|gguf)\] (?P<label>.+): ok (?P<ms>[0-9]+(?:\.[0-9]+)?) ms$")
 
 
 def repo_root() -> Path:
@@ -58,54 +64,164 @@ def discover_litenn(explicit: Path | None) -> Path:
     raise SystemExit("litenn_gguf_convert executable was not found; pass --litenn")
 
 
+def now_ns() -> int:
+    return time.perf_counter_ns()
+
+
 def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] | None = None) -> dict[str, object]:
     stdout = workdir / f"{name}.stdout.txt"
     stderr = workdir / f"{name}.stderr.txt"
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
 
-    def pump(stream, sink: list[str], mirror) -> None:
+    def pump(stream, output_file, mirror) -> None:
         try:
             for line in stream:
-                sink.append(line)
+                output_file.write(line)
+                output_file.flush()
                 encoding = mirror.encoding or "utf-8"
                 mirror.write(line.encode(encoding, errors="replace").decode(encoding, errors="replace"))
                 mirror.flush()
         finally:
             stream.close()
 
-    process = subprocess.Popen(
-        command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        env=env,
-    )
-    assert process.stdout is not None
-    assert process.stderr is not None
-    stdout_thread = threading.Thread(target=pump, args=(process.stdout, stdout_chunks, sys.stdout), daemon=True)
-    stderr_thread = threading.Thread(target=pump, args=(process.stderr, stderr_chunks, sys.stderr), daemon=True)
-    stdout_thread.start()
-    stderr_thread.start()
-    returncode = process.wait()
-    stdout_thread.join()
-    stderr_thread.join()
-    stdout.write_text("".join(stdout_chunks), encoding="utf-8")
-    stderr.write_text("".join(stderr_chunks), encoding="utf-8")
+    start_ns = now_ns()
+    with stdout.open("w", encoding="utf-8", errors="replace") as stdout_file, stderr.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as stderr_file:
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        stdout_thread = threading.Thread(target=pump, args=(process.stdout, stdout_file, sys.stdout), daemon=True)
+        stderr_thread = threading.Thread(target=pump, args=(process.stderr, stderr_file, sys.stderr), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        try:
+            returncode = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            raise
+        finally:
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+    end_ns = now_ns()
     return {
         "name": name,
         "command": command,
         "returncode": returncode,
+        "start_ns": start_ns,
+        "end_ns": end_ns,
+        "duration_ms": (end_ns - start_ns) / 1_000_000.0,
         "stdout": str(stdout),
         "stderr": str(stderr),
     }
 
 
-def require_ok(step: dict[str, object]) -> None:
+def parse_litenn_timed_events(step: dict[str, object]) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    cursor_ms = 0.0
+    for key in ("stderr", "stdout"):
+        path = Path(str(step[key]))
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = TIMED_LINE_RE.match(line)
+            if not match:
+                continue
+            duration_ms = float(match.group("ms"))
+            events.append(
+                {
+                    "name": match.group("label"),
+                    "category": f"litenn.{match.group('category')}",
+                    "step": step["name"],
+                    "start_ms": cursor_ms,
+                    "duration_ms": duration_ms,
+                    "source": key,
+                }
+            )
+            cursor_ms += duration_ms
+    return events
+
+
+def write_profile_artifacts(workdir: Path, steps: list[dict[str, object]]) -> tuple[Path, Path]:
+    if steps:
+        origin = min(int(step.get("start_ns", 0)) for step in steps if "start_ns" in step)
+    else:
+        origin = now_ns()
+
+    trace_events: list[dict[str, object]] = []
+    waterfall_lines = [
+        "# Qwen Smoke Waterfall",
+        "",
+        "| Step | Event | Duration ms | Source |",
+        "| --- | --- | ---: | --- |",
+    ]
+    for step_index, step in enumerate(steps):
+        start_ns = int(step.get("start_ns", origin))
+        end_ns = int(step.get("end_ns", start_ns))
+        trace_events.append(
+            {
+                "name": str(step["name"]),
+                "cat": "litenn.qwen_smoke.step",
+                "ph": "X",
+                "pid": TRACE_PID,
+                "tid": step_index + 1,
+                "ts": (start_ns - origin) / 1000.0,
+                "dur": (end_ns - start_ns) / 1000.0,
+                "args": {
+                    "returncode": step["returncode"],
+                    "stdout": step["stdout"],
+                    "stderr": step["stderr"],
+                },
+            }
+        )
+        waterfall_lines.append(
+            f"| `{step['name']}` | `<whole step>` | {float(step.get('duration_ms', 0.0)):.3f} | command |"
+        )
+        for event in parse_litenn_timed_events(step):
+            trace_events.append(
+                {
+                    "name": event["name"],
+                    "cat": event["category"],
+                    "ph": "X",
+                    "pid": TRACE_PID,
+                    "tid": step_index + 1,
+                    "ts": (start_ns - origin) / 1000.0 + float(event["start_ms"]) * 1000.0,
+                    "dur": float(event["duration_ms"]) * 1000.0,
+                    "args": {
+                        "step": event["step"],
+                        "source": event["source"],
+                    },
+                }
+            )
+            waterfall_lines.append(
+                f"| `{event['step']}` | `{event['name']}` | {float(event['duration_ms']):.3f} | {event['source']} |"
+            )
+
+    trace_path = workdir / "qwen_smoke_trace.json"
+    trace_path.write_text(json.dumps({ "traceEvents": trace_events }, indent=2) + "\n", encoding="utf-8")
+    waterfall_path = workdir / "qwen_smoke_waterfall.md"
+    waterfall_path.write_text("\n".join(waterfall_lines) + "\n", encoding="utf-8")
+    return trace_path, waterfall_path
+
+
+def require_ok(step: dict[str, object], steps: list[dict[str, object]] | None = None, workdir: Path | None = None) -> None:
     if int(step["returncode"]) != 0:
+        if steps is not None and workdir is not None:
+            write_profile_artifacts(workdir, steps)
         stdout_path = Path(str(step["stdout"]))
         stderr_path = Path(str(step["stderr"]))
         stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
@@ -184,12 +300,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail instead of compiling when the separated AOT cache is missing or invalid",
     )
     parser.add_argument(
+        "--no-aot-cache-write",
+        action="store_true",
+        help="Compile and run on a cache miss without writing separated AOT cache files",
+    )
+    parser.add_argument(
         "--stateful",
         action="store_true",
         help="Run LiteNN direct token-id decode through the runtime-schedule stateful/logits-only AOT path",
     )
     parser.add_argument("--stream-tokens", action="store_true", help="Mirror generated token events to stdout")
     parser.add_argument("--stream-stats", action="store_true", help="Mirror per-step live decode statistics to stdout")
+    parser.add_argument(
+        "--compile-only",
+        action="store_true",
+        help="Build/load the decode artifact for the requested token capacity, then stop before token execution",
+    )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -248,19 +374,24 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
     litenn = discover_litenn(args.litenn)
     steps: list[dict[str, object]] = []
+    def require_step_ok(step: dict[str, object]) -> None:
+        require_ok(step, steps, workdir)
+
     litenn_decode_env = os.environ.copy()
     litenn_decode_env["LITENN_CPU_AOT_LLVM_OPT_LEVEL"] = str(args.llvm_opt_level)
     if args.aot_cache_dir is not None:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_DIR"] = str(args.aot_cache_dir)
     if args.require_aot_cache_hit:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_REQUIRE_HIT"] = "1"
+    if args.no_aot_cache_write:
+        litenn_decode_env["LITENN_GGUF_AOT_CACHE_WRITE"] = "0"
     if not args.no_compile_diagnostics:
         litenn_decode_env["LITENN_COMPILE_DIAGNOSTICS"] = "1"
 
     analyze = run_step("analyze", [str(litenn), "--analyze-llm", str(args.model), args.profile], workdir)
     steps.append(analyze)
     if not args.allow_analysis_failure:
-        require_ok(analyze)
+        require_step_ok(analyze)
 
     token_ids = args.token_ids
     resolved_token_output: Path | None = None
@@ -289,7 +420,7 @@ def main() -> int:
             ]
             apply_template = run_step("apply_chat_template", template_cmd, workdir)
             steps.append(apply_template)
-            require_ok(apply_template)
+            require_step_ok(apply_template)
             tokenizer_text = formatted_prompt.read_text(encoding="utf-8")
         tokenize_cmd = [
             sys.executable,
@@ -308,7 +439,7 @@ def main() -> int:
         ]
         tokenize = run_step("tokenize_prompt", tokenize_cmd, workdir)
         steps.append(tokenize)
-        require_ok(tokenize)
+        require_step_ok(tokenize)
         token_document = json.loads(tokenizer_output.read_text(encoding="utf-8"))
         if token_document.get("schema") != "litenn.llamacpp_tokens.v1":
             raise SystemExit("llama.cpp tokenizer adapter returned an unsupported token schema")
@@ -342,7 +473,7 @@ def main() -> int:
             capture_cmd += ["--llama-cli", str(args.llama_cli)]
         capture = run_step("capture_llamacpp", capture_cmd, workdir)
         steps.append(capture)
-        require_ok(capture)
+        require_step_ok(capture)
 
         replay_cmd = [
             sys.executable,
@@ -362,7 +493,7 @@ def main() -> int:
             replay_cmd.append("--capture-decode-logits")
         replay = run_step("litenn_replay_from_golden", replay_cmd, workdir, env=litenn_decode_env)
         steps.append(replay)
-        require_ok(replay)
+        require_step_ok(replay)
 
         if args.compare_logits:
             compare_cmd = [
@@ -375,7 +506,7 @@ def main() -> int:
             ]
             compare = run_step("compare_prefill_logits", compare_cmd, workdir)
             steps.append(compare)
-            require_ok(compare)
+            require_step_ok(compare)
 
         if args.compare_text:
             compare_text_cmd = [
@@ -388,7 +519,7 @@ def main() -> int:
             ]
             compare_text = run_step("compare_generation_text", compare_text_cmd, workdir)
             steps.append(compare_text)
-            require_ok(compare_text)
+            require_step_ok(compare_text)
 
         decode_logits_reference = args.decode_logits_reference
         if args.llamacpp_decode_golden_tool is not None:
@@ -414,7 +545,7 @@ def main() -> int:
             ]
             capture_decode = run_step("capture_llamacpp_decode_logits", capture_decode_cmd, workdir)
             steps.append(capture_decode)
-            require_ok(capture_decode)
+            require_step_ok(capture_decode)
             decode_logits_reference = reference_dir / "manifest.json"
 
         if decode_logits_reference is not None:
@@ -428,7 +559,7 @@ def main() -> int:
             ]
             compare_decode = run_step("compare_decode_logits", compare_decode_cmd, workdir)
             steps.append(compare_decode)
-            require_ok(compare_decode)
+            require_step_ok(compare_decode)
 
     if token_ids:
         decode_output = args.output if args.output is not None else workdir / "litenn_decode_tokens.txt"
@@ -455,6 +586,8 @@ def main() -> int:
             decode_cmd.append("--stream-tokens")
         if args.stream_stats:
             decode_cmd.append("--stream-stats")
+        if args.compile_only:
+            decode_cmd.append("--compile-only")
         decode = run_step(
             "litenn_decode_token_ids",
             decode_cmd,
@@ -462,8 +595,8 @@ def main() -> int:
             env=litenn_decode_env,
         )
         steps.append(decode)
-        require_ok(decode)
-        if args.llamacpp_tokenizer_tool is not None:
+        require_step_ok(decode)
+        if args.llamacpp_tokenizer_tool is not None and not args.compile_only:
             replay_lines = decode_output.read_text(encoding="utf-8").splitlines()
             replay_ids = json.loads(replay_lines[0]) if replay_lines else []
             if not isinstance(replay_ids, list) or any(not isinstance(token_id, int) for token_id in replay_ids):
@@ -490,10 +623,12 @@ def main() -> int:
                 ]
                 detokenize = run_step("detokenize_generation", detokenize_cmd, workdir)
                 steps.append(detokenize)
-                require_ok(detokenize)
+                require_step_ok(detokenize)
             else:
                 text_output.parent.mkdir(parents=True, exist_ok=True)
                 text_output.write_bytes(b"")
+
+    trace_path, waterfall_path = write_profile_artifacts(workdir, steps)
 
     report = {
         "schema": "litenn.gguf_qwen_smoke.v2",
@@ -503,13 +638,17 @@ def main() -> int:
         "stop_mode": "ignore_eos" if args.ignore_eos else ("until_eos" if args.until_eos else "eos_or_token_cap"),
         "aot_cache_dir": str(args.aot_cache_dir) if args.aot_cache_dir is not None else None,
         "require_aot_cache_hit": args.require_aot_cache_hit,
+        "aot_cache_write": not args.no_aot_cache_write,
         "stream_tokens": args.stream_tokens,
         "stream_stats": args.stream_stats,
+        "compile_only": args.compile_only,
         "fallback_used": False,
         "production_candidate": args.backend_policy == "cuda-native",
         "workdir": str(workdir),
         "token_output": str(resolved_token_output) if resolved_token_output is not None else None,
         "text_output": str(resolved_text_output) if resolved_text_output is not None else None,
+        "trace": str(trace_path),
+        "waterfall": str(waterfall_path),
         "steps": steps,
     }
     report_path = workdir / "qwen_smoke_report.json"

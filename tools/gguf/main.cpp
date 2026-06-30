@@ -64,17 +64,17 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -207,6 +207,7 @@ namespace
 		bool statefulDecode{};
 		bool streamTokens{};
 		bool streamStats{};
+		bool compileOnly{};
 	};
 
 	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
@@ -273,6 +274,10 @@ namespace
 			else if (arg == "--stream-stats")
 			{
 				options.streamStats = true;
+			}
+			else if (arg == "--compile-only")
+			{
+				options.compileOnly = true;
 			}
 			else if (arg == "--chat-template")
 			{
@@ -789,6 +794,13 @@ namespace
 		}
 	}
 
+	void WriteBinaryFileTimed(const std::filesystem::path& path, std::span<const std::byte> bytes, bool diagnostics,
+	                          std::string_view label)
+	{
+		LogGGUFDiagnostic(diagnostics, std::format("{} bytes={} path={}", label, bytes.size(), path.generic_string()));
+		TimedGGUFDiagnostic(diagnostics, label, [&] { WriteBinaryFile(path, bytes); });
+	}
+
 	std::uint64_t FNV1a(std::string_view text)
 	{
 		std::uint64_t hash = 14695981039346656037ull;
@@ -831,6 +843,19 @@ namespace
 		return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 	}
 
+	bool DecodeAOTCacheWriteEnabled()
+	{
+		const char* value = std::getenv("LITENN_GGUF_AOT_CACHE_WRITE");
+		if (value == nullptr)
+		{
+			return true;
+		}
+		std::string text{ value };
+		std::ranges::transform(text, text.begin(),
+		                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+		return !(text == "0" || text == "false" || text == "off" || text == "no");
+	}
+
 	void ThrowDecodeAOTCacheMiss(const std::optional<std::filesystem::path>& cachePath)
 	{
 		if (RequireDecodeAOTCacheHit())
@@ -843,6 +868,46 @@ namespace
 			throw std::runtime_error("gguf decode aot cache hit is required but cache is missing or invalid: " +
 			                         cachePath->string());
 		}
+	}
+
+	LiteNN::CompiledModule<LiteNN::CPU> LoadDecodeAOTCache(const std::filesystem::path& cachePath, bool diagnostics)
+	{
+		auto artifact = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache read separated artifact", [&] {
+			return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
+			    ReadBinaryFile(cachePath / "metadata.bin"), ReadBinaryFile(cachePath / "constants.bin"),
+			    ReadBinaryFile(cachePath / "weights.bin"), ReadBinaryFile(cachePath / "instructions.bin"));
+		});
+		LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
+		return TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache load module", [&] { return artifact.Load(); });
+	}
+
+	void WriteDecodeAOTCache(const std::filesystem::path& cachePath, const LiteNN::CompiledModuleArtifact& artifact,
+	                         bool diagnostics)
+	{
+		if (!DecodeAOTCacheWriteEnabled())
+		{
+			LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: write skipped by LITENN_GGUF_AOT_CACHE_WRITE=0");
+			return;
+		}
+
+		std::filesystem::create_directories(cachePath);
+		auto separated = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache separate rodata",
+		                                     [&] { return artifact.SeparateRodata(); });
+		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache regions: metadata={} constants={} weights={} "
+		                                           "instructions={}",
+		                                           separated.Metadata().size(), separated.Constants().size(),
+		                                           separated.Weights().size(), separated.Instructions().size()));
+		WriteBinaryFileTimed(cachePath / "metadata.bin", separated.Metadata(), diagnostics,
+		                     "gguf decode aot cache write metadata");
+		WriteBinaryFileTimed(cachePath / "constants.bin", separated.Constants(), diagnostics,
+		                     "gguf decode aot cache write constants");
+		WriteBinaryFileTimed(cachePath / "weights.bin", separated.Weights(), diagnostics,
+		                     "gguf decode aot cache write weights");
+		WriteBinaryFileTimed(cachePath / "instructions.bin", separated.Instructions(), diagnostics,
+		                     "gguf decode aot cache write instructions");
+		WriteBinaryFileTimed(cachePath / "complete", std::span<const std::byte>{}, diagnostics,
+		                     "gguf decode aot cache write complete marker");
+		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: wrote {}", cachePath.string()));
 	}
 
 	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan,
@@ -863,11 +928,7 @@ namespace
 			{
 				try
 				{
-					auto artifact = LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
-					    ReadBinaryFile(metadata), ReadBinaryFile(constants), ReadBinaryFile(weights),
-					    ReadBinaryFile(instructions));
-					LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
-					return artifact.Load();
+					return LoadDecodeAOTCache(*cachePath, diagnostics);
 				}
 				catch (const std::exception& ex)
 				{
@@ -882,26 +943,22 @@ namespace
 		}
 		ThrowDecodeAOTCacheMiss(cachePath);
 
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
+		auto artifact = TimedGGUFDiagnostic(diagnostics, "gguf compile cpu aot decode artifact", [&] {
+			return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(plan, options);
+		});
 		if (cachePath)
 		{
 			try
 			{
-				std::filesystem::create_directories(*cachePath);
-				auto separated = artifact.SeparateRodata();
-				WriteBinaryFile(*cachePath / "metadata.bin", separated.Metadata());
-				WriteBinaryFile(*cachePath / "constants.bin", separated.Constants());
-				WriteBinaryFile(*cachePath / "weights.bin", separated.Weights());
-				WriteBinaryFile(*cachePath / "instructions.bin", separated.Instructions());
-				WriteBinaryFile(*cachePath / "complete", std::span<const std::byte>{});
-				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: wrote {}", cachePath->string()));
+				WriteDecodeAOTCache(*cachePath, artifact, diagnostics);
 			}
 			catch (const std::exception& ex)
 			{
 				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: write failed ({})", ex.what()));
 			}
 		}
-		return std::move(artifact).Load();
+		return TimedGGUFDiagnostic(diagnostics, "gguf load freshly compiled cpu aot decode module",
+		                           [&] { return std::move(artifact).Load(); });
 	}
 
 	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::Runtime::RuntimeSchedule& schedule,
@@ -922,11 +979,7 @@ namespace
 			{
 				try
 				{
-					auto artifact = LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
-					    ReadBinaryFile(metadata), ReadBinaryFile(constants), ReadBinaryFile(weights),
-					    ReadBinaryFile(instructions));
-					LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
-					return artifact.Load();
+					return LoadDecodeAOTCache(*cachePath, diagnostics);
 				}
 				catch (const std::exception& ex)
 				{
@@ -941,26 +994,22 @@ namespace
 		}
 		ThrowDecodeAOTCacheMiss(cachePath);
 
-		auto artifact = LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(schedule, options);
+		auto artifact = TimedGGUFDiagnostic(diagnostics, "gguf compile cpu aot stateful decode artifact", [&] {
+			return LiteNN::Compiler<LiteNN::CPU>::CompileArtifact(schedule, options);
+		});
 		if (cachePath)
 		{
 			try
 			{
-				std::filesystem::create_directories(*cachePath);
-				auto separated = artifact.SeparateRodata();
-				WriteBinaryFile(*cachePath / "metadata.bin", separated.Metadata());
-				WriteBinaryFile(*cachePath / "constants.bin", separated.Constants());
-				WriteBinaryFile(*cachePath / "weights.bin", separated.Weights());
-				WriteBinaryFile(*cachePath / "instructions.bin", separated.Instructions());
-				WriteBinaryFile(*cachePath / "complete", std::span<const std::byte>{});
-				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: wrote {}", cachePath->string()));
+				WriteDecodeAOTCache(*cachePath, artifact, diagnostics);
 			}
 			catch (const std::exception& ex)
 			{
 				LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: write failed ({})", ex.what()));
 			}
 		}
-		return std::move(artifact).Load();
+		return TimedGGUFDiagnostic(diagnostics, "gguf load freshly compiled cpu aot stateful decode module",
+		                           [&] { return std::move(artifact).Load(); });
 	}
 #endif
 
@@ -1052,6 +1101,19 @@ namespace
 		                  std::format("decode-plan inputs={} outputs={} variables={}", decodePlan.inputs.size(),
 		                              decodePlan.outputs.size(), decodePlan.variables.size()));
 		const auto buildEnd = std::chrono::steady_clock::now();
+		if (options.compileOnly)
+		{
+			const auto buildMs = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
+			std::cout << "Compiled LLaMA decode loop tensors=" << imported.summary.tensorCount
+			          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
+			          << " prompt_tokens=" << initialTokenIds.size() << " backend=cpu_aot decode_mode=" << decodeMode
+			          << " fallback_count=0 fallback=false cached_modules=1 build_ms=" << buildMs
+			          << " compile_only=true requested_token_count=" << requestedTokenCount
+			          << " max_run_steps=" << maxRunCount << " inputs=" << decodePlan.inputs.size()
+			          << " outputs=" << decodePlan.outputs.size() << " variables=" << decodePlan.variables.size()
+			          << '\n';
+			return;
+		}
 
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;

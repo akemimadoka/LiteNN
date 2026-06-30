@@ -30,6 +30,9 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
     from recorded artifacts.
   - [ ] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
+    - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits
+          `qwen_smoke_trace.json` and `qwen_smoke_waterfall.md`, and the GGUF AOT path reports separated-cache
+          population, artifact separation, cache read, and JIT/load timing explicitly.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
