@@ -38,6 +38,17 @@
 
 using namespace LiteNN;
 
+#ifdef LITENN_BENCH_HAS_AOT
+extern "C" void
+litenn_cpu_ggml_block_matmul_f32(const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows,
+                                 std::int64_t lhsColumns, std::int64_t lhsRowStride, std::int64_t lhsColumnStride,
+                                 const std::uint8_t*, const std::uint8_t* rhsAligned, std::int64_t rhsOffset,
+                                 std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+                                 std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+                                 std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+                                 std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+#endif
+
 namespace
 {
 
@@ -130,6 +141,23 @@ namespace
 	};
 
 	void SetThroughputCounters(benchmark::State& state, std::size_t batch);
+
+	const char* GGMLBlockFormatBenchmarkName(QuantizedBlockFormat format)
+	{
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q8_0:
+			return "Q8_0";
+		case QuantizedBlockFormat::GGML_Q4_K:
+			return "Q4_K";
+		case QuantizedBlockFormat::GGML_Q5_K:
+			return "Q5_K";
+		case QuantizedBlockFormat::GGML_Q6_K:
+			return "Q6_K";
+		default:
+			return "Unsupported";
+		}
+	}
 
 	Graph BuildLinear(std::size_t batch, std::mt19937& rng)
 	{
@@ -998,6 +1026,128 @@ namespace
 	}
 
 #ifdef LITENN_BENCH_HAS_AOT
+	void FillGGMLBenchmarkBlock(std::span<std::uint8_t> block, QuantizedBlockFormat format, std::uint32_t seed)
+	{
+		constexpr std::uint16_t f16One = 0x3c00U;
+		constexpr std::uint16_t f16Zero = 0x0000U;
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q8_0:
+			block[0] = static_cast<std::uint8_t>(f16One & 0xffU);
+			block[1] = static_cast<std::uint8_t>((f16One >> 8U) & 0xffU);
+			for (std::size_t lane = 0; lane < 32; ++lane)
+			{
+				block[2 + lane] = static_cast<std::uint8_t>((seed + lane * 13U) & 0xffU);
+			}
+			break;
+		case QuantizedBlockFormat::GGML_Q4_K:
+		case QuantizedBlockFormat::GGML_Q5_K: {
+			block[0] = static_cast<std::uint8_t>(f16One & 0xffU);
+			block[1] = static_cast<std::uint8_t>((f16One >> 8U) & 0xffU);
+			block[2] = static_cast<std::uint8_t>(f16Zero & 0xffU);
+			block[3] = static_cast<std::uint8_t>((f16Zero >> 8U) & 0xffU);
+			for (std::size_t i = 4; i < 16; ++i)
+			{
+				block[i] = 1U;
+			}
+			if (format == QuantizedBlockFormat::GGML_Q5_K)
+			{
+				for (std::size_t i = 16; i < 48; ++i)
+				{
+					block[i] = static_cast<std::uint8_t>((seed + i * 3U) & 0xffU);
+				}
+				for (std::size_t i = 48; i < 176; ++i)
+				{
+					block[i] = static_cast<std::uint8_t>((seed + i * 5U) & 0xffU);
+				}
+			}
+			else
+			{
+				for (std::size_t i = 16; i < 144; ++i)
+				{
+					block[i] = static_cast<std::uint8_t>((seed + i * 5U) & 0xffU);
+				}
+			}
+			break;
+		}
+		case QuantizedBlockFormat::GGML_Q6_K:
+			for (std::size_t i = 0; i < 192; ++i)
+			{
+				block[i] = static_cast<std::uint8_t>((seed + i * 7U) & 0xffU);
+			}
+			for (std::size_t i = 192; i < 208; ++i)
+			{
+				block[i] = 1U;
+			}
+			block[208] = static_cast<std::uint8_t>(f16One & 0xffU);
+			block[209] = static_cast<std::uint8_t>((f16One >> 8U) & 0xffU);
+			break;
+		default:
+			break;
+		}
+	}
+
+	std::vector<std::uint8_t> MakeGGMLBenchmarkStorage(QuantizedBlockFormat format, std::size_t rows,
+	                                                   std::size_t columns)
+	{
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || columns % layout->elementsPerBlock != 0)
+		{
+			throw std::invalid_argument("unsupported GGML helper benchmark shape");
+		}
+		const auto blockCount = columns / layout->elementsPerBlock;
+		std::vector<std::uint8_t> storage(rows * blockCount * layout->bytesPerBlock);
+		for (std::size_t row = 0; row < rows; ++row)
+		{
+			for (std::size_t block = 0; block < blockCount; ++block)
+			{
+				const auto offset = (row * blockCount + block) * layout->bytesPerBlock;
+				FillGGMLBenchmarkBlock(std::span<std::uint8_t>(storage).subspan(offset, layout->bytesPerBlock), format,
+				                       static_cast<std::uint32_t>(row * 131U + block * 17U));
+			}
+		}
+		return storage;
+	}
+
+	void BMGGMLBlockMatMulHelper(benchmark::State& state, QuantizedBlockFormat format, std::size_t batch,
+	                             std::size_t inputWidth, std::size_t outputWidth, std::uint64_t threadCount)
+	{
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout)
+		{
+			state.SkipWithError("unsupported GGML block format");
+			return;
+		}
+		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
+		auto lhs = MakeInputData(batch * inputWidth);
+		std::vector<float> output(batch * outputWidth);
+
+		const auto invoke = [&] {
+			litenn_cpu_ggml_block_matmul_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()),
+			    1, nullptr, output.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(outputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+	}
+
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
 	{
 		std::vector<Tensor<CPU>> outputs;
@@ -3135,6 +3285,27 @@ namespace
 			QuantizedWeightKind::PackedInt4,
 			QuantizedWeightKind::PackedFP4E2M1,
 		};
+#ifdef LITENN_BENCH_HAS_AOT
+		constexpr std::array ggmlBlockFormats{
+			QuantizedBlockFormat::GGML_Q8_0,
+			QuantizedBlockFormat::GGML_Q4_K,
+			QuantizedBlockFormat::GGML_Q5_K,
+			QuantizedBlockFormat::GGML_Q6_K,
+		};
+		for (const auto format : ggmlBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				auto* benchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("GGMLBlockMatMulHelper/{}/T{}/batch:1/in:4096/out:4096",
+				                GGMLBlockFormatBenchmarkName(format), threadCount),
+				    [=](benchmark::State& state) {
+					    BMGGMLBlockMatMulHelper(state, format, 1, 4096, 4096, static_cast<std::uint64_t>(threadCount));
+				    });
+				benchmarkCase->Unit(benchmark::kMillisecond);
+			}
+		}
+#endif
 		for (const auto kind : kModelKinds)
 		{
 			for (const auto batch : kBatchSizes)
