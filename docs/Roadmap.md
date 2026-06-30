@@ -641,6 +641,25 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       The profile report now prints layer shapes, estimated FLOPs, selected helper thread counts, sidecar-vs-MLIR gate
       reasons, and an emitted-object symbol check for `litenn_cpu_matmul_bias_relu_parallel_f32`.
 - [x] Extend `litenn_profile` with CUDA launch breakdowns.
+- [ ] Add a whole-process performance profile bundle tool for flame graphs and waterfall timelines.
+      Current `litenn_profile` can be used directly for deterministic backend evidence such as emitted-object
+      disassembly, CPU AOT instruction statistics, CPU helper-selection counters, CUDA launch breakdowns, and Vulkan
+      profile rows. It is not yet a sampling profiler and does not produce a unified timeline across import, lowering,
+      compile, load, execution, transfer, and synchronization phases.
+      - [ ] Emit Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
+            GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
+            steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases.
+      - [ ] Add platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
+            and a macOS Instruments-compatible import path when available.
+      - [ ] Normalize sampled stacks into collapsed-stack and Speedscope JSON outputs; optionally render SVG/HTML flame
+            graphs when the external renderer is installed.
+      - [ ] Correlate samples with waterfall spans by thread id and timestamp, preserving backend, model, shape,
+            token-count, compiler-option, commit, and tool-version metadata in the bundle manifest.
+      - [ ] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
+            tracked artifacts while the bundle still records enough anonymized model metadata for comparison.
+      - [ ] Acceptance: one command produces a profile directory containing raw tool logs, `trace.json`,
+            `speedscope.json` or collapsed stacks, optional flame-graph HTML/SVG, benchmark/profile CSVs, and a short
+            Markdown summary of top compile/runtime bottlenecks.
 
 Completed notes:
 
