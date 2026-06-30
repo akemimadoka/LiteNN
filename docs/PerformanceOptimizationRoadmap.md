@@ -33,6 +33,10 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits
           `qwen_smoke_trace.json` and `qwen_smoke_waterfall.md`, and the GGUF AOT path reports separated-cache
           population, artifact separation, cache read, and JIT/load timing explicitly.
+    - [x] Cache-population visibility/fix: GGUF decode AOT cache writes now stream large regions in chunks with progress
+          diagnostics and build separated metadata directly from the compiled artifact, avoiding an extra multi-GB
+          `SeparateRodata()` weight copy during cache population. Borrowing/mapping original GGUF weight regions remains
+          the G16.7 production target.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

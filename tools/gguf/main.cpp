@@ -772,33 +772,61 @@ namespace
 		}
 		input.seekg(0, std::ios::beg);
 		std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-		input.read(reinterpret_cast<char*>(bytes.data()), size);
-		if (!input && input.gcount() != size)
+		constexpr std::size_t kChunkBytes = 64ull * 1024ull * 1024ull;
+		std::size_t offset = 0;
+		while (offset < bytes.size())
+		{
+			const auto remaining = bytes.size() - offset;
+			const auto chunk = std::min(remaining, kChunkBytes);
+			input.read(reinterpret_cast<char*>(bytes.data() + offset), static_cast<std::streamsize>(chunk));
+			if (input.gcount() != static_cast<std::streamsize>(chunk))
+			{
+				throw std::runtime_error("failed to read cached artifact file: " + path.string());
+			}
+			offset += chunk;
+		}
+		if (!input && offset != bytes.size())
 		{
 			throw std::runtime_error("failed to read cached artifact file: " + path.string());
 		}
 		return bytes;
 	}
 
-	void WriteBinaryFile(const std::filesystem::path& path, std::span<const std::byte> bytes)
-	{
-		std::ofstream output(path, std::ios::binary);
-		if (!output)
-		{
-			throw std::runtime_error("failed to open cached artifact file for write: " + path.string());
-		}
-		output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-		if (!output)
-		{
-			throw std::runtime_error("failed to write cached artifact file: " + path.string());
-		}
-	}
-
 	void WriteBinaryFileTimed(const std::filesystem::path& path, std::span<const std::byte> bytes, bool diagnostics,
 	                          std::string_view label)
 	{
 		LogGGUFDiagnostic(diagnostics, std::format("{} bytes={} path={}", label, bytes.size(), path.generic_string()));
-		TimedGGUFDiagnostic(diagnostics, label, [&] { WriteBinaryFile(path, bytes); });
+		TimedGGUFDiagnostic(diagnostics, label, [&] {
+			std::ofstream output(path, std::ios::binary);
+			if (!output)
+			{
+				throw std::runtime_error("failed to open cached artifact file for write: " + path.string());
+			}
+
+			constexpr std::size_t kChunkBytes = 64ull * 1024ull * 1024ull;
+			constexpr std::size_t kProgressBytes = 512ull * 1024ull * 1024ull;
+			std::size_t offset = 0;
+			std::size_t nextProgress = kProgressBytes;
+			while (offset < bytes.size())
+			{
+				const auto remaining = bytes.size() - offset;
+				const auto chunk = std::min(remaining, kChunkBytes);
+				output.write(reinterpret_cast<const char*>(bytes.data() + offset), static_cast<std::streamsize>(chunk));
+				if (!output)
+				{
+					throw std::runtime_error("failed to write cached artifact file: " + path.string());
+				}
+				offset += chunk;
+				if (diagnostics && (offset >= nextProgress || offset == bytes.size()))
+				{
+					LogGGUFDiagnostic(diagnostics, std::format("{} progress {}/{} bytes", label, offset, bytes.size()));
+					while (nextProgress <= offset)
+					{
+						nextProgress += kProgressBytes;
+					}
+				}
+			}
+		});
 	}
 
 	std::uint64_t FNV1a(std::string_view text)
@@ -891,19 +919,18 @@ namespace
 		}
 
 		std::filesystem::create_directories(cachePath);
-		auto separated = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache separate rodata",
-		                                     [&] { return artifact.SeparateRodata(); });
+		auto metadata = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache build metadata",
+		                                    [&] { return artifact.BuildSeparatedMetadata(); });
 		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache regions: metadata={} constants={} weights={} "
 		                                           "instructions={}",
-		                                           separated.Metadata().size(), separated.Constants().size(),
-		                                           separated.Weights().size(), separated.Instructions().size()));
-		WriteBinaryFileTimed(cachePath / "metadata.bin", separated.Metadata(), diagnostics,
-		                     "gguf decode aot cache write metadata");
-		WriteBinaryFileTimed(cachePath / "constants.bin", separated.Constants(), diagnostics,
+		                                           metadata.size(), artifact.Constants().size(),
+		                                           artifact.Weights().size(), artifact.Instructions().size()));
+		WriteBinaryFileTimed(cachePath / "metadata.bin", metadata, diagnostics, "gguf decode aot cache write metadata");
+		WriteBinaryFileTimed(cachePath / "constants.bin", artifact.Constants(), diagnostics,
 		                     "gguf decode aot cache write constants");
-		WriteBinaryFileTimed(cachePath / "weights.bin", separated.Weights(), diagnostics,
+		WriteBinaryFileTimed(cachePath / "weights.bin", artifact.Weights(), diagnostics,
 		                     "gguf decode aot cache write weights");
-		WriteBinaryFileTimed(cachePath / "instructions.bin", separated.Instructions(), diagnostics,
+		WriteBinaryFileTimed(cachePath / "instructions.bin", artifact.Instructions(), diagnostics,
 		                     "gguf decode aot cache write instructions");
 		WriteBinaryFileTimed(cachePath / "complete", std::span<const std::byte>{}, diagnostics,
 		                     "gguf decode aot cache write complete marker");
