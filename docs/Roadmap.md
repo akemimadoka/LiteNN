@@ -646,20 +646,26 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       disassembly, CPU AOT instruction statistics, CPU helper-selection counters, CUDA launch breakdowns, and Vulkan
       profile rows. It is not yet a sampling profiler and does not produce a unified timeline across import, lowering,
       compile, load, execution, transfer, and synchronization phases.
-      - [ ] Emit Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
+      - [x] Add the first `benchmark/profile_bundle.py` command that wraps `litenn_profile` or an arbitrary smoke
+            command, captures stdout/stderr, writes `manifest.json`, `summary.md`, and a command-level
+            Chrome Trace / Perfetto-compatible `trace.json`.
+      - [ ] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
             steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases.
-      - [ ] Add platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
+      - [x] Add the first optional Linux `perf record` wrapper so local Linux runs can capture raw `perf.data` beside
+            the bundle without making platform profilers mandatory.
+      - [ ] Add full platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
             and a macOS Instruments-compatible import path when available.
       - [ ] Normalize sampled stacks into collapsed-stack and Speedscope JSON outputs; optionally render SVG/HTML flame
             graphs when the external renderer is installed.
       - [ ] Correlate samples with waterfall spans by thread id and timestamp, preserving backend, model, shape,
             token-count, compiler-option, commit, and tool-version metadata in the bundle manifest.
-      - [ ] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
+      - [x] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
             tracked artifacts while the bundle still records enough anonymized model metadata for comparison.
       - [ ] Acceptance: one command produces a profile directory containing raw tool logs, `trace.json`,
             `speedscope.json` or collapsed stacks, optional flame-graph HTML/SVG, benchmark/profile CSVs, and a short
-            Markdown summary of top compile/runtime bottlenecks.
+            Markdown summary of top compile/runtime bottlenecks. Current first slice writes raw logs, `trace.json`,
+            `manifest.json`, and `summary.md`; stack normalization and flame graph rendering remain open.
 
 Completed notes:
 

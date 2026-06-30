@@ -21,14 +21,19 @@ those documents describe capability coverage, while this one tracks benchmark-dr
 Goal: make slow paths diagnosable from one reproducible bundle instead of manually stitching together benchmark output,
 object disassembly, backend CSVs, and platform profilers.
 
-Status: planned. The canonical checklist lives in `docs/Roadmap.md` under G6.
+Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.md` under G6.
 
 - [ ] Add a whole-process profile bundle command that combines existing `litenn_profile` evidence with waterfall
   timeline output and optional platform sampling.
-  - Timeline output: Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile, object load,
-    runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
-  - Sampling output: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import adapters that normalize
-    stacks into collapsed-stack and Speedscope JSON formats.
+  - [x] First slice: `benchmark/profile_bundle.py` wraps `litenn_profile` or an arbitrary command, captures
+    stdout/stderr, writes `manifest.json`, `trace.json`, and `summary.md`, and redacts user-specified sensitive paths
+    from recorded artifacts.
+  - [ ] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
+    object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
+  - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
+    requested.
+  - [ ] Sampling normalization: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import adapters
+    normalize stacks into collapsed-stack and Speedscope JSON formats.
   - Flame graph output: optional HTML/SVG rendering when an external renderer is available; raw normalized stacks remain
     the portable fallback.
   - Bundle output: raw logs, `trace.json`, `speedscope.json` or collapsed stacks, benchmark/profile CSVs, anonymized
