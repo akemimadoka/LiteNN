@@ -713,20 +713,25 @@ namespace
 	{
 		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
 		float sum = 0.0F;
-		for (std::uint64_t lane = 0; lane < 32; ++lane)
+		for (std::uint64_t lane = 0; lane < 32; lane += 4)
 		{
-			sum += lhs[static_cast<std::int64_t>(lane) * lhsStride] *
-			       static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 2 + lane)));
+			const auto base = static_cast<std::int64_t>(lane) * lhsStride;
+			sum += lhs[base] * static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 2 + lane)));
+			sum += lhs[base + lhsStride] *
+			       static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 3 + lane)));
+			sum += lhs[base + lhsStride * 2] *
+			       static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 4 + lane)));
+			sum += lhs[base + lhsStride * 3] *
+			       static_cast<float>(static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 5 + lane)));
 		}
 		return d * sum;
 	}
 
-	float DotGGMLQ4Or5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
-	                            std::int64_t lhsStride, QuantizedBlockFormat format)
+	float DotGGMLQ4KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
+	                         std::int64_t lhsStride)
 	{
 		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
 		const auto dmin = ReadGGMLF16Strided(block, byteStride, 2);
-		const auto quantBaseOffset = format == QuantizedBlockFormat::GGML_Q5_K ? 48u : 16u;
 		float acc = 0.0F;
 		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
 		{
@@ -737,21 +742,55 @@ namespace
 			const auto useHighNibble = (subblock % 2) != 0;
 			float quantSum = 0.0F;
 			float lhsSum = 0.0F;
-			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; ++laneInSubblock)
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; laneInSubblock += 4)
 			{
-				const auto lane = subblock * 32 + laneInSubblock;
-				const auto quantByte = static_cast<std::uint32_t>(
-				    GGMLBlockByte(block, byteStride, quantBaseOffset + quantPairOffset + laneInSubblock));
-				auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
-				if (format == QuantizedBlockFormat::GGML_Q5_K)
+				for (std::uint64_t local = 0; local < 4; ++local)
 				{
-					const auto highBits =
-					    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 16 + laneInSubblock));
-					quant |= ((highBits >> subblock) & 1U) << 4U;
+					const auto localLane = laneInSubblock + local;
+					const auto lane = subblock * 32 + localLane;
+					const auto quantByte =
+					    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 16 + quantPairOffset + localLane));
+					const auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+					const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+					quantSum += lhsValue * static_cast<float>(quant);
+					lhsSum += lhsValue;
 				}
-				const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
-				quantSum += lhsValue * static_cast<float>(quant);
-				lhsSum += lhsValue;
+			}
+			acc += d * static_cast<float>(scale) * quantSum - dmin * static_cast<float>(minimum) * lhsSum;
+		}
+		return acc;
+	}
+
+	float DotGGMLQ5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
+	                         std::int64_t lhsStride)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 0);
+		const auto dmin = ReadGGMLF16Strided(block, byteStride, 2);
+		float acc = 0.0F;
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale = 0;
+			std::uint32_t minimum = 0;
+			GGMLQ4Or5KScaleMin(block, byteStride, subblock, scale, minimum);
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			float quantSum = 0.0F;
+			float lhsSum = 0.0F;
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; laneInSubblock += 4)
+			{
+				for (std::uint64_t local = 0; local < 4; ++local)
+				{
+					const auto localLane = laneInSubblock + local;
+					const auto lane = subblock * 32 + localLane;
+					const auto quantByte =
+					    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 48 + quantPairOffset + localLane));
+					const auto highBits = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 16 + localLane));
+					auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+					quant |= ((highBits >> subblock) & 1U) << 4U;
+					const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+					quantSum += lhsValue * static_cast<float>(quant);
+					lhsSum += lhsValue;
+				}
 			}
 			acc += d * static_cast<float>(scale) * quantSum - dmin * static_cast<float>(minimum) * lhsSum;
 		}
@@ -773,18 +812,22 @@ namespace
 					const auto scale = static_cast<float>(
 					    static_cast<std::int8_t>(GGMLBlockByte(block, byteStride, 192 + scaleOffset)));
 					float quantSum = 0.0F;
-					for (std::uint64_t local = 0; local < 16; ++local)
+					for (std::uint64_t local = 0; local < 16; local += 4)
 					{
-						const auto laneInSegment = group * 16 + local;
-						const auto lane = halfBlock * 128 + segment * 32 + laneInSegment;
-						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
-						const auto ql = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, qlOffset));
-						const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
-						const auto qhOffset = halfBlock * 32 + laneInSegment;
-						const auto qh = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 128 + qhOffset));
-						const auto highTwo = (qh >> (segment * 2)) & 3U;
-						const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
-						quantSum += lhs[static_cast<std::int64_t>(lane) * lhsStride] * static_cast<float>(quant);
+						for (std::uint64_t i = 0; i < 4; ++i)
+						{
+							const auto laneInSegment = group * 16 + local + i;
+							const auto lane = halfBlock * 128 + segment * 32 + laneInSegment;
+							const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+							const auto ql = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, qlOffset));
+							const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+							const auto qhOffset = halfBlock * 32 + laneInSegment;
+							const auto qh =
+							    static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 128 + qhOffset));
+							const auto highTwo = (qh >> (segment * 2)) & 3U;
+							const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+							quantSum += lhs[static_cast<std::int64_t>(lane) * lhsStride] * static_cast<float>(quant);
+						}
 					}
 					acc += d * scale * quantSum;
 				}
@@ -801,8 +844,9 @@ namespace
 		case QuantizedBlockFormat::GGML_Q8_0:
 			return DotGGMLQ8_0BlockF32(block, byteStride, lhs, lhsStride);
 		case QuantizedBlockFormat::GGML_Q4_K:
+			return DotGGMLQ4KBlockF32(block, byteStride, lhs, lhsStride);
 		case QuantizedBlockFormat::GGML_Q5_K:
-			return DotGGMLQ4Or5KBlockF32(block, byteStride, lhs, lhsStride, format);
+			return DotGGMLQ5KBlockF32(block, byteStride, lhs, lhsStride);
 		case QuantizedBlockFormat::GGML_Q6_K:
 			return DotGGMLQ6KBlockF32(block, byteStride, lhs, lhsStride);
 		default:

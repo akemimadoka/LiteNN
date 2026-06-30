@@ -2744,6 +2744,10 @@ placement and fallback policy.
       output columns, and cache-friendly output tiling. Current 14B O0 smoke still spends ~56s in MLIR-to-LLVM lowering
       and ~47s in object emission, so the next compile-time win is reducing the remaining non-quantized function/output
       surface rather than changing Interpreter fallback behavior.
+      - [x] Split the CPU sidecar Q4_K and Q5_K block-dot loops so the hot Q4_K path no longer pays the Q5 high-bit
+            branch, and unroll Q8_0/Q4_K/Q5_K/Q6_K lane loops in groups of four. Correctness was validated with the
+            GGUF quantized execution tests; a dedicated sidecar microbenchmark and real 14B before/after run are still
+            needed before claiming an end-to-end speedup.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.
