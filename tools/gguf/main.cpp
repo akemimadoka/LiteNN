@@ -64,17 +64,17 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -208,6 +208,7 @@ namespace
 		bool streamTokens{};
 		bool streamStats{};
 		bool compileOnly{};
+		std::optional<std::size_t> maxCacheLength;
 	};
 
 	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
@@ -278,6 +279,10 @@ namespace
 			else if (arg == "--compile-only")
 			{
 				options.compileOnly = true;
+			}
+			else if (arg == "--max-cache-length")
+			{
+				options.maxCacheLength = ParseSize(requireValue(arg), "max-cache-length");
 			}
 			else if (arg == "--chat-template")
 			{
@@ -1115,14 +1120,27 @@ namespace
 		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(imported.model.UnsafeGraphView());
 		auto tokenPieces = CopyTokenPieces(imported.model.UnsafeGraphView());
 		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
+		const auto maxCacheLength = options.maxCacheLength.value_or(requestedTokenCount);
+		if (maxCacheLength < requestedTokenCount)
+		{
+			throw std::runtime_error(
+			    std::format("decode-loop max-cache-length {} is smaller than requested token count {}", maxCacheLength,
+			                requestedTokenCount));
+		}
 		if (hyperparameters.contextLength > 0 && requestedTokenCount > hyperparameters.contextLength)
 		{
 			throw std::runtime_error(std::format("decode-loop requested {} total tokens but model context length is {}",
 			                                     requestedTokenCount, hyperparameters.contextLength));
 		}
+		if (hyperparameters.contextLength > 0 && maxCacheLength > hyperparameters.contextLength)
+		{
+			throw std::runtime_error(std::format("decode-loop max-cache-length {} exceeds model context length {}",
+			                                     maxCacheLength, hyperparameters.contextLength));
+		}
 		LogGGUFDiagnostic(diagnostics,
-		                  std::format("decode-loop tokens prompt={} generated_request={} max_cache_length={}",
-		                              initialTokenIds.size(), options.steps, requestedTokenCount));
+		                  std::format("decode-loop tokens prompt={} generated_request={} requested_token_count={} "
+		                              "max_cache_length={}",
+		                              initialTokenIds.size(), options.steps, requestedTokenCount, maxCacheLength));
 		const auto maxRunCount = requestedTokenCount - 1;
 		const auto buildStart = std::chrono::steady_clock::now();
 		const std::string_view decodeMode = options.statefulDecode ? "stateful" : "functional";
@@ -1134,7 +1152,7 @@ namespace
 					return LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(imported.model.UnsafeGraphView(),
 					                                                     { .prefillSequenceLength = 1,
 					                                                       .decodePastLength = 0,
-					                                                       .maxCacheLength = requestedTokenCount,
+					                                                       .maxCacheLength = maxCacheLength,
 					                                                       .preserveQuantizedWeights = true,
 					                                                       .dynamicDecodePosition = true });
 				});
@@ -1148,20 +1166,19 @@ namespace
 				                              decodePlan.inputs.size(), projection.functionalOutputCount,
 				                              projection.publicOutputIndices.size(), projection.stateAliases.size()));
 				const auto cachePath =
-				    DecodeAOTCachePath(options.inputPath, requestedTokenCount, compilerOptions, decodeMode);
+				    DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
 				return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot stateful decode module", [&] {
 					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, diagnostics);
 				});
 			}
 
 			auto graph = TimedGGUFDiagnostic(diagnostics, "gguf lower decode-capacity graph", [&] {
-				return LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(
-				    imported.model.UnsafeGraphView(), requestedTokenCount, { .preserveQuantizedWeights = true });
+				return LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(imported.model.UnsafeGraphView(), maxCacheLength,
+				                                                      { .preserveQuantizedWeights = true });
 			});
 			decodePlan = TimedGGUFDiagnostic(diagnostics, "gguf build executable plan",
 			                                 [&] { return LiteNN::Detail::BuildExecutablePlanFromGraph(graph); });
-			const auto cachePath =
-			    DecodeAOTCachePath(options.inputPath, requestedTokenCount, compilerOptions, decodeMode);
+			const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
 			return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot decode module", [&] {
 				return LoadOrCompileDecodeModule(decodePlan, compilerOptions, cachePath, diagnostics);
 			});
@@ -1178,9 +1195,9 @@ namespace
 			          << " prompt_tokens=" << initialTokenIds.size() << " backend=cpu_aot decode_mode=" << decodeMode
 			          << " fallback_count=0 fallback=false cached_modules=1 build_ms=" << buildMs
 			          << " compile_only=true requested_token_count=" << requestedTokenCount
-			          << " max_run_steps=" << maxRunCount << " inputs=" << decodePlan.inputs.size()
-			          << " outputs=" << decodePlan.outputs.size() << " variables=" << decodePlan.variables.size()
-			          << '\n';
+			          << " max_cache_length=" << maxCacheLength << " max_run_steps=" << maxRunCount
+			          << " inputs=" << decodePlan.inputs.size() << " outputs=" << decodePlan.outputs.size()
+			          << " variables=" << decodePlan.variables.size() << '\n';
 			return;
 		}
 		imported = {};
@@ -1361,6 +1378,7 @@ namespace
 		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
 		          << " backend=cpu_aot decode_mode=" << decodeMode
 		          << " fallback_count=0 fallback=false cached_modules=1 executed_steps=" << executedSteps
+		          << " requested_token_count=" << requestedTokenCount << " max_cache_length=" << maxCacheLength
 		          << " build_ms=" << buildMs << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg
 		          << " step_ms_min=" << stepMsMin << " step_ms_max=" << stepMsMax
 		          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
@@ -1392,11 +1410,13 @@ namespace
 			       << "generated_tokens=" << generatedTokenCount
 			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
 			       << " backend=cpu_aot decode_mode=" << decodeMode
-			       << " fallback_count=0 executed_steps=" << executedSteps << " run_ms=" << runMs
-			       << " step_ms_avg=" << stepMsAvg << " prompt_replay_steps=" << promptReplayStepCount
-			       << " prompt_replay_ms=" << promptReplayMs << " generation_steps=" << generationStepCount
-			       << " generation_ms=" << generationMs << " ms_per_generated_token=" << msPerToken
-			       << " generated_tokens_per_second=" << tokensPerSecond << '\n';
+			       << " fallback_count=0 executed_steps=" << executedSteps
+			       << " requested_token_count=" << requestedTokenCount << " max_cache_length=" << maxCacheLength
+			       << " run_ms=" << runMs << " step_ms_avg=" << stepMsAvg
+			       << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
+			       << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
+			       << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
+			       << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + *options.outputPath);

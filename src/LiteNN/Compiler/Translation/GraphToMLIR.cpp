@@ -2404,29 +2404,29 @@ namespace litenn
 				auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
 				const auto rank = resultType.getRank();
 				auto identity = AffineMap::getMultiDimIdentityMap(rank, &ctx_);
-				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
 				SmallVector<utils::IteratorType> iterTypes(rank, utils::IteratorType::parallel);
+				SmallVector<AffineExpr> zeroThenLoopDims;
+				zeroThenLoopDims.reserve(rank);
+				for (int64_t dim = 0; dim < rank; ++dim)
+				{
+					zeroThenLoopDims.push_back(static_cast<std::size_t>(dim) == node.axis
+					                               ? builder_.getAffineConstantExpr(0)
+					                               : builder_.getAffineDimExpr(dim));
+				}
+				auto indexMap = AffineMap::get(rank, 0, builder_.getAffineConstantExpr(0), &ctx_);
+				auto updatesMap = AffineMap::get(rank, 0, zeroThenLoopDims, &ctx_);
 				auto generic = builder_.create<linalg::GenericOp>(
-				    loc, TypeRange{ resultType }, ValueRange{ data }, ValueRange{ empty },
-				    SmallVector<AffineMap>{ identity, identity }, iterTypes,
+				    loc, TypeRange{ resultType }, ValueRange{ data, indices, updates }, ValueRange{ data },
+				    SmallVector<AffineMap>{ identity, indexMap, updatesMap, identity }, iterTypes,
 				    [&](OpBuilder& b, Location l, ValueRange args) {
-					    auto zero = b.create<arith::ConstantIndexOp>(l, 0).getResult();
-					    auto scatterIndex = b.create<tensor::ExtractOp>(l, indices, ValueRange{ zero }).getResult();
+					    auto scatterIndex = args[1];
 					    if (!isa<IndexType>(scatterIndex.getType()))
 					    {
 						    scatterIndex = b.create<arith::IndexCastOp>(l, b.getIndexType(), scatterIndex).getResult();
 					    }
 					    auto axisIndex = b.create<linalg::IndexOp>(l, static_cast<int64_t>(node.axis)).getResult();
 					    auto matches = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, axisIndex, scatterIndex);
-					    SmallVector<Value> updateCoords;
-					    updateCoords.reserve(rank);
-					    for (int64_t dim = 0; dim < rank; ++dim)
-					    {
-						    updateCoords.push_back(static_cast<std::size_t>(dim) == node.axis
-						                               ? zero
-						                               : b.create<linalg::IndexOp>(l, dim).getResult());
-					    }
-					    auto update = b.create<tensor::ExtractOp>(l, updates, updateCoords).getResult();
+					    auto update = args[2];
 					    Value replacement = update;
 					    if (node.mode == ScatterMode::Add)
 					    {
@@ -2437,6 +2437,11 @@ namespace litenn
 					    b.create<linalg::YieldOp>(
 					        l, b.create<arith::SelectOp>(l, matches, replacement, args[0]).getResult());
 				    });
+				if (node.axis == 0 && node.mode == ScatterMode::Update && outputInfos[0].dtype == DataType::Float32 &&
+				    rank == 3)
+				{
+					generic->setAttr("litenn.scatter_update_axis0_f32_rank3", builder_.getUnitAttr());
+				}
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
@@ -2459,6 +2464,82 @@ namespace litenn
 			              std::map<std::size_t, Value>&)
 			{
 				throw std::runtime_error("GraphToMLIR does not support RWKVWKVNode yet; use the interpreter path");
+			}
+
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const ActivePrefixAttentionNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
+			{
+				if (outputInfos.size() != 1)
+				{
+					throw std::runtime_error("GraphToMLIR ActivePrefixAttentionNode expected one output");
+				}
+				const auto queryInfo = sg.GetOutputInfo(node.query);
+				const auto keysInfo = sg.GetOutputInfo(node.keys);
+				const auto valuesInfo = sg.GetOutputInfo(node.values);
+				const auto positionInfo = sg.GetOutputInfo(node.currentPosition);
+				const auto keysRank = keysInfo.shape.size();
+				const auto valuesRank = valuesInfo.shape.size();
+				const auto keyDim = keysRank == 2 ? keysInfo.shape[1] : keysInfo.shape[2];
+				const auto valueDim = valuesRank == 2 ? valuesInfo.shape[1] : valuesInfo.shape[2];
+				const auto kvHeads = keysRank == 2 ? 1uz : keysInfo.shape[1];
+				if (queryInfo.dtype != DataType::Float32 || keysInfo.dtype != DataType::Float32 ||
+				    valuesInfo.dtype != DataType::Float32 || positionInfo.dtype != DataType::Int64 ||
+				    queryInfo.shape.size() != 2 || queryInfo.shape[0] != 1 ||
+				    !((keysRank == 2 && valuesRank == 2) || (keysRank == 3 && valuesRank == 3)) ||
+				    positionInfo.shape != std::vector<std::size_t>{ 1 } || keysInfo.shape[0] != valuesInfo.shape[0] ||
+				    keyDim != queryInfo.shape[1] || (keysRank == 3 && keysInfo.shape[1] != valuesInfo.shape[1]) ||
+				    node.kvHeadIndex >= kvHeads || outputInfos[0].shape != std::vector<std::size_t>{ 1, valueDim })
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR ActivePrefixAttentionNode currently supports Float32 query [1,H], 2D keys/values "
+					    "[C,D] or 3D keys/values [C,KV,D], Int64 currentPosition[1], and output [1,V]");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				auto output = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType())
+				                  .getResult();
+				auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+				auto filled =
+				    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ output }).getResult(0);
+				auto dim0 = getAffineDimExpr(0, &ctx_);
+				auto dim1 = getAffineDimExpr(1, &ctx_);
+				auto zeroExpr = getAffineConstantExpr(0, &ctx_);
+				auto kvHeadExpr = getAffineConstantExpr(static_cast<int64_t>(node.kvHeadIndex), &ctx_);
+				auto queryMap = AffineMap::get(2, 0, { zeroExpr, zeroExpr }, &ctx_);
+				auto keyMap = keysRank == 2 ? AffineMap::get(2, 0, { zeroExpr, zeroExpr }, &ctx_)
+				                            : AffineMap::get(2, 0, { zeroExpr, kvHeadExpr, zeroExpr }, &ctx_);
+				auto valueAffineMap = valuesRank == 2 ? AffineMap::get(2, 0, { zeroExpr, dim1 }, &ctx_)
+				                                      : AffineMap::get(2, 0, { zeroExpr, kvHeadExpr, dim1 }, &ctx_);
+				auto positionMap = AffineMap::get(2, 0, { zeroExpr }, &ctx_);
+				auto outputMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType },
+				    ValueRange{ getVal(valueMap, node.query), getVal(valueMap, node.keys),
+				                getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
+				    ValueRange{ filled },
+				    SmallVector<AffineMap>{ queryMap, keyMap, valueAffineMap, positionMap, outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto queryDep = emitScalarToF32(b, l, args[0]);
+					    auto keyDep = emitScalarToF32(b, l, args[1]);
+					    auto valueDep = emitScalarToF32(b, l, args[2]);
+					    auto posF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), args[3]).getResult();
+					    auto out = emitScalarToF32(b, l, args[4]);
+					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+					    auto dep = b.create<arith::AddFOp>(l, b.create<arith::AddFOp>(l, queryDep, keyDep).getResult(),
+					                                       b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
+					                   .getResult();
+					    auto sum = b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, dep, zeroF32).getResult())
+					                   .getResult();
+					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+				    });
+				generic->setAttr("litenn.active_prefix_attention",
+				                 builder_.getF64FloatAttr(static_cast<double>(node.scale)));
+				generic->setAttr("litenn.active_prefix_attention_kv_head",
+				                 builder_.getI64IntegerAttr(static_cast<int64_t>(node.kvHeadIndex)));
+				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,

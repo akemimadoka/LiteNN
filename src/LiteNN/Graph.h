@@ -324,6 +324,18 @@ namespace LiteNN
 			NodeOutput timeFirst;
 		};
 
+		// Single-token decode attention over a full-capacity KV cache. Only
+		// positions [0, currentPosition] are active; suffix capacity is ignored.
+		struct ActivePrefixAttentionNode
+		{
+			NodeOutput query;
+			NodeOutput keys;
+			NodeOutput values;
+			NodeOutput currentPosition;
+			double scale{ 1.0 };
+			std::size_t kvHeadIndex{};
+		};
+
 		// Numerically stable softmax along one axis.
 		struct SoftmaxNode
 		{

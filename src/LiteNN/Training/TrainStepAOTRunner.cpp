@@ -171,6 +171,11 @@ namespace LiteNN::Training
 				    {
 					    return OutProdNode{ remap(n.lhs), remap(n.rhs) };
 				    }
+				    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+				    {
+					    return ActivePrefixAttentionNode{ remap(n.query),           remap(n.keys), remap(n.values),
+						                                  remap(n.currentPosition), n.scale,       n.kvHeadIndex };
+				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
 					    return SaveActivationNode{ remap(n.input), n.slotId };

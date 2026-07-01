@@ -37,6 +37,13 @@ namespace litenn
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedGetRowsAttr = "litenn.ggml_block_quantized_get_rows";
+		constexpr llvm::StringLiteral kActivePrefixAttentionAttr = "litenn.active_prefix_attention";
+		constexpr llvm::StringLiteral kActivePrefixAttentionKVHeadAttr = "litenn.active_prefix_attention_kv_head";
+		constexpr llvm::StringLiteral kActivePrefixAttentionHelper = "litenn_cpu_active_prefix_attention_f32";
+		constexpr llvm::StringLiteral kActivePrefixAttentionRank3Helper =
+		    "litenn_cpu_active_prefix_attention_f32_rank3";
+		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Attr = "litenn.scatter_update_axis0_f32_rank3";
+		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
@@ -354,6 +361,173 @@ namespace litenn
 			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
 			builder.create<mlir::func::CallOp>(loc, helper,
 			                                   mlir::ValueRange{ dynamicStorage, dynamicIndices, dynamicOut, format });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteActivePrefixAttentionCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                                     mlir::OpBuilder& builder)
+		{
+			auto scaleAttr = op->getAttrOfType<mlir::FloatAttr>(kActivePrefixAttentionAttr);
+			auto kvHeadAttr = op->getAttrOfType<mlir::IntegerAttr>(kActivePrefixAttentionKVHeadAttr);
+			if (!scaleAttr || op->getNumResults() != 0 || op.getInputs().size() != 4 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			auto query = op.getInputs()[0];
+			auto keys = op.getInputs()[1];
+			auto values = op.getInputs()[2];
+			auto position = op.getInputs()[3];
+			auto out = op.getOutputs()[0];
+			auto queryType = llvm::dyn_cast<mlir::MemRefType>(query.getType());
+			auto keysType = llvm::dyn_cast<mlir::MemRefType>(keys.getType());
+			auto valuesType = llvm::dyn_cast<mlir::MemRefType>(values.getType());
+			auto positionType = llvm::dyn_cast<mlir::MemRefType>(position.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!queryType || !keysType || !valuesType || !positionType || !outType || queryType.getRank() != 2 ||
+			    !((keysType.getRank() == 2 && valuesType.getRank() == 2) ||
+			      (keysType.getRank() == 3 && valuesType.getRank() == 3)) ||
+			    positionType.getRank() != 1 || outType.getRank() != 2 || !queryType.getElementType().isF32() ||
+			    !keysType.getElementType().isF32() || !valuesType.getElementType().isF32() ||
+			    !outType.getElementType().isF32() || !positionType.getElementType().isInteger(64))
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto f64 = builder.getF64Type();
+			auto* mlirContext = builder.getContext();
+			auto dynamicLayoutRank1 =
+			    mlir::StridedLayoutAttr::get(mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic });
+			auto dynamicLayoutRank2 = mlir::StridedLayoutAttr::get(
+			    mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicLayoutRank3 = mlir::StridedLayoutAttr::get(
+			    mlirContext, mlir::ShapedType::kDynamic,
+			    { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicF32Rank2 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                             queryType.getElementType(), dynamicLayoutRank2);
+			auto dynamicF32Rank3 = mlir::MemRefType::get(
+			    { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			    keysType.getElementType(), dynamicLayoutRank3);
+			auto dynamicI64Rank1 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, positionType.getElementType(),
+			                                             dynamicLayoutRank1);
+			const bool rank3 = keysType.getRank() == 3;
+			llvm::SmallVector<mlir::Type, 8> funcArgTypes;
+			funcArgTypes.push_back(dynamicF32Rank2);
+			funcArgTypes.push_back(rank3 ? mlir::Type(dynamicF32Rank3) : mlir::Type(dynamicF32Rank2));
+			funcArgTypes.push_back(rank3 ? mlir::Type(dynamicF32Rank3) : mlir::Type(dynamicF32Rank2));
+			funcArgTypes.push_back(dynamicI64Rank1);
+			funcArgTypes.push_back(dynamicF32Rank2);
+			funcArgTypes.push_back(f64);
+			if (rank3)
+			{
+				funcArgTypes.push_back(builder.getI64Type());
+			}
+			auto funcType = builder.getFunctionType(funcArgTypes, mlir::TypeRange{});
+			auto helperName = rank3 ? kActivePrefixAttentionRank3Helper : kActivePrefixAttentionHelper;
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, helperName, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicQuery = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, query).getResult();
+			auto dynamicPosition = builder.create<mlir::memref::CastOp>(loc, dynamicI64Rank1, position).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, out).getResult();
+			auto scale = builder.create<mlir::arith::ConstantFloatOp>(loc, f64, scaleAttr.getValue()).getResult();
+			if (rank3)
+			{
+				auto dynamicKeys = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, keys).getResult();
+				auto dynamicValues = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, values).getResult();
+				auto kvHead = builder
+				                  .create<mlir::arith::ConstantIntOp>(loc, builder.getI64Type(),
+				                                                      kvHeadAttr ? kvHeadAttr.getInt() : 0)
+				                  .getResult();
+				llvm::SmallVector<mlir::Value, 8> callArgs;
+				callArgs.push_back(dynamicQuery);
+				callArgs.push_back(dynamicKeys);
+				callArgs.push_back(dynamicValues);
+				callArgs.push_back(dynamicPosition);
+				callArgs.push_back(dynamicOut);
+				callArgs.push_back(scale);
+				callArgs.push_back(kvHead);
+				builder.create<mlir::func::CallOp>(loc, helper, callArgs);
+			}
+			else
+			{
+				auto dynamicKeys = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, keys).getResult();
+				auto dynamicValues = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, values).getResult();
+				llvm::SmallVector<mlir::Value, 8> callArgs;
+				callArgs.push_back(dynamicQuery);
+				callArgs.push_back(dynamicKeys);
+				callArgs.push_back(dynamicValues);
+				callArgs.push_back(dynamicPosition);
+				callArgs.push_back(dynamicOut);
+				callArgs.push_back(scale);
+				builder.create<mlir::func::CallOp>(loc, helper, callArgs);
+			}
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteScatterUpdateAxis0F32Rank3Call(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                                          mlir::OpBuilder& builder)
+		{
+			if (!op->hasAttr(kScatterUpdateAxis0F32Rank3Attr) || op->getNumResults() != 0 ||
+			    op.getInputs().size() != 3 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			auto data = op.getInputs()[0];
+			auto indices = op.getInputs()[1];
+			auto updates = op.getInputs()[2];
+			auto out = op.getOutputs()[0];
+			auto dataType = llvm::dyn_cast<mlir::MemRefType>(data.getType());
+			auto indicesType = llvm::dyn_cast<mlir::MemRefType>(indices.getType());
+			auto updatesType = llvm::dyn_cast<mlir::MemRefType>(updates.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!dataType || !indicesType || !updatesType || !outType || dataType.getRank() != 3 ||
+			    updatesType.getRank() != 3 || indicesType.getRank() != 1 || outType.getRank() != 3 ||
+			    !dataType.getElementType().isF32() || !updatesType.getElementType().isF32() ||
+			    !outType.getElementType().isF32() || !indicesType.getElementType().isInteger(64))
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto dynamicF32Rank3 = mlir::MemRefType::get(
+			    { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			    dataType.getElementType());
+			auto dynamicI64Rank1 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, indicesType.getElementType());
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicF32Rank3, dynamicI64Rank1, dynamicF32Rank3, dynamicF32Rank3 },
+			    mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kScatterUpdateAxis0F32Rank3Helper);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, kScatterUpdateAxis0F32Rank3Helper, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicData = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, data).getResult();
+			auto dynamicIndices = builder.create<mlir::memref::CastOp>(loc, dynamicI64Rank1, indices).getResult();
+			auto dynamicUpdates = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, updates).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, out).getResult();
+			builder.create<mlir::func::CallOp>(
+			    loc, helper, mlir::ValueRange{ dynamicData, dynamicIndices, dynamicUpdates, dynamicOut });
 			op.erase();
 			return mlir::success();
 		}
@@ -1465,6 +1639,14 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
+					if (mlir::succeeded(rewriteActivePrefixAttentionCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
+					if (mlir::succeeded(rewriteScatterUpdateAxis0F32Rank3Call(getOperation(), op, builder)))
+					{
+						continue;
+					}
 					if (mlir::succeeded(rewriteGGMLBlockQuantizedGetRowsCall(getOperation(), op, builder)))
 					{
 						continue;

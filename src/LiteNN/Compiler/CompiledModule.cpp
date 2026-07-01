@@ -677,6 +677,199 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	extern "C" void litenn_cpu_active_prefix_attention_f32(
+	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+	    const float* keysAligned, std::int64_t keysOffset, std::int64_t keyRows, std::int64_t keyColumns,
+	    std::int64_t keyRowStride, std::int64_t keyColumnStride, const float*, const float* valuesAligned,
+	    std::int64_t valuesOffset, std::int64_t valueRows, std::int64_t valueColumns, std::int64_t valueRowStride,
+	    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
+	    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, double scale)
+	{
+		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
+		    keyColumns != queryColumns || valueRows != keyRows || valueColumns != outColumns || outColumns <= 0)
+		{
+			return;
+		}
+		const auto currentPosition = positionAligned[positionOffset + positionStride * 0];
+		if (currentPosition < 0)
+		{
+			return;
+		}
+		const auto activeRows = std::min<std::int64_t>(
+		    keyRows, currentPosition > std::numeric_limits<std::int64_t>::max() - 1 ? keyRows : currentPosition + 1);
+		if (activeRows <= 0)
+		{
+			return;
+		}
+		const auto* query = queryAligned + queryOffset;
+		const auto* keys = keysAligned + keysOffset;
+		const auto* values = valuesAligned + valuesOffset;
+		auto* out = outAligned + outOffset;
+		for (std::int64_t col = 0; col < outColumns; ++col)
+		{
+			out[col * outColumnStride] = 0.0F;
+		}
+
+		auto scoreAt = [&](std::int64_t row) {
+			float score = 0.0F;
+			const auto* keyRow = keys + row * keyRowStride;
+			for (std::int64_t col = 0; col < queryColumns; ++col)
+			{
+				score += query[col * queryColumnStride] * keyRow[col * keyColumnStride];
+			}
+			return score * static_cast<float>(scale);
+		};
+
+		float maxScore = -std::numeric_limits<float>::infinity();
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			maxScore = std::max(maxScore, scoreAt(row));
+		}
+		float denominator = 0.0F;
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			denominator += std::exp(scoreAt(row) - maxScore);
+		}
+		if (denominator == 0.0F)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			const auto weight = std::exp(scoreAt(row) - maxScore) / denominator;
+			const auto* valueRow = values + row * valueRowStride;
+			for (std::int64_t col = 0; col < outColumns; ++col)
+			{
+				out[col * outColumnStride] += weight * valueRow[col * valueColumnStride];
+			}
+		}
+	}
+
+	extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
+	    const float*, const float* dataAligned, std::int64_t dataOffset, std::int64_t dataDim0, std::int64_t dataDim1,
+	    std::int64_t dataDim2, std::int64_t dataStride0, std::int64_t dataStride1, std::int64_t dataStride2,
+	    const std::int64_t*, const std::int64_t* indicesAligned, std::int64_t indicesOffset, std::int64_t indicesSize,
+	    std::int64_t indicesStride, const float*, const float* updatesAligned, std::int64_t updatesOffset,
+	    std::int64_t updatesDim0, std::int64_t updatesDim1, std::int64_t updatesDim2, std::int64_t updatesStride0,
+	    std::int64_t updatesStride1, std::int64_t updatesStride2, float*, float* outAligned, std::int64_t outOffset,
+	    std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0,
+	    std::int64_t outStride1, std::int64_t outStride2)
+	{
+		if (indicesSize != 1 || dataDim0 != outDim0 || dataDim1 != outDim1 || dataDim2 != outDim2 || updatesDim0 != 1 ||
+		    updatesDim1 != dataDim1 || updatesDim2 != dataDim2 || dataDim0 <= 0 || dataDim1 <= 0 || dataDim2 <= 0)
+		{
+			return;
+		}
+		const auto row = indicesAligned[indicesOffset + indicesStride * 0];
+		if (row < 0 || row >= dataDim0)
+		{
+			return;
+		}
+
+		const auto* data = dataAligned + dataOffset;
+		const auto* updates = updatesAligned + updatesOffset;
+		auto* out = outAligned + outOffset;
+		if (data != out)
+		{
+			for (std::int64_t i = 0; i < dataDim0; ++i)
+			{
+				for (std::int64_t j = 0; j < dataDim1; ++j)
+				{
+					for (std::int64_t k = 0; k < dataDim2; ++k)
+					{
+						out[i * outStride0 + j * outStride1 + k * outStride2] =
+						    data[i * dataStride0 + j * dataStride1 + k * dataStride2];
+					}
+				}
+			}
+		}
+
+		for (std::int64_t j = 0; j < dataDim1; ++j)
+		{
+			for (std::int64_t k = 0; k < dataDim2; ++k)
+			{
+				out[row * outStride0 + j * outStride1 + k * outStride2] =
+				    updates[j * updatesStride1 + k * updatesStride2];
+			}
+		}
+	}
+
+	extern "C" void litenn_cpu_active_prefix_attention_f32_rank3(
+	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+	    const float* keysAligned, std::int64_t keysOffset, std::int64_t keyRows, std::int64_t keyHeads,
+	    std::int64_t keyColumns, std::int64_t keyRowStride, std::int64_t keyHeadStride, std::int64_t keyColumnStride,
+	    const float*, const float* valuesAligned, std::int64_t valuesOffset, std::int64_t valueRows,
+	    std::int64_t valueHeads, std::int64_t valueColumns, std::int64_t valueRowStride, std::int64_t valueHeadStride,
+	    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
+	    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, double scale, std::int64_t kvHead)
+	{
+		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
+		    keyColumns != queryColumns || valueRows != keyRows || valueHeads != keyHeads || kvHead < 0 ||
+		    kvHead >= keyHeads || valueColumns != outColumns || outColumns <= 0)
+		{
+			return;
+		}
+		const auto currentPosition = positionAligned[positionOffset + positionStride * 0];
+		if (currentPosition < 0)
+		{
+			return;
+		}
+		const auto activeRows = std::min<std::int64_t>(
+		    keyRows, currentPosition > std::numeric_limits<std::int64_t>::max() - 1 ? keyRows : currentPosition + 1);
+		if (activeRows <= 0)
+		{
+			return;
+		}
+		const auto* query = queryAligned + queryOffset;
+		const auto* keys = keysAligned + keysOffset;
+		const auto* values = valuesAligned + valuesOffset;
+		auto* out = outAligned + outOffset;
+		for (std::int64_t col = 0; col < outColumns; ++col)
+		{
+			out[col * outColumnStride] = 0.0F;
+		}
+
+		auto scoreAt = [&](std::int64_t row) {
+			float score = 0.0F;
+			const auto* keyHead = keys + row * keyRowStride + kvHead * keyHeadStride;
+			for (std::int64_t col = 0; col < queryColumns; ++col)
+			{
+				score += query[col * queryColumnStride] * keyHead[col * keyColumnStride];
+			}
+			return score * static_cast<float>(scale);
+		};
+
+		float maxScore = -std::numeric_limits<float>::infinity();
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			maxScore = std::max(maxScore, scoreAt(row));
+		}
+		float denominator = 0.0F;
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			denominator += std::exp(scoreAt(row) - maxScore);
+		}
+		if (denominator == 0.0F)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			const auto weight = std::exp(scoreAt(row) - maxScore) / denominator;
+			const auto* valueHead = values + row * valueRowStride + kvHead * valueHeadStride;
+			for (std::int64_t col = 0; col < outColumns; ++col)
+			{
+				out[col * outColumnStride] += weight * valueHead[col * valueColumnStride];
+			}
+		}
+	}
+
 	std::uint8_t GGMLBlockByte(const std::uint8_t* block, std::int64_t byteStride, std::uint64_t byteOffset)
 	{
 		return block[static_cast<std::int64_t>(byteOffset) * byteStride];
@@ -2579,6 +2772,14 @@ namespace
 				    copy.timeFirst = remap(copy.timeFirst);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+			    {
+				    copy.query = remap(copy.query);
+				    copy.keys = remap(copy.keys);
+				    copy.values = remap(copy.values);
+				    copy.currentPosition = remap(copy.currentPosition);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {
 				    copy.logits = remap(copy.logits);
@@ -4100,6 +4301,12 @@ namespace
 		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3",
+		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32_rank3));
+		RegisterJITRuntimeSymbol("litenn_cpu_scatter_update_axis0_f32_rank3",
+		                         reinterpret_cast<void*>(&litenn_cpu_scatter_update_axis0_f32_rank3));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_get_rows_i32_f32",

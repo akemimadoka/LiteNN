@@ -44,9 +44,18 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           prompt/generation step, while the user's `max_cache_length=2049` run measured about `6 s` per generated step.
           The current capacity-decode graph masks inactive cache suffixes but still scans the full static capacity each
           step.
-    - [ ] Replace full-capacity decode attention with active-prefix or paged-KV execution. This is a production
-          blocker for long context: 2K capacity is already visibly slow, and the 1M-context target cannot be met by
-          static full-buffer scans.
+    - [x] Replace the immediate full-capacity decode attention hot path with active-prefix execution. On 2026-07-02,
+          `ActivePrefixAttentionNode` gained CPU AOT lowering plus a rank-3 KV-cache path that reads
+          `[capacity, kvHeads, headDim]` directly instead of materializing per-head `Slice+Reshape` tensors. A real
+          Qwen2.5-Coder-14B Q4_K_M `--stateful --max-tokens 1 --max-cache-length 2048` smoke improved from about
+          `4.3-5.0 s/step` to about `0.62-0.72 s/step`, and the lowered LLVM instruction count dropped from about
+          `1.67M` to about `0.52M`.
+    - [ ] Add a head-aware RoPE helper/node for decode. Correct query RoPE must use head-local dimensions; applying RoPE
+          to the full concatenated query vector is numerically wrong for Qwen/LLaMA. The current correct per-head RoPE
+          path still expands enough IR to keep first-run CPU AOT compile time high.
+    - [ ] Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
+          scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
+          capacity-independent artifact shapes.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

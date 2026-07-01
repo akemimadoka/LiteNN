@@ -266,6 +266,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", dest="steps", type=int, default=8)
     parser.add_argument("--max-tokens", dest="steps", type=int, help="Alias for --steps")
     parser.add_argument(
+        "--max-cache-length",
+        type=int,
+        help="Compile the LiteNN decode artifact with this KV-cache capacity instead of prompt_tokens + max_tokens",
+    )
+    parser.add_argument(
         "--until-eos",
         action="store_true",
         help="Keep decoding until EOS is generated, using --steps/--max-tokens as the safety cap",
@@ -602,6 +607,8 @@ def main() -> int:
             decode_cmd.append("--stream-stats")
         if args.compile_only:
             decode_cmd.append("--compile-only")
+        if args.max_cache_length is not None:
+            decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
         decode = run_step(
             "litenn_decode_token_ids",
             decode_cmd,
@@ -656,6 +663,7 @@ def main() -> int:
         "stream_tokens": args.stream_tokens,
         "stream_stats": args.stream_stats,
         "compile_only": args.compile_only,
+        "max_cache_length": args.max_cache_length,
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),
         "fallback_used": False,
         "production_candidate": args.backend_policy == "cuda-native",

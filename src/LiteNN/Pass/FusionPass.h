@@ -200,6 +200,13 @@ namespace LiteNN
 						    countInput(node.timeDecay);
 						    countInput(node.timeFirst);
 					    }
+					    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+					    {
+						    countInput(node.query);
+						    countInput(node.keys);
+						    countInput(node.values);
+						    countInput(node.currentPosition);
+					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {
 						    countInput(node.input);
@@ -791,6 +798,11 @@ namespace LiteNN
 				    {
 					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
 						                    remap(n.timeFirst) };
+				    }
+				    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+				    {
+					    return ActivePrefixAttentionNode{ remap(n.query),           remap(n.keys), remap(n.values),
+						                                  remap(n.currentPosition), n.scale,       n.kvHeadIndex };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {

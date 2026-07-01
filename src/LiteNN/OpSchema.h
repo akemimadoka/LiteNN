@@ -477,6 +477,14 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<ActivePrefixAttentionNode> : NodeSchemaTraits<ScanNode>
+		{
+			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
+			static constexpr std::size_t MinInputs = 4;
+			static constexpr std::size_t MaxInputs = 4;
+		};
+
+		template <>
 		struct NodeSchemaTraits<SoftmaxNode> : NodeSchemaTraits<UnaryOpNode>
 		{
 			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
@@ -774,6 +782,10 @@ namespace LiteNN
 			    else if constexpr (std::same_as<T, RWKVWKVNode>)
 			    {
 				    return { value.key, value.value, value.receptance, value.timeDecay, value.timeFirst };
+			    }
+			    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+			    {
+				    return { value.query, value.keys, value.values, value.currentPosition };
 			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {

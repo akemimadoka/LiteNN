@@ -397,7 +397,7 @@ namespace LiteNN::GGUF
 
 		NodeOutput AddSingleHeadAttentionAtPosition(Subgraph& subgraph, NodeOutput queries, NodeOutput rotatedKeys,
 		                                            NodeOutput values, NodeOutput currentPosition,
-		                                            NodeOutput activeMask, const LLaMAHyperparameters& hyperparameters)
+		                                            const LLaMAHyperparameters& hyperparameters)
 		{
 			ValidateSupportedRoPE(hyperparameters, "dynamic decode");
 			const auto queryInfo = subgraph.GetOutputInfo(queries);
@@ -410,10 +410,11 @@ namespace LiteNN::GGUF
 				throw std::runtime_error("Dynamic decode attention received incompatible query/key/value shapes");
 			}
 			const auto rotatedQueries = AddLLaMARoPEAtPositions(subgraph, queries, currentPosition, hyperparameters);
-			Layer::FlashAttnExtOptions options;
-			options.scale = 1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1]));
-			options.mask = activeMask;
-			return Layer::AddFlashAttnExt(subgraph, rotatedQueries, rotatedKeys, values, options);
+			const auto output =
+			    subgraph.AddNode(ActivePrefixAttentionNode{ rotatedQueries, rotatedKeys, values, currentPosition,
+			                                                1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1])) },
+			                     { OutputInfo{ queryInfo.dtype, { 1, valueInfo.shape[1] } } });
+			return { output, 0 };
 		}
 
 		NodeOutput Reshape2D(Subgraph& subgraph, NodeOutput input, std::size_t rows, std::size_t cols)
@@ -943,8 +944,6 @@ namespace LiteNN::GGUF
 			Layer::AddScatter(subgraph, cache.keys, currentPosition, rotatedKeys3D, 0),
 			Layer::AddScatter(subgraph, cache.values, currentPosition, values3D, 0),
 		};
-		const auto activeMask = AddActiveCacheMask(subgraph, currentPosition, maxCacheLength, hiddenInfo.dtype);
-
 		std::vector<NodeOutput> headContexts;
 		headContexts.reserve(hyperparameters.attentionHeadCount);
 		const auto queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead();
@@ -956,20 +955,13 @@ namespace LiteNN::GGUF
 				                 { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } }),
 				0,
 			};
-			const auto keyHead3D = NodeOutput{
-				subgraph.AddNode(SliceNode{ updatedCache.keys, 1, kvHeadIndex, 1 },
-				                 { OutputInfo{ hiddenInfo.dtype, { maxCacheLength, 1, headDim } } }),
-				0,
-			};
-			const auto valueHead3D = NodeOutput{
-				subgraph.AddNode(SliceNode{ updatedCache.values, 1, kvHeadIndex, 1 },
-				                 { OutputInfo{ hiddenInfo.dtype, { maxCacheLength, 1, headDim } } }),
-				0,
-			};
-			headContexts.push_back(AddSingleHeadAttentionAtPosition(
-			    subgraph, queryHead, Reshape2D(subgraph, keyHead3D, maxCacheLength, headDim),
-			    Reshape2D(subgraph, valueHead3D, maxCacheLength, headDim), currentPosition, activeMask,
-			    hyperparameters));
+			const auto rotatedQueryHead =
+			    AddLLaMARoPEAtPositions(subgraph, queryHead, currentPosition, hyperparameters);
+			const auto attentionOutput = subgraph.AddNode(
+			    ActivePrefixAttentionNode{ rotatedQueryHead, updatedCache.keys, updatedCache.values, currentPosition,
+			                               1.0 / std::sqrt(static_cast<double>(headDim)), kvHeadIndex },
+			    { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } });
+			headContexts.push_back({ attentionOutput, 0 });
 		}
 
 		NodeOutput mergedContext = headContexts.front();

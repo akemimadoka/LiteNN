@@ -415,6 +415,11 @@ namespace LiteNN
 					    return RWKVWKVNode{ remap(n.key), remap(n.value), remap(n.receptance), remap(n.timeDecay),
 						                    remap(n.timeFirst) };
 				    }
+				    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+				    {
+					    return ActivePrefixAttentionNode{ remap(n.query),           remap(n.keys), remap(n.values),
+						                                  remap(n.currentPosition), n.scale,       n.kvHeadIndex };
+				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
 					    return SoftmaxNode{ remap(n.input), n.axis };

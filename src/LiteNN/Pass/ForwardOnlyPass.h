@@ -212,6 +212,15 @@ namespace LiteNN
 								                    remapOutput(node.receptance), remapOutput(node.timeDecay),
 								                    remapOutput(node.timeFirst) };
 						    }
+						    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+						    {
+							    return ActivePrefixAttentionNode{ remapOutput(node.query),
+								                                  remapOutput(node.keys),
+								                                  remapOutput(node.values),
+								                                  remapOutput(node.currentPosition),
+								                                  node.scale,
+								                                  node.kvHeadIndex };
+						    }
 						    else if constexpr (std::same_as<T, SoftmaxNode>)
 						    {
 							    return SoftmaxNode{ remapOutput(node.input), node.axis };

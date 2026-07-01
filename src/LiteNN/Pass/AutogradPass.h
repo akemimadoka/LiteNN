@@ -536,8 +536,9 @@ namespace LiteNN
 						    SaveIfNeeded(fwdSg, graph, node.labels, saved, insideLoop);
 					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
-					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, SoftmaxNode> ||
-					                       std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
+					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
+					                       std::same_as<T, SoftmaxNode> || std::same_as<T, RoPENode> ||
+					                       std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
 					                       std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
 					                       std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
@@ -862,6 +863,15 @@ namespace LiteNN
 						                    { nodeMap[n.receptance.node], n.receptance.port },
 						                    { nodeMap[n.timeDecay.node], n.timeDecay.port },
 						                    { nodeMap[n.timeFirst.node], n.timeFirst.port } };
+				    }
+				    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+				    {
+					    return ActivePrefixAttentionNode{ { nodeMap[n.query.node], n.query.port },
+						                                  { nodeMap[n.keys.node], n.keys.port },
+						                                  { nodeMap[n.values.node], n.values.port },
+						                                  { nodeMap[n.currentPosition.node], n.currentPosition.port },
+						                                  n.scale,
+						                                  n.kvHeadIndex };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -1336,6 +1346,11 @@ namespace LiteNN
 					    {
 						    throw std::runtime_error(
 						        "AutogradPass: RWKVWKVNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, ActivePrefixAttentionNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: ActivePrefixAttentionNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {

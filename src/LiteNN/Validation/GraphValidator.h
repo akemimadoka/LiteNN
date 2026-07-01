@@ -1164,6 +1164,52 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const ActivePrefixAttentionNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto query =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.query, "ActivePrefixAttentionNode query", true);
+			const auto keys =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.keys, "ActivePrefixAttentionNode keys", true);
+			const auto values =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.values, "ActivePrefixAttentionNode values", true);
+			const auto position = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.currentPosition,
+			                                         "ActivePrefixAttentionNode currentPosition", true);
+			if (query.shape.size() != 2 || query.shape[0] != 1 ||
+			    !((keys.shape.size() == 2 && values.shape.size() == 2) ||
+			      (keys.shape.size() == 3 && values.shape.size() == 3)))
+			{
+				Fail(subgraphId, nodeId,
+				     "ActivePrefixAttentionNode requires query [1, headDim], 2D keys/values [capacity, dim], or 3D "
+				     "keys/values [capacity, kvHeads, dim]");
+			}
+			if (keys.shape[0] != values.shape[0])
+			{
+				Fail(subgraphId, nodeId, "ActivePrefixAttentionNode key/value/query shapes are inconsistent");
+			}
+			const auto keyDim = keys.shape.size() == 2 ? keys.shape[1] : keys.shape[2];
+			const auto valueDim = values.shape.size() == 2 ? values.shape[1] : values.shape[2];
+			if (keyDim != query.shape[1] || (keys.shape.size() == 3 && keys.shape[1] != values.shape[1]))
+			{
+				Fail(subgraphId, nodeId, "ActivePrefixAttentionNode key/value/query shapes are inconsistent");
+			}
+			if (keys.shape.size() == 3 && node.kvHeadIndex >= keys.shape[1])
+			{
+				Fail(subgraphId, nodeId, "ActivePrefixAttentionNode kvHeadIndex is out of range");
+			}
+			if (query.dtype != keys.dtype || query.dtype != values.dtype || !IsFloatingDataType(query.dtype))
+			{
+				Fail(subgraphId, nodeId, "ActivePrefixAttentionNode requires matching floating-point inputs");
+			}
+			if (position.dtype != DataType::Int64 || position.shape != std::vector<std::size_t>{ 1 })
+			{
+				Fail(subgraphId, nodeId, "ActivePrefixAttentionNode currentPosition must be Int64[1]");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { query.dtype, { 1, valueDim } },
+			           "ActivePrefixAttentionNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const SoftmaxNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);
