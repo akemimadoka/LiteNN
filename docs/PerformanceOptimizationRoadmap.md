@@ -50,9 +50,14 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           Qwen2.5-Coder-14B Q4_K_M `--stateful --max-tokens 1 --max-cache-length 2048` smoke improved from about
           `4.3-5.0 s/step` to about `0.62-0.72 s/step`, and the lowered LLVM instruction count dropped from about
           `1.67M` to about `0.52M`.
-    - [ ] Add a head-aware RoPE helper/node for decode. Correct query RoPE must use head-local dimensions; applying RoPE
-          to the full concatenated query vector is numerically wrong for Qwen/LLaMA. The current correct per-head RoPE
-          path still expands enough IR to keep first-run CPU AOT compile time high.
+    - [x] Add a head-aware RoPE helper/node for decode. Correct query RoPE must use head-local dimensions; applying RoPE
+          to the full concatenated query vector is numerically wrong for Qwen/LLaMA. On 2026-07-02, runtime-position
+          `RoPENode` gained a CPU AOT helper rewrite (`litenn_cpu_rope_at_positions_f32`) so per-head decode RoPE stays
+          numerically correct without expanding into Reshape/Slice/Cos/Sin/Concat IR. A real
+          Qwen2.5-Coder-14B Q4_K_M `--stateful --max-tokens 1 --max-cache-length 2048 --no-aot-cache-write` smoke
+          completed in about 57s wall time, compiled the stateful decode artifact in about 22.1s, produced about 389k
+          LLVM instructions after the entry wrapper, ran prompt/generation steps in about `0.63-0.72 s/step`, and
+          generated token `9707` / `Hello`.
     - [ ] Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.

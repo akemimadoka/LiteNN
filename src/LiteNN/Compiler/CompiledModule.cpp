@@ -677,6 +677,46 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	extern "C" void litenn_cpu_rope_at_positions_f32(const float*, const float* inputAligned, std::int64_t inputOffset,
+	                                                 std::int64_t inputRows, std::int64_t inputColumns,
+	                                                 std::int64_t inputRowStride, std::int64_t inputColumnStride,
+	                                                 const std::int64_t*, const std::int64_t* positionAligned,
+	                                                 std::int64_t positionOffset, std::int64_t positionSize,
+	                                                 std::int64_t positionStride, float*, float* outAligned,
+	                                                 std::int64_t outOffset, std::int64_t outRows,
+	                                                 std::int64_t outColumns, std::int64_t outRowStride,
+	                                                 std::int64_t outColumnStride, double base, double frequencyScale)
+	{
+		if (inputRows <= 0 || inputColumns <= 0 || (inputColumns % 2) != 0 || inputRows != outRows ||
+		    inputColumns != outColumns || positionSize != inputRows || !std::isfinite(base) || base <= 0.0 ||
+		    !std::isfinite(frequencyScale) || frequencyScale <= 0.0)
+		{
+			return;
+		}
+
+		const auto* input = inputAligned + inputOffset;
+		auto* out = outAligned + outOffset;
+		for (std::int64_t row = 0; row < inputRows; ++row)
+		{
+			const auto position = static_cast<double>(positionAligned[positionOffset + row * positionStride]);
+			for (std::int64_t pair = 0; pair < inputColumns / 2; ++pair)
+			{
+				const auto angle =
+				    position * std::pow(base, -2.0 * static_cast<double>(pair) / static_cast<double>(inputColumns)) *
+				    frequencyScale;
+				const auto cosine = std::cos(angle);
+				const auto sine = std::sin(angle);
+				const auto first = static_cast<double>(input[row * inputRowStride + pair * 2 * inputColumnStride]);
+				const auto second =
+				    static_cast<double>(input[row * inputRowStride + (pair * 2 + 1) * inputColumnStride]);
+				out[row * outRowStride + pair * 2 * outColumnStride] =
+				    static_cast<float>(first * cosine - second * sine);
+				out[row * outRowStride + (pair * 2 + 1) * outColumnStride] =
+				    static_cast<float>(first * sine + second * cosine);
+			}
+		}
+	}
+
 	extern "C" void litenn_cpu_active_prefix_attention_f32(
 	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
 	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
@@ -4301,6 +4341,8 @@ namespace
 		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_rope_at_positions_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_rope_at_positions_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3",

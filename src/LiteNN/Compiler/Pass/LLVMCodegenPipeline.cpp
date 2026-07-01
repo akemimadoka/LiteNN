@@ -37,6 +37,9 @@ namespace litenn
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedGetRowsAttr = "litenn.ggml_block_quantized_get_rows";
+		constexpr llvm::StringLiteral kRoPEAtPositionsBaseAttr = "litenn.rope_at_positions_base";
+		constexpr llvm::StringLiteral kRoPEAtPositionsFrequencyScaleAttr = "litenn.rope_at_positions_frequency_scale";
+		constexpr llvm::StringLiteral kRoPEAtPositionsHelper = "litenn_cpu_rope_at_positions_f32";
 		constexpr llvm::StringLiteral kActivePrefixAttentionAttr = "litenn.active_prefix_attention";
 		constexpr llvm::StringLiteral kActivePrefixAttentionKVHeadAttr = "litenn.active_prefix_attention_kv_head";
 		constexpr llvm::StringLiteral kActivePrefixAttentionHelper = "litenn_cpu_active_prefix_attention_f32";
@@ -361,6 +364,67 @@ namespace litenn
 			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
 			builder.create<mlir::func::CallOp>(loc, helper,
 			                                   mlir::ValueRange{ dynamicStorage, dynamicIndices, dynamicOut, format });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteRoPEAtPositionsCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                               mlir::OpBuilder& builder)
+		{
+			auto baseAttr = op->getAttrOfType<mlir::FloatAttr>(kRoPEAtPositionsBaseAttr);
+			auto frequencyScaleAttr = op->getAttrOfType<mlir::FloatAttr>(kRoPEAtPositionsFrequencyScaleAttr);
+			if (!baseAttr || !frequencyScaleAttr || op->getNumResults() != 0 || op.getInputs().size() != 2 ||
+			    op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			auto input = op.getInputs()[0];
+			auto positions = op.getInputs()[1];
+			auto out = op.getOutputs()[0];
+			auto inputType = llvm::dyn_cast<mlir::MemRefType>(input.getType());
+			auto positionType = llvm::dyn_cast<mlir::MemRefType>(positions.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!inputType || !positionType || !outType || inputType.getRank() != 2 || positionType.getRank() != 1 ||
+			    outType.getRank() != 2 || !inputType.getElementType().isF32() ||
+			    !positionType.getElementType().isInteger(64) || !outType.getElementType().isF32())
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto f64 = builder.getF64Type();
+			auto* mlirContext = builder.getContext();
+			auto dynamicLayoutRank1 =
+			    mlir::StridedLayoutAttr::get(mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic });
+			auto dynamicLayoutRank2 = mlir::StridedLayoutAttr::get(
+			    mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicF32Rank2 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                             inputType.getElementType(), dynamicLayoutRank2);
+			auto dynamicI64Rank1 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, positionType.getElementType(),
+			                                             dynamicLayoutRank1);
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicF32Rank2, dynamicI64Rank1, dynamicF32Rank2, f64, f64 }, mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kRoPEAtPositionsHelper);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, kRoPEAtPositionsHelper, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicInput = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, input).getResult();
+			auto dynamicPositions = builder.create<mlir::memref::CastOp>(loc, dynamicI64Rank1, positions).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, out).getResult();
+			auto base = builder.create<mlir::arith::ConstantFloatOp>(loc, f64, baseAttr.getValue()).getResult();
+			auto frequencyScale =
+			    builder.create<mlir::arith::ConstantFloatOp>(loc, f64, frequencyScaleAttr.getValue()).getResult();
+			builder.create<mlir::func::CallOp>(
+			    loc, helper, mlir::ValueRange{ dynamicInput, dynamicPositions, dynamicOut, base, frequencyScale });
 			op.erase();
 			return mlir::success();
 		}
@@ -1639,6 +1703,10 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
+					if (mlir::succeeded(rewriteRoPEAtPositionsCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
 					if (mlir::succeeded(rewriteActivePrefixAttentionCall(getOperation(), op, builder)))
 					{
 						continue;

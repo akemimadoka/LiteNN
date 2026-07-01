@@ -2676,6 +2676,39 @@ namespace litenn
 				const auto dtype = outputInfos[0].dtype;
 				const auto sequenceLength = inputInfo.shape[0];
 				const auto featureSize = inputInfo.shape[1];
+				const auto ropePositionInfo =
+				    node.positions ? std::optional{ sg.GetOutputInfo(*node.positions) } : std::nullopt;
+				if (node.positions && dtype == DataType::Float32 && ropePositionInfo->dtype == DataType::Int64)
+				{
+					if (inputInfo.dtype != DataType::Float32 ||
+					    ropePositionInfo->shape != std::vector<std::size_t>{ sequenceLength })
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR RoPENode fast path requires Float32 input and Int64 positions");
+					}
+					const auto loc = builder_.getUnknownLoc();
+					const auto resultType = convertTensorType(ctx_, dtype, outputInfos[0].shape);
+					auto output =
+					    builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType())
+					        .getResult();
+					auto dim0 = getAffineDimExpr(0, &ctx_);
+					auto dim1 = getAffineDimExpr(1, &ctx_);
+					auto inputMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+					auto positionMap = AffineMap::get(2, 0, { dim0 }, &ctx_);
+					auto outputMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+					auto generic = builder_.create<linalg::GenericOp>(
+					    loc, TypeRange{ resultType },
+					    ValueRange{ getVal(valueMap, node.input), getVal(valueMap, *node.positions) },
+					    ValueRange{ output }, SmallVector<AffineMap>{ inputMap, positionMap, outputMap },
+					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
+					                                      utils::IteratorType::parallel },
+					    [&](OpBuilder& b, Location l, ValueRange args) { b.create<linalg::YieldOp>(l, args[0]); });
+					generic->setAttr("litenn.rope_at_positions_base", builder_.getF64FloatAttr(node.base));
+					generic->setAttr("litenn.rope_at_positions_frequency_scale",
+					                 builder_.getF64FloatAttr(node.frequencyScale));
+					valueMap[nodeId] = { generic.getResult(0) };
+					return;
+				}
 				const auto halfDim = featureSize / 2;
 				const std::vector<std::size_t> pairShape{ sequenceLength, halfDim, 2 };
 				const std::vector<std::size_t> laneShape{ sequenceLength, halfDim, 1 };
