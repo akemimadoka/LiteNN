@@ -2796,10 +2796,15 @@ Purpose: treat `max_tokens=2048` as a small smoke size, not a scalability ceilin
 1M-token context with compile time, artifact size, cache population, and runtime memory all scaling by model structure
 and active KV pages rather than by a fully unrolled static max-cache-length graph.
 
-- [ ] Add first-class compile diagnostics for long-context smoke runs:
+- [x] Add first-class compile diagnostics for long-context smoke runs:
       qwen smoke logs must stream to disk while running, preserve partial evidence after interruption, and emit
       Chrome Trace / Perfetto-compatible waterfall JSON for import, tokenize, schedule build, MLIR/LLVM compile,
       object emission, separated-cache population, JIT/load, prompt replay, and per-token decode phases.
+      Completed on 2026-07-02: Qwen smoke now writes streaming stdout/stderr evidence, `qwen_smoke_trace.json`, and
+      `qwen_smoke_waterfall.md`; CPU AOT compile diagnostics report externalization, MLIR lowering/bufferization,
+      LLVM lowering, instruction counts, object emission, cache/load, and decode-loop per-step timing. The latest
+      Qwen2.5-Coder-14B Q4_K_M `max_cache_length=2048` smoke completed successfully with active-prefix attention and
+      dynamic RoPE helper lowering, producing token `9707` / `Hello`.
 - [ ] Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
