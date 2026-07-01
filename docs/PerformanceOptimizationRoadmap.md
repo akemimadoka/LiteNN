@@ -37,6 +37,16 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           diagnostics and build separated metadata directly from the compiled artifact, avoiding an extra multi-GB
           `SeparateRodata()` weight copy during cache population. Borrowing/mapping original GGUF weight regions remains
           the G16.7 production target.
+    - [x] Runtime memory pressure slice: GGUF decode now releases the imported archive before token execution, and
+          separated-artifact cache hits can move owned constants/weights into the CPU module instead of copying the
+          multi-GB weights region during load.
+    - [x] Qwen decode smoke diagnosis: on 2026-07-01, `max_cache_length=10` measured about `0.54-0.62 s` per
+          prompt/generation step, while the user's `max_cache_length=2049` run measured about `6 s` per generated step.
+          The current capacity-decode graph masks inactive cache suffixes but still scans the full static capacity each
+          step.
+    - [ ] Replace full-capacity decode attention with active-prefix or paged-KV execution. This is a production
+          blocker for long context: 2K capacity is already visibly slow, and the 1M-context target cannot be met by
+          static full-buffer scans.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

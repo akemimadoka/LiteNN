@@ -2472,7 +2472,8 @@ placement and fallback policy.
 - [x] Wire real tokenizer execution into the Qwen smoke flow:
       `--llamacpp-tokenizer-tool` converts `--prompt` into validated token ids for direct LiteNN decode, then
       detokenizes generated ids to `--text-output` (or a work-directory default) through the same vocabulary;
-      `--apply-chat-template` formats an instruct-model user turn and assistant-generation marker before tokenization.
+      prompt execution now applies the model chat template by default for instruct-model reply behavior, while
+      `--raw-prompt` preserves deliberate continuation-style completion.
 - [x] Validate the optional adapter against a real Qwen2.5-Coder-14B-Instruct Q4_K_M GGUF:
       on 2026-06-21, `hello` tokenized to id `14990` with `addBos=false` and detokenized byte-for-byte back to `hello`;
       the default chat template produced Qwen's user/assistant markers and the expected nine-token prompt sequence.

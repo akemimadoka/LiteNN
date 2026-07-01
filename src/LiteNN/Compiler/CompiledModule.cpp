@@ -13290,6 +13290,25 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() const
 	return CompiledModule<CPU>::Load(Image());
 }
 
+CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() &&
+{
+	auto metadata = ValidateSeparatedImage(Image());
+	auto constants = RegionBytes({ .data = constants_.data(), .size = constants_.size() }, kConstantsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend,
+	    RegionBytes({ .data = instructions_.data(), .size = instructions_.size() }, kInstructionsRegionName),
+	    constants);
+	auto module = CompiledModule<CPU>::Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	});
+	module.impl_->externalConstants = std::move(constants_);
+	module.impl_->externalWeights = std::move(weights_);
+	return module;
+}
+
 CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions() const
 {
 	return CompiledModule<CPU>::LoadBorrowedExternalRegions(Image());

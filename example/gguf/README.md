@@ -267,10 +267,14 @@ prompt/template/token boundary directly:
 python311 example\gguf\qwen_smoke.py `
   --model model.gguf --prompt "hello" `
   --llamacpp-tokenizer-tool build-llamacpp-adapter\litenn_llamacpp_adapter.exe `
-  --apply-chat-template `
   --steps 1 --output build\qwen_smoke\tokens.txt `
   --text-output build\qwen_smoke\generated.txt
 ```
+
+With `--llamacpp-tokenizer-tool`, `qwen_smoke.py` treats `--prompt` as an
+instruct-model user turn by default and applies the model's chat template before
+tokenization. Add `--raw-prompt` only when deliberate continuation-style text
+completion is desired.
 
 The smoke driver defaults LiteNN decode to `LITENN_COMPILE_DIAGNOSTICS=1` and
 `LITENN_CPU_AOT_LLVM_OPT_LEVEL=0`, because large GGUF first-run CPU AOT

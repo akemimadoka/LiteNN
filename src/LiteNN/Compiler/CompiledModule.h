@@ -217,6 +217,7 @@ namespace LiteNN
 		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
 
 		CompiledModule<CPU> Load() const;
+		CompiledModule<CPU> Load() &&;
 		/// Loads instructions into a CPU module while borrowing constants/weights from this artifact.
 		/// The artifact must outlive every run of the returned module.
 		CompiledModule<CPU> LoadBorrowedExternalRegions() const;
@@ -392,6 +393,7 @@ namespace LiteNN
 
 	private:
 		friend class CompiledModuleArtifact;
+		friend class CompiledModuleSeparatedArtifact;
 
 		struct Impl;
 

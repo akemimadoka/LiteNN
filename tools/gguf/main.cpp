@@ -527,6 +527,19 @@ namespace
 		return (*tokenList)[static_cast<std::size_t>(tokenId)];
 	}
 
+	std::string TokenPieceText(std::span<const std::string> tokenPieces, std::int32_t tokenId)
+	{
+		if (tokenPieces.empty())
+		{
+			return "<missing-tokenizer.ggml.tokens>";
+		}
+		if (tokenId < 0 || static_cast<std::size_t>(tokenId) >= tokenPieces.size())
+		{
+			return "<out-of-range>";
+		}
+		return tokenPieces[static_cast<std::size_t>(tokenId)];
+	}
+
 	std::string TokenPiecesText(const LiteNN::Graph& archive, std::span<const std::int32_t> tokenIds)
 	{
 		std::string text = "[";
@@ -540,6 +553,32 @@ namespace
 		}
 		text += "]";
 		return text;
+	}
+
+	std::string TokenPiecesText(std::span<const std::string> tokenPieces, std::span<const std::int32_t> tokenIds)
+	{
+		std::string text = "[";
+		for (std::size_t i = 0; i < tokenIds.size(); ++i)
+		{
+			if (i != 0)
+			{
+				text += ',';
+			}
+			text += EscapeTokenPiece(TokenPieceText(tokenPieces, tokenIds[i]));
+		}
+		text += "]";
+		return text;
+	}
+
+	std::vector<std::string> CopyTokenPieces(const LiteNN::Graph& archive)
+	{
+		const auto* tokens = archive.FindMetadata("tokenizer.ggml.tokens");
+		const auto* tokenList = tokens == nullptr ? nullptr : std::get_if<std::vector<std::string>>(&tokens->value);
+		if (tokenList == nullptr)
+		{
+			return {};
+		}
+		return *tokenList;
 	}
 
 	std::vector<std::int32_t> TokenizePrompt(const std::filesystem::path& modelPath, std::string_view prompt,
@@ -906,7 +945,8 @@ namespace
 			    ReadBinaryFile(cachePath / "weights.bin"), ReadBinaryFile(cachePath / "instructions.bin"));
 		});
 		LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
-		return TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache load module", [&] { return artifact.Load(); });
+		return TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache load module",
+		                           [&] { return std::move(artifact).Load(); });
 	}
 
 	void WriteDecodeAOTCache(const std::filesystem::path& cachePath, const LiteNN::CompiledModuleArtifact& artifact,
@@ -1056,8 +1096,9 @@ namespace
 		const auto diagnostics = compilerOptions.enableCompileDiagnostics;
 		LogGGUFDiagnostic(diagnostics, std::format("decode-loop start input={} requested_steps={}", options.inputPath,
 		                                           options.steps));
-		const auto imported = TimedGGUFDiagnostic(diagnostics, "gguf import archive",
-		                                          [&] { return LiteNN::GGUF::ImportGGUFArchive(options.inputPath); });
+		auto imported = TimedGGUFDiagnostic(diagnostics, "gguf import archive",
+		                                    [&] { return LiteNN::GGUF::ImportGGUFArchive(options.inputPath); });
+		const auto importSummary = imported.summary;
 		auto initialTokenIds = options.initialTokenIds;
 		if (options.exactPrompt)
 		{
@@ -1072,6 +1113,7 @@ namespace
 		}
 		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(imported.model.UnsafeGraphView());
 		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(imported.model.UnsafeGraphView());
+		auto tokenPieces = CopyTokenPieces(imported.model.UnsafeGraphView());
 		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
 		if (hyperparameters.contextLength > 0 && requestedTokenCount > hyperparameters.contextLength)
 		{
@@ -1131,8 +1173,8 @@ namespace
 		if (options.compileOnly)
 		{
 			const auto buildMs = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
-			std::cout << "Compiled LLaMA decode loop tensors=" << imported.summary.tensorCount
-			          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
+			std::cout << "Compiled LLaMA decode loop tensors=" << importSummary.tensorCount
+			          << " metadata=" << importSummary.metadataCount << " steps=" << options.steps
 			          << " prompt_tokens=" << initialTokenIds.size() << " backend=cpu_aot decode_mode=" << decodeMode
 			          << " fallback_count=0 fallback=false cached_modules=1 build_ms=" << buildMs
 			          << " compile_only=true requested_token_count=" << requestedTokenCount
@@ -1141,6 +1183,8 @@ namespace
 			          << '\n';
 			return;
 		}
+		imported = {};
+		LogGGUFDiagnostic(diagnostics, "decode-loop released imported GGUF archive before token execution");
 
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;
@@ -1268,8 +1312,7 @@ namespace
 			if (options.streamTokens && !isPromptReplayStep)
 			{
 				std::cout << "stream token step=" << (step + 1) << " position=" << step << " token_id=" << currentToken
-				          << " piece="
-				          << EscapeTokenPiece(TokenPieceText(imported.model.UnsafeGraphView(), currentToken))
+				          << " piece=" << EscapeTokenPiece(TokenPieceText(tokenPieces, currentToken))
 				          << " generated_tokens=" << generatedTokenCount << " eos=" << (stoppedOnEos ? "true" : "false")
 				          << '\n';
 				std::cout.flush();
@@ -1312,8 +1355,8 @@ namespace
 		const auto tokensPerSecond =
 		    generationMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / generationMs;
 
-		std::cout << "Ran LLaMA decode loop tensors=" << imported.summary.tensorCount
-		          << " metadata=" << imported.summary.metadataCount << " steps=" << options.steps
+		std::cout << "Ran LLaMA decode loop tensors=" << importSummary.tensorCount
+		          << " metadata=" << importSummary.metadataCount << " steps=" << options.steps
 		          << " prompt_tokens=" << initialTokenIds.size() << " generated_tokens=" << generatedTokenCount
 		          << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
 		          << " backend=cpu_aot decode_mode=" << decodeMode
@@ -1335,7 +1378,7 @@ namespace
 		}
 		std::cout << " generated=";
 		PrintTokenList(history);
-		std::cout << " pieces=" << TokenPiecesText(imported.model.UnsafeGraphView(), history);
+		std::cout << " pieces=" << TokenPiecesText(tokenPieces, history);
 		std::cout << '\n';
 		if (options.outputPath)
 		{
@@ -1345,7 +1388,7 @@ namespace
 				throw std::runtime_error("Failed to open decode-loop output file: " + *options.outputPath);
 			}
 			output << TokenListText(history) << '\n'
-			       << TokenPiecesText(imported.model.UnsafeGraphView(), history) << '\n'
+			       << TokenPiecesText(tokenPieces, history) << '\n'
 			       << "generated_tokens=" << generatedTokenCount
 			       << " stopped_on_eos=" << (stoppedOnEos ? "true" : "false")
 			       << " backend=cpu_aot decode_mode=" << decodeMode

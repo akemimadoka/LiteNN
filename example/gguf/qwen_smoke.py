@@ -253,7 +253,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional API-level llama.cpp tokenizer adapter for direct prompt execution",
     )
-    parser.add_argument("--apply-chat-template", action="store_true", help="Format --prompt as one user turn")
+    parser.add_argument(
+        "--apply-chat-template",
+        action="store_true",
+        help="Format --prompt as one user turn. Kept for compatibility; this is now the default with --llamacpp-tokenizer-tool.",
+    )
+    parser.add_argument(
+        "--raw-prompt",
+        action="store_true",
+        help="Tokenize --prompt as raw text instead of an instruct-model chat turn",
+    )
     parser.add_argument("--steps", dest="steps", type=int, default=8)
     parser.add_argument("--max-tokens", dest="steps", type=int, help="Alias for --steps")
     parser.add_argument(
@@ -368,6 +377,8 @@ def main() -> int:
         raise SystemExit("--output is only used by the direct token-id decode path")
     if args.require_aot_cache_hit and args.aot_cache_dir is None:
         raise SystemExit("--require-aot-cache-hit requires --aot-cache-dir")
+    if args.apply_chat_template and args.raw_prompt:
+        raise SystemExit("--apply-chat-template and --raw-prompt cannot be used together")
 
     root = repo_root()
     workdir: Path = args.workdir
@@ -401,7 +412,10 @@ def main() -> int:
         tokenizer_dir = workdir / "llamacpp_tokenizer"
         tokenizer_output = tokenizer_dir / "prompt_tokens.json"
         tokenizer_text = args.prompt
+        use_chat_template = not args.raw_prompt
         if args.apply_chat_template:
+            use_chat_template = True
+        if use_chat_template:
             formatted_prompt = tokenizer_dir / "formatted_prompt.bin"
             template_cmd = [
                 sys.executable,
@@ -642,6 +656,7 @@ def main() -> int:
         "stream_tokens": args.stream_tokens,
         "stream_stats": args.stream_stats,
         "compile_only": args.compile_only,
+        "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),
         "fallback_used": False,
         "production_candidate": args.backend_policy == "cuda-native",
         "workdir": str(workdir),
