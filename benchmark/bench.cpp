@@ -55,6 +55,16 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
+    const float*, const float* dataAligned, std::int64_t dataOffset, std::int64_t dataDim0, std::int64_t dataDim1,
+    std::int64_t dataDim2, std::int64_t dataStride0, std::int64_t dataStride1, std::int64_t dataStride2,
+    const std::int64_t*, const std::int64_t* indicesAligned, std::int64_t indicesOffset, std::int64_t indicesSize,
+    std::int64_t indicesStride, const float*, const float* updatesAligned, std::int64_t updatesOffset,
+    std::int64_t updatesDim0, std::int64_t updatesDim1, std::int64_t updatesDim2, std::int64_t updatesStride0,
+    std::int64_t updatesStride1, std::int64_t updatesStride2, float*, float* outAligned, std::int64_t outOffset,
+    std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0, std::int64_t outStride1,
+    std::int64_t outStride2);
 #endif
 
 namespace
@@ -110,6 +120,14 @@ namespace
 		std::size_t projectionCount;
 	};
 
+	struct KVAppendBenchmarkSpec
+	{
+		std::string_view name;
+		std::size_t capacity;
+		std::size_t kvHeads;
+		std::size_t headDim;
+	};
+
 	struct QuantizedLayerSpec
 	{
 		std::size_t inputWidth;
@@ -161,6 +179,11 @@ namespace
 	constexpr std::array<GGMLGroupedProjectionBenchmarkSpec, 2> kGGMLGroupedProjectionBenchmarkSpecs = {
 		GGMLGroupedProjectionBenchmarkSpec{ "qwen_qkv", 5120, { 5120, 1024, 1024 }, 3 },
 		GGMLGroupedProjectionBenchmarkSpec{ "qwen_gate_up", 5120, { 13824, 13824, 0 }, 2 },
+	};
+
+	constexpr std::array<KVAppendBenchmarkSpec, 2> kKVAppendBenchmarkSpecs = {
+		KVAppendBenchmarkSpec{ "qwen_cache_2048", 2048, 8, 128 },
+		KVAppendBenchmarkSpec{ "qwen_cache_8192", 8192, 8, 128 },
 	};
 
 	constexpr std::array<QuantizedLayerSpec, 1> kQuantizedLinearLayers = {
@@ -1338,6 +1361,56 @@ namespace
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(totalOutputWidth));
 		state.counters["projection_count"] = benchmark::Counter(static_cast<double>(spec.projectionCount));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+	}
+
+	void BMKVScatterUpdateHelper(benchmark::State& state, const KVAppendBenchmarkSpec& spec, bool aliasOutput)
+	{
+		const auto rowElements = spec.kvHeads * spec.headDim;
+		const auto elementCount = spec.capacity * rowElements;
+		std::vector<float> data(elementCount);
+		for (std::size_t i = 0; i < data.size(); ++i)
+		{
+			data[i] = static_cast<float>(static_cast<int>(i % 257) - 128) * 0.01F;
+		}
+		std::vector<float> updates(rowElements);
+		for (std::size_t i = 0; i < updates.size(); ++i)
+		{
+			updates[i] = static_cast<float>((i % 37) + 1) * 0.25F;
+		}
+		const std::array<std::int64_t, 1> indices{ static_cast<std::int64_t>(spec.capacity / 2) };
+		std::vector<float> output(aliasOutput ? 0 : elementCount);
+
+		const auto invoke = [&] {
+			auto* out = aliasOutput ? data.data() : output.data();
+			litenn_cpu_scatter_update_axis0_f32_rank3(
+			    nullptr, data.data(), 0, static_cast<std::int64_t>(spec.capacity),
+			    static_cast<std::int64_t>(spec.kvHeads), static_cast<std::int64_t>(spec.headDim),
+			    static_cast<std::int64_t>(rowElements), static_cast<std::int64_t>(spec.headDim), 1, nullptr,
+			    indices.data(), 0, static_cast<std::int64_t>(indices.size()), 1, nullptr, updates.data(), 0, 1,
+			    static_cast<std::int64_t>(spec.kvHeads), static_cast<std::int64_t>(spec.headDim),
+			    static_cast<std::int64_t>(rowElements), static_cast<std::int64_t>(spec.headDim), 1, nullptr, out, 0,
+			    static_cast<std::int64_t>(spec.capacity), static_cast<std::int64_t>(spec.kvHeads),
+			    static_cast<std::int64_t>(spec.headDim), static_cast<std::int64_t>(rowElements),
+			    static_cast<std::int64_t>(spec.headDim), 1);
+		};
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(aliasOutput ? data.data() : output.data());
+		}
+
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(aliasOutput ? data.data() : output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["alias_output"] = benchmark::Counter(aliasOutput ? 1.0 : 0.0);
+		state.counters["capacity"] = benchmark::Counter(static_cast<double>(spec.capacity));
+		state.counters["row_elements"] = benchmark::Counter(static_cast<double>(rowElements));
+		state.counters["state_bytes"] = benchmark::Counter(static_cast<double>(elementCount * sizeof(float)));
 	}
 
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
@@ -3547,6 +3620,17 @@ namespace
 						benchmarkCase->Unit(benchmark::kMillisecond);
 					}
 				}
+			}
+		}
+		for (const auto shape : kKVAppendBenchmarkSpecs)
+		{
+			for (const auto aliasOutput : { true, false })
+			{
+				auto* benchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("KVScatterUpdateHelper/{}/{}/capacity:{}/heads:{}/dim:{}", shape.name,
+				                aliasOutput ? "alias" : "copy", shape.capacity, shape.kvHeads, shape.headDim),
+				    [=](benchmark::State& state) { BMKVScatterUpdateHelper(state, shape, aliasOutput); });
+				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
 		}
 #endif

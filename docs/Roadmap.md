@@ -2899,10 +2899,12 @@ Priority classes:
 - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
       Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
       source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
-- [ ] P1: Add a verified in-place KV append helper:
-      `ScatterNode` currently has a CPU helper path that copies the full `[capacity, kvHeads, headDim]` tensor when
-      input/output buffers differ. Stateful output aliasing should avoid that, but long-context performance needs a
-      dedicated cache-append lowering that writes only the current K/V row and fails closed if aliasing is not guaranteed.
+- [x] P1: Add a verified in-place KV append helper:
+      `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
+      append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache outputs
+      alias their input buffers. The `KVScatterUpdateHelper` benchmark records the cost boundary: on 2026-07-03,
+      Qwen-shaped alias append rounded to `0.000 ms`, while copy mode measured about `0.210 ms` for a 2048-token cache
+      and about `1.71 ms` real / `1.41 ms` CPU for an 8192-token cache.
 - [ ] P1: Replace dense full-capacity KV tensors with paged KV-cache state.
       The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
       policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.

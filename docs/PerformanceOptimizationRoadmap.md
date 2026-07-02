@@ -132,10 +132,12 @@ Priority classes for the GGUF/Qwen decode work:
     - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
-    - [ ] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
-          `litenn_cpu_scatter_update_axis0_f32_rank3` still has a full-cache copy path when input and output buffers are
-          distinct. Stateful output aliasing should make this avoidable, but the decode profiler must prove it; if not,
-          lower LLM cache appends to an explicit in-place helper.
+    - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
+          `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
+          append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache
+          outputs alias their input buffers. The `KVScatterUpdateHelper` benchmark records the cost boundary: on
+          2026-07-03, Qwen-shaped alias append rounded to `0.000 ms`, while copy mode measured about `0.210 ms` for a
+          2048-token cache and about `1.71 ms` real / `1.41 ms` CPU for an 8192-token cache.
     - [ ] P0/P1: Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
           fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. Projection grouping is
           P0; attention grouping is P1 because it scales with active context length.

@@ -47,6 +47,16 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
+    const float*, const float* dataAligned, std::int64_t dataOffset, std::int64_t dataDim0, std::int64_t dataDim1,
+    std::int64_t dataDim2, std::int64_t dataStride0, std::int64_t dataStride1, std::int64_t dataStride2,
+    const std::int64_t*, const std::int64_t* indicesAligned, std::int64_t indicesOffset, std::int64_t indicesSize,
+    std::int64_t indicesStride, const float*, const float* updatesAligned, std::int64_t updatesOffset,
+    std::int64_t updatesDim0, std::int64_t updatesDim1, std::int64_t updatesDim2, std::int64_t updatesStride0,
+    std::int64_t updatesStride1, std::int64_t updatesStride2, float*, float* outAligned, std::int64_t outOffset,
+    std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0, std::int64_t outStride1,
+    std::int64_t outStride2);
 #endif
 
 namespace
@@ -1973,6 +1983,38 @@ TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithPublicLogitsOnl
 	EXPECT_EQ(static_cast<const std::int64_t*>(inputs[1].UnsafeRawData())[0], 1);
 	ExpectTensorNear(inputs[2], expected[2], tolerance);
 	ExpectTensorNear(inputs[3], expected[3], tolerance);
+}
+
+TEST(GGUFLLaMACausalLM, KVScatterUpdateHelperSupportsInPlaceAppend)
+{
+	constexpr std::int64_t capacity = 4;
+	constexpr std::int64_t kvHeads = 2;
+	constexpr std::int64_t headDim = 3;
+	constexpr std::int64_t rowStride = kvHeads * headDim;
+	std::vector<float> initial(static_cast<std::size_t>(capacity * rowStride));
+	for (std::size_t i = 0; i < initial.size(); ++i)
+	{
+		initial[i] = static_cast<float>(i + 1);
+	}
+	const std::array<std::int64_t, 1> indices{ 2 };
+	const std::array<float, 6> updates{ 100.0F, 101.0F, 102.0F, 103.0F, 104.0F, 105.0F };
+
+	auto expected = initial;
+	std::copy(updates.begin(), updates.end(), expected.begin() + static_cast<std::ptrdiff_t>(indices[0] * rowStride));
+
+	auto inPlace = initial;
+	litenn_cpu_scatter_update_axis0_f32_rank3(
+	    nullptr, inPlace.data(), 0, capacity, kvHeads, headDim, rowStride, headDim, 1, nullptr, indices.data(), 0,
+	    static_cast<std::int64_t>(indices.size()), 1, nullptr, updates.data(), 0, 1, kvHeads, headDim, rowStride,
+	    headDim, 1, nullptr, inPlace.data(), 0, capacity, kvHeads, headDim, rowStride, headDim, 1);
+	EXPECT_EQ(inPlace, expected);
+
+	std::vector<float> copied(initial.size(), -1.0F);
+	litenn_cpu_scatter_update_axis0_f32_rank3(
+	    nullptr, initial.data(), 0, capacity, kvHeads, headDim, rowStride, headDim, 1, nullptr, indices.data(), 0,
+	    static_cast<std::int64_t>(indices.size()), 1, nullptr, updates.data(), 0, 1, kvHeads, headDim, rowStride,
+	    headDim, 1, nullptr, copied.data(), 0, capacity, kvHeads, headDim, rowStride, headDim, 1);
+	EXPECT_EQ(copied, expected);
 }
 
 TEST(GGUFLLaMACausalLM, CompilesCapacityPrefillOnceAndExposesMaxCapacityLogits)
