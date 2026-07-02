@@ -2863,6 +2863,13 @@ Priority classes:
 - [ ] P0: Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
       keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
       kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.
+      - [x] Add a scalar Q8_K-staged helper prototype and benchmark rows without switching the default AOT helper.
+            Validation on 2026-07-03 passed exact-activation parity for Q4_K/Q5_K/Q6_K. Short helper measurements showed
+            the scalar staged path is not a default-switch candidate yet: Q4_K `qwen_kv/T1` was slower (`~2.78 ms` CPU
+            staged vs `~2.60 ms` CPU direct in that run), while Q6_K `qwen_ffn_down/T1` only improved modestly
+            (`~66.4 ms` CPU staged vs `~70.3 ms` CPU direct) and carries activation-quantization deltas.
+      - [ ] Add SIMD/VNNI or architecture-specific packed vec-dot kernels for the Q8_K-staged path, then re-run the
+            direct-vs-staged helper table before changing the compiler/runtime default.
 - [ ] P0: Add grouped projection helpers for LLM decode:
       fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
       projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the

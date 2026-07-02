@@ -109,6 +109,13 @@ Priority classes for the GGUF/Qwen decode work:
           llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with
           tiled scheduling and architecture-specific packed/repacked variants. This is the strongest currently
           evidenced kernel-organization gap.
+          - [x] Add a scalar Q8_K-staged helper prototype and benchmark rows without switching the default AOT helper.
+                Validation on 2026-07-03 passed exact-activation parity for Q4_K/Q5_K/Q6_K. Short helper measurements
+                showed the scalar staged path is not a default-switch candidate yet: Q4_K `qwen_kv/T1` was slower
+                (`~2.78 ms` CPU staged vs `~2.60 ms` CPU direct in that run), while Q6_K `qwen_ffn_down/T1` only improved
+                modestly (`~66.4 ms` CPU staged vs `~70.3 ms` CPU direct) and carries activation-quantization deltas.
+          - [ ] Add SIMD/VNNI or architecture-specific packed vec-dot kernels for the Q8_K-staged path, then re-run the
+                direct-vs-staged helper table before changing the compiler/runtime default.
     - [ ] P0: Add a measured thread/grain policy for decode-shaped quantized projections.
           The policy must be driven by helper-level timing instead of a global thread count: the local `T16` Qwen smoke
           was slower than the default hardware-thread policy, while isolated helper rows still benefit from parallelism.

@@ -47,6 +47,14 @@ litenn_cpu_ggml_block_matmul_f32(const float*, const float* lhsAligned, std::int
                                  std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
                                  std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
                                  std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
 #endif
 
 namespace
@@ -1125,8 +1133,23 @@ namespace
 		return storage;
 	}
 
+	float MaxAbsDifference(std::span<const float> lhs, std::span<const float> rhs)
+	{
+		if (lhs.size() != rhs.size())
+		{
+			throw std::invalid_argument("MaxAbsDifference requires matching spans");
+		}
+		float maxDifference = 0.0F;
+		for (std::size_t i = 0; i < lhs.size(); ++i)
+		{
+			maxDifference = std::max(maxDifference, std::fabs(lhs[i] - rhs[i]));
+		}
+		return maxDifference;
+	}
+
 	void BMGGMLBlockMatMulHelper(benchmark::State& state, QuantizedBlockFormat format, std::size_t batch,
-	                             std::size_t inputWidth, std::size_t outputWidth, std::uint64_t threadCount)
+	                             std::size_t inputWidth, std::size_t outputWidth, std::uint64_t threadCount,
+	                             bool q8KStaged)
 	{
 		const auto layout = GetQuantizedBlockLayout(format);
 		if (!layout)
@@ -1137,15 +1160,43 @@ namespace
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
 		auto lhs = MakeInputData(batch * inputWidth);
 		std::vector<float> output(batch * outputWidth);
+		std::vector<float> directReference;
 
-		const auto invoke = [&] {
+		const auto invokeDirect = [&](std::span<float> target) {
 			litenn_cpu_ggml_block_matmul_f32(
 			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
 			    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()),
-			    1, nullptr, output.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    1, nullptr, target.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
 			    static_cast<std::int64_t>(outputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
 			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
 		};
+		const auto invokeStaged = [&](std::span<float> target) {
+			litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()),
+			    1, nullptr, target.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(outputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+		const auto invoke = [&] {
+			if (q8KStaged)
+			{
+				invokeStaged(output);
+			}
+			else
+			{
+				invokeDirect(output);
+			}
+		};
+
+		if (q8KStaged)
+		{
+			directReference.resize(output.size());
+			invokeDirect(directReference);
+			invokeStaged(output);
+			state.counters["max_abs_delta"] =
+			    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, directReference)));
+		}
 
 		for (int i = 0; i < kWarmupIterations; ++i)
 		{
@@ -1162,6 +1213,7 @@ namespace
 
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+		state.counters["q8k_staged"] = benchmark::Counter(q8KStaged ? 1.0 : 0.0);
 	}
 
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
@@ -3308,6 +3360,11 @@ namespace
 			QuantizedBlockFormat::GGML_Q5_K,
 			QuantizedBlockFormat::GGML_Q6_K,
 		};
+		constexpr std::array ggmlQ8KStagedBlockFormats{
+			QuantizedBlockFormat::GGML_Q4_K,
+			QuantizedBlockFormat::GGML_Q5_K,
+			QuantizedBlockFormat::GGML_Q6_K,
+		};
 		for (const auto format : ggmlBlockFormats)
 		{
 			for (const auto threadCount : kGGMLThreadCounts)
@@ -3320,7 +3377,25 @@ namespace
 					                shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                            static_cast<std::uint64_t>(threadCount));
+						                            static_cast<std::uint64_t>(threadCount), false);
+					    });
+					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
+			}
+		}
+		for (const auto format : ggmlQ8KStagedBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				for (const auto shape : kGGMLProjectionBenchmarkSpecs)
+				{
+					auto* benchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("GGMLBlockMatMulQ8KStagedHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
+					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+					                shape.outputWidth),
+					    [=](benchmark::State& state) {
+						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
+						                            static_cast<std::uint64_t>(threadCount), true);
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}

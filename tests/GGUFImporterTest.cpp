@@ -30,6 +30,25 @@
 
 using namespace LiteNN;
 
+#ifdef LITENN_ENABLE_MLIR
+extern "C" void
+litenn_cpu_ggml_block_matmul_f32(const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows,
+                                 std::int64_t lhsColumns, std::int64_t lhsRowStride, std::int64_t lhsColumnStride,
+                                 const std::uint8_t*, const std::uint8_t* rhsAligned, std::int64_t rhsOffset,
+                                 std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+                                 std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+                                 std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+                                 std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+#endif
+
 namespace
 {
 	struct GGUFContextDeleter
@@ -1314,6 +1333,57 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 5;
+	constexpr std::size_t rows = 2;
+	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight" },
+		std::tuple{ GGML_TYPE_Q5_K, QuantizedBlockFormat::GGML_Q5_K, "q5_k.weight" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
+	};
+
+	std::vector<float> inputValues(rows * inFeatures, 1.0F);
+	std::fill(inputValues.begin() + inFeatures, inputValues.end(), -0.5F);
+
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		SCOPED_TRACE(name);
+		std::vector<float> weightValues(outFeatures * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.125F;
+		}
+		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+		const auto& storage = quantizedWeight->Data();
+		const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+		std::vector<float> direct(rows * outFeatures);
+		std::vector<float> staged(rows * outFeatures);
+
+		litenn_cpu_ggml_block_matmul_f32(nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows),
+		                                 static_cast<std::int64_t>(inFeatures), static_cast<std::int64_t>(inFeatures),
+		                                 1, nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()),
+		                                 1, nullptr, direct.data(), 0, static_cast<std::int64_t>(rows),
+		                                 static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(outFeatures),
+		                                 1, static_cast<std::uint64_t>(blockFormat), 2,
+		                                 static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
+		    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+
+		for (std::size_t i = 0; i < direct.size(); ++i)
+		{
+			EXPECT_NEAR(staged[i], direct[i], 1.0e-4F);
+		}
 	}
 }
 #endif
