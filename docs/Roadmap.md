@@ -2751,6 +2751,8 @@ placement and fallback policy.
             speedup.
       - [x] Add `litenn_bench` rows for `GGMLBlockMatMulHelper/{Q8_0,Q4_K,Q5_K,Q6_K}/T{1,16}` at a decode-shaped
             `batch=1, in=4096, out=4096`, isolating the CPU sidecar helper from graph lowering and object emission.
+      - [x] Cache Q4_K/Q5_K activation subblock sums once per input block in `litenn_cpu_ggml_block_matmul_f32` and
+            reuse them across output columns. This is the first activation-side reuse slice before full Q8_K staging.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.
@@ -2796,6 +2798,16 @@ Purpose: treat `max_tokens=2048` as a small smoke size, not a scalability ceilin
 1M-token context with compile time, artifact size, cache population, and runtime memory all scaling by model structure
 and active KV pages rather than by a fully unrolled static max-cache-length graph.
 
+Priority classes:
+
+- P0, highest immediate generated-token latency benefit: real-shape projection benchmarks, activation-side
+  reuse/staging, Q8_K activation-staged quantized projection kernels, projection-specific thread/grain policy, grouped
+  QKV projection, and grouped SwiGLU gate/up projection.
+- P1, long-context scalability blockers: verified in-place KV append, paged KV-cache state, grouped active-prefix
+  attention, and long-context attention plans.
+- P2, measurement and acceptance gates: operator-level timing, long-context benchmark/profile rows, and golden
+  validation. These are required to avoid guessing, but they are not the largest direct runtime reducers.
+
 - [x] Add first-class compile diagnostics for long-context smoke runs:
       qwen smoke logs must stream to disk while running, preserve partial evidence after interruption, and emit
       Chrome Trace / Perfetto-compatible waterfall JSON for import, tokenize, schedule build, MLIR/LLVM compile,
@@ -2812,50 +2824,59 @@ and active KV pages rather than by a fully unrolled static max-cache-length grap
       gap is now tied to concrete execution structure: capacity-shaped overhead remains, but the larger
       capacity-independent gap is the GGML block projection helper's direct Q4_K/Q6_K x Float32 design versus
       llama.cpp's Q8_K activation staging, quantized vec-dot kernels, tiled scheduling, and packed/repacked CPU kernels.
-- [ ] Add decode operator-level profiling before claiming the next full-step bottleneck:
+- [ ] P2: Add decode operator-level profiling before claiming the next full-step bottleneck:
       collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
       count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
       projections, active-prefix attention, state alias copies, final logits projection, and sampler/text output.
-- [ ] Add production-shaped GGML helper benchmark and estimator coverage:
+- [x] P0: Add production-shaped GGML helper benchmark and estimator coverage:
       benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
       `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current
       `4096->4096` helper rows do not by themselves explain a 48-layer, 337-projection decode step.
-- [ ] Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
+      Completed on 2026-07-02: `litenn_bench` registers `baseline4096`, `qwen_hidden`, `qwen_kv`, `qwen_ffn_up`,
+      `qwen_ffn_down`, and `qwen_logits` rows for `GGMLBlockMatMulHelper/{Q8_0,Q4_K,Q5_K,Q6_K}/T{1,16}`. A short
+      smoke run verified `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1/batch:1/in:5120/out:1024`.
+- [x] P0: Cache Q4_K/Q5_K activation subblock sums in the CPU GGML block MatMul helper:
+      `litenn_cpu_ggml_block_matmul_f32` now computes the eight 32-lane activation sums once per input block and
+      reuses them across output columns. The split hot path keeps the no-cache fallback for correctness-style direct
+      calls and avoids a branch inside the innermost lane loop. Short benchmark validation on 2026-07-02 moved
+      `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1` from about `3.03 ms` to about `1.91 ms`; `Q4_K/baseline4096/T1` measured
+      about `6.09 ms` after the change.
+- [ ] P0: Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
       keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
       kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.
-- [ ] Add grouped projection helpers for LLM decode:
+- [ ] P0: Add grouped projection helpers for LLM decode:
       fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
       projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the
       same normalized hidden vector across Q/K/V and gate/up helpers.
-- [ ] Add a measured decode thread/grain model:
+- [ ] P0: Add a measured decode thread/grain model:
       the local full-step `T16` run regressed while isolated helper rows benefit from parallelism, so scheduling needs
       helper-level cost gates rather than a single global "more threads" rule.
-- [ ] Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
+- [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
-- [ ] Decouple persistent AOT instruction cache from model-weight storage.
+- [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
       Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
       source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
-- [ ] Add a verified in-place KV append helper:
+- [ ] P1: Add a verified in-place KV append helper:
       `ScatterNode` currently has a CPU helper path that copies the full `[capacity, kvHeads, headDim]` tensor when
       input/output buffers differ. Stateful output aliasing should avoid that, but long-context performance needs a
       dedicated cache-append lowering that writes only the current K/V row and fails closed if aliasing is not guaranteed.
-- [ ] Replace dense full-capacity KV tensors with paged KV-cache state.
+- [ ] P1: Replace dense full-capacity KV tensors with paged KV-cache state.
       The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
       policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.
-- [ ] Add long-context attention execution plans.
+- [ ] P1: Add long-context attention execution plans.
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
       logits-only decode.
-- [ ] Replace per-head active-prefix attention helpers with grouped attention execution:
+- [ ] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before
       treating 2K/32K/128K/1M context latency as representative.
-- [ ] Add context-extension validation gates.
+- [ ] P2: Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production
       readiness.
-- [ ] Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
+- [ ] P2: Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
       The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
       generated-token latency, peak memory, artifact bytes, and fallback count.
 

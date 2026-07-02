@@ -86,6 +86,13 @@ namespace
 		bool relu;
 	};
 
+	struct GGMLProjectionBenchmarkSpec
+	{
+		std::string_view name;
+		std::size_t inputWidth;
+		std::size_t outputWidth;
+	};
+
 	struct QuantizedLayerSpec
 	{
 		std::size_t inputWidth;
@@ -123,6 +130,15 @@ namespace
 		GGMLLayerSpec{ 784, 512, true },
 		GGMLLayerSpec{ 512, 256, true },
 		GGMLLayerSpec{ 256, 10, false },
+	};
+
+	constexpr std::array<GGMLProjectionBenchmarkSpec, 6> kGGMLProjectionBenchmarkSpecs = {
+		GGMLProjectionBenchmarkSpec{ "baseline4096", 4096, 4096 },
+		GGMLProjectionBenchmarkSpec{ "qwen_hidden", 5120, 5120 },
+		GGMLProjectionBenchmarkSpec{ "qwen_kv", 5120, 1024 },
+		GGMLProjectionBenchmarkSpec{ "qwen_ffn_up", 5120, 13824 },
+		GGMLProjectionBenchmarkSpec{ "qwen_ffn_down", 13824, 5120 },
+		GGMLProjectionBenchmarkSpec{ "qwen_logits", 5120, 152064 },
 	};
 
 	constexpr std::array<QuantizedLayerSpec, 1> kQuantizedLinearLayers = {
@@ -3296,13 +3312,18 @@ namespace
 		{
 			for (const auto threadCount : kGGMLThreadCounts)
 			{
-				auto* benchmarkCase = benchmark::RegisterBenchmark(
-				    std::format("GGMLBlockMatMulHelper/{}/T{}/batch:1/in:4096/out:4096",
-				                GGMLBlockFormatBenchmarkName(format), threadCount),
-				    [=](benchmark::State& state) {
-					    BMGGMLBlockMatMulHelper(state, format, 1, 4096, 4096, static_cast<std::uint64_t>(threadCount));
-				    });
-				benchmarkCase->Unit(benchmark::kMillisecond);
+				for (const auto shape : kGGMLProjectionBenchmarkSpecs)
+				{
+					auto* benchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("GGMLBlockMatMulHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
+					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+					                shape.outputWidth),
+					    [=](benchmark::State& state) {
+						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
+						                            static_cast<std::uint64_t>(threadCount));
+					    });
+					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
 			}
 		}
 #endif

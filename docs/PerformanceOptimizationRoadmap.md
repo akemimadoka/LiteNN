@@ -23,6 +23,16 @@ object disassembly, backend CSVs, and platform profilers.
 
 Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.md` under G6.
 
+Priority classes for the GGUF/Qwen decode work:
+
+- P0, step-latency reducers: optimize the capacity-independent generated-token path. This includes production-shaped
+  GGML helper benchmarks, activation-side reuse/staging, Q8_K activation-staged vec-dot kernels, shape-aware
+  thread/grain policy, grouped QKV projection, and grouped SwiGLU gate/up projection.
+- P1, long-context blockers: remove capacity-shaped work that prevents 32K/128K/1M contexts. This includes verified
+  in-place KV append, paged KV-cache state, grouped active-prefix attention, and long-context attention plans.
+- P2, observability and validation gates: add per-helper/per-node timing, long-context benchmark rows, and golden
+  validation. These do not directly speed up execution, but they keep P0/P1 changes measurable and regression-safe.
+
 - [ ] Add a whole-process profile bundle command that combines existing `litenn_profile` evidence with waterfall
   timeline output and optional platform sampling.
   - [x] First slice: `benchmark/profile_bundle.py` wraps `litenn_profile` or an arbitrary command, captures
@@ -63,32 +73,39 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           `max_cache_length=10` still takes about `522 ms` for the generated token, `max_cache_length=2048` adds about
           `200 ms`, and forcing `LITENN_CPU_AOT_THREADS=16` regresses to about `815 ms`. This rules out "threading is
           simply off" and "full-capacity attention is still the only bottleneck" as sufficient explanations.
-    - [ ] Add operator-level and helper-level timing for stateful GGUF CPU AOT decode.
+    - [ ] P2: Add operator-level and helper-level timing for stateful GGUF CPU AOT decode.
           Required output: per-layer/per-node duration, helper symbol name, GGML block format, input/output shape,
           thread count, cache length, and generated-token phase. The current per-step waterfall is enough to find the
           broad gap but not enough to rank RMSNorm, quantized projections, active-prefix attention, state copies,
           logits projection, and sampler work.
-    - [ ] Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
+    - [x] P0: Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
           `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064`.
           The current `4096->4096` row is useful but under-specifies the 337-projection full-step workload.
-    - [ ] Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
+          Completed on 2026-07-02: `litenn_bench` now registers named `baseline4096`, `qwen_hidden`, `qwen_kv`,
+          `qwen_ffn_up`, `qwen_ffn_down`, and `qwen_logits` rows for every supported GGML helper format and `T1/T16`.
+    - [x] P0: Cache Q4_K/Q5_K activation subblock sums inside `litenn_cpu_ggml_block_matmul_f32`.
+          This removes repeated `lhsSum` accumulation for every output column while preserving the direct Float32
+          reference-style dot path. Validation slice: `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1` measured about `3.03 ms`
+          before the slice and about `1.91 ms` after the split hot-path implementation; `Q4_K/baseline4096/T1` measured
+          about `6.09 ms` after the change.
+    - [ ] P0: Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
           family. The current helper computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations.
           llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with
           tiled scheduling and architecture-specific packed/repacked variants. This is the strongest currently
           evidenced kernel-organization gap.
-    - [ ] Add a measured thread/grain policy for decode-shaped quantized projections.
+    - [ ] P0: Add a measured thread/grain policy for decode-shaped quantized projections.
           The policy must be driven by helper-level timing instead of a global thread count: the local `T16` Qwen smoke
           was slower than the default hardware-thread policy, while isolated helper rows still benefit from parallelism.
-    - [ ] Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
+    - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
-    - [ ] Add a verified in-place KV append sidecar before the full paged-KV migration.
+    - [ ] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
           `litenn_cpu_scatter_update_axis0_f32_rank3` still has a full-cache copy path when input and output buffers are
           distinct. Stateful output aliasing should make this avoidable, but the decode profiler must prove it; if not,
           lower LLM cache appends to an explicit in-place helper.
-    - [ ] Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
-          fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. These target repeated
-          reads of the same activation/cache data that are invisible in a single-helper benchmark.
+    - [ ] P0/P1: Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
+          fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. Projection grouping is
+          P0; attention grouping is P1 because it scales with active context length.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
