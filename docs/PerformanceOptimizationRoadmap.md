@@ -58,6 +58,24 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           completed in about 57s wall time, compiled the stateful decode artifact in about 22.1s, produced about 389k
           LLVM instructions after the entry wrapper, ran prompt/generation steps in about `0.63-0.72 s/step`, and
           generated token `9707` / `Hello`.
+    - [x] Profile the remaining Qwen CPU AOT decode gap against a user's llama.cpp CPU reference run with GPU-style
+          accelerators disabled. The 2026-07-02 analysis in `docs/PerformanceAnalysis_2026-07-02.md` shows that
+          `max_cache_length=10` still takes about `522 ms` for the generated token, `max_cache_length=2048` adds about
+          `200 ms`, and forcing `LITENN_CPU_AOT_THREADS=16` regresses to about `815 ms`. This rules out "threading is
+          simply off" and "full-capacity attention is still the only bottleneck" as sufficient explanations.
+    - [ ] Add operator-level and helper-level timing for stateful GGUF CPU AOT decode.
+          Required output: per-layer/per-node duration, helper symbol name, GGML block format, input/output shape,
+          thread count, cache length, and generated-token phase. The current per-step waterfall is enough to find the
+          broad gap but not enough to rank RMSNorm, quantized projections, active-prefix attention, state copies,
+          logits projection, and sampler work.
+    - [ ] Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
+          family. The current helper computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations.
+          llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with
+          tiled scheduling and architecture-specific packed/repacked variants. This is the strongest currently
+          evidenced kernel-organization gap.
+    - [ ] Add a measured thread/grain policy for decode-shaped quantized projections.
+          The policy must be driven by helper-level timing instead of a global thread count: the local `T16` Qwen smoke
+          was slower than the default hardware-thread policy, while isolated helper rows still benefit from parallelism.
     - [ ] Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.

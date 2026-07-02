@@ -2805,6 +2805,23 @@ and active KV pages rather than by a fully unrolled static max-cache-length grap
       LLVM lowering, instruction counts, object emission, cache/load, and decode-loop per-step timing. The latest
       Qwen2.5-Coder-14B Q4_K_M `max_cache_length=2048` smoke completed successfully with active-prefix attention and
       dynamic RoPE helper lowering, producing token `9707` / `Hello`.
+- [x] Record a focused Qwen CPU AOT decode profile against the user's llama.cpp CPU reference:
+      `docs/PerformanceAnalysis_2026-07-02.md` compares the active-prefix/RoPE-helper LiteNN path with the reported
+      `0.1-0.2 s/step` llama.cpp run. Local LiteNN evidence shows about `522 ms` for `max_cache_length=10`, about
+      `722 ms` for `max_cache_length=2048`, and worse latency when forcing `LITENN_CPU_AOT_THREADS=16`. The documented
+      gap is now tied to concrete execution structure: capacity-shaped overhead remains, but the larger
+      capacity-independent gap is the GGML block projection helper's direct Q4_K/Q6_K x Float32 design versus
+      llama.cpp's Q8_K activation staging, quantized vec-dot kernels, tiled scheduling, and packed/repacked CPU kernels.
+- [ ] Add decode operator-level profiling before claiming the next full-step bottleneck:
+      collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
+      count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
+      projections, active-prefix attention, state alias copies, final logits projection, and sampler/text output.
+- [ ] Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
+      keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
+      kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.
+- [ ] Add a measured decode thread/grain model:
+      the local full-step `T16` run regressed while isolated helper rows benefit from parallelism, so scheduling needs
+      helper-level cost gates rather than a single global "more threads" rule.
 - [ ] Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
