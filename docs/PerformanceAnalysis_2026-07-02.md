@@ -57,6 +57,35 @@ possible, but a Qwen2.5 decode step contains hundreds of quantized projection ca
 state writes, the final full-vocabulary projection, and sampling/logit handling. A `~1 ms` helper is not sufficient for
 `0.1-0.2 s/step` once multiplied across the whole decoder.
 
+The current benchmark coverage is also too narrow for the real model shape. The measured rows cover only
+`batch=1, in=4096, out=4096`, while the target model metadata reports:
+
+| Field | Value |
+| --- | ---: |
+| Blocks | `48` |
+| Hidden width | `5120` |
+| Feed-forward width | `13824` |
+| Attention heads | `40` |
+| KV heads | `8` |
+| Context length | `131072` |
+
+The stateful decode graph builds separate Q/K/V/O and gate/up/down projections per block, then a final LM-head
+projection. That is `48 * 7 + 1 = 337` quantized projection helper calls per generated token. In 4096x4096-equivalent
+multiply work:
+
+| Projection group | 4096x4096-equivalent units |
+| --- | ---: |
+| One decoder block: Q, K, V, O, gate, up, down | `16.41` |
+| All 48 decoder blocks | `787.50` |
+| Final logits projection `5120 -> 152064` | `46.41` |
+| Total quantized projection work per generated token | `833.91` |
+
+So the isolated `~0.9-1.2 ms` helper row is not contradictory with a `~522 ms` full step. The full decode path executes
+hundreds of helper calls and about `834` units of 4096x4096-equivalent projection work before accounting for attention,
+normalization, cache updates, logits handling, and scheduler overhead. The benchmark suite should add production-shaped
+rows for `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064` before using helper rows to
+predict full-model latency.
+
 ## Difference From llama.cpp
 
 The local `third_party/llama.cpp` source shows a concrete kernel-organization difference, not just a generic "needs
@@ -97,6 +126,17 @@ attention/cache work. Active-prefix attention fixed the worst full-suffix scanni
 uses dense full-capacity KV tensors and 98 explicit state bindings/outputs. This matters for 2K context and becomes a
 hard blocker for the 1M-context target.
 
+Two concrete code-path risks explain why capacity still matters:
+
+- `litenn_cpu_scatter_update_axis0_f32_rank3` copies the full `[capacity, kvHeads, headDim]` input to output when
+  `data != out`, then writes the current token row. The entry wrapper aliases projected state outputs back to their
+  mutable input buffers, so this can be avoided only if the lowered helper observes the same input/output address. The
+  next profile must confirm whether the graph-internal scatter path is actually in-place for every K/V state.
+- `litenn_cpu_active_prefix_attention_f32_rank3` runs one helper per attention head. For each head it recomputes the
+  same score dot product in the max, denominator, and value-aggregation passes. At 48 blocks and 40 heads, that is 1920
+  helper calls per generated token. This is small at a 10-token smoke length, but it scales directly with active prefix
+  length and is a likely part of the `2048` vs `10` delta.
+
 ## Conclusions
 
 1. The old reports' "LiteNN low-level kernels are fast" mostly covered static Float32 Linear/MLP AOT kernels and some
@@ -118,11 +158,13 @@ hard blocker for the 1M-context target.
 The next high-ROI work should be concrete and evidence-driven:
 
 1. Add GGUF decode operator-level profiling around the compiled stateful runtime schedule and sidecar helper calls.
-2. Replace `litenn_cpu_ggml_block_matmul_f32` with a Q8_K activation staging + Q4_K/Q5_K/Q6_K/Q8_0 vec-dot kernel
+2. Add production-shaped GGML helper benchmark rows and a projection-work estimator for full decoder steps.
+3. Replace `litenn_cpu_ggml_block_matmul_f32` with a Q8_K activation staging + Q4_K/Q5_K/Q6_K/Q8_0 vec-dot kernel
    family, with architecture-specific packed/repacked variants where available.
-3. Add a thread/cost model for decode-shaped quantized projections; default hardware threads are better than T16 here,
+4. Add a thread/cost model for decode-shaped quantized projections; default hardware threads are better than T16 here,
    but per-projection scheduling still needs measured gates.
-4. Continue reducing capacity-shaped overhead through paged KV/cache descriptors, because `2048` still costs about
-   `200 ms` more than `10` after active-prefix attention.
-5. Only after per-op timing is available should grouped QKV projection, MLP gate/up fusion, or logits/sampler fusion be
-   prioritized; today those are plausible but not yet ranked by direct evidence.
+5. Replace cache append scatter with a verified in-place KV append helper, then evolve it into paged KV state.
+6. Group projection work that rereads the same activation: fused/concatenated QKV where formats permit and fused
+   gate/up projection for SwiGLU.
+7. Replace per-head active-prefix attention with grouped KV-head or FlashAttention-style online-softmax helpers.
+8. Only after per-op timing is available should logits/sampler fusion be ranked against the projection and cache work.

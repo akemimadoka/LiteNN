@@ -2816,9 +2816,17 @@ and active KV pages rather than by a fully unrolled static max-cache-length grap
       collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
       count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
       projections, active-prefix attention, state alias copies, final logits projection, and sampler/text output.
+- [ ] Add production-shaped GGML helper benchmark and estimator coverage:
+      benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
+      `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current
+      `4096->4096` helper rows do not by themselves explain a 48-layer, 337-projection decode step.
 - [ ] Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
       keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
       kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.
+- [ ] Add grouped projection helpers for LLM decode:
+      fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
+      projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the
+      same normalized hidden vector across Q/K/V and gate/up helpers.
 - [ ] Add a measured decode thread/grain model:
       the local full-step `T16` run regressed while isolated helper rows benefit from parallelism, so scheduling needs
       helper-level cost gates rather than a single global "more threads" rule.
@@ -2828,6 +2836,10 @@ and active KV pages rather than by a fully unrolled static max-cache-length grap
 - [ ] Decouple persistent AOT instruction cache from model-weight storage.
       Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
       source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
+- [ ] Add a verified in-place KV append helper:
+      `ScatterNode` currently has a CPU helper path that copies the full `[capacity, kvHeads, headDim]` tensor when
+      input/output buffers differ. Stateful output aliasing should avoid that, but long-context performance needs a
+      dedicated cache-append lowering that writes only the current K/V row and fails closed if aliasing is not guaranteed.
 - [ ] Replace dense full-capacity KV tensors with paged KV-cache state.
       The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
       policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.
@@ -2835,6 +2847,10 @@ and active KV pages rather than by a fully unrolled static max-cache-length grap
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
       logits-only decode.
+- [ ] Replace per-head active-prefix attention helpers with grouped attention execution:
+      the current CPU helper is called once per attention head and recomputes score dot products across max,
+      denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before
+      treating 2K/32K/128K/1M context latency as representative.
 - [ ] Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production

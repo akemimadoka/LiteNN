@@ -68,6 +68,9 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
           thread count, cache length, and generated-token phase. The current per-step waterfall is enough to find the
           broad gap but not enough to rank RMSNorm, quantized projections, active-prefix attention, state copies,
           logits projection, and sampler work.
+    - [ ] Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
+          `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064`.
+          The current `4096->4096` row is useful but under-specifies the 337-projection full-step workload.
     - [ ] Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
           family. The current helper computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations.
           llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with
@@ -79,6 +82,13 @@ Status: first slice implemented. The canonical checklist lives in `docs/Roadmap.
     - [ ] Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
+    - [ ] Add a verified in-place KV append sidecar before the full paged-KV migration.
+          `litenn_cpu_scatter_update_axis0_f32_rank3` still has a full-cache copy path when input and output buffers are
+          distinct. Stateful output aliasing should make this avoidable, but the decode profiler must prove it; if not,
+          lower LLM cache appends to an explicit in-place helper.
+    - [ ] Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
+          fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. These target repeated
+          reads of the same activation/cache data that are invisible in a single-helper benchmark.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
