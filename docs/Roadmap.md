@@ -2916,6 +2916,10 @@ Priority classes:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before
       treating 2K/32K/128K/1M context latency as representative.
+      - [x] Add active-prefix attention helper benchmark rows for Qwen-shaped rank-3 KV caches. A short 2026-07-03 run
+            measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows, and
+            `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a new
+            kernel.
 - [ ] P2: Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production

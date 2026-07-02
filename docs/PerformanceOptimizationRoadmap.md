@@ -147,6 +147,10 @@ Priority classes for the GGUF/Qwen decode work:
                 concatenated, while `qwen_gate_up/T0` improved from about `3.49 ms` to `3.17 ms`.
           - [ ] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated
                 helper call or a multi-output sidecar without copying model weights at runtime.
+          - [x] Add active-prefix attention helper benchmark rows for Qwen-shaped rank-3 KV caches. A short 2026-07-03
+                run measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows,
+                and `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a
+                new kernel.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

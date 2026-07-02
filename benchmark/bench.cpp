@@ -65,6 +65,18 @@ extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
     std::int64_t updatesStride1, std::int64_t updatesStride2, float*, float* outAligned, std::int64_t outOffset,
     std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0, std::int64_t outStride1,
     std::int64_t outStride2);
+
+extern "C" void litenn_cpu_active_prefix_attention_f32_rank3(
+    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+    const float* keysAligned, std::int64_t keysOffset, std::int64_t keyRows, std::int64_t keyHeads,
+    std::int64_t keyColumns, std::int64_t keyRowStride, std::int64_t keyHeadStride, std::int64_t keyColumnStride,
+    const float*, const float* valuesAligned, std::int64_t valuesOffset, std::int64_t valueRows,
+    std::int64_t valueHeads, std::int64_t valueColumns, std::int64_t valueRowStride, std::int64_t valueHeadStride,
+    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
+    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, double scale, std::int64_t kvHead);
 #endif
 
 namespace
@@ -128,6 +140,14 @@ namespace
 		std::size_t headDim;
 	};
 
+	struct ActivePrefixAttentionBenchmarkSpec
+	{
+		std::string_view name;
+		std::size_t activeRows;
+		std::size_t kvHeads;
+		std::size_t headDim;
+	};
+
 	struct QuantizedLayerSpec
 	{
 		std::size_t inputWidth;
@@ -184,6 +204,12 @@ namespace
 	constexpr std::array<KVAppendBenchmarkSpec, 2> kKVAppendBenchmarkSpecs = {
 		KVAppendBenchmarkSpec{ "qwen_cache_2048", 2048, 8, 128 },
 		KVAppendBenchmarkSpec{ "qwen_cache_8192", 8192, 8, 128 },
+	};
+
+	constexpr std::array<ActivePrefixAttentionBenchmarkSpec, 3> kActivePrefixAttentionBenchmarkSpecs = {
+		ActivePrefixAttentionBenchmarkSpec{ "qwen_ctx_128", 128, 8, 128 },
+		ActivePrefixAttentionBenchmarkSpec{ "qwen_ctx_2048", 2048, 8, 128 },
+		ActivePrefixAttentionBenchmarkSpec{ "qwen_ctx_8192", 8192, 8, 128 },
 	};
 
 	constexpr std::array<QuantizedLayerSpec, 1> kQuantizedLinearLayers = {
@@ -1411,6 +1437,58 @@ namespace
 		state.counters["capacity"] = benchmark::Counter(static_cast<double>(spec.capacity));
 		state.counters["row_elements"] = benchmark::Counter(static_cast<double>(rowElements));
 		state.counters["state_bytes"] = benchmark::Counter(static_cast<double>(elementCount * sizeof(float)));
+	}
+
+	void BMActivePrefixAttentionRank3Helper(benchmark::State& state, const ActivePrefixAttentionBenchmarkSpec& spec)
+	{
+		const auto rowElements = spec.kvHeads * spec.headDim;
+		const auto elementCount = spec.activeRows * rowElements;
+		std::vector<float> query(spec.headDim);
+		std::vector<float> keys(elementCount);
+		std::vector<float> values(elementCount);
+		for (std::size_t i = 0; i < query.size(); ++i)
+		{
+			query[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.03125F;
+		}
+		for (std::size_t i = 0; i < keys.size(); ++i)
+		{
+			keys[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.015625F;
+			values[i] = static_cast<float>(static_cast<int>(i % 43) - 21) * 0.02F;
+		}
+		const std::array<std::int64_t, 1> position{ static_cast<std::int64_t>(spec.activeRows - 1) };
+		std::vector<float> output(spec.headDim);
+		const auto scale = 1.0 / std::sqrt(static_cast<double>(spec.headDim));
+
+		const auto invoke = [&] {
+			litenn_cpu_active_prefix_attention_f32_rank3(
+			    nullptr, query.data(), 0, 1, static_cast<std::int64_t>(spec.headDim),
+			    static_cast<std::int64_t>(spec.headDim), 1, nullptr, keys.data(), 0,
+			    static_cast<std::int64_t>(spec.activeRows), static_cast<std::int64_t>(spec.kvHeads),
+			    static_cast<std::int64_t>(spec.headDim), static_cast<std::int64_t>(rowElements),
+			    static_cast<std::int64_t>(spec.headDim), 1, nullptr, values.data(), 0,
+			    static_cast<std::int64_t>(spec.activeRows), static_cast<std::int64_t>(spec.kvHeads),
+			    static_cast<std::int64_t>(spec.headDim), static_cast<std::int64_t>(rowElements),
+			    static_cast<std::int64_t>(spec.headDim), 1, nullptr, position.data(), 0,
+			    static_cast<std::int64_t>(position.size()), 1, nullptr, output.data(), 0, 1,
+			    static_cast<std::int64_t>(spec.headDim), static_cast<std::int64_t>(spec.headDim), 1, scale, 0);
+		};
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["active_rows"] = benchmark::Counter(static_cast<double>(spec.activeRows));
+		state.counters["head_dim"] = benchmark::Counter(static_cast<double>(spec.headDim));
+		state.counters["kv_heads"] = benchmark::Counter(static_cast<double>(spec.kvHeads));
 	}
 
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
@@ -3632,6 +3710,14 @@ namespace
 				    [=](benchmark::State& state) { BMKVScatterUpdateHelper(state, shape, aliasOutput); });
 				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
+		}
+		for (const auto shape : kActivePrefixAttentionBenchmarkSpecs)
+		{
+			auto* benchmarkCase = benchmark::RegisterBenchmark(
+			    std::format("ActivePrefixAttentionRank3Helper/{}/rows:{}/heads:{}/dim:{}", shape.name, shape.activeRows,
+			                shape.kvHeads, shape.headDim),
+			    [=](benchmark::State& state) { BMActivePrefixAttentionRank3Helper(state, shape); });
+			benchmarkCase->Unit(benchmark::kMillisecond);
 		}
 #endif
 		for (const auto kind : kModelKinds)
