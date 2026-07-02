@@ -139,6 +139,12 @@ Priority classes for the GGUF/Qwen decode work:
     - [ ] P0/P1: Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
           fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. Projection grouping is
           P0; attention grouping is P1 because it scales with active context length.
+          - [x] Add grouped-projection benchmark rows that compare separate Q/K/V or gate/up helper calls against
+                concatenated output-major GGML weights using the existing helper ABI. A short 2026-07-03 Q4_K run
+                validated `max_abs_delta=0`; `qwen_qkv/T0` improved from about `1.37 ms` real separate to `1.07 ms`
+                concatenated, while `qwen_gate_up/T0` improved from about `3.49 ms` to `3.17 ms`.
+          - [ ] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated
+                helper call or a multi-output sidecar without copying model weights at runtime.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

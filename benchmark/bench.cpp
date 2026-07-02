@@ -81,6 +81,7 @@ namespace
 
 	constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
 	constexpr std::array<int, 7> kGGMLThreadCounts = { 0, 1, 2, 4, 8, 16, 32 };
+	constexpr std::array<int, 4> kGGMLGroupedThreadCounts = { 0, 1, 16, 32 };
 	constexpr int kWarmupIterations = 5;
 	constexpr std::size_t kInputWidth = 784;
 	constexpr std::size_t kLoRAOutputWidth = 512;
@@ -99,6 +100,14 @@ namespace
 		std::string_view name;
 		std::size_t inputWidth;
 		std::size_t outputWidth;
+	};
+
+	struct GGMLGroupedProjectionBenchmarkSpec
+	{
+		std::string_view name;
+		std::size_t inputWidth;
+		std::array<std::size_t, 3> outputWidths;
+		std::size_t projectionCount;
 	};
 
 	struct QuantizedLayerSpec
@@ -147,6 +156,11 @@ namespace
 		GGMLProjectionBenchmarkSpec{ "qwen_ffn_up", 5120, 13824 },
 		GGMLProjectionBenchmarkSpec{ "qwen_ffn_down", 13824, 5120 },
 		GGMLProjectionBenchmarkSpec{ "qwen_logits", 5120, 152064 },
+	};
+
+	constexpr std::array<GGMLGroupedProjectionBenchmarkSpec, 2> kGGMLGroupedProjectionBenchmarkSpecs = {
+		GGMLGroupedProjectionBenchmarkSpec{ "qwen_qkv", 5120, { 5120, 1024, 1024 }, 3 },
+		GGMLGroupedProjectionBenchmarkSpec{ "qwen_gate_up", 5120, { 13824, 13824, 0 }, 2 },
 	};
 
 	constexpr std::array<QuantizedLayerSpec, 1> kQuantizedLinearLayers = {
@@ -1214,6 +1228,116 @@ namespace
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 		state.counters["q8k_staged"] = benchmark::Counter(q8KStaged ? 1.0 : 0.0);
+	}
+
+	std::size_t TotalOutputWidth(std::span<const std::size_t> outputWidths)
+	{
+		std::size_t total = 0;
+		for (const auto width : outputWidths)
+		{
+			total += width;
+		}
+		return total;
+	}
+
+	void InvokeGGMLSeparateProjectionHelper(std::span<const std::vector<std::uint8_t>> rhsSegments,
+	                                        std::span<const std::size_t> outputWidths, QuantizedBlockFormat format,
+	                                        std::span<const float> lhs, std::size_t inputWidth,
+	                                        std::uint64_t threadCount, std::span<float> output)
+	{
+		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
+		std::size_t outputOffset = 0;
+		for (std::size_t projection = 0; projection < outputWidths.size(); ++projection)
+		{
+			const auto outputWidth = outputWidths[projection];
+			const auto& rhs = rhsSegments[projection];
+			litenn_cpu_ggml_block_matmul_f32(
+			    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+			    1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(),
+			    static_cast<std::int64_t>(outputOffset), 1, static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(totalOutputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			outputOffset += outputWidth;
+		}
+	}
+
+	void InvokeGGMLConcatenatedProjectionHelper(std::span<const std::uint8_t> rhs, std::size_t outputWidth,
+	                                            QuantizedBlockFormat format, std::span<const float> lhs,
+	                                            std::size_t inputWidth, std::uint64_t threadCount,
+	                                            std::span<float> output)
+	{
+		litenn_cpu_ggml_block_matmul_f32(
+		    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1,
+		    nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(), 0, 1,
+		    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+		    static_cast<std::uint64_t>(format), threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+	}
+
+	void BMGGMLGroupedProjectionHelper(benchmark::State& state, QuantizedBlockFormat format,
+	                                   const GGMLGroupedProjectionBenchmarkSpec& spec, std::uint64_t threadCount,
+	                                   bool concatenated)
+	{
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout)
+		{
+			state.SkipWithError("unsupported GGML block format");
+			return;
+		}
+		const auto outputWidths = std::span<const std::size_t>(spec.outputWidths.data(), spec.projectionCount);
+		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
+		auto lhs = MakeInputData(spec.inputWidth);
+		std::vector<std::vector<std::uint8_t>> rhsSegments;
+		rhsSegments.reserve(spec.projectionCount);
+		std::vector<std::uint8_t> concatenatedRhs;
+		for (const auto outputWidth : outputWidths)
+		{
+			auto segment = MakeGGMLBenchmarkStorage(format, outputWidth, spec.inputWidth);
+			concatenatedRhs.insert(concatenatedRhs.end(), segment.begin(), segment.end());
+			rhsSegments.push_back(std::move(segment));
+		}
+
+		std::vector<float> output(totalOutputWidth);
+		auto invoke = [&] {
+			if (concatenated)
+			{
+				InvokeGGMLConcatenatedProjectionHelper(concatenatedRhs, totalOutputWidth, format, lhs, spec.inputWidth,
+				                                       threadCount, output);
+			}
+			else
+			{
+				InvokeGGMLSeparateProjectionHelper(rhsSegments, outputWidths, format, lhs, spec.inputWidth, threadCount,
+				                                   output);
+			}
+		};
+
+		if (concatenated)
+		{
+			std::vector<float> separateReference(totalOutputWidth);
+			InvokeGGMLSeparateProjectionHelper(rhsSegments, outputWidths, format, lhs, spec.inputWidth, threadCount,
+			                                   separateReference);
+			InvokeGGMLConcatenatedProjectionHelper(concatenatedRhs, totalOutputWidth, format, lhs, spec.inputWidth,
+			                                       threadCount, output);
+			state.counters["max_abs_delta"] =
+			    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, separateReference)));
+		}
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["concatenated"] = benchmark::Counter(concatenated ? 1.0 : 0.0);
+		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(totalOutputWidth));
+		state.counters["projection_count"] = benchmark::Counter(static_cast<double>(spec.projectionCount));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
@@ -3398,6 +3522,30 @@ namespace
 						                            static_cast<std::uint64_t>(threadCount), true);
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
+			}
+		}
+		for (const auto format : ggmlBlockFormats)
+		{
+			for (const auto threadCount : kGGMLGroupedThreadCounts)
+			{
+				for (const auto shape : kGGMLGroupedProjectionBenchmarkSpecs)
+				{
+					const auto totalOutputWidth = TotalOutputWidth(
+					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
+					for (const auto concatenated : { false, true })
+					{
+						auto* benchmarkCase = benchmark::RegisterBenchmark(
+						    std::format("GGMLGroupedProjectionHelper/{}/{}/{}/T{}/batch:1/in:{}/out:{}",
+						                GGMLBlockFormatBenchmarkName(format), shape.name,
+						                concatenated ? "concatenated" : "separate", threadCount, shape.inputWidth,
+						                totalOutputWidth),
+						    [=](benchmark::State& state) {
+							    BMGGMLGroupedProjectionHelper(state, format, shape,
+							                                  static_cast<std::uint64_t>(threadCount), concatenated);
+						    });
+						benchmarkCase->Unit(benchmark::kMillisecond);
+					}
 				}
 			}
 		}

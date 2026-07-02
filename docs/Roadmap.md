@@ -2880,6 +2880,12 @@ Priority classes:
       fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
       projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the
       same normalized hidden vector across Q/K/V and gate/up helpers.
+      - [x] Add grouped-projection benchmark rows that compare separate Q/K/V or gate/up helper calls against
+            concatenated output-major GGML weights using the existing helper ABI. A short 2026-07-03 Q4_K run validated
+            `max_abs_delta=0`; `qwen_qkv/T0` improved from about `1.37 ms` real separate to `1.07 ms` concatenated,
+            while `qwen_gate_up/T0` improved from about `3.49 ms` to `3.17 ms`.
+      - [ ] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated helper
+            call or a multi-output sidecar without copying model weights at runtime.
 - [x] P0: Add a measured decode thread/grain model:
       `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
       MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit
