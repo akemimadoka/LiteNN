@@ -1030,6 +1030,45 @@ namespace
 		       format == QuantizedBlockFormat::GGML_Q6_K;
 	}
 
+	std::uint64_t ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat format,
+	                                                GGMLActivationDotMode activationDotMode, std::uint64_t operations,
+	                                                std::uint64_t outputUnits, std::uint64_t requestedThreadCount)
+	{
+		if (outputUnits <= 1 || operations < (1ull << 20))
+		{
+			return 1;
+		}
+
+		const auto requestedOrHardware = requestedThreadCount == 0
+		                                     ? static_cast<std::uint64_t>(LiteNNCPUHardwareThreadCount())
+		                                     : requestedThreadCount;
+		if (requestedOrHardware <= 1)
+		{
+			return 1;
+		}
+
+		auto capped = requestedOrHardware;
+		if (requestedThreadCount == 0)
+		{
+			capped = std::min<std::uint64_t>(capped, 16);
+			if (outputUnits <= 32)
+			{
+				capped = std::min<std::uint64_t>(capped, 4);
+			}
+			else if (outputUnits <= 128)
+			{
+				capped = std::min<std::uint64_t>(capped, 8);
+			}
+			if (activationDotMode == GGMLActivationDotMode::Q8KStaged &&
+			    (format == QuantizedBlockFormat::GGML_Q4_K || format == QuantizedBlockFormat::GGML_Q5_K))
+			{
+				capped = std::min<std::uint64_t>(capped, 8);
+			}
+		}
+
+		return std::max<std::uint64_t>(1, std::min<std::uint64_t>(capped, outputUnits));
+	}
+
 #if LITENN_HAS_X86_AVX2_TARGET
 	bool LiteNNCPUHasAVX2()
 	{
@@ -2157,12 +2196,8 @@ namespace
 			}
 		};
 		const auto operations = outputElements * static_cast<std::uint64_t>(lhsColumns);
-		const auto configuredThreadCount =
-		    requestedThreadCount == 0 ? LiteNNCPUHardwareThreadCount() : static_cast<std::size_t>(requestedThreadCount);
-		const auto threadCount =
-		    operations >= (1ull << 20)
-		        ? std::min<std::uint64_t>(static_cast<std::uint64_t>(configuredThreadCount), outputElements)
-		        : std::uint64_t{ 1 };
+		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, effectiveActivationDotMode, operations,
+		                                                           outputElements, requestedThreadCount);
 		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
 		                                ? CPUAOTAffinityPolicy::Compact
 		                                : CPUAOTAffinityPolicy::None;
@@ -2282,10 +2317,8 @@ namespace
 				}
 			};
 			const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * context.columnGroupsPerRow;
-			const auto groupedThreadCount =
-			    operations >= (1ull << 20)
-			        ? std::min<std::uint64_t>(static_cast<std::uint64_t>(configuredThreadCount), outputGroups)
-			        : std::uint64_t{ 1 };
+			const auto groupedThreadCount = ResolveGGMLBlockMatMulThreadCount(
+			    format, effectiveActivationDotMode, operations, outputGroups, requestedThreadCount);
 			const auto groupedGrain =
 			    std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, groupedThreadCount) * 8));
 			if (groupedThreadCount <= 1)

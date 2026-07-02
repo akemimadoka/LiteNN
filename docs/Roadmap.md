@@ -2880,9 +2880,13 @@ Priority classes:
       fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
       projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the
       same normalized hidden vector across Q/K/V and gate/up helpers.
-- [ ] P0: Add a measured decode thread/grain model:
-      the local full-step `T16` run regressed while isolated helper rows benefit from parallelism, so scheduling needs
-      helper-level cost gates rather than a single global "more threads" rule.
+- [x] P0: Add a measured decode thread/grain model:
+      `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
+      MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit
+      `T1/T2/T4/T8/T16/T32` requests. The helper benchmark matrix now includes `T0/T1/T2/T4/T8/T16/T32` rows. A short
+      2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
+      `Q6_K/qwen_ffn_down` about `3.28 ms` real), while explicit `T32` remains available when isolated helper rows prove
+      it wins.
 - [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.

@@ -122,9 +122,13 @@ Priority classes for the GGUF/Qwen decode work:
                 Do not switch the default globally until the policy is format-specific and accuracy-aware.
           - [ ] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
                 re-run the direct-vs-staged helper table before changing the compiler/runtime default.
-    - [ ] P0: Add a measured thread/grain policy for decode-shaped quantized projections.
-          The policy must be driven by helper-level timing instead of a global thread count: the local `T16` Qwen smoke
-          was slower than the default hardware-thread policy, while isolated helper rows still benefit from parallelism.
+    - [x] P0: Add a measured thread/grain policy for decode-shaped quantized projections.
+          `requestedThreadCount == 0` now takes an auto policy instead of blindly using every hardware thread: it caps
+          GGML block MatMul helpers at 16 workers, applies smaller caps to tiny output-group counts, and keeps explicit
+          `T1/T2/T4/T8/T16/T32` requests unchanged. The helper benchmark matrix now includes `T0/T1/T2/T4/T8/T16/T32`
+          rows. A short 2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
+          `Q6_K/qwen_ffn_down` about `3.28 ms` real) while explicit `T32` remains available for isolated helper cases
+          where it wins.
     - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
