@@ -100,6 +100,10 @@ Priority classes for the GGUF/Qwen decode work:
           accumulation semantics. Short validation on 2026-07-02 passed the stateful GGUF logits parity test and measured
           `GGMLBlockMatMulHelper/Q6_K/qwen_ffn_down/T1` at about `49.9 ms` CPU and the matching `T16` row at about
           `4.58 ms` CPU. This remains a major single-thread hotspot until Q8_K activation-staged vec-dot kernels land.
+    - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns.
+          The grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on
+          2026-07-02 passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about
+          `2.03 ms` CPU and `Q5_K/qwen_kv/T1` at about `3.67 ms` CPU.
     - [ ] P0: Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
           family. The current helper computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations.
           llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with

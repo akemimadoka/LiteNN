@@ -2753,9 +2753,9 @@ placement and fallback policy.
             `batch=1, in=4096, out=4096`, isolating the CPU sidecar helper from graph lowering and object emission.
       - [x] Cache Q4_K/Q5_K activation subblock sums once per input block in `litenn_cpu_ggml_block_matmul_f32` and
             reuse them across output columns. This is the first activation-side reuse slice before full Q8_K staging.
-      - [x] Add four-output-column tiling to the direct Q4_K/Q6_K CPU helper path so decode-shaped projections can reuse
-            each Float32 activation scan across adjacent output columns before the full Q8_K activation-staged kernel
-            replacement.
+      - [x] Add four-output-column tiling to the direct Q8_0/Q4_K/Q5_K/Q6_K CPU helper path so decode-shaped
+            projections can reuse each Float32 activation scan across adjacent output columns before the full Q8_K
+            activation-staged kernel replacement.
 - [x] Make `benchmark/gguf_decode_compare.py` consume GGUF decode observability fields so comparison tables carry
       backend identity, fallback count, explicit ms/generated-token, and generated-token throughput instead of only
       deriving throughput from `run_ms`.
@@ -2856,6 +2856,10 @@ Priority classes:
       `GGMLBlockMatMulHelper/Q6_K/qwen_ffn_down/T1` at about `49.9 ms` CPU and the matching `T16` row at about
       `4.58 ms` CPU, confirming Q6_K still needs the higher-priority Q8_K/vec-dot replacement for single-thread
       latency.
+- [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
+      the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
+      passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
+      `Q5_K/qwen_kv/T1` at about `3.67 ms` CPU.
 - [ ] P0: Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
       keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
       kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.

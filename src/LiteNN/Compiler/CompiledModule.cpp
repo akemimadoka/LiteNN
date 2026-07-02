@@ -960,6 +960,47 @@ namespace
 		return d * sum;
 	}
 
+	void AccumulateGGMLQ8_0BlockF32x4(const std::uint8_t* const blocks[4], const bool valid[4], std::int64_t byteStride,
+	                                  const float* lhs, std::int64_t lhsStride, float acc[4])
+	{
+		float d[4] = {};
+		for (int column = 0; column < 4; ++column)
+		{
+			if (valid[column])
+			{
+				d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 0);
+			}
+		}
+
+		float sum[4] = {};
+		for (std::uint64_t lane = 0; lane < 32; lane += 4)
+		{
+			for (std::uint64_t local = 0; local < 4; ++local)
+			{
+				const auto localLane = lane + local;
+				const auto lhsValue = lhs[static_cast<std::int64_t>(localLane) * lhsStride];
+				for (int column = 0; column < 4; ++column)
+				{
+					if (!valid[column])
+					{
+						continue;
+					}
+					const auto quant = static_cast<float>(
+					    static_cast<std::int8_t>(GGMLBlockByte(blocks[column], byteStride, 2 + localLane)));
+					sum[column] += lhsValue * quant;
+				}
+			}
+		}
+
+		for (int column = 0; column < 4; ++column)
+		{
+			if (valid[column])
+			{
+				acc[column] += d[column] * sum[column];
+			}
+		}
+	}
+
 	float DotGGMLQ4KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
 	                         std::int64_t lhsStride, const float* lhsSubblockSums)
 	{
@@ -1139,6 +1180,78 @@ namespace
 			acc += d * static_cast<float>(scale) * quantSum - dmin * static_cast<float>(minimum) * lhsSum;
 		}
 		return acc;
+	}
+
+	void AccumulateGGMLQ5KBlockF32x4(const std::uint8_t* const blocks[4], const bool valid[4], std::int64_t byteStride,
+	                                 const float* lhs, std::int64_t lhsStride, const float* lhsSubblockSums,
+	                                 float acc[4])
+	{
+		float d[4] = {};
+		float dmin[4] = {};
+		for (int column = 0; column < 4; ++column)
+		{
+			if (!valid[column])
+			{
+				continue;
+			}
+			d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 0);
+			dmin[column] = ReadGGMLF16Strided(blocks[column], byteStride, 2);
+		}
+
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale[4] = {};
+			std::uint32_t minimum[4] = {};
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
+				}
+			}
+
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			float quantSum[4] = {};
+			float lhsSum = lhsSubblockSums ? lhsSubblockSums[subblock] : 0.0F;
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; laneInSubblock += 4)
+			{
+				for (std::uint64_t local = 0; local < 4; ++local)
+				{
+					const auto localLane = laneInSubblock + local;
+					const auto lane = subblock * 32 + localLane;
+					const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+					if (!lhsSubblockSums)
+					{
+						lhsSum += lhsValue;
+					}
+
+					for (int column = 0; column < 4; ++column)
+					{
+						if (!valid[column])
+						{
+							continue;
+						}
+						const auto quantByte = static_cast<std::uint32_t>(
+						    GGMLBlockByte(blocks[column], byteStride, 48 + quantPairOffset + localLane));
+						const auto highBits =
+						    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, 16 + localLane));
+						auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+						quant |= ((highBits >> subblock) & 1U) << 4U;
+						quantSum[column] += lhsValue * static_cast<float>(quant);
+					}
+				}
+			}
+
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					acc[column] += d[column] * static_cast<float>(scale[column]) * quantSum[column] -
+					               dmin[column] * static_cast<float>(minimum[column]) * lhsSum;
+				}
+			}
+		}
 	}
 
 	float DotGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
@@ -1495,7 +1608,8 @@ namespace
 		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
 		                                ? CPUAOTAffinityPolicy::Compact
 		                                : CPUAOTAffinityPolicy::None;
-		if (format == QuantizedBlockFormat::GGML_Q4_K || format == QuantizedBlockFormat::GGML_Q6_K)
+		if (format == QuantizedBlockFormat::GGML_Q8_0 || format == QuantizedBlockFormat::GGML_Q4_K ||
+		    format == QuantizedBlockFormat::GGML_Q5_K || format == QuantizedBlockFormat::GGML_Q6_K)
 		{
 			const auto groupedBody = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 				const auto& ctx = *static_cast<const Context*>(userData);
@@ -1536,9 +1650,19 @@ namespace
 							    column * static_cast<std::int64_t>(ctx.rowBytes) * ctx.rhsStride +
 							    static_cast<std::int64_t>(blockIndex * ctx.bytesPerBlock) * ctx.rhsStride;
 						}
-						if (ctx.format == QuantizedBlockFormat::GGML_Q4_K)
+						if (ctx.format == QuantizedBlockFormat::GGML_Q8_0)
+						{
+							AccumulateGGMLQ8_0BlockF32x4(blocks, valid, ctx.rhsStride, lhsBlock, ctx.lhsColumnStride,
+							                             acc);
+						}
+						else if (ctx.format == QuantizedBlockFormat::GGML_Q4_K)
 						{
 							AccumulateGGMLQ4KBlockF32x4(blocks, valid, ctx.rhsStride, lhsBlock, ctx.lhsColumnStride,
+							                            lhsSums, acc);
+						}
+						else if (ctx.format == QuantizedBlockFormat::GGML_Q5_K)
+						{
+							AccumulateGGMLQ5KBlockF32x4(blocks, valid, ctx.rhsStride, lhsBlock, ctx.lhsColumnStride,
 							                            lhsSums, acc);
 						}
 						else
