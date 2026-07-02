@@ -2841,6 +2841,12 @@ Priority classes:
       calls and avoids a branch inside the innermost lane loop. Short benchmark validation on 2026-07-02 moved
       `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1` from about `3.03 ms` to about `1.91 ms`; `Q4_K/baseline4096/T1` measured
       about `6.09 ms` after the change.
+- [x] P0: Tile the Q4_K direct CPU helper across four output columns:
+      `litenn_cpu_ggml_block_matmul_f32` now shares each Float32 activation scan across four Q4_K output columns before
+      moving to the numerically different Q8_K staging path. Short validation on 2026-07-02 passed the stateful GGUF
+      logits parity test and measured `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1` at about `1.73 ms` CPU and
+      `Q4_K/baseline4096/T1` at about `5.79 ms` CPU; the same `qwen_kv` helper row measured about `0.33 ms` CPU at
+      `T16`, keeping helper-level parallelism as a valid but shape/grain-sensitive optimization.
 - [ ] P0: Replace the current GGML block MatMul CPU sidecar with Q8_K activation-staged vec-dot kernels:
       keep the existing direct Float32 helper only as a fallback/reference path, then add Q4_K/Q5_K/Q6_K/Q8_0 x Q8_K
       kernels with cache-friendly output tiling and architecture-specific packed/repacked variants where available.
