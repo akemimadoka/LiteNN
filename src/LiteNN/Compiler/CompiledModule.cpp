@@ -73,6 +73,16 @@
 #include <sched.h>
 #endif
 
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) &&                               \
+    (defined(__GNUC__) || defined(__clang__))
+#include <immintrin.h>
+#define LITENN_HAS_X86_AVX2_TARGET 1
+#define LITENN_TARGET_AVX2 __attribute__((target("avx2")))
+#else
+#define LITENN_HAS_X86_AVX2_TARGET 0
+#define LITENN_TARGET_AVX2
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1020,6 +1030,37 @@ namespace
 		       format == QuantizedBlockFormat::GGML_Q6_K;
 	}
 
+#if LITENN_HAS_X86_AVX2_TARGET
+	bool LiteNNCPUHasAVX2()
+	{
+		static const bool supported = [] {
+			__builtin_cpu_init();
+			return __builtin_cpu_supports("avx2");
+		}();
+		return supported;
+	}
+
+	LITENN_TARGET_AVX2 std::int32_t DotGGMLQ8KWithU8Raw16AVX2(const std::int8_t* q8, const std::uint8_t* raw,
+	                                                          std::int16_t zeroPoint)
+	{
+		const auto q8Bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q8));
+		const auto rawBytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(raw));
+		const auto q8I16 = _mm256_cvtepi8_epi16(q8Bytes);
+		const auto rawU16 = _mm256_cvtepu8_epi16(rawBytes);
+		const auto rawI16 = _mm256_sub_epi16(rawU16, _mm256_set1_epi16(zeroPoint));
+		const auto products = _mm256_mullo_epi16(q8I16, rawI16);
+		const auto sums = _mm256_madd_epi16(products, _mm256_set1_epi16(1));
+		alignas(32) std::int32_t lanes[8];
+		_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), sums);
+		std::int32_t total = 0;
+		for (auto lane : lanes)
+		{
+			total += lane;
+		}
+		return total;
+	}
+#endif
+
 	void QuantizeGGMLQ8KActivationBlock(const float* lhs, std::int64_t lhsStride, GGMLQ8KActivationBlock& out)
 	{
 		float signedMax = 0.0F;
@@ -1252,6 +1293,82 @@ namespace
 		}
 	}
 
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ4KBlockQ8Kx4AVX2(const std::uint8_t* const blocks[4], const bool valid[4],
+	                                                        std::int64_t byteStride, const GGMLQ8KActivationBlock& lhs,
+	                                                        float acc[4])
+	{
+		float d[4] = {};
+		float dmin[4] = {};
+		for (int column = 0; column < 4; ++column)
+		{
+			if (!valid[column])
+			{
+				continue;
+			}
+			d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 0);
+			dmin[column] = ReadGGMLF16Strided(blocks[column], byteStride, 2);
+		}
+
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale[4] = {};
+			std::uint32_t minimum[4] = {};
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
+				}
+			}
+
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			std::int32_t quantSum[4] = {};
+			for (std::uint64_t group = 0; group < 2; ++group)
+			{
+				std::uint8_t raw[4][16] = {};
+				for (std::uint64_t local = 0; local < 16; ++local)
+				{
+					const auto localLane = group * 16 + local;
+					for (int column = 0; column < 4; ++column)
+					{
+						if (!valid[column])
+						{
+							continue;
+						}
+						const auto quantByte = static_cast<std::uint32_t>(
+						    GGMLBlockByte(blocks[column], byteStride, 16 + quantPairOffset + localLane));
+						raw[column][local] =
+						    static_cast<std::uint8_t>(useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U));
+					}
+				}
+				const auto q8Offset = subblock * 32 + group * 16;
+				for (int column = 0; column < 4; ++column)
+				{
+					if (valid[column])
+					{
+						quantSum[column] += DotGGMLQ8KWithU8Raw16AVX2(lhs.qs + q8Offset, raw[column], 0);
+					}
+				}
+			}
+
+			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
+			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					const auto combinedScale = lhs.d * d[column];
+					acc[column] +=
+					    combinedScale * static_cast<float>(scale[column]) * static_cast<float>(quantSum[column]) -
+					    lhs.d * dmin[column] * static_cast<float>(minimum[column]) * static_cast<float>(lhsSum);
+				}
+			}
+		}
+	}
+#endif
+
 	float DotGGMLQ5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
 	                         std::int64_t lhsStride, const float* lhsSubblockSums)
 	{
@@ -1452,6 +1569,85 @@ namespace
 		}
 	}
 
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ5KBlockQ8Kx4AVX2(const std::uint8_t* const blocks[4], const bool valid[4],
+	                                                        std::int64_t byteStride, const GGMLQ8KActivationBlock& lhs,
+	                                                        float acc[4])
+	{
+		float d[4] = {};
+		float dmin[4] = {};
+		for (int column = 0; column < 4; ++column)
+		{
+			if (!valid[column])
+			{
+				continue;
+			}
+			d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 0);
+			dmin[column] = ReadGGMLF16Strided(blocks[column], byteStride, 2);
+		}
+
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale[4] = {};
+			std::uint32_t minimum[4] = {};
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
+				}
+			}
+
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			std::int32_t quantSum[4] = {};
+			for (std::uint64_t group = 0; group < 2; ++group)
+			{
+				std::uint8_t raw[4][16] = {};
+				for (std::uint64_t local = 0; local < 16; ++local)
+				{
+					const auto localLane = group * 16 + local;
+					for (int column = 0; column < 4; ++column)
+					{
+						if (!valid[column])
+						{
+							continue;
+						}
+						const auto quantByte = static_cast<std::uint32_t>(
+						    GGMLBlockByte(blocks[column], byteStride, 48 + quantPairOffset + localLane));
+						const auto highBits =
+						    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, 16 + localLane));
+						auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+						quant |= ((highBits >> subblock) & 1U) << 4U;
+						raw[column][local] = static_cast<std::uint8_t>(quant);
+					}
+				}
+				const auto q8Offset = subblock * 32 + group * 16;
+				for (int column = 0; column < 4; ++column)
+				{
+					if (valid[column])
+					{
+						quantSum[column] += DotGGMLQ8KWithU8Raw16AVX2(lhs.qs + q8Offset, raw[column], 0);
+					}
+				}
+			}
+
+			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
+			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
+			for (int column = 0; column < 4; ++column)
+			{
+				if (valid[column])
+				{
+					const auto combinedScale = lhs.d * d[column];
+					acc[column] +=
+					    combinedScale * static_cast<float>(scale[column]) * static_cast<float>(quantSum[column]) -
+					    lhs.d * dmin[column] * static_cast<float>(minimum[column]) * static_cast<float>(lhsSum);
+				}
+			}
+		}
+	}
+#endif
+
 	float DotGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
 	                         std::int64_t lhsStride)
 	{
@@ -1628,6 +1824,75 @@ namespace
 			}
 		}
 	}
+
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ6KBlockQ8Kx4AVX2(const std::uint8_t* const blocks[4], const bool valid[4],
+	                                                        std::int64_t byteStride, const GGMLQ8KActivationBlock& lhs,
+	                                                        float acc[4])
+	{
+		float d[4] = {};
+		for (int column = 0; column < 4; ++column)
+		{
+			if (valid[column])
+			{
+				d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 208);
+			}
+		}
+
+		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+		{
+			for (std::uint64_t segment = 0; segment < 4; ++segment)
+			{
+				for (std::uint64_t group = 0; group < 2; ++group)
+				{
+					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
+					float scale[4] = {};
+					for (int column = 0; column < 4; ++column)
+					{
+						if (valid[column])
+						{
+							scale[column] = static_cast<float>(
+							    static_cast<std::int8_t>(GGMLBlockByte(blocks[column], byteStride, 192 + scaleOffset)));
+						}
+					}
+
+					std::int32_t quantSum[4] = {};
+					std::uint8_t raw[4][16] = {};
+					for (std::uint64_t local = 0; local < 16; ++local)
+					{
+						const auto laneInSegment = group * 16 + local;
+						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+						const auto qhOffset = halfBlock * 32 + laneInSegment;
+						for (int column = 0; column < 4; ++column)
+						{
+							if (!valid[column])
+							{
+								continue;
+							}
+							const auto ql =
+							    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, qlOffset));
+							const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+							const auto qh =
+							    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, 128 + qhOffset));
+							const auto highTwo = (qh >> (segment * 2)) & 3U;
+							raw[column][local] = static_cast<std::uint8_t>(lowFour | (highTwo << 4U));
+						}
+					}
+
+					const auto q8Offset = halfBlock * 128 + segment * 32 + group * 16;
+					for (int column = 0; column < 4; ++column)
+					{
+						if (valid[column])
+						{
+							quantSum[column] = DotGGMLQ8KWithU8Raw16AVX2(lhs.qs + q8Offset, raw[column], 32);
+							acc[column] += lhs.d * d[column] * scale[column] * static_cast<float>(quantSum[column]);
+						}
+					}
+				}
+			}
+		}
+	}
+#endif
 
 	float DotGGMLBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs, std::int64_t lhsStride,
 	                      QuantizedBlockFormat format, const float* lhsSubblockSums = nullptr)
@@ -1949,15 +2214,36 @@ namespace
 							    ctx.lhsQ8KBlocks + static_cast<std::uint64_t>(row) * ctx.blockCount + blockIndex;
 							if (ctx.format == QuantizedBlockFormat::GGML_Q4_K)
 							{
-								AccumulateGGMLQ4KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+#if LITENN_HAS_X86_AVX2_TARGET
+								if (LiteNNCPUHasAVX2())
+								{
+									AccumulateGGMLQ4KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+								}
+								else
+#endif
+									AccumulateGGMLQ4KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
 							}
 							else if (ctx.format == QuantizedBlockFormat::GGML_Q5_K)
 							{
-								AccumulateGGMLQ5KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+#if LITENN_HAS_X86_AVX2_TARGET
+								if (LiteNNCPUHasAVX2())
+								{
+									AccumulateGGMLQ5KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+								}
+								else
+#endif
+									AccumulateGGMLQ5KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
 							}
 							else
 							{
-								AccumulateGGMLQ6KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+#if LITENN_HAS_X86_AVX2_TARGET
+								if (LiteNNCPUHasAVX2())
+								{
+									AccumulateGGMLQ6KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+								}
+								else
+#endif
+									AccumulateGGMLQ6KBlockQ8Kx4(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
 							}
 						}
 						else if (ctx.format == QuantizedBlockFormat::GGML_Q8_0)
