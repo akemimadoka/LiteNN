@@ -35,6 +35,7 @@ namespace LiteNN
 	struct CompiledModuleCPUHelperProfileEvent
 	{
 		std::string helper;
+		std::string detail;
 		std::uint64_t calls{};
 		double totalMilliseconds{};
 	};

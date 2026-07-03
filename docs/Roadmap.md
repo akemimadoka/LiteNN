@@ -2940,9 +2940,9 @@ Priority classes:
       The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
       generated-token latency, peak memory, artifact bytes, and fallback count.
       - [x] Add explicit CPU AOT helper profiling scopes and GGUF decode diagnostics output for helper symbol,
-            call count, total time, and average time per decode step. This covers sidecar/helper attribution for
-            quantized projections, get-rows, RoPE, KV scatter, and active-prefix attention; per-layer/per-node
-            attribution remains open.
+            shape/format/thread detail, call count, total time, and average time per decode step. This covers
+            sidecar/helper attribution for quantized projections, get-rows, RoPE, KV scatter, and active-prefix
+            attention; per-layer/per-node attribution remains open.
 
 ### Long-Term Deferred Queue
 

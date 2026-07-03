@@ -820,9 +820,10 @@ namespace
 		for (const auto& event : events)
 		{
 			const auto averageMs = event.calls == 0 ? 0.0 : event.totalMilliseconds / static_cast<double>(event.calls);
+			const auto detail = event.detail.empty() ? std::string{} : std::format(" detail=\"{}\"", event.detail);
 			LogGGUFDiagnostic(enabled,
-			                  std::format("decode step {} helper {} calls={} total_ms={:.3f} avg_ms={:.6f}", step,
-			                              event.helper, event.calls, event.totalMilliseconds, averageMs));
+			                  std::format("decode step {} helper {}{} calls={} total_ms={:.3f} avg_ms={:.6f}", step,
+			                              event.helper, detail, event.calls, event.totalMilliseconds, averageMs));
 		}
 	}
 

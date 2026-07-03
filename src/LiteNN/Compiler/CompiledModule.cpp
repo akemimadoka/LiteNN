@@ -129,14 +129,18 @@ namespace LiteNN
 			return current != nullptr;
 		}
 
-		static void Record(std::string_view helper, double milliseconds)
+		static void Record(std::string_view helper, std::string_view detail, double milliseconds)
 		{
 			if (current == nullptr)
 			{
 				return;
 			}
-			auto& event = current->events[std::string(helper)];
+			std::string key(helper);
+			key.push_back('\n');
+			key.append(detail);
+			auto& event = current->events[key];
 			event.helper = std::string(helper);
+			event.detail = std::string(detail);
 			++event.calls;
 			event.totalMilliseconds += milliseconds;
 		}
@@ -159,9 +163,21 @@ namespace
 	{
 	public:
 		explicit CPUAOTHelperProfileTimer(std::string_view helper)
-		    : helper_(helper), enabled_(CompiledModuleCPUHelperProfilerAccess::Enabled()),
-		      start_(std::chrono::steady_clock::now())
+		    : helper_(helper), enabled_(CompiledModuleCPUHelperProfilerAccess::Enabled())
 		{
+			if (enabled_)
+			{
+				start_ = std::chrono::steady_clock::now();
+			}
+		}
+
+		CPUAOTHelperProfileTimer(std::string_view helper, std::string detail)
+		    : helper_(helper), detail_(std::move(detail)), enabled_(CompiledModuleCPUHelperProfilerAccess::Enabled())
+		{
+			if (enabled_)
+			{
+				start_ = std::chrono::steady_clock::now();
+			}
 		}
 
 		~CPUAOTHelperProfileTimer()
@@ -171,12 +187,13 @@ namespace
 				return;
 			}
 			const auto elapsed = std::chrono::steady_clock::now() - start_;
-			CompiledModuleCPUHelperProfilerAccess::Record(helper_,
+			CompiledModuleCPUHelperProfilerAccess::Record(helper_, detail_,
 			                                              std::chrono::duration<double, std::milli>(elapsed).count());
 		}
 
 	private:
 		std::string_view helper_;
+		std::string detail_;
 		bool enabled_{};
 		std::chrono::steady_clock::time_point start_;
 	};
@@ -756,7 +773,11 @@ namespace
 	                                                 std::int64_t outColumns, std::int64_t outRowStride,
 	                                                 std::int64_t outColumnStride, double base, double frequencyScale)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_rope_at_positions_f32");
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_rope_at_positions_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("input={}x{} out={}x{}", inputRows, inputColumns, outRows, outColumns)
+		        : std::string{});
 		if (inputRows <= 0 || inputColumns <= 0 || (inputColumns % 2) != 0 || inputRows != outRows ||
 		    inputColumns != outColumns || positionSize != inputRows || !std::isfinite(base) || base <= 0.0 ||
 		    !std::isfinite(frequencyScale) || frequencyScale <= 0.0)
@@ -851,7 +872,11 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32");
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32",
+		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
+		                                          ? std::format("query={}x{} keys={}x{} out={}x{}", queryRows,
+		                                                        queryColumns, keyRows, keyColumns, outRows, outColumns)
+		                                          : std::string{});
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueColumns != outColumns || outColumns <= 0)
 		{
@@ -888,7 +913,12 @@ namespace
 	    std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0,
 	    std::int64_t outStride1, std::int64_t outStride2)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_scatter_update_axis0_f32_rank3");
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_scatter_update_axis0_f32_rank3",
+		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
+		                                          ? std::format("data={}x{}x{} updates={}x{}x{} out={}x{}x{}", dataDim0,
+		                                                        dataDim1, dataDim2, updatesDim0, updatesDim1,
+		                                                        updatesDim2, outDim0, outDim1, outDim2)
+		                                          : std::string{});
 		if (indicesSize != 1 || dataDim0 != outDim0 || dataDim1 != outDim1 || dataDim2 != outDim2 || updatesDim0 != 1 ||
 		    updatesDim1 != dataDim1 || updatesDim2 != dataDim2 || dataDim0 <= 0 || dataDim1 <= 0 || dataDim2 <= 0)
 		{
@@ -940,7 +970,12 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale, std::int64_t kvHead)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3");
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3",
+		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
+		                                          ? std::format("query={}x{} keys={}x{}x{} out={}x{} kv_head={}",
+		                                                        queryRows, queryColumns, keyRows, keyHeads, keyColumns,
+		                                                        outRows, outColumns, kvHead)
+		                                          : std::string{});
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueHeads != keyHeads || kvHead < 0 ||
 		    kvHead >= keyHeads || valueColumns != outColumns || outColumns <= 0)
@@ -981,7 +1016,12 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3_grouped");
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("queries={}x{} keys={}x{}x{} out={}x{} groups_per_kv={}", queryRows, queryColumns,
+		                      keyRows, keyHeads, keyColumns, outRows, outColumns, queryGroupsPerKVHead)
+		        : std::string{});
 		if (queryRows <= 0 || outRows != queryRows || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyHeads <= 0 || queryGroupsPerKVHead <= 0 || keyColumns != queryColumns || valueRows != keyRows ||
 		    valueHeads != keyHeads || valueColumns != outColumns || outColumns <= 0 ||
@@ -1163,6 +1203,28 @@ namespace
 		}
 
 		return std::max<std::uint64_t>(1, std::min<std::uint64_t>(capped, outputUnits));
+	}
+
+	std::string BuildGGMLBlockMatMulProfileDetail(QuantizedBlockFormat format, GGMLActivationDotMode activationDotMode,
+	                                              std::int64_t lhsRows, std::int64_t lhsColumns, std::int64_t outRows,
+	                                              std::int64_t outColumns, std::uint64_t requestedThreadCount)
+	{
+		const auto positiveLhsRows = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows));
+		const auto positiveLhsColumns = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsColumns));
+		const auto positiveOutColumns = static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns));
+		const auto outputElements = positiveLhsRows * positiveOutColumns;
+		const auto operations = outputElements * positiveLhsColumns;
+		auto outputUnits = outputElements;
+		if (format == QuantizedBlockFormat::GGML_Q8_0 || format == QuantizedBlockFormat::GGML_Q4_K ||
+		    format == QuantizedBlockFormat::GGML_Q5_K || format == QuantizedBlockFormat::GGML_Q6_K)
+		{
+			outputUnits = positiveLhsRows * ((positiveOutColumns + 3) / 4);
+		}
+		return std::format("format={} lhs={}x{} out={}x{} requested_threads={} resolved_threads={}",
+		                   QuantizedBlockFormatName(format), lhsRows, lhsColumns, outRows, outColumns,
+		                   requestedThreadCount,
+		                   ResolveGGMLBlockMatMulThreadCount(format, activationDotMode, operations, outputUnits,
+		                                                     requestedThreadCount));
 	}
 
 #if LITENN_HAS_X86_AVX2_TARGET
@@ -2443,7 +2505,13 @@ namespace
 	    std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
 	    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_matmul_f32");
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_matmul_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::DirectFloat32, lhsRows, lhsColumns,
+		                                            outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -2458,7 +2526,13 @@ namespace
 	    std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
 	    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_matmul_q8k_staged_f32");
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_matmul_q8k_staged_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
+		                                            outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -2518,7 +2592,13 @@ namespace
 	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
 	    std::uint64_t formatValue)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_get_rows_i32_f32");
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_get_rows_i32_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("format={} rows={} columns={} storage_bytes={}",
+		                      QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
+		                      outColumns, storageBytes)
+		        : std::string{});
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);
@@ -2531,7 +2611,13 @@ namespace
 	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
 	    std::uint64_t formatValue)
 	{
-		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_get_rows_i64_f32");
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_get_rows_i64_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("format={} rows={} columns={} storage_bytes={}",
+		                      QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
+		                      outColumns, storageBytes)
+		        : std::string{});
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);

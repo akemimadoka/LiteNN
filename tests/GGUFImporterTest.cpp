@@ -1905,7 +1905,8 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntime
 		profileEvents = profiler.Snapshot();
 	}
 	EXPECT_TRUE(std::ranges::any_of(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& event) {
-		return event.helper == "litenn_cpu_active_prefix_attention_f32_rank3_grouped" && event.calls > 0;
+		return event.helper == "litenn_cpu_active_prefix_attention_f32_rank3_grouped" && event.calls > 0 &&
+		       event.detail.find("queries=") != std::string::npos && event.detail.find("keys=") != std::string::npos;
 	}));
 	ASSERT_EQ(actual.size(), expected.size());
 	ExpectTensorNear(actual[0], expected[0], tolerance);
