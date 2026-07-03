@@ -112,6 +112,39 @@
 
 using namespace LiteNN;
 
+namespace LiteNN
+{
+	struct CompiledModuleCPUHelperProfiler::Impl
+	{
+		CompiledModuleCPUHelperProfiler::Impl* previous{};
+		std::unordered_map<std::string, CompiledModuleCPUHelperProfileEvent> events;
+	};
+
+	struct CompiledModuleCPUHelperProfilerAccess
+	{
+		static thread_local CompiledModuleCPUHelperProfiler::Impl* current;
+
+		static bool Enabled()
+		{
+			return current != nullptr;
+		}
+
+		static void Record(std::string_view helper, double milliseconds)
+		{
+			if (current == nullptr)
+			{
+				return;
+			}
+			auto& event = current->events[std::string(helper)];
+			event.helper = std::string(helper);
+			++event.calls;
+			event.totalMilliseconds += milliseconds;
+		}
+	};
+
+	thread_local CompiledModuleCPUHelperProfiler::Impl* CompiledModuleCPUHelperProfilerAccess::current = nullptr;
+} // namespace LiteNN
+
 namespace
 {
 #if defined(__GNUC__) || defined(__clang__)
@@ -121,6 +154,32 @@ namespace
 #define LITENN_RESTRICT
 #define LITENN_GCC_IVDEP
 #endif
+
+	class CPUAOTHelperProfileTimer
+	{
+	public:
+		explicit CPUAOTHelperProfileTimer(std::string_view helper)
+		    : helper_(helper), enabled_(CompiledModuleCPUHelperProfilerAccess::Enabled()),
+		      start_(std::chrono::steady_clock::now())
+		{
+		}
+
+		~CPUAOTHelperProfileTimer()
+		{
+			if (!enabled_)
+			{
+				return;
+			}
+			const auto elapsed = std::chrono::steady_clock::now() - start_;
+			CompiledModuleCPUHelperProfilerAccess::Record(helper_,
+			                                              std::chrono::duration<double, std::milli>(elapsed).count());
+		}
+
+	private:
+		std::string_view helper_;
+		bool enabled_{};
+		std::chrono::steady_clock::time_point start_;
+	};
 
 	bool IsCPUExternalRegionsEnabled(const CompilerOptions& options)
 	{
@@ -697,6 +756,7 @@ namespace
 	                                                 std::int64_t outColumns, std::int64_t outRowStride,
 	                                                 std::int64_t outColumnStride, double base, double frequencyScale)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_rope_at_positions_f32");
 		if (inputRows <= 0 || inputColumns <= 0 || (inputColumns % 2) != 0 || inputRows != outRows ||
 		    inputColumns != outColumns || positionSize != inputRows || !std::isfinite(base) || base <= 0.0 ||
 		    !std::isfinite(frequencyScale) || frequencyScale <= 0.0)
@@ -791,6 +851,7 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32");
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueColumns != outColumns || outColumns <= 0)
 		{
@@ -827,6 +888,7 @@ namespace
 	    std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0,
 	    std::int64_t outStride1, std::int64_t outStride2)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_scatter_update_axis0_f32_rank3");
 		if (indicesSize != 1 || dataDim0 != outDim0 || dataDim1 != outDim1 || dataDim2 != outDim2 || updatesDim0 != 1 ||
 		    updatesDim1 != dataDim1 || updatesDim2 != dataDim2 || dataDim0 <= 0 || dataDim1 <= 0 || dataDim2 <= 0)
 		{
@@ -878,6 +940,7 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale, std::int64_t kvHead)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3");
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueHeads != keyHeads || kvHead < 0 ||
 		    kvHead >= keyHeads || valueColumns != outColumns || outColumns <= 0)
@@ -918,6 +981,7 @@ namespace
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
 	    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3_grouped");
 		if (queryRows <= 0 || outRows != queryRows || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyHeads <= 0 || queryGroupsPerKVHead <= 0 || keyColumns != queryColumns || valueRows != keyRows ||
 		    valueHeads != keyHeads || valueColumns != outColumns || outColumns <= 0 ||
@@ -2379,6 +2443,7 @@ namespace
 	    std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
 	    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_matmul_f32");
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -2393,6 +2458,7 @@ namespace
 	    std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
 	    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_matmul_q8k_staged_f32");
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -2452,6 +2518,7 @@ namespace
 	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
 	    std::uint64_t formatValue)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_get_rows_i32_f32");
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);
@@ -2464,6 +2531,7 @@ namespace
 	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
 	    std::uint64_t formatValue)
 	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_ggml_block_get_rows_i64_f32");
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);
@@ -14516,6 +14584,38 @@ struct CompiledModule<CPU>::Impl
 		return borrowedExternalWeights.empty() ? nullptr : borrowedExternalWeights.data();
 	}
 };
+
+CompiledModuleCPUHelperProfiler::CompiledModuleCPUHelperProfiler() : impl_(std::make_unique<Impl>())
+{
+	impl_->previous = CompiledModuleCPUHelperProfilerAccess::current;
+	CompiledModuleCPUHelperProfilerAccess::current = impl_.get();
+}
+
+CompiledModuleCPUHelperProfiler::~CompiledModuleCPUHelperProfiler()
+{
+	if (CompiledModuleCPUHelperProfilerAccess::current == impl_.get())
+	{
+		CompiledModuleCPUHelperProfilerAccess::current = impl_->previous;
+	}
+}
+
+std::vector<CompiledModuleCPUHelperProfileEvent> CompiledModuleCPUHelperProfiler::Snapshot() const
+{
+	std::vector<CompiledModuleCPUHelperProfileEvent> events;
+	events.reserve(impl_->events.size());
+	for (const auto& [_, event] : impl_->events)
+	{
+		events.push_back(event);
+	}
+	std::ranges::sort(events, [](const auto& lhs, const auto& rhs) {
+		if (lhs.totalMilliseconds != rhs.totalMilliseconds)
+		{
+			return lhs.totalMilliseconds > rhs.totalMilliseconds;
+		}
+		return lhs.helper < rhs.helper;
+	});
+	return events;
+}
 
 CompiledModule<CPU>::CompiledModule() = default;
 

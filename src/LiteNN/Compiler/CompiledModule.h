@@ -32,6 +32,30 @@ namespace LiteNN
 		VulkanNative = 3,
 	};
 
+	struct CompiledModuleCPUHelperProfileEvent
+	{
+		std::string helper;
+		std::uint64_t calls{};
+		double totalMilliseconds{};
+	};
+
+	class CompiledModuleCPUHelperProfiler
+	{
+	public:
+		CompiledModuleCPUHelperProfiler();
+		CompiledModuleCPUHelperProfiler(const CompiledModuleCPUHelperProfiler&) = delete;
+		CompiledModuleCPUHelperProfiler& operator=(const CompiledModuleCPUHelperProfiler&) = delete;
+		~CompiledModuleCPUHelperProfiler();
+
+		std::vector<CompiledModuleCPUHelperProfileEvent> Snapshot() const;
+
+	private:
+		friend struct CompiledModuleCPUHelperProfilerAccess;
+
+		struct Impl;
+		std::unique_ptr<Impl> impl_;
+	};
+
 	struct CompiledTensorSpec
 	{
 		TensorType type;

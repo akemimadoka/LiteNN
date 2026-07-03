@@ -78,6 +78,10 @@ Priority classes for the GGUF/Qwen decode work:
           thread count, cache length, and generated-token phase. The current per-step waterfall is enough to find the
           broad gap but not enough to rank RMSNorm, quantized projections, active-prefix attention, state copies,
           logits projection, and sampler work.
+          - [x] Add explicit CPU AOT helper profiling scopes and GGUF decode diagnostics output for helper symbol,
+                call count, total time, and average time per decode step. This covers sidecar/helper attribution for
+                quantized projections, get-rows, RoPE, KV scatter, and active-prefix attention; per-layer/per-node
+                attribution remains open.
     - [x] P0: Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
           `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064`.
           The current `4096->4096` row is useful but under-specifies the 337-projection full-step workload.

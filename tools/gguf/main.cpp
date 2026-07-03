@@ -801,6 +801,31 @@ namespace
 		}
 	}
 
+	void LogGGUFHelperProfile(bool enabled, std::size_t step,
+	                          std::span<const LiteNN::CompiledModuleCPUHelperProfileEvent> events)
+	{
+		if (!enabled || events.empty())
+		{
+			return;
+		}
+		double totalMs = 0.0;
+		std::uint64_t totalCalls = 0;
+		for (const auto& event : events)
+		{
+			totalMs += event.totalMilliseconds;
+			totalCalls += event.calls;
+		}
+		LogGGUFDiagnostic(enabled, std::format("decode step {} helper_profile total_ms={:.3f} calls={} helpers={}",
+		                                       step, totalMs, totalCalls, events.size()));
+		for (const auto& event : events)
+		{
+			const auto averageMs = event.calls == 0 ? 0.0 : event.totalMilliseconds / static_cast<double>(event.calls);
+			LogGGUFDiagnostic(enabled,
+			                  std::format("decode step {} helper {} calls={} total_ms={:.3f} avg_ms={:.6f}", step,
+			                              event.helper, event.calls, event.totalMilliseconds, averageMs));
+		}
+	}
+
 	std::vector<std::byte> ReadBinaryFile(const std::filesystem::path& path)
 	{
 		std::ifstream input(path, std::ios::binary);
@@ -1236,6 +1261,11 @@ namespace
 			const auto stepStart = std::chrono::steady_clock::now();
 			const bool isPromptReplayStep = step + 1 < initialTokenIds.size();
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
+			std::optional<LiteNN::CompiledModuleCPUHelperProfiler> helperProfiler;
+			if (diagnostics)
+			{
+				helperProfiler.emplace();
+			}
 			if (options.statefulDecode)
 			{
 				StoreScalarTokenId(statefulInputs.front(), currentToken);
@@ -1272,6 +1302,10 @@ namespace
 					caches.clear();
 				}
 				outputs = decodeModule.RunTensors(inputs);
+			}
+			if (helperProfiler)
+			{
+				LogGGUFHelperProfile(diagnostics, step + 1, helperProfiler->Snapshot());
 			}
 			if (outputs.empty() || (!options.statefulDecode && outputs.size() < 2))
 			{

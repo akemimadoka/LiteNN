@@ -1897,7 +1897,16 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntime
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(plan, inputs);
 	auto compiled = Compiler<CPU>::CompileArtifact(plan).Load();
-	const auto actual = compiled.RunTensors(inputs);
+	std::vector<CompiledModuleCPUHelperProfileEvent> profileEvents;
+	std::vector<Tensor<CPU>> actual;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		actual = compiled.RunTensors(inputs);
+		profileEvents = profiler.Snapshot();
+	}
+	EXPECT_TRUE(std::ranges::any_of(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& event) {
+		return event.helper == "litenn_cpu_active_prefix_attention_f32_rank3_grouped" && event.calls > 0;
+	}));
 	ASSERT_EQ(actual.size(), expected.size());
 	ExpectTensorNear(actual[0], expected[0], tolerance);
 	EXPECT_EQ(static_cast<const std::int64_t*>(actual[1].UnsafeRawData())[0], 1);
