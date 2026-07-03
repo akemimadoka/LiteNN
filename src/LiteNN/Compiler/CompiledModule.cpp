@@ -773,23 +773,28 @@ namespace
 			return score * static_cast<float>(scale);
 		};
 
+		std::vector<float> scores(static_cast<std::size_t>(activeRows));
 		float maxScore = -std::numeric_limits<float>::infinity();
 		for (std::int64_t row = 0; row < activeRows; ++row)
 		{
-			maxScore = std::max(maxScore, scoreAt(row));
+			const auto score = scoreAt(row);
+			scores[static_cast<std::size_t>(row)] = score;
+			maxScore = std::max(maxScore, score);
 		}
 		float denominator = 0.0F;
-		for (std::int64_t row = 0; row < activeRows; ++row)
+		for (auto& score : scores)
 		{
-			denominator += std::exp(scoreAt(row) - maxScore);
+			score = std::exp(score - maxScore);
+			denominator += score;
 		}
 		if (denominator == 0.0F)
 		{
 			return;
 		}
+		const auto invDenominator = 1.0F / denominator;
 		for (std::int64_t row = 0; row < activeRows; ++row)
 		{
-			const auto weight = std::exp(scoreAt(row) - maxScore) / denominator;
+			const auto weight = scores[static_cast<std::size_t>(row)] * invDenominator;
 			const auto* valueRow = values + row * valueRowStride;
 			for (std::int64_t col = 0; col < outColumns; ++col)
 			{
@@ -895,23 +900,28 @@ namespace
 			return score * static_cast<float>(scale);
 		};
 
+		std::vector<float> scores(static_cast<std::size_t>(activeRows));
 		float maxScore = -std::numeric_limits<float>::infinity();
 		for (std::int64_t row = 0; row < activeRows; ++row)
 		{
-			maxScore = std::max(maxScore, scoreAt(row));
+			const auto score = scoreAt(row);
+			scores[static_cast<std::size_t>(row)] = score;
+			maxScore = std::max(maxScore, score);
 		}
 		float denominator = 0.0F;
-		for (std::int64_t row = 0; row < activeRows; ++row)
+		for (auto& score : scores)
 		{
-			denominator += std::exp(scoreAt(row) - maxScore);
+			score = std::exp(score - maxScore);
+			denominator += score;
 		}
 		if (denominator == 0.0F)
 		{
 			return;
 		}
+		const auto invDenominator = 1.0F / denominator;
 		for (std::int64_t row = 0; row < activeRows; ++row)
 		{
-			const auto weight = std::exp(scoreAt(row) - maxScore) / denominator;
+			const auto weight = scores[static_cast<std::size_t>(row)] * invDenominator;
 			const auto* valueHead = values + row * valueRowStride + kvHead * valueHeadStride;
 			for (std::int64_t col = 0; col < outColumns; ++col)
 			{

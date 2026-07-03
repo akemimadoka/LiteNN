@@ -151,6 +151,10 @@ Priority classes for the GGUF/Qwen decode work:
                 run measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows,
                 and `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a
                 new kernel.
+          - [x] Cache per-row attention scores inside the CPU active-prefix helper so max, denominator, and value
+                aggregation no longer recompute the query-key dot product. Validation on 2026-07-03 passed the CPU AOT
+                decode parity tests; helper timing improved to about `0.006 ms` for 128 rows, `0.099 ms` for 2048 rows,
+                and `0.651 ms` for 8192 rows.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

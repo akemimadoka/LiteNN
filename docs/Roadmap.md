@@ -2920,6 +2920,10 @@ Priority classes:
             measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows, and
             `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a new
             kernel.
+      - [x] Cache per-row attention scores inside the CPU active-prefix helper so max, denominator, and value
+            aggregation no longer recompute the query-key dot product. Validation on 2026-07-03 passed the CPU AOT
+            decode parity tests; helper timing improved to about `0.006 ms` for 128 rows, `0.099 ms` for 2048 rows, and
+            `0.651 ms` for 8192 rows.
 - [ ] P2: Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production
