@@ -1299,6 +1299,33 @@ namespace LiteNN::Serialization
 			{
 				return SoftmaxNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis") };
 			}
+			if (op.kind == "ActivePrefixAttentionNode")
+			{
+				if (inputs.size() != 4)
+				{
+					throw std::runtime_error("vNext ActivePrefixAttentionNode descriptor requires four inputs");
+				}
+				return ActivePrefixAttentionNode{ .query = RequireNodeInput(inputs, 0, op.kind),
+					                              .keys = RequireNodeInput(inputs, 1, op.kind),
+					                              .values = RequireNodeInput(inputs, 2, op.kind),
+					                              .currentPosition = RequireNodeInput(inputs, 3, op.kind),
+					                              .scale = PlanAttributeDouble(op, "scale"),
+					                              .kvHeadIndex = PlanAttributeSize(op, "kvHeadIndex") };
+			}
+			if (op.kind == "GroupedActivePrefixAttentionNode")
+			{
+				if (inputs.size() != 4)
+				{
+					throw std::runtime_error("vNext GroupedActivePrefixAttentionNode descriptor requires four inputs");
+				}
+				return GroupedActivePrefixAttentionNode{ .queries = RequireNodeInput(inputs, 0, op.kind),
+					                                     .keys = RequireNodeInput(inputs, 1, op.kind),
+					                                     .values = RequireNodeInput(inputs, 2, op.kind),
+					                                     .currentPosition = RequireNodeInput(inputs, 3, op.kind),
+					                                     .scale = PlanAttributeDouble(op, "scale"),
+					                                     .queryGroupsPerKVHead =
+					                                         PlanAttributeSize(op, "queryGroupsPerKVHead") };
+			}
 			if (op.kind == "RoPENode")
 			{
 				const auto hasPositions = PlanAttributeBool(op, "hasPositions");

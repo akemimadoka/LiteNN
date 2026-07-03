@@ -470,6 +470,22 @@ namespace LiteNN
 		return attrs;
 	}
 
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ActivePrefixAttentionNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "scale", node.scale);
+		AddPlanAttribute(attrs, "kvHeadIndex", node.kvHeadIndex);
+		return attrs;
+	}
+
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const GroupedActivePrefixAttentionNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "scale", node.scale);
+		AddPlanAttribute(attrs, "queryGroupsPerKVHead", node.queryGroupsPerKVHead);
+		return attrs;
+	}
+
 	template <typename T>
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const T&)
 	{
