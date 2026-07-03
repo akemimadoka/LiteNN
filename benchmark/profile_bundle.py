@@ -515,6 +515,21 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     if not analysis.steps and not analysis.helpers:
         return None
 
+    step_ms_by_id = { step.step: step.step_ms for step in analysis.steps }
+    total_step_ms = sum(step.step_ms for step in analysis.steps)
+    helper_totals_by_step: dict[int, dict[tuple[str, str], dict[str, object]]] = {}
+    for helper in analysis.helpers:
+        step_totals = helper_totals_by_step.setdefault(helper.step, {})
+        key = (helper.helper, helper.detail)
+        total = step_totals.setdefault(
+            key, { "helper": helper.helper, "detail": helper.detail, "calls": 0, "total_ms": 0.0 }
+        )
+        total["calls"] = int(total["calls"]) + helper.calls
+        total["total_ms"] = float(total["total_ms"]) + helper.total_ms
+
+    def helper_percent(total_ms: float, denominator_ms: float) -> float | None:
+        return total_ms * 100.0 / denominator_ms if denominator_ms > 0.0 else None
+
     step_dicts = [
         {
             "step": step.step,
@@ -522,6 +537,28 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "step_ms": step.step_ms,
             "generated_tokens": step.generated_tokens,
             "generated_tokens_per_second": step.tokens_per_second,
+            "helper_total_ms": sum(
+                float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()
+            ),
+            "helper_percent_of_step": helper_percent(
+                sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()),
+                step.step_ms,
+            ),
+            "top_helper": next(
+                (
+                    {
+                        "helper": helper["helper"],
+                        "detail": helper["detail"],
+                        "total_ms": helper["total_ms"],
+                        "percent_of_step": helper_percent(float(helper["total_ms"]), step.step_ms),
+                    }
+                    for helper in sorted(
+                        helper_totals_by_step.get(step.step, {}).values(),
+                        key=lambda item: (-float(item["total_ms"]), str(item["helper"])),
+                    )[:1]
+                ),
+                None,
+            ),
         }
         for step in analysis.steps
     ]
@@ -545,11 +582,14 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         total["calls"] = int(total["calls"]) + helper.calls
         total["total_ms"] = float(total["total_ms"]) + helper.total_ms
     ranked_helpers = sorted(helper_totals.values(), key=lambda item: (-float(item["total_ms"]), str(item["helper"])))
+    for helper in ranked_helpers:
+        helper["percent_of_steps"] = helper_percent(float(helper["total_ms"]), total_step_ms)
 
     summary = {
         "step_count": len(analysis.steps),
         "helper_event_count": len(analysis.helpers),
-        "total_step_ms": sum(step.step_ms for step in analysis.steps),
+        "total_step_ms": total_step_ms,
+        "total_helper_ms": sum(float(helper["total_ms"]) for helper in ranked_helpers),
         "generation_step_count": sum(1 for step in analysis.steps if step.phase == "generation"),
         "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
         "helpers": ranked_helpers,
@@ -598,6 +638,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                     "detail": helper.detail,
                     "calls": helper.calls,
                     "avg_ms": helper.avg_ms,
+                    "percent_of_step": helper_percent(helper.total_ms, step_ms_by_id.get(helper.step, 0.0)),
                 },
             }
         )
@@ -613,19 +654,45 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "",
         "## Top Helpers",
         "",
-        "| Helper | Detail | Calls | Total ms |",
-        "| --- | --- | ---: | ---: |",
+        "| Helper | Detail | Calls | Total ms | % of steps |",
+        "| --- | --- | ---: | ---: | ---: |",
     ]
     for helper in ranked_helpers[:20]:
+        percent = helper["percent_of_steps"]
+        percent_text = "n/a" if percent is None else f"{float(percent):.2f}%"
         md_lines.append(
             f"| `{helper['helper']}` | `{helper['detail']}` | {helper['calls']} | "
-            f"{float(helper['total_ms']):.3f} |"
+            f"{float(helper['total_ms']):.3f} | {percent_text} |"
         )
     if not ranked_helpers:
-        md_lines.append("| `none` |  | 0 | 0.000 |")
-    md_lines.extend(["", "## Steps", "", "| Step | Phase | Step ms | Tokens/s |", "| ---: | --- | ---: | ---: |"])
+        md_lines.append("| `none` |  | 0 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
+            "## Steps",
+            "",
+            "| Step | Phase | Step ms | Helper ms | Helper % | Top helper | Tokens/s |",
+            "| ---: | --- | ---: | ---: | ---: | --- | ---: |",
+        ]
+    )
     for step in analysis.steps:
-        md_lines.append(f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | {step.tokens_per_second:.3f} |")
+        step_summary = next(item for item in step_dicts if item["step"] == step.step)
+        helper_percent_text = (
+            "n/a"
+            if step_summary["helper_percent_of_step"] is None
+            else f"{float(step_summary['helper_percent_of_step']):.2f}%"
+        )
+        top_helper = step_summary["top_helper"]
+        top_helper_text = (
+            "`none`"
+            if not isinstance(top_helper, dict)
+            else f"`{top_helper['helper']}` {float(top_helper['total_ms']):.3f} ms"
+        )
+        md_lines.append(
+            f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | "
+            f"{float(step_summary['helper_total_ms']):.3f} | {helper_percent_text} | "
+            f"{top_helper_text} | {step.tokens_per_second:.3f} |"
+        )
     md_path = out_dir / "gguf_decode_summary.md"
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 

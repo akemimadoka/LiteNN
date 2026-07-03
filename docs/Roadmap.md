@@ -652,6 +652,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Parse GGUF decode `--stream-stats` and helper diagnostic output into `gguf_decode_summary.json`,
             `gguf_decode_summary.md`, and `gguf_decode_trace.json` so token-step and helper attribution are bundled
             with the command logs.
+      - [x] Include helper percentage attribution in the GGUF decode bundle summary: total helper share, per-step helper
+            share, and per-step top helper are now recorded so large residual/non-helper time remains visible.
       - [x] Import completed Qwen smoke reports with `benchmark/profile_bundle.py --qwen-smoke-report <report>` so
             helper/step attribution can be rebuilt from existing large-model evidence, while the bundle manifest links
             the original `qwen_smoke_trace.json` and waterfall outputs.
