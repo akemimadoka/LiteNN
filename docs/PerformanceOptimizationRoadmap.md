@@ -41,6 +41,10 @@ Priority classes for the GGUF/Qwen decode work:
   - [x] GGUF decode parser slice: the bundle now converts `--stream-stats` and helper diagnostics into
     `gguf_decode_summary.json`, `gguf_decode_summary.md`, and `gguf_decode_trace.json` for token-step and helper
     attribution.
+  - [x] Existing-run import slice: `benchmark/profile_bundle.py --qwen-smoke-report <qwen_smoke_report.json>` can
+    rebuild the same decode helper/step attribution from a completed Qwen smoke directory, linking the original
+    `qwen_smoke_trace.json` and waterfall into the bundle manifest so large-model evidence can be re-summarized without
+    re-running the model.
   - [ ] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits

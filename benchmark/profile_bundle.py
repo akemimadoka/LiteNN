@@ -83,6 +83,13 @@ class GGUFDecodeAnalysis:
     helpers: list[GGUFHelperEvent]
 
 
+@dataclass(frozen=True)
+class LogEvidence:
+    name: str
+    stdout: Path
+    stderr: Path
+
+
 def now_ns() -> int:
     return time.perf_counter_ns()
 
@@ -414,7 +421,54 @@ def parse_key_values(line: str) -> dict[str, str]:
     return values
 
 
-def parse_gguf_decode_logs(results: list[StepResult]) -> GGUFDecodeAnalysis:
+def resolve_report_path(raw: object, base: Path) -> Path:
+    path = Path(str(raw))
+    if path.is_absolute():
+        return path
+    return base / path
+
+
+def load_qwen_smoke_evidence(report_path: Path) -> tuple[list[LogEvidence], dict[str, object]]:
+    report = load_json(report_path)
+    if not isinstance(report, dict) or report.get("schema") not in (
+        "litenn.gguf_qwen_smoke.v1",
+        "litenn.gguf_qwen_smoke.v2",
+    ):
+        raise SystemExit(f"unsupported qwen smoke report: {report_path}")
+
+    base = report_path.parent
+    evidence: list[LogEvidence] = []
+    for raw_step in report.get("steps", []):
+        if not isinstance(raw_step, dict):
+            continue
+        stdout = raw_step.get("stdout")
+        stderr = raw_step.get("stderr")
+        if stdout is None or stderr is None:
+            continue
+        evidence.append(
+            LogEvidence(
+                name=str(raw_step.get("name", "qwen_smoke_step")),
+                stdout=resolve_report_path(stdout, base),
+                stderr=resolve_report_path(stderr, base),
+            )
+        )
+
+    links: dict[str, object] = {
+        "qwen_smoke_report": str(report_path),
+        "qwen_smoke_step_count": len(evidence),
+    }
+    for key in ("trace", "waterfall", "token_output", "text_output"):
+        value = report.get(key)
+        if value:
+            links[f"qwen_smoke_{key}"] = str(resolve_report_path(value, base))
+    return evidence, links
+
+
+def load_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
     steps: list[GGUFDecodeStep] = []
     helpers: list[GGUFHelperEvent] = []
     helper_pattern = re.compile(
@@ -590,6 +644,7 @@ def write_manifest(
     metadata: dict[str, object],
     stack_outputs: dict[str, object] | None = None,
     analysis_outputs: dict[str, object] | None = None,
+    imported_outputs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     manifest = {
         "format": "litenn-profile-bundle-v1",
@@ -611,6 +666,8 @@ def write_manifest(
         manifest["stack_outputs"] = stack_outputs
     if analysis_outputs is not None:
         manifest["analysis_outputs"] = analysis_outputs
+    if imported_outputs is not None:
+        manifest["imported_outputs"] = imported_outputs
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
@@ -655,6 +712,12 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
         for key in ("gguf_decode_step_count", "gguf_decode_helper_event_count"):
             if key in analysis_outputs:
                 lines.append(f"| `{key}` | `{analysis_outputs[key]}` |")
+
+    imported_outputs = manifest.get("imported_outputs")
+    if isinstance(imported_outputs, dict):
+        lines.extend(["", "## Imported Outputs", "", "| Artifact | Path |", "| --- | --- |"])
+        for key in sorted(imported_outputs):
+            lines.append(f"| `{key}` | `{imported_outputs[key]}` |")
 
     lines.extend(
         [
@@ -703,6 +766,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Collapsed stack input in 'frame;frame count' format; repeatable",
     )
+    parser.add_argument(
+        "--qwen-smoke-report",
+        action="append",
+        default=[],
+        type=Path,
+        help="Existing example/gguf/qwen_smoke.py report to import for GGUF decode analysis; repeatable",
+    )
     return parser.parse_args()
 
 
@@ -735,7 +805,7 @@ def main() -> int:
             raise SystemExit("--command was provided without a command")
         commands.append(("command", command, None))
 
-    if not commands and not args.collapsed_stacks:
+    if not commands and not args.collapsed_stacks and not args.qwen_smoke_report:
         raise SystemExit("No profile command was selected")
 
     metadata = {
@@ -753,6 +823,19 @@ def main() -> int:
         if result.returncode != 0:
             break
 
+    imported_evidence: list[LogEvidence] = []
+    imported_outputs: dict[str, object] | None = None
+    if args.qwen_smoke_report:
+        imported_outputs = {}
+        for report_index, report_path in enumerate(args.qwen_smoke_report):
+            evidence, links = load_qwen_smoke_evidence(report_path)
+            imported_evidence.extend(evidence)
+            prefix = f"qwen_smoke_{report_index}"
+            for key, value in links.items():
+                imported_outputs[f"{prefix}_{key}"] = (
+                    redact_text(value, replacements) if isinstance(value, str) else value
+                )
+
     stack_outputs: dict[str, object] | None = None
     if args.collapsed_stacks:
         stacks = read_collapsed_stacks(args.collapsed_stacks, replacements)
@@ -767,8 +850,12 @@ def main() -> int:
             "total_samples": sum(stack.samples for stack in stacks),
         }
 
-    analysis_outputs = write_gguf_decode_analysis(out_dir, parse_gguf_decode_logs(results))
-    manifest = write_manifest(out_dir, results, metadata, stack_outputs, analysis_outputs)
+    log_evidence: list[LogEvidence] = [
+        LogEvidence(name=result.name, stdout=result.stdout, stderr=result.stderr) for result in results
+    ]
+    log_evidence.extend(imported_evidence)
+    analysis_outputs = write_gguf_decode_analysis(out_dir, parse_gguf_decode_logs(log_evidence))
+    manifest = write_manifest(out_dir, results, metadata, stack_outputs, analysis_outputs, imported_outputs)
     trace = chrome_trace_events(results, metadata)
     (out_dir / "trace.json").write_text(json.dumps(trace, indent=2), encoding="utf-8")
     summarize(out_dir, manifest)
