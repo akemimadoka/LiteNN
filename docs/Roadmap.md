@@ -657,6 +657,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Import completed Qwen smoke reports with `benchmark/profile_bundle.py --qwen-smoke-report <report>` so
             helper/step attribution can be rebuilt from existing large-model evidence, while the bundle manifest links
             the original `qwen_smoke_trace.json` and waterfall outputs.
+      - [x] Persist CPU AOT A/B knobs in Qwen smoke reports and comparison tables, including LLVM opt level, helper
+            thread count, affinity, parallelism gate, Q8_K-staged mode, and compile-diagnostics mode.
       - [ ] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
             steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases.

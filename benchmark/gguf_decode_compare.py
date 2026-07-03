@@ -79,12 +79,22 @@ def litenn_row(path: Path) -> dict[str, object]:
         if ms_per_token_match is not None
         else run_ms / token_count
     )
+    cpu_aot_options = report.get("cpu_aot_options")
+    config = "n/a"
+    if isinstance(cpu_aot_options, dict):
+        config = (
+            f"opt={cpu_aot_options.get('llvm_opt_level', 'n/a')},"
+            f"T={cpu_aot_options.get('thread_count', 'auto')},"
+            f"aff={cpu_aot_options.get('affinity', 'default')},"
+            f"q8k={int(bool(cpu_aot_options.get('q8k_staged_matmul', False)))}"
+        )
     return {
         "implementation": "LiteNN",
         "backend": backend_match.group("value") if backend_match is not None else report.get("backend_policy"),
         "decodeMode": (
             decode_mode_match.group("value") if decode_mode_match is not None else report.get("decode_mode", "unknown")
         ),
+        "config": config,
         "tokens": token_count,
         "totalMs": run_ms,
         "promptReplayMs": float(prompt_replay_ms_match.group("value")) if prompt_replay_ms_match is not None else None,
@@ -114,6 +124,7 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "implementation": "llama.cpp",
                 "backend": "gpu" if gpu_layers > 0 else "cpu",
                 "decodeMode": entry.get("test", "decode"),
+                "config": f"gpu_layers={gpu_layers}",
                 "tokens": int(entry["n_gen"]),
                 "totalMs": int(entry["n_gen"]) * 1000.0 / tokens_per_second,
                 "promptReplayMs": None,
@@ -145,6 +156,7 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "implementation": str(entry.get("implementation", "PyTorch/HF")),
                 "backend": str(entry.get("backend", "unknown")),
                 "decodeMode": str(entry.get("decodeMode", entry.get("mode", "decode"))),
+                "config": str(entry.get("config", "n/a")),
                 "tokens": entry.get("tokens"),
                 "totalMs": entry.get("totalMs"),
                 "promptReplayMs": entry.get("promptReplayMs"),
@@ -197,13 +209,14 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
         lines.append(
             f"| {row['implementation']} | {row['backend']} | {row.get('decodeMode', 'decode')} | "
+            f"{row.get('config', 'n/a')} | "
             f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row['fallbackUsed']} | {row.get('fallbackCount')} |"
