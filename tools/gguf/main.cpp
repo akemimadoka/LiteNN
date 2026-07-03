@@ -65,18 +65,24 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
@@ -212,6 +218,11 @@ namespace
 		bool streamStats{};
 		bool compileOnly{};
 		bool enableCPUAOTQ8KStagedMatMul{};
+		std::optional<std::size_t> cpuAOTThreadCount;
+		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
+		std::optional<std::uint8_t> cpuAOTLLVMOptLevel;
+		std::optional<std::string> cpuAOTAffinityPolicy;
+		std::optional<bool> enableCompileDiagnostics;
 		std::optional<std::size_t> maxCacheLength;
 	};
 
@@ -287,6 +298,47 @@ namespace
 			else if (arg == "--cpu-aot-q8k-staged-matmul")
 			{
 				options.enableCPUAOTQ8KStagedMatMul = true;
+			}
+			else if (arg == "--cpu-aot-threads")
+			{
+				options.cpuAOTThreadCount = ParseSize(requireValue(arg), "cpu-aot-threads", true);
+			}
+			else if (arg == "--cpu-aot-parallel-min-flops")
+			{
+				options.cpuAOTParallelMinFlops = ParseU64(requireValue(arg), "cpu-aot-parallel-min-flops");
+			}
+			else if (arg == "--cpu-aot-llvm-opt-level")
+			{
+				const auto optLevel = ParseU64(requireValue(arg), "cpu-aot-llvm-opt-level");
+				if (optLevel > 3)
+				{
+					throw std::runtime_error("cpu-aot-llvm-opt-level must be between 0 and 3");
+				}
+				options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(optLevel);
+			}
+			else if (arg == "--cpu-aot-affinity")
+			{
+				const auto value = requireValue(arg);
+				if (value == "none")
+				{
+					options.cpuAOTAffinityPolicy = "none";
+				}
+				else if (value == "compact")
+				{
+					options.cpuAOTAffinityPolicy = "compact";
+				}
+				else
+				{
+					throw std::runtime_error("cpu-aot-affinity must be 'none' or 'compact'");
+				}
+			}
+			else if (arg == "--compile-diagnostics")
+			{
+				options.enableCompileDiagnostics = true;
+			}
+			else if (arg == "--no-compile-diagnostics")
+			{
+				options.enableCompileDiagnostics = false;
 			}
 			else if (arg == "--max-cache-length")
 			{
@@ -778,6 +830,8 @@ namespace
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 	LiteNN::CompilerOptions CompilerOptionsFromEnvironment();
+	void ApplyDecodeLoopCompilerOptions(const DecodeLoopCommandOptions& decodeOptions,
+	                                    LiteNN::CompilerOptions& compilerOptions);
 
 	void LogGGUFDiagnostic(bool enabled, std::string_view message)
 	{
@@ -932,10 +986,12 @@ namespace
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto keyText =
-		    std::format("gguf-decode-{}-v3|{}|{}|{}|tokens={}|opt={}|external={}|q8k_staged={}", decodeMode,
-		                std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
-		                options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
-		                options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0);
+		    std::format("gguf-decode-{}-v3|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
+		                "q8k_staged={}",
+		                decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
+		                requestedTokenCount, options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
+		                options.cpuAOTThreadCount, static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
+		                options.cpuAOTParallelMinFlops, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -1133,10 +1189,7 @@ namespace
 		}
 		auto compilerOptions = CompilerOptionsFromEnvironment();
 		compilerOptions.enableCPUAOTExternalRegions = true;
-		if (options.enableCPUAOTQ8KStagedMatMul)
-		{
-			compilerOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
-		}
+		ApplyDecodeLoopCompilerOptions(options, compilerOptions);
 		const auto diagnostics = compilerOptions.enableCompileDiagnostics;
 		LogGGUFDiagnostic(diagnostics, std::format("decode-loop start input={} requested_steps={}", options.inputPath,
 		                                           options.steps));
@@ -1542,6 +1595,37 @@ namespace
 		options.enableCPUAOTGGMLQ8KStagedMatMul = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_Q8K_STAGED_MATMUL"));
 		options.enableCompileDiagnostics = TruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS"));
 		return options;
+	}
+
+	void ApplyDecodeLoopCompilerOptions(const DecodeLoopCommandOptions& decodeOptions,
+	                                    LiteNN::CompilerOptions& compilerOptions)
+	{
+		if (decodeOptions.cpuAOTThreadCount)
+		{
+			compilerOptions.cpuAOTThreadCount = *decodeOptions.cpuAOTThreadCount;
+		}
+		if (decodeOptions.cpuAOTParallelMinFlops)
+		{
+			compilerOptions.cpuAOTParallelMinFlops = *decodeOptions.cpuAOTParallelMinFlops;
+		}
+		if (decodeOptions.cpuAOTLLVMOptLevel)
+		{
+			compilerOptions.cpuAOTLLVMOptLevel = *decodeOptions.cpuAOTLLVMOptLevel;
+		}
+		if (decodeOptions.cpuAOTAffinityPolicy)
+		{
+			compilerOptions.cpuAOTAffinityPolicy = *decodeOptions.cpuAOTAffinityPolicy == "compact"
+			                                           ? LiteNN::CPUAOTAffinityPolicy::Compact
+			                                           : LiteNN::CPUAOTAffinityPolicy::None;
+		}
+		if (decodeOptions.enableCompileDiagnostics)
+		{
+			compilerOptions.enableCompileDiagnostics = *decodeOptions.enableCompileDiagnostics;
+		}
+		if (decodeOptions.enableCPUAOTQ8KStagedMatMul)
+		{
+			compilerOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
+		}
 	}
 
 	std::string_view BackendName(LiteNN::CompiledModuleBackend backend)

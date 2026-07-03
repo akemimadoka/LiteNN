@@ -131,6 +131,10 @@ Priority classes for the GGUF/Qwen decode work:
                 while keeping the default path on the numerically stricter direct helper. Q4_K/Q5_K/Q8_0 remain direct
                 until they have measured production-shape wins. The GGUF decode CLI exposes this as
                 `--cpu-aot-q8k-staged-matmul` for A/B profiling.
+          - [x] Expose GGUF decode CPU AOT tuning as CLI flags for reproducible A/B runs:
+                `--cpu-aot-threads`, `--cpu-aot-affinity`, `--cpu-aot-llvm-opt-level`,
+                `--cpu-aot-parallel-min-flops`, and `--compile-diagnostics` / `--no-compile-diagnostics`.
+                Artifact-affecting options are part of the decode cache key.
           - [ ] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
                 re-run the direct-vs-staged helper table before changing the compiler/runtime default.
     - [x] P0: Add a measured thread/grain policy for decode-shaped quantized projections.

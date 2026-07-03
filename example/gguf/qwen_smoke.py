@@ -299,6 +299,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="CPU AOT LLVM optimization level for LiteNN decode smoke; default keeps first-run latency lower",
     )
     parser.add_argument(
+        "--cpu-aot-threads",
+        type=int,
+        help="CPU AOT helper thread count passed to litenn_gguf_convert; 0 selects the runtime auto policy",
+    )
+    parser.add_argument(
+        "--cpu-aot-affinity",
+        choices=("none", "compact"),
+        help="CPU AOT helper affinity policy passed to litenn_gguf_convert",
+    )
+    parser.add_argument(
+        "--cpu-aot-parallel-min-flops",
+        type=int,
+        help="CPU AOT f32 sidecar minimum FLOP gate passed to litenn_gguf_convert",
+    )
+    parser.add_argument(
+        "--cpu-aot-q8k-staged-matmul",
+        action="store_true",
+        help="Opt in to Q8_K-staged GGML_Q6_K CPU AOT matmul for A/B profiling",
+    )
+    parser.add_argument(
         "--no-compile-diagnostics",
         action="store_true",
         help="Suppress LiteNN decode compile/run progress diagnostics",
@@ -394,16 +414,12 @@ def main() -> int:
         require_ok(step, steps, workdir)
 
     litenn_decode_env = os.environ.copy()
-    litenn_decode_env["LITENN_CPU_AOT_LLVM_OPT_LEVEL"] = str(args.llvm_opt_level)
     if args.aot_cache_dir is not None:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_DIR"] = str(args.aot_cache_dir)
     if args.require_aot_cache_hit:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_REQUIRE_HIT"] = "1"
     if args.no_aot_cache_write:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_WRITE"] = "0"
-    if not args.no_compile_diagnostics:
-        litenn_decode_env["LITENN_COMPILE_DIAGNOSTICS"] = "1"
-
     analyze = run_step("analyze", [str(litenn), "--analyze-llm", str(args.model), args.profile], workdir)
     steps.append(analyze)
     if not args.allow_analysis_failure:
@@ -609,6 +625,20 @@ def main() -> int:
             decode_cmd.append("--compile-only")
         if args.max_cache_length is not None:
             decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
+        decode_cmd.extend(["--cpu-aot-llvm-opt-level", str(args.llvm_opt_level)])
+        if args.cpu_aot_threads is not None:
+            if args.cpu_aot_threads < 0:
+                raise SystemExit("--cpu-aot-threads must be non-negative")
+            decode_cmd.extend(["--cpu-aot-threads", str(args.cpu_aot_threads)])
+        if args.cpu_aot_affinity is not None:
+            decode_cmd.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
+        if args.cpu_aot_parallel_min_flops is not None:
+            if args.cpu_aot_parallel_min_flops < 0:
+                raise SystemExit("--cpu-aot-parallel-min-flops must be non-negative")
+            decode_cmd.extend(["--cpu-aot-parallel-min-flops", str(args.cpu_aot_parallel_min_flops)])
+        if args.cpu_aot_q8k_staged_matmul:
+            decode_cmd.append("--cpu-aot-q8k-staged-matmul")
+        decode_cmd.append("--no-compile-diagnostics" if args.no_compile_diagnostics else "--compile-diagnostics")
         decode = run_step(
             "litenn_decode_token_ids",
             decode_cmd,
