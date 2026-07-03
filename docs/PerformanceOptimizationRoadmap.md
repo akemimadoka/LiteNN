@@ -38,6 +38,9 @@ Priority classes for the GGUF/Qwen decode work:
   - [x] First slice: `benchmark/profile_bundle.py` wraps `litenn_profile` or an arbitrary command, captures
     stdout/stderr, writes `manifest.json`, `trace.json`, and `summary.md`, and redacts user-specified sensitive paths
     from recorded artifacts.
+  - [x] GGUF decode parser slice: the bundle now converts `--stream-stats` and helper diagnostics into
+    `gguf_decode_summary.json`, `gguf_decode_summary.md`, and `gguf_decode_trace.json` for token-step and helper
+    attribution.
   - [ ] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits

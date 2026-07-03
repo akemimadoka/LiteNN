@@ -22,6 +22,7 @@ import html
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,31 @@ class StepResult:
 class CollapsedStack:
     frames: tuple[str, ...]
     samples: int
+
+
+@dataclass(frozen=True)
+class GGUFDecodeStep:
+    step: int
+    phase: str
+    step_ms: float
+    generated_tokens: int
+    tokens_per_second: float
+
+
+@dataclass(frozen=True)
+class GGUFHelperEvent:
+    step: int
+    helper: str
+    detail: str
+    calls: int
+    total_ms: float
+    avg_ms: float
+
+
+@dataclass(frozen=True)
+class GGUFDecodeAnalysis:
+    steps: list[GGUFDecodeStep]
+    helpers: list[GGUFHelperEvent]
 
 
 def now_ns() -> int:
@@ -378,11 +404,192 @@ def chrome_trace_events(results: list[StepResult], metadata: dict[str, object]) 
     return { "traceEvents": events, "metadata": metadata }
 
 
+def parse_key_values(line: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for match in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|\S+)", line):
+        value = match.group(2)
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1]
+        values[match.group(1)] = value
+    return values
+
+
+def parse_gguf_decode_logs(results: list[StepResult]) -> GGUFDecodeAnalysis:
+    steps: list[GGUFDecodeStep] = []
+    helpers: list[GGUFHelperEvent] = []
+    helper_pattern = re.compile(
+        r"decode step (?P<step>\d+) helper (?P<helper>\S+)(?: detail=\"(?P<detail>[^\"]*)\")? "
+        r"calls=(?P<calls>\d+) total_ms=(?P<total>[0-9.+\-eE]+) avg_ms=(?P<avg>[0-9.+\-eE]+)"
+    )
+    for result in results:
+        for path in (result.stdout, result.stderr):
+            if not path.exists():
+                continue
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if "stream stats " in line:
+                    values = parse_key_values(line)
+                    try:
+                        steps.append(
+                            GGUFDecodeStep(
+                                step=int(values["step"]),
+                                phase=values.get("phase", "unknown"),
+                                step_ms=float(values["step_ms"]),
+                                generated_tokens=int(values.get("generated_tokens", "0")),
+                                tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
+                            )
+                        )
+                    except (KeyError, ValueError):
+                        continue
+                if "decode step " in line and " helper " in line:
+                    match = helper_pattern.search(line)
+                    if match is None:
+                        continue
+                    helpers.append(
+                        GGUFHelperEvent(
+                            step=int(match.group("step")),
+                            helper=match.group("helper"),
+                            detail=match.group("detail") or "",
+                            calls=int(match.group("calls")),
+                            total_ms=float(match.group("total")),
+                            avg_ms=float(match.group("avg")),
+                        )
+                    )
+    return GGUFDecodeAnalysis(steps=steps, helpers=helpers)
+
+
+def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> dict[str, object] | None:
+    if not analysis.steps and not analysis.helpers:
+        return None
+
+    step_dicts = [
+        {
+            "step": step.step,
+            "phase": step.phase,
+            "step_ms": step.step_ms,
+            "generated_tokens": step.generated_tokens,
+            "generated_tokens_per_second": step.tokens_per_second,
+        }
+        for step in analysis.steps
+    ]
+    helper_dicts = [
+        {
+            "step": helper.step,
+            "helper": helper.helper,
+            "detail": helper.detail,
+            "calls": helper.calls,
+            "total_ms": helper.total_ms,
+            "avg_ms": helper.avg_ms,
+        }
+        for helper in analysis.helpers
+    ]
+    helper_totals: dict[tuple[str, str], dict[str, object]] = {}
+    for helper in analysis.helpers:
+        key = (helper.helper, helper.detail)
+        total = helper_totals.setdefault(
+            key, { "helper": helper.helper, "detail": helper.detail, "calls": 0, "total_ms": 0.0 }
+        )
+        total["calls"] = int(total["calls"]) + helper.calls
+        total["total_ms"] = float(total["total_ms"]) + helper.total_ms
+    ranked_helpers = sorted(helper_totals.values(), key=lambda item: (-float(item["total_ms"]), str(item["helper"])))
+
+    summary = {
+        "step_count": len(analysis.steps),
+        "helper_event_count": len(analysis.helpers),
+        "total_step_ms": sum(step.step_ms for step in analysis.steps),
+        "generation_step_count": sum(1 for step in analysis.steps if step.phase == "generation"),
+        "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
+        "helpers": ranked_helpers,
+        "steps": step_dicts,
+        "helper_events": helper_dicts,
+    }
+
+    json_path = out_dir / "gguf_decode_summary.json"
+    json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    trace_events: list[dict[str, object]] = []
+    step_starts: dict[int, float] = {}
+    cursor_us = 0.0
+    for step in analysis.steps:
+        step_starts[step.step] = cursor_us
+        trace_events.append(
+            {
+                "name": f"decode_step_{step.step}_{step.phase}",
+                "cat": "litenn.gguf.decode",
+                "ph": "X",
+                "pid": DEFAULT_TRACE_PID + 1,
+                "tid": 1,
+                "ts": cursor_us,
+                "dur": step.step_ms * 1000.0,
+                "args": {
+                    "step": step.step,
+                    "phase": step.phase,
+                    "generated_tokens": step.generated_tokens,
+                    "generated_tokens_per_second": step.tokens_per_second,
+                },
+            }
+        )
+        cursor_us += step.step_ms * 1000.0
+    for helper in analysis.helpers:
+        trace_events.append(
+            {
+                "name": helper.helper,
+                "cat": "litenn.gguf.helper",
+                "ph": "X",
+                "pid": DEFAULT_TRACE_PID + 1,
+                "tid": 2,
+                "ts": step_starts.get(helper.step, 0.0),
+                "dur": helper.total_ms * 1000.0,
+                "args": {
+                    "step": helper.step,
+                    "detail": helper.detail,
+                    "calls": helper.calls,
+                    "avg_ms": helper.avg_ms,
+                },
+            }
+        )
+    trace_path = out_dir / "gguf_decode_trace.json"
+    trace_path.write_text(json.dumps({ "traceEvents": trace_events }, indent=2), encoding="utf-8")
+
+    md_lines = [
+        "# GGUF Decode Summary",
+        "",
+        f"- steps: {len(analysis.steps)}",
+        f"- helper events: {len(analysis.helpers)}",
+        f"- total step ms: {summary['total_step_ms']:.3f}",
+        "",
+        "## Top Helpers",
+        "",
+        "| Helper | Detail | Calls | Total ms |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    for helper in ranked_helpers[:20]:
+        md_lines.append(
+            f"| `{helper['helper']}` | `{helper['detail']}` | {helper['calls']} | "
+            f"{float(helper['total_ms']):.3f} |"
+        )
+    if not ranked_helpers:
+        md_lines.append("| `none` |  | 0 | 0.000 |")
+    md_lines.extend(["", "## Steps", "", "| Step | Phase | Step ms | Tokens/s |", "| ---: | --- | ---: | ---: |"])
+    for step in analysis.steps:
+        md_lines.append(f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | {step.tokens_per_second:.3f} |")
+    md_path = out_dir / "gguf_decode_summary.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+    return {
+        "gguf_decode_summary": str(json_path),
+        "gguf_decode_trace": str(trace_path),
+        "gguf_decode_markdown": str(md_path),
+        "gguf_decode_step_count": len(analysis.steps),
+        "gguf_decode_helper_event_count": len(analysis.helpers),
+    }
+
+
 def write_manifest(
     out_dir: Path,
     results: list[StepResult],
     metadata: dict[str, object],
     stack_outputs: dict[str, object] | None = None,
+    analysis_outputs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     manifest = {
         "format": "litenn-profile-bundle-v1",
@@ -402,6 +609,8 @@ def write_manifest(
     }
     if stack_outputs is not None:
         manifest["stack_outputs"] = stack_outputs
+    if analysis_outputs is not None:
+        manifest["analysis_outputs"] = analysis_outputs
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
@@ -437,12 +646,23 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
         if "total_samples" in stack_outputs:
             lines.append(f"| `total_samples` | `{stack_outputs['total_samples']}` |")
 
+    analysis_outputs = manifest.get("analysis_outputs")
+    if isinstance(analysis_outputs, dict):
+        lines.extend(["", "## Analysis Outputs", "", "| Artifact | Path |", "| --- | --- |"])
+        for key in ("gguf_decode_summary", "gguf_decode_trace", "gguf_decode_markdown"):
+            if key in analysis_outputs:
+                lines.append(f"| `{key}` | `{analysis_outputs[key]}` |")
+        for key in ("gguf_decode_step_count", "gguf_decode_helper_event_count"):
+            if key in analysis_outputs:
+                lines.append(f"| `{key}` | `{analysis_outputs[key]}` |")
+
     lines.extend(
         [
             "",
             "## Next Diagnostics",
             "",
             "- Open `trace.json` in `chrome://tracing` or Perfetto to inspect the current command-level waterfall.",
+            "- When profiling GGUF decode with `--stream-stats` and `LITENN_COMPILE_DIAGNOSTICS=1`, open `gguf_decode_trace.json` and `gguf_decode_summary.md` for token-step and helper attribution.",
             "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; convert it to collapsed stacks and pass `--collapsed-stacks` to generate Speedscope/flame graph output.",
             "- Pass private model files through `--sensitive-path` so manifest, summary, trace, stdout, and stderr redact them.",
             "",
@@ -547,7 +767,8 @@ def main() -> int:
             "total_samples": sum(stack.samples for stack in stacks),
         }
 
-    manifest = write_manifest(out_dir, results, metadata, stack_outputs)
+    analysis_outputs = write_gguf_decode_analysis(out_dir, parse_gguf_decode_logs(results))
+    manifest = write_manifest(out_dir, results, metadata, stack_outputs, analysis_outputs)
     trace = chrome_trace_events(results, metadata)
     (out_dir / "trace.json").write_text(json.dumps(trace, indent=2), encoding="utf-8")
     summarize(out_dir, manifest)

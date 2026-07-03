@@ -649,6 +649,9 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Add the first `benchmark/profile_bundle.py` command that wraps `litenn_profile` or an arbitrary smoke
             command, captures stdout/stderr, writes `manifest.json`, `summary.md`, and a command-level
             Chrome Trace / Perfetto-compatible `trace.json`.
+      - [x] Parse GGUF decode `--stream-stats` and helper diagnostic output into `gguf_decode_summary.json`,
+            `gguf_decode_summary.md`, and `gguf_decode_trace.json` so token-step and helper attribution are bundled
+            with the command logs.
       - [ ] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
             steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases.
