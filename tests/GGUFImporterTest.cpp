@@ -1739,6 +1739,33 @@ TEST(GGUFLLaMACausalLM, ReusesCapacityDecodeGraphAcrossRuntimePositions)
 	ExpectTensorNear(secondOutputs[0], fullSecondLogit, GGUF::GetLLaMAParityTolerance(DataType::Float32));
 }
 
+TEST(GGUFLLaMACausalLM, CapacityDecodeUsesGroupedActivePrefixAttention)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto capacityDecode = GGUF::LowerLLaMACausalLMDecodeCapacity(archive, 4);
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(archive);
+	std::size_t groupedAttentionNodeCount = 0;
+	std::size_t singleHeadAttentionNodeCount = 0;
+	for (SubgraphId subgraphId = 0; subgraphId < capacityDecode.SubgraphCount(); ++subgraphId)
+	{
+		const auto& subgraph = capacityDecode.GetSubgraph(subgraphId);
+		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		{
+			const auto& node = subgraph.GetNodeEntry(nodeId).node;
+			if (std::holds_alternative<GroupedActivePrefixAttentionNode>(node))
+			{
+				++groupedAttentionNodeCount;
+			}
+			if (std::holds_alternative<ActivePrefixAttentionNode>(node))
+			{
+				++singleHeadAttentionNodeCount;
+			}
+		}
+	}
+	EXPECT_EQ(groupedAttentionNodeCount, hyperparameters.blockCount);
+	EXPECT_EQ(singleHeadAttentionNodeCount, 0u);
+}
+
 TEST(GGUFLLaMACausalLM, ReusesCapacityPrefillGraphAcrossPromptLengths)
 {
 	const auto archive = BuildTinyLLaMAArchive();

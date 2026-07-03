@@ -944,12 +944,11 @@ namespace LiteNN::GGUF
 			Layer::AddScatter(subgraph, cache.keys, currentPosition, rotatedKeys3D, 0),
 			Layer::AddScatter(subgraph, cache.values, currentPosition, values3D, 0),
 		};
-		std::vector<NodeOutput> headContexts;
-		headContexts.reserve(hyperparameters.attentionHeadCount);
 		const auto queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead();
+		std::vector<NodeOutput> rotatedQueryHeads;
+		rotatedQueryHeads.reserve(hyperparameters.attentionHeadCount);
 		for (std::size_t headIndex = 0; headIndex < hyperparameters.attentionHeadCount; ++headIndex)
 		{
-			const auto kvHeadIndex = headIndex / queryGroupsPerKVHead;
 			const auto queryHead = NodeOutput{
 				subgraph.AddNode(SliceNode{ queries, 1, headIndex * headDim, headDim },
 				                 { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } }),
@@ -957,21 +956,25 @@ namespace LiteNN::GGUF
 			};
 			const auto rotatedQueryHead =
 			    AddLLaMARoPEAtPositions(subgraph, queryHead, currentPosition, hyperparameters);
-			const auto attentionOutput = subgraph.AddNode(
-			    ActivePrefixAttentionNode{ rotatedQueryHead, updatedCache.keys, updatedCache.values, currentPosition,
-			                               1.0 / std::sqrt(static_cast<double>(headDim)), kvHeadIndex },
-			    { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } });
-			headContexts.push_back({ attentionOutput, 0 });
+			rotatedQueryHeads.push_back(rotatedQueryHead);
 		}
-
-		NodeOutput mergedContext = headContexts.front();
-		if (headContexts.size() > 1)
+		NodeOutput groupedQueries = rotatedQueryHeads.front();
+		if (rotatedQueryHeads.size() > 1)
 		{
-			mergedContext = { subgraph.AddNode(
-				                  ConcatNode{ headContexts, 1 },
-				                  { OutputInfo{ hiddenInfo.dtype, { 1, hyperparameters.embeddingLength } } }),
-				              0 };
+			groupedQueries = { subgraph.AddNode(
+				                   ConcatNode{ rotatedQueryHeads, 0 },
+				                   { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
+				               0 };
 		}
+		const auto groupedAttention = NodeOutput{
+			subgraph.AddNode(GroupedActivePrefixAttentionNode{ groupedQueries, updatedCache.keys, updatedCache.values,
+			                                                   currentPosition,
+			                                                   1.0 / std::sqrt(static_cast<double>(headDim)),
+			                                                   queryGroupsPerKVHead },
+			                 { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
+			0,
+		};
+		const auto mergedContext = Reshape2D(subgraph, groupedAttention, 1, hyperparameters.embeddingLength);
 		const auto attentionOutput = Layer::AddLinear(subgraph, block.outputProjection, mergedContext);
 		const auto attentionResidual = NodeOutput{
 			subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, hiddenState, attentionOutput }, { hiddenInfo }),

@@ -537,6 +537,7 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
+					                       std::same_as<T, GroupedActivePrefixAttentionNode> ||
 					                       std::same_as<T, SoftmaxNode> || std::same_as<T, RoPENode> ||
 					                       std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
@@ -872,6 +873,16 @@ namespace LiteNN
 						                                  { nodeMap[n.currentPosition.node], n.currentPosition.port },
 						                                  n.scale,
 						                                  n.kvHeadIndex };
+				    }
+				    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+				    {
+					    return GroupedActivePrefixAttentionNode{ { nodeMap[n.queries.node], n.queries.port },
+						                                         { nodeMap[n.keys.node], n.keys.port },
+						                                         { nodeMap[n.values.node], n.values.port },
+						                                         { nodeMap[n.currentPosition.node],
+						                                           n.currentPosition.port },
+						                                         n.scale,
+						                                         n.queryGroupsPerKVHead };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -1351,6 +1362,11 @@ namespace LiteNN
 					    {
 						    throw std::runtime_error(
 						        "AutogradPass: ActivePrefixAttentionNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+					    {
+						    throw std::runtime_error("AutogradPass: GroupedActivePrefixAttentionNode differentiation "
+						                             "is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {

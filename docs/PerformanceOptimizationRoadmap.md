@@ -158,8 +158,11 @@ Priority classes for the GGUF/Qwen decode work:
           - [x] Add a grouped active-prefix attention CPU sidecar ABI and benchmark rows that compare Qwen-shaped GQA
                 grouped execution against repeated per-query-head rank-3 helper calls. AOT lowering is still pending, so
                 compiled decode graphs do not emit this helper directly yet. A short 2026-07-03 run validated
-                `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.388 ms` grouped vs `0.373 ms` repeated),
-                while 2048 active rows improved from about `7.34 ms` repeated to `6.23 ms` grouped.
+                `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.397 ms` grouped vs `0.410 ms` repeated),
+                while 2048 active rows improved from about `9.30 ms` repeated to `8.31 ms` grouped.
+          - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
+                grouped CPU AOT sidecar. The builder still applies RoPE per query/KV head before grouping, and the
+                grouped helper remains a conservative CPU sidecar rather than a final KV-head-tiled attention kernel.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.

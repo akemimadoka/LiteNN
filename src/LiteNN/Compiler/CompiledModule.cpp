@@ -3936,6 +3936,14 @@ namespace
 				    copy.currentPosition = remap(copy.currentPosition);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+			    {
+				    copy.queries = remap(copy.queries);
+				    copy.keys = remap(copy.keys);
+				    copy.values = remap(copy.values);
+				    copy.currentPosition = remap(copy.currentPosition);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {
 				    copy.logits = remap(copy.logits);

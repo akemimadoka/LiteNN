@@ -2542,6 +2542,75 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const GroupedActivePrefixAttentionNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
+			{
+				if (outputInfos.size() != 1)
+				{
+					throw std::runtime_error("GraphToMLIR GroupedActivePrefixAttentionNode expected one output");
+				}
+				const auto queryInfo = sg.GetOutputInfo(node.queries);
+				const auto keysInfo = sg.GetOutputInfo(node.keys);
+				const auto valuesInfo = sg.GetOutputInfo(node.values);
+				const auto positionInfo = sg.GetOutputInfo(node.currentPosition);
+				if (queryInfo.dtype != DataType::Float32 || keysInfo.dtype != DataType::Float32 ||
+				    valuesInfo.dtype != DataType::Float32 || positionInfo.dtype != DataType::Int64 ||
+				    queryInfo.shape.size() != 2 || keysInfo.shape.size() != 3 || valuesInfo.shape.size() != 3 ||
+				    positionInfo.shape != std::vector<std::size_t>{ 1 } || keysInfo.shape[0] != valuesInfo.shape[0] ||
+				    keysInfo.shape[1] != valuesInfo.shape[1] || keysInfo.shape[2] != queryInfo.shape[1] ||
+				    valuesInfo.shape[2] != queryInfo.shape[1] || node.queryGroupsPerKVHead == 0 ||
+				    queryInfo.shape[0] > keysInfo.shape[1] * node.queryGroupsPerKVHead ||
+				    outputInfos[0].shape != std::vector<std::size_t>{ queryInfo.shape[0], valuesInfo.shape[2] })
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR GroupedActivePrefixAttentionNode currently supports Float32 queries [Q,H], "
+					    "rank-3 keys/values [C,KV,H], Int64 currentPosition[1], and output [Q,V]");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				auto output = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType())
+				                  .getResult();
+				auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+				auto filled =
+				    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ output }).getResult(0);
+				auto dim0 = getAffineDimExpr(0, &ctx_);
+				auto dim1 = getAffineDimExpr(1, &ctx_);
+				auto zeroExpr = getAffineConstantExpr(0, &ctx_);
+				auto queryMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+				auto keyMap = AffineMap::get(2, 0, { zeroExpr, zeroExpr, dim1 }, &ctx_);
+				auto valueMapAffine = AffineMap::get(2, 0, { zeroExpr, zeroExpr, dim1 }, &ctx_);
+				auto positionMap = AffineMap::get(2, 0, { zeroExpr }, &ctx_);
+				auto outputMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType },
+				    ValueRange{ getVal(valueMap, node.queries), getVal(valueMap, node.keys),
+				                getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
+				    ValueRange{ filled },
+				    SmallVector<AffineMap>{ queryMap, keyMap, valueMapAffine, positionMap, outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto queryDep = emitScalarToF32(b, l, args[0]);
+					    auto keyDep = emitScalarToF32(b, l, args[1]);
+					    auto valueDep = emitScalarToF32(b, l, args[2]);
+					    auto posF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), args[3]).getResult();
+					    auto out = emitScalarToF32(b, l, args[4]);
+					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+					    auto dep = b.create<arith::AddFOp>(l, b.create<arith::AddFOp>(l, queryDep, keyDep).getResult(),
+					                                       b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
+					                   .getResult();
+					    auto sum = b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, dep, zeroF32).getResult())
+					                   .getResult();
+					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+				    });
+				generic->setAttr("litenn.grouped_active_prefix_attention",
+				                 builder_.getF64FloatAttr(static_cast<double>(node.scale)));
+				generic->setAttr("litenn.grouped_active_prefix_attention_query_groups_per_kv_head",
+				                 builder_.getI64IntegerAttr(static_cast<int64_t>(node.queryGroupsPerKVHead)));
+				valueMap[nodeId] = { generic.getResult(0) };
+			}
+
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)

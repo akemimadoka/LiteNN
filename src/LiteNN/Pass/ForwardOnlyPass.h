@@ -221,6 +221,15 @@ namespace LiteNN
 								                                  node.scale,
 								                                  node.kvHeadIndex };
 						    }
+						    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+						    {
+							    return GroupedActivePrefixAttentionNode{ remapOutput(node.queries),
+								                                         remapOutput(node.keys),
+								                                         remapOutput(node.values),
+								                                         remapOutput(node.currentPosition),
+								                                         node.scale,
+								                                         node.queryGroupsPerKVHead };
+						    }
 						    else if constexpr (std::same_as<T, SoftmaxNode>)
 						    {
 							    return SoftmaxNode{ remapOutput(node.input), node.axis };

@@ -403,6 +403,13 @@ namespace LiteNN
 					    fn(n.values);
 					    fn(n.currentPosition);
 				    }
+				    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+				    {
+					    fn(n.queries);
+					    fn(n.keys);
+					    fn(n.values);
+					    fn(n.currentPosition);
+				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
 					    fn(n.logits);
@@ -616,6 +623,12 @@ namespace LiteNN
 				    {
 					    return ActivePrefixAttentionNode{ remap(n.query),           remap(n.keys), remap(n.values),
 						                                  remap(n.currentPosition), n.scale,       n.kvHeadIndex };
+				    }
+				    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
+				    {
+					    return GroupedActivePrefixAttentionNode{ remap(n.queries), remap(n.keys),
+						                                         remap(n.values),  remap(n.currentPosition),
+						                                         n.scale,          n.queryGroupsPerKVHead };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {

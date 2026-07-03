@@ -336,6 +336,18 @@ namespace LiteNN
 			std::size_t kvHeadIndex{};
 		};
 
+		// Grouped single-token decode attention over a rank-3 KV cache.
+		// queries/output use [queryHeads, headDim]; K/V use [capacity, kvHeads, headDim].
+		struct GroupedActivePrefixAttentionNode
+		{
+			NodeOutput queries;
+			NodeOutput keys;
+			NodeOutput values;
+			NodeOutput currentPosition;
+			double scale{ 1.0 };
+			std::size_t queryGroupsPerKVHead{ 1 };
+		};
+
 		// Numerically stable softmax along one axis.
 		struct SoftmaxNode
 		{

@@ -1210,6 +1210,48 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GroupedActivePrefixAttentionNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto queries = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.queries,
+			                                        "GroupedActivePrefixAttentionNode queries", true);
+			const auto keys = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.keys,
+			                                     "GroupedActivePrefixAttentionNode keys", true);
+			const auto values = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.values,
+			                                       "GroupedActivePrefixAttentionNode values", true);
+			const auto position = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.currentPosition,
+			                                         "GroupedActivePrefixAttentionNode currentPosition", true);
+			if (queries.shape.size() != 2 || keys.shape.size() != 3 || values.shape.size() != 3)
+			{
+				Fail(subgraphId, nodeId,
+				     "GroupedActivePrefixAttentionNode requires queries [queryHeads, headDim] and rank-3 "
+				     "keys/values [capacity, kvHeads, dim]");
+			}
+			if (queries.shape[0] == 0 || queries.shape[1] == 0 || keys.shape[0] != values.shape[0] ||
+			    keys.shape[1] != values.shape[1] || keys.shape[2] != queries.shape[1] ||
+			    values.shape[2] != queries.shape[1])
+			{
+				Fail(subgraphId, nodeId, "GroupedActivePrefixAttentionNode key/value/query shapes are inconsistent");
+			}
+			if (node.queryGroupsPerKVHead == 0 || queries.shape[0] > keys.shape[1] * node.queryGroupsPerKVHead)
+			{
+				Fail(subgraphId, nodeId,
+				     "GroupedActivePrefixAttentionNode query groups are incompatible with KV heads");
+			}
+			if (queries.dtype != keys.dtype || queries.dtype != values.dtype || !IsFloatingDataType(queries.dtype))
+			{
+				Fail(subgraphId, nodeId, "GroupedActivePrefixAttentionNode requires matching floating-point inputs");
+			}
+			if (position.dtype != DataType::Int64 || position.shape != std::vector<std::size_t>{ 1 })
+			{
+				Fail(subgraphId, nodeId, "GroupedActivePrefixAttentionNode currentPosition must be Int64[1]");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { queries.dtype, { queries.shape[0], values.shape[2] } },
+			           "GroupedActivePrefixAttentionNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const SoftmaxNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);

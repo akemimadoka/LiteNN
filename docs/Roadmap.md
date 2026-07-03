@@ -2927,8 +2927,11 @@ Priority classes:
       - [x] Add a grouped active-prefix attention CPU sidecar ABI and benchmark rows that compare Qwen-shaped GQA
             grouped execution against repeated per-query-head rank-3 helper calls. AOT lowering is still pending, so the
             parent item remains open until compiled decode graphs emit the grouped helper directly. A short 2026-07-03
-            run validated `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.388 ms` grouped vs `0.373 ms`
-            repeated), while 2048 active rows improved from about `7.34 ms` repeated to `6.23 ms` grouped.
+            run validated `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.397 ms` grouped vs `0.410 ms`
+            repeated), while 2048 active rows improved from about `9.30 ms` repeated to `8.31 ms` grouped.
+      - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
+            grouped CPU AOT sidecar. The builder still applies RoPE per query/KV head before grouping, and the grouped
+            helper remains a conservative CPU sidecar rather than a final KV-head-tiled attention kernel.
 - [ ] P2: Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production

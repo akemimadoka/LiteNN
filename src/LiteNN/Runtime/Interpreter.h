@@ -1084,6 +1084,98 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const GroupedActivePrefixAttentionNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto queries = GetValue(slots, node.queries).CopyToDevice(CPU{});
+			const auto keys = GetValue(slots, node.keys).CopyToDevice(CPU{});
+			const auto values = GetValue(slots, node.values).CopyToDevice(CPU{});
+			const auto position = GetValue(slots, node.currentPosition).CopyToDevice(CPU{});
+			if (queries.DType() != DataType::Float32 || keys.DType() != DataType::Float32 ||
+			    values.DType() != DataType::Float32 || position.DType() != DataType::Int64)
+			{
+				throw std::runtime_error(
+				    "Interpreter GroupedActivePrefixAttentionNode currently supports Float32 + Int64 only");
+			}
+			const auto& queryShape = queries.Shape();
+			const auto& keysShape = keys.Shape();
+			const auto& valuesShape = values.Shape();
+			if (queryShape.Dims.size() != 2 || keysShape.Dims.size() != 3 || valuesShape.Dims.size() != 3)
+			{
+				throw std::runtime_error(
+				    "GroupedActivePrefixAttentionNode requires rank-2 queries and rank-3 KV cache");
+			}
+			const auto queryHeads = queryShape[0];
+			const auto headDim = queryShape[1];
+			const auto capacity = keysShape[0];
+			const auto kvHeads = keysShape[1];
+			const auto valueDim = valuesShape[2];
+			if (node.queryGroupsPerKVHead == 0 || queryHeads > kvHeads * node.queryGroupsPerKVHead ||
+			    keysShape[2] != headDim || valuesShape[0] != capacity || valuesShape[1] != kvHeads)
+			{
+				throw std::runtime_error("GroupedActivePrefixAttentionNode received incompatible query/KV shapes");
+			}
+			const auto rawPosition = *static_cast<const std::int64_t*>(position.UnsafeRawData());
+			if (rawPosition < 0)
+			{
+				throw std::runtime_error("GroupedActivePrefixAttentionNode currentPosition must be non-negative");
+			}
+			const auto active = std::min<std::size_t>(capacity, static_cast<std::size_t>(rawPosition) + 1);
+			if (active == 0)
+			{
+				throw std::runtime_error("GroupedActivePrefixAttentionNode expects at least one active key");
+			}
+
+			const auto* q = static_cast<const float*>(queries.UnsafeRawData());
+			const auto* k = static_cast<const float*>(keys.UnsafeRawData());
+			const auto* v = static_cast<const float*>(values.UnsafeRawData());
+			Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, DataType::Float32);
+			auto* out = static_cast<float*>(cpuResult.UnsafeRawData());
+			std::fill_n(out, cpuResult.NumElements(), 0.0F);
+			std::vector<float> scores(active);
+			for (std::size_t queryHead = 0; queryHead < queryHeads; ++queryHead)
+			{
+				const auto kvHead = queryHead / node.queryGroupsPerKVHead;
+				const auto* query = q + queryHead * headDim;
+				float maxScore = -std::numeric_limits<float>::infinity();
+				for (std::size_t row = 0; row < active; ++row)
+				{
+					float score = 0.0F;
+					for (std::size_t col = 0; col < headDim; ++col)
+					{
+						score += query[col] * k[(row * kvHeads + kvHead) * headDim + col];
+					}
+					score *= static_cast<float>(node.scale);
+					scores[row] = score;
+					maxScore = std::max(maxScore, score);
+				}
+				float denom = 0.0F;
+				for (auto& score : scores)
+				{
+					score = std::exp(score - maxScore);
+					denom += score;
+				}
+				for (std::size_t row = 0; row < active; ++row)
+				{
+					const auto weight = scores[row] / denom;
+					for (std::size_t col = 0; col < valueDim; ++col)
+					{
+						out[queryHead * valueDim + col] += weight * v[(row * kvHeads + kvHead) * valueDim + col];
+					}
+				}
+			}
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		template <typename ExecutionModel>
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SoftmaxNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{
