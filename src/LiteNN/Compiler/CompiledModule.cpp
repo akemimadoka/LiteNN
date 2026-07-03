@@ -5631,6 +5631,8 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_scatter_update_axis0_f32_rank3));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_q8k_staged_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_q8k_staged_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_get_rows_i32_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_get_rows_i32_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_get_rows_i64_f32",
@@ -14536,6 +14538,7 @@ namespace
 			    pm, litenn::LLVMCodegenOptions{
 			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
 			            .ggmlBlockMatMulAffinityPolicy = static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy),
+			            .enableGGMLQ8KStagedMatMul = options.enableCPUAOTGGMLQ8KStagedMatMul,
 			        });
 			if (mlir::failed(pm.run(*module)))
 			{

@@ -124,6 +124,10 @@ Priority classes for the GGUF/Qwen decode work:
                 measurements showed the AVX2 staged path helps Q6_K single-thread (`qwen_ffn_down/T1` about `41.7 ms`
                 CPU staged vs `44.3 ms` CPU direct in that run) but Q4_K/Q5_K remained slower than the direct helper.
                 Do not switch the default globally until the policy is format-specific and accuracy-aware.
+          - [x] Add an explicit CPU AOT opt-in route from GGML_Q6_K matmul placeholders to the Q8_K-staged sidecar,
+                while keeping the default path on the numerically stricter direct helper. Q4_K/Q5_K/Q8_0 remain direct
+                until they have measured production-shape wins. The GGUF decode CLI exposes this as
+                `--cpu-aot-q8k-staged-matmul` for A/B profiling.
           - [ ] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
                 re-run the direct-vs-staged helper table before changing the compiler/runtime default.
     - [x] P0: Add a measured thread/grain policy for decode-shaped quantized projections.

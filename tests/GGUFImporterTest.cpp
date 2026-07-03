@@ -1343,6 +1343,17 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+		if (blockFormat == QuantizedBlockFormat::GGML_Q6_K)
+		{
+			CompilerOptions options;
+			options.enableCPUAOTGGMLQ8KStagedMatMul = true;
+			const auto stagedArtifact = Compiler<CPU>::CompileArtifact(plan, options);
+			EXPECT_TRUE(ByteSpanContains(stagedArtifact.Instructions(), "litenn_cpu_ggml_block_matmul_q8k_staged_f32"));
+			auto stagedCompiled = stagedArtifact.Load();
+			const auto stagedActual = stagedCompiled.RunTensors(inputs);
+			ASSERT_EQ(stagedActual.size(), 1u);
+			ExpectTensorNear(stagedActual[0], expected, { .absolute = 3.0e-2, .relative = 1.0e-4 });
+		}
 	}
 }
 

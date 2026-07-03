@@ -64,17 +64,20 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N]\n"
+		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--cpu-aot-q8k-staged-matmul]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -208,6 +211,7 @@ namespace
 		bool streamTokens{};
 		bool streamStats{};
 		bool compileOnly{};
+		bool enableCPUAOTQ8KStagedMatMul{};
 		std::optional<std::size_t> maxCacheLength;
 	};
 
@@ -279,6 +283,10 @@ namespace
 			else if (arg == "--compile-only")
 			{
 				options.compileOnly = true;
+			}
+			else if (arg == "--cpu-aot-q8k-staged-matmul")
+			{
+				options.enableCPUAOTQ8KStagedMatMul = true;
 			}
 			else if (arg == "--max-cache-length")
 			{
@@ -924,9 +932,10 @@ namespace
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto keyText =
-		    std::format("gguf-decode-{}-v3|{}|{}|{}|tokens={}|opt={}|external={}", decodeMode,
+		    std::format("gguf-decode-{}-v3|{}|{}|{}|tokens={}|opt={}|external={}|q8k_staged={}", decodeMode,
 		                std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
-		                options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0);
+		                options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
+		                options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -1124,6 +1133,10 @@ namespace
 		}
 		auto compilerOptions = CompilerOptionsFromEnvironment();
 		compilerOptions.enableCPUAOTExternalRegions = true;
+		if (options.enableCPUAOTQ8KStagedMatMul)
+		{
+			compilerOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
+		}
 		const auto diagnostics = compilerOptions.enableCompileDiagnostics;
 		LogGGUFDiagnostic(diagnostics, std::format("decode-loop start input={} requested_steps={}", options.inputPath,
 		                                           options.steps));
@@ -1526,6 +1539,7 @@ namespace
 		{
 			options.enableCUDANativeAOT = false;
 		}
+		options.enableCPUAOTGGMLQ8KStagedMatMul = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_Q8K_STAGED_MATMUL"));
 		options.enableCompileDiagnostics = TruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS"));
 		return options;
 	}

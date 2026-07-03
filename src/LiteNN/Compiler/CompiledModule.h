@@ -165,6 +165,9 @@ namespace LiteNN
 		std::uint64_t cpuAOTExternalConstantMinBytes{ 64 };
 		/// Retry the CPU f32 linear-chain external-region path after an internal FusionPass.
 		bool enableCPUAOTExternalRegionFusion{ true };
+		/// Opt in to Q8_K activation-staged GGML block MatMul helpers for formats where small numeric deltas are
+		/// allowed.
+		bool enableCPUAOTGGMLQ8KStagedMatMul{};
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };
 		/// Prefer Vulkan native AOT kernels before falling back to CPU AOT bridge.

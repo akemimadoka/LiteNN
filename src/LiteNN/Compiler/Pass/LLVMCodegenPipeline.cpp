@@ -1,5 +1,7 @@
 #include "Pass/LLVMCodegenPipeline.h"
 
+#include <LiteNN/Quantization.h>
+
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
@@ -53,6 +55,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Attr = "litenn.scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
 
@@ -271,12 +274,17 @@ namespace litenn
 			                                            outType.getElementType());
 			auto funcType = builder.getFunctionType(
 			    mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64, i64 }, mlir::TypeRange{});
-			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGGMLBlockMatMulHelper);
+			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatAttr.getInt());
+			const auto helperName =
+			    options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K
+			        ? kGGMLBlockMatMulQ8KStagedHelper
+			        : kGGMLBlockMatMulHelper;
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
 			if (!helper)
 			{
 				mlir::OpBuilder::InsertionGuard guard(builder);
 				builder.setInsertionPointToStart(module.getBody());
-				helper = builder.create<mlir::func::FuncOp>(loc, kGGMLBlockMatMulHelper, funcType);
+				helper = builder.create<mlir::func::FuncOp>(loc, helperName, funcType);
 				helper.setPrivate();
 			}
 			else if (helper.getFunctionType() != funcType)
