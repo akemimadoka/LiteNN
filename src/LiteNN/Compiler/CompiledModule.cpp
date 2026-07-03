@@ -727,6 +727,59 @@ namespace
 		}
 	}
 
+	void ComputeActivePrefixAttentionF32(const float* query, std::int64_t queryColumns, std::int64_t queryColumnStride,
+	                                     const float* keys, std::int64_t keyRowStride, std::int64_t keyColumnStride,
+	                                     const float* values, std::int64_t valueRowStride,
+	                                     std::int64_t valueColumnStride, std::int64_t activeRows, float* out,
+	                                     std::int64_t outColumns, std::int64_t outColumnStride, double scale,
+	                                     std::span<float> scores)
+	{
+		if (scores.size() < static_cast<std::size_t>(activeRows))
+		{
+			return;
+		}
+		for (std::int64_t col = 0; col < outColumns; ++col)
+		{
+			out[col * outColumnStride] = 0.0F;
+		}
+
+		float maxScore = -std::numeric_limits<float>::infinity();
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			float score = 0.0F;
+			const auto* keyRow = keys + row * keyRowStride;
+			for (std::int64_t col = 0; col < queryColumns; ++col)
+			{
+				score += query[col * queryColumnStride] * keyRow[col * keyColumnStride];
+			}
+			score *= static_cast<float>(scale);
+			scores[static_cast<std::size_t>(row)] = score;
+			maxScore = std::max(maxScore, score);
+		}
+
+		float denominator = 0.0F;
+		for (auto& score : scores)
+		{
+			score = std::exp(score - maxScore);
+			denominator += score;
+		}
+		if (denominator == 0.0F)
+		{
+			return;
+		}
+
+		const auto invDenominator = 1.0F / denominator;
+		for (std::int64_t row = 0; row < activeRows; ++row)
+		{
+			const auto weight = scores[static_cast<std::size_t>(row)] * invDenominator;
+			const auto* valueRow = values + row * valueRowStride;
+			for (std::int64_t col = 0; col < outColumns; ++col)
+			{
+				out[col * outColumnStride] += weight * valueRow[col * valueColumnStride];
+			}
+		}
+	}
+
 	extern "C" void litenn_cpu_active_prefix_attention_f32(
 	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
 	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
@@ -758,49 +811,10 @@ namespace
 		const auto* keys = keysAligned + keysOffset;
 		const auto* values = valuesAligned + valuesOffset;
 		auto* out = outAligned + outOffset;
-		for (std::int64_t col = 0; col < outColumns; ++col)
-		{
-			out[col * outColumnStride] = 0.0F;
-		}
-
-		auto scoreAt = [&](std::int64_t row) {
-			float score = 0.0F;
-			const auto* keyRow = keys + row * keyRowStride;
-			for (std::int64_t col = 0; col < queryColumns; ++col)
-			{
-				score += query[col * queryColumnStride] * keyRow[col * keyColumnStride];
-			}
-			return score * static_cast<float>(scale);
-		};
-
 		std::vector<float> scores(static_cast<std::size_t>(activeRows));
-		float maxScore = -std::numeric_limits<float>::infinity();
-		for (std::int64_t row = 0; row < activeRows; ++row)
-		{
-			const auto score = scoreAt(row);
-			scores[static_cast<std::size_t>(row)] = score;
-			maxScore = std::max(maxScore, score);
-		}
-		float denominator = 0.0F;
-		for (auto& score : scores)
-		{
-			score = std::exp(score - maxScore);
-			denominator += score;
-		}
-		if (denominator == 0.0F)
-		{
-			return;
-		}
-		const auto invDenominator = 1.0F / denominator;
-		for (std::int64_t row = 0; row < activeRows; ++row)
-		{
-			const auto weight = scores[static_cast<std::size_t>(row)] * invDenominator;
-			const auto* valueRow = values + row * valueRowStride;
-			for (std::int64_t col = 0; col < outColumns; ++col)
-			{
-				out[col * outColumnStride] += weight * valueRow[col * valueColumnStride];
-			}
-		}
+		ComputeActivePrefixAttentionF32(query, queryColumns, queryColumnStride, keys, keyRowStride, keyColumnStride,
+		                                values, valueRowStride, valueColumnStride, activeRows, out, outColumns,
+		                                outColumnStride, scale, scores);
 	}
 
 	extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
@@ -885,48 +899,56 @@ namespace
 		const auto* keys = keysAligned + keysOffset;
 		const auto* values = valuesAligned + valuesOffset;
 		auto* out = outAligned + outOffset;
-		for (std::int64_t col = 0; col < outColumns; ++col)
-		{
-			out[col * outColumnStride] = 0.0F;
-		}
-
-		auto scoreAt = [&](std::int64_t row) {
-			float score = 0.0F;
-			const auto* keyHead = keys + row * keyRowStride + kvHead * keyHeadStride;
-			for (std::int64_t col = 0; col < queryColumns; ++col)
-			{
-				score += query[col * queryColumnStride] * keyHead[col * keyColumnStride];
-			}
-			return score * static_cast<float>(scale);
-		};
-
 		std::vector<float> scores(static_cast<std::size_t>(activeRows));
-		float maxScore = -std::numeric_limits<float>::infinity();
-		for (std::int64_t row = 0; row < activeRows; ++row)
-		{
-			const auto score = scoreAt(row);
-			scores[static_cast<std::size_t>(row)] = score;
-			maxScore = std::max(maxScore, score);
-		}
-		float denominator = 0.0F;
-		for (auto& score : scores)
-		{
-			score = std::exp(score - maxScore);
-			denominator += score;
-		}
-		if (denominator == 0.0F)
+		ComputeActivePrefixAttentionF32(query, queryColumns, queryColumnStride, keys + kvHead * keyHeadStride,
+		                                keyRowStride, keyColumnStride, values + kvHead * valueHeadStride,
+		                                valueRowStride, valueColumnStride, activeRows, out, outColumns, outColumnStride,
+		                                scale, scores);
+	}
+
+	extern "C" void litenn_cpu_active_prefix_attention_f32_rank3_grouped(
+	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+	    const float* keysAligned, std::int64_t keysOffset, std::int64_t keyRows, std::int64_t keyHeads,
+	    std::int64_t keyColumns, std::int64_t keyRowStride, std::int64_t keyHeadStride, std::int64_t keyColumnStride,
+	    const float*, const float* valuesAligned, std::int64_t valuesOffset, std::int64_t valueRows,
+	    std::int64_t valueHeads, std::int64_t valueColumns, std::int64_t valueRowStride, std::int64_t valueHeadStride,
+	    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
+	    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead)
+	{
+		if (queryRows <= 0 || outRows != queryRows || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
+		    keyHeads <= 0 || queryGroupsPerKVHead <= 0 || keyColumns != queryColumns || valueRows != keyRows ||
+		    valueHeads != keyHeads || valueColumns != outColumns || outColumns <= 0 ||
+		    queryRows > keyHeads * queryGroupsPerKVHead)
 		{
 			return;
 		}
-		const auto invDenominator = 1.0F / denominator;
-		for (std::int64_t row = 0; row < activeRows; ++row)
+		const auto currentPosition = positionAligned[positionOffset + positionStride * 0];
+		if (currentPosition < 0)
 		{
-			const auto weight = scores[static_cast<std::size_t>(row)] * invDenominator;
-			const auto* valueHead = values + row * valueRowStride + kvHead * valueHeadStride;
-			for (std::int64_t col = 0; col < outColumns; ++col)
-			{
-				out[col * outColumnStride] += weight * valueHead[col * valueColumnStride];
-			}
+			return;
+		}
+		const auto activeRows = std::min<std::int64_t>(
+		    keyRows, currentPosition > std::numeric_limits<std::int64_t>::max() - 1 ? keyRows : currentPosition + 1);
+		if (activeRows <= 0)
+		{
+			return;
+		}
+
+		const auto* queries = queryAligned + queryOffset;
+		const auto* keys = keysAligned + keysOffset;
+		const auto* values = valuesAligned + valuesOffset;
+		auto* out = outAligned + outOffset;
+		std::vector<float> scores(static_cast<std::size_t>(activeRows));
+		for (std::int64_t queryHead = 0; queryHead < queryRows; ++queryHead)
+		{
+			const auto kvHead = queryHead / queryGroupsPerKVHead;
+			ComputeActivePrefixAttentionF32(
+			    queries + queryHead * queryRowStride, queryColumns, queryColumnStride, keys + kvHead * keyHeadStride,
+			    keyRowStride, keyColumnStride, values + kvHead * valueHeadStride, valueRowStride, valueColumnStride,
+			    activeRows, out + queryHead * outRowStride, outColumns, outColumnStride, scale, scores);
 		}
 	}
 
@@ -5441,6 +5463,8 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3",
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32_rank3));
+		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32_rank3_grouped));
 		RegisterJITRuntimeSymbol("litenn_cpu_scatter_update_axis0_f32_rank3",
 		                         reinterpret_cast<void*>(&litenn_cpu_scatter_update_axis0_f32_rank3));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",

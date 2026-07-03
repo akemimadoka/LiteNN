@@ -155,6 +155,11 @@ Priority classes for the GGUF/Qwen decode work:
                 aggregation no longer recompute the query-key dot product. Validation on 2026-07-03 passed the CPU AOT
                 decode parity tests; helper timing improved to about `0.006 ms` for 128 rows, `0.099 ms` for 2048 rows,
                 and `0.651 ms` for 8192 rows.
+          - [x] Add a grouped active-prefix attention CPU sidecar ABI and benchmark rows that compare Qwen-shaped GQA
+                grouped execution against repeated per-query-head rank-3 helper calls. AOT lowering is still pending, so
+                compiled decode graphs do not emit this helper directly yet. A short 2026-07-03 run validated
+                `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.388 ms` grouped vs `0.373 ms` repeated),
+                while 2048 active rows improved from about `7.34 ms` repeated to `6.23 ms` grouped.
   - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
     requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
