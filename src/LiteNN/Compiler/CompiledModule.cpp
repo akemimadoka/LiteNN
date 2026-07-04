@@ -1242,11 +1242,14 @@ namespace
 	{
 		const auto q8Bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q8));
 		const auto rawBytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(raw));
-		const auto q8I16 = _mm256_cvtepi8_epi16(q8Bytes);
-		const auto rawU16 = _mm256_cvtepu8_epi16(rawBytes);
-		const auto rawI16 = _mm256_sub_epi16(rawU16, _mm256_set1_epi16(zeroPoint));
-		const auto products = _mm256_mullo_epi16(q8I16, rawI16);
-		const auto sums = _mm256_madd_epi16(products, _mm256_set1_epi16(1));
+		const auto rawTimesQ8Pairs = _mm_maddubs_epi16(rawBytes, q8Bytes);
+		auto sums = _mm256_cvtepi16_epi32(rawTimesQ8Pairs);
+		if (zeroPoint != 0)
+		{
+			const auto q8I16 = _mm256_cvtepi8_epi16(q8Bytes);
+			const auto q8PairSums = _mm256_madd_epi16(q8I16, _mm256_set1_epi16(1));
+			sums = _mm256_sub_epi32(sums, _mm256_mullo_epi32(q8PairSums, _mm256_set1_epi32(zeroPoint)));
+		}
 		alignas(32) std::int32_t lanes[8];
 		_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), sums);
 		std::int32_t total = 0;

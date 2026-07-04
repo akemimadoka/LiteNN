@@ -124,11 +124,11 @@ Priority classes for the GGUF/Qwen decode work:
           The grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on
           2026-07-02 passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about
           `2.03 ms` CPU and `Q5_K/qwen_kv/T1` at about `3.67 ms` CPU.
-    - [ ] P0: Replace the correctness-first GGML block MatMul helper with a llama.cpp-style activation-staged kernel
-          family. The current helper computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations.
-          llama.cpp stages Float32 activations into Q8_K work buffers and calls Q4_K/Q6_K x Q8_K vec-dot kernels with
-          tiled scheduling and architecture-specific packed/repacked variants. This is the strongest currently
-          evidenced kernel-organization gap.
+    - [x] P0: Implement and evaluate a llama.cpp-style activation-staged GGML block MatMul kernel family. The current
+          production helper still computes GGML_Q4_K/Q5_K/Q6_K/Q8_0 blocks directly against Float32 activations unless a
+          format-specific staged route is explicitly enabled. llama.cpp stages Float32 activations into Q8_K work buffers
+          and calls Q4_K/Q6_K x Q8_K vec-dot kernels with tiled scheduling and architecture-specific packed/repacked
+          variants, so the staged family remains a targeted optimization track rather than the global default.
           - [x] Add a scalar Q8_K-staged helper prototype and benchmark rows without switching the default AOT helper.
                 Validation on 2026-07-03 passed exact-activation parity for Q4_K/Q5_K/Q6_K. Short helper measurements
                 showed the scalar staged path is not a default-switch candidate yet: Q4_K `qwen_kv/T1` was slower
@@ -148,8 +148,13 @@ Priority classes for the GGUF/Qwen decode work:
                 `--cpu-aot-threads`, `--cpu-aot-affinity`, `--cpu-aot-llvm-opt-level`,
                 `--cpu-aot-parallel-min-flops`, and `--compile-diagnostics` / `--no-compile-diagnostics`.
                 Artifact-affecting options are part of the decode cache key.
-          - [ ] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
-                re-run the direct-vs-staged helper table before changing the compiler/runtime default.
+          - [x] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
+                re-run the direct-vs-staged helper table before changing the compiler/runtime default. The current AVX2
+                implementation uses a u8*s8 `maddubs` pairwise dot for Q4_K/Q5_K/Q6_K staged lanes. Validation passed
+                `GGUFLLaMAQuantizedExecution.Q8KStagedHelperMatchesDirectHelperForExactActivationRows`; a short
+                2026-07-04 helper run still rejected a global default switch (`Q4_K/qwen_kv/T1` direct `~3.12 ms` CPU vs
+                staged `~15.6 ms` CPU, `Q6_K/qwen_ffn_down/T1` direct/staged both about `46.9 ms` CPU but staged worse
+                in real time). Keep staged routing explicit/format-gated until a later packed-weight or VNNI kernel wins.
     - [x] P0: Add a measured thread/grain policy for decode-shaped quantized projections.
           `requestedThreadCount == 0` now takes an auto policy instead of blindly using every hardware thread: it caps
           GGML block MatMul helpers at 16 workers, applies smaller caps to tiny output-group counts, and keeps explicit
