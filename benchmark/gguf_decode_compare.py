@@ -103,6 +103,63 @@ def litenn_row(path: Path) -> dict[str, object]:
         "tokensPerSecond": tokens_per_second,
         "fallbackUsed": fallback_match.group("value") == "true" if fallback_match is not None else report.get("fallback_used"),
         "fallbackCount": int(fallback_count_match.group("value")) if fallback_count_match is not None else None,
+        "topHelper": None,
+        "helperSharePercent": None,
+        "source": str(path),
+    }
+
+
+def litenn_profile_summary_row(path: Path) -> dict[str, object]:
+    summary = load_json(path)
+    if not isinstance(summary, dict) or "steps" not in summary:
+        raise SystemExit(f"unsupported LiteNN GGUF decode summary: {path}")
+    steps = summary.get("steps")
+    helpers = summary.get("helpers")
+    if not isinstance(steps, list):
+        raise SystemExit(f"LiteNN GGUF decode summary has no steps array: {path}")
+
+    step_dicts = [step for step in steps if isinstance(step, dict)]
+    total_step_ms = float(summary.get("total_step_ms", 0.0))
+    if total_step_ms <= 0.0:
+        total_step_ms = sum(float(step.get("step_ms", 0.0)) for step in step_dicts)
+    def generated_tokens(step: dict[str, object]) -> int:
+        try:
+            return int(step.get("generated_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    token_count = max(
+        [generated_tokens(step) for step in step_dicts if generated_tokens(step) > 0],
+        default=sum(1 for step in step_dicts if step.get("phase") == "generation"),
+    )
+    if total_step_ms <= 0.0 or token_count <= 0:
+        raise SystemExit(f"LiteNN GGUF decode summary must contain positive time and generated tokens: {path}")
+
+    helper_rows = helpers if isinstance(helpers, list) else []
+    top_helper = next((helper for helper in helper_rows if isinstance(helper, dict)), None)
+    top_helper_name = None
+    top_helper_share = None
+    if isinstance(top_helper, dict):
+        top_helper_name = str(top_helper.get("helper", "unknown"))
+        percent = top_helper.get("percent_of_steps")
+        top_helper_share = float(percent) if percent is not None else None
+
+    tokens_per_second = token_count * 1000.0 / total_step_ms
+    return {
+        "implementation": "LiteNN",
+        "backend": "cpu-aot",
+        "decodeMode": "profile-summary",
+        "config": "from-profile-bundle",
+        "tokens": token_count,
+        "totalMs": total_step_ms,
+        "promptReplayMs": None,
+        "generationMs": total_step_ms,
+        "msPerToken": total_step_ms / token_count,
+        "tokensPerSecond": tokens_per_second,
+        "fallbackUsed": None,
+        "fallbackCount": None,
+        "topHelper": top_helper_name,
+        "helperSharePercent": top_helper_share,
         "source": str(path),
     }
 
@@ -133,6 +190,8 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": False,
                 "fallbackCount": 0,
+                "topHelper": None,
+                "helperSharePercent": None,
                 "source": str(path),
             }
         )
@@ -165,6 +224,8 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "tokensPerSecond": tokens_per_second,
                 "fallbackUsed": entry.get("fallbackUsed", False),
                 "fallbackCount": entry.get("fallbackCount"),
+                "topHelper": entry.get("topHelper"),
+                "helperSharePercent": entry.get("helperSharePercent"),
                 "source": str(path),
             }
         )
@@ -203,23 +264,48 @@ def add_baseline_deltas(rows: list[dict[str, object]]) -> None:
 def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "gguf_decode_compare.json").write_text(json.dumps({"rows": rows}, indent=2) + "\n", encoding="utf-8")
-    fields = list(rows[0].keys()) if rows else []
+    preferred_fields = [
+        "implementation",
+        "backend",
+        "decodeMode",
+        "config",
+        "tokens",
+        "totalMs",
+        "promptReplayMs",
+        "generationMs",
+        "msPerToken",
+        "tokensPerSecond",
+        "vsLlamaCppPercent",
+        "vsPyTorchPercent",
+        "fallbackUsed",
+        "fallbackCount",
+        "topHelper",
+        "helperSharePercent",
+        "source",
+    ]
+    observed_fields = {field for row in rows for field in row}
+    fields = [field for field in preferred_fields if field in observed_fields]
+    fields.extend(sorted(observed_fields.difference(fields)))
     with (output_dir / "gguf_decode_compare.csv").open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=fields)
+        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
+        format_percent = lambda value: "n/a" if value is None else f"{float(value):.2f}%"
+        format_optional = lambda value: "n/a" if value is None else str(value)
         lines.append(
             f"| {row['implementation']} | {row['backend']} | {row.get('decodeMode', 'decode')} | "
             f"{row.get('config', 'n/a')} | "
             f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
-            f"{format_delta(row['vsPyTorchPercent'])} | {row['fallbackUsed']} | {row.get('fallbackCount')} |"
+            f"{format_delta(row['vsPyTorchPercent'])} | {row.get('topHelper') or 'n/a'} | "
+            f"{format_percent(row.get('helperSharePercent'))} | {format_optional(row['fallbackUsed'])} | "
+            f"{format_optional(row.get('fallbackCount'))} |"
         )
     (output_dir / "gguf_decode_compare.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -227,11 +313,13 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--litenn-smoke-report", action="append", type=Path, default=[])
+    parser.add_argument("--litenn-profile-summary", action="append", type=Path, default=[])
     parser.add_argument("--llama-bench-json", action="append", type=Path, default=[])
     parser.add_argument("--pytorch-json", action="append", type=Path, default=[])
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     rows = [litenn_row(path) for path in args.litenn_smoke_report]
+    rows.extend(litenn_profile_summary_row(path) for path in args.litenn_profile_summary)
     for path in args.llama_bench_json:
         rows.extend(llama_rows(path))
     for path in args.pytorch_json:
