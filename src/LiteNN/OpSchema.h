@@ -503,6 +503,13 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<GroupedPagedAttentionNode> : NodeSchemaTraits<ActivePrefixAttentionNode>
+		{
+			static constexpr std::size_t MinInputs = 5;
+			static constexpr std::size_t MaxInputs = 5;
+		};
+
+		template <>
 		struct NodeSchemaTraits<SoftmaxNode> : NodeSchemaTraits<UnaryOpNode>
 		{
 			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
@@ -816,6 +823,10 @@ namespace LiteNN
 			    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
 			    {
 				    return { value.queries, value.keys, value.values, value.currentPosition };
+			    }
+			    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+			    {
+				    return { value.queries, value.kvState, value.pageTable, value.pageDescriptors, value.activeLength };
 			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {

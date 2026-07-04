@@ -495,6 +495,14 @@ namespace LiteNN
 		return attrs;
 	}
 
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const GroupedPagedAttentionNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanAttribute(attrs, "scale", node.scale);
+		AddPlanAttribute(attrs, "queryGroupsPerKVHead", node.queryGroupsPerKVHead);
+		return attrs;
+	}
+
 	template <typename T>
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const T&)
 	{

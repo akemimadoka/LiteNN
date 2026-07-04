@@ -192,6 +192,11 @@ Priority classes for the GGUF/Qwen decode work:
                 LLaMA artifact planning now names the implemented CPU active-prefix path and planned CPU/CUDA/Vulkan
                 paged-attention paths, including page size, max context, full-mask avoidance, streaming decode, and
                 required paged KV runtime states for diagnostics and lowering.
+          - [x] Add the CPU paged-attention reference execution path. Completed on 2026-07-05:
+                `GroupedPagedAttentionNode` executes against explicit KV/page-table/page-descriptor/active-length state
+                in the interpreter and is validated against dense grouped active-prefix attention. This closes the
+                semantic reference for paged lowering; dynamic decode still needs to emit the paged node instead of the
+                dense fallback signature.
           - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
                 artifacts stop scaling with max context length.
     - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.

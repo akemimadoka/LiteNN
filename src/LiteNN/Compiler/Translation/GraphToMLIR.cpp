@@ -2720,6 +2720,15 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
+			void emitNode(const PlanSubgraphView&, NodeId, const GroupedPagedAttentionNode&,
+			              std::span<const OutputInfo>, std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
+			              std::map<std::size_t, Value>&)
+			{
+				throw std::runtime_error(
+				    "GraphToMLIR GroupedPagedAttentionNode lowering is not implemented; use Interpreter reference "
+				    "execution or enable the planned paged-attention sidecar lowering");
+			}
+
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)

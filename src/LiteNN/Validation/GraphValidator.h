@@ -1297,6 +1297,56 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GroupedPagedAttentionNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto queries = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.queries,
+			                                        "GroupedPagedAttentionNode queries", true);
+			const auto kvState = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.kvState,
+			                                        "GroupedPagedAttentionNode kvState", true);
+			const auto pageTable = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.pageTable,
+			                                          "GroupedPagedAttentionNode pageTable", true);
+			const auto pageDescriptors = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.pageDescriptors,
+			                                                "GroupedPagedAttentionNode pageDescriptors", true);
+			const auto activeLength = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.activeLength,
+			                                             "GroupedPagedAttentionNode activeLength", true);
+			if (queries.shape.size() != 2 || kvState.shape.size() != 5 || kvState.shape[0] != 2)
+			{
+				Fail(subgraphId, nodeId,
+				     "GroupedPagedAttentionNode requires queries [queryHeads, headDim] and kvState "
+				     "[2, residentPages, pageSize, kvHeads, headDim]");
+			}
+			if (queries.shape[0] == 0 || queries.shape[1] == 0 || kvState.shape[1] == 0 || kvState.shape[2] == 0 ||
+			    kvState.shape[3] == 0 || kvState.shape[4] != queries.shape[1])
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode query/KV shapes are inconsistent");
+			}
+			if (node.queryGroupsPerKVHead == 0 || queries.shape[0] > kvState.shape[3] * node.queryGroupsPerKVHead)
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode query groups are incompatible with KV heads");
+			}
+			if (queries.dtype != kvState.dtype || !IsFloatingDataType(queries.dtype))
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode requires matching floating-point query/KV state");
+			}
+			if (pageTable.dtype != DataType::Int64 || pageTable.shape.size() != 1)
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode pageTable must be Int64[logicalPages]");
+			}
+			if (pageDescriptors.dtype != DataType::Int64 ||
+			    pageDescriptors.shape != std::vector<std::size_t>{ kvState.shape[1], 4 })
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode pageDescriptors must be Int64[residentPages,4]");
+			}
+			if (activeLength.dtype != DataType::Int64 || activeLength.shape != std::vector<std::size_t>{ 1 })
+			{
+				Fail(subgraphId, nodeId, "GroupedPagedAttentionNode activeLength must be Int64[1]");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { queries.dtype, { queries.shape[0], kvState.shape[4] } }, "GroupedPagedAttentionNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const SoftmaxNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);

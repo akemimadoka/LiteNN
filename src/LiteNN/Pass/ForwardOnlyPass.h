@@ -230,6 +230,15 @@ namespace LiteNN
 								                                         node.scale,
 								                                         node.queryGroupsPerKVHead };
 						    }
+						    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+						    {
+							    return GroupedPagedAttentionNode{
+								    remapOutput(node.queries),      remapOutput(node.kvState),
+								    remapOutput(node.pageTable),    remapOutput(node.pageDescriptors),
+								    remapOutput(node.activeLength), node.scale,
+								    node.queryGroupsPerKVHead
+							    };
+						    }
 						    else if constexpr (std::same_as<T, SoftmaxNode>)
 						    {
 							    return SoftmaxNode{ remapOutput(node.input), node.axis };

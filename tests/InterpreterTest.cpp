@@ -6,6 +6,7 @@
 #include <LiteNN/Runtime/Interpreter.h>
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -16,6 +17,15 @@ using namespace LiteNN;
 float ReadFloat(const Tensor<CPU>& t, std::size_t i)
 {
 	return static_cast<const float*>(t.UnsafeRawData())[i];
+}
+
+Tensor<CPU> MakeInt64Tensor(std::initializer_list<std::int64_t> values, ShapeView shape)
+{
+	CPU device;
+	Tensor<CPU> tensor(Uninitialized, shape, DataType::Int64, device);
+	DeviceTraits<CPU>::CopyFromCPU(device, DataType::Int64, tensor.UnsafeRawData(), DataType::Int64, values.begin(),
+	                               values.size());
+	return tensor;
 }
 
 // 测试 1: 简单二元操作 y = a + b
@@ -101,6 +111,81 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 	EXPECT_EQ(std::get<2>(trace[2]), "BinaryOpNode");
 	EXPECT_EQ(std::get<3>(trace[2]), 1u);
 	EXPECT_TRUE(std::get<4>(trace[2]));
+}
+
+TEST(Interpreter, GroupedPagedAttentionMatchesDenseActivePrefix)
+{
+	Graph denseGraph;
+	Subgraph dense;
+	const auto denseQueries = dense.AddParam(DataType::Float32, { 2, 2 });
+	const auto denseKeys = dense.AddParam(DataType::Float32, { 3, 1, 2 });
+	const auto denseValues = dense.AddParam(DataType::Float32, { 3, 1, 2 });
+	const auto densePosition = dense.AddParam(DataType::Int64, { 1 });
+	const auto denseAttention = dense.AddNode(GroupedActivePrefixAttentionNode{ .queries = { denseQueries, 0 },
+	                                                                            .keys = { denseKeys, 0 },
+	                                                                            .values = { denseValues, 0 },
+	                                                                            .currentPosition = { densePosition, 0 },
+	                                                                            .scale = 1.0,
+	                                                                            .queryGroupsPerKVHead = 2 },
+	                                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	dense.SetResults({ { denseAttention, 0 } });
+	const auto denseForward = denseGraph.AddSubgraph(std::move(dense));
+	denseGraph.SetForward(denseForward);
+
+	Graph pagedGraph;
+	Subgraph paged;
+	const auto pagedQueries = paged.AddParam(DataType::Float32, { 2, 2 });
+	const auto kvState = paged.AddParam(DataType::Float32, { 2, 2, 2, 1, 2 });
+	const auto pageTable = paged.AddParam(DataType::Int64, { 2 });
+	const auto pageDescriptors = paged.AddParam(DataType::Int64, { 2, 4 });
+	const auto activeLength = paged.AddParam(DataType::Int64, { 1 });
+	const auto pagedAttention = paged.AddNode(GroupedPagedAttentionNode{ .queries = { pagedQueries, 0 },
+	                                                                     .kvState = { kvState, 0 },
+	                                                                     .pageTable = { pageTable, 0 },
+	                                                                     .pageDescriptors = { pageDescriptors, 0 },
+	                                                                     .activeLength = { activeLength, 0 },
+	                                                                     .scale = 1.0,
+	                                                                     .queryGroupsPerKVHead = 2 },
+	                                          { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	paged.SetResults({ { pagedAttention, 0 } });
+	const auto pagedForward = pagedGraph.AddSubgraph(std::move(paged));
+	pagedGraph.SetForward(pagedForward);
+
+	std::array<double, 16> kv{};
+	kv[0] = 1.0;
+	kv[3] = 1.0;
+	kv[4] = 1.0;
+	kv[5] = 1.0;
+	constexpr std::size_t valuePlaneOffset = 8;
+	kv[valuePlaneOffset + 0] = 10.0;
+	kv[valuePlaneOffset + 3] = 20.0;
+	kv[valuePlaneOffset + 4] = 30.0;
+	kv[valuePlaneOffset + 5] = 40.0;
+
+	std::array<Tensor<CPU>, 4> denseInputs = {
+		Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F }, { 2, 2 }),
+		Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F }, { 3, 1, 2 }),
+		Tensor<CPU>({ 10.0F, 0.0F, 0.0F, 20.0F, 30.0F, 40.0F }, { 3, 1, 2 }),
+		MakeInt64Tensor({ 2 }, { 1 }),
+	};
+	std::array<Tensor<CPU>, 5> pagedInputs = {
+		Tensor<CPU>({ 1.0F, 0.0F, 0.0F, 1.0F }, { 2, 2 }),
+		Tensor<CPU>(std::span<const double>(kv), { 2, 2, 2, 1, 2 }),
+		MakeInt64Tensor({ 0, 1 }, { 2 }),
+		MakeInt64Tensor({ 0, 0, 2, 1, 1, 2, 1, 1 }, { 2, 4 }),
+		MakeInt64Tensor({ 3 }, { 1 }),
+	};
+
+	Runtime::Interpreter<CPU> interp;
+	const auto denseResults = interp.RunForward(Detail::BuildExecutablePlanFromGraph(denseGraph), denseInputs);
+	const auto pagedResults = interp.RunForward(Detail::BuildExecutablePlanFromGraph(pagedGraph), pagedInputs);
+	ASSERT_EQ(denseResults.size(), 1u);
+	ASSERT_EQ(pagedResults.size(), 1u);
+	ASSERT_EQ(denseResults[0].NumElements(), pagedResults[0].NumElements());
+	for (std::size_t i = 0; i < denseResults[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(pagedResults[0], i), ReadFloat(denseResults[0], i), 1e-5F) << "at element " << i;
+	}
 }
 
 // 测试 2: MatMul y = x @ w + bias (使用 Variable 作为权重)

@@ -182,6 +182,13 @@ namespace LiteNN::Training
 						                                         remap(n.values),  remap(n.currentPosition),
 						                                         n.scale,          n.queryGroupsPerKVHead };
 				    }
+				    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+				    {
+					    return GroupedPagedAttentionNode{ remap(n.queries),      remap(n.kvState),
+						                                  remap(n.pageTable),    remap(n.pageDescriptors),
+						                                  remap(n.activeLength), n.scale,
+						                                  n.queryGroupsPerKVHead };
+				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
 					    return SaveActivationNode{ remap(n.input), n.slotId };

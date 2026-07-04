@@ -1360,6 +1360,21 @@ namespace LiteNN::Serialization
 					                                     .queryGroupsPerKVHead =
 					                                         PlanAttributeSize(op, "queryGroupsPerKVHead") };
 			}
+			if (op.kind == "GroupedPagedAttentionNode")
+			{
+				if (inputs.size() != 5)
+				{
+					throw std::runtime_error("vNext GroupedPagedAttentionNode descriptor requires five inputs");
+				}
+				return GroupedPagedAttentionNode{ .queries = RequireNodeInput(inputs, 0, op.kind),
+					                              .kvState = RequireNodeInput(inputs, 1, op.kind),
+					                              .pageTable = RequireNodeInput(inputs, 2, op.kind),
+					                              .pageDescriptors = RequireNodeInput(inputs, 3, op.kind),
+					                              .activeLength = RequireNodeInput(inputs, 4, op.kind),
+					                              .scale = PlanAttributeDouble(op, "scale"),
+					                              .queryGroupsPerKVHead =
+					                                  PlanAttributeSize(op, "queryGroupsPerKVHead") };
+			}
 			if (op.kind == "RoPENode")
 			{
 				const auto hasPositions = PlanAttributeBool(op, "hasPositions");

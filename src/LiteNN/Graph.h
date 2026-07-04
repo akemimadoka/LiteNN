@@ -358,6 +358,22 @@ namespace LiteNN
 			std::size_t queryGroupsPerKVHead{ 1 };
 		};
 
+		// Grouped single-token decode attention over a paged rank-4 KV cache.
+		// queries/output use [queryHeads, headDim]; K/V state uses
+		// [2, residentPages, pageSize, kvHeads, headDim]. pageTable maps
+		// logical pages to resident pages and pageDescriptors are
+		// [residentPages, logicalPage/firstToken/tokenCount/flags].
+		struct GroupedPagedAttentionNode
+		{
+			NodeOutput queries;
+			NodeOutput kvState;
+			NodeOutput pageTable;
+			NodeOutput pageDescriptors;
+			NodeOutput activeLength;
+			double scale{ 1.0 };
+			std::size_t queryGroupsPerKVHead{ 1 };
+		};
+
 		// Numerically stable softmax along one axis.
 		struct SoftmaxNode
 		{

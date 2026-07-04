@@ -2,6 +2,7 @@
 #include <LiteNN/DataMovement.h>
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include <algorithm>
@@ -1237,6 +1238,140 @@ namespace LiteNN::Runtime
 					for (std::size_t col = 0; col < valueDim; ++col)
 					{
 						out[queryHead * valueDim + col] += weight * v[(row * kvHeads + kvHead) * valueDim + col];
+					}
+				}
+			}
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
+			}
+		}
+
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const GroupedPagedAttentionNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			const auto queries = GetValue(slots, node.queries).CopyToDevice(CPU{});
+			const auto kvState = GetValue(slots, node.kvState).CopyToDevice(CPU{});
+			const auto pageTable = GetValue(slots, node.pageTable).CopyToDevice(CPU{});
+			const auto pageDescriptors = GetValue(slots, node.pageDescriptors).CopyToDevice(CPU{});
+			const auto activeLength = GetValue(slots, node.activeLength).CopyToDevice(CPU{});
+			if (queries.DType() != DataType::Float32 || kvState.DType() != DataType::Float32 ||
+			    pageTable.DType() != DataType::Int64 || pageDescriptors.DType() != DataType::Int64 ||
+			    activeLength.DType() != DataType::Int64)
+			{
+				throw std::runtime_error(
+				    "Interpreter GroupedPagedAttentionNode currently supports Float32 KV and Int64 "
+				    "paged metadata only");
+			}
+			const auto& queryShape = queries.Shape();
+			const auto& kvShape = kvState.Shape();
+			const auto& tableShape = pageTable.Shape();
+			const auto& descriptorShape = pageDescriptors.Shape();
+			if (queryShape.Dims.size() != 2 || kvShape.Dims.size() != 5 || tableShape.Dims.size() != 1 ||
+			    descriptorShape.Dims.size() != 2 || kvShape[0] != 2 || descriptorShape[1] != 4)
+			{
+				throw std::runtime_error("GroupedPagedAttentionNode received incompatible paged KV shapes");
+			}
+			const auto queryHeads = queryShape[0];
+			const auto headDim = queryShape[1];
+			const auto residentPages = kvShape[1];
+			const auto pageSize = kvShape[2];
+			const auto kvHeads = kvShape[3];
+			const auto valueDim = kvShape[4];
+			if (node.queryGroupsPerKVHead == 0 || queryHeads > kvHeads * node.queryGroupsPerKVHead ||
+			    descriptorShape[0] != residentPages || headDim != valueDim)
+			{
+				throw std::runtime_error("GroupedPagedAttentionNode received incompatible query/KV metadata");
+			}
+			const auto rawActiveLength = *static_cast<const std::int64_t*>(activeLength.UnsafeRawData());
+			if (rawActiveLength <= 0)
+			{
+				throw std::runtime_error("GroupedPagedAttentionNode expects positive activeLength");
+			}
+			const auto active = static_cast<std::size_t>(rawActiveLength);
+			const auto logicalPages = tableShape[0];
+			if ((active + pageSize - 1) / pageSize > logicalPages)
+			{
+				throw std::runtime_error("GroupedPagedAttentionNode activeLength exceeds page table capacity");
+			}
+
+			const auto* q = static_cast<const float*>(queries.UnsafeRawData());
+			const auto* kv = static_cast<const float*>(kvState.UnsafeRawData());
+			const auto* table = static_cast<const std::int64_t*>(pageTable.UnsafeRawData());
+			const auto* descriptors = static_cast<const std::int64_t*>(pageDescriptors.UnsafeRawData());
+			Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, DataType::Float32);
+			auto* out = static_cast<float*>(cpuResult.UnsafeRawData());
+			std::fill_n(out, cpuResult.NumElements(), 0.0F);
+			std::vector<float> scores(active);
+			const auto planeStride = residentPages * pageSize * kvHeads * headDim;
+			const auto pageStride = pageSize * kvHeads * headDim;
+			const auto tokenStride = kvHeads * headDim;
+			const auto descriptorColumns = static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count);
+			for (std::size_t queryHead = 0; queryHead < queryHeads; ++queryHead)
+			{
+				const auto kvHead = queryHead / node.queryGroupsPerKVHead;
+				const auto* query = q + queryHead * headDim;
+				float maxScore = -std::numeric_limits<float>::infinity();
+				for (std::size_t token = 0; token < active; ++token)
+				{
+					const auto logicalPage = token / pageSize;
+					const auto tokenInPage = token % pageSize;
+					const auto residentPage = table[logicalPage];
+					if (residentPage < 0 || static_cast<std::size_t>(residentPage) >= residentPages)
+					{
+						throw std::runtime_error(
+						    "GroupedPagedAttentionNode active token maps to a missing resident page");
+					}
+					const auto resident = static_cast<std::size_t>(residentPage);
+					const auto descriptorBase = resident * descriptorColumns;
+					if (descriptors[descriptorBase +
+					                static_cast<std::size_t>(PagedKVPageDescriptorColumn::LogicalPage)] !=
+					        static_cast<std::int64_t>(logicalPage) ||
+					    descriptors[descriptorBase +
+					                static_cast<std::size_t>(PagedKVPageDescriptorColumn::FirstToken)] >
+					        static_cast<std::int64_t>(token) ||
+					    descriptors[descriptorBase +
+					                static_cast<std::size_t>(PagedKVPageDescriptorColumn::TokenCount)] <=
+					        static_cast<std::int64_t>(tokenInPage) ||
+					    (descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::Flags)] &
+					     PagedKVPageResidentFlag) == 0)
+					{
+						throw std::runtime_error(
+						    "GroupedPagedAttentionNode page descriptor does not cover active token");
+					}
+					const auto keyBase = resident * pageStride + tokenInPage * tokenStride + kvHead * headDim;
+					float score = 0.0F;
+					for (std::size_t col = 0; col < headDim; ++col)
+					{
+						score += query[col] * kv[keyBase + col];
+					}
+					score *= static_cast<float>(node.scale);
+					scores[token] = score;
+					maxScore = std::max(maxScore, score);
+				}
+				float denom = 0.0F;
+				for (auto& score : scores)
+				{
+					score = std::exp(score - maxScore);
+					denom += score;
+				}
+				for (std::size_t token = 0; token < active; ++token)
+				{
+					const auto logicalPage = token / pageSize;
+					const auto tokenInPage = token % pageSize;
+					const auto resident = static_cast<std::size_t>(table[logicalPage]);
+					const auto valueBase =
+					    planeStride + resident * pageStride + tokenInPage * tokenStride + kvHead * headDim;
+					const auto weight = scores[token] / denom;
+					for (std::size_t col = 0; col < valueDim; ++col)
+					{
+						out[queryHead * valueDim + col] += weight * kv[valueBase + col];
 					}
 				}
 			}

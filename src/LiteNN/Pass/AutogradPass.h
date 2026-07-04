@@ -538,8 +538,8 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
 					                       std::same_as<T, GroupedActivePrefixAttentionNode> ||
-					                       std::same_as<T, SoftmaxNode> || std::same_as<T, RoPENode> ||
-					                       std::same_as<T, CrossEntropyLossBackwardNode> ||
+					                       std::same_as<T, GroupedPagedAttentionNode> || std::same_as<T, SoftmaxNode> ||
+					                       std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
 					                       std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
 					                       std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
@@ -883,6 +883,16 @@ namespace LiteNN
 						                                           n.currentPosition.port },
 						                                         n.scale,
 						                                         n.queryGroupsPerKVHead };
+				    }
+				    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+				    {
+					    return GroupedPagedAttentionNode{ { nodeMap[n.queries.node], n.queries.port },
+						                                  { nodeMap[n.kvState.node], n.kvState.port },
+						                                  { nodeMap[n.pageTable.node], n.pageTable.port },
+						                                  { nodeMap[n.pageDescriptors.node], n.pageDescriptors.port },
+						                                  { nodeMap[n.activeLength.node], n.activeLength.port },
+						                                  n.scale,
+						                                  n.queryGroupsPerKVHead };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -1367,6 +1377,11 @@ namespace LiteNN
 					    {
 						    throw std::runtime_error("AutogradPass: GroupedActivePrefixAttentionNode differentiation "
 						                             "is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: GroupedPagedAttentionNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {

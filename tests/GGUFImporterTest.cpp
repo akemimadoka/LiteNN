@@ -1906,6 +1906,94 @@ TEST(GGUFLLaMACausalLM, CapacityDecodeUsesGroupedActivePrefixAttention)
 	EXPECT_EQ(singleHeadAttentionNodeCount, 0u);
 }
 
+TEST(GGUFLLaMACausalLM, GroupedPagedAttentionReferenceMatchesDenseActivePrefix)
+{
+	Graph denseGraph;
+	Subgraph denseForward;
+	const auto denseQueries = denseForward.AddParam(DataType::Float32, { 2, 2 });
+	const auto denseKeys = denseForward.AddParam(DataType::Float32, { 3, 1, 2 });
+	const auto denseValues = denseForward.AddParam(DataType::Float32, { 3, 1, 2 });
+	const auto densePosition = denseForward.AddParam(DataType::Int64, { 1 });
+	const auto denseAttention =
+	    denseForward.AddNode(GroupedActivePrefixAttentionNode{ .queries = { denseQueries, 0 },
+	                                                           .keys = { denseKeys, 0 },
+	                                                           .values = { denseValues, 0 },
+	                                                           .currentPosition = { densePosition, 0 },
+	                                                           .scale = 1.0,
+	                                                           .queryGroupsPerKVHead = 2 },
+	                         { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	denseForward.SetResults({ { denseAttention, 0 } });
+	denseGraph.SetForward(denseGraph.AddSubgraph(std::move(denseForward)));
+	denseGraph.SetInputNames({ "queries", "keys", "values", "position" });
+	denseGraph.SetOutputNames({ "attention" });
+
+	Graph pagedGraph;
+	Subgraph pagedForward;
+	const auto pagedQueries = pagedForward.AddParam(DataType::Float32, { 2, 2 });
+	const auto kvState = pagedForward.AddParam(DataType::Float32, { 2, 2, 2, 1, 2 });
+	const auto pageTable = pagedForward.AddParam(DataType::Int64, { 2 });
+	const auto pageDescriptors = pagedForward.AddParam(DataType::Int64, { 2, 4 });
+	const auto activeLength = pagedForward.AddParam(DataType::Int64, { 1 });
+	const auto pagedAttention =
+	    pagedForward.AddNode(GroupedPagedAttentionNode{ .queries = { pagedQueries, 0 },
+	                                                    .kvState = { kvState, 0 },
+	                                                    .pageTable = { pageTable, 0 },
+	                                                    .pageDescriptors = { pageDescriptors, 0 },
+	                                                    .activeLength = { activeLength, 0 },
+	                                                    .scale = 1.0,
+	                                                    .queryGroupsPerKVHead = 2 },
+	                         { OutputInfo{ DataType::Float32, { 2, 2 } } });
+	pagedForward.SetResults({ { pagedAttention, 0 } });
+	pagedGraph.SetForward(pagedGraph.AddSubgraph(std::move(pagedForward)));
+	pagedGraph.SetInputNames({ "queries", "kv_state", "page_table", "page_descriptors", "active_length" });
+	pagedGraph.SetOutputNames({ "attention" });
+
+	const std::array<float, 4> queries = { 1.0f, 0.0f, 0.0f, 1.0f };
+	const std::array<float, 6> denseKeysInput = { 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+	const std::array<float, 6> denseValuesInput = { 10.0f, 0.0f, 0.0f, 20.0f, 30.0f, 40.0f };
+
+	std::array<float, 16> kv{};
+	kv[0] = 1.0f;
+	kv[1] = 0.0f;
+	kv[2] = 0.0f;
+	kv[3] = 1.0f;
+	kv[4] = 1.0f;
+	kv[5] = 1.0f;
+	constexpr std::size_t valuePlaneOffset = 8;
+	kv[valuePlaneOffset + 0] = 10.0f;
+	kv[valuePlaneOffset + 1] = 0.0f;
+	kv[valuePlaneOffset + 2] = 0.0f;
+	kv[valuePlaneOffset + 3] = 20.0f;
+	kv[valuePlaneOffset + 4] = 30.0f;
+	kv[valuePlaneOffset + 5] = 40.0f;
+
+	std::array<Tensor<CPU>, 4> denseInputs = {
+		MakeFloatTensor(queries, { 2, 2 }),
+		MakeFloatTensor(denseKeysInput, { 3, 1, 2 }),
+		MakeFloatTensor(denseValuesInput, { 3, 1, 2 }),
+		MakeInt64Tensor({ 2 }, { 1 }),
+	};
+	std::array<Tensor<CPU>, 5> pagedInputs = {
+		MakeFloatTensor(queries, { 2, 2 }), MakeFloatTensor(kv, { 2, 2, 2, 1, 2 }),
+		MakeInt64Tensor({ 0, 1 }, { 2 }),   MakeInt64Tensor({ 0, 0, 2, 1, 1, 2, 1, 1 }, { 2, 4 }),
+		MakeInt64Tensor({ 3 }, { 1 }),
+	};
+
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(denseGraph), denseInputs);
+	const auto actual = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(pagedGraph), pagedInputs);
+	ASSERT_EQ(actual.size(), 1u);
+	ExpectTensorNear(actual[0], expected[0], GGUF::GetLLaMAParityTolerance(DataType::Float32));
+
+	const auto path = MakeTempFixturePath("litenn_grouped_paged_attention", ".ltnn");
+	Serialization::SaveVNextModelPackage(Detail::BuildExecutableModuleFromGraph(pagedGraph), path);
+	const auto loaded = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+	const auto roundTrip = interpreter.RunForward(loaded.plan, pagedInputs);
+	ASSERT_EQ(roundTrip.size(), 1u);
+	ExpectTensorNear(roundTrip[0], expected[0], GGUF::GetLLaMAParityTolerance(DataType::Float32));
+}
+
 TEST(GGUFLLaMACausalLM, ReusesCapacityPrefillGraphAcrossPromptLengths)
 {
 	const auto archive = BuildTinyLLaMAArchive();
