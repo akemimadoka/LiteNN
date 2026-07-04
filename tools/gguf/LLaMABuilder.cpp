@@ -1672,9 +1672,16 @@ namespace LiteNN::GGUF
 	Runtime::RuntimeSchedule BuildLLaMADecodeRuntimeSchedule(const Graph& archive,
 	                                                         const LLaMAArtifactPlanningOptions& options)
 	{
+		if (options.usePagedReferenceDecode && !options.dynamicDecodePosition)
+		{
+			throw std::runtime_error("Paged-reference decode schedule requires dynamicDecodePosition");
+		}
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
 		auto graph =
-		    options.dynamicDecodePosition
+		    options.usePagedReferenceDecode ? LowerLLaMACausalLMDecodePagedReference(
+		                                          archive, artifacts.decodeStep.maxCacheLength,
+		                                          { .preserveQuantizedWeights = options.preserveQuantizedWeights })
+		    : options.dynamicDecodePosition
 		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
 		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights })
 		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
@@ -1700,7 +1707,40 @@ namespace LiteNN::GGUF
 		{
 			states.push_back(*artifacts.decodeStateABI.currentPosition);
 		}
-		auto stateValueBindings = artifacts.decodeStep.stateValueBindings;
+		auto stateValueBindings = std::vector<Runtime::RuntimeStateValueBinding>{};
+		if (options.usePagedReferenceDecode)
+		{
+			stateValueBindings.reserve(artifacts.decodeStep.kvCaches.size() * 4 + 2);
+			for (std::size_t blockIndex = 0; blockIndex < artifacts.decodeStep.kvCaches.size(); ++blockIndex)
+			{
+				const auto& cache = artifacts.decodeStep.kvCaches[blockIndex];
+				const auto inputBase = 2uz + blockIndex * 4uz;
+				stateValueBindings.push_back(
+				    { cache.stateBinding.name, 0, Runtime::RuntimeStateValueKind::FunctionInput, inputBase, 0 });
+				if (!cache.pageTableStateBinding || !cache.pageDescriptorStateBinding ||
+				    !cache.activeLengthStateBinding)
+				{
+					throw std::runtime_error("Paged-reference decode schedule requires paged KV auxiliary states");
+				}
+				stateValueBindings.push_back({ cache.pageTableStateBinding->name, 0,
+				                               Runtime::RuntimeStateValueKind::FunctionInput, inputBase + 1, 0 });
+				stateValueBindings.push_back({ cache.pageDescriptorStateBinding->name, 0,
+				                               Runtime::RuntimeStateValueKind::FunctionInput, inputBase + 2, 0 });
+				stateValueBindings.push_back({ cache.activeLengthStateBinding->name, 0,
+				                               Runtime::RuntimeStateValueKind::FunctionInput, inputBase + 3, 0 });
+			}
+			if (artifacts.decodeStateABI.currentPosition)
+			{
+				stateValueBindings.push_back({ artifacts.decodeStateABI.currentPosition->name, 0,
+				                               Runtime::RuntimeStateValueKind::FunctionInput, 1, 0 });
+				stateValueBindings.push_back({ artifacts.decodeStateABI.currentPosition->name, 0,
+				                               Runtime::RuntimeStateValueKind::FunctionOutput, 1, 0 });
+			}
+		}
+		else
+		{
+			stateValueBindings = artifacts.decodeStep.stateValueBindings;
+		}
 		for (auto& binding : stateValueBindings)
 		{
 			binding.function = module.plan.forward;

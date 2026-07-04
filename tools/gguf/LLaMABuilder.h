@@ -142,6 +142,8 @@ namespace LiteNN::GGUF
 		bool dynamicPrefillLength{};
 		/// Build a max-capacity decode graph whose current position is a runtime state value.
 		bool dynamicDecodePosition{};
+		/// Build a logits-only decode schedule that reads paged KV state through the CPU reference attention node.
+		bool usePagedReferenceDecode{};
 	};
 
 	struct LLaMALoweringOptions

@@ -2150,6 +2150,40 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	EXPECT_EQ(loaded.manifest.stateValueBindings[5].kind, Runtime::RuntimeStateValueKind::FunctionOutput);
 }
 
+TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeScheduleBindsPagedKVInputs)
+{
+	const auto schedule =
+	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
+	                                                                     .decodePastLength = 0,
+	                                                                     .maxCacheLength = 4,
+	                                                                     .dynamicDecodePosition = true,
+	                                                                     .usePagedReferenceDecode = true });
+	ASSERT_EQ(schedule.states.size(), 5u);
+	const auto forward = schedule.module.plan.forward;
+	ASSERT_EQ(schedule.module.functions[forward].inputs.size(), 6u);
+	EXPECT_EQ(schedule.module.functions[forward].inputs[2].StaticShape(), std::vector<std::size_t>({ 2, 1, 4, 1, 2 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[3].StaticShape(), std::vector<std::size_t>({ 1 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[4].StaticShape(), std::vector<std::size_t>({ 1, 4 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[5].StaticShape(), std::vector<std::size_t>({ 1 }));
+	ASSERT_EQ(schedule.stateValueBindings.size(), 6u);
+	EXPECT_EQ(schedule.stateValueBindings[0].stateName, "kv.layer0");
+	EXPECT_EQ(schedule.stateValueBindings[0].kind, Runtime::RuntimeStateValueKind::FunctionInput);
+	EXPECT_EQ(schedule.stateValueBindings[0].valueIndex, 2u);
+	EXPECT_EQ(schedule.stateValueBindings[1].stateName, "kv.layer0.page_table");
+	EXPECT_EQ(schedule.stateValueBindings[1].valueIndex, 3u);
+	EXPECT_EQ(schedule.stateValueBindings[2].stateName, "kv.layer0.page_descriptor");
+	EXPECT_EQ(schedule.stateValueBindings[2].valueIndex, 4u);
+	EXPECT_EQ(schedule.stateValueBindings[3].stateName, "kv.layer0.active_length");
+	EXPECT_EQ(schedule.stateValueBindings[3].valueIndex, 5u);
+	EXPECT_EQ(Runtime::RuntimeSchedulePublicOutputIndices(schedule, forward), std::vector<std::size_t>({ 0 }));
+	EXPECT_EQ(Runtime::RuntimeScheduleStateOutputIndices(schedule, forward), std::vector<std::size_t>({ 1 }));
+	const auto stateAliases = Runtime::RuntimeScheduleStateOutputAliases(schedule, forward);
+	ASSERT_EQ(stateAliases.size(), 1u);
+	EXPECT_EQ(stateAliases[0].outputIndex, 1u);
+	EXPECT_EQ(stateAliases[0].inputIndex, 1u);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+}
+
 TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 {
 	const auto archive = BuildTinyLLaMAArchive();

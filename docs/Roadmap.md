@@ -3009,6 +3009,10 @@ Priority classes:
                   `LowerLLaMACausalLMDecodePagedReference` exposes per-layer paged KV state, page table, page descriptor,
                   and active length inputs, then routes attention through `GroupedPagedAttentionNode` instead of
                   `GroupedActivePrefixAttentionNode`.
+            - [x] Expose paged-reference decode as an explicit runtime-schedule option. Completed on 2026-07-05:
+                  `BuildLLaMADecodeRuntimeSchedule(... usePagedReferenceDecode=true)` binds paged KV/page-table/
+                  page-descriptor/active-length states as function inputs and keeps only `decode.position` as a state
+                  output alias.
             - [ ] Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
                   decode graphs can append current K/V directly into page-table/page-descriptor state.
       - [ ] Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
