@@ -529,14 +529,20 @@ namespace LiteNN::GGUF
 			headDim,
 		};
 		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
-		const std::vector<std::size_t> stateShape{ 2, maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
-		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
-		const auto cacheCapacityPerPlaneBytes =
-		    maxCacheLength * hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
-		const auto stateByteSize = stateType.ByteSize().value_or(0);
-		const auto tokenByteStride = hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 		const auto pageSizeTokens = std::min<std::size_t>(maxCacheLength, 256);
 		const auto residentPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
+		const auto stateTokenCapacity =
+		    options.dynamicDecodePosition ? residentPageCount * pageSizeTokens : maxCacheLength;
+		const auto stateShape =
+		    options.dynamicDecodePosition
+		        ? std::vector<std::size_t>{ 2, residentPageCount, pageSizeTokens, hyperparameters.attentionHeadCountKV,
+			                                headDim }
+		        : std::vector<std::size_t>{ 2, maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
+		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
+		const auto cacheCapacityPerPlaneBytes =
+		    stateTokenCapacity * hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
+		const auto stateByteSize = stateType.ByteSize().value_or(0);
+		const auto tokenByteStride = hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 
 		LLaMAArtifactEntry prefill{
 			.kind = LLaMAArtifactKind::Prefill,
@@ -680,13 +686,13 @@ namespace LiteNN::GGUF
 			{
 			    .name = "runtime.paged_kv_state",
 			    .domain = "runtime-state",
-			    .axes = { "page", "token_in_page", "kv_head", "head_dim" },
+			    .axes = { "key_value", "resident_page", "token_in_page", "kv_head", "head_dim" },
 			    .layout = "paged-row-major",
 			    .note =
 			        "Dynamic decode plans publish paged KV layout metadata plus explicit page-table, page-descriptor, "
-			        "and active-length runtime states. The current CPU lowering still uses the dense backing tensor "
-			        "as a compatibility fallback until paged attention/state kernels replace the capacity-shaped "
-			        "function ABI.",
+			        "and active-length runtime states. The backing state is [2, residentPages, pageSize, kvHeads, "
+			        "headDim]; the current CPU lowering still exposes dense function inputs as a compatibility "
+			        "fallback until paged attention/state kernels replace the capacity-shaped function ABI.",
 			},
 		};
 

@@ -1055,6 +1055,7 @@ TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
 	          std::vector<std::string>({ "logits", "next_position", "updated_key_0", "updated_value_0" }));
 	ASSERT_EQ(plan.decodeStep.kvCaches.size(), 1u);
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 8, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateType.StaticShape(), std::vector<std::size_t>({ 2, 1, 8, 1, 2 }));
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.role, "paged-kv-cache");
 	ASSERT_TRUE(plan.decodeStep.kvCaches[0].stateBinding.layout.has_value());
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->kind, Runtime::RuntimeStateLayoutKind::PagedKVCache);
