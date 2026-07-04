@@ -6,6 +6,7 @@
 #include <LiteNN/Misc.h>
 #include <LiteNN/Runtime/Placement.h>
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -261,6 +262,8 @@ namespace LiteNN::Runtime
 		std::vector<RuntimeExecutionSegment> segments;
 		std::vector<RuntimeScheduleStep> steps;
 	};
+
+	inline void ValidateRuntimeSchedule(const RuntimeSchedule& schedule);
 
 	inline std::string_view RuntimeStateValueKindName(RuntimeStateValueKind kind) noexcept
 	{
@@ -722,6 +725,7 @@ namespace LiteNN::Runtime
 			step.inputBuffers.push_back(*state.memoryBuffer);
 			schedule.steps.push_back(std::move(step));
 		}
+		ValidateRuntimeSchedule(schedule);
 		return schedule;
 	}
 
@@ -1402,6 +1406,51 @@ namespace LiteNN::Runtime
 			{
 				throw std::runtime_error("Runtime state binding must use a persistent buffer");
 			}
+		}
+		for (const auto& state : schedule.states)
+		{
+			if (!state.layout || state.layout->kind != RuntimeStateLayoutKind::PagedKVCache)
+			{
+				continue;
+			}
+			const auto& layout = *state.layout;
+			const auto findState = [&](std::string_view name) -> const RuntimeStateBinding* {
+				const auto found = std::ranges::find_if(
+				    schedule.states, [&](const RuntimeStateBinding& candidate) { return candidate.name == name; });
+				return found == schedule.states.end() ? nullptr : std::to_address(found);
+			};
+			const auto* pageTable = findState(layout.pageTableState);
+			const auto* pageDescriptor = findState(layout.pageDescriptorState);
+			const auto* activeLength = findState(layout.activeLengthState);
+			if (!pageTable || !pageDescriptor || !activeLength)
+			{
+				throw std::runtime_error("Paged KV runtime state references missing auxiliary state(s): " + state.name);
+			}
+			const auto requireAuxiliary = [&](const RuntimeStateBinding& auxiliary, std::string_view role,
+			                                  std::span<const std::size_t> shape) {
+				if (auxiliary.kind != RuntimeStateKind::KVCache || auxiliary.role != role ||
+				    auxiliary.type.dtype != DataType::Int64 || !std::ranges::equal(auxiliary.type.StaticShape(), shape))
+				{
+					throw std::runtime_error("Paged KV runtime auxiliary state has incompatible type or role: " +
+					                         auxiliary.name);
+				}
+				if (!auxiliary.memoryBuffer || *auxiliary.memoryBuffer >= schedule.memory.buffers.size() ||
+				    schedule.memory.buffers[*auxiliary.memoryBuffer].kind != MemoryBufferKind::Persistent)
+				{
+					throw std::runtime_error("Paged KV runtime auxiliary state must use a persistent buffer: " +
+					                         auxiliary.name);
+				}
+			};
+			const auto logicalPages = PagedKVLogicalPageCount(layout);
+			const std::array<std::size_t, 1> pageTableShape{ logicalPages };
+			const std::array<std::size_t, 2> pageDescriptorShape{
+				layout.residentPageCount,
+				static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count),
+			};
+			const std::array<std::size_t, 1> activeLengthShape{ 1 };
+			requireAuxiliary(*pageTable, "kv-page-table", pageTableShape);
+			requireAuxiliary(*pageDescriptor, "kv-page-descriptor", pageDescriptorShape);
+			requireAuxiliary(*activeLength, "kv-active-length", activeLengthShape);
 		}
 		for (const auto& binding : schedule.bufferBindings)
 		{

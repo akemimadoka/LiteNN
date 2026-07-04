@@ -719,7 +719,10 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 
 	auto state = Runtime::MakePagedKVCacheState(
 	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 2, 4, 1, 64 }), 4, 128, 2, 0, 1024, 128);
-	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { state });
+	auto states = std::vector{ state };
+	auto auxiliaryStates = Runtime::MakePagedKVAuxiliaryStates(state);
+	states.insert(states.end(), auxiliaryStates.begin(), auxiliaryStates.end());
+	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), states);
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_paged_runtime_state.json";
 	Serialization::SaveVNextModelPackage(schedule, path);
 	{
@@ -733,7 +736,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 	const auto package = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
 
-	ASSERT_EQ(package.manifest.runtimeStates.size(), 1u);
+	ASSERT_EQ(package.manifest.runtimeStates.size(), 4u);
 	const auto& loaded = package.manifest.runtimeStates[0];
 	ASSERT_TRUE(loaded.layout.has_value());
 	EXPECT_EQ(loaded.layout->kind, Runtime::RuntimeStateLayoutKind::PagedKVCache);
@@ -792,7 +795,32 @@ TEST(G14VNext, RuntimeScheduleRejectsPagedKVShapeLayoutMismatch)
 
 	auto state = Runtime::MakePagedKVCacheState(
 	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 8, 1, 64 }), 4, 128, 2, 0, 1024, 128);
+	auto states = std::vector{ state };
+	auto auxiliaryStates = Runtime::MakePagedKVAuxiliaryStates(state);
+	states.insert(states.end(), auxiliaryStates.begin(), auxiliaryStates.end());
+	EXPECT_THROW(Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), states),
+	             std::runtime_error);
+}
+
+TEST(G14VNext, RuntimeScheduleRejectsPagedKVMissingOrInvalidAuxiliaryStates)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2 });
+	forward.SetResults({ { input, 0 } });
+	graph.AddSubgraph(std::move(forward));
+	graph.SetForward(0);
+
+	auto state = Runtime::MakePagedKVCacheState(
+	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 2, 4, 1, 64 }), 4, 128, 2, 0, 1024, 128);
 	EXPECT_THROW(Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { state }),
+	             std::runtime_error);
+
+	auto states = std::vector{ state };
+	auto auxiliaryStates = Runtime::MakePagedKVAuxiliaryStates(state);
+	auxiliaryStates[1].type = TensorType::Dense(DataType::Int64, ShapeView{ 3, 4 });
+	states.insert(states.end(), auxiliaryStates.begin(), auxiliaryStates.end());
+	EXPECT_THROW(Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), states),
 	             std::runtime_error);
 }
 

@@ -2970,6 +2970,8 @@ Priority classes:
             binding until decode lowering consumes page-table state directly.
             Runtime schedule validation now rejects paged KV states whose backing tensor shape or token/page byte
             strides do not match the layout metadata.
+            It also requires the referenced page-table/page-descriptor/active-length auxiliary states to be present
+            with the expected Int64 shapes before a schedule can be built.
       - [x] Publish page-table, page-descriptor, and active-length runtime states for dynamic decode. Completed on
             2026-07-04: paged KV layout metadata now names all three auxiliary states; the LLaMA dynamic decode planner
             exposes them as explicit `RuntimeStateBinding`s and vNext manifests round-trip the descriptor-state field.
