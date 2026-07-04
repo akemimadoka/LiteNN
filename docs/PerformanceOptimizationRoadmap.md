@@ -162,6 +162,12 @@ Priority classes for the GGUF/Qwen decode work:
           rows. A short 2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
           `Q6_K/qwen_ffn_down` about `3.28 ms` real) while explicit `T32` remains available for isolated helper cases
           where it wins.
+    - [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
+          - [x] Make the GGUF decode-loop CLI default to the stateful runtime-schedule path. Completed on 2026-07-04:
+                `--run-llama-*-decode-loop` now builds/loads the logits-only public-output stateful schedule unless
+                `--functional` is passed explicitly for compatibility or diagnostics.
+          - [ ] Replace the remaining max-cache-length-shaped stateful function signature with per-layer/per-block
+                reusable decode artifacts or page-table state bindings.
     - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.

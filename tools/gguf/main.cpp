@@ -64,7 +64,8 @@ namespace
 		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
+		             "[--max-cache-length N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -72,7 +73,8 @@ namespace
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
+		             "[--max-cache-length N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -80,7 +82,8 @@ namespace
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful] [--stream-tokens] [--stream-stats] [--compile-only] [--max-cache-length N] "
+		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
+		             "[--max-cache-length N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -213,7 +216,7 @@ namespace
 		std::optional<std::string> logitsOutputDirectory;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
-		bool statefulDecode{};
+		bool statefulDecode{ true };
 		bool streamTokens{};
 		bool streamStats{};
 		bool compileOnly{};
@@ -282,6 +285,10 @@ namespace
 			else if (arg == "--stateful")
 			{
 				options.statefulDecode = true;
+			}
+			else if (arg == "--functional")
+			{
+				options.statefulDecode = false;
 			}
 			else if (arg == "--stream-tokens")
 			{

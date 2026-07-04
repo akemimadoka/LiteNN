@@ -2930,6 +2930,12 @@ Priority classes:
 - [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
+      - [x] Make the GGUF decode-loop CLI default to the stateful runtime-schedule path instead of the functional
+            cache-input/cache-output path. Completed on 2026-07-04: `--run-llama-*-decode-loop` now uses the logits-only
+            public-output stateful schedule by default, while `--functional` remains available as an explicit
+            compatibility/diagnostic path.
+      - [ ] Replace the remaining max-cache-length-shaped stateful function signature with per-layer/per-block reusable
+            decode artifacts or shape-polymorphic page-table state bindings.
 - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
       Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
       source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
