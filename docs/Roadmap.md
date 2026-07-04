@@ -2968,7 +2968,7 @@ Priority classes:
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
       logits-only decode.
-- [ ] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
+- [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before
       treating 2K/32K/128K/1M context latency as representative.
@@ -2981,10 +2981,9 @@ Priority classes:
             decode parity tests; helper timing improved to about `0.006 ms` for 128 rows, `0.099 ms` for 2048 rows, and
             `0.651 ms` for 8192 rows.
       - [x] Add a grouped active-prefix attention CPU sidecar ABI and benchmark rows that compare Qwen-shaped GQA
-            grouped execution against repeated per-query-head rank-3 helper calls. AOT lowering is still pending, so the
-            parent item remains open until compiled decode graphs emit the grouped helper directly. A short 2026-07-03
-            run validated `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.397 ms` grouped vs `0.410 ms`
-            repeated), while 2048 active rows improved from about `9.30 ms` repeated to `8.31 ms` grouped.
+            grouped execution against repeated per-query-head rank-3 helper calls. A short 2026-07-03 run validated
+            `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.397 ms` grouped vs `0.410 ms` repeated),
+            while 2048 active rows improved from about `9.30 ms` repeated to `8.31 ms` grouped.
       - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
             grouped CPU AOT sidecar. The builder still applies RoPE per query/KV head before grouping, and the grouped
             helper remains a conservative CPU sidecar rather than a final KV-head-tiled attention kernel.

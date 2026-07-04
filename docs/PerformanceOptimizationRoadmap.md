@@ -192,7 +192,7 @@ Priority classes for the GGUF/Qwen decode work:
           outputs alias their input buffers. The `KVScatterUpdateHelper` benchmark records the cost boundary: on
           2026-07-03, Qwen-shaped alias append rounded to `0.000 ms`, while copy mode measured about `0.210 ms` for a
           2048-token cache and about `1.71 ms` real / `1.41 ms` CPU for an 8192-token cache.
-    - [ ] P0/P1: Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
+    - [x] P0/P1: Add grouped LLM decode helpers after operator timing is available: fused/concatenated QKV projection,
           fused gate/up projection for SwiGLU, and grouped active-prefix attention per KV head. Projection grouping is
           P0; attention grouping is P1 because it scales with active context length.
           - [x] Add grouped-projection benchmark rows that compare separate Q/K/V or gate/up helper calls against
@@ -215,8 +215,7 @@ Priority classes for the GGUF/Qwen decode work:
                 decode parity tests; helper timing improved to about `0.006 ms` for 128 rows, `0.099 ms` for 2048 rows,
                 and `0.651 ms` for 8192 rows.
           - [x] Add a grouped active-prefix attention CPU sidecar ABI and benchmark rows that compare Qwen-shaped GQA
-                grouped execution against repeated per-query-head rank-3 helper calls. AOT lowering is still pending, so
-                compiled decode graphs do not emit this helper directly yet. A short 2026-07-03 run validated
+                grouped execution against repeated per-query-head rank-3 helper calls. A short 2026-07-03 run validated
                 `max_abs_delta=0`; 128 active rows stayed roughly neutral (`0.397 ms` grouped vs `0.410 ms` repeated),
                 while 2048 active rows improved from about `9.30 ms` repeated to `8.31 ms` grouped.
           - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
