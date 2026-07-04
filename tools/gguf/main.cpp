@@ -924,6 +924,22 @@ namespace
 		return bytes;
 	}
 
+	std::string ReadTextFile(const std::filesystem::path& path)
+	{
+		std::ifstream input(path, std::ios::binary);
+		if (!input)
+		{
+			throw std::runtime_error("failed to open cached artifact text file: " + path.string());
+		}
+		std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		while (!text.empty() &&
+		       (text.back() == '\n' || text.back() == '\r' || text.back() == ' ' || text.back() == '\t'))
+		{
+			text.pop_back();
+		}
+		return text;
+	}
+
 	void WriteBinaryFileTimed(const std::filesystem::path& path, std::span<const std::byte> bytes, bool diagnostics,
 	                          std::string_view label)
 	{
@@ -961,6 +977,13 @@ namespace
 		});
 	}
 
+	void WriteTextFileTimed(const std::filesystem::path& path, std::string_view text, bool diagnostics,
+	                        std::string_view label)
+	{
+		const auto bytes = std::as_bytes(std::span<const char>(text.data(), text.size()));
+		WriteBinaryFileTimed(path, bytes, diagnostics, label);
+	}
+
 	std::uint64_t FNV1a(std::string_view text)
 	{
 		std::uint64_t hash = 14695981039346656037ull;
@@ -986,13 +1009,88 @@ namespace
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto keyText =
-		    std::format("gguf-decode-{}-v3|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
+		    std::format("gguf-decode-{}-v4|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
 		                "q8k_staged={}",
 		                decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
 		                requestedTokenCount, options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
 		                options.cpuAOTThreadCount, static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
 		                options.cpuAOTParallelMinFlops, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
+	}
+
+	std::optional<std::filesystem::path> DecodeAOTSharedWeightsPath(std::string_view modelPath)
+	{
+		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
+		if (root == nullptr || std::string_view(root).empty())
+		{
+			return std::nullopt;
+		}
+		const std::filesystem::path model(modelPath);
+		std::error_code ec;
+		const auto modelSize = std::filesystem::file_size(model, ec);
+		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
+		const auto keyText = std::format("gguf-shared-weights-v1|{}|{}|{}",
+		                                 std::filesystem::absolute(model, ec).string(), modelSize, lastWrite);
+		return std::filesystem::path(root) / "_weights" / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
+	}
+
+	struct DecodeAOTCacheFiles
+	{
+		std::filesystem::path metadata;
+		std::filesystem::path constants;
+		std::filesystem::path weights;
+		std::filesystem::path weightReference;
+		std::filesystem::path instructions;
+		std::filesystem::path complete;
+	};
+
+	DecodeAOTCacheFiles DecodeAOTCacheFilesFor(const std::filesystem::path& cachePath)
+	{
+		return {
+			.metadata = cachePath / "metadata.bin",
+			.constants = cachePath / "constants.bin",
+			.weights = cachePath / "weights.bin",
+			.weightReference = cachePath / "weights.path.txt",
+			.instructions = cachePath / "instructions.bin",
+			.complete = cachePath / "complete",
+		};
+	}
+
+	std::optional<std::filesystem::path> DecodeAOTReferencedWeightsPath(const DecodeAOTCacheFiles& files)
+	{
+		if (!std::filesystem::exists(files.weightReference))
+		{
+			return std::nullopt;
+		}
+		const auto text = ReadTextFile(files.weightReference);
+		if (text.empty())
+		{
+			throw std::runtime_error("gguf decode aot cache weights reference is empty");
+		}
+		return std::filesystem::path(text);
+	}
+
+	bool DecodeAOTWeightsAvailable(const DecodeAOTCacheFiles& files)
+	{
+		if (std::filesystem::exists(files.weightReference))
+		{
+			const auto referenced = DecodeAOTReferencedWeightsPath(files);
+			if (!referenced)
+			{
+				return false;
+			}
+			return std::filesystem::exists(*referenced) &&
+			       std::filesystem::exists(referenced->parent_path() / "complete");
+		}
+		return std::filesystem::exists(files.weights);
+	}
+
+	bool DecodeAOTCacheComplete(const std::filesystem::path& cachePath)
+	{
+		const auto files = DecodeAOTCacheFilesFor(cachePath);
+		return std::filesystem::exists(files.metadata) && std::filesystem::exists(files.constants) &&
+		       std::filesystem::exists(files.instructions) && std::filesystem::exists(files.complete) &&
+		       DecodeAOTWeightsAvailable(files);
 	}
 
 	bool RequireDecodeAOTCacheHit()
@@ -1036,9 +1134,21 @@ namespace
 	LiteNN::CompiledModule<LiteNN::CPU> LoadDecodeAOTCache(const std::filesystem::path& cachePath, bool diagnostics)
 	{
 		auto artifact = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache read separated artifact", [&] {
+			const auto files = DecodeAOTCacheFilesFor(cachePath);
+			std::vector<std::byte> weights;
+			if (auto referencedWeights = DecodeAOTReferencedWeightsPath(files))
+			{
+				LogGGUFDiagnostic(diagnostics,
+				                  "gguf decode aot cache: using shared weights " + referencedWeights->generic_string());
+				weights = ReadBinaryFile(*referencedWeights);
+			}
+			else
+			{
+				weights = ReadBinaryFile(files.weights);
+			}
 			return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
-			    ReadBinaryFile(cachePath / "metadata.bin"), ReadBinaryFile(cachePath / "constants.bin"),
-			    ReadBinaryFile(cachePath / "weights.bin"), ReadBinaryFile(cachePath / "instructions.bin"));
+			    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), std::move(weights),
+			    ReadBinaryFile(files.instructions));
 		});
 		LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
 		return TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache load module",
@@ -1046,7 +1156,7 @@ namespace
 	}
 
 	void WriteDecodeAOTCache(const std::filesystem::path& cachePath, const LiteNN::CompiledModuleArtifact& artifact,
-	                         bool diagnostics)
+	                         const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
 	{
 		if (!DecodeAOTCacheWriteEnabled())
 		{
@@ -1055,39 +1165,56 @@ namespace
 		}
 
 		std::filesystem::create_directories(cachePath);
+		const auto files = DecodeAOTCacheFilesFor(cachePath);
 		auto metadata = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache build metadata",
 		                                    [&] { return artifact.BuildSeparatedMetadata(); });
 		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache regions: metadata={} constants={} weights={} "
 		                                           "instructions={}",
 		                                           metadata.size(), artifact.Constants().size(),
 		                                           artifact.Weights().size(), artifact.Instructions().size()));
-		WriteBinaryFileTimed(cachePath / "metadata.bin", metadata, diagnostics, "gguf decode aot cache write metadata");
-		WriteBinaryFileTimed(cachePath / "constants.bin", artifact.Constants(), diagnostics,
+		WriteBinaryFileTimed(files.metadata, metadata, diagnostics, "gguf decode aot cache write metadata");
+		WriteBinaryFileTimed(files.constants, artifact.Constants(), diagnostics,
 		                     "gguf decode aot cache write constants");
-		WriteBinaryFileTimed(cachePath / "weights.bin", artifact.Weights(), diagnostics,
-		                     "gguf decode aot cache write weights");
-		WriteBinaryFileTimed(cachePath / "instructions.bin", artifact.Instructions(), diagnostics,
+		if (sharedWeightsPath && !artifact.Weights().empty())
+		{
+			const auto sharedComplete = sharedWeightsPath->parent_path() / "complete";
+			const auto sharedSizeMatches = std::filesystem::exists(*sharedWeightsPath) &&
+			                               std::filesystem::file_size(*sharedWeightsPath) == artifact.Weights().size();
+			if (!sharedSizeMatches || !std::filesystem::exists(sharedComplete))
+			{
+				std::filesystem::create_directories(sharedWeightsPath->parent_path());
+				WriteBinaryFileTimed(*sharedWeightsPath, artifact.Weights(), diagnostics,
+				                     "gguf decode aot shared weight store write weights");
+				WriteBinaryFileTimed(sharedComplete, std::span<const std::byte>{}, diagnostics,
+				                     "gguf decode aot shared weight store write complete marker");
+			}
+			else
+			{
+				LogGGUFDiagnostic(diagnostics,
+				                  "gguf decode aot shared weight store: reused " + sharedWeightsPath->generic_string());
+			}
+			WriteTextFileTimed(files.weightReference, std::filesystem::absolute(*sharedWeightsPath).string(),
+			                   diagnostics, "gguf decode aot cache write weights reference");
+		}
+		else
+		{
+			WriteBinaryFileTimed(files.weights, artifact.Weights(), diagnostics, "gguf decode aot cache write weights");
+		}
+		WriteBinaryFileTimed(files.instructions, artifact.Instructions(), diagnostics,
 		                     "gguf decode aot cache write instructions");
-		WriteBinaryFileTimed(cachePath / "complete", std::span<const std::byte>{}, diagnostics,
+		WriteBinaryFileTimed(files.complete, std::span<const std::byte>{}, diagnostics,
 		                     "gguf decode aot cache write complete marker");
 		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: wrote {}", cachePath.string()));
 	}
 
-	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan,
-	                                                              const LiteNN::CompilerOptions& options,
-	                                                              const std::optional<std::filesystem::path>& cachePath,
-	                                                              bool diagnostics)
+	LiteNN::CompiledModule<LiteNN::CPU>
+	LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan, const LiteNN::CompilerOptions& options,
+	                          const std::optional<std::filesystem::path>& cachePath,
+	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
 	{
 		if (cachePath)
 		{
-			const auto metadata = *cachePath / "metadata.bin";
-			const auto constants = *cachePath / "constants.bin";
-			const auto weights = *cachePath / "weights.bin";
-			const auto instructions = *cachePath / "instructions.bin";
-			const auto complete = *cachePath / "complete";
-			if (std::filesystem::exists(metadata) && std::filesystem::exists(constants) &&
-			    std::filesystem::exists(weights) && std::filesystem::exists(instructions) &&
-			    std::filesystem::exists(complete))
+			if (DecodeAOTCacheComplete(*cachePath))
 			{
 				try
 				{
@@ -1113,7 +1240,7 @@ namespace
 		{
 			try
 			{
-				WriteDecodeAOTCache(*cachePath, artifact, diagnostics);
+				WriteDecodeAOTCache(*cachePath, artifact, sharedWeightsPath, diagnostics);
 			}
 			catch (const std::exception& ex)
 			{
@@ -1124,21 +1251,14 @@ namespace
 		                           [&] { return std::move(artifact).Load(); });
 	}
 
-	LiteNN::CompiledModule<LiteNN::CPU> LoadOrCompileDecodeModule(const LiteNN::Runtime::RuntimeSchedule& schedule,
-	                                                              const LiteNN::CompilerOptions& options,
-	                                                              const std::optional<std::filesystem::path>& cachePath,
-	                                                              bool diagnostics)
+	LiteNN::CompiledModule<LiteNN::CPU>
+	LoadOrCompileDecodeModule(const LiteNN::Runtime::RuntimeSchedule& schedule, const LiteNN::CompilerOptions& options,
+	                          const std::optional<std::filesystem::path>& cachePath,
+	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
 	{
 		if (cachePath)
 		{
-			const auto metadata = *cachePath / "metadata.bin";
-			const auto constants = *cachePath / "constants.bin";
-			const auto weights = *cachePath / "weights.bin";
-			const auto instructions = *cachePath / "instructions.bin";
-			const auto complete = *cachePath / "complete";
-			if (std::filesystem::exists(metadata) && std::filesystem::exists(constants) &&
-			    std::filesystem::exists(weights) && std::filesystem::exists(instructions) &&
-			    std::filesystem::exists(complete))
+			if (DecodeAOTCacheComplete(*cachePath))
 			{
 				try
 				{
@@ -1164,7 +1284,7 @@ namespace
 		{
 			try
 			{
-				WriteDecodeAOTCache(*cachePath, artifact, diagnostics);
+				WriteDecodeAOTCache(*cachePath, artifact, sharedWeightsPath, diagnostics);
 			}
 			catch (const std::exception& ex)
 			{
@@ -1259,8 +1379,10 @@ namespace
 				                              projection.publicOutputIndices.size(), projection.stateAliases.size()));
 				const auto cachePath =
 				    DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
+				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath);
 				return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot stateful decode module", [&] {
-					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, diagnostics);
+					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, sharedWeightsPath,
+					                                 diagnostics);
 				});
 			}
 
@@ -1271,8 +1393,10 @@ namespace
 			decodePlan = TimedGGUFDiagnostic(diagnostics, "gguf build executable plan",
 			                                 [&] { return LiteNN::Detail::BuildExecutablePlanFromGraph(graph); });
 			const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
+			const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath);
 			return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot decode module", [&] {
-				return LoadOrCompileDecodeModule(decodePlan, compilerOptions, cachePath, diagnostics);
+				return LoadOrCompileDecodeModule(decodePlan, compilerOptions, cachePath, sharedWeightsPath,
+				                                 diagnostics);
 			});
 		}();
 		LogGGUFDiagnostic(diagnostics,

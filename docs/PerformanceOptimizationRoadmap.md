@@ -172,6 +172,14 @@ Priority classes for the GGUF/Qwen decode work:
                 uses the dense capacity-shaped fallback signature until paged lowering lands.
           - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
                 artifacts stop scaling with max context length.
+    - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
+          - [x] Deduplicate GGUF decode AOT cache weights across instruction-cache variants for the same source model.
+                Completed on 2026-07-04: cache entries now write `weights.path.txt` pointing to a model-level shared
+                weight blob under the cache root, while metadata/constants/instructions remain per artifact. Legacy
+                per-cache `weights.bin` entries still load. This removes repeated multi-GB weight writes when tuning AOT
+                flags or thread policy.
+          - [ ] Replace the shared copied blob with direct mapped/borrowed GGUF/package regions after separated metadata
+                can encode source file offsets and stable source checksums.
     - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
           `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
           append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache

@@ -2933,6 +2933,14 @@ Priority classes:
 - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
       Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
       source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
+      - [x] Deduplicate decode AOT cache weights across instruction-cache variants for the same source model. Completed
+            on 2026-07-04: GGUF decode cache entries now use a model-level shared weight store and write
+            `weights.path.txt` beside metadata/constants/instructions instead of rewriting a per-cache `weights.bin`.
+            Legacy cache entries with local `weights.bin` still load. This removes repeated multi-GB writes when only
+            AOT flags, thread policy, or decode mode change.
+      - [ ] Replace the shared copied weight blob with direct mapped/borrowed source-package or GGUF regions once
+            separated-artifact metadata can represent source file offsets rather than only offsets inside the compiled
+            `weights` region.
 - [x] P1: Add a verified in-place KV append helper:
       `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
       append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache outputs
