@@ -2994,6 +2994,8 @@ Priority classes:
             plans now distinguish the implemented CPU active-prefix path from planned CPU reference, CUDA-native, and
             Vulkan-native paged-attention paths, record page size/max context, avoid-full-mask expectations, streaming
             decode support, and required paged KV runtime states.
+            Updated on 2026-07-05: `cpu-paged-reference` is now reported as `implemented-reference` because
+            `GroupedPagedAttentionNode` provides CPU reference semantics; CUDA/Vulkan paged kernels remain planned.
       - [x] Implement the CPU paged-attention reference kernel against the page-table/page-descriptor state contract.
             Completed on 2026-07-05: `GroupedPagedAttentionNode` now has graph/schema/validation/pass/vNext support and
             a CPU interpreter reference path over explicit KV state, page table, page descriptors, and active length.

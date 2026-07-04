@@ -743,7 +743,7 @@ namespace LiteNN::GGUF
 			    .requiresPageTable = true,
 			    .materializesFullMask = false,
 			    .streamingDecode = true,
-			    .status = "planned",
+			    .status = "implemented-reference",
 			    .requiredRuntimeStates = pagedRuntimeStates,
 			});
 			attentionExecutionPlans.push_back({

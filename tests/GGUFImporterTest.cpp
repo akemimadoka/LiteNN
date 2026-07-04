@@ -1101,6 +1101,7 @@ TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
 	EXPECT_TRUE(cpuPaged->requiresPageTable);
 	EXPECT_FALSE(cpuPaged->materializesFullMask);
 	EXPECT_EQ(cpuPaged->pageSizeTokens, 8u);
+	EXPECT_EQ(cpuPaged->status, "implemented-reference");
 	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0")));
 	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0.page_table")));
 	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0.page_descriptor")));
