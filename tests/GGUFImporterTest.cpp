@@ -1989,6 +1989,24 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	EXPECT_EQ(projection.stateAliases.size(), 3u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
+	VNextArtifactRef artifact;
+	artifact.name = "cpu_decode";
+	artifact.backend = std::string(BackendCPUAOT);
+	artifact.entries.push_back({ .name = "decode",
+	                             .kind = VNextArtifactEntryKind::Forward,
+	                             .function = forward,
+	                             .requiredBufferBindings = {} });
+	const auto manifest = BuildVNextPackageManifest(schedule, { artifact });
+	ASSERT_EQ(manifest.artifacts.size(), 1u);
+	ASSERT_EQ(manifest.artifacts[0].entries.size(), 1u);
+	const auto& requiredStates = manifest.artifacts[0].entries[0].requiredStateBindings;
+	ASSERT_EQ(requiredStates.size(), 5u);
+	EXPECT_TRUE(std::ranges::contains(requiredStates, std::string("kv.layer0")));
+	EXPECT_TRUE(std::ranges::contains(requiredStates, std::string("kv.layer0.page_table")));
+	EXPECT_TRUE(std::ranges::contains(requiredStates, std::string("kv.layer0.page_descriptor")));
+	EXPECT_TRUE(std::ranges::contains(requiredStates, std::string("kv.layer0.active_length")));
+	EXPECT_TRUE(std::ranges::contains(requiredStates, std::string("decode.position")));
+
 	const auto path = MakeTempFixturePath("litenn_llama_capacity_decode", ".ltnn");
 	Serialization::SaveVNextModelPackage(schedule, path);
 	const auto loaded = Serialization::LoadVNextModelPackage(path);

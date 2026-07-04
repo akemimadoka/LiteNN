@@ -2969,6 +2969,10 @@ Priority classes:
             2026-07-04: paged KV layout metadata now names all three auxiliary states; the LLaMA dynamic decode planner
             exposes them as explicit `RuntimeStateBinding`s and vNext manifests round-trip the descriptor-state field.
             These states are not yet consumed by the CPU lowering.
+      - [x] Attach runtime-state requirements to stateful artifact entries. Completed on 2026-07-04:
+            vNext manifest construction now fills empty artifact-entry `requiredStateBindings` from the schedule's
+            runtime states, so paged decode artifacts declare their KV/page-table/page-descriptor/active-length/position
+            dependencies unless a caller intentionally provides an explicit list.
       - [x] Define host-side paged KV table initialization semantics. Completed on 2026-07-04:
             runtime helpers now create empty page tables with invalid `-1` logical mappings, fixed descriptor columns
             `[logical_page, first_token, token_count, flags]`, active-length metadata, and checked prefix-to-resident-page

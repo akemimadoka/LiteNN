@@ -561,6 +561,25 @@ namespace LiteNN
 		manifest.runtimeSegments = std::move(schedule.segments);
 		manifest.runtimeSteps = std::move(schedule.steps);
 		manifest.artifacts = std::move(artifacts);
+		std::vector<std::string> runtimeStateNames;
+		runtimeStateNames.reserve(manifest.runtimeStates.size());
+		for (const auto& state : manifest.runtimeStates)
+		{
+			runtimeStateNames.push_back(state.name);
+		}
+		if (!runtimeStateNames.empty())
+		{
+			for (auto& artifact : manifest.artifacts)
+			{
+				for (auto& entry : artifact.entries)
+				{
+					if (entry.requiredStateBindings.empty())
+					{
+						entry.requiredStateBindings = runtimeStateNames;
+					}
+				}
+			}
+		}
 		manifest.adapters = std::move(adapters);
 		manifest.opCoverage = registry.CoverageReport();
 		manifest.tensors.reserve(schedule.module.plan.variables.size());

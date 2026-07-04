@@ -180,6 +180,10 @@ Priority classes for the GGUF/Qwen decode work:
                 dynamic GGUF decode schedules now allocate visible auxiliary `RuntimeStateBinding`s derived from the
                 paged KV layout, and vNext manifests persist the descriptor-state name. Lowering still needs to consume
                 these states before the dense fallback signature can disappear.
+          - [x] Attach runtime-state requirements to stateful artifact entries. Completed on 2026-07-04:
+                vNext manifest construction now fills empty artifact-entry `requiredStateBindings` from the runtime
+                schedule, so paged decode packages expose the KV/page-table/page-descriptor/active-length/position
+                dependencies needed by future cache-hit loaders and dispatchers.
           - [x] Define host-side paged KV initialization semantics. Completed on 2026-07-04:
                 runtime helpers initialize invalid page-table entries, fixed four-column page descriptors, active
                 lengths, and checked prefix mapping into resident pages so future paged attention/state kernels share a
