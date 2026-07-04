@@ -728,6 +728,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 		EXPECT_NE(json.find("\"layout\""), std::string::npos);
 		EXPECT_NE(json.find("\"pageSizeTokens\":4"), std::string::npos);
 		EXPECT_NE(json.find("\"pageTableState\":\"kv.layer0.page_table\""), std::string::npos);
+		EXPECT_NE(json.find("\"pageDescriptorState\":\"kv.layer0.page_descriptor\""), std::string::npos);
 	}
 	const auto package = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
@@ -742,7 +743,19 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 	EXPECT_EQ(loaded.layout->valuePlaneOffsetBytes, 1024u);
 	EXPECT_EQ(loaded.layout->tokenByteStride, 128u);
 	EXPECT_EQ(loaded.layout->pageByteStride, 512u);
+	EXPECT_EQ(loaded.layout->pageTableState, "kv.layer0.page_table");
+	EXPECT_EQ(loaded.layout->pageDescriptorState, "kv.layer0.page_descriptor");
+	EXPECT_EQ(loaded.layout->activeLengthState, "kv.layer0.active_length");
 	EXPECT_EQ(loaded.role, "paged-kv-cache");
+	const auto pageTable = Runtime::MakePagedKVPageTableState(loaded);
+	const auto pageDescriptor = Runtime::MakePagedKVPageDescriptorState(loaded);
+	const auto activeLength = Runtime::MakePagedKVActiveLengthState(loaded);
+	EXPECT_EQ(pageTable.name, "kv.layer0.page_table");
+	EXPECT_EQ(pageTable.type.StaticShape(), std::vector<std::size_t>({ 32 }));
+	EXPECT_EQ(pageDescriptor.name, "kv.layer0.page_descriptor");
+	EXPECT_EQ(pageDescriptor.type.StaticShape(), std::vector<std::size_t>({ 2, 4 }));
+	EXPECT_EQ(activeLength.name, "kv.layer0.active_length");
+	EXPECT_EQ(activeLength.type.StaticShape(), std::vector<std::size_t>({ 1 }));
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 }
 

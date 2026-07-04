@@ -412,6 +412,8 @@ namespace LiteNN::Serialization
 				    << ",\"tokenByteStride\":" << layout.tokenByteStride
 				    << ",\"pageByteStride\":" << layout.pageByteStride << ",\"pageTableState\":";
 				JsonString(out, layout.pageTableState);
+				out << ",\"pageDescriptorState\":";
+				JsonString(out, layout.pageDescriptorState);
 				out << ",\"activeLengthState\":";
 				JsonString(out, layout.activeLengthState);
 				out << '}';
@@ -1537,6 +1539,7 @@ namespace LiteNN::Serialization
 				.tokenByteStride = static_cast<std::size_t>(AsUInt(Member(object, "tokenByteStride", label), label)),
 				.pageByteStride = static_cast<std::size_t>(AsUInt(Member(object, "pageByteStride", label), label)),
 				.pageTableState = AsString(Member(object, "pageTableState", label), label),
+				.pageDescriptorState = AsString(Member(object, "pageDescriptorState", label), label),
 				.activeLengthState = AsString(Member(object, "activeLengthState", label), label),
 			};
 		}

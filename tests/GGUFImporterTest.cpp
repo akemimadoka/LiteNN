@@ -1059,6 +1059,21 @@ TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->residentPageCount, 1u);
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->valuePlaneOffsetBytes, 64u);
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->tokenByteStride, 8u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->pageTableState, "kv.layer0.page_table");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->pageDescriptorState, "kv.layer0.page_descriptor");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->activeLengthState, "kv.layer0.active_length");
+	ASSERT_TRUE(plan.decodeStep.kvCaches[0].pageTableStateBinding.has_value());
+	ASSERT_TRUE(plan.decodeStep.kvCaches[0].pageDescriptorStateBinding.has_value());
+	ASSERT_TRUE(plan.decodeStep.kvCaches[0].activeLengthStateBinding.has_value());
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageTableStateBinding->name, "kv.layer0.page_table");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageTableStateBinding->role, "kv-page-table");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageTableStateBinding->type.StaticShape(), std::vector<std::size_t>({ 1 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageDescriptorStateBinding->name, "kv.layer0.page_descriptor");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageDescriptorStateBinding->role, "kv-page-descriptor");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].pageDescriptorStateBinding->type.StaticShape(),
+	          std::vector<std::size_t>({ 1, 4 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].activeLengthStateBinding->name, "kv.layer0.active_length");
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].activeLengthStateBinding->role, "kv-active-length");
 	ASSERT_EQ(plan.decodeStep.stateValueBindings.size(), 6u);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[0].valueIndex, 2u);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[2].valueIndex, 2u);
@@ -1915,7 +1930,15 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	const auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(
 	    BuildTinyQwen2Archive(),
 	    { .prefillSequenceLength = 1, .decodePastLength = 0, .maxCacheLength = 4, .dynamicDecodePosition = true });
-	ASSERT_EQ(schedule.states.size(), 2u);
+	ASSERT_EQ(schedule.states.size(), 5u);
+	EXPECT_EQ(schedule.states[0].name, "kv.layer0");
+	EXPECT_EQ(schedule.states[1].name, "kv.layer0.page_table");
+	EXPECT_EQ(schedule.states[1].role, "kv-page-table");
+	EXPECT_EQ(schedule.states[2].name, "kv.layer0.page_descriptor");
+	EXPECT_EQ(schedule.states[2].role, "kv-page-descriptor");
+	EXPECT_EQ(schedule.states[3].name, "kv.layer0.active_length");
+	EXPECT_EQ(schedule.states[3].role, "kv-active-length");
+	EXPECT_EQ(schedule.states[4].name, "decode.position");
 	ASSERT_EQ(schedule.stateValueBindings.size(), 6u);
 	const auto forward = schedule.module.plan.forward;
 	EXPECT_EQ(schedule.module.functions[forward].inputs[1].dtype, DataType::Int64);
@@ -1946,7 +1969,10 @@ TEST(GGUFLLaMAArtifacts, CapacityDecodeScheduleRoundTripsPositionAndFullCacheBin
 	Serialization::SaveVNextModelPackage(schedule, path);
 	const auto loaded = Serialization::LoadVNextModelPackage(path);
 	std::filesystem::remove(path);
-	ASSERT_EQ(loaded.manifest.runtimeStates.size(), 2u);
+	ASSERT_EQ(loaded.manifest.runtimeStates.size(), 5u);
+	EXPECT_EQ(loaded.manifest.runtimeStates[1].name, "kv.layer0.page_table");
+	EXPECT_EQ(loaded.manifest.runtimeStates[2].name, "kv.layer0.page_descriptor");
+	EXPECT_EQ(loaded.manifest.runtimeStates[3].name, "kv.layer0.active_length");
 	ASSERT_EQ(loaded.manifest.stateValueBindings.size(), 6u);
 	EXPECT_EQ(loaded.manifest.stateValueBindings[4].stateName, "decode.position");
 	EXPECT_EQ(loaded.manifest.stateValueBindings[5].kind, Runtime::RuntimeStateValueKind::FunctionOutput);

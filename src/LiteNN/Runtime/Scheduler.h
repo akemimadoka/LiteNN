@@ -45,6 +45,7 @@ namespace LiteNN::Runtime
 		std::size_t tokenByteStride{};
 		std::size_t pageByteStride{};
 		std::string pageTableState;
+		std::string pageDescriptorState;
 		std::string activeLengthState;
 	};
 
@@ -289,9 +290,63 @@ namespace LiteNN::Runtime
 			.tokenByteStride = tokenByteStride,
 			.pageByteStride = pageSizeTokens * tokenByteStride,
 			.pageTableState = std::format("{}.page_table", state.name),
+			.pageDescriptorState = std::format("{}.page_descriptor", state.name),
 			.activeLengthState = std::format("{}.active_length", state.name),
 		};
 		return state;
+	}
+
+	inline const RuntimeStateLayout& RequirePagedKVCacheLayout(const RuntimeStateBinding& binding)
+	{
+		if (!binding.layout || binding.layout->kind != RuntimeStateLayoutKind::PagedKVCache)
+		{
+			throw std::runtime_error("Runtime state is not a paged KV cache: " + binding.name);
+		}
+		return *binding.layout;
+	}
+
+	inline std::size_t PagedKVLogicalPageCount(const RuntimeStateLayout& layout)
+	{
+		if (layout.pageSizeTokens == 0)
+		{
+			throw std::runtime_error("Paged KV layout has zero page size");
+		}
+		return (layout.maxLogicalTokens + layout.pageSizeTokens - 1) / layout.pageSizeTokens;
+	}
+
+	inline RuntimeStateBinding MakePagedKVPageTableState(const RuntimeStateBinding& kvState)
+	{
+		const auto& layout = RequirePagedKVCacheLayout(kvState);
+		return MakeRuntimeStateBinding(layout.pageTableState, RuntimeStateKind::KVCache, "kv-page-table",
+		                               TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{
+		                                                                      PagedKVLogicalPageCount(layout) } }),
+		                               BufferMutability::Mutable, { "read", "write", "allocate", "evict" });
+	}
+
+	inline RuntimeStateBinding MakePagedKVPageDescriptorState(const RuntimeStateBinding& kvState)
+	{
+		const auto& layout = RequirePagedKVCacheLayout(kvState);
+		return MakeRuntimeStateBinding(
+		    layout.pageDescriptorState, RuntimeStateKind::KVCache, "kv-page-descriptor",
+		    TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{ layout.residentPageCount, 4 } }),
+		    BufferMutability::Mutable, { "read", "write", "allocate", "evict" });
+	}
+
+	inline RuntimeStateBinding MakePagedKVActiveLengthState(const RuntimeStateBinding& kvState)
+	{
+		const auto& layout = RequirePagedKVCacheLayout(kvState);
+		return MakeRuntimeStateBinding(layout.activeLengthState, RuntimeStateKind::KVCache, "kv-active-length",
+		                               TensorType::Dense(DataType::Int64, ShapeView{ std::vector<std::size_t>{ 1 } }),
+		                               BufferMutability::Mutable, { "read", "write", "increment" });
+	}
+
+	inline std::vector<RuntimeStateBinding> MakePagedKVAuxiliaryStates(const RuntimeStateBinding& kvState)
+	{
+		return {
+			MakePagedKVPageTableState(kvState),
+			MakePagedKVPageDescriptorState(kvState),
+			MakePagedKVActiveLengthState(kvState),
+		};
 	}
 
 	inline std::string_view RuntimeStateLayoutKindName(RuntimeStateLayoutKind kind) noexcept
@@ -330,6 +385,12 @@ namespace LiteNN::Runtime
 		if (layout.pageByteStride < layout.pageSizeTokens * layout.tokenByteStride)
 		{
 			throw std::runtime_error("Paged KV runtime state page stride is smaller than one logical page: " +
+			                         binding.name);
+		}
+		if (layout.pageTableState.empty() || layout.pageDescriptorState.empty() || layout.activeLengthState.empty())
+		{
+			throw std::runtime_error("Paged KV runtime state must name page-table, page-descriptor, and active-length "
+			                         "states: " +
 			                         binding.name);
 		}
 		if (layout.valuePlaneOffsetBytes <= layout.keyPlaneOffsetBytes)

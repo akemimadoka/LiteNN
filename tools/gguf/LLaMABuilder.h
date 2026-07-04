@@ -66,6 +66,9 @@ namespace LiteNN::GGUF
 		TensorType cacheType;
 		TensorType stateType;
 		Runtime::RuntimeStateBinding stateBinding;
+		std::optional<Runtime::RuntimeStateBinding> pageTableStateBinding;
+		std::optional<Runtime::RuntimeStateBinding> pageDescriptorStateBinding;
+		std::optional<Runtime::RuntimeStateBinding> activeLengthStateBinding;
 		std::size_t keyByteOffset{};
 		std::size_t valueByteOffset{};
 		std::size_t layerByteStride{};

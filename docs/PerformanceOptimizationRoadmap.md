@@ -176,6 +176,10 @@ Priority classes for the GGUF/Qwen decode work:
                 GGUF decode planning marks KV cache states with page size, logical capacity, resident page count,
                 plane offsets, and token/page strides. This is the contract step only; the current CPU decode graph still
                 uses the dense capacity-shaped fallback signature until paged lowering lands.
+          - [x] Publish explicit page-table/page-descriptor/active-length runtime states. Completed on 2026-07-04:
+                dynamic GGUF decode schedules now allocate visible auxiliary `RuntimeStateBinding`s derived from the
+                paged KV layout, and vNext manifests persist the descriptor-state name. Lowering still needs to consume
+                these states before the dense fallback signature can disappear.
           - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
                 artifacts stop scaling with max context length.
     - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.

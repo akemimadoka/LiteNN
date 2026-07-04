@@ -584,6 +584,15 @@ namespace LiteNN::GGUF
 			        : Runtime::MakeRuntimeStateBinding(
 			              std::format("kv.layer{}", blockIndex), Runtime::RuntimeStateKind::KVCache, "kv-cache",
 			              TensorType{ stateType }, BufferMutability::Mutable, { "read", "write", "append", "view" });
+			std::optional<Runtime::RuntimeStateBinding> pageTableStateBinding;
+			std::optional<Runtime::RuntimeStateBinding> pageDescriptorStateBinding;
+			std::optional<Runtime::RuntimeStateBinding> activeLengthStateBinding;
+			if (stateBinding.layout && stateBinding.layout->kind == Runtime::RuntimeStateLayoutKind::PagedKVCache)
+			{
+				pageTableStateBinding = Runtime::MakePagedKVPageTableState(stateBinding);
+				pageDescriptorStateBinding = Runtime::MakePagedKVPageDescriptorState(stateBinding);
+				activeLengthStateBinding = Runtime::MakePagedKVActiveLengthState(stateBinding);
+			}
 			decode.kvCaches.push_back({
 			    .blockIndex = blockIndex,
 			    .pastKeyInput = std::move(pastKey),
@@ -593,6 +602,9 @@ namespace LiteNN::GGUF
 			    .cacheType = cacheType,
 			    .stateType = stateType,
 			    .stateBinding = stateBinding,
+			    .pageTableStateBinding = std::move(pageTableStateBinding),
+			    .pageDescriptorStateBinding = std::move(pageDescriptorStateBinding),
+			    .activeLengthStateBinding = std::move(activeLengthStateBinding),
 			    .keyByteOffset = 0,
 			    .valueByteOffset = cacheCapacityPerPlaneBytes,
 			    .layerByteStride = stateByteSize,
@@ -671,9 +683,10 @@ namespace LiteNN::GGUF
 			    .axes = { "page", "token_in_page", "kv_head", "head_dim" },
 			    .layout = "paged-row-major",
 			    .note =
-			        "Dynamic decode plans publish paged KV layout metadata on the runtime state binding. The current "
-			        "CPU lowering still uses the dense backing tensor as a compatibility fallback until paged "
-			        "attention/state kernels replace the capacity-shaped function ABI.",
+			        "Dynamic decode plans publish paged KV layout metadata plus explicit page-table, page-descriptor, "
+			        "and active-length runtime states. The current CPU lowering still uses the dense backing tensor "
+			        "as a compatibility fallback until paged attention/state kernels replace the capacity-shaped "
+			        "function ABI.",
 			},
 		};
 
@@ -1419,6 +1432,21 @@ namespace LiteNN::GGUF
 		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
 		auto states = artifacts.decodeStateABI.kvCaches;
+		for (const auto& cache : artifacts.decodeStep.kvCaches)
+		{
+			if (cache.pageTableStateBinding)
+			{
+				states.push_back(*cache.pageTableStateBinding);
+			}
+			if (cache.pageDescriptorStateBinding)
+			{
+				states.push_back(*cache.pageDescriptorStateBinding);
+			}
+			if (cache.activeLengthStateBinding)
+			{
+				states.push_back(*cache.activeLengthStateBinding);
+			}
+		}
 		if (artifacts.decodeStateABI.currentPosition)
 		{
 			states.push_back(*artifacts.decodeStateABI.currentPosition);

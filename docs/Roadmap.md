@@ -2965,6 +2965,10 @@ Priority classes:
             resident page count, plane offsets, token/page strides, and page-table/active-length state names. Dynamic
             GGUF decode planning publishes this layout on KV cache states while the current dense backing tensor remains
             the executable fallback until paged lowering and kernels land.
+      - [x] Publish page-table, page-descriptor, and active-length runtime states for dynamic decode. Completed on
+            2026-07-04: paged KV layout metadata now names all three auxiliary states; the LLaMA dynamic decode planner
+            exposes them as explicit `RuntimeStateBinding`s and vNext manifests round-trip the descriptor-state field.
+            These states are not yet consumed by the CPU lowering.
       - [ ] Replace the dense fallback backing tensor in dynamic decode signatures with page-table + page-descriptor
             inputs, and update the runtime state value bindings so artifact shape no longer scales with max cache
             length.
