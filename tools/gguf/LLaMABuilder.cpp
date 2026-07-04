@@ -1114,6 +1114,81 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	NodeOutput AddLLaMADecoderBlockDecodePagedReference(Subgraph& subgraph, const LLaMADecoderBlock& block,
+	                                                    const LLaMAHyperparameters& hyperparameters,
+	                                                    NodeOutput hiddenState, NodeOutput pagedKVState,
+	                                                    NodeOutput pageTable, NodeOutput pageDescriptors,
+	                                                    NodeOutput activeLength, NodeOutput currentPosition)
+	{
+		const auto hiddenInfo = subgraph.GetOutputInfo(hiddenState);
+		const auto positionInfo = subgraph.GetOutputInfo(currentPosition);
+		const auto kvInfo = subgraph.GetOutputInfo(pagedKVState);
+		const auto pageTableInfo = subgraph.GetOutputInfo(pageTable);
+		const auto pageDescriptorInfo = subgraph.GetOutputInfo(pageDescriptors);
+		const auto activeLengthInfo = subgraph.GetOutputInfo(activeLength);
+		const auto headDim = hyperparameters.HeadDimension();
+		if (hiddenInfo.shape != std::vector<std::size_t>{ 1, hyperparameters.embeddingLength } ||
+		    positionInfo.dtype != DataType::Int64 || positionInfo.shape != std::vector<std::size_t>{ 1 } ||
+		    kvInfo.dtype != hiddenInfo.dtype || kvInfo.shape.size() != 5 || kvInfo.shape[0] != 2 ||
+		    kvInfo.shape[3] != hyperparameters.attentionHeadCountKV || kvInfo.shape[4] != headDim ||
+		    pageTableInfo.dtype != DataType::Int64 || pageTableInfo.shape.size() != 1 ||
+		    pageDescriptorInfo.dtype != DataType::Int64 ||
+		    pageDescriptorInfo.shape !=
+		        std::vector<std::size_t>{ kvInfo.shape[1],
+		                                  static_cast<std::size_t>(Runtime::PagedKVPageDescriptorColumn::Count) } ||
+		    activeLengthInfo.dtype != DataType::Int64 || activeLengthInfo.shape != std::vector<std::size_t>{ 1 })
+		{
+			throw std::runtime_error(
+			    "Paged-reference decode requires one token, Int64 position[1], paged KV state, page table, page "
+			    "descriptors, and active length");
+		}
+
+		const auto normalizedAttentionInput = Layer::AddRMSNorm(subgraph, block.attentionNorm, hiddenState);
+		const auto queries = Layer::AddLinear(subgraph, block.queryProjection, normalizedAttentionInput);
+		std::vector<NodeOutput> rotatedQueryHeads;
+		rotatedQueryHeads.reserve(hyperparameters.attentionHeadCount);
+		for (std::size_t headIndex = 0; headIndex < hyperparameters.attentionHeadCount; ++headIndex)
+		{
+			const auto queryHead = NodeOutput{
+				subgraph.AddNode(SliceNode{ queries, 1, headIndex * headDim, headDim },
+				                 { OutputInfo{ hiddenInfo.dtype, { 1, headDim } } }),
+				0,
+			};
+			rotatedQueryHeads.push_back(AddLLaMARoPEAtPositions(subgraph, queryHead, currentPosition, hyperparameters));
+		}
+		NodeOutput groupedQueries = rotatedQueryHeads.front();
+		if (rotatedQueryHeads.size() > 1)
+		{
+			groupedQueries = { subgraph.AddNode(
+				                   ConcatNode{ rotatedQueryHeads, 0 },
+				                   { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
+				               0 };
+		}
+		const auto groupedAttention =
+		    NodeOutput{ subgraph.AddNode(
+			                GroupedPagedAttentionNode{ .queries = groupedQueries,
+			                                           .kvState = pagedKVState,
+			                                           .pageTable = pageTable,
+			                                           .pageDescriptors = pageDescriptors,
+			                                           .activeLength = activeLength,
+			                                           .scale = 1.0 / std::sqrt(static_cast<double>(headDim)),
+			                                           .queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead() },
+			                { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
+			            0 };
+		const auto mergedContext = Reshape2D(subgraph, groupedAttention, 1, hyperparameters.embeddingLength);
+		const auto attentionOutput = Layer::AddLinear(subgraph, block.outputProjection, mergedContext);
+		const auto attentionResidual = NodeOutput{
+			subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, hiddenState, attentionOutput }, { hiddenInfo }),
+			0,
+		};
+		const auto normalizedFeedForwardInput = Layer::AddRMSNorm(subgraph, block.feedForwardNorm, attentionResidual);
+		const auto feedForwardOutput = Layer::AddSwiGLUMLP(subgraph, block.mlp, normalizedFeedForwardInput);
+		return {
+			subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, attentionResidual, feedForwardOutput }, { hiddenInfo }),
+			0,
+		};
+	}
+
 	SubgraphId BuildLLaMADecoderBlock(Graph& graph, const LLaMADecoderBlock& block,
 	                                  const LLaMAHyperparameters& hyperparameters, std::size_t sequenceLength,
 	                                  std::size_t positionOffset)
@@ -1318,6 +1393,30 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	NodeOutput AddLLaMACausalLMDecodePagedReference(Subgraph& subgraph, const LLaMACausalLM& model,
+	                                                const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
+	                                                NodeOutput currentPosition,
+	                                                std::span<const NodeOutput> pagedKVStates,
+	                                                std::span<const NodeOutput> pageTables,
+	                                                std::span<const NodeOutput> pageDescriptors,
+	                                                std::span<const NodeOutput> activeLengths)
+	{
+		if (pagedKVStates.size() != model.blocks.size() || pageTables.size() != model.blocks.size() ||
+		    pageDescriptors.size() != model.blocks.size() || activeLengths.size() != model.blocks.size())
+		{
+			throw std::runtime_error("Paged-reference decode requires one paged KV state bundle per decoder block");
+		}
+		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
+		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
+		{
+			hiddenState = AddLLaMADecoderBlockDecodePagedReference(
+			    subgraph, model.blocks[blockIndex], hyperparameters, hiddenState, pagedKVStates[blockIndex],
+			    pageTables[blockIndex], pageDescriptors[blockIndex], activeLengths[blockIndex], currentPosition);
+		}
+		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
+		return Layer::AddLinear(subgraph, model.lmHead, normalized);
+	}
+
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
 	                              std::size_t sequenceLength, std::size_t positionOffset)
 	{
@@ -1502,6 +1601,71 @@ namespace LiteNN::GGUF
 		graph.SetForward(forward);
 		graph.SetInputNames(std::move(inputNames));
 		graph.SetOutputNames(std::move(outputNames));
+		return graph;
+	}
+
+	Graph LowerLLaMACausalLMDecodePagedReference(const Graph& archive, std::size_t maxCacheLength,
+	                                             const LLaMALoweringOptions& options)
+	{
+		if (maxCacheLength == 0)
+		{
+			throw std::runtime_error("Paged-reference LLaMA decode requires maxCacheLength > 0");
+		}
+		auto graph = Graph{};
+		graph.SetMetadata(CopyMetadata(archive));
+		const auto hyperparameters = ParseLLaMAHyperparameters(archive);
+		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
+		const auto headDim = hyperparameters.HeadDimension();
+		const auto pageSizeTokens = std::min<std::size_t>(maxCacheLength, 256);
+		const auto residentPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
+		const auto logicalPageCount = residentPageCount;
+		const std::vector<std::size_t> pagedKVShape{ 2, residentPageCount, pageSizeTokens,
+			                                         hyperparameters.attentionHeadCountKV, headDim };
+		const std::vector<std::size_t> pageDescriptorShape{
+			residentPageCount, static_cast<std::size_t>(Runtime::PagedKVPageDescriptorColumn::Count)
+		};
+
+		Subgraph subgraph;
+		const auto tokenIds = subgraph.AddParam(DataType::Int32, { 1 });
+		const auto currentPosition = subgraph.AddParam(DataType::Int64, { 1 });
+		std::vector<NodeOutput> pagedKVStates;
+		std::vector<NodeOutput> pageTables;
+		std::vector<NodeOutput> pageDescriptors;
+		std::vector<NodeOutput> activeLengths;
+		pagedKVStates.reserve(model.blocks.size());
+		pageTables.reserve(model.blocks.size());
+		pageDescriptors.reserve(model.blocks.size());
+		activeLengths.reserve(model.blocks.size());
+		std::vector<std::string> inputNames{ "token_ids", "current_position" };
+		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
+		{
+			const auto pagedKVState = subgraph.AddParam(model.dtype, pagedKVShape);
+			const auto pageTable = subgraph.AddParam(DataType::Int64, { logicalPageCount });
+			const auto pageDescriptor = subgraph.AddParam(DataType::Int64, pageDescriptorShape);
+			const auto activeLength = subgraph.AddParam(DataType::Int64, { 1 });
+			pagedKVStates.push_back({ pagedKVState, 0 });
+			pageTables.push_back({ pageTable, 0 });
+			pageDescriptors.push_back({ pageDescriptor, 0 });
+			activeLengths.push_back({ activeLength, 0 });
+			inputNames.push_back(std::format("kv_state_{}", blockIndex));
+			inputNames.push_back(std::format("page_table_{}", blockIndex));
+			inputNames.push_back(std::format("page_descriptor_{}", blockIndex));
+			inputNames.push_back(std::format("active_length_{}", blockIndex));
+		}
+		const auto logits = AddLLaMACausalLMDecodePagedReference(subgraph, model, hyperparameters, { tokenIds, 0 },
+		                                                         { currentPosition, 0 }, pagedKVStates, pageTables,
+		                                                         pageDescriptors, activeLengths);
+		const std::array<double, 1> one{ 1.0 };
+		const auto oneValue =
+		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
+		const auto nextPosition =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { currentPosition, 0 }, { oneValue, 0 } },
+		                     { OutputInfo{ DataType::Int64, { 1 } } });
+		subgraph.SetResults({ logits, { nextPosition, 0 } });
+		const auto forward = graph.AddSubgraph(std::move(subgraph));
+		graph.SetForward(forward);
+		graph.SetInputNames(std::move(inputNames));
+		graph.SetOutputNames({ "logits", "next_position" });
 		return graph;
 	}
 

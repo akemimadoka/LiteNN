@@ -187,6 +187,9 @@ namespace LiteNN::GGUF
 	/// Lowers one-token decode with full-capacity caches and a runtime Int64 position input.
 	Graph LowerLLaMACausalLMDecodeCapacity(const Graph& archive, std::size_t maxCacheLength,
 	                                       const LLaMALoweringOptions& options = {});
+	/// Lowers one-token logits-only decode that reads paged KV state through the CPU reference attention node.
+	Graph LowerLLaMACausalLMDecodePagedReference(const Graph& archive, std::size_t maxCacheLength,
+	                                             const LLaMALoweringOptions& options = {});
 } // namespace LiteNN::GGUF
 
 #endif

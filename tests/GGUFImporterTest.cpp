@@ -1908,6 +1908,46 @@ TEST(GGUFLLaMACausalLM, CapacityDecodeUsesGroupedActivePrefixAttention)
 	EXPECT_EQ(singleHeadAttentionNodeCount, 0u);
 }
 
+TEST(GGUFLLaMACausalLM, PagedReferenceDecodeUsesGroupedPagedAttention)
+{
+	const auto archive = BuildTinyLLaMAArchive();
+	const auto pagedDecode = GGUF::LowerLLaMACausalLMDecodePagedReference(archive, 4);
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(archive);
+	const auto inputNames = pagedDecode.InputNames();
+	ASSERT_EQ(inputNames.size(), 2u + hyperparameters.blockCount * 4u);
+	EXPECT_EQ(inputNames[0], "token_ids");
+	EXPECT_EQ(inputNames[1], "current_position");
+	EXPECT_EQ(inputNames[2], "kv_state_0");
+	EXPECT_EQ(inputNames[3], "page_table_0");
+	EXPECT_EQ(inputNames[4], "page_descriptor_0");
+	EXPECT_EQ(inputNames[5], "active_length_0");
+	const auto outputNames = pagedDecode.OutputNames();
+	ASSERT_EQ(outputNames.size(), 2u);
+	EXPECT_EQ(outputNames[0], "logits");
+	EXPECT_EQ(outputNames[1], "next_position");
+
+	std::size_t pagedAttentionNodeCount = 0;
+	std::size_t activePrefixAttentionNodeCount = 0;
+	for (SubgraphId subgraphId = 0; subgraphId < pagedDecode.SubgraphCount(); ++subgraphId)
+	{
+		const auto& subgraph = pagedDecode.GetSubgraph(subgraphId);
+		for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+		{
+			const auto& node = subgraph.GetNodeEntry(nodeId).node;
+			if (std::holds_alternative<GroupedPagedAttentionNode>(node))
+			{
+				++pagedAttentionNodeCount;
+			}
+			if (std::holds_alternative<GroupedActivePrefixAttentionNode>(node))
+			{
+				++activePrefixAttentionNodeCount;
+			}
+		}
+	}
+	EXPECT_EQ(pagedAttentionNodeCount, hyperparameters.blockCount);
+	EXPECT_EQ(activePrefixAttentionNodeCount, 0u);
+}
+
 TEST(GGUFLLaMACausalLM, GroupedPagedAttentionReferenceMatchesDenseActivePrefix)
 {
 	Graph denseGraph;

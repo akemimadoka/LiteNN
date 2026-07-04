@@ -3005,6 +3005,12 @@ Priority classes:
             active-prefix attention.
       - [ ] Lower dynamic decode attention to the paged reference kernel without materializing dense full-capacity KV
             tensors.
+            - [x] Add a logits-only paged-reference decode lowering entry. Completed on 2026-07-05:
+                  `LowerLLaMACausalLMDecodePagedReference` exposes per-layer paged KV state, page table, page descriptor,
+                  and active length inputs, then routes attention through `GroupedPagedAttentionNode` instead of
+                  `GroupedActivePrefixAttentionNode`.
+            - [ ] Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
+                  decode graphs can append current K/V directly into page-table/page-descriptor state.
       - [ ] Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
 - [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
