@@ -99,6 +99,27 @@ namespace LiteNN::GGUF
 		std::string note;
 	};
 
+	enum class LLaMAAttentionExecutionMode
+	{
+		ActivePrefix,
+		PagedAttention
+	};
+
+	struct LLaMAAttentionExecutionPlan
+	{
+		std::string name;
+		LLaMAAttentionExecutionMode mode{ LLaMAAttentionExecutionMode::ActivePrefix };
+		std::string backend;
+		std::size_t maxContextLength{};
+		std::size_t pageSizeTokens{};
+		bool usesPagedKV{};
+		bool requiresPageTable{};
+		bool materializesFullMask{};
+		bool streamingDecode{};
+		std::string status;
+		std::vector<std::string> requiredRuntimeStates;
+	};
+
 	struct LLaMAArtifactPlan
 	{
 		LLaMAHyperparameters hyperparameters;
@@ -108,6 +129,7 @@ namespace LiteNN::GGUF
 		LLaMAArtifactEntry decodeStep;
 		Runtime::LLMDecodeStateABI decodeStateABI;
 		std::vector<LLaMATensorLayoutRecord> tensorLayouts;
+		std::vector<LLaMAAttentionExecutionPlan> attentionExecutionPlans;
 	};
 
 	struct LLaMAArtifactPlanningOptions

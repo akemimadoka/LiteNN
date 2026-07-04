@@ -2981,6 +2981,14 @@ Priority classes:
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
       logits-only decode.
+      - [x] Publish structured LLaMA attention execution plans from artifact planning. Completed on 2026-07-04:
+            plans now distinguish the implemented CPU active-prefix path from planned CPU reference, CUDA-native, and
+            Vulkan-native paged-attention paths, record page size/max context, avoid-full-mask expectations, streaming
+            decode support, and required paged KV runtime states.
+      - [ ] Implement the CPU paged-attention reference kernel against the page-table/page-descriptor state contract.
+      - [ ] Lower dynamic decode attention to the paged reference kernel without materializing dense full-capacity KV
+            tensors.
+      - [ ] Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
 - [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before

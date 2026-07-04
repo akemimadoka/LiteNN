@@ -965,6 +965,10 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	ASSERT_TRUE(plan.decodeStateABI.currentPosition.has_value());
 	EXPECT_EQ(plan.decodeStateABI.currentPosition->name, "decode.position");
 	EXPECT_TRUE(std::ranges::contains(plan.decodeStateABI.currentPosition->effects, std::string("increment")));
+	ASSERT_EQ(plan.attentionExecutionPlans.size(), 1u);
+	EXPECT_EQ(plan.attentionExecutionPlans[0].name, "cpu-active-prefix");
+	EXPECT_EQ(plan.attentionExecutionPlans[0].mode, GGUF::LLaMAAttentionExecutionMode::ActivePrefix);
+	EXPECT_EQ(plan.attentionExecutionPlans[0].status, "implemented");
 }
 
 TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
@@ -1082,6 +1086,26 @@ TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[4].valueIndex, 1u);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[5].kind, Runtime::RuntimeStateValueKind::FunctionOutput);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[5].valueIndex, 1u);
+
+	ASSERT_EQ(plan.attentionExecutionPlans.size(), 4u);
+	const auto findAttentionPlan = [&plan](std::string_view name) -> const GGUF::LLaMAAttentionExecutionPlan* {
+		const auto found = std::ranges::find_if(plan.attentionExecutionPlans,
+		                                        [name](const auto& candidate) { return candidate.name == name; });
+		return found == plan.attentionExecutionPlans.end() ? nullptr : std::to_address(found);
+	};
+	const auto* cpuPaged = findAttentionPlan("cpu-paged-reference");
+	ASSERT_NE(cpuPaged, nullptr);
+	EXPECT_EQ(cpuPaged->mode, GGUF::LLaMAAttentionExecutionMode::PagedAttention);
+	EXPECT_TRUE(cpuPaged->usesPagedKV);
+	EXPECT_TRUE(cpuPaged->requiresPageTable);
+	EXPECT_FALSE(cpuPaged->materializesFullMask);
+	EXPECT_EQ(cpuPaged->pageSizeTokens, 8u);
+	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0")));
+	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0.page_table")));
+	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0.page_descriptor")));
+	EXPECT_TRUE(std::ranges::contains(cpuPaged->requiredRuntimeStates, std::string("kv.layer0.active_length")));
+	EXPECT_NE(findAttentionPlan("cuda-paged-attention"), nullptr);
+	EXPECT_NE(findAttentionPlan("vulkan-paged-attention"), nullptr);
 }
 
 TEST(GGUFLLaMAArtifacts, ReportsInspectableTensorLayouts)

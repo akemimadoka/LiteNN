@@ -690,6 +690,84 @@ namespace LiteNN::GGUF
 			},
 		};
 
+		std::vector<std::string> pagedRuntimeStates;
+		for (const auto& cache : decode.kvCaches)
+		{
+			if (!cache.stateBinding.layout)
+			{
+				continue;
+			}
+			pagedRuntimeStates.push_back(cache.stateBinding.name);
+			if (cache.pageTableStateBinding)
+			{
+				pagedRuntimeStates.push_back(cache.pageTableStateBinding->name);
+			}
+			if (cache.pageDescriptorStateBinding)
+			{
+				pagedRuntimeStates.push_back(cache.pageDescriptorStateBinding->name);
+			}
+			if (cache.activeLengthStateBinding)
+			{
+				pagedRuntimeStates.push_back(cache.activeLengthStateBinding->name);
+			}
+		}
+		std::vector<LLaMAAttentionExecutionPlan> attentionExecutionPlans{
+			{
+			    .name = "cpu-active-prefix",
+			    .mode = LLaMAAttentionExecutionMode::ActivePrefix,
+			    .backend = "cpu-native",
+			    .maxContextLength = maxCacheLength,
+			    .pageSizeTokens = 0,
+			    .usesPagedKV = false,
+			    .requiresPageTable = false,
+			    .materializesFullMask = false,
+			    .streamingDecode = true,
+			    .status = "implemented",
+			},
+		};
+		if (!pagedRuntimeStates.empty())
+		{
+			attentionExecutionPlans.push_back({
+			    .name = "cpu-paged-reference",
+			    .mode = LLaMAAttentionExecutionMode::PagedAttention,
+			    .backend = "cpu-reference",
+			    .maxContextLength = maxCacheLength,
+			    .pageSizeTokens = pageSizeTokens,
+			    .usesPagedKV = true,
+			    .requiresPageTable = true,
+			    .materializesFullMask = false,
+			    .streamingDecode = true,
+			    .status = "planned",
+			    .requiredRuntimeStates = pagedRuntimeStates,
+			});
+			attentionExecutionPlans.push_back({
+			    .name = "cuda-paged-attention",
+			    .mode = LLaMAAttentionExecutionMode::PagedAttention,
+			    .backend = "cuda-native",
+			    .maxContextLength = maxCacheLength,
+			    .pageSizeTokens = pageSizeTokens,
+			    .usesPagedKV = true,
+			    .requiresPageTable = true,
+			    .materializesFullMask = false,
+			    .streamingDecode = true,
+			    .status = "planned",
+			    .requiredRuntimeStates = pagedRuntimeStates,
+			});
+			attentionExecutionPlans.push_back({
+			    .name = "vulkan-paged-attention",
+			    .mode = LLaMAAttentionExecutionMode::PagedAttention,
+			    .backend = "vulkan-native",
+			    .maxContextLength = maxCacheLength,
+			    .pageSizeTokens = pageSizeTokens,
+			    .usesPagedKV = true,
+			    .requiresPageTable = true,
+			    .materializesFullMask = false,
+			    .streamingDecode = true,
+			    .status = "planned",
+			    .requiredRuntimeStates = std::move(pagedRuntimeStates),
+			});
+		}
+
 		return {
 			.hyperparameters = hyperparameters,
 			.dtype = dtype,
@@ -698,6 +776,7 @@ namespace LiteNN::GGUF
 			.decodeStep = std::move(decode),
 			.decodeStateABI = std::move(decodeStateABI),
 			.tensorLayouts = std::move(tensorLayouts),
+			.attentionExecutionPlans = std::move(attentionExecutionPlans),
 		};
 	}
 

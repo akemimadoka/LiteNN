@@ -184,6 +184,10 @@ Priority classes for the GGUF/Qwen decode work:
                 runtime helpers initialize invalid page-table entries, fixed four-column page descriptors, active
                 lengths, and checked prefix mapping into resident pages so future paged attention/state kernels share a
                 stable state format.
+          - [x] Publish structured long-context attention execution plans. Completed on 2026-07-04:
+                LLaMA artifact planning now names the implemented CPU active-prefix path and planned CPU/CUDA/Vulkan
+                paged-attention paths, including page size, max context, full-mask avoidance, streaming decode, and
+                required paged KV runtime states for diagnostics and lowering.
           - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
                 artifacts stop scaling with max context length.
     - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.

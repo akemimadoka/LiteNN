@@ -720,6 +720,18 @@ namespace
 		}
 	}
 
+	std::string_view AttentionExecutionModeName(LiteNN::GGUF::LLaMAAttentionExecutionMode mode)
+	{
+		switch (mode)
+		{
+		case LiteNN::GGUF::LLaMAAttentionExecutionMode::ActivePrefix:
+			return "active-prefix";
+		case LiteNN::GGUF::LLaMAAttentionExecutionMode::PagedAttention:
+			return "paged-attention";
+		}
+		return "unknown";
+	}
+
 	void PrintLLMArtifactPlan(const LiteNN::GGUF::LLaMAArtifactPlan& plan)
 	{
 		std::cout << "LLM artifact plan architecture=" << plan.hyperparameters.architecture
@@ -752,6 +764,21 @@ namespace
 			std::cout << "layout name=" << layout.name << " domain=" << layout.domain << " axes=";
 			PrintStringList(layout.axes);
 			std::cout << " layout=" << layout.layout << '\n';
+		}
+		for (const auto& attentionPlan : plan.attentionExecutionPlans)
+		{
+			std::cout << "attention_plan name=" << attentionPlan.name
+			          << " mode=" << AttentionExecutionModeName(attentionPlan.mode)
+			          << " backend=" << attentionPlan.backend << " status=" << attentionPlan.status
+			          << " max_context_length=" << attentionPlan.maxContextLength
+			          << " page_size_tokens=" << attentionPlan.pageSizeTokens
+			          << " uses_paged_kv=" << (attentionPlan.usesPagedKV ? "true" : "false")
+			          << " requires_page_table=" << (attentionPlan.requiresPageTable ? "true" : "false")
+			          << " materializes_full_mask=" << (attentionPlan.materializesFullMask ? "true" : "false")
+			          << " streaming_decode=" << (attentionPlan.streamingDecode ? "true" : "false")
+			          << " required_states=";
+			PrintStringList(attentionPlan.requiredRuntimeStates);
+			std::cout << '\n';
 		}
 	}
 
