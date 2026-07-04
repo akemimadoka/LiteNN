@@ -65,7 +65,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] "
+		             "[--max-cache-length N] [--paged-reference-decode] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -74,7 +74,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] "
+		             "[--max-cache-length N] [--paged-reference-decode] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -83,7 +83,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] "
+		             "[--max-cache-length N] [--paged-reference-decode] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -220,6 +220,7 @@ namespace
 		bool streamTokens{};
 		bool streamStats{};
 		bool compileOnly{};
+		bool pagedReferenceDecode{};
 		bool enableCPUAOTQ8KStagedMatMul{};
 		std::optional<std::size_t> cpuAOTThreadCount;
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
@@ -301,6 +302,11 @@ namespace
 			else if (arg == "--compile-only")
 			{
 				options.compileOnly = true;
+			}
+			else if (arg == "--paged-reference-decode")
+			{
+				options.pagedReferenceDecode = true;
+				options.statefulDecode = true;
 			}
 			else if (arg == "--cpu-aot-q8k-staged-matmul")
 			{
@@ -1383,24 +1389,32 @@ namespace
 			throw std::runtime_error(std::format("decode-loop max-cache-length {} exceeds model context length {}",
 			                                     maxCacheLength, hyperparameters.contextLength));
 		}
+		if (options.pagedReferenceDecode && !options.compileOnly)
+		{
+			throw std::runtime_error("--paged-reference-decode currently supports --compile-only until paged KV "
+			                         "initialization/writeback is wired into the decode loop");
+		}
 		LogGGUFDiagnostic(diagnostics,
 		                  std::format("decode-loop tokens prompt={} generated_request={} requested_token_count={} "
 		                              "max_cache_length={}",
 		                              initialTokenIds.size(), options.steps, requestedTokenCount, maxCacheLength));
 		const auto maxRunCount = requestedTokenCount - 1;
 		const auto buildStart = std::chrono::steady_clock::now();
-		const std::string_view decodeMode = options.statefulDecode ? "stateful" : "functional";
+		const std::string_view decodeMode = options.pagedReferenceDecode ? "paged_reference"
+		                                    : options.statefulDecode     ? "stateful"
+		                                                                 : "functional";
 		LiteNN::ExecutablePlan decodePlan;
 		LiteNN::CompiledModule<LiteNN::CPU> decodeModule = [&] {
 			if (options.statefulDecode)
 			{
 				auto schedule = TimedGGUFDiagnostic(diagnostics, "gguf build stateful decode runtime schedule", [&] {
-					return LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(imported.model.UnsafeGraphView(),
-					                                                     { .prefillSequenceLength = 1,
-					                                                       .decodePastLength = 0,
-					                                                       .maxCacheLength = maxCacheLength,
-					                                                       .preserveQuantizedWeights = true,
-					                                                       .dynamicDecodePosition = true });
+					return LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(
+					    imported.model.UnsafeGraphView(), { .prefillSequenceLength = 1,
+					                                        .decodePastLength = 0,
+					                                        .maxCacheLength = maxCacheLength,
+					                                        .preserveQuantizedWeights = true,
+					                                        .dynamicDecodePosition = true,
+					                                        .usePagedReferenceDecode = options.pagedReferenceDecode });
 				});
 				decodePlan = schedule.module.plan;
 				const auto projection =

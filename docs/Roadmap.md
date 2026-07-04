@@ -3013,6 +3013,10 @@ Priority classes:
                   `BuildLLaMADecodeRuntimeSchedule(... usePagedReferenceDecode=true)` binds paged KV/page-table/
                   page-descriptor/active-length states as function inputs and keeps only `decode.position` as a state
                   output alias.
+            - [x] Add a guarded CLI/smoke entry for the paged-reference schedule. Completed on 2026-07-05:
+                  `litenn_gguf_convert --paged-reference-decode --compile-only` and
+                  `example/gguf/qwen_smoke.py --paged-reference-decode --compile-only` can build/cache the schedule
+                  without pretending the decode loop can initialize paged KV state yet.
             - [ ] Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
                   decode graphs can append current K/V directly into page-table/page-descriptor state.
       - [ ] Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.

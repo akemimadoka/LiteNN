@@ -350,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Build/load the decode artifact for the requested token capacity, then stop before token execution",
     )
+    parser.add_argument(
+        "--paged-reference-decode",
+        action="store_true",
+        help="Compile the experimental paged-reference stateful decode schedule; requires --compile-only",
+    )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
     parser.add_argument(
@@ -402,6 +407,8 @@ def main() -> int:
         raise SystemExit("--output is only used by the direct token-id decode path")
     if args.require_aot_cache_hit and args.aot_cache_dir is None:
         raise SystemExit("--require-aot-cache-hit requires --aot-cache-dir")
+    if args.paged_reference_decode and not args.compile_only:
+        raise SystemExit("--paged-reference-decode currently requires --compile-only")
     if args.apply_chat_template and args.raw_prompt:
         raise SystemExit("--apply-chat-template and --raw-prompt cannot be used together")
 
@@ -623,6 +630,8 @@ def main() -> int:
             decode_cmd.append("--stream-stats")
         if args.compile_only:
             decode_cmd.append("--compile-only")
+        if args.paged_reference_decode:
+            decode_cmd.append("--paged-reference-decode")
         if args.max_cache_length is not None:
             decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
         decode_cmd.extend(["--cpu-aot-llvm-opt-level", str(args.llvm_opt_level)])
