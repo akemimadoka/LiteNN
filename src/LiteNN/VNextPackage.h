@@ -758,6 +758,7 @@ namespace LiteNN
 		}
 		for (const auto& state : manifest.runtimeStates)
 		{
+			Runtime::ValidateRuntimeStateBinding(state);
 			if (state.name.empty())
 			{
 				throw std::runtime_error("vNext runtime state binding name cannot be empty");

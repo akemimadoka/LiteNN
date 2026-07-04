@@ -1051,6 +1051,14 @@ TEST(GGUFLLaMAArtifacts, PlansCapacityDecodeWithDynamicPositionState)
 	          std::vector<std::string>({ "logits", "next_position", "updated_key_0", "updated_value_0" }));
 	ASSERT_EQ(plan.decodeStep.kvCaches.size(), 1u);
 	EXPECT_EQ(plan.decodeStep.kvCaches[0].cacheType.StaticShape(), std::vector<std::size_t>({ 8, 1, 2 }));
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.role, "paged-kv-cache");
+	ASSERT_TRUE(plan.decodeStep.kvCaches[0].stateBinding.layout.has_value());
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->kind, Runtime::RuntimeStateLayoutKind::PagedKVCache);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->pageSizeTokens, 8u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->maxLogicalTokens, 8u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->residentPageCount, 1u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->valuePlaneOffsetBytes, 64u);
+	EXPECT_EQ(plan.decodeStep.kvCaches[0].stateBinding.layout->tokenByteStride, 8u);
 	ASSERT_EQ(plan.decodeStep.stateValueBindings.size(), 6u);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[0].valueIndex, 2u);
 	EXPECT_EQ(plan.decodeStep.stateValueBindings[2].valueIndex, 2u);

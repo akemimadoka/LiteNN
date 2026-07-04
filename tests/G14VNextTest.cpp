@@ -708,6 +708,44 @@ TEST(G14VNext, VNextModelPackageRoundTripsRuntimeStateValueBindings)
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 }
 
+TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2 });
+	forward.SetResults({ { input, 0 } });
+	graph.AddSubgraph(std::move(forward));
+	graph.SetForward(0);
+
+	auto state = Runtime::MakePagedKVCacheState(
+	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 8, 1, 64 }), 4, 128, 2, 0, 1024, 128);
+	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { state });
+	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_paged_runtime_state.json";
+	Serialization::SaveVNextModelPackage(schedule, path);
+	{
+		std::ifstream inputFile(path, std::ios::binary);
+		const std::string json((std::istreambuf_iterator<char>(inputFile)), std::istreambuf_iterator<char>());
+		EXPECT_NE(json.find("\"layout\""), std::string::npos);
+		EXPECT_NE(json.find("\"pageSizeTokens\":4"), std::string::npos);
+		EXPECT_NE(json.find("\"pageTableState\":\"kv.layer0.page_table\""), std::string::npos);
+	}
+	const auto package = Serialization::LoadVNextModelPackage(path);
+	std::filesystem::remove(path);
+
+	ASSERT_EQ(package.manifest.runtimeStates.size(), 1u);
+	const auto& loaded = package.manifest.runtimeStates[0];
+	ASSERT_TRUE(loaded.layout.has_value());
+	EXPECT_EQ(loaded.layout->kind, Runtime::RuntimeStateLayoutKind::PagedKVCache);
+	EXPECT_EQ(loaded.layout->pageSizeTokens, 4u);
+	EXPECT_EQ(loaded.layout->maxLogicalTokens, 128u);
+	EXPECT_EQ(loaded.layout->residentPageCount, 2u);
+	EXPECT_EQ(loaded.layout->valuePlaneOffsetBytes, 1024u);
+	EXPECT_EQ(loaded.layout->tokenByteStride, 128u);
+	EXPECT_EQ(loaded.layout->pageByteStride, 512u);
+	EXPECT_EQ(loaded.role, "paged-kv-cache");
+	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
 TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)
 {
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_package_legacy.json";

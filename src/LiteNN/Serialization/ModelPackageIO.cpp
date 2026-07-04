@@ -399,6 +399,23 @@ namespace LiteNN::Serialization
 			{
 				out << "null";
 			}
+			if (binding.layout)
+			{
+				const auto& layout = *binding.layout;
+				out << ",\"layout\":{\"kind\":" << EnumValue(layout.kind)
+				    << ",\"pageSizeTokens\":" << layout.pageSizeTokens
+				    << ",\"maxLogicalTokens\":" << layout.maxLogicalTokens
+				    << ",\"residentPageCount\":" << layout.residentPageCount
+				    << ",\"keyValuePlaneCount\":" << layout.keyValuePlaneCount
+				    << ",\"keyPlaneOffsetBytes\":" << layout.keyPlaneOffsetBytes
+				    << ",\"valuePlaneOffsetBytes\":" << layout.valuePlaneOffsetBytes
+				    << ",\"tokenByteStride\":" << layout.tokenByteStride
+				    << ",\"pageByteStride\":" << layout.pageByteStride << ",\"pageTableState\":";
+				JsonString(out, layout.pageTableState);
+				out << ",\"activeLengthState\":";
+				JsonString(out, layout.activeLengthState);
+				out << '}';
+			}
 			out << '}';
 		}
 
@@ -1502,6 +1519,28 @@ namespace LiteNN::Serialization
 			};
 		}
 
+		Runtime::RuntimeStateLayout ParseRuntimeStateLayout(simdjson::dom::element value, std::string_view label)
+		{
+			const auto object = AsObject(value, label);
+			return {
+				.kind = static_cast<Runtime::RuntimeStateLayoutKind>(AsUInt(Member(object, "kind", label), label)),
+				.pageSizeTokens = static_cast<std::size_t>(AsUInt(Member(object, "pageSizeTokens", label), label)),
+				.maxLogicalTokens = static_cast<std::size_t>(AsUInt(Member(object, "maxLogicalTokens", label), label)),
+				.residentPageCount =
+				    static_cast<std::size_t>(AsUInt(Member(object, "residentPageCount", label), label)),
+				.keyValuePlaneCount =
+				    static_cast<std::size_t>(AsUInt(Member(object, "keyValuePlaneCount", label), label)),
+				.keyPlaneOffsetBytes =
+				    static_cast<std::size_t>(AsUInt(Member(object, "keyPlaneOffsetBytes", label), label)),
+				.valuePlaneOffsetBytes =
+				    static_cast<std::size_t>(AsUInt(Member(object, "valuePlaneOffsetBytes", label), label)),
+				.tokenByteStride = static_cast<std::size_t>(AsUInt(Member(object, "tokenByteStride", label), label)),
+				.pageByteStride = static_cast<std::size_t>(AsUInt(Member(object, "pageByteStride", label), label)),
+				.pageTableState = AsString(Member(object, "pageTableState", label), label),
+				.activeLengthState = AsString(Member(object, "activeLengthState", label), label),
+			};
+		}
+
 		Runtime::RuntimeStateBinding ParseRuntimeStateBinding(simdjson::dom::element value, std::string_view label)
 		{
 			const auto object = AsObject(value, label);
@@ -1517,6 +1556,11 @@ namespace LiteNN::Serialization
 			{
 				binding.memoryBuffer = static_cast<std::size_t>(AsUInt(memoryBuffer, label));
 			}
+			if (const auto layout = FindMember(object, "layout"))
+			{
+				binding.layout = ParseRuntimeStateLayout(*layout, label);
+			}
+			Runtime::ValidateRuntimeStateBinding(binding);
 			return binding;
 		}
 

@@ -2942,6 +2942,14 @@ Priority classes:
 - [ ] P1: Replace dense full-capacity KV tensors with paged KV-cache state.
       The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
       policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.
+      - [x] Add a runtime-state paged KV layout ABI and persist it through vNext manifests. Completed on 2026-07-04:
+            `RuntimeStateBinding` can now carry `PagedKVCache` layout metadata with page size, logical capacity,
+            resident page count, plane offsets, token/page strides, and page-table/active-length state names. Dynamic
+            GGUF decode planning publishes this layout on KV cache states while the current dense backing tensor remains
+            the executable fallback until paged lowering and kernels land.
+      - [ ] Replace the dense fallback backing tensor in dynamic decode signatures with page-table + page-descriptor
+            inputs, and update the runtime state value bindings so artifact shape no longer scales with max cache
+            length.
 - [ ] P1: Add long-context attention execution plans.
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming

@@ -27,6 +27,27 @@ namespace LiteNN::Runtime
 		LoRAAdapter
 	};
 
+	enum class RuntimeStateLayoutKind
+	{
+		Dense,
+		PagedKVCache
+	};
+
+	struct RuntimeStateLayout
+	{
+		RuntimeStateLayoutKind kind{ RuntimeStateLayoutKind::Dense };
+		std::size_t pageSizeTokens{};
+		std::size_t maxLogicalTokens{};
+		std::size_t residentPageCount{};
+		std::size_t keyValuePlaneCount{};
+		std::size_t keyPlaneOffsetBytes{};
+		std::size_t valuePlaneOffsetBytes{};
+		std::size_t tokenByteStride{};
+		std::size_t pageByteStride{};
+		std::string pageTableState;
+		std::string activeLengthState;
+	};
+
 	struct RuntimeStateBinding
 	{
 		std::string name;
@@ -36,6 +57,7 @@ namespace LiteNN::Runtime
 		BufferMutability mutability{ BufferMutability::Mutable };
 		std::vector<std::string> effects;
 		std::optional<std::size_t> memoryBuffer;
+		std::optional<RuntimeStateLayout> layout;
 	};
 
 	enum class RuntimeStateValueKind
@@ -248,6 +270,81 @@ namespace LiteNN::Runtime
 		                               BufferMutability::Mutable, { "read", "append", "view" });
 	}
 
+	inline RuntimeStateBinding MakePagedKVCacheState(std::string name, TensorType type, std::size_t pageSizeTokens,
+	                                                 std::size_t maxLogicalTokens, std::size_t residentPageCount,
+	                                                 std::size_t keyPlaneOffsetBytes, std::size_t valuePlaneOffsetBytes,
+	                                                 std::size_t tokenByteStride)
+	{
+		auto state =
+		    MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::KVCache, "paged-kv-cache", std::move(type),
+		                            BufferMutability::Mutable, { "read", "write", "append", "view", "page-table" });
+		state.layout = RuntimeStateLayout{
+			.kind = RuntimeStateLayoutKind::PagedKVCache,
+			.pageSizeTokens = pageSizeTokens,
+			.maxLogicalTokens = maxLogicalTokens,
+			.residentPageCount = residentPageCount,
+			.keyValuePlaneCount = 2,
+			.keyPlaneOffsetBytes = keyPlaneOffsetBytes,
+			.valuePlaneOffsetBytes = valuePlaneOffsetBytes,
+			.tokenByteStride = tokenByteStride,
+			.pageByteStride = pageSizeTokens * tokenByteStride,
+			.pageTableState = std::format("{}.page_table", state.name),
+			.activeLengthState = std::format("{}.active_length", state.name),
+		};
+		return state;
+	}
+
+	inline std::string_view RuntimeStateLayoutKindName(RuntimeStateLayoutKind kind) noexcept
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(kind);
+	}
+
+	inline void ValidateRuntimeStateBinding(const RuntimeStateBinding& binding)
+	{
+		if (binding.name.empty())
+		{
+			throw std::runtime_error("Runtime state binding name cannot be empty");
+		}
+		if (!IsValidDataTypeValue(binding.type.dtype))
+		{
+			throw std::runtime_error("Runtime state binding has invalid dtype: " + binding.name);
+		}
+		if (!binding.layout)
+		{
+			return;
+		}
+		if (binding.layout->kind != RuntimeStateLayoutKind::PagedKVCache)
+		{
+			return;
+		}
+		const auto& layout = *binding.layout;
+		if (binding.kind != RuntimeStateKind::KVCache)
+		{
+			throw std::runtime_error("Paged KV runtime state must use RuntimeStateKind::KVCache: " + binding.name);
+		}
+		if (layout.pageSizeTokens == 0 || layout.maxLogicalTokens == 0 || layout.residentPageCount == 0 ||
+		    layout.keyValuePlaneCount != 2 || layout.tokenByteStride == 0 || layout.pageByteStride == 0)
+		{
+			throw std::runtime_error("Paged KV runtime state has invalid layout metadata: " + binding.name);
+		}
+		if (layout.pageByteStride < layout.pageSizeTokens * layout.tokenByteStride)
+		{
+			throw std::runtime_error("Paged KV runtime state page stride is smaller than one logical page: " +
+			                         binding.name);
+		}
+		if (layout.valuePlaneOffsetBytes <= layout.keyPlaneOffsetBytes)
+		{
+			throw std::runtime_error("Paged KV runtime state value plane must follow key plane: " + binding.name);
+		}
+		if (const auto stateBytes = binding.type.ByteSize())
+		{
+			if (layout.valuePlaneOffsetBytes >= *stateBytes)
+			{
+				throw std::runtime_error("Paged KV runtime state value plane exceeds backing tensor: " + binding.name);
+			}
+		}
+	}
+
 	inline RuntimeStateBinding MakeDiffusionState(std::string name, std::string role, TensorType type,
 	                                              BufferMutability mutability = BufferMutability::Mutable)
 	{
@@ -282,6 +379,7 @@ namespace LiteNN::Runtime
 
 		for (auto& state : schedule.states)
 		{
+			ValidateRuntimeStateBinding(state);
 			if (state.memoryBuffer)
 			{
 				if (*state.memoryBuffer >= schedule.memory.buffers.size())

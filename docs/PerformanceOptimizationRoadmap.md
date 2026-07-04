@@ -165,6 +165,13 @@ Priority classes for the GGUF/Qwen decode work:
     - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
+          - [x] Add the paged-KV runtime-state ABI/manifest/planner contract. Completed on 2026-07-04:
+                `RuntimeStateBinding` can carry `PagedKVCache` layout metadata, vNext packages round-trip it, and dynamic
+                GGUF decode planning marks KV cache states with page size, logical capacity, resident page count,
+                plane offsets, and token/page strides. This is the contract step only; the current CPU decode graph still
+                uses the dense capacity-shaped fallback signature until paged lowering lands.
+          - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
+                artifacts stop scaling with max context length.
     - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
           `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
           append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache

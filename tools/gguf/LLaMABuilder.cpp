@@ -535,6 +535,8 @@ namespace LiteNN::GGUF
 		    maxCacheLength * hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
 		const auto stateByteSize = stateType.ByteSize().value_or(0);
 		const auto tokenByteStride = hyperparameters.attentionHeadCountKV * headDim * ElementByteSize(dtype);
+		const auto pageSizeTokens = std::min<std::size_t>(maxCacheLength, 256);
+		const auto residentPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
 
 		LLaMAArtifactEntry prefill{
 			.kind = LLaMAArtifactKind::Prefill,
@@ -574,9 +576,14 @@ namespace LiteNN::GGUF
 			decode.inputNames.push_back(pastValue);
 			decode.outputNames.push_back(updatedKey);
 			decode.outputNames.push_back(updatedValue);
-			auto stateBinding = Runtime::MakeRuntimeStateBinding(
-			    std::format("kv.layer{}", blockIndex), Runtime::RuntimeStateKind::KVCache, "kv-cache",
-			    TensorType{ stateType }, BufferMutability::Mutable, { "read", "write", "append", "view" });
+			auto stateBinding =
+			    options.dynamicDecodePosition
+			        ? Runtime::MakePagedKVCacheState(std::format("kv.layer{}", blockIndex), TensorType{ stateType },
+			                                         pageSizeTokens, maxCacheLength, residentPageCount, 0,
+			                                         cacheCapacityPerPlaneBytes, tokenByteStride)
+			        : Runtime::MakeRuntimeStateBinding(
+			              std::format("kv.layer{}", blockIndex), Runtime::RuntimeStateKind::KVCache, "kv-cache",
+			              TensorType{ stateType }, BufferMutability::Mutable, { "read", "write", "append", "view" });
 			decode.kvCaches.push_back({
 			    .blockIndex = blockIndex,
 			    .pastKeyInput = std::move(pastKey),
@@ -657,6 +664,16 @@ namespace LiteNN::GGUF
 			    .layout = "row-major-4d",
 			    .note = "Artifact ABI exposes a mutable state buffer with key plane at offset 0 and value plane at the "
 			            "per-plane capacity offset.",
+			},
+			{
+			    .name = "runtime.paged_kv_state",
+			    .domain = "runtime-state",
+			    .axes = { "page", "token_in_page", "kv_head", "head_dim" },
+			    .layout = "paged-row-major",
+			    .note =
+			        "Dynamic decode plans publish paged KV layout metadata on the runtime state binding. The current "
+			        "CPU lowering still uses the dense backing tensor as a compatibility fallback until paged "
+			        "attention/state kernels replace the capacity-shaped function ABI.",
 			},
 		};
 
