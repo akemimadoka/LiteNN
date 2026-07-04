@@ -2968,6 +2968,8 @@ Priority classes:
             Updated on 2026-07-05: dynamic decode KV runtime state now uses the true paged backing shape
             `[2, residentPages, pageSize, kvHeads, headDim]`; dense function inputs/outputs remain a compatibility
             binding until decode lowering consumes page-table state directly.
+            Runtime schedule validation now rejects paged KV states whose backing tensor shape or token/page byte
+            strides do not match the layout metadata.
       - [x] Publish page-table, page-descriptor, and active-length runtime states for dynamic decode. Completed on
             2026-07-04: paged KV layout metadata now names all three auxiliary states; the LLaMA dynamic decode planner
             exposes them as explicit `RuntimeStateBinding`s and vNext manifests round-trip the descriptor-state field.

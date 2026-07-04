@@ -718,7 +718,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 	graph.SetForward(0);
 
 	auto state = Runtime::MakePagedKVCacheState(
-	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 8, 1, 64 }), 4, 128, 2, 0, 1024, 128);
+	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 2, 4, 1, 64 }), 4, 128, 2, 0, 1024, 128);
 	const auto schedule = Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { state });
 	const auto path = std::filesystem::temp_directory_path() / "litenn_vnext_paged_runtime_state.json";
 	Serialization::SaveVNextModelPackage(schedule, path);
@@ -779,6 +779,21 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 	EXPECT_EQ(prefixHostState.pageDescriptors[7], Runtime::PagedKVPageResidentFlag);
 	EXPECT_THROW(Runtime::MapPagedKVHostPrefix(prefixHostState, loaded, 9), std::runtime_error);
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
+}
+
+TEST(G14VNext, RuntimeScheduleRejectsPagedKVShapeLayoutMismatch)
+{
+	Graph graph;
+	Subgraph forward;
+	const auto input = forward.AddParam(DataType::Float32, { 2 });
+	forward.SetResults({ { input, 0 } });
+	graph.AddSubgraph(std::move(forward));
+	graph.SetForward(0);
+
+	auto state = Runtime::MakePagedKVCacheState(
+	    "kv.layer0", TensorType::Dense(DataType::Float16, ShapeView{ 2, 8, 1, 64 }), 4, 128, 2, 0, 1024, 128);
+	EXPECT_THROW(Runtime::BuildRuntimeSchedule(Detail::BuildExecutableModuleFromGraph(graph), { state }),
+	             std::runtime_error);
 }
 
 TEST(G14VNext, VNextModelPackageRejectsLegacyFormat)

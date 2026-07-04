@@ -461,6 +461,27 @@ namespace LiteNN::Runtime
 			                         "states: " +
 			                         binding.name);
 		}
+		const auto shape = binding.type.StaticShape();
+		if (shape.size() != 5 || shape[0] != layout.keyValuePlaneCount || shape[1] != layout.residentPageCount ||
+		    shape[2] != layout.pageSizeTokens)
+		{
+			throw std::runtime_error(
+			    "Paged KV runtime state backing tensor must be [planes,residentPages,pageSize,kvHeads,headDim]: " +
+			    binding.name);
+		}
+		const auto elementBytes = ElementByteSize(binding.type.dtype);
+		const auto expectedTokenByteStride = shape[3] * shape[4] * elementBytes;
+		if (layout.tokenByteStride != expectedTokenByteStride)
+		{
+			throw std::runtime_error("Paged KV runtime state token stride does not match backing tensor shape: " +
+			                         binding.name);
+		}
+		const auto expectedPageByteStride = layout.pageSizeTokens * expectedTokenByteStride;
+		if (layout.pageByteStride != expectedPageByteStride)
+		{
+			throw std::runtime_error("Paged KV runtime state page stride does not match backing tensor shape: " +
+			                         binding.name);
+		}
 		if (layout.valuePlaneOffsetBytes <= layout.keyPlaneOffsetBytes)
 		{
 			throw std::runtime_error("Paged KV runtime state value plane must follow key plane: " + binding.name);
