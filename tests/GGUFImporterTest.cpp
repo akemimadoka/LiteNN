@@ -1357,6 +1357,88 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializingConcatenatedWeight)
+{
+	constexpr std::size_t inFeatures = 256;
+	const std::array<std::size_t, 3> outFeatures{ 2, 1, 3 };
+	Graph graph;
+	std::array<Layer::LinearLayer, 3> layers{};
+	std::array<Tensor<CPU>, 3> dequantizedWeights{
+		Tensor<CPU>(Uninitialized, { outFeatures[0], inFeatures }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, { outFeatures[1], inFeatures }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, { outFeatures[2], inFeatures }, DataType::Float32),
+	};
+	for (std::size_t projection = 0; projection < layers.size(); ++projection)
+	{
+		std::vector<float> weightValues(outFeatures[projection] * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] =
+			    static_cast<float>(static_cast<int>((i + projection * 7) % 17) - 8) * (0.0625F + projection * 0.01F);
+		}
+		const auto plainWeight =
+		    Variable::Create(MakeFloatTensor(weightValues, { outFeatures[projection], inFeatures }));
+		const auto quantizedWeight =
+		    QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K);
+		dequantizedWeights[projection] = GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "grouped_q4_k.weight");
+		const auto weightVariable = graph.AddVariable(quantizedWeight);
+		layers[projection] = Layer::LinearLayer{
+			.weightVariable = weightVariable,
+			.inFeatures = inFeatures,
+			.outFeatures = outFeatures[projection],
+			.dtype = DataType::Float32,
+			.weightQuantization = *quantizedWeight->Quantization(),
+			.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+			.transposeWeight = true,
+		};
+	}
+
+	Subgraph forward;
+	const auto inputNode = forward.AddParam(DataType::Float32, { 2, inFeatures });
+	const auto outputs = Layer::AddLinearProjectionGroup(forward, layers, { inputNode, 0 });
+	forward.SetResults(outputs);
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+
+	std::vector<float> inputValues(2 * inFeatures);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.125F;
+	}
+	std::array<Tensor<CPU>, 1> inputs = { MakeFloatTensor(inputValues, { 2, inFeatures }) };
+	std::array<Tensor<CPU>, 3> expected{
+		Tensor<CPU>(Uninitialized, { 2, outFeatures[0] }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, { 2, outFeatures[1] }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, { 2, outFeatures[2] }, DataType::Float32),
+	};
+	for (std::size_t projection = 0; projection < outFeatures.size(); ++projection)
+	{
+		const auto* weightData = static_cast<const float*>(dequantizedWeights[projection].UnsafeRawData());
+		auto* expectedData = static_cast<float*>(expected[projection].UnsafeRawData());
+		for (std::size_t row = 0; row < 2; ++row)
+		{
+			for (std::size_t column = 0; column < outFeatures[projection]; ++column)
+			{
+				float sum = 0.0F;
+				for (std::size_t reduction = 0; reduction < inFeatures; ++reduction)
+				{
+					sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
+				}
+				expectedData[row * outFeatures[projection] + column] = sum;
+			}
+		}
+	}
+
+	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_f32"));
+	auto compiled = artifact.Load();
+	const auto actual = compiled.RunTensors(inputs);
+	ASSERT_EQ(actual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		ExpectTensorNear(actual[i], expected[i], { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+}
+
 TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
 {
 	constexpr std::size_t inFeatures = 256;
@@ -2264,17 +2346,29 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithQuantizedMatMulNo
 
 	const auto& forward = lowered.GetSubgraph(lowered.Forward());
 	std::size_t quantizedMatMulNodeCount = 0;
+	std::size_t groupedQuantizedMatMulNodeCount = 0;
+	std::size_t coveredProjectionCount = 0;
 	for (NodeId nodeId = 0; nodeId < forward.NodeCount(); ++nodeId)
 	{
 		const auto* quantizedMatMul = std::get_if<QuantizedMatMulNode>(&forward.GetNodeEntry(nodeId).node);
-		if (!quantizedMatMul)
+		if (quantizedMatMul)
 		{
-			continue;
+			++quantizedMatMulNodeCount;
+			++coveredProjectionCount;
+			EXPECT_EQ(quantizedMatMul->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
 		}
-		++quantizedMatMulNodeCount;
-		EXPECT_EQ(quantizedMatMul->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+		const auto* groupedQuantizedMatMul =
+		    std::get_if<GroupedQuantizedMatMulNode>(&forward.GetNodeEntry(nodeId).node);
+		if (groupedQuantizedMatMul)
+		{
+			++groupedQuantizedMatMulNodeCount;
+			coveredProjectionCount += groupedQuantizedMatMul->rhsStorages.size();
+			EXPECT_EQ(groupedQuantizedMatMul->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+		}
 	}
-	EXPECT_EQ(quantizedMatMulNodeCount, 7u);
+	EXPECT_LT(quantizedMatMulNodeCount, 7u);
+	EXPECT_GE(groupedQuantizedMatMulNodeCount, 1u);
+	EXPECT_EQ(coveredProjectionCount, 7u);
 
 	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
 	EXPECT_NO_THROW(ValidateExecutablePlan(plan));

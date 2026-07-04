@@ -2,7 +2,9 @@
 #include <LiteNN/ModelBuilder.h>
 
 #include <format>
+#include <numeric>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -156,6 +158,96 @@ namespace LiteNN::Layer
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, matmul, { bias, 0 } },
 		                                     { OutputInfo{ layer.dtype, outputShape } });
 		return { result, 0 };
+	}
+
+	inline bool CanUseGroupedQuantizedLinearProjection(std::span<const LinearLayer> layers, const OutputInfo& inputInfo)
+	{
+		if (layers.size() < 2 || layers.size() > 3)
+		{
+			return false;
+		}
+		const auto& first = layers.front();
+		if (inputInfo.dtype != first.dtype || inputInfo.shape.size() != 2 || inputInfo.shape[1] != first.inFeatures ||
+		    !first.weightQuantization || first.biasVariable || !first.transposeWeight ||
+		    first.weightStorageShape.size() != 1)
+		{
+			return false;
+		}
+		const auto& firstParams = *first.weightQuantization;
+		if (firstParams.scheme != QuantizationScheme::Block || !IsGGMLQuantizedBlockFormat(firstParams.blockFormat) ||
+		    firstParams.storageType != DataType::UInt8 || firstParams.expressedType != first.dtype ||
+		    firstParams.expressedShape != std::vector<std::size_t>{ first.outFeatures, first.inFeatures })
+		{
+			return false;
+		}
+		for (const auto& layer : layers.subspan(1))
+		{
+			if (layer.dtype != first.dtype || layer.inFeatures != first.inFeatures || layer.biasVariable ||
+			    !layer.weightQuantization || !layer.transposeWeight || layer.weightStorageShape.size() != 1)
+			{
+				return false;
+			}
+			const auto& params = *layer.weightQuantization;
+			if (params.scheme != firstParams.scheme || params.blockFormat != firstParams.blockFormat ||
+			    params.storageType != firstParams.storageType || params.expressedType != firstParams.expressedType ||
+			    params.granularity != firstParams.granularity ||
+			    params.expressedShape != std::vector<std::size_t>{ layer.outFeatures, layer.inFeatures })
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	inline std::vector<NodeOutput> AddLinearProjectionGroup(Subgraph& subgraph, std::span<const LinearLayer> layers,
+	                                                        NodeOutput input)
+	{
+		const auto inputInfo = subgraph.GetOutputInfo(input);
+		if (!CanUseGroupedQuantizedLinearProjection(layers, inputInfo))
+		{
+			std::vector<NodeOutput> outputs;
+			outputs.reserve(layers.size());
+			for (const auto& layer : layers)
+			{
+				outputs.push_back(AddLinear(subgraph, layer, input));
+			}
+			return outputs;
+		}
+
+		std::vector<NodeOutput> rhsStorages;
+		std::vector<std::size_t> outputWidths;
+		rhsStorages.reserve(layers.size());
+		outputWidths.reserve(layers.size());
+		for (const auto& layer : layers)
+		{
+			const auto& params = *layer.weightQuantization;
+			const auto storage = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
+			                                      { OutputInfo{ params.storageType, layer.weightStorageShape } });
+			rhsStorages.push_back({ storage, 0 });
+			outputWidths.push_back(layer.outFeatures);
+		}
+
+		const auto totalOutputWidth = std::accumulate(outputWidths.begin(), outputWidths.end(), std::size_t{ 0 });
+		auto groupedParams = *layers.front().weightQuantization;
+		groupedParams.expressedShape = { totalOutputWidth, layers.front().inFeatures };
+		const auto grouped = NodeOutput{
+			subgraph.AddNode(GroupedQuantizedMatMulNode{ input, rhsStorages, groupedParams, outputWidths, true },
+			                 { OutputInfo{ layers.front().dtype, { inputInfo.shape[0], totalOutputWidth } } }),
+			0,
+		};
+
+		std::vector<NodeOutput> outputs;
+		outputs.reserve(layers.size());
+		std::size_t offset = 0;
+		for (std::size_t i = 0; i < layers.size(); ++i)
+		{
+			outputs.push_back(
+			    { subgraph.AddNode(SliceNode{ grouped, 1, offset, outputWidths[i] },
+			                       { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
+			      0 });
+			offset += outputWidths[i];
+		}
+		return outputs;
 	}
 
 	namespace Detail

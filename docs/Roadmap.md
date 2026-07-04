@@ -2903,7 +2903,7 @@ Priority classes:
             2026-07-04 helper run still rejected a global default switch (`Q4_K/qwen_kv/T1` direct `~3.12 ms` CPU vs
             staged `~15.6 ms` CPU, `Q6_K/qwen_ffn_down/T1` direct/staged both about `46.9 ms` CPU but staged worse in
             real time). Keep staged routing explicit/format-gated until a later packed-weight or VNNI kernel wins.
-- [ ] P0: Add grouped projection helpers for LLM decode:
+- [x] P0: Add grouped projection helpers for LLM decode:
       fuse or concatenate Q/K/V projection work where quantized storage formats permit, fuse the SwiGLU gate/up
       projections, and split outputs after the shared activation scan. This directly targets duplicated reads of the
       same normalized hidden vector across Q/K/V and gate/up helpers.
@@ -2911,8 +2911,15 @@ Priority classes:
             concatenated output-major GGML weights using the existing helper ABI. A short 2026-07-03 Q4_K run validated
             `max_abs_delta=0`; `qwen_qkv/T0` improved from about `1.37 ms` real separate to `1.07 ms` concatenated,
             while `qwen_gate_up/T0` improved from about `3.49 ms` to `3.17 ms`.
-      - [ ] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated helper
-            call or a multi-output sidecar without copying model weights at runtime.
+      - [x] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated helper
+            call or a multi-output sidecar without copying model weights at runtime. Completed on 2026-07-04 with a
+            first-class `GroupedQuantizedMatMulNode`, Q/K/V and gate/up layer helpers, executable-plan round-trip
+            support, CPU MLIR lowering to `litenn_cpu_ggml_block_grouped_matmul2_f32` /
+            `litenn_cpu_ggml_block_grouped_matmul3_f32`, and a projection-span sidecar that accepts independent
+            output-major GGML rhs memrefs. Validation passed
+            `GGUFLLaMAQuantizedExecution.CompilesGroupedQ4KProjectionWithoutMaterializingConcatenatedWeight`,
+            `GGUFLLaMACausalLM.PreservesQuantizedProjectionStorageWithQuantizedMatMulNodes`, and
+            `GGUFLLaMAQuantizedExecution.*`.
 - [x] P0: Add a measured decode thread/grain model:
       `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
       MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit

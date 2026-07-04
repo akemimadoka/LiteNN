@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -1715,6 +1716,114 @@ namespace litenn
 					    auto sum = b.create<arith::AddFOp>(l, accumulator, product).getResult();
 					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
 				    });
+				valueMap[nodeId] = { generic.getResult(0) };
+			}
+
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const GroupedQuantizedMatMulNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
+			{
+				const auto isGGMLBlockQuantizedMatMul = node.params.scheme == QuantizationScheme::Block &&
+				                                        (node.params.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
+				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
+				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K ||
+				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0);
+				if (!isGGMLBlockQuantizedMatMul || !node.transposeRhs || node.rhsStorages.size() < 2 ||
+				    node.rhsStorages.size() > 3 || node.rhsStorages.size() != node.outputWidths.size())
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR GroupedQuantizedMatMulNode currently supports two or three transposed GGML "
+					    "block projections");
+				}
+				if (outputInfos.size() != 1)
+				{
+					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode expected one output");
+				}
+				const auto lhsInfo = sg.GetOutputInfo(node.lhs);
+				if (lhsInfo.shape.size() != 2 || outputInfos[0].shape.size() != 2 ||
+				    lhsInfo.shape[0] != outputInfos[0].shape[0])
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR GroupedQuantizedMatMulNode CPU AOT lowering requires rank-2 tensors");
+				}
+				const auto layout = GetQuantizedBlockLayout(node.params.blockFormat);
+				const auto k = lhsInfo.shape[1];
+				if (!layout || k % layout->elementsPerBlock != 0 || outputInfos[0].dtype != node.params.expressedType)
+				{
+					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode shape metadata is inconsistent");
+				}
+				const auto rowBytes = (k / layout->elementsPerBlock) * layout->bytesPerBlock;
+				std::size_t totalOutputWidth = 0;
+				for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
+				{
+					const auto rhsInfo = sg.GetOutputInfo(node.rhsStorages[i]);
+					const auto width = node.outputWidths[i];
+					totalOutputWidth += width;
+					if (rhsInfo.dtype != DataType::UInt8 || rhsInfo.shape.size() != 1 ||
+					    rhsInfo.shape[0] != width * rowBytes)
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR GroupedQuantizedMatMulNode requires output-major UInt8 block storage");
+					}
+				}
+				if (totalOutputWidth != outputInfos[0].shape[1] ||
+				    node.params.expressedShape != std::vector<std::size_t>{ totalOutputWidth, k })
+				{
+					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode output width metadata is invalid");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				if (!isa<FloatType>(resultType.getElementType()))
+				{
+					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode output must be floating-point");
+				}
+				auto lhs = getVal(valueMap, node.lhs);
+				SmallVector<Value> rhsValues;
+				for (const auto rhs : node.rhsStorages)
+				{
+					rhsValues.push_back(getVal(valueMap, rhs));
+				}
+
+				auto empty = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+				auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+				auto filled =
+				    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ empty }).getResult(0);
+				auto lhsMap = AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(2, &ctx_) }, &ctx_);
+				auto outputMap =
+				    AffineMap::get(3, 0, { getAffineDimExpr(0, &ctx_), getAffineDimExpr(1, &ctx_) }, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
+				    SmallVector<AffineMap>{ lhsMap, outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
+				                                      utils::IteratorType::reduction },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto dependency =
+					        b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F)).getResult();
+					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F)).getResult();
+					    auto zeroIndex = b.create<arith::ConstantIndexOp>(l, 0).getResult();
+					    for (auto rhs : rhsValues)
+					    {
+						    auto rhsByte = b.create<tensor::ExtractOp>(l, rhs, ValueRange{ zeroIndex }).getResult();
+						    auto rhsI32 = b.create<arith::ExtUIOp>(l, b.getI32Type(), rhsByte).getResult();
+						    auto rhsF32 = b.create<arith::UIToFPOp>(l, b.getF32Type(), rhsI32).getResult();
+						    dependency = b.create<arith::AddFOp>(
+						                      l, dependency, b.create<arith::MulFOp>(l, rhsF32, zeroF32).getResult())
+						                     .getResult();
+					    }
+					    auto accumulator = emitScalarToF32(b, l, args.back());
+					    auto sum = b.create<arith::AddFOp>(l, accumulator, dependency).getResult();
+					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+				    });
+				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul",
+				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
+				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_projection_count",
+				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.rhsStorages.size())));
+				for (std::size_t i = 0; i < node.outputWidths.size(); ++i)
+				{
+					generic->setAttr(std::format("litenn.ggml_block_grouped_quantized_matmul_output_width{}", i),
+					                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.outputWidths[i])));
+				}
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 

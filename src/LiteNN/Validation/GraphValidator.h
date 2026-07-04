@@ -743,6 +743,51 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const GroupedQuantizedMatMulNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 1);
+			const auto lhs =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.lhs, "GroupedQuantizedMatMulNode lhs", true);
+			if (node.rhsStorages.size() < 2 || node.rhsStorages.size() > 3 ||
+			    node.rhsStorages.size() != node.outputWidths.size())
+			{
+				Fail(subgraphId, nodeId,
+				     "GroupedQuantizedMatMulNode requires two or three rhs storages with matching output widths");
+			}
+			if (!IsFloatingDataType(lhs.dtype) || lhs.dtype != node.params.expressedType || lhs.shape.size() != 2 ||
+			    node.params.expressedShape.size() != 2 || !node.transposeRhs)
+			{
+				Fail(subgraphId, nodeId,
+				     "GroupedQuantizedMatMulNode requires 2D floating lhs and transposed 2D weight metadata");
+			}
+			const auto totalOutputWidth =
+			    std::accumulate(node.outputWidths.begin(), node.outputWidths.end(), std::size_t{ 0 });
+			if (node.params.expressedShape != std::vector<std::size_t>{ totalOutputWidth, lhs.shape[1] })
+			{
+				Fail(subgraphId, nodeId, "GroupedQuantizedMatMulNode expressed shape must be [sum(N), K]");
+			}
+			for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
+			{
+				const auto rhs = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.rhsStorages[i],
+				                                    "GroupedQuantizedMatMulNode rhsStorage", true);
+				auto projectionParams = node.params;
+				projectionParams.expressedShape = { node.outputWidths[i], lhs.shape[1] };
+				try
+				{
+					ValidateQuantizationParams(projectionParams, ShapeView{ rhs.shape }, rhs.dtype);
+				}
+				catch (const std::runtime_error& ex)
+				{
+					Fail(subgraphId, nodeId,
+					     std::format("GroupedQuantizedMatMulNode projection {} metadata is invalid: {}", i, ex.what()));
+				}
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0],
+			           { node.params.expressedType, { lhs.shape[0], totalOutputWidth } },
+			           "GroupedQuantizedMatMulNode output");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const QuantizedGetRowsNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);

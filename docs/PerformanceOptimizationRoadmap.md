@@ -178,8 +178,13 @@ Priority classes for the GGUF/Qwen decode work:
                 concatenated output-major GGML weights using the existing helper ABI. A short 2026-07-03 Q4_K run
                 validated `max_abs_delta=0`; `qwen_qkv/T0` improved from about `1.37 ms` real separate to `1.07 ms`
                 concatenated, while `qwen_gate_up/T0` improved from about `3.49 ms` to `3.17 ms`.
-          - [ ] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated
-                helper call or a multi-output sidecar without copying model weights at runtime.
+          - [x] Add AOT lowering that recognizes same-input compatible projection groups and emits a concatenated
+                helper call or a multi-output sidecar without copying model weights at runtime. Completed on
+                2026-07-04 with `GroupedQuantizedMatMulNode`, Q/K/V and gate/up layer helpers, executable-plan
+                round-trip support, CPU MLIR lowering to `litenn_cpu_ggml_block_grouped_matmul2_f32` /
+                `litenn_cpu_ggml_block_grouped_matmul3_f32`, and a projection-span sidecar that accepts independent
+                output-major GGML rhs memrefs. Validation passed the grouped Q4_K AOT regression, the quantized
+                projection storage preservation regression, and `GGUFLLaMAQuantizedExecution.*`.
           - [x] Add active-prefix attention helper benchmark rows for Qwen-shaped rank-3 KV caches. A short 2026-07-03
                 run measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows,
                 and `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a

@@ -737,9 +737,12 @@ namespace LiteNN::GGUF
 		const auto headDim = hyperparameters.HeadDimension();
 		const auto queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead();
 		const auto normalizedAttentionInput = Layer::AddRMSNorm(subgraph, block.attentionNorm, hiddenState);
-		const auto queries = Layer::AddLinear(subgraph, block.queryProjection, normalizedAttentionInput);
-		const auto keys = Layer::AddLinear(subgraph, block.keyProjection, normalizedAttentionInput);
-		const auto values = Layer::AddLinear(subgraph, block.valueProjection, normalizedAttentionInput);
+		const std::array attentionProjections{ block.queryProjection, block.keyProjection, block.valueProjection };
+		const auto attentionProjectionOutputs =
+		    Layer::AddLinearProjectionGroup(subgraph, attentionProjections, normalizedAttentionInput);
+		const auto queries = attentionProjectionOutputs[0];
+		const auto keys = attentionProjectionOutputs[1];
+		const auto values = attentionProjectionOutputs[2];
 
 		std::vector<NodeOutput> headContexts;
 		headContexts.reserve(hyperparameters.attentionHeadCount);
@@ -815,9 +818,12 @@ namespace LiteNN::GGUF
 		}
 
 		const auto normalizedAttentionInput = Layer::AddRMSNorm(subgraph, block.attentionNorm, hiddenState);
-		const auto queries = Layer::AddLinear(subgraph, block.queryProjection, normalizedAttentionInput);
-		const auto keys = Layer::AddLinear(subgraph, block.keyProjection, normalizedAttentionInput);
-		const auto values = Layer::AddLinear(subgraph, block.valueProjection, normalizedAttentionInput);
+		const std::array attentionProjections{ block.queryProjection, block.keyProjection, block.valueProjection };
+		const auto attentionProjectionOutputs =
+		    Layer::AddLinearProjectionGroup(subgraph, attentionProjections, normalizedAttentionInput);
+		const auto queries = attentionProjectionOutputs[0];
+		const auto keys = attentionProjectionOutputs[1];
+		const auto values = attentionProjectionOutputs[2];
 		const auto sequenceLength = hiddenInfo.shape[0];
 		const auto keys3D = Reshape3D(subgraph, keys, sequenceLength, hyperparameters.attentionHeadCountKV, headDim);
 		const auto values3D =
@@ -913,9 +919,12 @@ namespace LiteNN::GGUF
 		}
 
 		const auto normalizedAttentionInput = Layer::AddRMSNorm(subgraph, block.attentionNorm, hiddenState);
-		const auto queries = Layer::AddLinear(subgraph, block.queryProjection, normalizedAttentionInput);
-		const auto keys = Layer::AddLinear(subgraph, block.keyProjection, normalizedAttentionInput);
-		const auto values = Layer::AddLinear(subgraph, block.valueProjection, normalizedAttentionInput);
+		const std::array attentionProjections{ block.queryProjection, block.keyProjection, block.valueProjection };
+		const auto attentionProjectionOutputs =
+		    Layer::AddLinearProjectionGroup(subgraph, attentionProjections, normalizedAttentionInput);
+		const auto queries = attentionProjectionOutputs[0];
+		const auto keys = attentionProjectionOutputs[1];
+		const auto values = attentionProjectionOutputs[2];
 		const auto keys3D = Reshape3D(subgraph, keys, 1, hyperparameters.attentionHeadCountKV, headDim);
 		const auto values3D = Reshape3D(subgraph, values, 1, hyperparameters.attentionHeadCountKV, headDim);
 

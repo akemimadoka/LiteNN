@@ -357,6 +357,15 @@ namespace LiteNN
 		return attrs;
 	}
 
+	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const GroupedQuantizedMatMulNode& node)
+	{
+		std::vector<ExecutablePlanAttribute> attrs;
+		AddPlanQuantizationAttributes(attrs, node.params);
+		AddPlanAttribute(attrs, "outputWidths", node.outputWidths);
+		AddPlanAttribute(attrs, "transposeRhs", node.transposeRhs);
+		return attrs;
+	}
+
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const QuantizedGetRowsNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;

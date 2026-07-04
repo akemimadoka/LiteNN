@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <format>
 #include <functional>
 #include <limits>
@@ -640,6 +641,80 @@ namespace LiteNN::Runtime
 			else
 			{
 				slots[nodeId].push_back(cpuResult->CopyToDevice(device));
+			}
+		}
+
+		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId,
+		             const GroupedQuantizedMatMulNode& node, std::vector<std::vector<Tensor<D>>>& slots,
+		             std::span<const Tensor<D>> inputs, D& device)
+		{
+			if (node.rhsStorages.size() != node.outputWidths.size() || node.rhsStorages.empty())
+			{
+				throw std::runtime_error("GroupedQuantizedMatMulNode projection metadata is inconsistent");
+			}
+			auto lhsCPU = [&]() {
+				if constexpr (std::same_as<D, CPU>)
+				{
+					return GetValue(slots, node.lhs);
+				}
+				else
+				{
+					return GetValue(slots, node.lhs).CopyToDevice(CPU{});
+				}
+			}();
+			Tensor<CPU> cpuResult(Uninitialized, entry.outputInfos[0].shape, entry.outputInfos[0].dtype);
+			auto* output = static_cast<std::byte*>(cpuResult.UnsafeRawData());
+			const auto rows = entry.outputInfos[0].shape[0];
+			const auto totalColumns = entry.outputInfos[0].shape[1];
+			const auto elementBytes = ElementByteSize(entry.outputInfos[0].dtype);
+			std::size_t columnOffset = 0;
+			for (std::size_t projection = 0; projection < node.rhsStorages.size(); ++projection)
+			{
+				auto params = node.params;
+				params.expressedShape = { node.outputWidths[projection], lhsCPU.Shape()[1] };
+				auto rhsCPU = [&]() {
+					if constexpr (std::same_as<D, CPU>)
+					{
+						return GetValue(slots, node.rhsStorages[projection]);
+					}
+					else
+					{
+						return GetValue(slots, node.rhsStorages[projection]).CopyToDevice(CPU{});
+					}
+				}();
+				std::optional<Tensor<CPU>> projectionResult;
+				if (quantizedMatMulCallback_)
+				{
+					projectionResult = quantizedMatMulCallback_(lhsCPU, rhsCPU, params, node.transposeRhs);
+				}
+				if (!projectionResult)
+				{
+					if (node.transposeRhs)
+					{
+						throw std::runtime_error(
+						    "Interpreter GroupedQuantizedMatMulNode requires a backend callback for transposed block "
+						    "weights");
+					}
+					projectionResult = EvalQuantizedMatMul(lhsCPU, rhsCPU, params, params.expressedType);
+				}
+				const auto projectionColumns = node.outputWidths[projection];
+				const auto* projectionData = static_cast<const std::byte*>(projectionResult->UnsafeRawData());
+				for (std::size_t row = 0; row < rows; ++row)
+				{
+					std::memcpy(output + (row * totalColumns + columnOffset) * elementBytes,
+					            projectionData + row * projectionColumns * elementBytes,
+					            projectionColumns * elementBytes);
+				}
+				columnOffset += projectionColumns;
+			}
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(cpuResult));
+			}
+			else
+			{
+				slots[nodeId].push_back(cpuResult.CopyToDevice(device));
 			}
 		}
 

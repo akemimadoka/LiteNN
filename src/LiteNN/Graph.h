@@ -171,6 +171,16 @@ namespace LiteNN
 			bool transposeRhs{};
 		};
 
+		// 同一 lhs 与多组量化权重 storage 的拼接 MatMul。当前主要用于 GGML LLM decode 的 Q/K/V 与 gate/up 投影。
+		struct GroupedQuantizedMatMulNode
+		{
+			NodeOutput lhs;
+			std::vector<NodeOutput> rhsStorages;
+			QuantizationParams params;
+			std::vector<std::size_t> outputWidths;
+			bool transposeRhs{};
+		};
+
 		// 从量化二维表中按第一维取行，避免先物化完整浮点 embedding table。
 		struct QuantizedGetRowsNode
 		{

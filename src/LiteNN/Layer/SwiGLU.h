@@ -3,6 +3,7 @@
 #include <LiteNN/Layer/Linear.h>
 #include <LiteNN/ModelBuilder.h>
 
+#include <array>
 #include <stdexcept>
 
 #ifndef LITENN_LAYER_SWIGLU_H
@@ -65,9 +66,11 @@ namespace LiteNN::Layer
 	inline NodeOutput AddSwiGLUMLP(Subgraph& subgraph, const SwiGLUMLPLayer& layer, NodeOutput input)
 	{
 		ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
-		const auto gate = AddLinear(subgraph, layer.gateProjection, input);
+		const std::array groupedLayers{ layer.gateProjection, layer.upProjection };
+		const auto grouped = AddLinearProjectionGroup(subgraph, groupedLayers, input);
+		const auto gate = grouped[0];
 		const auto gateActivated = AddSiLU(subgraph, gate);
-		const auto up = AddLinear(subgraph, layer.upProjection, input);
+		const auto up = grouped[1];
 		const auto gated = subgraph.AddNode(
 		    BinaryOpNode{ BinaryOp::Multiply, gateActivated, up },
 		    { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gateActivated).shape } } });

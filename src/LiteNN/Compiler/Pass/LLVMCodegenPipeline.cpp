@@ -25,8 +25,10 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/TargetParser/Host.h"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -38,6 +40,10 @@ namespace litenn
 	{
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedQuantizedMatMulAttr =
+		    "litenn.ggml_block_grouped_quantized_matmul";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedQuantizedMatMulProjectionCountAttr =
+		    "litenn.ggml_block_grouped_quantized_matmul_projection_count";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedGetRowsAttr = "litenn.ggml_block_quantized_get_rows";
 		constexpr llvm::StringLiteral kRoPEAtPositionsBaseAttr = "litenn.rope_at_positions_base";
 		constexpr llvm::StringLiteral kRoPEAtPositionsFrequencyScaleAttr = "litenn.rope_at_positions_frequency_scale";
@@ -56,6 +62,8 @@ namespace litenn
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
 
@@ -303,6 +311,126 @@ namespace litenn
 			builder.create<mlir::func::CallOp>(
 			    loc, helper,
 			    mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format, threadCount, affinityPolicy });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteGGMLBlockGroupedQuantizedMatMulCall(mlir::ModuleOp module,
+		                                                               mlir::linalg::GenericOp op,
+		                                                               mlir::OpBuilder& builder,
+		                                                               const LLVMCodegenOptions& options)
+		{
+			auto formatAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockGroupedQuantizedMatMulAttr);
+			auto projectionCountAttr =
+			    op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockGroupedQuantizedMatMulProjectionCountAttr);
+			if (!formatAttr || !projectionCountAttr || op->getNumResults() != 0 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			const auto projectionCount = static_cast<std::size_t>(projectionCountAttr.getInt());
+			if ((projectionCount != 2 && projectionCount != 3) || op.getInputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+
+			auto lhs = op.getInputs().front();
+			auto out = op.getOutputs().front();
+			auto lhsType = llvm::dyn_cast<mlir::MemRefType>(lhs.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!lhsType || !outType || lhsType.getRank() != 2 || outType.getRank() != 2 ||
+			    !lhsType.getElementType().isF32() || !outType.getElementType().isF32())
+			{
+				return mlir::failure();
+			}
+
+			constexpr std::array<llvm::StringLiteral, 3> widthAttrs{
+				"litenn.ggml_block_grouped_quantized_matmul_output_width0",
+				"litenn.ggml_block_grouped_quantized_matmul_output_width1",
+				"litenn.ggml_block_grouped_quantized_matmul_output_width2",
+			};
+			llvm::SmallVector<std::int64_t, 3> outputWidths;
+			for (std::size_t i = 0; i < projectionCount; ++i)
+			{
+				auto widthAttr = op->getAttrOfType<mlir::IntegerAttr>(widthAttrs[i]);
+				if (!widthAttr || widthAttr.getInt() <= 0)
+				{
+					return mlir::failure();
+				}
+				outputWidths.push_back(widthAttr.getInt());
+			}
+
+			llvm::SmallVector<mlir::Value, 3> rhsValues;
+			op.getRegion().walk([&](mlir::memref::LoadOp load) {
+				auto candidate = load.getMemRef();
+				auto candidateType = llvm::dyn_cast<mlir::MemRefType>(candidate.getType());
+				if (!candidateType || candidateType.getRank() != 1 || !candidateType.getElementType().isInteger(8))
+				{
+					return;
+				}
+				if (llvm::is_contained(rhsValues, candidate))
+				{
+					return;
+				}
+				rhsValues.push_back(candidate);
+			});
+			if (rhsValues.size() != projectionCount)
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto i64 = builder.getI64Type();
+			auto dynamicLhsType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                            lhsType.getElementType());
+			auto dynamicRhsType =
+			    mlir::MemRefType::get({ mlir::ShapedType::kDynamic },
+			                          llvm::cast<mlir::MemRefType>(rhsValues.front().getType()).getElementType());
+			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                            outType.getElementType());
+			llvm::SmallVector<mlir::Type> argTypes;
+			argTypes.push_back(dynamicLhsType);
+			for (std::size_t i = 0; i < projectionCount; ++i)
+			{
+				argTypes.push_back(dynamicRhsType);
+			}
+			argTypes.push_back(dynamicOutType);
+			for (std::size_t i = 0; i < projectionCount + 3; ++i)
+			{
+				argTypes.push_back(i64);
+			}
+			auto funcType = builder.getFunctionType(argTypes, mlir::TypeRange{});
+			const auto helperName =
+			    projectionCount == 2 ? kGGMLBlockGroupedMatMul2Helper : kGGMLBlockGroupedMatMul3Helper;
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, helperName, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			llvm::SmallVector<mlir::Value> callArgs;
+			callArgs.push_back(builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult());
+			for (auto rhs : rhsValues)
+			{
+				callArgs.push_back(builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult());
+			}
+			callArgs.push_back(builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult());
+			callArgs.push_back(builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult());
+			for (const auto width : outputWidths)
+			{
+				callArgs.push_back(builder.create<mlir::arith::ConstantIntOp>(loc, width, 64).getResult());
+			}
+			callArgs.push_back(
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulThreadCount, 64).getResult());
+			callArgs.push_back(
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulAffinityPolicy, 64).getResult());
+			builder.create<mlir::func::CallOp>(loc, helper, callArgs);
 			op.erase();
 			return mlir::success();
 		}
@@ -1811,6 +1939,11 @@ namespace litenn
 						continue;
 					}
 					if (mlir::succeeded(rewriteGGMLBlockQuantizedGetRowsCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
+					if (mlir::succeeded(
+					        rewriteGGMLBlockGroupedQuantizedMatMulCall(getOperation(), op, builder, options_)))
 					{
 						continue;
 					}

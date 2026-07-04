@@ -1272,6 +1272,21 @@ namespace LiteNN::Serialization
 				return QuantizedMatMulNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
 					                        PlanQuantizationParams(op), PlanAttributeBool(op, "transposeRhs") };
 			}
+			if (op.kind == "GroupedQuantizedMatMulNode")
+			{
+				if (inputs.size() < 3 || inputs.size() > 4)
+				{
+					throw std::runtime_error(
+					    "vNext GroupedQuantizedMatMulNode descriptor requires three or four inputs");
+				}
+				return GroupedQuantizedMatMulNode{
+					.lhs = RequireNodeInput(inputs, 0, op.kind),
+					.rhsStorages = std::vector<NodeOutput>(inputs.begin() + 1, inputs.end()),
+					.params = PlanQuantizationParams(op),
+					.outputWidths = PlanAttributeSizeList(op, "outputWidths"),
+					.transposeRhs = PlanAttributeBool(op, "transposeRhs"),
+				};
+			}
 			if (op.kind == "QuantizedGetRowsNode")
 			{
 				return QuantizedGetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),

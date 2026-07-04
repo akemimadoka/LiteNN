@@ -370,6 +370,19 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<GroupedQuantizedMatMulNode>
+		{
+			static constexpr OpCategory Category = OpCategory::LinearAlgebra;
+			static constexpr OpEffect Effect = OpEffect::Pure;
+			static constexpr std::size_t MinInputs = 3;
+			static constexpr std::size_t MaxInputs = 4;
+			static constexpr std::size_t MinOutputs = 1;
+			static constexpr std::size_t MaxOutputs = 1;
+			static constexpr bool HasShapeInference = false;
+			static constexpr bool HasVerifier = false;
+		};
+
+		template <>
 		struct NodeSchemaTraits<QuantizedGetRowsNode> : NodeSchemaTraits<BinaryOpNode>
 		{
 		};
@@ -752,6 +765,14 @@ namespace LiteNN
 				    {
 					    return { value.lhs, value.rhs };
 				    }
+			    }
+			    else if constexpr (std::same_as<T, GroupedQuantizedMatMulNode>)
+			    {
+				    std::vector<NodeOutput> inputs;
+				    inputs.reserve(1 + value.rhsStorages.size());
+				    inputs.push_back(value.lhs);
+				    inputs.insert(inputs.end(), value.rhsStorages.begin(), value.rhsStorages.end());
+				    return inputs;
 			    }
 			    else if constexpr (std::same_as<T, CallNode>)
 			    {
