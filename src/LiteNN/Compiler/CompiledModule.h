@@ -249,6 +249,8 @@ namespace LiteNN
 		/// Loads instructions into a CPU module while borrowing constants/weights from this artifact.
 		/// The artifact must outlive every run of the returned module.
 		CompiledModule<CPU> LoadBorrowedExternalRegions() const;
+		/// Moves this artifact into the returned CPU module so external regions can be borrowed without an extra copy.
+		CompiledModule<CPU> LoadBorrowedExternalRegions() &&;
 #ifdef LITENN_ENABLE_CUDA
 		CompiledModule<CUDA> Load(CUDA device) const;
 		/// Loads a CUDA module from separated regions. CUDA-native constants are copied

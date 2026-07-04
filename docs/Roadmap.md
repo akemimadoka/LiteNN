@@ -2944,6 +2944,10 @@ Priority classes:
             `weights.path.txt` beside metadata/constants/instructions instead of rewriting a per-cache `weights.bin`.
             Legacy cache entries with local `weights.bin` still load. This removes repeated multi-GB writes when only
             AOT flags, thread policy, or decode mode change.
+      - [x] Load decode AOT cache hits through borrowed separated regions. Completed on 2026-07-04:
+            rvalue `CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions()` moves the separated artifact into
+            the returned module as an owner and borrows constants/weights from it, so cache-hit loading avoids a second
+            copy of the shared weight blob after reading it.
       - [ ] Replace the shared copied weight blob with direct mapped/borrowed source-package or GGUF regions once
             separated-artifact metadata can represent source file offsets rather than only offsets inside the compiled
             `weights` region.

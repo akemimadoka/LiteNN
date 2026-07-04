@@ -14845,6 +14845,7 @@ struct CompiledModule<CPU>::Impl
 	std::vector<std::byte> externalWeights;
 	std::span<const std::byte> borrowedExternalConstants;
 	std::span<const std::byte> borrowedExternalWeights;
+	std::vector<std::shared_ptr<const void>> borrowedExternalOwners;
 	std::vector<CompiledTensorSpec> inputSpecs;
 	std::vector<CompiledTensorSpec> outputSpecs;
 	CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
@@ -15073,6 +15074,14 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() &&
 CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions() const
 {
 	return CompiledModule<CPU>::LoadBorrowedExternalRegions(Image());
+}
+
+CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions() &&
+{
+	auto owner = std::make_shared<CompiledModuleSeparatedArtifact>(std::move(*this));
+	auto module = owner->LoadBorrowedExternalRegions();
+	module.impl_->borrowedExternalOwners.push_back(std::move(owner));
+	return module;
 }
 
 #ifdef LITENN_ENABLE_CUDA

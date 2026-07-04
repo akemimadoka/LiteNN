@@ -184,6 +184,9 @@ Priority classes for the GGUF/Qwen decode work:
                 weight blob under the cache root, while metadata/constants/instructions remain per artifact. Legacy
                 per-cache `weights.bin` entries still load. This removes repeated multi-GB weight writes when tuning AOT
                 flags or thread policy.
+          - [x] Load decode AOT cache hits through borrowed separated regions. Completed on 2026-07-04:
+                rvalue separated-artifact borrowed loading keeps the cache artifact alive inside the CPU module, avoiding
+                a second constants/weights copy after reading the shared cache blob.
           - [ ] Replace the shared copied blob with direct mapped/borrowed GGUF/package regions after separated metadata
                 can encode source file offsets and stable source checksums.
     - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.

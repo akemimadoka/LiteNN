@@ -1159,7 +1159,7 @@ namespace
 		});
 		LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
 		return TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache load module",
-		                           [&] { return std::move(artifact).Load(); });
+		                           [&] { return std::move(artifact).LoadBorrowedExternalRegions(); });
 	}
 
 	void WriteDecodeAOTCache(const std::filesystem::path& cachePath, const LiteNN::CompiledModuleArtifact& artifact,

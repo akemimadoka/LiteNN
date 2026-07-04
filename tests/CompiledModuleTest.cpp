@@ -2785,6 +2785,14 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto artifactBorrowed = separated.LoadBorrowedExternalRegions();
 	runAndCheck(artifactBorrowed);
 
+	auto ownedBorrowed = CompiledModuleSeparatedArtifact::FromOwnedRegions(
+	                         std::vector<std::byte>(separated.Metadata().begin(), separated.Metadata().end()),
+	                         std::vector<std::byte>(separated.Constants().begin(), separated.Constants().end()),
+	                         std::vector<std::byte>(separated.Weights().begin(), separated.Weights().end()),
+	                         std::vector<std::byte>(separated.Instructions().begin(), separated.Instructions().end()))
+	                         .LoadBorrowedExternalRegions();
+	runAndCheck(ownedBorrowed);
+
 	std::vector<std::byte> reboundConstants(separated.Constants().begin(), separated.Constants().end());
 	auto rebound = separated.WithReboundConstants({
 	    .data = reboundConstants.data(),
