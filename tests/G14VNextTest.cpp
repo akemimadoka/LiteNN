@@ -756,6 +756,28 @@ TEST(G14VNext, VNextModelPackageRoundTripsPagedRuntimeStateLayout)
 	EXPECT_EQ(pageDescriptor.type.StaticShape(), std::vector<std::size_t>({ 2, 4 }));
 	EXPECT_EQ(activeLength.name, "kv.layer0.active_length");
 	EXPECT_EQ(activeLength.type.StaticShape(), std::vector<std::size_t>({ 1 }));
+	const auto emptyHostState = Runtime::MakeEmptyPagedKVHostState(loaded);
+	ASSERT_EQ(emptyHostState.pageTable.size(), 32u);
+	ASSERT_EQ(emptyHostState.pageDescriptors.size(), 8u);
+	EXPECT_EQ(emptyHostState.pageTable[0], Runtime::PagedKVInvalidPage);
+	EXPECT_EQ(emptyHostState.pageDescriptors[0], Runtime::PagedKVInvalidPage);
+	EXPECT_EQ(emptyHostState.activeLength, 0);
+
+	auto prefixHostState = Runtime::MakeEmptyPagedKVHostState(loaded);
+	Runtime::MapPagedKVHostPrefix(prefixHostState, loaded, 6);
+	EXPECT_EQ(prefixHostState.activeLength, 6);
+	EXPECT_EQ(prefixHostState.pageTable[0], 0);
+	EXPECT_EQ(prefixHostState.pageTable[1], 1);
+	EXPECT_EQ(prefixHostState.pageTable[2], Runtime::PagedKVInvalidPage);
+	EXPECT_EQ(prefixHostState.pageDescriptors[0], 0);
+	EXPECT_EQ(prefixHostState.pageDescriptors[1], 0);
+	EXPECT_EQ(prefixHostState.pageDescriptors[2], 4);
+	EXPECT_EQ(prefixHostState.pageDescriptors[3], Runtime::PagedKVPageResidentFlag);
+	EXPECT_EQ(prefixHostState.pageDescriptors[4], 1);
+	EXPECT_EQ(prefixHostState.pageDescriptors[5], 4);
+	EXPECT_EQ(prefixHostState.pageDescriptors[6], 2);
+	EXPECT_EQ(prefixHostState.pageDescriptors[7], Runtime::PagedKVPageResidentFlag);
+	EXPECT_THROW(Runtime::MapPagedKVHostPrefix(prefixHostState, loaded, 9), std::runtime_error);
 	EXPECT_NO_THROW(ValidateVNextPackageManifest(package.manifest));
 }
 

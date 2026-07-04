@@ -7,6 +7,7 @@
 #include <LiteNN/Runtime/Placement.h>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <optional>
 #include <span>
@@ -90,6 +91,25 @@ namespace LiteNN::Runtime
 		std::vector<std::size_t> publicOutputIndices;
 		std::vector<TensorType> publicOutputTypes;
 		std::vector<RuntimeStateOutputAlias> stateAliases;
+	};
+
+	inline constexpr std::int64_t PagedKVInvalidPage = -1;
+	inline constexpr std::int64_t PagedKVPageResidentFlag = 1;
+
+	enum class PagedKVPageDescriptorColumn : std::size_t
+	{
+		LogicalPage = 0,
+		FirstToken = 1,
+		TokenCount = 2,
+		Flags = 3,
+		Count = 4
+	};
+
+	struct PagedKVHostState
+	{
+		std::vector<std::int64_t> pageTable;
+		std::vector<std::int64_t> pageDescriptors;
+		std::int64_t activeLength{};
 	};
 
 	struct LLMDecodeStateABI
@@ -347,6 +367,54 @@ namespace LiteNN::Runtime
 			MakePagedKVPageDescriptorState(kvState),
 			MakePagedKVActiveLengthState(kvState),
 		};
+	}
+
+	inline PagedKVHostState MakeEmptyPagedKVHostState(const RuntimeStateBinding& kvState)
+	{
+		const auto& layout = RequirePagedKVCacheLayout(kvState);
+		PagedKVHostState state;
+		state.pageTable.assign(PagedKVLogicalPageCount(layout), PagedKVInvalidPage);
+		state.pageDescriptors.assign(
+		    layout.residentPageCount * static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count), 0);
+		for (std::size_t page = 0; page < layout.residentPageCount; ++page)
+		{
+			state.pageDescriptors[page * static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count) +
+			                      static_cast<std::size_t>(PagedKVPageDescriptorColumn::LogicalPage)] =
+			    PagedKVInvalidPage;
+		}
+		return state;
+	}
+
+	inline void MapPagedKVHostPrefix(PagedKVHostState& state, const RuntimeStateBinding& kvState,
+	                                 std::size_t tokenCount)
+	{
+		const auto& layout = RequirePagedKVCacheLayout(kvState);
+		if (tokenCount > layout.maxLogicalTokens)
+		{
+			throw std::runtime_error("Paged KV prefix exceeds max logical token count: " + kvState.name);
+		}
+		const auto neededPages = tokenCount == 0 ? 0 : (tokenCount + layout.pageSizeTokens - 1) / layout.pageSizeTokens;
+		if (neededPages > layout.residentPageCount)
+		{
+			throw std::runtime_error("Paged KV prefix exceeds resident page capacity: " + kvState.name);
+		}
+		state = MakeEmptyPagedKVHostState(kvState);
+		state.activeLength = static_cast<std::int64_t>(tokenCount);
+		for (std::size_t logicalPage = 0; logicalPage < neededPages; ++logicalPage)
+		{
+			const auto firstToken = logicalPage * layout.pageSizeTokens;
+			const auto pageTokenCount = std::min(layout.pageSizeTokens, tokenCount - firstToken);
+			state.pageTable[logicalPage] = static_cast<std::int64_t>(logicalPage);
+			const auto descriptorBase = logicalPage * static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count);
+			state.pageDescriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::LogicalPage)] =
+			    static_cast<std::int64_t>(logicalPage);
+			state.pageDescriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::FirstToken)] =
+			    static_cast<std::int64_t>(firstToken);
+			state.pageDescriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::TokenCount)] =
+			    static_cast<std::int64_t>(pageTokenCount);
+			state.pageDescriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::Flags)] =
+			    PagedKVPageResidentFlag;
+		}
 	}
 
 	inline std::string_view RuntimeStateLayoutKindName(RuntimeStateLayoutKind kind) noexcept

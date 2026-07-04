@@ -2969,6 +2969,11 @@ Priority classes:
             2026-07-04: paged KV layout metadata now names all three auxiliary states; the LLaMA dynamic decode planner
             exposes them as explicit `RuntimeStateBinding`s and vNext manifests round-trip the descriptor-state field.
             These states are not yet consumed by the CPU lowering.
+      - [x] Define host-side paged KV table initialization semantics. Completed on 2026-07-04:
+            runtime helpers now create empty page tables with invalid `-1` logical mappings, fixed descriptor columns
+            `[logical_page, first_token, token_count, flags]`, active-length metadata, and checked prefix-to-resident-page
+            mapping. This gives paged kernels a stable state format before lowering switches away from dense fallback
+            tensors.
       - [ ] Replace the dense fallback backing tensor in dynamic decode signatures with page-table + page-descriptor
             inputs, and update the runtime state value bindings so artifact shape no longer scales with max cache
             length.
