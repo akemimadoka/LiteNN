@@ -180,7 +180,18 @@ namespace LiteNN
 
 		friend constexpr bool operator==(ShapeView lhs, ShapeView rhs)
 		{
-			return std::ranges::equal(lhs.Dims, rhs.Dims);
+			if (lhs.Dims.size() != rhs.Dims.size())
+			{
+				return false;
+			}
+			for (std::size_t i = 0; i < lhs.Dims.size(); ++i)
+			{
+				if (lhs.Dims[i] != rhs.Dims[i])
+				{
+					return false;
+				}
+			}
+			return true;
 		}
 
 		friend constexpr bool operator!=(ShapeView lhs, ShapeView rhs)

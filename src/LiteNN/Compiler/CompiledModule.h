@@ -242,6 +242,10 @@ namespace LiteNN
 		                                                        std::vector<std::byte> constants,
 		                                                        std::vector<std::byte> weights,
 		                                                        std::vector<std::byte> instructions);
+		static CompiledModuleSeparatedArtifact
+		FromOwnedRegionsWithBorrowedWeights(std::vector<std::byte> metadata, std::vector<std::byte> constants,
+		                                    CompiledModuleRegion weights, std::shared_ptr<const void> weightsOwner,
+		                                    std::vector<std::byte> instructions);
 		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
 
 		CompiledModule<CPU> Load() const;
@@ -292,10 +296,19 @@ namespace LiteNN
 		                                std::vector<std::byte> weights, std::vector<std::byte> instructions,
 		                                std::vector<CompiledTensorSpec> inputSpecs,
 		                                std::vector<CompiledTensorSpec> outputSpecs, CompiledModuleBackend backend);
+		CompiledModuleSeparatedArtifact(std::vector<std::byte> metadata, std::vector<std::byte> constants,
+		                                CompiledModuleRegion borrowedWeights,
+		                                std::shared_ptr<const void> borrowedWeightsOwner,
+		                                std::vector<std::byte> instructions, std::vector<CompiledTensorSpec> inputSpecs,
+		                                std::vector<CompiledTensorSpec> outputSpecs, CompiledModuleBackend backend);
+
+		CompiledModuleRegion WeightsRegion() const;
 
 		std::vector<std::byte> metadata_;
 		std::vector<std::byte> constants_;
 		std::vector<std::byte> weights_;
+		CompiledModuleRegion borrowedWeights_;
+		std::shared_ptr<const void> borrowedWeightsOwner_;
 		std::vector<std::byte> instructions_;
 		std::vector<CompiledTensorSpec> inputSpecs_;
 		std::vector<CompiledTensorSpec> outputSpecs_;

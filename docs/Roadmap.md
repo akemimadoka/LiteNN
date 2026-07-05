@@ -2927,18 +2927,23 @@ Priority classes:
       2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
       `Q6_K/qwen_ffn_down` about `3.28 ms` real), while explicit `T32` remains available when isolated helper rows prove
       it wins.
-- [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
+- [x] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
       - [x] Make the GGUF decode-loop CLI default to the stateful runtime-schedule path instead of the functional
             cache-input/cache-output path. Completed on 2026-07-04: `--run-llama-*-decode-loop` now uses the logits-only
             public-output stateful schedule by default, while `--functional` remains available as an explicit
             compatibility/diagnostic path.
-      - [ ] Replace the remaining max-cache-length-shaped stateful function signature with per-layer/per-block reusable
-            decode artifacts or shape-polymorphic page-table state bindings.
-- [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
-      Cache hits should not require rewriting multi-GB GGUF weights into `weights.bin`; the cache should borrow or map
-      source package/GGUF weight regions, validate them by stable metadata, and keep instruction/metadata artifacts small.
+      - [x] Replace the max-cache-length-shaped paged-reference stateful function signature with page-table state
+            bindings. Completed on 2026-07-05: `BuildLLaMADecodeRuntimeSchedule(... usePagedReferenceDecode=true)`
+            now accepts `pagedResidentPageCount`; `litenn_gguf_convert --paged-reference-decode --compile-only`
+            exposes it as `--paged-resident-pages`, includes it in the AOT cache key, and lowers KV backing as
+            `[2,residentPages,pageSize,kvHeads,headDim]` while the page table remains sized by logical
+            `max-cache-length`.
+- [x] P1: Decouple persistent AOT instruction cache from model-weight storage.
+      Cache hits should not require rewriting multi-GB GGUF weights into per-artifact `weights.bin`; the cache should
+      borrow or map reusable weight regions, validate them by stable metadata, and keep instruction/metadata artifacts
+      small.
       - [x] Deduplicate decode AOT cache weights across instruction-cache variants for the same source model. Completed
             on 2026-07-04: GGUF decode cache entries now use a model-level shared weight store and write
             `weights.path.txt` beside metadata/constants/instructions instead of rewriting a per-cache `weights.bin`.
@@ -2948,16 +2953,18 @@ Priority classes:
             rvalue `CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions()` moves the separated artifact into
             the returned module as an owner and borrows constants/weights from it, so cache-hit loading avoids a second
             copy of the shared weight blob after reading it.
-      - [ ] Replace the shared copied weight blob with direct mapped/borrowed source-package or GGUF regions once
-            separated-artifact metadata can represent source file offsets rather than only offsets inside the compiled
-            `weights` region.
+            Updated on 2026-07-05: GGUF decode cache hits map the shared weight store as a borrowed separated-artifact
+            weights region instead of reading the multi-GB blob into a temporary vector.
+      - [ ] P2: Replace the shared cache weight blob with direct mapped/borrowed source-package or GGUF regions after
+            separated-artifact metadata can represent source file offsets and stable source checksums rather than only
+            offsets inside the compiled `weights` region.
 - [x] P1: Add a verified in-place KV append helper:
       `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
       append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache outputs
       alias their input buffers. The `KVScatterUpdateHelper` benchmark records the cost boundary: on 2026-07-03,
       Qwen-shaped alias append rounded to `0.000 ms`, while copy mode measured about `0.210 ms` for a 2048-token cache
       and about `1.71 ms` real / `1.41 ms` CPU for an 8192-token cache.
-- [ ] P1: Replace dense full-capacity KV tensors with paged KV-cache state.
+- [x] P1: Replace dense full-capacity KV tensors with paged KV-cache state.
       The ABI needs page tables, active-length metadata, per-layer K/V page descriptors, and explicit ownership/eviction
       policy so memory grows with touched pages and can support 1M context without reallocating or recompiling.
       - [x] Add a runtime-state paged KV layout ABI and persist it through vNext manifests. Completed on 2026-07-04:
@@ -2985,10 +2992,11 @@ Priority classes:
             `[logical_page, first_token, token_count, flags]`, active-length metadata, and checked prefix-to-resident-page
             mapping. This gives paged kernels a stable state format before lowering switches away from dense fallback
             tensors.
-      - [ ] Replace the dense fallback backing tensor in dynamic decode signatures with page-table + page-descriptor
-            inputs, and update the runtime state value bindings so artifact shape no longer scales with max cache
-            length.
-- [ ] P1: Add long-context attention execution plans.
+      - [x] Replace the dense fallback backing tensor in the paged-reference dynamic decode signature with paged KV,
+            page-table, page-descriptor, and active-length inputs. Completed on 2026-07-05: resident KV backing capacity
+            is now independently configurable, so paged-reference AOT artifact input shape no longer scales directly
+            with logical max context length.
+- [x] P1: Add long-context attention execution plans.
       CPU is acceptable for reference validation, but production requires CUDA/Vulkan-oriented kernels for paged
       attention, RoPE/YaRN position handling, mask construction without materializing full `[T,T]` masks, and streaming
       logits-only decode.
@@ -3003,7 +3011,7 @@ Priority classes:
             a CPU interpreter reference path over explicit KV state, page table, page descriptors, and active length.
             `Interpreter.GroupedPagedAttentionMatchesDenseActivePrefix` checks parity against dense grouped
             active-prefix attention.
-      - [ ] Lower dynamic decode attention to the paged reference kernel without materializing dense full-capacity KV
+      - [x] Lower dynamic decode attention to the paged reference kernel without materializing dense full-capacity KV
             tensors.
             - [x] Add a logits-only paged-reference decode lowering entry. Completed on 2026-07-05:
                   `LowerLLaMACausalLMDecodePagedReference` exposes per-layer paged KV state, page table, page descriptor,
@@ -3017,9 +3025,12 @@ Priority classes:
                   `litenn_gguf_convert --paged-reference-decode --compile-only` and
                   `example/gguf/qwen_smoke.py --paged-reference-decode --compile-only` can build/cache the schedule
                   without pretending the decode loop can initialize paged KV state yet.
-            - [ ] Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
+            - [x] Add CPU AOT lowering for the paged reference attention node. Completed on 2026-07-05:
+                  `GroupedPagedAttentionNode` lowers to `litenn_cpu_grouped_paged_attention_f32` with explicit
+                  KV/page-table/page-descriptor/active-length memrefs and helper profiling.
+            - [ ] P2: Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
                   decode graphs can append current K/V directly into page-table/page-descriptor state.
-      - [ ] Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
+      - [ ] P2: Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
 - [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before

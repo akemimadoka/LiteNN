@@ -14,16 +14,19 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -31,6 +34,18 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -65,7 +80,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] "
+		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -74,7 +89,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] "
+		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -83,7 +98,7 @@ namespace
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] "
+		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul]\n"
@@ -221,6 +236,7 @@ namespace
 		bool streamStats{};
 		bool compileOnly{};
 		bool pagedReferenceDecode{};
+		std::optional<std::size_t> pagedResidentPageCount;
 		bool enableCPUAOTQ8KStagedMatMul{};
 		std::optional<std::size_t> cpuAOTThreadCount;
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
@@ -307,6 +323,10 @@ namespace
 			{
 				options.pagedReferenceDecode = true;
 				options.statefulDecode = true;
+			}
+			else if (arg == "--paged-resident-pages")
+			{
+				options.pagedResidentPageCount = ParseSize(requireValue(arg), "paged-resident-pages");
 			}
 			else if (arg == "--cpu-aot-q8k-staged-matmul")
 			{
@@ -980,6 +1000,117 @@ namespace
 		return text;
 	}
 
+	class MappedReadOnlyFile
+	{
+	public:
+		explicit MappedReadOnlyFile(const std::filesystem::path& path)
+		{
+#ifdef _WIN32
+			file_ = CreateFileW(path.wstring().c_str(), GENERIC_READ,
+			                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+			                    FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (file_ == INVALID_HANDLE_VALUE)
+			{
+				throw std::runtime_error("failed to open cached artifact file for mapping: " + path.string());
+			}
+			LARGE_INTEGER size;
+			if (!GetFileSizeEx(file_, &size) || size.QuadPart < 0)
+			{
+				throw std::runtime_error("failed to size cached artifact file for mapping: " + path.string());
+			}
+			size_ = static_cast<std::size_t>(size.QuadPart);
+			if (size_ == 0)
+			{
+				return;
+			}
+			mapping_ = CreateFileMappingW(file_, nullptr, PAGE_READONLY, 0, 0, nullptr);
+			if (mapping_ == nullptr)
+			{
+				throw std::runtime_error("failed to create cached artifact file mapping: " + path.string());
+			}
+			view_ = MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, 0);
+			if (view_ == nullptr)
+			{
+				throw std::runtime_error("failed to map cached artifact file: " + path.string());
+			}
+			data_ = view_;
+#else
+			fd_ = open(path.string().c_str(), O_RDONLY);
+			if (fd_ < 0)
+			{
+				throw std::runtime_error("failed to open cached artifact file for mapping: " + path.string() + ": " +
+				                         std::strerror(errno));
+			}
+			struct stat st;
+			if (fstat(fd_, &st) != 0 || st.st_size < 0)
+			{
+				throw std::runtime_error("failed to size cached artifact file for mapping: " + path.string() + ": " +
+				                         std::strerror(errno));
+			}
+			size_ = static_cast<std::size_t>(st.st_size);
+			if (size_ == 0)
+			{
+				return;
+			}
+			view_ = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+			if (view_ == MAP_FAILED)
+			{
+				view_ = nullptr;
+				throw std::runtime_error("failed to map cached artifact file: " + path.string() + ": " +
+				                         std::strerror(errno));
+			}
+			data_ = view_;
+#endif
+		}
+
+		MappedReadOnlyFile(const MappedReadOnlyFile&) = delete;
+		MappedReadOnlyFile& operator=(const MappedReadOnlyFile&) = delete;
+
+		~MappedReadOnlyFile()
+		{
+#ifdef _WIN32
+			if (view_ != nullptr)
+			{
+				UnmapViewOfFile(view_);
+			}
+			if (mapping_ != nullptr)
+			{
+				CloseHandle(mapping_);
+			}
+			if (file_ != nullptr && file_ != INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(file_);
+			}
+#else
+			if (view_ != nullptr)
+			{
+				munmap(view_, size_);
+			}
+			if (fd_ >= 0)
+			{
+				close(fd_);
+			}
+#endif
+		}
+
+		LiteNN::CompiledModuleRegion Region() const
+		{
+			return { .data = data_, .size = size_ };
+		}
+
+	private:
+		const void* data_{};
+		std::size_t size_{};
+#ifdef _WIN32
+		HANDLE file_{ INVALID_HANDLE_VALUE };
+		HANDLE mapping_{};
+		void* view_{};
+#else
+		int fd_{ -1 };
+		void* view_{};
+#endif
+	};
+
 	void WriteBinaryFileTimed(const std::filesystem::path& path, std::span<const std::byte> bytes, bool diagnostics,
 	                          std::string_view label)
 	{
@@ -1035,9 +1166,10 @@ namespace
 		return hash;
 	}
 
-	std::optional<std::filesystem::path> DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
-	                                                        const LiteNN::CompilerOptions& options,
-	                                                        std::string_view decodeMode)
+	std::optional<std::filesystem::path>
+	DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
+	                   const LiteNN::CompilerOptions& options, std::string_view decodeMode,
+	                   std::optional<std::size_t> pagedResidentPageCount = std::nullopt)
 	{
 		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
 		if (root == nullptr || std::string_view(root).empty())
@@ -1048,13 +1180,15 @@ namespace
 		std::error_code ec;
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
-		const auto keyText =
-		    std::format("gguf-decode-{}-v4|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
-		                "q8k_staged={}",
-		                decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
-		                requestedTokenCount, options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
-		                options.cpuAOTThreadCount, static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
-		                options.cpuAOTParallelMinFlops, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0);
+		const auto residentPagesText =
+		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
+		const auto keyText = std::format(
+		    "gguf-decode-{}-v5|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
+		    "q8k_staged={}|paged_resident_pages={}",
+		    decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
+		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
+		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
+		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -1175,19 +1309,18 @@ namespace
 	{
 		auto artifact = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache read separated artifact", [&] {
 			const auto files = DecodeAOTCacheFilesFor(cachePath);
-			std::vector<std::byte> weights;
 			if (auto referencedWeights = DecodeAOTReferencedWeightsPath(files))
 			{
-				LogGGUFDiagnostic(diagnostics,
-				                  "gguf decode aot cache: using shared weights " + referencedWeights->generic_string());
-				weights = ReadBinaryFile(*referencedWeights);
-			}
-			else
-			{
-				weights = ReadBinaryFile(files.weights);
+				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: mapping shared weights " +
+				                                   referencedWeights->generic_string());
+				auto mappedWeights = std::make_shared<MappedReadOnlyFile>(*referencedWeights);
+				std::shared_ptr<const void> mappedOwner = mappedWeights;
+				return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegionsWithBorrowedWeights(
+				    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), mappedWeights->Region(),
+				    std::move(mappedOwner), ReadBinaryFile(files.instructions));
 			}
 			return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
-			    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), std::move(weights),
+			    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), ReadBinaryFile(files.weights),
 			    ReadBinaryFile(files.instructions));
 		});
 		LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: hit");
@@ -1394,10 +1527,16 @@ namespace
 			throw std::runtime_error("--paged-reference-decode currently supports --compile-only until paged KV "
 			                         "initialization/writeback is wired into the decode loop");
 		}
+		if (options.pagedResidentPageCount && !options.pagedReferenceDecode)
+		{
+			throw std::runtime_error("--paged-resident-pages requires --paged-reference-decode");
+		}
 		LogGGUFDiagnostic(diagnostics,
 		                  std::format("decode-loop tokens prompt={} generated_request={} requested_token_count={} "
-		                              "max_cache_length={}",
-		                              initialTokenIds.size(), options.steps, requestedTokenCount, maxCacheLength));
+		                              "max_cache_length={} paged_resident_pages={}",
+		                              initialTokenIds.size(), options.steps, requestedTokenCount, maxCacheLength,
+		                              options.pagedResidentPageCount ? std::to_string(*options.pagedResidentPageCount)
+		                                                             : std::string("auto")));
 		const auto maxRunCount = requestedTokenCount - 1;
 		const auto buildStart = std::chrono::steady_clock::now();
 		const std::string_view decodeMode = options.pagedReferenceDecode ? "paged_reference"
@@ -1414,7 +1553,8 @@ namespace
 					                                        .maxCacheLength = maxCacheLength,
 					                                        .preserveQuantizedWeights = true,
 					                                        .dynamicDecodePosition = true,
-					                                        .usePagedReferenceDecode = options.pagedReferenceDecode });
+					                                        .usePagedReferenceDecode = options.pagedReferenceDecode,
+					                                        .pagedResidentPageCount = options.pagedResidentPageCount });
 				});
 				decodePlan = schedule.module.plan;
 				const auto projection =
@@ -1425,8 +1565,8 @@ namespace
 				                              schedule.states.size(), schedule.stateValueBindings.size(),
 				                              decodePlan.inputs.size(), projection.functionalOutputCount,
 				                              projection.publicOutputIndices.size(), projection.stateAliases.size()));
-				const auto cachePath =
-				    DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
+				const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions,
+				                                          decodeMode, options.pagedResidentPageCount);
 				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath);
 				return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot stateful decode module", [&] {
 					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, sharedWeightsPath,

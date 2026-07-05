@@ -2034,6 +2034,23 @@ TEST(GGUFLLaMACausalLM, GroupedPagedAttentionReferenceMatchesDenseActivePrefix)
 	const auto roundTrip = interpreter.RunForward(loaded.plan, pagedInputs);
 	ASSERT_EQ(roundTrip.size(), 1u);
 	ExpectTensorNear(roundTrip[0], expected[0], GGUF::GetLLaMAParityTolerance(DataType::Float32));
+
+#ifdef LITENN_ENABLE_MLIR
+	auto compiled = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(pagedGraph)).Load();
+	std::vector<CompiledModuleCPUHelperProfileEvent> profileEvents;
+	std::vector<Tensor<CPU>> compiledOutputs;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		compiledOutputs = compiled.RunTensors(pagedInputs);
+		profileEvents = profiler.Snapshot();
+	}
+	EXPECT_TRUE(std::ranges::any_of(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& event) {
+		return event.helper == "litenn_cpu_grouped_paged_attention_f32" && event.calls > 0 &&
+		       event.detail.find("queries=") != std::string::npos && event.detail.find("kv=") != std::string::npos;
+	}));
+	ASSERT_EQ(compiledOutputs.size(), 1u);
+	ExpectTensorNear(compiledOutputs[0], expected[0], GGUF::GetLLaMAParityTolerance(DataType::Float32));
+#endif
 }
 
 TEST(GGUFLLaMACausalLM, ReusesCapacityPrefillGraphAcrossPromptLengths)
@@ -2181,6 +2198,33 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeScheduleBindsPagedKVInputs)
 	ASSERT_EQ(stateAliases.size(), 1u);
 	EXPECT_EQ(stateAliases[0].outputIndex, 1u);
 	EXPECT_EQ(stateAliases[0].inputIndex, 1u);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+}
+
+TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeSeparatesLogicalAndResidentKVCapacity)
+{
+	const auto schedule =
+	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
+	                                                                     .decodePastLength = 0,
+	                                                                     .maxCacheLength = 512,
+	                                                                     .dynamicDecodePosition = true,
+	                                                                     .usePagedReferenceDecode = true,
+	                                                                     .pagedResidentPageCount = 1 });
+	ASSERT_EQ(schedule.states.size(), 5u);
+	ASSERT_TRUE(schedule.states[0].layout.has_value());
+	EXPECT_EQ(schedule.states[0].layout->maxLogicalTokens, 512u);
+	EXPECT_EQ(schedule.states[0].layout->pageSizeTokens, 256u);
+	EXPECT_EQ(schedule.states[0].layout->residentPageCount, 1u);
+	EXPECT_EQ(schedule.states[1].type.StaticShape(), std::vector<std::size_t>({ 2 }));
+	EXPECT_EQ(schedule.states[2].type.StaticShape(), std::vector<std::size_t>({ 1, 4 }));
+
+	const auto forward = schedule.module.plan.forward;
+	ASSERT_EQ(schedule.module.functions[forward].inputs.size(), 6u);
+	EXPECT_EQ(schedule.module.functions[forward].inputs[2].StaticShape(),
+	          std::vector<std::size_t>({ 2, 1, 256, 1, 2 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[3].StaticShape(), std::vector<std::size_t>({ 2 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[4].StaticShape(), std::vector<std::size_t>({ 1, 4 }));
+	EXPECT_EQ(schedule.module.functions[forward].inputs[5].StaticShape(), std::vector<std::size_t>({ 1 }));
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 }
 

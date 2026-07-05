@@ -1,4 +1,5 @@
 #include <mlir/IR/DialectRegistry.h>
+#include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassManager.h>
 
 #ifndef LITENN_COMPILER_PASS_BUFFERIZATIONPIPELINE_H

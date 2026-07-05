@@ -30,6 +30,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -1053,6 +1054,118 @@ namespace
 			    queries + queryHead * queryRowStride, queryColumns, queryColumnStride, keys + kvHead * keyHeadStride,
 			    keyRowStride, keyColumnStride, values + kvHead * valueHeadStride, valueRowStride, valueColumnStride,
 			    activeRows, out + queryHead * outRowStride, outColumns, outColumnStride, scale, scores);
+		}
+	}
+
+	extern "C" void litenn_cpu_grouped_paged_attention_f32(
+	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+	    const float* kvAligned, std::int64_t kvOffset, std::int64_t kvPlanes, std::int64_t residentPages,
+	    std::int64_t pageSize, std::int64_t kvHeads, std::int64_t kvColumns, std::int64_t kvPlaneStride,
+	    std::int64_t kvPageStride, std::int64_t kvTokenStride, std::int64_t kvHeadStride, std::int64_t kvColumnStride,
+	    const std::int64_t*, const std::int64_t* pageTableAligned, std::int64_t pageTableOffset,
+	    std::int64_t pageTableSize, std::int64_t pageTableStride, const std::int64_t*,
+	    const std::int64_t* pageDescriptorAligned, std::int64_t pageDescriptorOffset, std::int64_t pageDescriptorRows,
+	    std::int64_t pageDescriptorColumns, std::int64_t pageDescriptorRowStride,
+	    std::int64_t pageDescriptorColumnStride, const std::int64_t*, const std::int64_t* activeLengthAligned,
+	    std::int64_t activeLengthOffset, std::int64_t activeLengthSize, std::int64_t activeLengthStride, float*,
+	    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	    std::int64_t outRowStride, std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead)
+	{
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_grouped_paged_attention_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("queries={}x{} kv={}x{}x{}x{}x{} out={}x{} groups_per_kv={}", queryRows, queryColumns,
+		                      kvPlanes, residentPages, pageSize, kvHeads, kvColumns, outRows, outColumns,
+		                      queryGroupsPerKVHead)
+		        : std::string{});
+		if (queryRows <= 0 || queryColumns <= 0 || outRows != queryRows || outColumns != queryColumns ||
+		    kvPlanes != 2 || residentPages <= 0 || pageSize <= 0 || kvHeads <= 0 || kvColumns != queryColumns ||
+		    queryGroupsPerKVHead <= 0 || queryRows > kvHeads * queryGroupsPerKVHead || pageTableSize <= 0 ||
+		    pageDescriptorRows != residentPages || pageDescriptorColumns < 4 || activeLengthSize != 1)
+		{
+			return;
+		}
+
+		const auto activeLength = activeLengthAligned[activeLengthOffset];
+		if (activeLength <= 0 || (activeLength + pageSize - 1) / pageSize > pageTableSize)
+		{
+			return;
+		}
+
+		const auto* queries = queryAligned + queryOffset;
+		const auto* kv = kvAligned + kvOffset;
+		const auto* pageTable = pageTableAligned + pageTableOffset;
+		const auto* pageDescriptors = pageDescriptorAligned + pageDescriptorOffset;
+		auto* out = outAligned + outOffset;
+		std::vector<float> scores(static_cast<std::size_t>(activeLength));
+
+		for (std::int64_t queryHead = 0; queryHead < queryRows; ++queryHead)
+		{
+			const auto kvHead = queryHead / queryGroupsPerKVHead;
+			for (std::int64_t col = 0; col < outColumns; ++col)
+			{
+				out[queryHead * outRowStride + col * outColumnStride] = 0.0F;
+			}
+
+			float maxScore = -std::numeric_limits<float>::infinity();
+			for (std::int64_t token = 0; token < activeLength; ++token)
+			{
+				const auto logicalPage = token / pageSize;
+				const auto tokenInPage = token % pageSize;
+				const auto resident = pageTable[logicalPage * pageTableStride];
+				if (resident < 0 || resident >= residentPages)
+				{
+					return;
+				}
+				const auto descriptor = pageDescriptors + resident * pageDescriptorRowStride;
+				const auto descriptorLogicalPage = descriptor[0 * pageDescriptorColumnStride];
+				const auto descriptorFirstToken = descriptor[1 * pageDescriptorColumnStride];
+				const auto descriptorTokenCount = descriptor[2 * pageDescriptorColumnStride];
+				const auto descriptorFlags = descriptor[3 * pageDescriptorColumnStride];
+				if (descriptorLogicalPage != logicalPage || descriptorFirstToken > token ||
+				    descriptorFirstToken + descriptorTokenCount <= token || (descriptorFlags & 1) == 0)
+				{
+					return;
+				}
+
+				const auto* query = queries + queryHead * queryRowStride;
+				const auto* key = kv + resident * kvPageStride + tokenInPage * kvTokenStride + kvHead * kvHeadStride;
+				float score = 0.0F;
+				for (std::int64_t col = 0; col < queryColumns; ++col)
+				{
+					score += query[col * queryColumnStride] * key[col * kvColumnStride];
+				}
+				score *= static_cast<float>(scale);
+				scores[static_cast<std::size_t>(token)] = score;
+				maxScore = std::max(maxScore, score);
+			}
+
+			float denominator = 0.0F;
+			for (auto& score : scores)
+			{
+				score = std::exp(score - maxScore);
+				denominator += score;
+			}
+			if (denominator == 0.0F)
+			{
+				return;
+			}
+
+			const auto invDenominator = 1.0F / denominator;
+			for (std::int64_t token = 0; token < activeLength; ++token)
+			{
+				const auto logicalPage = token / pageSize;
+				const auto tokenInPage = token % pageSize;
+				const auto resident = pageTable[logicalPage * pageTableStride];
+				const auto* value =
+				    kv + kvPlaneStride + resident * kvPageStride + tokenInPage * kvTokenStride + kvHead * kvHeadStride;
+				const auto weight = scores[static_cast<std::size_t>(token)] * invDenominator;
+				for (std::int64_t col = 0; col < outColumns; ++col)
+				{
+					out[queryHead * outRowStride + col * outColumnStride] += weight * value[col * kvColumnStride];
+				}
+			}
 		}
 	}
 
@@ -4291,6 +4404,15 @@ namespace
 				    copy.currentPosition = remap(copy.currentPosition);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
+			    {
+				    copy.queries = remap(copy.queries);
+				    copy.kvState = remap(copy.kvState);
+				    copy.pageTable = remap(copy.pageTable);
+				    copy.pageDescriptors = remap(copy.pageDescriptors);
+				    copy.activeLength = remap(copy.activeLength);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {
 				    copy.logits = remap(copy.logits);
@@ -5820,6 +5942,8 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32_rank3));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3_grouped",
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32_rank3_grouped));
+		RegisterJITRuntimeSymbol("litenn_cpu_grouped_paged_attention_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_grouped_paged_attention_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_scatter_update_axis0_f32_rank3",
 		                         reinterpret_cast<void*>(&litenn_cpu_scatter_update_axis0_f32_rank3));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_f32",
@@ -14997,6 +15121,17 @@ CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(
 {
 }
 
+CompiledModuleSeparatedArtifact::CompiledModuleSeparatedArtifact(
+    std::vector<std::byte> metadata, std::vector<std::byte> constants, CompiledModuleRegion borrowedWeights,
+    std::shared_ptr<const void> borrowedWeightsOwner, std::vector<std::byte> instructions,
+    std::vector<CompiledTensorSpec> inputSpecs, std::vector<CompiledTensorSpec> outputSpecs,
+    CompiledModuleBackend backend)
+    : metadata_(std::move(metadata)), constants_(std::move(constants)), borrowedWeights_(borrowedWeights),
+      borrowedWeightsOwner_(std::move(borrowedWeightsOwner)), instructions_(std::move(instructions)),
+      inputSpecs_(std::move(inputSpecs)), outputSpecs_(std::move(outputSpecs)), backend_(backend)
+{
+}
+
 CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::CopyFromImage(CompiledModuleSeparatedImage image)
 {
 	auto separatedMetadata = ValidateSeparatedImage(image);
@@ -15020,6 +15155,26 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegion
 	});
 	return CompiledModuleSeparatedArtifact(
 	    std::move(metadata), std::move(constants), std::move(weights), std::move(instructions),
+	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	    separatedMetadata.legacyMetadata.backend);
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegionsWithBorrowedWeights(
+    std::vector<std::byte> metadata, std::vector<std::byte> constants, CompiledModuleRegion weights,
+    std::shared_ptr<const void> weightsOwner, std::vector<std::byte> instructions)
+{
+	if (weights.size != 0 && !weightsOwner)
+	{
+		throw std::runtime_error("Borrowed separated artifact weights require an owner");
+	}
+	auto separatedMetadata = ValidateSeparatedImage({
+	    .metadata = { .data = metadata.data(), .size = metadata.size() },
+	    .constants = { .data = constants.data(), .size = constants.size() },
+	    .weights = weights,
+	    .instructions = { .data = instructions.data(), .size = instructions.size() },
+	});
+	return CompiledModuleSeparatedArtifact(
+	    std::move(metadata), std::move(constants), weights, std::move(weightsOwner), std::move(instructions),
 	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),
 	    separatedMetadata.legacyMetadata.backend);
 }
@@ -15056,6 +15211,7 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() &&
 {
 	auto metadata = ValidateSeparatedImage(Image());
 	auto constants = RegionBytes({ .data = constants_.data(), .size = constants_.size() }, kConstantsRegionName);
+	auto weights = RegionBytes(WeightsRegion(), kWeightsRegionName);
 	auto instructions = RestoreLegacyInstructionsFromSeparated(
 	    metadata.legacyMetadata.backend,
 	    RegionBytes({ .data = instructions_.data(), .size = instructions_.size() }, kInstructionsRegionName),
@@ -15067,7 +15223,7 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::Load() &&
 	    .instructionSize = instructions.size(),
 	});
 	module.impl_->externalConstants = std::move(constants_);
-	module.impl_->externalWeights = std::move(weights_);
+	module.impl_->externalWeights.assign(weights.begin(), weights.end());
 	return module;
 }
 
@@ -15101,6 +15257,12 @@ CompiledModuleSeparatedArtifact::WithReboundConstants(CompiledModuleRegion const
 {
 	auto metadata = DeserializeSeparatedMetadata(metadata_);
 	ValidateSeparatedRegion(constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
+	if (borrowedWeightsOwner_)
+	{
+		return CompiledModuleSeparatedArtifact(metadata_, ToByteVector(constants, kConstantsRegionName),
+		                                       borrowedWeights_, borrowedWeightsOwner_, instructions_, inputSpecs_,
+		                                       outputSpecs_, backend_);
+	}
 	return CompiledModuleSeparatedArtifact(metadata_, ToByteVector(constants, kConstantsRegionName), weights_,
 	                                       instructions_, inputSpecs_, outputSpecs_, backend_);
 }
@@ -15115,6 +15277,7 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::WithReboundWeig
 
 CompiledModuleSeparatedImage CompiledModuleSeparatedArtifact::Image() const
 {
+	const auto weights = WeightsRegion();
 	return {
 		.metadata = {
 		    .data = metadata_.data(),
@@ -15125,14 +15288,23 @@ CompiledModuleSeparatedImage CompiledModuleSeparatedArtifact::Image() const
 		    .size = constants_.size(),
 		},
 		.weights = {
-		    .data = weights_.data(),
-		    .size = weights_.size(),
+		    .data = weights.data,
+		    .size = weights.size,
 		},
 		.instructions = {
 		    .data = instructions_.data(),
 		    .size = instructions_.size(),
 		},
 	};
+}
+
+CompiledModuleRegion CompiledModuleSeparatedArtifact::WeightsRegion() const
+{
+	if (borrowedWeightsOwner_)
+	{
+		return borrowedWeights_;
+	}
+	return { .data = weights_.data(), .size = weights_.size() };
 }
 
 std::span<const std::byte> CompiledModuleSeparatedArtifact::Metadata() const
@@ -15147,7 +15319,7 @@ std::span<const std::byte> CompiledModuleSeparatedArtifact::Constants() const
 
 std::span<const std::byte> CompiledModuleSeparatedArtifact::Weights() const
 {
-	return weights_;
+	return RegionBytes(WeightsRegion(), kWeightsRegionName);
 }
 
 std::span<const std::byte> CompiledModuleSeparatedArtifact::Instructions() const
@@ -15196,7 +15368,7 @@ std::optional<std::size_t> CompiledModuleSeparatedArtifact::FindOutput(std::stri
 void CompiledModuleSeparatedArtifact::WriteObjectFile(const std::filesystem::path& path,
                                                       std::string_view symbolPrefix) const
 {
-	const auto objectBytes = EmitSeparatedCarrierObject(metadata_, constants_, weights_, instructions_, symbolPrefix);
+	const auto objectBytes = EmitSeparatedCarrierObject(metadata_, constants_, Weights(), instructions_, symbolPrefix);
 	WriteAllBytes(path, objectBytes);
 }
 
@@ -15210,7 +15382,7 @@ void CompiledModuleSeparatedArtifact::WriteObjectFiles(const std::filesystem::pa
 	WriteAllBytes(directory / (prefix + "_constants.o"),
 	              EmitSingleRegionCarrierObject(constants_, symbolPrefix, kConstantsRegionName, ".litenn_constants"));
 	WriteAllBytes(directory / (prefix + "_weights.o"),
-	              EmitSingleRegionCarrierObject(weights_, symbolPrefix, kWeightsRegionName, ".litenn_weights"));
+	              EmitSingleRegionCarrierObject(Weights(), symbolPrefix, kWeightsRegionName, ".litenn_weights"));
 	WriteAllBytes(
 	    directory / (prefix + "_instructions.o"),
 	    EmitSingleRegionCarrierObject(instructions_, symbolPrefix, kInstructionsRegionName, ".litenn_instructions"));
@@ -15223,7 +15395,7 @@ void CompiledModuleSeparatedArtifact::WriteRegionFiles(const std::filesystem::pa
 	const auto prefix = std::string(filePrefix);
 	WriteAllBytes(directory / (prefix + ".metadata.bin"), metadata_);
 	WriteAllBytes(directory / (prefix + ".constants.bin"), constants_);
-	WriteAllBytes(directory / (prefix + ".weights.bin"), weights_);
+	WriteAllBytes(directory / (prefix + ".weights.bin"), Weights());
 	WriteAllBytes(directory / (prefix + ".instructions.bin"), instructions_);
 }
 

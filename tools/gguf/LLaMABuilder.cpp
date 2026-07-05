@@ -530,7 +530,12 @@ namespace LiteNN::GGUF
 		};
 		const auto cacheType = TensorType::Dense(dtype, ShapeView{ cacheShape });
 		const auto pageSizeTokens = std::min<std::size_t>(maxCacheLength, 256);
-		const auto residentPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
+		const auto logicalPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
+		const auto residentPageCount = options.pagedResidentPageCount.value_or(logicalPageCount);
+		if (residentPageCount == 0)
+		{
+			throw std::runtime_error("Paged KV resident page count must be greater than zero");
+		}
 		const auto stateTokenCapacity =
 		    options.dynamicDecodePosition ? residentPageCount * pageSizeTokens : maxCacheLength;
 		const auto stateShape =
@@ -1617,8 +1622,12 @@ namespace LiteNN::GGUF
 		const auto model = CreateLLaMACausalLM(graph, archive, hyperparameters, options);
 		const auto headDim = hyperparameters.HeadDimension();
 		const auto pageSizeTokens = std::min<std::size_t>(maxCacheLength, 256);
-		const auto residentPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
-		const auto logicalPageCount = residentPageCount;
+		const auto logicalPageCount = (maxCacheLength + pageSizeTokens - 1) / pageSizeTokens;
+		const auto residentPageCount = options.pagedResidentPageCount.value_or(logicalPageCount);
+		if (residentPageCount == 0)
+		{
+			throw std::runtime_error("Paged-reference LLaMA decode resident page count must be greater than zero");
+		}
 		const std::vector<std::size_t> pagedKVShape{ 2, residentPageCount, pageSizeTokens,
 			                                         hyperparameters.attentionHeadCountKV, headDim };
 		const std::vector<std::size_t> pageDescriptorShape{
@@ -1676,11 +1685,16 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("Paged-reference decode schedule requires dynamicDecodePosition");
 		}
+		if (options.pagedResidentPageCount && !options.usePagedReferenceDecode)
+		{
+			throw std::runtime_error("Paged resident page count currently requires paged-reference decode");
+		}
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
 		auto graph =
-		    options.usePagedReferenceDecode ? LowerLLaMACausalLMDecodePagedReference(
-		                                          archive, artifacts.decodeStep.maxCacheLength,
-		                                          { .preserveQuantizedWeights = options.preserveQuantizedWeights })
+		    options.usePagedReferenceDecode
+		        ? LowerLLaMACausalLMDecodePagedReference(archive, artifacts.decodeStep.maxCacheLength,
+		                                                 { .preserveQuantizedWeights = options.preserveQuantizedWeights,
+		                                                   .pagedResidentPageCount = options.pagedResidentPageCount })
 		    : options.dynamicDecodePosition
 		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
 		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights })

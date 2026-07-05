@@ -144,11 +144,15 @@ namespace LiteNN::GGUF
 		bool dynamicDecodePosition{};
 		/// Build a logits-only decode schedule that reads paged KV state through the CPU reference attention node.
 		bool usePagedReferenceDecode{};
+		/// Optional physical paged-KV backing capacity. Logical capacity remains maxCacheLength.
+		std::optional<std::size_t> pagedResidentPageCount;
 	};
 
 	struct LLaMALoweringOptions
 	{
 		bool preserveQuantizedWeights{};
+		/// Optional physical paged-KV backing capacity for paged-reference decode lowering.
+		std::optional<std::size_t> pagedResidentPageCount;
 	};
 
 	LLaMAParityTolerance GetLLaMAParityTolerance(DataType dtype,

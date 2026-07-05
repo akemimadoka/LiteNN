@@ -162,13 +162,15 @@ Priority classes for the GGUF/Qwen decode work:
           rows. A short 2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
           `Q6_K/qwen_ffn_down` about `3.28 ms` real) while explicit `T32` remains available for isolated helper cases
           where it wins.
-    - [ ] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
+    - [x] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
           - [x] Make the GGUF decode-loop CLI default to the stateful runtime-schedule path. Completed on 2026-07-04:
                 `--run-llama-*-decode-loop` now builds/loads the logits-only public-output stateful schedule unless
                 `--functional` is passed explicitly for compatibility or diagnostics.
-          - [ ] Replace the remaining max-cache-length-shaped stateful function signature with per-layer/per-block
-                reusable decode artifacts or page-table state bindings.
-    - [ ] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
+          - [x] Replace the remaining max-cache-length-shaped paged-reference stateful function signature with
+                page-table state bindings. Completed on 2026-07-05: `--paged-reference-decode --compile-only` accepts
+                `--paged-resident-pages`; resident KV backing shape is `[2,residentPages,pageSize,kvHeads,headDim]`
+                while logical capacity remains in page-table metadata/cache key.
+    - [x] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
           - [x] Add the paged-KV runtime-state ABI/manifest/planner contract. Completed on 2026-07-04:
@@ -200,9 +202,13 @@ Priority classes for the GGUF/Qwen decode work:
                 in the interpreter and is validated against dense grouped active-prefix attention. This closes the
                 semantic reference for paged lowering; dynamic decode still needs to emit the paged node instead of the
                 dense fallback signature.
-          - [ ] Replace the dense fallback decode signature with page-table/page-descriptor state bindings so cache-hit
-                artifacts stop scaling with max context length.
-    - [ ] P1: Decouple persistent AOT instruction cache from model-weight storage.
+          - [x] Replace the dense fallback paged-reference decode signature with page-table/page-descriptor state
+                bindings so cache-hit artifacts stop scaling directly with max context length. Completed on 2026-07-05:
+                `GroupedPagedAttentionNode` has CPU AOT sidecar lowering and `pagedResidentPageCount` lets resident
+                backing capacity stay independent from logical `max-cache-length`.
+          - [ ] P2: Add graph-side paged KV writeback for full decode-loop execution; the current paged-reference path
+                remains compile-only because current K/V append is still owned by the external/prefill contract.
+    - [x] P1: Decouple persistent AOT instruction cache from model-weight storage.
           - [x] Deduplicate GGUF decode AOT cache weights across instruction-cache variants for the same source model.
                 Completed on 2026-07-04: cache entries now write `weights.path.txt` pointing to a model-level shared
                 weight blob under the cache root, while metadata/constants/instructions remain per artifact. Legacy
@@ -211,8 +217,10 @@ Priority classes for the GGUF/Qwen decode work:
           - [x] Load decode AOT cache hits through borrowed separated regions. Completed on 2026-07-04:
                 rvalue separated-artifact borrowed loading keeps the cache artifact alive inside the CPU module, avoiding
                 a second constants/weights copy after reading the shared cache blob.
-          - [ ] Replace the shared copied blob with direct mapped/borrowed GGUF/package regions after separated metadata
-                can encode source file offsets and stable source checksums.
+                Updated on 2026-07-05: cache hits map the shared weight store as a borrowed separated-artifact weights
+                region instead of reading the multi-GB blob into a temporary vector.
+          - [ ] P2: Replace the shared cache weight blob with direct mapped/borrowed GGUF/package regions after separated
+                metadata can encode source file offsets and stable source checksums.
     - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
           `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
           append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache

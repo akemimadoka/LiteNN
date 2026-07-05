@@ -2720,13 +2720,85 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
-			void emitNode(const PlanSubgraphView&, NodeId, const GroupedPagedAttentionNode&,
-			              std::span<const OutputInfo>, std::vector<SmallVector<Value>>&, std::map<std::size_t, Value>&,
-			              std::map<std::size_t, Value>&)
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const GroupedPagedAttentionNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				throw std::runtime_error(
-				    "GraphToMLIR GroupedPagedAttentionNode lowering is not implemented; use Interpreter reference "
-				    "execution or enable the planned paged-attention sidecar lowering");
+				if (outputInfos.size() != 1)
+				{
+					throw std::runtime_error("GraphToMLIR GroupedPagedAttentionNode expected one output");
+				}
+				const auto queryInfo = sg.GetOutputInfo(node.queries);
+				const auto kvInfo = sg.GetOutputInfo(node.kvState);
+				const auto pageTableInfo = sg.GetOutputInfo(node.pageTable);
+				const auto pageDescriptorInfo = sg.GetOutputInfo(node.pageDescriptors);
+				const auto activeLengthInfo = sg.GetOutputInfo(node.activeLength);
+				if (queryInfo.dtype != DataType::Float32 || kvInfo.dtype != DataType::Float32 ||
+				    pageTableInfo.dtype != DataType::Int64 || pageDescriptorInfo.dtype != DataType::Int64 ||
+				    activeLengthInfo.dtype != DataType::Int64 || queryInfo.shape.size() != 2 ||
+				    kvInfo.shape.size() != 5 || kvInfo.shape[0] != 2 || kvInfo.shape[3] == 0 ||
+				    kvInfo.shape[4] != queryInfo.shape[1] || pageTableInfo.shape.size() != 1 ||
+				    pageDescriptorInfo.shape != std::vector<std::size_t>{ kvInfo.shape[1], 4 } ||
+				    activeLengthInfo.shape != std::vector<std::size_t>{ 1 } || node.queryGroupsPerKVHead == 0 ||
+				    queryInfo.shape[0] > kvInfo.shape[3] * node.queryGroupsPerKVHead ||
+				    outputInfos[0].shape != std::vector<std::size_t>{ queryInfo.shape[0], kvInfo.shape[4] })
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR GroupedPagedAttentionNode currently supports Float32 queries [Q,H], paged KV "
+					    "[2,residentPages,pageSize,KV,H], Int64 pageTable[logicalPages], Int64 "
+					    "pageDescriptors[residentPages,4], Int64 activeLength[1], and output [Q,H]");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto resultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				auto output = builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType())
+				                  .getResult();
+				auto zero = emitScalarZero(builder_, loc, resultType.getElementType());
+				auto filled =
+				    builder_.create<linalg::FillOp>(loc, ValueRange{ zero }, ValueRange{ output }).getResult(0);
+				auto dim0 = getAffineDimExpr(0, &ctx_);
+				auto dim1 = getAffineDimExpr(1, &ctx_);
+				auto zeroExpr = getAffineConstantExpr(0, &ctx_);
+				auto queryMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+				auto kvMap = AffineMap::get(2, 0, { zeroExpr, zeroExpr, zeroExpr, zeroExpr, dim1 }, &ctx_);
+				auto pageTableMap = AffineMap::get(2, 0, { zeroExpr }, &ctx_);
+				auto pageDescriptorMap = AffineMap::get(2, 0, { zeroExpr, zeroExpr }, &ctx_);
+				auto activeLengthMap = AffineMap::get(2, 0, { zeroExpr }, &ctx_);
+				auto outputMap = AffineMap::get(2, 0, { dim0, dim1 }, &ctx_);
+				auto generic = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ resultType },
+				    ValueRange{ getVal(valueMap, node.queries), getVal(valueMap, node.kvState),
+				                getVal(valueMap, node.pageTable), getVal(valueMap, node.pageDescriptors),
+				                getVal(valueMap, node.activeLength) },
+				    ValueRange{ filled },
+				    SmallVector<AffineMap>{ queryMap, kvMap, pageTableMap, pageDescriptorMap, activeLengthMap,
+				                            outputMap },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto queryDep = emitScalarToF32(b, l, args[0]);
+					    auto kvDep = emitScalarToF32(b, l, args[1]);
+					    auto tableF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), args[2]).getResult();
+					    auto descriptorF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), args[3]).getResult();
+					    auto activeF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), args[4]).getResult();
+					    auto out = emitScalarToF32(b, l, args[5]);
+					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+					    auto metadataDep =
+					        b.create<arith::AddFOp>(l, tableF32,
+					                                b.create<arith::AddFOp>(l, descriptorF32, activeF32).getResult())
+					            .getResult();
+					    auto valueDep = b.create<arith::AddFOp>(
+					                         l, b.create<arith::AddFOp>(l, queryDep, kvDep).getResult(), metadataDep)
+					                        .getResult();
+					    auto sum =
+					        b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, valueDep, zeroF32).getResult())
+					            .getResult();
+					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
+				    });
+				generic->setAttr("litenn.grouped_paged_attention",
+				                 builder_.getF64FloatAttr(static_cast<double>(node.scale)));
+				generic->setAttr("litenn.grouped_paged_attention_query_groups_per_kv_head",
+				                 builder_.getI64IntegerAttr(static_cast<int64_t>(node.queryGroupsPerKVHead)));
+				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,
