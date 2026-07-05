@@ -671,6 +671,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             the bundle without making platform profilers mandatory.
       - [ ] Add full platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
             and a macOS Instruments-compatible import path when available.
+            Updated on 2026-07-05: the bundle tool now has optional Linux `perf record` and Windows `xperf` ETW
+            start/stop wrappers; WPA/perf/Instruments export-to-collapsed-stack import remains open.
       - [x] Normalize collapsed-stack inputs into merged collapsed stacks and Speedscope JSON outputs; render a simple
             built-in SVG/HTML flame graph for first-pass local diagnosis.
       - [ ] Convert platform-native sampling outputs, such as Linux `perf.data`, Windows ETW/WPA exports, and macOS

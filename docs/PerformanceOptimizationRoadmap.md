@@ -264,8 +264,8 @@ Priority classes for the GGUF/Qwen decode work:
           - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
                 grouped CPU AOT sidecar. The builder still applies RoPE per query/KV head before grouping, and the
                 grouped helper remains a conservative CPU sidecar rather than a final KV-head-tiled attention kernel.
-  - [x] Sampling raw capture: optional Linux `perf record` wrapper captures raw `perf.data` beside the bundle when
-    requested.
+  - [x] Sampling raw capture: optional Linux `perf record` and Windows `xperf` ETW wrappers capture raw platform
+    evidence beside the bundle when requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
   - [ ] Platform-native sampling import: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import
     adapters normalize their own raw formats into the collapsed-stack path.

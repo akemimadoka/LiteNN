@@ -329,11 +329,78 @@ def maybe_wrap_sampler(command: list[str], sampler: str, step_dir: Path) -> tupl
         xperf = shutil.which("xperf")
         if xperf is None:
             raise SystemExit("--sampler windows-xperf requested, but 'xperf' was not found on PATH")
-        raise SystemExit(
-            "--sampler windows-xperf needs a start/stop ETW session and is tracked as the next implementation slice"
-        )
+        etl_path = step_dir / "xperf.etl"
+        return command, [etl_path], "windows-xperf"
 
     raise SystemExit(f"Unsupported sampler: {sampler}")
+
+
+def run_xperf(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def start_platform_sampler(sampler_name: str, sampler_outputs: list[Path]) -> list[str]:
+    if sampler_name != "windows-xperf":
+        return []
+    xperf = shutil.which("xperf")
+    if xperf is None:
+        raise SystemExit("--sampler windows-xperf requested, but 'xperf' was not found on PATH")
+    completed = run_xperf(
+        [
+            xperf,
+            "-on",
+            "PROC_THREAD+LOADER+PROFILE",
+            "-stackwalk",
+            "Profile",
+            "-BufferSize",
+            "1024",
+            "-MinBuffers",
+            "64",
+            "-MaxBuffers",
+            "256",
+        ]
+    )
+    lines = [
+        "windows-xperf start:",
+        "command=" + " ".join(completed.args if isinstance(completed.args, list) else [str(completed.args)]),
+        f"returncode={completed.returncode}",
+        completed.stdout,
+        completed.stderr,
+    ]
+    if completed.returncode != 0:
+        raise SystemExit("xperf failed to start ETW sampling:\n" + "\n".join(lines))
+    if sampler_outputs:
+        lines.append(f"etl={sampler_outputs[0]}")
+    return lines
+
+
+def stop_platform_sampler(sampler_name: str, sampler_outputs: list[Path]) -> list[str]:
+    if sampler_name != "windows-xperf":
+        return []
+    xperf = shutil.which("xperf")
+    if xperf is None:
+        return ["windows-xperf stop skipped: xperf disappeared from PATH"]
+    if not sampler_outputs:
+        return ["windows-xperf stop skipped: no ETL output path"]
+    completed = run_xperf([xperf, "-d", str(sampler_outputs[0])])
+    lines = [
+        "windows-xperf stop:",
+        "command=" + " ".join(completed.args if isinstance(completed.args, list) else [str(completed.args)]),
+        f"returncode={completed.returncode}",
+        completed.stdout,
+        completed.stderr,
+    ]
+    if completed.returncode != 0:
+        lines.append("warning: xperf failed to stop cleanly; ETW session may need manual cleanup")
+    return lines
 
 
 def run_step(
@@ -350,24 +417,29 @@ def run_step(
     stderr_path = step_dir / "stderr.txt"
     wrapped_command, sampler_outputs, sampler_name = maybe_wrap_sampler(command, sampler, step_dir)
 
+    sampler_log_lines = [f"sampler={sampler_name}"]
     start = now_ns()
-    completed = subprocess.run(
-        wrapped_command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        check=False,
-    )
-    end = now_ns()
+    sampler_log_lines.extend(start_platform_sampler(sampler_name, sampler_outputs))
+    try:
+        completed = subprocess.run(
+            wrapped_command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=False,
+        )
+    finally:
+        sampler_log_lines.extend(stop_platform_sampler(sampler_name, sampler_outputs))
+        end = now_ns()
 
     write_redacted_text(stdout_path, completed.stdout, replacements)
     write_redacted_text(stderr_path, completed.stderr, replacements)
 
     sampler_log = step_dir / "sampler.txt"
-    sampler_log.write_text(f"sampler={sampler_name}\n", encoding="utf-8")
+    write_redacted_text(sampler_log, "\n".join(sampler_log_lines) + "\n", replacements)
 
     return StepResult(
         name=name,
