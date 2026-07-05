@@ -111,6 +111,29 @@ Priority classes for the GGUF/Qwen decode work:
                 format, input/output shape, thread counts, calls, total/average milliseconds, and explicit
                 `attribution=helper-derived`; comparison tables expose the top node. Stable runtime layer ids remain a
                 later metadata enhancement rather than a P2 blocker.
+          - [x] Add a measured Qwen2.5-Coder-14B Q4_K_M stateful decode attribution report. Completed on 2026-07-05:
+                `docs/PerformanceAnalysis_2026-07-05.md` records the user's `~819 ms/token` LiteNN run against a
+                `6.85 tokens/s` llama.cpp CPU reference. The repaired profile bundle attributes about `82.5%` of step
+                time to timed helpers and about `80.5%` to quantized projection helpers; active-prefix attention is only
+                about `0.16%` and KV append about `0.01%` in the 2K-context run.
+          - [ ] P0: Replace the current direct/staged GGML projection helpers with production packed Q4_K/Q6_K kernels.
+                Target the measured top rows first: grouped gate/up `1x5120 -> 1x27648`, hidden/output
+                `1x5120 -> 1x5120`, FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits
+                `1x5120 -> 152064`. The current Q8_K-staged prototype is not a default-switch candidate on the July 5
+                production-shaped T16 rows, so this work needs packed/repacked weight layout, architecture-specific
+                vector-dot kernels, activation staging reuse where it actually wins, and a format-specific policy.
+          - [ ] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
+                The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
+                T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full
+                stateful decode with helper share, residual share, and generated-token TPS before changing defaults.
+          - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
+                Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
+                residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is
+                the next blocker once quantized projection time is reduced.
+          - [ ] P1: Skip full-vocabulary logits projection for prompt replay steps that cannot be sampled.
+                The July 5 run spends about `53 ms` per logits projection and executes one on every prompt replay step.
+                Skipping all but the last replay logits improves prompt/prefill latency, though it is not a steady-state
+                generated-token TPS fix.
     - [x] P2: Add context-extension validation gates before reporting long-context readiness. Completed on 2026-07-05:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived

@@ -536,6 +536,8 @@ def resolve_report_path(raw: object, base: Path) -> Path:
     path = Path(str(raw))
     if path.is_absolute():
         return path
+    if path.exists():
+        return path
     return base / path
 
 
@@ -601,7 +603,7 @@ def detail_value(detail: str, key: str) -> str | None:
 
 
 def classify_gguf_helper(helper: str, detail: str) -> tuple[str, str]:
-    if "ggml_block_matmul" in helper:
+    if "ggml_block_matmul" in helper or "ggml_block_grouped_matmul" in helper:
         if detail_has_output_columns(detail, 152064):
             return "projection", "logits"
         if detail_has_output_columns(detail, 27648):
@@ -647,12 +649,13 @@ def node_kind_for_operator(operator: str, role: str) -> str:
 
 
 def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
-    steps: list[GGUFDecodeStep] = []
+    steps_by_id: dict[int, GGUFDecodeStep] = {}
     helpers: list[GGUFHelperEvent] = []
     helper_pattern = re.compile(
         r"decode step (?P<step>\d+) helper (?P<helper>\S+)(?: detail=\"(?P<detail>[^\"]*)\")? "
         r"calls=(?P<calls>\d+) total_ms=(?P<total>[0-9.+\-eE]+) avg_ms=(?P<avg>[0-9.+\-eE]+)"
     )
+    step_ok_pattern = re.compile(r"decode step (?P<step>\d+) ok (?P<total>[0-9.+\-eE]+) ms")
     for result in results:
         for path in (result.stdout, result.stderr):
             if not path.exists():
@@ -661,17 +664,33 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                 if "stream stats " in line:
                     values = parse_key_values(line)
                     try:
-                        steps.append(
-                            GGUFDecodeStep(
-                                step=int(values["step"]),
-                                phase=values.get("phase", "unknown"),
-                                step_ms=float(values["step_ms"]),
-                                generated_tokens=int(values.get("generated_tokens", "0")),
-                                tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
-                            )
+                        step_id = int(values["step"])
+                        steps_by_id[step_id] = GGUFDecodeStep(
+                            step=step_id,
+                            phase=values.get("phase", "unknown"),
+                            step_ms=float(values["step_ms"]),
+                            generated_tokens=int(values.get("generated_tokens", "0")),
+                            tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
                         )
                     except (KeyError, ValueError):
                         continue
+                if "decode step " in line and " ok " in line:
+                    match = step_ok_pattern.search(line)
+                    if match is not None:
+                        try:
+                            step_id = int(match.group("step"))
+                            steps_by_id.setdefault(
+                                step_id,
+                                GGUFDecodeStep(
+                                    step=step_id,
+                                    phase="unknown",
+                                    step_ms=float(match.group("total")),
+                                    generated_tokens=0,
+                                    tokens_per_second=0.0,
+                                ),
+                            )
+                        except ValueError:
+                            continue
                 if "decode step " in line and " helper " in line:
                     match = helper_pattern.search(line)
                     if match is None:
@@ -691,7 +710,7 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             avg_ms=float(match.group("avg")),
                         )
                     )
-    return GGUFDecodeAnalysis(steps=steps, helpers=helpers)
+    return GGUFDecodeAnalysis(steps=[steps_by_id[key] for key in sorted(steps_by_id)], helpers=helpers)
 
 
 def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> dict[str, object] | None:
