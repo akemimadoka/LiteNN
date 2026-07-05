@@ -154,6 +154,16 @@ def redact_command(command: list[str], replacements: list[tuple[str, str]]) -> l
     return [redact_text(arg, replacements) for arg in command]
 
 
+def redact_json_value(value: object, replacements: list[tuple[str, str]]) -> object:
+    if isinstance(value, str):
+        return redact_text(value, replacements)
+    if isinstance(value, list):
+        return [redact_json_value(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return { str(key): redact_json_value(item, replacements) for key, item in value.items() }
+    return value
+
+
 def write_redacted_text(path: Path, text: str, replacements: list[tuple[str, str]]) -> None:
     path.write_text(redact_text(text, replacements), encoding="utf-8")
 
@@ -372,7 +382,31 @@ def run_step(
     )
 
 
-def chrome_trace_events(results: list[StepResult], metadata: dict[str, object]) -> dict[str, object]:
+def load_chrome_trace_events(path: Path, replacements: list[tuple[str, str]], pid_offset: int) -> list[dict[str, object]]:
+    trace = load_json(path)
+    if not isinstance(trace, dict) or not isinstance(trace.get("traceEvents"), list):
+        raise SystemExit(f"unsupported Chrome Trace JSON: {path}")
+    events: list[dict[str, object]] = []
+    for raw_event in trace["traceEvents"]:
+        if not isinstance(raw_event, dict):
+            continue
+        event = redact_json_value(raw_event, replacements)
+        if not isinstance(event, dict):
+            continue
+        pid = event.get("pid")
+        event["pid"] = (int(pid) if isinstance(pid, int) else DEFAULT_TRACE_PID) + pid_offset
+        args = event.setdefault("args", {})
+        if isinstance(args, dict):
+            args.setdefault("imported_trace", redact_text(str(path), replacements))
+        events.append(event)
+    return events
+
+
+def chrome_trace_events(
+    results: list[StepResult],
+    metadata: dict[str, object],
+    imported_events: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     if results:
         origin = min(result.start_ns for result in results)
     else:
@@ -397,6 +431,9 @@ def chrome_trace_events(results: list[StepResult], metadata: dict[str, object]) 
                 },
             }
         )
+
+    if imported_events:
+        events.extend(imported_events)
 
     events.append(
         {
@@ -840,6 +877,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Existing example/gguf/qwen_smoke.py report to import for GGUF decode analysis; repeatable",
     )
+    parser.add_argument(
+        "--trace-json",
+        action="append",
+        default=[],
+        type=Path,
+        help="Existing Chrome Trace / Perfetto JSON to merge into the bundle trace; repeatable",
+    )
     return parser.parse_args()
 
 
@@ -891,9 +935,11 @@ def main() -> int:
             break
 
     imported_evidence: list[LogEvidence] = []
+    imported_trace_events: list[dict[str, object]] = []
     imported_outputs: dict[str, object] | None = None
-    if args.qwen_smoke_report:
+    if args.qwen_smoke_report or args.trace_json:
         imported_outputs = {}
+        imported_trace_count = 0
         for report_index, report_path in enumerate(args.qwen_smoke_report):
             evidence, links = load_qwen_smoke_evidence(report_path)
             imported_evidence.extend(evidence)
@@ -902,6 +948,18 @@ def main() -> int:
                 imported_outputs[f"{prefix}_{key}"] = (
                     redact_text(value, replacements) if isinstance(value, str) else value
                 )
+            trace_value = links.get("qwen_smoke_trace")
+            if isinstance(trace_value, str):
+                trace_events = load_chrome_trace_events(Path(trace_value), replacements, 100 * (report_index + 1))
+                imported_trace_events.extend(trace_events)
+                imported_trace_count += len(trace_events)
+        for trace_index, trace_path in enumerate(args.trace_json):
+            trace_events = load_chrome_trace_events(trace_path, replacements, 1000 + 100 * trace_index)
+            imported_trace_events.extend(trace_events)
+            imported_trace_count += len(trace_events)
+            imported_outputs[f"trace_json_{trace_index}"] = redact_text(str(trace_path), replacements)
+        if imported_trace_count:
+            imported_outputs["merged_trace_event_count"] = imported_trace_count
 
     stack_outputs: dict[str, object] | None = None
     if args.collapsed_stacks:
@@ -923,7 +981,7 @@ def main() -> int:
     log_evidence.extend(imported_evidence)
     analysis_outputs = write_gguf_decode_analysis(out_dir, parse_gguf_decode_logs(log_evidence))
     manifest = write_manifest(out_dir, results, metadata, stack_outputs, analysis_outputs, imported_outputs)
-    trace = chrome_trace_events(results, metadata)
+    trace = chrome_trace_events(results, metadata, imported_trace_events)
     (out_dir / "trace.json").write_text(json.dumps(trace, indent=2), encoding="utf-8")
     summarize(out_dir, manifest)
 

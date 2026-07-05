@@ -51,11 +51,14 @@ Priority classes for the GGUF/Qwen decode work:
   - [x] Profile-summary comparison slice: `benchmark/gguf_decode_compare.py --litenn-profile-summary
     <gguf_decode_summary.json>` can compare already-bundled decode runs directly and carries top-helper/helper-share
     columns into Markdown/CSV/JSON outputs.
-  - [ ] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
+  - [x] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits
           `qwen_smoke_trace.json` and `qwen_smoke_waterfall.md`, and the GGUF AOT path reports separated-cache
           population, artifact separation, cache read, and JIT/load timing explicitly.
+    - [x] Bundle merge slice: `benchmark/profile_bundle.py --qwen-smoke-report` now imports the referenced
+          `qwen_smoke_trace.json` into the top-level `trace.json`, and `--trace-json` can merge arbitrary
+          Chrome Trace / Perfetto JSON evidence into the same bundle.
     - [x] Cache-population visibility/fix: GGUF decode AOT cache writes now stream large regions in chunks with progress
           diagnostics and build separated metadata directly from the compiled artifact, avoiding an extra multi-GB
           `SeparateRodata()` weight copy during cache population. Borrowing/mapping original GGUF weight regions remains

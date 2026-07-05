@@ -662,9 +662,11 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Compare completed profile bundles directly: `gguf_decode_compare.py --litenn-profile-summary
             <gguf_decode_summary.json>` now derives throughput and carries top-helper/helper-share columns into the
             output tables.
-      - [ ] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
+      - [x] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
-            steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases.
+            steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases. Completed on
+            2026-07-05: `qwen_smoke.py` writes command/span trace artifacts and `profile_bundle.py` can merge
+            `qwen_smoke_trace.json` or arbitrary `--trace-json` inputs into the bundle `trace.json`.
       - [x] Add the first optional Linux `perf record` wrapper so local Linux runs can capture raw `perf.data` beside
             the bundle without making platform profilers mandatory.
       - [ ] Add full platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
@@ -681,7 +683,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             `speedscope.json` or collapsed stacks, optional flame-graph HTML/SVG, benchmark/profile CSVs, and a short
             Markdown summary of top compile/runtime bottlenecks. Current first slice writes raw logs, `trace.json`,
             `manifest.json`, `summary.md`, `speedscope.json`, and built-in flame graph outputs for collapsed-stack
-            inputs; platform-native stack import remains open.
+            inputs; qwen smoke trace/summary import is now merged into the main bundle trace; platform-native stack
+            import remains open.
 
 Completed notes:
 
