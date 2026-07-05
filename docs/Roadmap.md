@@ -2846,6 +2846,14 @@ Priority classes:
       gap is now tied to concrete execution structure: capacity-shaped overhead remains, but the larger
       capacity-independent gap is the GGML block projection helper's direct Q4_K/Q6_K x Float32 design versus
       llama.cpp's Q8_K activation staging, quantized vec-dot kernels, tiled scheduling, and packed/repacked CPU kernels.
+- [x] Build a local CPU-only llama.cpp GGUF control path before doing more CPU tuning:
+      completed on 2026-07-06 with an out-of-tree `llama-bench` build from `third_party/llama.cpp`, configured with
+      CUDA/Vulkan/BLAS disabled. MinGW required explicit Windows 10 API compile flags for the bundled `cpp-httplib`.
+      TG-only Qwen2.5-Coder-14B Q4_K_M measurements showed llama.cpp at about `5.07 t/s` for T4, `4.60 t/s` for T8,
+      `3.52 t/s` for T16 with `b=1/ub=1`, `3.34 t/s` for T16 with default `b=2048/ub=512`, and `2.62 t/s` for T32.
+      LiteNN stateful CPU AOT measured about `0.49 t/s` at T4 and about `2.33 t/s` with its default thread policy on
+      the same short prompt. The priority remains CPU projection/scheduler parity with llama.cpp rather than CUDA work
+      or blanket thread-count retuning.
 - [x] P2: Add decode operator-level profiling before claiming the next full-step bottleneck:
       collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
       count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
@@ -3129,6 +3137,10 @@ or backend architecture decisions before implementation would be meaningful.
 - Deferred: warp-tiled/shared-memory CUDA quantized projection kernels and fused LLM kernels
   (RMSNorm+Linear, RoPE+Q/K layout, attention softmax/value aggregation, quantized Linear epilogues). G16 closes native
   correctness and production gates; these remain benchmark-driven performance work.
+- Deferred: CUDA GGUF decode-loop production runner work. This includes a user-facing CUDA backend selector for the
+  decode-loop CLI, CUDA cache-hit loading for real Qwen stateful artifacts, Qwen-shaped CUDA quantized projection
+  benchmark rows, and a full native CUDA decode comparison table. Do not start this until the CPU-vs-llama.cpp control
+  harness keeps the CPU parity work evidence-driven.
 - Deferred: repository-owned real Qwen CUDA-native/bridge decode benchmark rows. The comparison tooling accepts these
   rows, but recording model-specific results requires an external model/golden run and should not be replaced by
   synthetic data.

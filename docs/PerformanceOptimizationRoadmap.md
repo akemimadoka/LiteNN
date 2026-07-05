@@ -139,6 +139,19 @@ Priority classes for the GGUF/Qwen decode work:
                 `5120->5120`, `1.72 ms` for Q4_K `5120->13824`, `17.9 ms` for Q4_K logits, `3.02 ms` for Q6_K
                 `5120->13824`, and `33.0 ms` for Q6_K logits. Full decode A/B remains required before closing this
                 item.
+                CPU-only llama.cpp control run on 2026-07-06: an out-of-tree `llama-bench` build from
+                `third_party/llama.cpp` was configured with CUDA/Vulkan/BLAS disabled and MinGW Windows 10 API flags.
+                On the same Qwen2.5-Coder-14B Q4_K_M GGUF, TG-only `ngl=0, flash_attn=0` measured about `5.07 t/s`
+                at T4, `4.60 t/s` at T8, `3.52 t/s` at T16 with `b=1/ub=1`, `3.34 t/s` at T16 with default
+                `b=2048/ub=512`, and `2.62 t/s` at T32. LiteNN stateful CPU AOT on the same prompt measured about
+                `0.49 t/s` with `--cpu-aot-threads 4` and about `2.33 t/s` with the default thread policy. This rules
+                out simply copying llama.cpp's low thread count as the fix: LiteNN first needs llama.cpp-class
+                low-thread quantized projection efficiency and graph-wide task scheduling.
+          - [ ] P0: Add a repository-owned CPU-only llama.cpp control harness.
+                The manual 2026-07-06 run is useful evidence, but the next comparison should be reproducible without
+                leaking external model paths into the repository. Add a small benchmark driver that accepts a model path
+                at runtime, builds or locates `llama-bench`, captures TG-only rows for T2/T4/T8/T16/T32, and emits an
+                anonymized comparison table against LiteNN stateful CPU AOT cache-hit runs.
           - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
                 Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                 residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is
