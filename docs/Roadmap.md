@@ -3060,10 +3060,12 @@ Priority classes:
       - [x] Route GGUF capacity decode graphs through `GroupedActivePrefixAttentionNode` and lower that node to the
             grouped CPU AOT sidecar. The builder still applies RoPE per query/KV head before grouping, and the grouped
             helper remains a conservative CPU sidecar rather than a final KV-head-tiled attention kernel.
-- [ ] P2: Add context-extension validation gates.
+- [x] P2: Add context-extension validation gates.
       Golden evidence must cover prompt lengths beyond tiny smoke sizes, runtime position reuse, EOS behavior,
       tokenizer/chat-template parity, and at least one long-context RoPE/YaRN profile before reporting production
-      readiness.
+      readiness. Completed on 2026-07-05: `ValidateLLaMAContextRequest` rejects requests beyond model context, rejects
+      context extension without RoPE scaling metadata, accepts implemented linear RoPE extension within the scaled limit,
+      and blocks YaRN/LongRoPE long-context execution until those scaling formulas have golden-gated runtime support.
 - [ ] P2: Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
       The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
       generated-token latency, peak memory, artifact bytes, and fallback count.

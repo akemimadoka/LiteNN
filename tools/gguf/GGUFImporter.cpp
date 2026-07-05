@@ -1101,6 +1101,113 @@ namespace LiteNN::GGUF
 		return hyperparameters;
 	}
 
+	LLaMAContextValidationReport ValidateLLaMAContextRequest(const LLaMAHyperparameters& hyperparameters,
+	                                                         std::size_t requestedTokenCount,
+	                                                         std::size_t maxCacheLength)
+	{
+		LLaMAContextValidationReport report{
+			.requestedTokenCount = requestedTokenCount,
+			.maxCacheLength = maxCacheLength,
+			.modelContextLength = hyperparameters.contextLength,
+			.trainedContextLength =
+			    hyperparameters.ropeScalingOriginalContextLength.value_or(hyperparameters.contextLength),
+			.ropeScalingType = hyperparameters.ropeScalingType,
+		};
+		const auto addDiagnostic = [&report](std::string subject, std::string message, bool blocking) {
+			if (blocking)
+			{
+				report.accepted = false;
+			}
+			report.diagnostics.push_back({
+			    .subject = std::move(subject),
+			    .message = std::move(message),
+			    .blocking = blocking,
+			});
+		};
+
+		if (requestedTokenCount == 0 || maxCacheLength == 0)
+		{
+			addDiagnostic("decode.context", "Requested token count and max cache length must be positive.", true);
+			return report;
+		}
+		if (maxCacheLength < requestedTokenCount)
+		{
+			addDiagnostic("decode.max_cache_length",
+			              std::format("max-cache-length {} is smaller than requested token count {}", maxCacheLength,
+			                          requestedTokenCount),
+			              true);
+		}
+		if (hyperparameters.contextLength > 0 && requestedTokenCount > hyperparameters.contextLength)
+		{
+			addDiagnostic("decode.requested_token_count",
+			              std::format("requested {} total tokens but model context length is {}", requestedTokenCount,
+			                          hyperparameters.contextLength),
+			              true);
+		}
+		if (hyperparameters.contextLength > 0 && maxCacheLength > hyperparameters.contextLength)
+		{
+			addDiagnostic("decode.max_cache_length",
+			              std::format("max-cache-length {} exceeds model context length {}", maxCacheLength,
+			                          hyperparameters.contextLength),
+			              true);
+		}
+
+		const auto validationLength = std::max(requestedTokenCount, maxCacheLength);
+		report.usesContextExtension = report.trainedContextLength > 0 && validationLength > report.trainedContextLength;
+		if (!report.usesContextExtension)
+		{
+			return report;
+		}
+
+		const auto scalingSubject = std::format("{}.rope.scaling.type", hyperparameters.architecture);
+		if (hyperparameters.ropeScalingType == "none")
+		{
+			addDiagnostic(scalingSubject,
+			              std::format("requested context {} exceeds trained context {} but RoPE scaling is absent",
+			                          validationLength, report.trainedContextLength),
+			              true);
+			return report;
+		}
+		if (hyperparameters.ropeScalingType != "linear")
+		{
+			addDiagnostic(scalingSubject,
+			              std::format("requested context {} requires '{}' RoPE scaling, but current LiteNN decode "
+			                          "execution only validates none/linear scaling against long-context gates",
+			                          validationLength, hyperparameters.ropeScalingType),
+			              true);
+			return report;
+		}
+		if (!hyperparameters.ropeScalingFactor)
+		{
+			addDiagnostic(std::format("{}.rope.scaling.factor", hyperparameters.architecture),
+			              "linear RoPE context extension requires rope.scaling.factor metadata.", true);
+			return report;
+		}
+		if (!(*hyperparameters.ropeScalingFactor > 1.0))
+		{
+			addDiagnostic(std::format("{}.rope.scaling.factor", hyperparameters.architecture),
+			              std::format("linear RoPE scaling factor {} does not extend the trained context.",
+			                          *hyperparameters.ropeScalingFactor),
+			              true);
+		}
+		const auto scaledLimit = static_cast<double>(report.trainedContextLength) * *hyperparameters.ropeScalingFactor;
+		if (static_cast<double>(validationLength) > scaledLimit + 0.5)
+		{
+			addDiagnostic(std::format("{}.rope.scaling.factor", hyperparameters.architecture),
+			              std::format("requested context {} exceeds trained_context * scaling_factor ({:.0f})",
+			                          validationLength, scaledLimit),
+			              true);
+		}
+		if (!hyperparameters.ropeScalingFinetuned.value_or(false))
+		{
+			addDiagnostic(std::format("{}.rope.scaling.finetuned", hyperparameters.architecture),
+			              "linear RoPE context extension is not marked finetuned; require external long-context golden "
+			              "evidence before production acceptance.",
+			              false);
+		}
+		return report;
+	}
+
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath)
 	{
 		auto loaded = LoadGGUFContext(inputPath);

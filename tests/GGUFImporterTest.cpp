@@ -1622,6 +1622,117 @@ TEST(GGUFLLaMAHyperparameters, ParsesRopeScalingMetadata)
 	EXPECT_TRUE(*hyperparameters.ropeScalingFinetuned);
 }
 
+TEST(GGUFLLaMAHyperparameters, ValidatesContextRequestsWithoutExtension)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 4096 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	const auto report = GGUF::ValidateLLaMAContextRequest(hyperparameters, 256, 2048);
+	EXPECT_TRUE(report.accepted);
+	EXPECT_FALSE(report.usesContextExtension);
+	EXPECT_TRUE(report.diagnostics.empty());
+}
+
+TEST(GGUFLLaMAHyperparameters, RejectsContextExtensionWithoutRopeScaling)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 8192 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	    { "llama.rope.scaling.original_context_length", std::uint64_t{ 2048 } },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	const auto report = GGUF::ValidateLLaMAContextRequest(hyperparameters, 4096, 4096);
+	EXPECT_FALSE(report.accepted);
+	EXPECT_TRUE(report.usesContextExtension);
+	ASSERT_FALSE(report.diagnostics.empty());
+	EXPECT_TRUE(report.diagnostics.front().blocking);
+}
+
+TEST(GGUFLLaMAHyperparameters, AcceptsLinearContextExtensionWithinScaledLimit)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 8192 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	    { "llama.rope.scaling.type", std::string("linear") },
+	    { "llama.rope.scaling.factor", 4.0 },
+	    { "llama.rope.scaling.original_context_length", std::uint64_t{ 2048 } },
+	    { "llama.rope.scaling.finetuned", true },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	const auto report = GGUF::ValidateLLaMAContextRequest(hyperparameters, 4096, 8192);
+	EXPECT_TRUE(report.accepted);
+	EXPECT_TRUE(report.usesContextExtension);
+	EXPECT_TRUE(report.diagnostics.empty());
+}
+
+TEST(GGUFLLaMAHyperparameters, RejectsContextExtensionBeyondScaledLimit)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 16384 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	    { "llama.rope.scaling.type", std::string("linear") },
+	    { "llama.rope.scaling.factor", 4.0 },
+	    { "llama.rope.scaling.original_context_length", std::uint64_t{ 2048 } },
+	    { "llama.rope.scaling.finetuned", true },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	const auto report = GGUF::ValidateLLaMAContextRequest(hyperparameters, 8193, 8193);
+	EXPECT_FALSE(report.accepted);
+	EXPECT_TRUE(report.usesContextExtension);
+}
+
+TEST(GGUFLLaMAHyperparameters, RejectsUnimplementedContextExtensionScaling)
+{
+	Graph graph;
+	graph.SetMetadata({
+	    { "general.architecture", std::string("llama") },
+	    { "llama.context_length", std::uint64_t{ 8192 } },
+	    { "llama.embedding_length", std::uint64_t{ 256 } },
+	    { "llama.block_count", std::uint64_t{ 4 } },
+	    { "llama.feed_forward_length", std::uint64_t{ 768 } },
+	    { "llama.attention.head_count", std::uint64_t{ 8 } },
+	    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
+	    { "llama.rope.scaling.type", std::string("yarn") },
+	    { "llama.rope.scaling.factor", 4.0 },
+	    { "llama.rope.scaling.original_context_length", std::uint64_t{ 2048 } },
+	});
+
+	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
+	const auto report = GGUF::ValidateLLaMAContextRequest(hyperparameters, 4096, 4096);
+	EXPECT_FALSE(report.accepted);
+	EXPECT_TRUE(report.usesContextExtension);
+}
+
 TEST(GGUFLLaMAHyperparameters, RejectsMissingRequiredMetadata)
 {
 	Graph graph;

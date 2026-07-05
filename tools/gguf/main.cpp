@@ -1570,21 +1570,29 @@ namespace
 		auto tokenPieces = CopyTokenPieces(imported.model.UnsafeGraphView());
 		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
 		const auto maxCacheLength = options.maxCacheLength.value_or(requestedTokenCount);
-		if (maxCacheLength < requestedTokenCount)
+		const auto contextValidation =
+		    LiteNN::GGUF::ValidateLLaMAContextRequest(hyperparameters, requestedTokenCount, maxCacheLength);
+		LogGGUFDiagnostic(diagnostics,
+		                  std::format("decode-loop context model={} trained={} requested={} max_cache={} "
+		                              "rope_scaling={} extension={}",
+		                              contextValidation.modelContextLength, contextValidation.trainedContextLength,
+		                              requestedTokenCount, maxCacheLength, contextValidation.ropeScalingType,
+		                              contextValidation.usesContextExtension ? "true" : "false"));
+		for (const auto& diagnostic : contextValidation.diagnostics)
 		{
-			throw std::runtime_error(
-			    std::format("decode-loop max-cache-length {} is smaller than requested token count {}", maxCacheLength,
-			                requestedTokenCount));
+			LogGGUFDiagnostic(diagnostics,
+			                  std::format("decode-loop context diagnostic blocking={} subject={} message={}",
+			                              diagnostic.blocking ? "true" : "false", diagnostic.subject,
+			                              diagnostic.message));
 		}
-		if (hyperparameters.contextLength > 0 && requestedTokenCount > hyperparameters.contextLength)
+		if (!contextValidation.accepted)
 		{
-			throw std::runtime_error(std::format("decode-loop requested {} total tokens but model context length is {}",
-			                                     requestedTokenCount, hyperparameters.contextLength));
-		}
-		if (hyperparameters.contextLength > 0 && maxCacheLength > hyperparameters.contextLength)
-		{
-			throw std::runtime_error(std::format("decode-loop max-cache-length {} exceeds model context length {}",
-			                                     maxCacheLength, hyperparameters.contextLength));
+			const auto blocking = std::ranges::find_if(
+			    contextValidation.diagnostics,
+			    [](const LiteNN::GGUF::LLaMACompatibilityDiagnostic& diagnostic) { return diagnostic.blocking; });
+			throw std::runtime_error(blocking == contextValidation.diagnostics.end()
+			                             ? "decode-loop context validation failed"
+			                             : "decode-loop context validation failed: " + blocking->message);
 		}
 		if (options.pagedResidentPageCount && !options.pagedReferenceDecode)
 		{

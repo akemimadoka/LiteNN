@@ -94,6 +94,18 @@ namespace LiteNN::GGUF
 		std::vector<LLaMACompatibilityDiagnostic> diagnostics;
 	};
 
+	struct LLaMAContextValidationReport
+	{
+		std::size_t requestedTokenCount{};
+		std::size_t maxCacheLength{};
+		std::size_t modelContextLength{};
+		std::size_t trainedContextLength{};
+		std::string ropeScalingType;
+		bool accepted{ true };
+		bool usesContextExtension{};
+		std::vector<LLaMACompatibilityDiagnostic> diagnostics;
+	};
+
 	struct LLMTokenizerMetadataSummary
 	{
 		std::optional<std::string> model;
@@ -151,6 +163,9 @@ namespace LiteNN::GGUF
 	LLaMAQuantizedExecutionPlan PlanLLaMAQuantizedWeightExecution(const Graph& archive,
 	                                                              std::size_t dequantizedMemoryBudgetBytes = 0);
 	LLaMAHyperparameters ParseLLaMAHyperparameters(const Graph& graph);
+	LLaMAContextValidationReport ValidateLLaMAContextRequest(const LLaMAHyperparameters& hyperparameters,
+	                                                         std::size_t requestedTokenCount,
+	                                                         std::size_t maxCacheLength);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);
 	ImportSummary ConvertGGUFArchiveExternalWeights(const std::filesystem::path& inputPath,
