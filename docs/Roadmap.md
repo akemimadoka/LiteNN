@@ -2879,6 +2879,12 @@ Priority classes:
       logits parity test and measured `GGMLBlockMatMulHelper/Q4_K/qwen_kv/T1` at about `1.73 ms` CPU and
       `Q4_K/baseline4096/T1` at about `5.79 ms` CPU; the same `qwen_kv` helper row measured about `0.33 ms` CPU at
       `T16`, keeping helper-level parallelism as a valid but shape/grain-sensitive optimization.
+- [x] P0: Add a complete-output-group fast path for direct Q4_K/Q6_K helpers:
+      completed on 2026-07-06 after rejecting a wider `x8` output grouping experiment that regressed Qwen-shaped rows.
+      The retained path skips repeated tail-validity checks for the common full `x4` output group while preserving the
+      old partial-tail logic. Short helper validation measured Q4_K default rows at about `0.70 ms` for `5120->5120`,
+      `1.64 ms` for `5120->13824`, `17.5 ms` for logits, and grouped gate/up concatenated at about `3.32 ms`; a real
+      Qwen2.5-Coder-14B Q4_K_M stateful smoke with `max_cache=11` measured about `506 ms/generated token`.
 - [x] P0: Tile the Q6_K direct CPU helper across four output columns:
       the same grouped-output helper path now covers Q6_K FFN-down-style projections without changing accumulation
       semantics. Short validation on 2026-07-02 passed the stateful GGUF logits parity test and measured

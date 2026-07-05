@@ -728,9 +728,19 @@ namespace
 		std::cout << ']';
 	}
 
+	void EnsureParentDirectory(const std::filesystem::path& path)
+	{
+		const auto parent = path.parent_path();
+		if (!parent.empty())
+		{
+			std::filesystem::create_directories(parent);
+		}
+	}
+
 	void WriteLastTokenLogitsText(const LiteNN::Tensor<LiteNN::CPU>& logits, std::string_view outputPath)
 	{
 		const auto lastTokenLogits = LiteNN::GGUF::ExtractLastTokenLogits(logits);
+		EnsureParentDirectory(std::filesystem::path(outputPath));
 		std::ofstream output(std::string(outputPath), std::ios::binary);
 		if (!output)
 		{
@@ -1881,6 +1891,7 @@ namespace
 		std::cout << '\n';
 		if (options.outputPath)
 		{
+			EnsureParentDirectory(std::filesystem::path(*options.outputPath));
 			std::ofstream output(*options.outputPath, std::ios::binary);
 			if (!output)
 			{

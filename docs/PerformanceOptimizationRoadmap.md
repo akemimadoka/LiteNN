@@ -122,6 +122,12 @@ Priority classes for the GGUF/Qwen decode work:
                 `1x5120 -> 152064`. The current Q8_K-staged prototype is not a default-switch candidate on the July 5
                 production-shaped T16 rows, so this work needs packed/repacked weight layout, architecture-specific
                 vector-dot kernels, activation staging reuse where it actually wins, and a format-specific policy.
+                Progress on 2026-07-06: direct Q4_K/Q6_K helpers now use a full-column-group fast path that avoids
+                repeated tail-validity checks for the common complete `x4` output group. A wider `x8` grouping
+                experiment was rejected because Qwen-shaped helper rows regressed. Short helper validation after the
+                retained fast path measured Q4_K default rows at about `0.70 ms` for `5120->5120`, `1.64 ms` for
+                `5120->13824`, `17.5 ms` for logits, and grouped gate/up concatenated at about `3.32 ms`; a real
+                Qwen2.5-Coder-14B Q4_K_M `--stateful --max_cache=11` smoke measured about `506 ms/generated token`.
           - [ ] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
                 The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
                 T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full

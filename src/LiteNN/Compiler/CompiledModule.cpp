@@ -1475,11 +1475,12 @@ namespace
 	                                 const float* lhs, std::int64_t lhsStride, const float* lhsSubblockSums,
 	                                 float acc[4])
 	{
+		const bool allValid = valid[0] && valid[1] && valid[2] && valid[3];
 		float d[4] = {};
 		float dmin[4] = {};
 		for (int column = 0; column < 4; ++column)
 		{
-			if (!valid[column])
+			if (!allValid && !valid[column])
 			{
 				continue;
 			}
@@ -1493,7 +1494,7 @@ namespace
 			std::uint32_t minimum[4] = {};
 			for (int column = 0; column < 4; ++column)
 			{
-				if (valid[column])
+				if (allValid || valid[column])
 				{
 					GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
 				}
@@ -1515,23 +1516,36 @@ namespace
 						lhsSum += lhsValue;
 					}
 
-					for (int column = 0; column < 4; ++column)
+					if (allValid)
 					{
-						if (!valid[column])
+						for (int column = 0; column < 4; ++column)
 						{
-							continue;
+							const auto quantByte = static_cast<std::uint32_t>(
+							    GGMLBlockByte(blocks[column], byteStride, 16 + quantPairOffset + localLane));
+							const auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+							quantSum[column] += lhsValue * static_cast<float>(quant);
 						}
-						const auto quantByte = static_cast<std::uint32_t>(
-						    GGMLBlockByte(blocks[column], byteStride, 16 + quantPairOffset + localLane));
-						const auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
-						quantSum[column] += lhsValue * static_cast<float>(quant);
+					}
+					else
+					{
+						for (int column = 0; column < 4; ++column)
+						{
+							if (!valid[column])
+							{
+								continue;
+							}
+							const auto quantByte = static_cast<std::uint32_t>(
+							    GGMLBlockByte(blocks[column], byteStride, 16 + quantPairOffset + localLane));
+							const auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+							quantSum[column] += lhsValue * static_cast<float>(quant);
+						}
 					}
 				}
 			}
 
 			for (int column = 0; column < 4; ++column)
 			{
-				if (valid[column])
+				if (allValid || valid[column])
 				{
 					acc[column] += d[column] * static_cast<float>(scale[column]) * quantSum[column] -
 					               dmin[column] * static_cast<float>(minimum[column]) * lhsSum;
@@ -2003,10 +2017,11 @@ namespace
 	void AccumulateGGMLQ6KBlockF32x4(const std::uint8_t* const blocks[4], const bool valid[4], std::int64_t byteStride,
 	                                 const float* lhs, std::int64_t lhsStride, float acc[4])
 	{
+		const bool allValid = valid[0] && valid[1] && valid[2] && valid[3];
 		float d[4] = {};
 		for (int column = 0; column < 4; ++column)
 		{
-			if (valid[column])
+			if (allValid || valid[column])
 			{
 				d[column] = ReadGGMLF16Strided(blocks[column], byteStride, 208);
 			}
@@ -2022,7 +2037,7 @@ namespace
 					float scale[4] = {};
 					for (int column = 0; column < 4; ++column)
 					{
-						if (valid[column])
+						if (allValid || valid[column])
 						{
 							scale[column] = static_cast<float>(
 							    static_cast<std::int8_t>(GGMLBlockByte(blocks[column], byteStride, 192 + scaleOffset)));
@@ -2039,27 +2054,44 @@ namespace
 							const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
 							const auto qhOffset = halfBlock * 32 + laneInSegment;
 							const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
-							for (int column = 0; column < 4; ++column)
+							if (allValid)
 							{
-								if (!valid[column])
+								for (int column = 0; column < 4; ++column)
 								{
-									continue;
+									const auto ql =
+									    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, qlOffset));
+									const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+									const auto qh = static_cast<std::uint32_t>(
+									    GGMLBlockByte(blocks[column], byteStride, 128 + qhOffset));
+									const auto highTwo = (qh >> (segment * 2)) & 3U;
+									const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+									quantSum[column] += lhsValue * static_cast<float>(quant);
 								}
-								const auto ql =
-								    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, qlOffset));
-								const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
-								const auto qh = static_cast<std::uint32_t>(
-								    GGMLBlockByte(blocks[column], byteStride, 128 + qhOffset));
-								const auto highTwo = (qh >> (segment * 2)) & 3U;
-								const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
-								quantSum[column] += lhsValue * static_cast<float>(quant);
+							}
+							else
+							{
+								for (int column = 0; column < 4; ++column)
+								{
+									if (!valid[column])
+									{
+										continue;
+									}
+									const auto ql =
+									    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, qlOffset));
+									const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+									const auto qh = static_cast<std::uint32_t>(
+									    GGMLBlockByte(blocks[column], byteStride, 128 + qhOffset));
+									const auto highTwo = (qh >> (segment * 2)) & 3U;
+									const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+									quantSum[column] += lhsValue * static_cast<float>(quant);
+								}
 							}
 						}
 					}
 
 					for (int column = 0; column < 4; ++column)
 					{
-						if (valid[column])
+						if (allValid || valid[column])
 						{
 							acc[column] += d[column] * scale[column] * quantSum[column];
 						}
