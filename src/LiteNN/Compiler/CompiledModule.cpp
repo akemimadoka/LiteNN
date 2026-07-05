@@ -1299,7 +1299,7 @@ namespace
 		auto capped = requestedOrHardware;
 		if (requestedThreadCount == 0)
 		{
-			capped = std::min<std::uint64_t>(capped, 16);
+			capped = std::min<std::uint64_t>(capped, 32);
 			if (outputUnits <= 32)
 			{
 				capped = std::min<std::uint64_t>(capped, 4);
@@ -2544,10 +2544,32 @@ namespace
 					const auto columnBase = (groupIndex % ctx.columnGroupsPerRow) * static_cast<std::uint64_t>(4);
 					const auto* lhsRow = ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
 					float acc[4] = {};
-					const bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
-						                    columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
-						                    columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
-						                    columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+					bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
+						              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
+						              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
+						              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+					const std::uint8_t* weightRows[4] = {};
+					for (int localColumn = 0; localColumn < 4; ++localColumn)
+					{
+						if (!valid[localColumn])
+						{
+							continue;
+						}
+						const auto column =
+						    static_cast<std::int64_t>(columnBase + static_cast<std::uint64_t>(localColumn));
+						std::uint64_t projectionColumn = 0;
+						const auto* projection =
+						    ResolveGGMLBlockMatMulProjection({ ctx.projections, ctx.projectionCount },
+						                                     static_cast<std::uint64_t>(column), projectionColumn);
+						if (!projection)
+						{
+							valid[localColumn] = false;
+							continue;
+						}
+						weightRows[localColumn] =
+						    projection->rhsAligned + projection->rhsOffset +
+						    static_cast<std::int64_t>(projectionColumn * ctx.rowBytes) * ctx.rhsStride;
+					}
 					for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 					{
 						const auto* lhsBlock =
@@ -2568,19 +2590,8 @@ namespace
 							{
 								continue;
 							}
-							const auto column =
-							    static_cast<std::int64_t>(columnBase + static_cast<std::uint64_t>(localColumn));
-							std::uint64_t projectionColumn = 0;
-							const auto* projection =
-							    ResolveGGMLBlockMatMulProjection({ ctx.projections, ctx.projectionCount },
-							                                     static_cast<std::uint64_t>(column), projectionColumn);
-							if (!projection)
-							{
-								continue;
-							}
 							blocks[localColumn] =
-							    projection->rhsAligned + projection->rhsOffset +
-							    static_cast<std::int64_t>(projectionColumn * ctx.rowBytes) * ctx.rhsStride +
+							    weightRows[localColumn] +
 							    static_cast<std::int64_t>(blockIndex * ctx.bytesPerBlock) * ctx.rhsStride;
 						}
 						if (ctx.activationDotMode == GGMLActivationDotMode::Q8KStaged)

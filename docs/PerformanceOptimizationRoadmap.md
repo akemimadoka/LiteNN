@@ -126,6 +126,13 @@ Priority classes for the GGUF/Qwen decode work:
                 The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
                 T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full
                 stateful decode with helper share, residual share, and generated-token TPS before changing defaults.
+                First implementation slice completed on 2026-07-05: large GGML block MatMul auto-policy now permits up
+                to 32 workers instead of capping at 16, while tiny output-unit counts remain capped at 4/8 workers. The
+                same slice hoists grouped-projection column/projection resolution out of the K-block loop. Short
+                Qwen-shaped helper validation after the change measured T0/default at about `0.58 ms` for Q4_K
+                `5120->5120`, `1.72 ms` for Q4_K `5120->13824`, `17.9 ms` for Q4_K logits, `3.02 ms` for Q6_K
+                `5120->13824`, and `33.0 ms` for Q6_K logits. Full decode A/B remains required before closing this
+                item.
           - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
                 Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                 residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is
