@@ -353,7 +353,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--paged-reference-decode",
         action="store_true",
-        help="Compile the experimental paged-reference stateful decode schedule; requires --compile-only",
+        help="Use the experimental paged-reference stateful decode schedule",
+    )
+    parser.add_argument(
+        "--paged-resident-pages",
+        type=int,
+        help="Resident KV page count passed to litenn_gguf_convert when --paged-reference-decode is enabled",
     )
     parser.add_argument("--capture-llamacpp", action="store_true")
     parser.add_argument("--compare-logits", action="store_true")
@@ -407,8 +412,10 @@ def main() -> int:
         raise SystemExit("--output is only used by the direct token-id decode path")
     if args.require_aot_cache_hit and args.aot_cache_dir is None:
         raise SystemExit("--require-aot-cache-hit requires --aot-cache-dir")
-    if args.paged_reference_decode and not args.compile_only:
-        raise SystemExit("--paged-reference-decode currently requires --compile-only")
+    if args.paged_resident_pages is not None and not args.paged_reference_decode:
+        raise SystemExit("--paged-resident-pages requires --paged-reference-decode")
+    if args.paged_resident_pages is not None and args.paged_resident_pages <= 0:
+        raise SystemExit("--paged-resident-pages must be positive")
     if args.apply_chat_template and args.raw_prompt:
         raise SystemExit("--apply-chat-template and --raw-prompt cannot be used together")
 
@@ -632,6 +639,8 @@ def main() -> int:
             decode_cmd.append("--compile-only")
         if args.paged_reference_decode:
             decode_cmd.append("--paged-reference-decode")
+        if args.paged_resident_pages is not None:
+            decode_cmd.extend(["--paged-resident-pages", str(args.paged_resident_pages)])
         if args.max_cache_length is not None:
             decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
         decode_cmd.extend(["--cpu-aot-llvm-opt-level", str(args.llvm_opt_level)])

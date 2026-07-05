@@ -9,6 +9,7 @@
 #ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
 #include <LlamaCppTokenizerAdapter.h>
 #endif
+#include <LiteNN/Runtime/Scheduler.h>
 #include <LiteNN/Serialization/ModelPackageIO.h>
 
 #include <algorithm>
@@ -857,6 +858,69 @@ namespace
 		return inputs;
 	}
 
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	void InitializePagedKVMetadataInput(const LiteNN::CompiledTensorSpec& input, LiteNN::Tensor<LiteNN::CPU>& tensor)
+	{
+		if (input.type.dtype != LiteNN::DataType::Int64 || !input.type.IsFullyStatic())
+		{
+			return;
+		}
+		const auto shape = input.type.StaticShape();
+		auto* values = static_cast<std::int64_t*>(tensor.UnsafeRawData());
+		if (input.name.starts_with("page_table_") && shape.size() == 1)
+		{
+			std::fill_n(values, LiteNN::Detail::Product(shape), LiteNN::Runtime::PagedKVInvalidPage);
+			return;
+		}
+		if (!input.name.starts_with("page_descriptor_") || shape.size() != 2)
+		{
+			return;
+		}
+		const auto columnCount = static_cast<std::size_t>(LiteNN::Runtime::PagedKVPageDescriptorColumn::Count);
+		if (shape[1] < columnCount)
+		{
+			throw std::runtime_error(
+			    std::format("Paged KV descriptor input {} has too few columns: {}", input.name, shape[1]));
+		}
+		const auto logicalPageColumn =
+		    static_cast<std::size_t>(LiteNN::Runtime::PagedKVPageDescriptorColumn::LogicalPage);
+		for (std::size_t page = 0; page < shape[0]; ++page)
+		{
+			values[page * shape[1] + logicalPageColumn] = LiteNN::Runtime::PagedKVInvalidPage;
+		}
+	}
+
+	std::vector<LiteNN::Tensor<LiteNN::CPU>> MakeZeroStateInputs(std::span<const LiteNN::CompiledTensorSpec> inputSpecs,
+	                                                             LiteNN::Tensor<LiteNN::CPU> tokenIds)
+	{
+		if (inputSpecs.empty())
+		{
+			throw std::runtime_error("Compiled LLM module has no inputs");
+		}
+		if (inputSpecs.front().type.dtype != LiteNN::DataType::Int32 ||
+		    inputSpecs.front().type.StaticShape() != tokenIds.Shape())
+		{
+			throw std::runtime_error("Compiled LLM module first input does not match token-id tensor");
+		}
+
+		std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
+		inputs.push_back(std::move(tokenIds));
+		LiteNN::CPU cpu;
+		for (std::size_t i = 1; i < inputSpecs.size(); ++i)
+		{
+			const auto& input = inputSpecs[i];
+			if (!input.type.IsFullyStatic())
+			{
+				throw std::runtime_error(
+				    std::format("Compiled LLM module input {} ({}) must have a static shape", i, input.name));
+			}
+			auto& tensor = inputs.emplace_back(input.type.StaticShape(), input.type.dtype, cpu);
+			InitializePagedKVMetadataInput(input, tensor);
+		}
+		return inputs;
+	}
+#endif
+
 	LiteNN::Tensor<LiteNN::CPU> MakeTokenIdTensorForPlan(std::int32_t tokenId, const LiteNN::ExecutablePlan& plan)
 	{
 		const std::array<std::int32_t, 1> ids{ tokenId };
@@ -1522,11 +1586,6 @@ namespace
 			throw std::runtime_error(std::format("decode-loop max-cache-length {} exceeds model context length {}",
 			                                     maxCacheLength, hyperparameters.contextLength));
 		}
-		if (options.pagedReferenceDecode && !options.compileOnly)
-		{
-			throw std::runtime_error("--paged-reference-decode currently supports --compile-only until paged KV "
-			                         "initialization/writeback is wired into the decode loop");
-		}
 		if (options.pagedResidentPageCount && !options.pagedReferenceDecode)
 		{
 			throw std::runtime_error("--paged-resident-pages requires --paged-reference-decode");
@@ -1625,7 +1684,8 @@ namespace
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulInputs;
 		if (options.statefulDecode)
 		{
-			statefulInputs = MakeZeroStateInputs(decodePlan, MakeTokenIdTensorForPlan(currentToken, decodePlan));
+			statefulInputs =
+			    MakeZeroStateInputs(decodeModule.InputSpecs(), MakeTokenIdTensorForPlan(currentToken, decodePlan));
 		}
 		if (options.logitsOutputDirectory)
 		{

@@ -3021,10 +3021,11 @@ Priority classes:
                   `BuildLLaMADecodeRuntimeSchedule(... usePagedReferenceDecode=true)` binds paged KV/page-table/
                   page-descriptor/active-length states as function inputs and function outputs, while public compiled
                   artifacts still expose only logits through runtime-schedule output projection.
-            - [x] Add a guarded CLI/smoke entry for the paged-reference schedule. Completed on 2026-07-05:
-                  `litenn_gguf_convert --paged-reference-decode --compile-only` and
-                  `example/gguf/qwen_smoke.py --paged-reference-decode --compile-only` can build/cache the schedule
-                  without pretending the decode loop can initialize paged KV state yet.
+            - [x] Add a CLI/smoke entry for the paged-reference schedule. Completed on 2026-07-05:
+                  `litenn_gguf_convert --paged-reference-decode` and
+                  `example/gguf/qwen_smoke.py --paged-reference-decode` can now run the stateful decode loop after
+                  initializing page tables and page descriptors from compiled input specs; `--compile-only` remains
+                  available for cache warming.
             - [x] Add CPU AOT lowering for the paged reference attention node. Completed on 2026-07-05:
                   `GroupedPagedAttentionNode` lowers to `litenn_cpu_grouped_paged_attention_f32` with explicit
                   KV/page-table/page-descriptor/active-length memrefs and helper profiling.

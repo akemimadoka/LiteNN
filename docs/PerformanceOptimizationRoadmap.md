@@ -167,9 +167,10 @@ Priority classes for the GGUF/Qwen decode work:
                 `--run-llama-*-decode-loop` now builds/loads the logits-only public-output stateful schedule unless
                 `--functional` is passed explicitly for compatibility or diagnostics.
           - [x] Replace the remaining max-cache-length-shaped paged-reference stateful function signature with
-                page-table state bindings. Completed on 2026-07-05: `--paged-reference-decode --compile-only` accepts
-                `--paged-resident-pages`; resident KV backing shape is `[2,residentPages,pageSize,kvHeads,headDim]`
-                while logical capacity remains in page-table metadata/cache key.
+                page-table state bindings. Completed on 2026-07-05: `--paged-reference-decode` accepts
+                `--paged-resident-pages` and can run after initializing page metadata from compiled input specs;
+                resident KV backing shape is `[2,residentPages,pageSize,kvHeads,headDim]` while logical capacity
+                remains in page-table metadata/cache key.
     - [x] P1: Replace dense full-capacity KV state with paged-KV execution. Active-prefix attention removes inactive suffix
           scans from attention, but the 1M-context target still requires page tables, active-length metadata, and
           capacity-independent artifact shapes.
