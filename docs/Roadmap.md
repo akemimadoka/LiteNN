@@ -2849,6 +2849,11 @@ Priority classes:
       collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
       count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
       projections, active-prefix attention, state alias copies, final logits projection, and sampler/text output.
+      - [x] Add operator/role attribution to GGUF decode profile bundles. Completed on 2026-07-05:
+            `profile_bundle.py` classifies helper events into projection, attention, position_encoding, kv_update,
+            embedding, normalization, and other roles, emits ranked operator totals, and annotates per-step
+            `top_operator` plus trace event args. This is a bundle-level attribution bridge; true per-layer/per-node
+            runtime timing remains open.
 - [x] P0: Add production-shaped GGML helper benchmark and estimator coverage:
       benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
       `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current

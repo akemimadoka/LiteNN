@@ -72,6 +72,8 @@ class GGUFHelperEvent:
     step: int
     helper: str
     detail: str
+    operator: str
+    role: str
     calls: int
     total_ms: float
     avg_ms: float
@@ -577,6 +579,52 @@ def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def detail_has_output_columns(detail: str, columns: int) -> bool:
+    return (
+        re.search(rf"\bout=\d+x{columns}\b", detail) is not None
+        or re.search(rf"\bout_columns={columns}\b", detail) is not None
+        or re.search(rf"\bn={columns}\b", detail) is not None
+    )
+
+
+def detail_has_input_columns(detail: str, columns: int) -> bool:
+    return (
+        re.search(rf"\blhs=\d+x{columns}\b", detail) is not None
+        or re.search(rf"\bin={columns}\b", detail) is not None
+        or re.search(rf"\bk={columns}\b", detail) is not None
+    )
+
+
+def classify_gguf_helper(helper: str, detail: str) -> tuple[str, str]:
+    if "ggml_block_matmul" in helper:
+        if detail_has_output_columns(detail, 152064):
+            return "projection", "logits"
+        if detail_has_output_columns(detail, 27648):
+            return "projection", "ffn_gate_up_grouped"
+        if detail_has_output_columns(detail, 13824):
+            return "projection", "ffn_gate_or_up"
+        if detail_has_input_columns(detail, 13824):
+            return "projection", "ffn_down"
+        if detail_has_output_columns(detail, 7168):
+            return "projection", "qkv_grouped"
+        if detail_has_output_columns(detail, 1024):
+            return "projection", "kv"
+        if detail_has_output_columns(detail, 5120):
+            return "projection", "hidden_or_output"
+        return "projection", "quantized_matmul"
+    if "active_prefix_attention" in helper or "paged_attention" in helper:
+        return "attention", "paged" if "paged" in helper else "active_prefix"
+    if "rope" in helper:
+        return "position_encoding", "rope"
+    if "scatter_update" in helper or "paged_kv_append" in helper:
+        return "kv_update", "append"
+    if "get_rows" in helper or "embedding" in helper:
+        return "embedding", "token_lookup"
+    if "rms" in helper or "norm" in helper:
+        return "normalization", "norm"
+    return "other", "unknown"
+
+
 def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
     steps: list[GGUFDecodeStep] = []
     helpers: list[GGUFHelperEvent] = []
@@ -607,11 +655,16 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                     match = helper_pattern.search(line)
                     if match is None:
                         continue
+                    helper = match.group("helper")
+                    detail = match.group("detail") or ""
+                    operator, role = classify_gguf_helper(helper, detail)
                     helpers.append(
                         GGUFHelperEvent(
                             step=int(match.group("step")),
-                            helper=match.group("helper"),
-                            detail=match.group("detail") or "",
+                            helper=helper,
+                            detail=detail,
+                            operator=operator,
+                            role=role,
                             calls=int(match.group("calls")),
                             total_ms=float(match.group("total")),
                             avg_ms=float(match.group("avg")),
@@ -627,6 +680,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     step_ms_by_id = { step.step: step.step_ms for step in analysis.steps }
     total_step_ms = sum(step.step_ms for step in analysis.steps)
     helper_totals_by_step: dict[int, dict[tuple[str, str], dict[str, object]]] = {}
+    operator_totals_by_step: dict[int, dict[tuple[str, str], dict[str, object]]] = {}
     for helper in analysis.helpers:
         step_totals = helper_totals_by_step.setdefault(helper.step, {})
         key = (helper.helper, helper.detail)
@@ -635,6 +689,13 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
         total["calls"] = int(total["calls"]) + helper.calls
         total["total_ms"] = float(total["total_ms"]) + helper.total_ms
+        operator_step_totals = operator_totals_by_step.setdefault(helper.step, {})
+        operator_key = (helper.operator, helper.role)
+        operator_total = operator_step_totals.setdefault(
+            operator_key, { "operator": helper.operator, "role": helper.role, "calls": 0, "total_ms": 0.0 }
+        )
+        operator_total["calls"] = int(operator_total["calls"]) + helper.calls
+        operator_total["total_ms"] = float(operator_total["total_ms"]) + helper.total_ms
 
     def helper_percent(total_ms: float, denominator_ms: float) -> float | None:
         return total_ms * 100.0 / denominator_ms if denominator_ms > 0.0 else None
@@ -668,6 +729,21 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 ),
                 None,
             ),
+            "top_operator": next(
+                (
+                    {
+                        "operator": operator["operator"],
+                        "role": operator["role"],
+                        "total_ms": operator["total_ms"],
+                        "percent_of_step": helper_percent(float(operator["total_ms"]), step.step_ms),
+                    }
+                    for operator in sorted(
+                        operator_totals_by_step.get(step.step, {}).values(),
+                        key=lambda item: (-float(item["total_ms"]), str(item["operator"]), str(item["role"])),
+                    )[:1]
+                ),
+                None,
+            ),
         }
         for step in analysis.steps
     ]
@@ -676,6 +752,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "step": helper.step,
             "helper": helper.helper,
             "detail": helper.detail,
+            "operator": helper.operator,
+            "role": helper.role,
             "calls": helper.calls,
             "total_ms": helper.total_ms,
             "avg_ms": helper.avg_ms,
@@ -693,6 +771,19 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     ranked_helpers = sorted(helper_totals.values(), key=lambda item: (-float(item["total_ms"]), str(item["helper"])))
     for helper in ranked_helpers:
         helper["percent_of_steps"] = helper_percent(float(helper["total_ms"]), total_step_ms)
+    operator_totals: dict[tuple[str, str], dict[str, object]] = {}
+    for helper in analysis.helpers:
+        key = (helper.operator, helper.role)
+        total = operator_totals.setdefault(
+            key, { "operator": helper.operator, "role": helper.role, "calls": 0, "total_ms": 0.0 }
+        )
+        total["calls"] = int(total["calls"]) + helper.calls
+        total["total_ms"] = float(total["total_ms"]) + helper.total_ms
+    ranked_operators = sorted(
+        operator_totals.values(), key=lambda item: (-float(item["total_ms"]), str(item["operator"]), str(item["role"]))
+    )
+    for operator in ranked_operators:
+        operator["percent_of_steps"] = helper_percent(float(operator["total_ms"]), total_step_ms)
 
     summary = {
         "step_count": len(analysis.steps),
@@ -702,6 +793,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "generation_step_count": sum(1 for step in analysis.steps if step.phase == "generation"),
         "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
         "helpers": ranked_helpers,
+        "operators": ranked_operators,
         "steps": step_dicts,
         "helper_events": helper_dicts,
     }
@@ -745,6 +837,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 "args": {
                     "step": helper.step,
                     "detail": helper.detail,
+                    "operator": helper.operator,
+                    "role": helper.role,
                     "calls": helper.calls,
                     "avg_ms": helper.avg_ms,
                     "percent_of_step": helper_percent(helper.total_ms, step_ms_by_id.get(helper.step, 0.0)),
@@ -778,10 +872,28 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     md_lines.extend(
         [
             "",
+            "## Top Operators",
+            "",
+            "| Operator | Role | Calls | Total ms | % of steps |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for operator in ranked_operators[:20]:
+        percent = operator["percent_of_steps"]
+        percent_text = "n/a" if percent is None else f"{float(percent):.2f}%"
+        md_lines.append(
+            f"| `{operator['operator']}` | `{operator['role']}` | {operator['calls']} | "
+            f"{float(operator['total_ms']):.3f} | {percent_text} |"
+        )
+    if not ranked_operators:
+        md_lines.append("| `none` | `none` | 0 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
             "## Steps",
             "",
-            "| Step | Phase | Step ms | Helper ms | Helper % | Top helper | Tokens/s |",
-            "| ---: | --- | ---: | ---: | ---: | --- | ---: |",
+            "| Step | Phase | Step ms | Helper ms | Helper % | Top helper | Top operator | Tokens/s |",
+            "| ---: | --- | ---: | ---: | ---: | --- | --- | ---: |",
         ]
     )
     for step in analysis.steps:
@@ -797,10 +909,16 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             if not isinstance(top_helper, dict)
             else f"`{top_helper['helper']}` {float(top_helper['total_ms']):.3f} ms"
         )
+        top_operator = step_summary["top_operator"]
+        top_operator_text = (
+            "`none`"
+            if not isinstance(top_operator, dict)
+            else f"`{top_operator['operator']}/{top_operator['role']}` {float(top_operator['total_ms']):.3f} ms"
+        )
         md_lines.append(
             f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | "
             f"{float(step_summary['helper_total_ms']):.3f} | {helper_percent_text} | "
-            f"{top_helper_text} | {step.tokens_per_second:.3f} |"
+            f"{top_helper_text} | {top_operator_text} | {step.tokens_per_second:.3f} |"
         )
     md_path = out_dir / "gguf_decode_summary.md"
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")

@@ -101,6 +101,11 @@ Priority classes for the GGUF/Qwen decode work:
           - [x] Bundle helper shares: `gguf_decode_summary.json` and `.md` now report helper time as a percentage of
                 total step time and per-step helper totals/top helper, making it clearer whether the next bottleneck is
                 quantized projection, attention, KV state movement, or non-helper residual work.
+          - [x] Add operator/role attribution in profile bundles. Completed on 2026-07-05:
+                `profile_bundle.py` classifies helper events into projection, attention, position_encoding, kv_update,
+                embedding, normalization, and other roles; writes ranked `operators`, per-step `top_operator`, and
+                operator/role trace args. This keeps the next report grounded while deeper per-layer/per-node timing is
+                still pending.
     - [x] P2: Add context-extension validation gates before reporting long-context readiness. Completed on 2026-07-05:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived
