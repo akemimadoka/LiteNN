@@ -105,6 +105,8 @@ def litenn_row(path: Path) -> dict[str, object]:
         "fallbackCount": int(fallback_count_match.group("value")) if fallback_count_match is not None else None,
         "topHelper": None,
         "helperSharePercent": None,
+        "topOperator": None,
+        "operatorSharePercent": None,
         "source": str(path),
     }
 
@@ -115,6 +117,7 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         raise SystemExit(f"unsupported LiteNN GGUF decode summary: {path}")
     steps = summary.get("steps")
     helpers = summary.get("helpers")
+    operators = summary.get("operators")
     if not isinstance(steps, list):
         raise SystemExit(f"LiteNN GGUF decode summary has no steps array: {path}")
 
@@ -143,6 +146,14 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         top_helper_name = str(top_helper.get("helper", "unknown"))
         percent = top_helper.get("percent_of_steps")
         top_helper_share = float(percent) if percent is not None else None
+    operator_rows = operators if isinstance(operators, list) else []
+    top_operator = next((operator for operator in operator_rows if isinstance(operator, dict)), None)
+    top_operator_name = None
+    top_operator_share = None
+    if isinstance(top_operator, dict):
+        top_operator_name = f"{top_operator.get('operator', 'unknown')}/{top_operator.get('role', 'unknown')}"
+        percent = top_operator.get("percent_of_steps")
+        top_operator_share = float(percent) if percent is not None else None
 
     tokens_per_second = token_count * 1000.0 / total_step_ms
     return {
@@ -160,6 +171,8 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         "fallbackCount": None,
         "topHelper": top_helper_name,
         "helperSharePercent": top_helper_share,
+        "topOperator": top_operator_name,
+        "operatorSharePercent": top_operator_share,
         "source": str(path),
     }
 
@@ -192,6 +205,8 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "fallbackCount": 0,
                 "topHelper": None,
                 "helperSharePercent": None,
+                "topOperator": None,
+                "operatorSharePercent": None,
                 "source": str(path),
             }
         )
@@ -226,6 +241,8 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "fallbackCount": entry.get("fallbackCount"),
                 "topHelper": entry.get("topHelper"),
                 "helperSharePercent": entry.get("helperSharePercent"),
+                "topOperator": entry.get("topOperator"),
+                "operatorSharePercent": entry.get("operatorSharePercent"),
                 "source": str(path),
             }
         )
@@ -281,6 +298,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "fallbackCount",
         "topHelper",
         "helperSharePercent",
+        "topOperator",
+        "operatorSharePercent",
         "source",
     ]
     observed_fields = {field for row in rows for field in row}
@@ -291,8 +310,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Operator | Operator Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
@@ -304,7 +323,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row.get('topHelper') or 'n/a'} | "
-            f"{format_percent(row.get('helperSharePercent'))} | {format_optional(row['fallbackUsed'])} | "
+            f"{format_percent(row.get('helperSharePercent'))} | {row.get('topOperator') or 'n/a'} | "
+            f"{format_percent(row.get('operatorSharePercent'))} | {format_optional(row['fallbackUsed'])} | "
             f"{format_optional(row.get('fallbackCount'))} |"
         )
     (output_dir / "gguf_decode_compare.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

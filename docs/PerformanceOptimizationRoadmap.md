@@ -49,8 +49,8 @@ Priority classes for the GGUF/Qwen decode work:
     parallelism gate, Q8_K-staged mode, and compile-diagnostics mode; `benchmark/gguf_decode_compare.py` includes the
     compact configuration string in comparison tables.
   - [x] Profile-summary comparison slice: `benchmark/gguf_decode_compare.py --litenn-profile-summary
-    <gguf_decode_summary.json>` can compare already-bundled decode runs directly and carries top-helper/helper-share
-    columns into Markdown/CSV/JSON outputs.
+    <gguf_decode_summary.json>` can compare already-bundled decode runs directly and carries top-helper/helper-share plus
+    top-operator/operator-share columns into Markdown/CSV/JSON outputs.
   - [x] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits

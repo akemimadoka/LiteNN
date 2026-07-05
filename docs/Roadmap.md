@@ -660,8 +660,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Persist CPU AOT A/B knobs in Qwen smoke reports and comparison tables, including LLVM opt level, helper
             thread count, affinity, parallelism gate, Q8_K-staged mode, and compile-diagnostics mode.
       - [x] Compare completed profile bundles directly: `gguf_decode_compare.py --litenn-profile-summary
-            <gguf_decode_summary.json>` now derives throughput and carries top-helper/helper-share columns into the
-            output tables.
+            <gguf_decode_summary.json>` now derives throughput and carries top-helper/helper-share plus
+            top-operator/operator-share columns into the output tables.
       - [x] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
             steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases. Completed on
