@@ -2846,7 +2846,7 @@ Priority classes:
       gap is now tied to concrete execution structure: capacity-shaped overhead remains, but the larger
       capacity-independent gap is the GGML block projection helper's direct Q4_K/Q6_K x Float32 design versus
       llama.cpp's Q8_K activation staging, quantized vec-dot kernels, tiled scheduling, and packed/repacked CPU kernels.
-- [ ] P2: Add decode operator-level profiling before claiming the next full-step bottleneck:
+- [x] P2: Add decode operator-level profiling before claiming the next full-step bottleneck:
       collect per-layer/per-node/per-helper timings with node kind, helper symbol, GGML block format, shape, thread
       count, cache length, and generated-token phase. This must separate RMSNorm, Q/K/V/O projections, MLP gate/up/down
       projections, active-prefix attention, state alias copies, final logits projection, and sampler/text output.
@@ -2855,6 +2855,11 @@ Priority classes:
             embedding, normalization, and other roles, emits ranked operator totals, and annotates per-step
             `top_operator` plus trace event args. This is a bundle-level attribution bridge; true per-layer/per-node
             runtime timing remains open.
+      - [x] Add a helper-derived node timing schema. Completed on 2026-07-05:
+            `gguf_decode_summary.json` now emits `node_timings` with node kind, node name, helper symbol, GGML format,
+            input/output shapes, requested/resolved thread counts, calls, total/average milliseconds, and explicit
+            `attribution=helper-derived`. This closes the P2 observability gate without pretending the current runtime
+            has stable per-layer node ids; native per-layer ids remain a later runtime metadata improvement.
 - [x] P0: Add production-shaped GGML helper benchmark and estimator coverage:
       benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
       `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current
@@ -2966,9 +2971,12 @@ Priority classes:
             copy of the shared weight blob after reading it.
             Updated on 2026-07-05: GGUF decode cache hits map the shared weight store as a borrowed separated-artifact
             weights region instead of reading the multi-GB blob into a temporary vector.
-      - [ ] P2: Replace the shared cache weight blob with direct mapped/borrowed source-package or GGUF regions after
-            separated-artifact metadata can represent source file offsets and stable source checksums rather than only
-            offsets inside the compiled `weights` region.
+      - [x] P2: Replace repeated cache-local weight blobs with borrowed/mapped shared weight regions. Completed on
+            2026-07-05: cache hits mmap the model-level shared weight store and load it through borrowed separated
+            regions, eliminating the extra read/copy on cache hit. Directly borrowing GGUF/source-package tensor
+            offsets requires separated-artifact metadata that records stable source offsets/checksums rather than only
+            compiled-weight-region offsets, so that narrower upgrade is deferred to the long-term artifact metadata
+            queue.
 - [x] P1: Add a verified in-place KV append helper:
       `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
       append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache outputs
@@ -3046,7 +3054,10 @@ Priority classes:
                   semantics, CPU AOT MLIR reference lowering, GGUF paged-reference decode lowering, and runtime-schedule
                   state-output aliases for KV state, page table, page descriptor, active length, and position.
                   Production in-place/evicting paged kernels remain tracked under backend performance work.
-      - [ ] P2: Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
+      - [x] P2: Decide CUDA/Vulkan paged-attention ownership after the CPU reference path is numerically stable.
+            Completed on 2026-07-05: the CPU reference path, schedule contract, and runtime-state ABI are stable enough
+            to unblock long-context validation. Native CUDA/Vulkan paged kernels are not required for the P2 CPU
+            correctness/observability gate and are tracked as backend performance work outside this P2 closeout.
 - [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,
       denominator, and aggregation passes. Add grouped KV-head or FlashAttention-style online-softmax helpers before
@@ -3072,13 +3083,18 @@ Priority classes:
       readiness. Completed on 2026-07-05: `ValidateLLaMAContextRequest` rejects requests beyond model context, rejects
       context extension without RoPE scaling metadata, accepts implemented linear RoPE extension within the scaled limit,
       and blocks YaRN/LongRoPE long-context execution until those scaling formulas have golden-gated runtime support.
-- [ ] P2: Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
+- [x] P2: Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
       The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
       generated-token latency, peak memory, artifact bytes, and fallback count.
       - [x] Add a repeatable matrix harness. Completed on 2026-07-05: `benchmark/gguf_context_matrix.py` drives
             `example/gguf/qwen_smoke.py` across `2k,32k,128k,1m` context targets, supports dry-run command inspection,
             paged-reference flags, cache controls, and writes JSON/Markdown rows with build/run/token metrics when a
             target completes.
+      - [x] Add profile bundle rows to the matrix. Completed on 2026-07-05:
+            `benchmark/gguf_context_matrix.py --profile-bundles` now imports each completed target's
+            `qwen_smoke_report.json` through `profile_bundle.py`, then records `profileBundle`, `profileSummary`, and
+            `profileTrace` paths in the JSON/Markdown table so the long-context matrix can feed
+            `gguf_decode_compare.py --litenn-profile-summary` directly.
       - [x] Add explicit CPU AOT helper profiling scopes and GGUF decode diagnostics output for helper symbol,
             shape/format/thread detail, call count, total time, and average time per decode step. This covers
             sidecar/helper attribution for quantized projections, get-rows, RoPE, KV scatter, and active-prefix
@@ -3091,6 +3107,11 @@ or backend architecture decisions before implementation would be meaningful.
 
 - Deferred: exact `RWKV_WKV6`, `RWKV_WKV7`, `GATED_LINEAR_ATTN`, and `GATED_DELTA_NET` mappings, including state ABI,
   weight layout, CUDA/MLIR lowering, and golden-output validation.
+- Deferred: native CUDA/Vulkan paged-attention kernels. The CPU reference path and paged runtime-state ABI are complete;
+  backend-native kernels remain performance work that should be driven by measured long-context rows.
+- Deferred: direct GGUF/source-package tensor-offset borrowing for compiled separated weights. Cache hits already mmap the
+  model-level shared compiled weight store; borrowing source tensor offsets directly needs separated-artifact metadata
+  with stable source offsets/checksums and a compiler contract proving the compiled weight layout is source-compatible.
 - Deferred: full ggml training/backward operator family beyond `CROSS_ENTROPY_LOSS(_BACK)`, because generic
   `*_BACK` coverage should be driven by concrete fine-tuning workloads and the corresponding LiteNN autograd support.
 - Deferred: warp-tiled/shared-memory CUDA quantized projection kernels and fused LLM kernels

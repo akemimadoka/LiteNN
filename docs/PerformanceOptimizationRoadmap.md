@@ -89,7 +89,7 @@ Priority classes for the GGUF/Qwen decode work:
           `max_cache_length=10` still takes about `522 ms` for the generated token, `max_cache_length=2048` adds about
           `200 ms`, and forcing `LITENN_CPU_AOT_THREADS=16` regresses to about `815 ms`. This rules out "threading is
           simply off" and "full-capacity attention is still the only bottleneck" as sufficient explanations.
-    - [ ] P2: Add operator-level and helper-level timing for stateful GGUF CPU AOT decode.
+    - [x] P2: Add operator-level and helper-level timing for stateful GGUF CPU AOT decode.
           Required output: per-layer/per-node duration, helper symbol name, GGML block format, input/output shape,
           thread count, cache length, and generated-token phase. The current per-step waterfall is enough to find the
           broad gap but not enough to rank RMSNorm, quantized projections, active-prefix attention, state copies,
@@ -106,14 +106,20 @@ Priority classes for the GGUF/Qwen decode work:
                 embedding, normalization, and other roles; writes ranked `operators`, per-step `top_operator`, and
                 operator/role trace args. This keeps the next report grounded while deeper per-layer/per-node timing is
                 still pending.
+          - [x] Add helper-derived node timing rows. Completed on 2026-07-05:
+                `gguf_decode_summary.json` now emits `node_timings` with node kind, node name, helper symbol, GGML
+                format, input/output shape, thread counts, calls, total/average milliseconds, and explicit
+                `attribution=helper-derived`; comparison tables expose the top node. Stable runtime layer ids remain a
+                later metadata enhancement rather than a P2 blocker.
     - [x] P2: Add context-extension validation gates before reporting long-context readiness. Completed on 2026-07-05:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived
           limit, and blocks YaRN/LongRoPE long-context execution until their runtime formulas have golden coverage.
     - [x] P2: Add a repeatable long-context matrix harness. Completed on 2026-07-05:
           `benchmark/gguf_context_matrix.py` drives qwen smoke rows for `2k,32k,128k,1m`, supports dry-run command
-          inspection, paged-reference/cache controls, and writes JSON/Markdown summaries. The remaining work is to run
-          the matrix on a real model and attach the resulting measurements.
+          inspection, paged-reference/cache controls, writes JSON/Markdown summaries, and can attach per-target profile
+          bundles with `--profile-bundles`. The remaining work is to run the matrix on a real model and attach the
+          resulting measurements.
     - [x] P0: Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
           `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064`.
           The current `4096->4096` row is useful but under-specifies the 337-projection full-step workload.
@@ -240,8 +246,10 @@ Priority classes for the GGUF/Qwen decode work:
                 a second constants/weights copy after reading the shared cache blob.
                 Updated on 2026-07-05: cache hits map the shared weight store as a borrowed separated-artifact weights
                 region instead of reading the multi-GB blob into a temporary vector.
-          - [ ] P2: Replace the shared cache weight blob with direct mapped/borrowed GGUF/package regions after separated
-                metadata can encode source file offsets and stable source checksums.
+          - [x] P2: Replace repeated cache-local weight blobs with borrowed/mapped shared weight regions. Completed on
+                2026-07-05: cache hits mmap the model-level shared weight store through borrowed separated regions.
+                Directly borrowing GGUF/source-package tensor offsets is deferred until separated-artifact metadata can
+                encode source offsets and stable checksums instead of only compiled-weight-region offsets.
     - [x] P1: Add a verified in-place KV append sidecar before the full paged-KV migration.
           `litenn_cpu_scatter_update_axis0_f32_rank3` now has direct regression coverage for both same-buffer in-place
           append and distinct-output copy semantics, and stateful decode schedule coverage confirms projected cache

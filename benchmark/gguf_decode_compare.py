@@ -108,6 +108,8 @@ def litenn_row(path: Path) -> dict[str, object]:
         "topOperator": None,
         "operatorSharePercent": None,
         "residualSharePercent": None,
+        "topNode": None,
+        "topNodeKind": None,
         "source": str(path),
     }
 
@@ -119,6 +121,7 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
     steps = summary.get("steps")
     helpers = summary.get("helpers")
     operators = summary.get("operators")
+    node_timings = summary.get("node_timings")
     if not isinstance(steps, list):
         raise SystemExit(f"LiteNN GGUF decode summary has no steps array: {path}")
 
@@ -157,6 +160,14 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         top_operator_share = float(percent) if percent is not None else None
     residual_percent = summary.get("residual_percent_of_steps")
     residual_share = float(residual_percent) if residual_percent is not None else None
+    node_rows = node_timings if isinstance(node_timings, list) else []
+    top_node = max(
+        (node for node in node_rows if isinstance(node, dict)),
+        key=lambda node: float(node.get("total_ms", 0.0) or 0.0),
+        default=None,
+    )
+    top_node_name = str(top_node.get("node_name", "unknown")) if isinstance(top_node, dict) else None
+    top_node_kind = str(top_node.get("node_kind", "unknown")) if isinstance(top_node, dict) else None
 
     tokens_per_second = token_count * 1000.0 / total_step_ms
     return {
@@ -177,6 +188,8 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         "topOperator": top_operator_name,
         "operatorSharePercent": top_operator_share,
         "residualSharePercent": residual_share,
+        "topNode": top_node_name,
+        "topNodeKind": top_node_kind,
         "source": str(path),
     }
 
@@ -212,6 +225,8 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "topOperator": None,
                 "operatorSharePercent": None,
                 "residualSharePercent": None,
+                "topNode": None,
+                "topNodeKind": None,
                 "source": str(path),
             }
         )
@@ -249,6 +264,8 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "topOperator": entry.get("topOperator"),
                 "operatorSharePercent": entry.get("operatorSharePercent"),
                 "residualSharePercent": entry.get("residualSharePercent"),
+                "topNode": entry.get("topNode"),
+                "topNodeKind": entry.get("topNodeKind"),
                 "source": str(path),
             }
         )
@@ -307,6 +324,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "topOperator",
         "operatorSharePercent",
         "residualSharePercent",
+        "topNode",
+        "topNodeKind",
         "source",
     ]
     observed_fields = {field for row in rows for field in row}
@@ -317,8 +336,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Operator | Operator Share | Residual Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Node | Top Operator | Operator Share | Residual Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
@@ -330,7 +349,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row.get('topHelper') or 'n/a'} | "
-            f"{format_percent(row.get('helperSharePercent'))} | {row.get('topOperator') or 'n/a'} | "
+            f"{format_percent(row.get('helperSharePercent'))} | {row.get('topNode') or 'n/a'} | "
+            f"{row.get('topOperator') or 'n/a'} | "
             f"{format_percent(row.get('operatorSharePercent'))} | {format_percent(row.get('residualSharePercent'))} | "
             f"{format_optional(row['fallbackUsed'])} | "
             f"{format_optional(row.get('fallbackCount'))} |"

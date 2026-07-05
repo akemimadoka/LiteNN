@@ -118,6 +118,24 @@ def summarize_report(target: int, report_path: Path, returncode: int) -> dict[st
     }
 
 
+def attach_profile_bundle(row: dict[str, object], target: int, report_path: Path, out_dir: Path, python: str) -> None:
+    bundle_dir = out_dir / f"context_{target}_profile_bundle"
+    command = [
+        python,
+        str(repo_root() / "benchmark" / "profile_bundle.py"),
+        "--skip-litenn-profile",
+        "--out-dir",
+        str(bundle_dir),
+        "--qwen-smoke-report",
+        str(report_path),
+    ]
+    completed = subprocess.run(command, text=True, check=False)
+    row["profileBundleReturncode"] = completed.returncode
+    row["profileBundle"] = str(bundle_dir)
+    row["profileSummary"] = str(bundle_dir / "gguf_decode_summary.json")
+    row["profileTrace"] = str(bundle_dir / "gguf_decode_trace.json")
+
+
 def write_outputs(out_dir: Path, rows: list[dict[str, object]], commands: list[list[str]]) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "gguf_context_matrix.json").write_text(
@@ -127,8 +145,8 @@ def write_outputs(out_dir: Path, rows: list[dict[str, object]], commands: list[l
     lines = [
         "# GGUF Context Matrix",
         "",
-        "| Target | RC | Mode | Compile only | Build ms | Run ms | Gen tokens | ms/token | tok/s | Fallbacks | Report |",
-        "| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Target | RC | Mode | Compile only | Build ms | Run ms | Gen tokens | ms/token | tok/s | Fallbacks | Report | Profile summary |",
+        "| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in rows:
         def value(key: str) -> str:
@@ -154,6 +172,7 @@ def write_outputs(out_dir: Path, rows: list[dict[str, object]], commands: list[l
                     value("generatedTokensPerSecond"),
                     value("fallbackCount"),
                     f"`{value('report')}`",
+                    f"`{value('profileSummary')}`",
                 ]
             )
             + " |"
@@ -180,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-aot-cache-write", action="store_true")
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--no-compile-diagnostics", action="store_true")
+    parser.add_argument("--profile-bundles", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -234,7 +254,10 @@ def main() -> int:
         completed = subprocess.run(command, text=True, check=False)
         report_path = workdir / "qwen_smoke_report.json"
         if report_path.exists():
-            rows.append(summarize_report(target, report_path, completed.returncode))
+            row = summarize_report(target, report_path, completed.returncode)
+            if args.profile_bundles:
+                attach_profile_bundle(row, target, report_path, args.out_dir, args.python)
+            rows.append(row)
         else:
             rows.append({ "targetContext": target, "returncode": completed.returncode, "report": str(report_path) })
         if completed.returncode != 0:

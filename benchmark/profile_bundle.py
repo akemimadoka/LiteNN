@@ -595,6 +595,11 @@ def detail_has_input_columns(detail: str, columns: int) -> bool:
     )
 
 
+def detail_value(detail: str, key: str) -> str | None:
+    match = re.search(rf"\b{re.escape(key)}=(?P<value>[^\s]+)", detail)
+    return match.group("value") if match is not None else None
+
+
 def classify_gguf_helper(helper: str, detail: str) -> tuple[str, str]:
     if "ggml_block_matmul" in helper:
         if detail_has_output_columns(detail, 152064):
@@ -623,6 +628,22 @@ def classify_gguf_helper(helper: str, detail: str) -> tuple[str, str]:
     if "rms" in helper or "norm" in helper:
         return "normalization", "norm"
     return "other", "unknown"
+
+
+def node_kind_for_operator(operator: str, role: str) -> str:
+    if operator == "projection":
+        return "QuantizedMatMulNode"
+    if operator == "attention":
+        return "GroupedPagedAttentionNode" if role == "paged" else "GroupedActivePrefixAttentionNode"
+    if operator == "position_encoding":
+        return "RoPENode"
+    if operator == "kv_update":
+        return "PagedKVAppendNode" if role == "append" else "ScatterNode"
+    if operator == "embedding":
+        return "GetRowsNode"
+    if operator == "normalization":
+        return "RMSNormNode"
+    return "unknown"
 
 
 def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
@@ -772,6 +793,30 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         }
         for helper in analysis.helpers
     ]
+    node_timing_dicts = [
+        {
+            "step": helper.step,
+            "node_kind": node_kind_for_operator(helper.operator, helper.role),
+            "node_name": f"{helper.operator}/{helper.role}",
+            "operator": helper.operator,
+            "role": helper.role,
+            "helper": helper.helper,
+            "detail": helper.detail,
+            "format": detail_value(helper.detail, "format"),
+            "lhs_shape": detail_value(helper.detail, "lhs"),
+            "out_shape": detail_value(helper.detail, "out"),
+            "query_shape": detail_value(helper.detail, "query") or detail_value(helper.detail, "queries"),
+            "keys_shape": detail_value(helper.detail, "keys"),
+            "kv_shape": detail_value(helper.detail, "kv"),
+            "requested_threads": detail_value(helper.detail, "requested_threads"),
+            "resolved_threads": detail_value(helper.detail, "resolved_threads"),
+            "calls": helper.calls,
+            "total_ms": helper.total_ms,
+            "avg_ms": helper.avg_ms,
+            "attribution": "helper-derived",
+        }
+        for helper in analysis.helpers
+    ]
     helper_totals: dict[tuple[str, str], dict[str, object]] = {}
     for helper in analysis.helpers:
         key = (helper.helper, helper.detail)
@@ -810,6 +855,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "operators": ranked_operators,
         "steps": step_dicts,
         "helper_events": helper_dicts,
+        "node_timings": node_timing_dicts,
     }
 
     json_path = out_dir / "gguf_decode_summary.json"
@@ -903,6 +949,24 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
     if not ranked_operators:
         md_lines.append("| `none` | `none` | 0 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
+            "## Node Timings",
+            "",
+            "| Step | Node kind | Node | Helper | Format | LHS | Out | Calls | Total ms | Attribution |",
+            "| ---: | --- | --- | --- | --- | --- | --- | ---: | ---: | --- |",
+        ]
+    )
+    for timing in sorted(node_timing_dicts, key=lambda item: (int(item["step"]), -float(item["total_ms"])))[:80]:
+        md_lines.append(
+            f"| {timing['step']} | `{timing['node_kind']}` | `{timing['node_name']}` | `{timing['helper']}` | "
+            f"`{timing.get('format') or 'n/a'}` | `{timing.get('lhs_shape') or 'n/a'}` | "
+            f"`{timing.get('out_shape') or 'n/a'}` | {timing['calls']} | {float(timing['total_ms']):.3f} | "
+            f"`{timing['attribution']}` |"
+        )
+    if not node_timing_dicts:
+        md_lines.append("| 0 | `none` | `none` | `none` | `n/a` | `n/a` | `n/a` | 0 | 0.000 | `none` |")
     md_lines.extend(
         [
             "",
