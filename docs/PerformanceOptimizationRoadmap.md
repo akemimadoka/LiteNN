@@ -128,6 +128,31 @@ Priority classes for the GGUF/Qwen decode work:
                 retained fast path measured Q4_K default rows at about `0.70 ms` for `5120->5120`, `1.64 ms` for
                 `5120->13824`, `17.5 ms` for logits, and grouped gate/up concatenated at about `3.32 ms`; a real
                 Qwen2.5-Coder-14B Q4_K_M `--stateful --max_cache=11` smoke measured about `506 ms/generated token`.
+                Deep profile on 2026-07-06: `build/qwen_perf_profile_default_20260706` captured 24 decode steps with
+                `--stream-stats --compile-diagnostics --ignore-eos`. Total step time was about `10244 ms`; timed
+                helpers accounted for about `9607 ms` (`93.8%`) and residual/non-helper time for about `637 ms`
+                (`6.2%`). Generated-token steps averaged about `430.7 ms`, of which helpers averaged about
+                `400.3 ms` and residual averaged about `30.4 ms`. Projection helpers alone accounted for about
+                `90.2%` of all step time: grouped gate/up `34.5%`, FFN-down `23.9%`, hidden/output `16.2%`, KV
+                `8.7%`, and logits `7.0%`. Attention was only about `0.37%`, KV append about `0.01%`, and token lookup
+                rounded to zero. This makes projection kernel replacement the only current path with enough headroom to
+                close the llama.cpp CPU gap.
+                Implementation route:
+                - [ ] Add a production CPU packed-weight format for GGML_Q4_K/GGML_Q6_K decode projections, stored in
+                      separated compiled weights with an explicit layout/version tag and a fallback to source GGML
+                      layout. The first target is output-major Qwen gate/up, FFN-down, hidden/output, KV, and logits
+                      projections.
+                - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
+                      cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
+                      gate/up/down, and logits projections where shapes and tolerances permit.
+                - [ ] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
+                      The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
+                      repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML
+                      block accumulation in `litenn_cpu_ggml_block_matmul_f32` with `x4` output grouping.
+                - [ ] Add Qwen-shaped packed-kernel benchmark rows for the exact top profile rows and require
+                      full-decode profile evidence before switching the default route. Acceptance target for this
+                      tranche: bring default stateful CPU AOT below `300 ms/generated token` on the local Qwen2.5 14B
+                      Q4_K_M control run without increasing residual/fallback share.
           - [ ] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
                 The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
                 T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full
@@ -147,11 +172,25 @@ Priority classes for the GGUF/Qwen decode work:
                 `0.49 t/s` with `--cpu-aot-threads 4` and about `2.33 t/s` with the default thread policy. This rules
                 out simply copying llama.cpp's low thread count as the fix: LiteNN first needs llama.cpp-class
                 low-thread quantized projection efficiency and graph-wide task scheduling.
+                Follow-up profile on 2026-07-06: `build/qwen_perf_profile_t4_20260706` used explicit
+                `--cpu-aot-threads 4` and captured 12 steps. Step time averaged about `2007 ms/generated token`; timed
+                helpers accounted for about `98.7%` of total step time. Projection helpers were even more dominant:
+                grouped gate/up `41.2%`, FFN-down `27.6%`, hidden/output `16.2%`, logits `8.6%`, and KV `4.5%`.
+                Residual/non-helper time did not explode; the kernel itself became the limiter. A fresh CPU-only
+                llama.cpp `llama-bench` matrix on the same machine measured about `4.65 t/s` at T2, `4.64 t/s` at T4,
+                `4.29 t/s` at T8, `3.47 t/s` at T16, and `2.35 t/s` at T32 with `ngl=0` and `flash_attn=0`. Therefore
+                the next thread-policy work should wait for packed kernels; otherwise T4/T8 retuning makes LiteNN worse.
           - [ ] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 The manual 2026-07-06 run is useful evidence, but the next comparison should be reproducible without
                 leaking external model paths into the repository. Add a small benchmark driver that accepts a model path
                 at runtime, builds or locates `llama-bench`, captures TG-only rows for T2/T4/T8/T16/T32, and emits an
                 anonymized comparison table against LiteNN stateful CPU AOT cache-hit runs.
+          - [ ] P0: Make `gguf_decode_compare.py` phase-aware for profile-summary inputs.
+                The current `--litenn-profile-summary` path can compare top-helper/operator shares, but it treats
+                prompt replay plus generation steps as one generation bucket. The 2026-07-06 default profile therefore
+                reports about `1.56 t/s` from the comparison table even though steady generated-token steps are about
+                `430.7 ms/token` (`~2.32 t/s`). Add prompt/generation phase separation to the JSON/Markdown/CSV output
+                before using those comparison rows as acceptance data.
           - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
                 Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                 residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is
@@ -160,6 +199,14 @@ Priority classes for the GGUF/Qwen decode work:
                 The July 5 run spends about `53 ms` per logits projection and executes one on every prompt replay step.
                 Skipping all but the last replay logits improves prompt/prefill latency, though it is not a steady-state
                 generated-token TPS fix.
+          - [ ] P1: Add a sampler-only logits path for text generation when public logits are not requested.
+                The July 6 profile shows the final vocabulary projection costs about `7%` of total decode time even
+                after grouped projection work. Golden-logit and API runs still need full public logits, but text-only
+                decode can use a projection+sampler path that keeps only the selected token/top-k candidates.
+          - [ ] P1: Batch or fuse per-head RoPE helper calls after projection work moves.
+                RoPE is not the current top bottleneck, but the default profile still shows `55296` helper calls over
+                24 steps and about `13-14 ms` per decode step. Once projection kernels are reduced, convert per-head
+                RoPE calls into a batched per-layer helper or fuse it into the Q/K layout path.
     - [x] P2: Add context-extension validation gates before reporting long-context readiness. Completed on 2026-07-05:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived
