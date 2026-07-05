@@ -903,7 +903,26 @@ struct Case
 	std::vector<std::size_t> outShape; // single-output models
 };
 
-static std::string CsvEscape(std::string_view value);
+static std::string CsvEscape(std::string_view value)
+{
+	if (value.find_first_of(",\"\n\r") == std::string_view::npos)
+	{
+		return std::string(value);
+	}
+	std::string escaped;
+	escaped.reserve(value.size() + 2);
+	escaped.push_back('"');
+	for (const char ch : value)
+	{
+		if (ch == '"')
+		{
+			escaped.push_back('"');
+		}
+		escaped.push_back(ch);
+	}
+	escaped.push_back('"');
+	return escaped;
+}
 
 #ifdef LITENN_ENABLE_CUDA
 struct CUDALaunchBreakdown
@@ -1361,27 +1380,6 @@ static VulkanLaunchBreakdown ProfileVulkanLaunches(const Case& profileCase)
 	                                                .build = profileCase.build,
 	                                                .batch = profileCase.outShape[0],
 	                                                .makeInputs = MakeVulkanProfileInputs });
-}
-
-static std::string CsvEscape(std::string_view value)
-{
-	if (value.find_first_of(",\"\n\r") == std::string_view::npos)
-	{
-		return std::string(value);
-	}
-	std::string escaped;
-	escaped.reserve(value.size() + 2);
-	escaped.push_back('"');
-	for (const char ch : value)
-	{
-		if (ch == '"')
-		{
-			escaped.push_back('"');
-		}
-		escaped.push_back(ch);
-	}
-	escaped.push_back('"');
-	return escaped;
 }
 
 static void WriteVulkanProfileCsv(const std::filesystem::path& path, std::span<const VulkanLaunchBreakdown> rows)
