@@ -241,6 +241,26 @@ fallback state, and percentage differences against same-device-class
 llama.cpp and PyTorch/HF baselines. Missing backends remain absent rather than
 being represented by bridge or synthetic measurements.
 
+Run a long-context LiteNN matrix with the same smoke driver:
+
+```powershell
+python311 benchmark\gguf_context_matrix.py `
+  --model model.gguf `
+  --litenn build-tools\tools\gguf\litenn_gguf_convert.exe `
+  --targets 2k,32k,128k,1m `
+  --token-ids 1,2,3 `
+  --steps 1 `
+  --paged-reference-decode `
+  --paged-resident-pages 64 `
+  --aot-cache-dir build\qwen_aot_cache `
+  --out-dir build\qwen_context_matrix
+```
+
+Use `--dry-run` first to inspect the exact commands. The matrix writes
+`gguf_context_matrix.json` and `.md` with build/run/token metrics when rows
+complete; private model paths stay in the ignored output directory, not in the
+repo.
+
 The same isolated adapter provides production tokenizer parity without linking
 llama.cpp into LiteNN. Tokenize and detokenize through the manifest-backed
 driver:

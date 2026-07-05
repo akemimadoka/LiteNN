@@ -3069,6 +3069,10 @@ Priority classes:
 - [ ] P2: Add benchmark/profile rows for 2K, 32K, 128K, and 1M context targets.
       The table should separate first-run compile/cache population, cache-hit load, prompt replay, steady-state
       generated-token latency, peak memory, artifact bytes, and fallback count.
+      - [x] Add a repeatable matrix harness. Completed on 2026-07-05: `benchmark/gguf_context_matrix.py` drives
+            `example/gguf/qwen_smoke.py` across `2k,32k,128k,1m` context targets, supports dry-run command inspection,
+            paged-reference flags, cache controls, and writes JSON/Markdown rows with build/run/token metrics when a
+            target completes.
       - [x] Add explicit CPU AOT helper profiling scopes and GGUF decode diagnostics output for helper symbol,
             shape/format/thread detail, call count, total time, and average time per decode step. This covers
             sidecar/helper attribution for quantized projections, get-rows, RoPE, KV scatter, and active-prefix

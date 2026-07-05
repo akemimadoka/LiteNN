@@ -105,6 +105,10 @@ Priority classes for the GGUF/Qwen decode work:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived
           limit, and blocks YaRN/LongRoPE long-context execution until their runtime formulas have golden coverage.
+    - [x] P2: Add a repeatable long-context matrix harness. Completed on 2026-07-05:
+          `benchmark/gguf_context_matrix.py` drives qwen smoke rows for `2k,32k,128k,1m`, supports dry-run command
+          inspection, paged-reference/cache controls, and writes JSON/Markdown summaries. The remaining work is to run
+          the matrix on a real model and attach the resulting measurements.
     - [x] P0: Add production-shaped GGML helper benchmark rows for the real Qwen decode dimensions:
           `5120->5120`, `5120->1024`, `5120->13824`, `13824->5120`, and `5120->152064`.
           The current `4096->4096` row is useful but under-specifies the 337-projection full-step workload.
