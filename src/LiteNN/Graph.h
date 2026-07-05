@@ -374,6 +374,21 @@ namespace LiteNN
 			std::size_t queryGroupsPerKVHead{ 1 };
 		};
 
+		// Single-token append into paged KV state.
+		// kvState is [2, residentPages, pageSize, kvHeads, headDim]; keys/values are
+		// [kvHeads, headDim]. The reference policy maps logical page N to resident
+		// page N and rejects appends beyond resident capacity.
+		struct PagedKVAppendNode
+		{
+			NodeOutput kvState;
+			NodeOutput pageTable;
+			NodeOutput pageDescriptors;
+			NodeOutput activeLength;
+			NodeOutput keys;
+			NodeOutput values;
+			NodeOutput position;
+		};
+
 		// Numerically stable softmax along one axis.
 		struct SoftmaxNode
 		{

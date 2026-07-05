@@ -239,6 +239,16 @@ namespace LiteNN
 								    node.queryGroupsPerKVHead
 							    };
 						    }
+						    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+						    {
+							    return PagedKVAppendNode{ remapOutput(node.kvState),
+								                          remapOutput(node.pageTable),
+								                          remapOutput(node.pageDescriptors),
+								                          remapOutput(node.activeLength),
+								                          remapOutput(node.keys),
+								                          remapOutput(node.values),
+								                          remapOutput(node.position) };
+						    }
 						    else if constexpr (std::same_as<T, SoftmaxNode>)
 						    {
 							    return SoftmaxNode{ remapOutput(node.input), node.axis };

@@ -418,6 +418,16 @@ namespace LiteNN
 					    fn(n.pageDescriptors);
 					    fn(n.activeLength);
 				    }
+				    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+				    {
+					    fn(n.kvState);
+					    fn(n.pageTable);
+					    fn(n.pageDescriptors);
+					    fn(n.activeLength);
+					    fn(n.keys);
+					    fn(n.values);
+					    fn(n.position);
+				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
 					    fn(n.logits);
@@ -644,6 +654,12 @@ namespace LiteNN
 						                                  remap(n.pageTable),    remap(n.pageDescriptors),
 						                                  remap(n.activeLength), n.scale,
 						                                  n.queryGroupsPerKVHead };
+				    }
+				    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+				    {
+					    return PagedKVAppendNode{ remap(n.kvState),      remap(n.pageTable), remap(n.pageDescriptors),
+						                          remap(n.activeLength), remap(n.keys),      remap(n.values),
+						                          remap(n.position) };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {

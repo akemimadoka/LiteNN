@@ -206,8 +206,12 @@ Priority classes for the GGUF/Qwen decode work:
                 bindings so cache-hit artifacts stop scaling directly with max context length. Completed on 2026-07-05:
                 `GroupedPagedAttentionNode` has CPU AOT sidecar lowering and `pagedResidentPageCount` lets resident
                 backing capacity stay independent from logical `max-cache-length`.
-          - [ ] P2: Add graph-side paged KV writeback for full decode-loop execution; the current paged-reference path
-                remains compile-only because current K/V append is still owned by the external/prefill contract.
+          - [x] P2: Add graph-side paged KV writeback for full decode-loop execution. Completed on 2026-07-05:
+                `PagedKVAppendNode` appends current K/V into explicit paged KV/page-table/page-descriptor/active-length
+                graph state, GGUF paged-reference decode now returns those updated states, and the runtime schedule
+                aliases them back to the input state buffers while keeping logits as the only public output. The current
+                implementation is a correctness/reference lowering; in-place and evicting kernels remain the performance
+                follow-up.
     - [x] P1: Decouple persistent AOT instruction cache from model-weight storage.
           - [x] Deduplicate GGUF decode AOT cache weights across instruction-cache variants for the same source model.
                 Completed on 2026-07-04: cache entries now write `weights.path.txt` pointing to a model-level shared

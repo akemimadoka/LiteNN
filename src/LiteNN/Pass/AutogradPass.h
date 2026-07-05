@@ -538,7 +538,8 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
 					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
 					                       std::same_as<T, GroupedActivePrefixAttentionNode> ||
-					                       std::same_as<T, GroupedPagedAttentionNode> || std::same_as<T, SoftmaxNode> ||
+					                       std::same_as<T, GroupedPagedAttentionNode> ||
+					                       std::same_as<T, PagedKVAppendNode> || std::same_as<T, SoftmaxNode> ||
 					                       std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
 					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
 					                       std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
@@ -893,6 +894,16 @@ namespace LiteNN
 						                                  { nodeMap[n.activeLength.node], n.activeLength.port },
 						                                  n.scale,
 						                                  n.queryGroupsPerKVHead };
+				    }
+				    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+				    {
+					    return PagedKVAppendNode{ { nodeMap[n.kvState.node], n.kvState.port },
+						                          { nodeMap[n.pageTable.node], n.pageTable.port },
+						                          { nodeMap[n.pageDescriptors.node], n.pageDescriptors.port },
+						                          { nodeMap[n.activeLength.node], n.activeLength.port },
+						                          { nodeMap[n.keys.node], n.keys.port },
+						                          { nodeMap[n.values.node], n.values.port },
+						                          { nodeMap[n.position.node], n.position.port } };
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -1382,6 +1393,11 @@ namespace LiteNN
 					    {
 						    throw std::runtime_error(
 						        "AutogradPass: GroupedPagedAttentionNode differentiation is not yet implemented");
+					    }
+					    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+					    {
+						    throw std::runtime_error(
+						        "AutogradPass: PagedKVAppendNode differentiation is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
 					    {

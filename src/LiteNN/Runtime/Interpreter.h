@@ -1386,6 +1386,118 @@ namespace LiteNN::Runtime
 		}
 
 		template <typename ExecutionModel>
+		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const PagedKVAppendNode& node,
+		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
+		{
+			auto updatedKV = GetValue(slots, node.kvState).CopyToDevice(CPU{});
+			auto updatedPageTable = GetValue(slots, node.pageTable).CopyToDevice(CPU{});
+			auto updatedPageDescriptors = GetValue(slots, node.pageDescriptors).CopyToDevice(CPU{});
+			auto updatedActiveLength = GetValue(slots, node.activeLength).CopyToDevice(CPU{});
+			const auto keys = GetValue(slots, node.keys).CopyToDevice(CPU{});
+			const auto values = GetValue(slots, node.values).CopyToDevice(CPU{});
+			const auto position = GetValue(slots, node.position).CopyToDevice(CPU{});
+			if (updatedKV.DType() != DataType::Float32 || keys.DType() != DataType::Float32 ||
+			    values.DType() != DataType::Float32 || updatedPageTable.DType() != DataType::Int64 ||
+			    updatedPageDescriptors.DType() != DataType::Int64 || updatedActiveLength.DType() != DataType::Int64 ||
+			    position.DType() != DataType::Int64)
+			{
+				throw std::runtime_error("PagedKVAppendNode currently supports Float32 KV and Int64 metadata only");
+			}
+			const auto& kvShape = updatedKV.Shape();
+			const auto& keyShape = keys.Shape();
+			const auto& valueShape = values.Shape();
+			const auto& tableShape = updatedPageTable.Shape();
+			const auto& descriptorShape = updatedPageDescriptors.Shape();
+			if (kvShape.Dims.size() != 5 || kvShape[0] != 2 || keyShape.Dims.size() != 2 ||
+			    valueShape.Dims.size() != 2 || tableShape.Dims.size() != 1 || descriptorShape.Dims.size() != 2 ||
+			    descriptorShape[1] != static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count) ||
+			    updatedActiveLength.Shape() != ShapeView{ 1 } || position.Shape() != ShapeView{ 1 })
+			{
+				throw std::runtime_error("PagedKVAppendNode received incompatible shapes");
+			}
+			const auto residentPages = kvShape[1];
+			const auto pageSize = kvShape[2];
+			const auto kvHeads = kvShape[3];
+			const auto headDim = kvShape[4];
+			if (residentPages == 0 || pageSize == 0 || kvHeads == 0 || headDim == 0 ||
+			    descriptorShape[0] != residentPages || keyShape[0] != kvHeads || keyShape[1] != headDim ||
+			    valueShape[0] != kvHeads || valueShape[1] != headDim)
+			{
+				throw std::runtime_error("PagedKVAppendNode received incompatible KV/key/value metadata");
+			}
+			const auto rawPosition = *static_cast<const std::int64_t*>(position.UnsafeRawData());
+			if (rawPosition < 0)
+			{
+				throw std::runtime_error("PagedKVAppendNode position must be non-negative");
+			}
+			const auto token = static_cast<std::size_t>(rawPosition);
+			const auto logicalPage = token / pageSize;
+			const auto tokenInPage = token % pageSize;
+			if (logicalPage >= tableShape[0])
+			{
+				throw std::runtime_error("PagedKVAppendNode position exceeds logical page table capacity");
+			}
+			if (logicalPage >= residentPages)
+			{
+				throw std::runtime_error("PagedKVAppendNode reference policy requires resident page for logical page");
+			}
+			const auto residentPage = logicalPage;
+			auto* table = static_cast<std::int64_t*>(updatedPageTable.UnsafeRawData());
+			auto* descriptors = static_cast<std::int64_t*>(updatedPageDescriptors.UnsafeRawData());
+			const auto descriptorColumns = static_cast<std::size_t>(PagedKVPageDescriptorColumn::Count);
+			const auto descriptorBase = residentPage * descriptorColumns;
+			if (table[logicalPage] != PagedKVInvalidPage &&
+			    table[logicalPage] != static_cast<std::int64_t>(residentPage))
+			{
+				throw std::runtime_error("PagedKVAppendNode reference policy does not support resident page remapping");
+			}
+			const auto existingLogicalPage =
+			    descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::LogicalPage)];
+			if (existingLogicalPage != PagedKVInvalidPage &&
+			    existingLogicalPage != static_cast<std::int64_t>(logicalPage))
+			{
+				throw std::runtime_error("PagedKVAppendNode reference policy does not support page eviction");
+			}
+			table[logicalPage] = static_cast<std::int64_t>(residentPage);
+			descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::LogicalPage)] =
+			    static_cast<std::int64_t>(logicalPage);
+			descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::FirstToken)] =
+			    static_cast<std::int64_t>(logicalPage * pageSize);
+			auto& tokenCount =
+			    descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::TokenCount)];
+			tokenCount = std::max(tokenCount, static_cast<std::int64_t>(tokenInPage + 1));
+			descriptors[descriptorBase + static_cast<std::size_t>(PagedKVPageDescriptorColumn::Flags)] =
+			    PagedKVPageResidentFlag;
+
+			auto* kv = static_cast<float*>(updatedKV.UnsafeRawData());
+			const auto* keyData = static_cast<const float*>(keys.UnsafeRawData());
+			const auto* valueData = static_cast<const float*>(values.UnsafeRawData());
+			const auto planeStride = residentPages * pageSize * kvHeads * headDim;
+			const auto pageStride = pageSize * kvHeads * headDim;
+			const auto tokenStride = kvHeads * headDim;
+			const auto kvBase = residentPage * pageStride + tokenInPage * tokenStride;
+			std::copy_n(keyData, kvHeads * headDim, kv + kvBase);
+			std::copy_n(valueData, kvHeads * headDim, kv + planeStride + kvBase);
+			auto* active = static_cast<std::int64_t*>(updatedActiveLength.UnsafeRawData());
+			*active = std::max(*active, static_cast<std::int64_t>(token + 1));
+
+			if constexpr (std::same_as<D, CPU>)
+			{
+				slots[nodeId].push_back(std::move(updatedKV));
+				slots[nodeId].push_back(std::move(updatedPageTable));
+				slots[nodeId].push_back(std::move(updatedPageDescriptors));
+				slots[nodeId].push_back(std::move(updatedActiveLength));
+			}
+			else
+			{
+				slots[nodeId].push_back(updatedKV.CopyToDevice(device));
+				slots[nodeId].push_back(updatedPageTable.CopyToDevice(device));
+				slots[nodeId].push_back(updatedPageDescriptors.CopyToDevice(device));
+				slots[nodeId].push_back(updatedActiveLength.CopyToDevice(device));
+			}
+		}
+
+		template <typename ExecutionModel>
 		void Execute(const ExecutionModel& graph, const NodeEntry& entry, NodeId nodeId, const SoftmaxNode& node,
 		             std::vector<std::vector<Tensor<D>>>& slots, std::span<const Tensor<D>> inputs, D& device)
 		{

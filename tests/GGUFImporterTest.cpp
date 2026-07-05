@@ -1922,11 +1922,16 @@ TEST(GGUFLLaMACausalLM, PagedReferenceDecodeUsesGroupedPagedAttention)
 	EXPECT_EQ(inputNames[4], "page_descriptor_0");
 	EXPECT_EQ(inputNames[5], "active_length_0");
 	const auto outputNames = pagedDecode.OutputNames();
-	ASSERT_EQ(outputNames.size(), 2u);
+	ASSERT_EQ(outputNames.size(), 2u + hyperparameters.blockCount * 4u);
 	EXPECT_EQ(outputNames[0], "logits");
 	EXPECT_EQ(outputNames[1], "next_position");
+	EXPECT_EQ(outputNames[2], "updated_kv_state_0");
+	EXPECT_EQ(outputNames[3], "updated_page_table_0");
+	EXPECT_EQ(outputNames[4], "updated_page_descriptor_0");
+	EXPECT_EQ(outputNames[5], "updated_active_length_0");
 
 	std::size_t pagedAttentionNodeCount = 0;
+	std::size_t pagedAppendNodeCount = 0;
 	std::size_t activePrefixAttentionNodeCount = 0;
 	for (SubgraphId subgraphId = 0; subgraphId < pagedDecode.SubgraphCount(); ++subgraphId)
 	{
@@ -1938,6 +1943,10 @@ TEST(GGUFLLaMACausalLM, PagedReferenceDecodeUsesGroupedPagedAttention)
 			{
 				++pagedAttentionNodeCount;
 			}
+			if (std::holds_alternative<PagedKVAppendNode>(node))
+			{
+				++pagedAppendNodeCount;
+			}
 			if (std::holds_alternative<GroupedActivePrefixAttentionNode>(node))
 			{
 				++activePrefixAttentionNodeCount;
@@ -1945,6 +1954,7 @@ TEST(GGUFLLaMACausalLM, PagedReferenceDecodeUsesGroupedPagedAttention)
 		}
 	}
 	EXPECT_EQ(pagedAttentionNodeCount, hyperparameters.blockCount);
+	EXPECT_EQ(pagedAppendNodeCount, hyperparameters.blockCount);
 	EXPECT_EQ(activePrefixAttentionNodeCount, 0u);
 }
 
@@ -2182,7 +2192,7 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeScheduleBindsPagedKVInputs)
 	EXPECT_EQ(schedule.module.functions[forward].inputs[3].StaticShape(), std::vector<std::size_t>({ 1 }));
 	EXPECT_EQ(schedule.module.functions[forward].inputs[4].StaticShape(), std::vector<std::size_t>({ 1, 4 }));
 	EXPECT_EQ(schedule.module.functions[forward].inputs[5].StaticShape(), std::vector<std::size_t>({ 1 }));
-	ASSERT_EQ(schedule.stateValueBindings.size(), 6u);
+	ASSERT_EQ(schedule.stateValueBindings.size(), 10u);
 	EXPECT_EQ(schedule.stateValueBindings[0].stateName, "kv.layer0");
 	EXPECT_EQ(schedule.stateValueBindings[0].kind, Runtime::RuntimeStateValueKind::FunctionInput);
 	EXPECT_EQ(schedule.stateValueBindings[0].valueIndex, 2u);
@@ -2193,11 +2203,31 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeScheduleBindsPagedKVInputs)
 	EXPECT_EQ(schedule.stateValueBindings[3].stateName, "kv.layer0.active_length");
 	EXPECT_EQ(schedule.stateValueBindings[3].valueIndex, 5u);
 	EXPECT_EQ(Runtime::RuntimeSchedulePublicOutputIndices(schedule, forward), std::vector<std::size_t>({ 0 }));
-	EXPECT_EQ(Runtime::RuntimeScheduleStateOutputIndices(schedule, forward), std::vector<std::size_t>({ 1 }));
+	EXPECT_EQ(Runtime::RuntimeScheduleStateOutputIndices(schedule, forward),
+	          std::vector<std::size_t>({ 1, 2, 3, 4, 5 }));
 	const auto stateAliases = Runtime::RuntimeScheduleStateOutputAliases(schedule, forward);
-	ASSERT_EQ(stateAliases.size(), 1u);
-	EXPECT_EQ(stateAliases[0].outputIndex, 1u);
-	EXPECT_EQ(stateAliases[0].inputIndex, 1u);
+	ASSERT_EQ(stateAliases.size(), 5u);
+	EXPECT_TRUE(std::ranges::any_of(stateAliases, [](const Runtime::RuntimeStateOutputAlias& alias) {
+		return alias.outputIndex == 1u && alias.inputIndex == 1u;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(stateAliases, [](const Runtime::RuntimeStateOutputAlias& alias) {
+		return alias.outputIndex == 2u && alias.inputIndex == 2u;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(stateAliases, [](const Runtime::RuntimeStateOutputAlias& alias) {
+		return alias.outputIndex == 3u && alias.inputIndex == 3u;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(stateAliases, [](const Runtime::RuntimeStateOutputAlias& alias) {
+		return alias.outputIndex == 4u && alias.inputIndex == 4u;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(stateAliases, [](const Runtime::RuntimeStateOutputAlias& alias) {
+		return alias.outputIndex == 5u && alias.inputIndex == 5u;
+	}));
+	const auto projection = Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, forward);
+	EXPECT_EQ(projection.functionalOutputCount, 6u);
+	EXPECT_EQ(projection.publicOutputIndices, std::vector<std::size_t>({ 0 }));
+	ASSERT_EQ(projection.publicOutputTypes.size(), 1u);
+	EXPECT_EQ(projection.publicOutputTypes[0].StaticShape(), std::vector<std::size_t>({ 1, 3 }));
+	EXPECT_EQ(projection.stateAliases.size(), 5u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 }
 

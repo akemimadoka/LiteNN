@@ -1347,6 +1347,63 @@ namespace LiteNN::Validation
 		}
 
 		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
+		                  const PagedKVAppendNode& node) const
+		{
+			ExpectOutputCount(subgraphId, nodeId, entry, 4);
+			const auto kvState =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.kvState, "PagedKVAppendNode kvState", true);
+			const auto pageTable =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.pageTable, "PagedKVAppendNode pageTable", true);
+			const auto pageDescriptors = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.pageDescriptors,
+			                                                "PagedKVAppendNode pageDescriptors", true);
+			const auto activeLength = ValidateNodeOutput(subgraph, subgraphId, nodeId, node.activeLength,
+			                                             "PagedKVAppendNode activeLength", true);
+			const auto keys =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.keys, "PagedKVAppendNode keys", true);
+			const auto values =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.values, "PagedKVAppendNode values", true);
+			const auto position =
+			    ValidateNodeOutput(subgraph, subgraphId, nodeId, node.position, "PagedKVAppendNode position", true);
+			if (kvState.shape.size() != 5 || kvState.shape[0] != 2 || kvState.shape[1] == 0 || kvState.shape[2] == 0 ||
+			    kvState.shape[3] == 0 || kvState.shape[4] == 0)
+			{
+				Fail(subgraphId, nodeId,
+				     "PagedKVAppendNode kvState must be [2,residentPages,pageSize,kvHeads,headDim]");
+			}
+			if (!IsFloatingDataType(kvState.dtype) || keys.dtype != kvState.dtype || values.dtype != kvState.dtype)
+			{
+				Fail(subgraphId, nodeId, "PagedKVAppendNode requires matching floating-point KV/key/value tensors");
+			}
+			const std::vector<std::size_t> kvRowShape{ kvState.shape[3], kvState.shape[4] };
+			if (keys.shape != kvRowShape || values.shape != kvRowShape)
+			{
+				Fail(subgraphId, nodeId, "PagedKVAppendNode keys/values must be [kvHeads,headDim]");
+			}
+			if (pageTable.dtype != DataType::Int64 || pageTable.shape.size() != 1 || pageTable.shape[0] == 0)
+			{
+				Fail(subgraphId, nodeId, "PagedKVAppendNode pageTable must be Int64[logicalPages]");
+			}
+			if (pageDescriptors.dtype != DataType::Int64 ||
+			    pageDescriptors.shape != std::vector<std::size_t>{ kvState.shape[1], 4 })
+			{
+				Fail(subgraphId, nodeId, "PagedKVAppendNode pageDescriptors must be Int64[residentPages,4]");
+			}
+			if (activeLength.dtype != DataType::Int64 || activeLength.shape != std::vector<std::size_t>{ 1 } ||
+			    position.dtype != DataType::Int64 || position.shape != std::vector<std::size_t>{ 1 })
+			{
+				Fail(subgraphId, nodeId, "PagedKVAppendNode activeLength and position must be Int64[1]");
+			}
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[0], { kvState.dtype, kvState.shape },
+			           "PagedKVAppendNode updated kvState");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[1], { pageTable.dtype, pageTable.shape },
+			           "PagedKVAppendNode updated pageTable");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[2], { pageDescriptors.dtype, pageDescriptors.shape },
+			           "PagedKVAppendNode updated pageDescriptors");
+			ExpectInfo(subgraphId, nodeId, entry.outputInfos[3], { activeLength.dtype, activeLength.shape },
+			           "PagedKVAppendNode updated activeLength");
+		}
+
+		void ValidateNode(const Subgraph& subgraph, SubgraphId subgraphId, NodeId nodeId, const NodeEntry& entry,
 		                  const SoftmaxNode& node) const
 		{
 			ExpectOutputCount(subgraphId, nodeId, entry, 1);

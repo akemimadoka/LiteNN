@@ -4413,6 +4413,17 @@ namespace
 				    copy.activeLength = remap(copy.activeLength);
 				    return copy;
 			    }
+			    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+			    {
+				    copy.kvState = remap(copy.kvState);
+				    copy.pageTable = remap(copy.pageTable);
+				    copy.pageDescriptors = remap(copy.pageDescriptors);
+				    copy.activeLength = remap(copy.activeLength);
+				    copy.keys = remap(copy.keys);
+				    copy.values = remap(copy.values);
+				    copy.position = remap(copy.position);
+				    return copy;
+			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {
 				    copy.logits = remap(copy.logits);

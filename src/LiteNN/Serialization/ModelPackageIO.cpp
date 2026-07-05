@@ -1375,6 +1375,20 @@ namespace LiteNN::Serialization
 					                              .queryGroupsPerKVHead =
 					                                  PlanAttributeSize(op, "queryGroupsPerKVHead") };
 			}
+			if (op.kind == "PagedKVAppendNode")
+			{
+				if (inputs.size() != 7)
+				{
+					throw std::runtime_error("vNext PagedKVAppendNode descriptor requires seven inputs");
+				}
+				return PagedKVAppendNode{ .kvState = RequireNodeInput(inputs, 0, op.kind),
+					                      .pageTable = RequireNodeInput(inputs, 1, op.kind),
+					                      .pageDescriptors = RequireNodeInput(inputs, 2, op.kind),
+					                      .activeLength = RequireNodeInput(inputs, 3, op.kind),
+					                      .keys = RequireNodeInput(inputs, 4, op.kind),
+					                      .values = RequireNodeInput(inputs, 5, op.kind),
+					                      .position = RequireNodeInput(inputs, 6, op.kind) };
+			}
 			if (op.kind == "RoPENode")
 			{
 				const auto hasPositions = PlanAttributeBool(op, "hasPositions");

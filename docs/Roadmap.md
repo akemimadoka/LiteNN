@@ -3019,8 +3019,8 @@ Priority classes:
                   `GroupedActivePrefixAttentionNode`.
             - [x] Expose paged-reference decode as an explicit runtime-schedule option. Completed on 2026-07-05:
                   `BuildLLaMADecodeRuntimeSchedule(... usePagedReferenceDecode=true)` binds paged KV/page-table/
-                  page-descriptor/active-length states as function inputs and keeps only `decode.position` as a state
-                  output alias.
+                  page-descriptor/active-length states as function inputs and function outputs, while public compiled
+                  artifacts still expose only logits through runtime-schedule output projection.
             - [x] Add a guarded CLI/smoke entry for the paged-reference schedule. Completed on 2026-07-05:
                   `litenn_gguf_convert --paged-reference-decode --compile-only` and
                   `example/gguf/qwen_smoke.py --paged-reference-decode --compile-only` can build/cache the schedule
@@ -3028,8 +3028,12 @@ Priority classes:
             - [x] Add CPU AOT lowering for the paged reference attention node. Completed on 2026-07-05:
                   `GroupedPagedAttentionNode` lowers to `litenn_cpu_grouped_paged_attention_f32` with explicit
                   KV/page-table/page-descriptor/active-length memrefs and helper profiling.
-            - [ ] P2: Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
-                  decode graphs can append current K/V directly into page-table/page-descriptor state.
+            - [x] P2: Replace the remaining external/prefill-side KV update contract with dynamic paged KV writeback so
+                  decode graphs can append current K/V directly into page-table/page-descriptor state. Completed on
+                  2026-07-05: `PagedKVAppendNode` now has graph/schema/validation/pass/vNext support, CPU interpreter
+                  semantics, CPU AOT MLIR reference lowering, GGUF paged-reference decode lowering, and runtime-schedule
+                  state-output aliases for KV state, page table, page descriptor, active length, and position.
+                  Production in-place/evicting paged kernels remain tracked under backend performance work.
       - [ ] P2: Add CUDA/Vulkan paged-attention kernels after the CPU reference path is numerically stable.
 - [x] P1: Replace per-head active-prefix attention helpers with grouped attention execution:
       the current CPU helper is called once per attention head and recomputes score dot products across max,

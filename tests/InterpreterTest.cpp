@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -186,6 +187,60 @@ TEST(Interpreter, GroupedPagedAttentionMatchesDenseActivePrefix)
 	{
 		EXPECT_NEAR(ReadFloat(pagedResults[0], i), ReadFloat(denseResults[0], i), 1e-5F) << "at element " << i;
 	}
+}
+
+TEST(Interpreter, PagedKVAppendUpdatesPagedStateBundle)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto kvState = sg.AddParam(DataType::Float32, { 2, 2, 2, 1, 2 });
+	const auto pageTable = sg.AddParam(DataType::Int64, { 2 });
+	const auto pageDescriptors = sg.AddParam(DataType::Int64, { 2, 4 });
+	const auto activeLength = sg.AddParam(DataType::Int64, { 1 });
+	const auto keys = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto values = sg.AddParam(DataType::Float32, { 1, 2 });
+	const auto position = sg.AddParam(DataType::Int64, { 1 });
+	const auto append =
+	    sg.AddNode(PagedKVAppendNode{ .kvState = { kvState, 0 },
+	                                  .pageTable = { pageTable, 0 },
+	                                  .pageDescriptors = { pageDescriptors, 0 },
+	                                  .activeLength = { activeLength, 0 },
+	                                  .keys = { keys, 0 },
+	                                  .values = { values, 0 },
+	                                  .position = { position, 0 } },
+	               { OutputInfo{ DataType::Float32, { 2, 2, 2, 1, 2 } }, OutputInfo{ DataType::Int64, { 2 } },
+	                 OutputInfo{ DataType::Int64, { 2, 4 } }, OutputInfo{ DataType::Int64, { 1 } } });
+	sg.SetResults({ { append, 0 }, { append, 1 }, { append, 2 }, { append, 3 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const std::vector<double> zeroKV(16, 0.0);
+	Runtime::Interpreter<CPU> interp;
+	std::array<Tensor<CPU>, 7> inputs = {
+		Tensor<CPU>(std::span<const double>(zeroKV), { 2, 2, 2, 1, 2 }),
+		MakeInt64Tensor({ Runtime::PagedKVInvalidPage, Runtime::PagedKVInvalidPage }, { 2 }),
+		MakeInt64Tensor({ Runtime::PagedKVInvalidPage, 0, 0, 0, Runtime::PagedKVInvalidPage, 0, 0, 0 }, { 2, 4 }),
+		MakeInt64Tensor({ 0 }, { 1 }),
+		Tensor<CPU>({ 3.0F, 4.0F }, { 1, 2 }),
+		Tensor<CPU>({ 30.0F, 40.0F }, { 1, 2 }),
+		MakeInt64Tensor({ 2 }, { 1 }),
+	};
+	const auto outputs = interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+	ASSERT_EQ(outputs.size(), 4u);
+
+	const auto* kv = static_cast<const float*>(outputs[0].UnsafeRawData());
+	EXPECT_FLOAT_EQ(kv[4], 3.0F);
+	EXPECT_FLOAT_EQ(kv[5], 4.0F);
+	EXPECT_FLOAT_EQ(kv[12], 30.0F);
+	EXPECT_FLOAT_EQ(kv[13], 40.0F);
+	const auto* table = static_cast<const std::int64_t*>(outputs[1].UnsafeRawData());
+	EXPECT_EQ(table[0], Runtime::PagedKVInvalidPage);
+	EXPECT_EQ(table[1], 1);
+	const auto* descriptors = static_cast<const std::int64_t*>(outputs[2].UnsafeRawData());
+	EXPECT_EQ(descriptors[4], 1);
+	EXPECT_EQ(descriptors[5], 2);
+	EXPECT_EQ(descriptors[6], 1);
+	EXPECT_EQ(descriptors[7], Runtime::PagedKVPageResidentFlag);
+	EXPECT_EQ(static_cast<const std::int64_t*>(outputs[3].UnsafeRawData())[0], 3);
 }
 
 // 测试 2: MatMul y = x @ w + bias (使用 Variable 作为权重)

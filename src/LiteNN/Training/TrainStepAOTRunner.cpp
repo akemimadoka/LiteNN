@@ -189,6 +189,12 @@ namespace LiteNN::Training
 						                                  remap(n.activeLength), n.scale,
 						                                  n.queryGroupsPerKVHead };
 				    }
+				    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+				    {
+					    return PagedKVAppendNode{ remap(n.kvState),      remap(n.pageTable), remap(n.pageDescriptors),
+						                          remap(n.activeLength), remap(n.keys),      remap(n.values),
+						                          remap(n.position) };
+				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
 					    return SaveActivationNode{ remap(n.input), n.slotId };

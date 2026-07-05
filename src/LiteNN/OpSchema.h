@@ -510,6 +510,15 @@ namespace LiteNN
 		};
 
 		template <>
+		struct NodeSchemaTraits<PagedKVAppendNode> : NodeSchemaTraits<GroupedPagedAttentionNode>
+		{
+			static constexpr std::size_t MinInputs = 7;
+			static constexpr std::size_t MaxInputs = 7;
+			static constexpr std::size_t MinOutputs = 4;
+			static constexpr std::size_t MaxOutputs = 4;
+		};
+
+		template <>
 		struct NodeSchemaTraits<SoftmaxNode> : NodeSchemaTraits<UnaryOpNode>
 		{
 			static constexpr OpCategory Category = OpCategory::NeuralNetwork;
@@ -827,6 +836,11 @@ namespace LiteNN
 			    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
 			    {
 				    return { value.queries, value.kvState, value.pageTable, value.pageDescriptors, value.activeLength };
+			    }
+			    else if constexpr (std::same_as<T, PagedKVAppendNode>)
+			    {
+				    return { value.kvState, value.pageTable, value.pageDescriptors, value.activeLength,
+					         value.keys,    value.values,    value.position };
 			    }
 			    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 			    {

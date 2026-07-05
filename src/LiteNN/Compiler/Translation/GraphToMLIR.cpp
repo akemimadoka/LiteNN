@@ -2801,6 +2801,172 @@ namespace litenn
 				valueMap[nodeId] = { generic.getResult(0) };
 			}
 
+			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const PagedKVAppendNode& node,
+			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
+			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
+			{
+				if (outputInfos.size() != 4)
+				{
+					throw std::runtime_error("GraphToMLIR PagedKVAppendNode expected four outputs");
+				}
+				const auto kvInfo = sg.GetOutputInfo(node.kvState);
+				const auto pageTableInfo = sg.GetOutputInfo(node.pageTable);
+				const auto pageDescriptorInfo = sg.GetOutputInfo(node.pageDescriptors);
+				const auto activeLengthInfo = sg.GetOutputInfo(node.activeLength);
+				const auto keysInfo = sg.GetOutputInfo(node.keys);
+				const auto valuesInfo = sg.GetOutputInfo(node.values);
+				const auto positionInfo = sg.GetOutputInfo(node.position);
+				if (kvInfo.dtype != DataType::Float32 || keysInfo.dtype != DataType::Float32 ||
+				    valuesInfo.dtype != DataType::Float32 || pageTableInfo.dtype != DataType::Int64 ||
+				    pageDescriptorInfo.dtype != DataType::Int64 || activeLengthInfo.dtype != DataType::Int64 ||
+				    positionInfo.dtype != DataType::Int64 || kvInfo.shape.size() != 5 || kvInfo.shape[0] != 2 ||
+				    kvInfo.shape[1] == 0 || kvInfo.shape[2] == 0 || kvInfo.shape[3] == 0 || kvInfo.shape[4] == 0 ||
+				    keysInfo.shape != std::vector<std::size_t>{ kvInfo.shape[3], kvInfo.shape[4] } ||
+				    valuesInfo.shape != keysInfo.shape || pageTableInfo.shape.size() != 1 ||
+				    pageDescriptorInfo.shape != std::vector<std::size_t>{ kvInfo.shape[1], 4 } ||
+				    activeLengthInfo.shape != std::vector<std::size_t>{ 1 } ||
+				    positionInfo.shape != std::vector<std::size_t>{ 1 } || outputInfos[0].dtype != kvInfo.dtype ||
+				    outputInfos[0].shape != kvInfo.shape || outputInfos[1].dtype != pageTableInfo.dtype ||
+				    outputInfos[1].shape != pageTableInfo.shape || outputInfos[2].dtype != pageDescriptorInfo.dtype ||
+				    outputInfos[2].shape != pageDescriptorInfo.shape ||
+				    outputInfos[3].dtype != activeLengthInfo.dtype || outputInfos[3].shape != activeLengthInfo.shape)
+				{
+					throw std::runtime_error(
+					    "GraphToMLIR PagedKVAppendNode currently supports Float32 paged KV "
+					    "[2,residentPages,pageSize,KV,H], Float32 keys/values [KV,H], Int64 metadata, and "
+					    "same-shaped state outputs");
+				}
+
+				const auto loc = builder_.getUnknownLoc();
+				const auto kvResultType = convertTensorType(ctx_, outputInfos[0].dtype, outputInfos[0].shape);
+				const auto pageTableResultType = convertTensorType(ctx_, outputInfos[1].dtype, outputInfos[1].shape);
+				const auto pageDescriptorResultType =
+				    convertTensorType(ctx_, outputInfos[2].dtype, outputInfos[2].shape);
+				const auto activeLengthResultType = convertTensorType(ctx_, outputInfos[3].dtype, outputInfos[3].shape);
+				const auto pageSize = static_cast<std::int64_t>(kvInfo.shape[2]);
+				const auto descriptorColumns = static_cast<std::int64_t>(pageDescriptorInfo.shape[1]);
+				auto keyMap = AffineMap::get(5, 0, { getAffineDimExpr(3, &ctx_), getAffineDimExpr(4, &ctx_) }, &ctx_);
+				auto positionMapRank5 = AffineMap::get(5, 0, { getAffineConstantExpr(0, &ctx_) }, &ctx_);
+				auto kvMap = AffineMap::getMultiDimIdentityMap(5, &ctx_);
+				auto kvGeneric = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ kvResultType },
+				    ValueRange{ getVal(valueMap, node.keys), getVal(valueMap, node.values),
+				                getVal(valueMap, node.position) },
+				    ValueRange{ getVal(valueMap, node.kvState) },
+				    SmallVector<AffineMap>{ keyMap, keyMap, positionMapRank5, kvMap },
+				    SmallVector<utils::IteratorType>(5, utils::IteratorType::parallel),
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto plane = emitIndexAsI64(b, l, 0);
+					    auto page = emitIndexAsI64(b, l, 1);
+					    auto token = emitIndexAsI64(b, l, 2);
+					    auto pageSizeValue = emitI64Constant(b, l, pageSize);
+					    auto logicalPage = b.create<arith::DivSIOp>(l, args[2], pageSizeValue).getResult();
+					    auto tokenInPage = b.create<arith::RemSIOp>(l, args[2], pageSizeValue).getResult();
+					    auto pageMatches =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, page, logicalPage).getResult();
+					    auto tokenMatches =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, token, tokenInPage).getResult();
+					    auto locationMatches = b.create<arith::AndIOp>(l, pageMatches, tokenMatches).getResult();
+					    auto isKeyPlane =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, plane, emitI64Constant(b, l, 0))
+					            .getResult();
+					    auto isValuePlane =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, plane, emitI64Constant(b, l, 1))
+					            .getResult();
+					    auto keyMatches = b.create<arith::AndIOp>(l, locationMatches, isKeyPlane).getResult();
+					    auto valueMatches = b.create<arith::AndIOp>(l, locationMatches, isValuePlane).getResult();
+					    auto valueOrOld = b.create<arith::SelectOp>(l, valueMatches, args[1], args[3]).getResult();
+					    b.create<linalg::YieldOp>(
+					        l, b.create<arith::SelectOp>(l, keyMatches, args[0], valueOrOld).getResult());
+				    });
+
+				auto positionMapRank1 = AffineMap::get(1, 0, { getAffineConstantExpr(0, &ctx_) }, &ctx_);
+				auto rank1Identity = AffineMap::getMultiDimIdentityMap(1, &ctx_);
+				auto pageTableGeneric = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ pageTableResultType }, ValueRange{ getVal(valueMap, node.position) },
+				    ValueRange{ getVal(valueMap, node.pageTable) },
+				    SmallVector<AffineMap>{ positionMapRank1, rank1Identity },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto page = emitIndexAsI64(b, l, 0);
+					    auto logicalPage =
+					        b.create<arith::DivSIOp>(l, args[0], emitI64Constant(b, l, pageSize)).getResult();
+					    auto matches =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, page, logicalPage).getResult();
+					    b.create<linalg::YieldOp>(
+					        l, b.create<arith::SelectOp>(l, matches, logicalPage, args[1]).getResult());
+				    });
+
+				auto positionMapRank2 = AffineMap::get(2, 0, { getAffineConstantExpr(0, &ctx_) }, &ctx_);
+				auto rank2Identity = AffineMap::getMultiDimIdentityMap(2, &ctx_);
+				auto pageDescriptorGeneric = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ pageDescriptorResultType }, ValueRange{ getVal(valueMap, node.position) },
+				    ValueRange{ getVal(valueMap, node.pageDescriptors) },
+				    SmallVector<AffineMap>{ positionMapRank2, rank2Identity },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto row = emitIndexAsI64(b, l, 0);
+					    auto column = emitIndexAsI64(b, l, 1);
+					    auto pageSizeValue = emitI64Constant(b, l, pageSize);
+					    auto logicalPage = b.create<arith::DivSIOp>(l, args[0], pageSizeValue).getResult();
+					    auto tokenInPage = b.create<arith::RemSIOp>(l, args[0], pageSizeValue).getResult();
+					    auto firstToken = b.create<arith::MulIOp>(l, logicalPage, pageSizeValue).getResult();
+					    auto tokenCount = b.create<arith::AddIOp>(l, tokenInPage, emitI64Constant(b, l, 1)).getResult();
+					    auto residentFlag = emitI64Constant(b, l, 1);
+					    auto replacement = args[1];
+					    replacement =
+					        b.create<arith::SelectOp>(
+					             l,
+					             b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, column, emitI64Constant(b, l, 0))
+					                 .getResult(),
+					             logicalPage, replacement)
+					            .getResult();
+					    replacement =
+					        b.create<arith::SelectOp>(
+					             l,
+					             b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, column, emitI64Constant(b, l, 1))
+					                 .getResult(),
+					             firstToken, replacement)
+					            .getResult();
+					    replacement =
+					        b.create<arith::SelectOp>(
+					             l,
+					             b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, column, emitI64Constant(b, l, 2))
+					                 .getResult(),
+					             emitI64Max(b, l, args[1], tokenCount), replacement)
+					            .getResult();
+					    replacement =
+					        b.create<arith::SelectOp>(
+					             l,
+					             b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, column, emitI64Constant(b, l, 3))
+					                 .getResult(),
+					             residentFlag, replacement)
+					            .getResult();
+					    auto rowMatches =
+					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, row, logicalPage).getResult();
+					    auto columnInRange = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, column,
+					                                                 emitI64Constant(b, l, descriptorColumns))
+					                             .getResult();
+					    b.create<linalg::YieldOp>(
+					        l, b.create<arith::SelectOp>(
+					                l, b.create<arith::AndIOp>(l, rowMatches, columnInRange).getResult(), replacement,
+					                args[1])
+					               .getResult());
+				    });
+
+				auto activeLengthGeneric = builder_.create<linalg::GenericOp>(
+				    loc, TypeRange{ activeLengthResultType }, ValueRange{ getVal(valueMap, node.position) },
+				    ValueRange{ getVal(valueMap, node.activeLength) },
+				    SmallVector<AffineMap>{ positionMapRank1, rank1Identity },
+				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel },
+				    [&](OpBuilder& b, Location l, ValueRange args) {
+					    auto nextLength = b.create<arith::AddIOp>(l, args[0], emitI64Constant(b, l, 1)).getResult();
+					    b.create<linalg::YieldOp>(l, emitI64Max(b, l, args[1], nextLength));
+				    });
+				valueMap[nodeId] = { kvGeneric.getResult(0), pageTableGeneric.getResult(0),
+					                 pageDescriptorGeneric.getResult(0), activeLengthGeneric.getResult(0) };
+			}
+
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
