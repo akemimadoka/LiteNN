@@ -653,7 +653,8 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             `gguf_decode_summary.md`, and `gguf_decode_trace.json` so token-step and helper attribution are bundled
             with the command logs.
       - [x] Include helper percentage attribution in the GGUF decode bundle summary: total helper share, per-step helper
-            share, and per-step top helper are now recorded so large residual/non-helper time remains visible.
+            share, residual/non-helper share, and per-step top helper are now recorded so large residual/non-helper time
+            remains visible.
       - [x] Import completed Qwen smoke reports with `benchmark/profile_bundle.py --qwen-smoke-report <report>` so
             helper/step attribution can be rebuilt from existing large-model evidence, while the bundle manifest links
             the original `qwen_smoke_trace.json` and waterfall outputs.
@@ -661,7 +662,7 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             thread count, affinity, parallelism gate, Q8_K-staged mode, and compile-diagnostics mode.
       - [x] Compare completed profile bundles directly: `gguf_decode_compare.py --litenn-profile-summary
             <gguf_decode_summary.json>` now derives throughput and carries top-helper/helper-share plus
-            top-operator/operator-share columns into the output tables.
+            top-operator/operator-share and residual-share columns into the output tables.
       - [x] Emit fine-grained Chrome Trace / Perfetto-compatible waterfall JSON from LiteNN spans, including graph import,
             GGUF/safetensors conversion, MLIR pass pipeline, LLVM/object emission, module loading, runtime schedule
             steps, GPU dispatch, host/device transfer, synchronization, and decode-loop token phases. Completed on

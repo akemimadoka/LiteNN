@@ -107,6 +107,7 @@ def litenn_row(path: Path) -> dict[str, object]:
         "helperSharePercent": None,
         "topOperator": None,
         "operatorSharePercent": None,
+        "residualSharePercent": None,
         "source": str(path),
     }
 
@@ -154,6 +155,8 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         top_operator_name = f"{top_operator.get('operator', 'unknown')}/{top_operator.get('role', 'unknown')}"
         percent = top_operator.get("percent_of_steps")
         top_operator_share = float(percent) if percent is not None else None
+    residual_percent = summary.get("residual_percent_of_steps")
+    residual_share = float(residual_percent) if residual_percent is not None else None
 
     tokens_per_second = token_count * 1000.0 / total_step_ms
     return {
@@ -173,6 +176,7 @@ def litenn_profile_summary_row(path: Path) -> dict[str, object]:
         "helperSharePercent": top_helper_share,
         "topOperator": top_operator_name,
         "operatorSharePercent": top_operator_share,
+        "residualSharePercent": residual_share,
         "source": str(path),
     }
 
@@ -207,6 +211,7 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "helperSharePercent": None,
                 "topOperator": None,
                 "operatorSharePercent": None,
+                "residualSharePercent": None,
                 "source": str(path),
             }
         )
@@ -243,6 +248,7 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "helperSharePercent": entry.get("helperSharePercent"),
                 "topOperator": entry.get("topOperator"),
                 "operatorSharePercent": entry.get("operatorSharePercent"),
+                "residualSharePercent": entry.get("residualSharePercent"),
                 "source": str(path),
             }
         )
@@ -300,6 +306,7 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "helperSharePercent",
         "topOperator",
         "operatorSharePercent",
+        "residualSharePercent",
         "source",
     ]
     observed_fields = {field for row in rows for field in row}
@@ -310,8 +317,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Operator | Operator Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Operator | Operator Share | Residual Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
@@ -324,7 +331,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row.get('topHelper') or 'n/a'} | "
             f"{format_percent(row.get('helperSharePercent'))} | {row.get('topOperator') or 'n/a'} | "
-            f"{format_percent(row.get('operatorSharePercent'))} | {format_optional(row['fallbackUsed'])} | "
+            f"{format_percent(row.get('operatorSharePercent'))} | {format_percent(row.get('residualSharePercent'))} | "
+            f"{format_optional(row['fallbackUsed'])} | "
             f"{format_optional(row.get('fallbackCount'))} |"
         )
     (output_dir / "gguf_decode_compare.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
