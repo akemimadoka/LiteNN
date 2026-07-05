@@ -3126,6 +3126,62 @@ namespace
 		modulePipeline.run(module, moduleAnalysisManager);
 	}
 
+	void StripStateAliasUnsafeAttributes(llvm::Module& module)
+	{
+		constexpr std::array aliasSensitiveAttrs = {
+			llvm::Attribute::NoAlias,
+			llvm::Attribute::ReadNone,
+			llvm::Attribute::ReadOnly,
+			llvm::Attribute::WriteOnly,
+		};
+		const auto stripParamAttrs = [&](auto& callable, unsigned argCount) {
+			for (unsigned arg = 0; arg < argCount; ++arg)
+			{
+				for (const auto attr : aliasSensitiveAttrs)
+				{
+					callable.removeParamAttr(arg, attr);
+				}
+			}
+		};
+		const auto stripFnAttrs = [](auto& callable) {
+			callable.removeFnAttr(llvm::Attribute::ReadNone);
+			callable.removeFnAttr(llvm::Attribute::ReadOnly);
+			callable.removeFnAttr(llvm::Attribute::WriteOnly);
+		};
+
+		for (auto& function : module)
+		{
+			stripParamAttrs(function, function.arg_size());
+			stripFnAttrs(function);
+			for (auto& block : function)
+			{
+				for (auto& instruction : block)
+				{
+					auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction);
+					if (!call)
+					{
+						continue;
+					}
+					stripParamAttrs(*call, call->arg_size());
+					stripFnAttrs(*call);
+				}
+			}
+		}
+	}
+
+	std::uint8_t EffectiveCPUAOTLLVMOptLevel(const CompilerOptions& options,
+	                                         const Runtime::RuntimeScheduleOutputProjection* outputProjection)
+	{
+		if (options.cpuAOTLLVMOptLevel <= 2 || outputProjection == nullptr || outputProjection->stateAliases.empty())
+		{
+			return options.cpuAOTLLVMOptLevel;
+		}
+		LogCompileDiagnostic(
+		    options,
+		    "cpu-aot llvm opt level O3 is downgraded to O2 for state-alias schedules until O3 alias safety is proven");
+		return 2;
+	}
+
 	std::vector<std::byte> EmitObjectFile(llvm::Module& module)
 	{
 		auto config = CreateNativeTargetMachine();
@@ -4144,7 +4200,7 @@ namespace
 		auto externalRegionFn =
 		    module.getOrInsertFunction(std::string(symbol), llvm::FunctionType::get(ptrTy, {}, false));
 		auto* base = builder.CreateCall(externalRegionFn);
-		return builder.CreateInBoundsGEP(i8Ty, base, builder.getInt64(offset));
+		return builder.CreateGEP(i8Ty, base, builder.getInt64(offset));
 	}
 
 	CompiledModuleExternalTensorInfo MakeExternalF32TensorInfo(std::string name, std::string_view regionName,
@@ -14961,10 +15017,15 @@ namespace
 			AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs,
 			                       functionalOutputSpecs, externalized->entryExternalTensorInfos, outputProjection);
 		});
+		if (outputProjection && !outputProjection->stateAliases.empty())
+		{
+			TimedCompileDiagnostic(options, "cpu-aot strip state-alias unsafe attributes",
+			                       [&] { StripStateAliasUnsafeAttributes(*llvmModule); });
+		}
 		LogLLVMModuleStats(options, "cpu-llvm after entry wrapper", *llvmModule);
-		TimedCompileDiagnostic(
-		    options, std::format("cpu-aot optimize LLVM module O{}", options.cpuAOTLLVMOptLevel),
-		    [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel); });
+		const auto effectiveOptLevel = EffectiveCPUAOTLLVMOptLevel(options, outputProjection);
+		TimedCompileDiagnostic(options, std::format("cpu-aot optimize LLVM module O{}", effectiveOptLevel),
+		                       [&] { OptimizeLLVMModule(*llvmModule, *config.targetMachine, effectiveOptLevel); });
 		LogLLVMModuleStats(options, "cpu-llvm after optimize", *llvmModule);
 
 		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
@@ -17443,7 +17504,11 @@ namespace
 		const auto entryOutputSpecs = BuildEntryOutputSpecs(functionalOutputSpecs, outputProjection);
 		AddUniformEntryWrapper(*llvmModule, "subgraph_" + std::to_string(graph.Forward()), inputSpecs,
 		                       functionalOutputSpecs, {}, outputProjection);
-		OptimizeLLVMModule(*llvmModule, *config.targetMachine, options.cpuAOTLLVMOptLevel);
+		if (outputProjection && !outputProjection->stateAliases.empty())
+		{
+			StripStateAliasUnsafeAttributes(*llvmModule);
+		}
+		OptimizeLLVMModule(*llvmModule, *config.targetMachine, EffectiveCPUAOTLLVMOptLevel(options, outputProjection));
 
 		auto rodata = SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
 		auto instructions = EmitObjectFile(*llvmModule);

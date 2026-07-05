@@ -2912,6 +2912,12 @@ Priority classes:
             `--cpu-aot-threads`, `--cpu-aot-affinity`, `--cpu-aot-llvm-opt-level`,
             `--cpu-aot-parallel-min-flops`, and `--compile-diagnostics` / `--no-compile-diagnostics`.
             These options are included in the decode AOT cache key when they affect generated artifacts.
+      - [x] Guard CPU AOT O3 for state-alias decode schedules. Completed on 2026-07-05: Qwen stateful decode with
+            `--cpu-aot-llvm-opt-level 3` reproduced a Windows access violation on the first decode step, while O1/O2
+            completed. CPU AOT now strips alias-sensitive LLVM attributes around state-alias entry wrappers and
+            downgrades only state-alias schedules requested as O3 to effective O2 with an explicit compile diagnostic.
+            Non-state-alias CPU AOT artifacts can still use O3. True O3 alias-safety proof remains a follow-up before
+            reenabling O3 for mutable-state decode entries.
       - [x] Add VNNI, repacked-weight, or other architecture-specific vec-dot kernels for the Q8_K-staged path, then
             re-run the direct-vs-staged helper table before changing the compiler/runtime default. The current AVX2 path
             now uses an architecture-specific u8*s8 `maddubs` pairwise dot for Q4_K/Q5_K/Q6_K staged lanes. Validation
