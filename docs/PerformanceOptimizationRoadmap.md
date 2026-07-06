@@ -186,6 +186,10 @@ Priority classes for the GGUF/Qwen decode work:
                 llama.cpp `llama-bench` matrix on the same machine measured about `4.65 t/s` at T2, `4.64 t/s` at T4,
                 `4.29 t/s` at T8, `3.47 t/s` at T16, and `2.35 t/s` at T32 with `ngl=0` and `flash_attn=0`. Therefore
                 the next thread-policy work should wait for packed kernels; otherwise T4/T8 retuning makes LiteNN worse.
+                Matrix tooling completed on 2026-07-06: `benchmark/gguf_decode_thread_matrix.py` runs LiteNN stateful
+                CPU AOT decode across auto/T2/T4/T8/T16/T32, supports cache-hit and profile-bundle modes, and redacts the
+                model path in saved command manifests. Use it for the next full-decode acceptance run before changing
+                default thread policy.
           - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
                 or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and
