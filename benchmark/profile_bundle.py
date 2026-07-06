@@ -67,6 +67,8 @@ class GGUFDecodeStep:
     tokens_per_second: float
     input_prep_ms: float | None = None
     module_run_ms: float | None = None
+    helper_total_ms: float | None = None
+    module_non_helper_ms: float | None = None
     helper_profile_emit_ms: float | None = None
     logits_output_ms: float | None = None
     sampling_ms: float | None = None
@@ -690,6 +692,8 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
                             input_prep_ms=optional_float(values, "input_prep_ms"),
                             module_run_ms=optional_float(values, "module_run_ms"),
+                            helper_total_ms=optional_float(values, "helper_total_ms"),
+                            module_non_helper_ms=optional_float(values, "module_non_helper_ms"),
                             helper_profile_emit_ms=optional_float(values, "helper_profile_emit_ms"),
                             logits_output_ms=optional_float(values, "logits_output_ms"),
                             sampling_ms=optional_float(values, "sampling_ms"),
@@ -767,6 +771,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     runtime_bucket_specs = [
         ("input_prep", "input_prep_ms", "stream_stats_input_prep"),
         ("module_run", "module_run_ms", "stream_stats_module_run"),
+        ("helper_total", "helper_total_ms", "stream_stats_helper_total"),
+        ("module_non_helper", "module_non_helper_ms", "stream_stats_module_run_minus_helper_total"),
         ("helper_profile_emit", "helper_profile_emit_ms", "stream_stats_helper_profile_emit"),
         ("logits_output", "logits_output_ms", "stream_stats_logits_output"),
         ("sampling", "sampling_ms", "stream_stats_sampling"),
@@ -774,10 +780,24 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         ("host_overhead", "host_overhead_ms", "stream_stats_unattributed_host_overhead"),
     ]
 
+    def helper_total_ms_for_step(step: GGUFDecodeStep) -> float:
+        if step.helper_total_ms is not None:
+            return step.helper_total_ms
+        return sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values())
+
     def runtime_accounted_ms(step: GGUFDecodeStep) -> float:
+        non_overlapping_fields = (
+            "input_prep_ms",
+            "module_run_ms",
+            "helper_profile_emit_ms",
+            "logits_output_ms",
+            "sampling_ms",
+            "state_update_ms",
+            "host_overhead_ms",
+        )
         return sum(
             value
-            for _, field_name, _ in runtime_bucket_specs
+            for field_name in non_overlapping_fields
             for value in (getattr(step, field_name),)
             if value is not None
         )
@@ -791,31 +811,18 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "generated_tokens_per_second": step.tokens_per_second,
             "input_prep_ms": step.input_prep_ms,
             "module_run_ms": step.module_run_ms,
+            "stream_helper_total_ms": step.helper_total_ms,
+            "module_non_helper_ms": step.module_non_helper_ms,
             "helper_profile_emit_ms": step.helper_profile_emit_ms,
             "logits_output_ms": step.logits_output_ms,
             "sampling_ms": step.sampling_ms,
             "state_update_ms": step.state_update_ms,
             "host_overhead_ms": step.host_overhead_ms,
             "runtime_accounted_ms": runtime_accounted_ms(step),
-            "helper_total_ms": sum(
-                float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()
-            ),
-            "helper_percent_of_step": helper_percent(
-                sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()),
-                step.step_ms,
-            ),
-            "residual_ms": max(
-                0.0,
-                step.step_ms - sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()),
-            ),
-            "residual_percent_of_step": helper_percent(
-                max(
-                    0.0,
-                    step.step_ms
-                    - sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()),
-                ),
-                step.step_ms,
-            ),
+            "helper_total_ms": helper_total_ms_for_step(step),
+            "helper_percent_of_step": helper_percent(helper_total_ms_for_step(step), step.step_ms),
+            "residual_ms": max(0.0, step.step_ms - helper_total_ms_for_step(step)),
+            "residual_percent_of_step": helper_percent(max(0.0, step.step_ms - helper_total_ms_for_step(step)), step.step_ms),
             "top_helper": next(
                 (
                     {
@@ -1231,8 +1238,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "",
             "## Steps",
             "",
-            "| Step | Phase | Step ms | Module ms | Host overhead ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
-            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
+            "| Step | Phase | Step ms | Module ms | Module non-helper ms | Host overhead ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
         ]
     )
     for step in analysis.steps:
@@ -1262,6 +1269,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         md_lines.append(
             f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | "
             f"{format_optional_ms(step_summary['module_run_ms'])} | "
+            f"{format_optional_ms(step_summary['module_non_helper_ms'])} | "
             f"{format_optional_ms(step_summary['host_overhead_ms'])} | "
             f"{float(step_summary['helper_total_ms']):.3f} | {helper_percent_text} | "
             f"{float(step_summary['residual_ms']):.3f} | {residual_percent_text} | "

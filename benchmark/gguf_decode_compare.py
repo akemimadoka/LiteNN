@@ -116,6 +116,8 @@ def litenn_row(path: Path) -> dict[str, object]:
         "topResolvedThreads": None,
         "moduleRunMs": None,
         "moduleRunSharePercent": None,
+        "moduleNonHelperMs": None,
+        "moduleNonHelperSharePercent": None,
         "hostOverheadMs": None,
         "hostOverheadSharePercent": None,
         "source": str(path),
@@ -220,6 +222,11 @@ def litenn_profile_summary_rows(path: Path) -> list[dict[str, object]]:
         top_node_kind = str(top_node.get("node_kind", "unknown")) if isinstance(top_node, dict) else None
         top_node_event = max(selected_nodes, key=lambda node: as_float(node.get("total_ms")), default=None)
         module_run_ms = sum(as_float(step.get("module_run_ms")) for step in selected_steps if step.get("module_run_ms") is not None)
+        module_non_helper_ms = sum(
+            as_float(step.get("module_non_helper_ms"))
+            for step in selected_steps
+            if step.get("module_non_helper_ms") is not None
+        )
         host_overhead_ms = sum(
             as_float(step.get("host_overhead_ms")) for step in selected_steps if step.get("host_overhead_ms") is not None
         )
@@ -264,6 +271,10 @@ def litenn_profile_summary_rows(path: Path) -> list[dict[str, object]]:
             ),
             "moduleRunMs": module_run_ms if module_run_ms > 0.0 else None,
             "moduleRunSharePercent": helper_percent(module_run_ms, total_step_ms) if module_run_ms > 0.0 else None,
+            "moduleNonHelperMs": module_non_helper_ms if module_non_helper_ms > 0.0 else None,
+            "moduleNonHelperSharePercent": (
+                helper_percent(module_non_helper_ms, total_step_ms) if module_non_helper_ms > 0.0 else None
+            ),
             "hostOverheadMs": host_overhead_ms if host_overhead_ms > 0.0 else None,
             "hostOverheadSharePercent": helper_percent(host_overhead_ms, total_step_ms) if host_overhead_ms > 0.0 else None,
             "source": str(path),
@@ -315,6 +326,8 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "topResolvedThreads": None,
                 "moduleRunMs": None,
                 "moduleRunSharePercent": None,
+                "moduleNonHelperMs": None,
+                "moduleNonHelperSharePercent": None,
                 "hostOverheadMs": None,
                 "hostOverheadSharePercent": None,
                 "source": str(path),
@@ -361,6 +374,8 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "topResolvedThreads": entry.get("topResolvedThreads"),
                 "moduleRunMs": entry.get("moduleRunMs"),
                 "moduleRunSharePercent": entry.get("moduleRunSharePercent"),
+                "moduleNonHelperMs": entry.get("moduleNonHelperMs"),
+                "moduleNonHelperSharePercent": entry.get("moduleNonHelperSharePercent"),
                 "hostOverheadMs": entry.get("hostOverheadMs"),
                 "hostOverheadSharePercent": entry.get("hostOverheadSharePercent"),
                 "source": str(path),
@@ -428,6 +443,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "residualSharePercent",
         "moduleRunMs",
         "moduleRunSharePercent",
+        "moduleNonHelperMs",
+        "moduleNonHelperSharePercent",
         "hostOverheadMs",
         "hostOverheadSharePercent",
         "topNode",
@@ -442,8 +459,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper ms | Helper Share | Top Node | Top Operator | Operator Share | Format | Activation | Threads | Module ms | Module Share | Host Overhead ms | Host Overhead Share | Residual ms | Residual Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper ms | Helper Share | Top Node | Top Operator | Operator Share | Format | Activation | Threads | Module ms | Module Share | Module non-helper ms | Module non-helper share | Host Overhead ms | Host Overhead Share | Residual ms | Residual Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
@@ -462,7 +479,10 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{format_percent(row.get('operatorSharePercent'))} | "
             f"{row.get('topFormat') or 'n/a'} | {row.get('topActivation') or 'n/a'} | "
             f"{row.get('topResolvedThreads') or 'n/a'} | {format_ms(row.get('moduleRunMs'))} | "
-            f"{format_percent(row.get('moduleRunSharePercent'))} | {format_ms(row.get('hostOverheadMs'))} | "
+            f"{format_percent(row.get('moduleRunSharePercent'))} | "
+            f"{format_ms(row.get('moduleNonHelperMs'))} | "
+            f"{format_percent(row.get('moduleNonHelperSharePercent'))} | "
+            f"{format_ms(row.get('hostOverheadMs'))} | "
             f"{format_percent(row.get('hostOverheadSharePercent'))} | {format_ms(row.get('residualMs'))} | "
             f"{format_percent(row.get('residualSharePercent'))} | "
             f"{format_optional(row['fallbackUsed'])} | "

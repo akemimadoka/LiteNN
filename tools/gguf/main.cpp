@@ -1725,6 +1725,8 @@ namespace
 			const bool isPromptReplayStep = step + 1 < initialTokenIds.size();
 			double inputPrepMs = 0.0;
 			double moduleRunMs = 0.0;
+			double helperTotalMs = 0.0;
+			double moduleNonHelperMs = 0.0;
 			double helperProfileEmitMs = 0.0;
 			double logitsOutputMs = 0.0;
 			double samplingMs = 0.0;
@@ -1787,10 +1789,20 @@ namespace
 			if (helperProfiler)
 			{
 				const auto helperProfileEmitStart = std::chrono::steady_clock::now();
-				LogGGUFHelperProfile(diagnostics, step + 1, helperProfiler->Snapshot());
+				const auto helperEvents = helperProfiler->Snapshot();
+				for (const auto& event : helperEvents)
+				{
+					helperTotalMs += event.totalMilliseconds;
+				}
+				moduleNonHelperMs = moduleRunMs >= helperTotalMs ? moduleRunMs - helperTotalMs : 0.0;
+				LogGGUFHelperProfile(diagnostics, step + 1, helperEvents);
 				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
 				helperProfileEmitMs =
 				    std::chrono::duration<double, std::milli>(helperProfileEmitEnd - helperProfileEmitStart).count();
+			}
+			else
+			{
+				moduleNonHelperMs = moduleRunMs;
 			}
 			const auto logitsOutputStart = std::chrono::steady_clock::now();
 			if (outputs.empty() || (!options.statefulDecode && outputs.size() < 2))
@@ -1872,6 +1884,7 @@ namespace
 				std::cout << "stream stats step=" << (step + 1) << " position=" << step
 				          << " phase=" << (isPromptReplayStep ? "prompt_replay" : "generation") << " step_ms=" << stepMs
 				          << " input_prep_ms=" << inputPrepMs << " module_run_ms=" << moduleRunMs
+				          << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
 				          << " helper_profile_emit_ms=" << helperProfileEmitMs << " logits_output_ms=" << logitsOutputMs
 				          << " sampling_ms=" << samplingMs << " state_update_ms=" << stateUpdateMs
 				          << " host_overhead_ms=" << hostOverheadMs << " prompt_replay_steps=" << promptReplayStepCount
@@ -1883,10 +1896,12 @@ namespace
 			}
 			LogGGUFDiagnostic(diagnostics,
 			                  std::format("decode step {} buckets input_prep_ms={:.3f} module_run_ms={:.3f} "
+			                              "helper_total_ms={:.3f} module_non_helper_ms={:.3f} "
 			                              "helper_profile_emit_ms={:.3f} logits_output_ms={:.3f} "
 			                              "sampling_ms={:.3f} state_update_ms={:.3f} host_overhead_ms={:.3f}",
-			                              step + 1, inputPrepMs, moduleRunMs, helperProfileEmitMs, logitsOutputMs,
-			                              samplingMs, stateUpdateMs, hostOverheadMs));
+			                              step + 1, inputPrepMs, moduleRunMs, helperTotalMs, moduleNonHelperMs,
+			                              helperProfileEmitMs, logitsOutputMs, samplingMs, stateUpdateMs,
+			                              hostOverheadMs));
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
 			{

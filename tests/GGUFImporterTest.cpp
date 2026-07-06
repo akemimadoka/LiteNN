@@ -1528,7 +1528,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 		}
 	}
 
-	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	const auto artifact = Compiler<CPU>::CompileArtifact(plan);
 	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_f32"));
 	auto compiled = artifact.Load();
 	const auto actual = compiled.RunTensors(inputs);
@@ -1536,6 +1537,26 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		ExpectTensorNear(actual[i], expected[i], { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+
+	CompilerOptions prepackedOptions;
+	prepackedOptions.enableCPUAOTExternalRegions = true;
+	prepackedOptions.enableCPUAOTGGMLPrepackedWeights = true;
+	prepackedOptions.cpuAOTThreadCount = 2;
+	const auto prepackedArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
+	EXPECT_TRUE(
+	    ByteSpanContains(prepackedArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_q4k_prepacked_f32"));
+	const auto externalInfos = prepackedArtifact.ExternalTensorInfos();
+	const auto prepackedWeightCount = std::ranges::count_if(externalInfos, [](const auto& info) {
+		return info.region == "weights" && info.name.find(".prepacked.GGML_Q4_K") != std::string::npos;
+	});
+	EXPECT_EQ(prepackedWeightCount, outFeatures.size());
+	auto prepackedCompiled = prepackedArtifact.Load();
+	const auto prepackedActual = prepackedCompiled.RunTensors(inputs);
+	ASSERT_EQ(prepackedActual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		ExpectTensorNear(prepackedActual[i], expected[i], { .absolute = 2.0e-3, .relative = 1.0e-5 });
 	}
 }
 

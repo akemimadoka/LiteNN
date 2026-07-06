@@ -1781,19 +1781,31 @@ namespace litenn
 				{
 					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode shape metadata is inconsistent");
 				}
-				const auto rowBytes = (k / layout->elementsPerBlock) * layout->bytesPerBlock;
+				const auto sourceRowBytes = (k / layout->elementsPerBlock) * layout->bytesPerBlock;
+				const auto preparedBlockBytes = GGMLPreparedBlockBytes(node.params.blockFormat);
+				const auto preparedRowBytes =
+				    preparedBlockBytes ? (k / layout->elementsPerBlock) * *preparedBlockBytes : std::size_t{ 0 };
+				std::optional<bool> usesPreparedLayout;
 				std::size_t totalOutputWidth = 0;
 				for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
 				{
 					const auto rhsInfo = sg.GetOutputInfo(node.rhsStorages[i]);
 					const auto width = node.outputWidths[i];
 					totalOutputWidth += width;
-					if (rhsInfo.dtype != DataType::UInt8 || rhsInfo.shape.size() != 1 ||
-					    rhsInfo.shape[0] != width * rowBytes)
+					const auto matchesSource = rhsInfo.shape.size() == 1 && rhsInfo.shape[0] == width * sourceRowBytes;
+					const auto matchesPrepared =
+					    preparedBlockBytes && rhsInfo.shape.size() == 1 && rhsInfo.shape[0] == width * preparedRowBytes;
+					if (rhsInfo.dtype != DataType::UInt8 || (!matchesSource && !matchesPrepared))
 					{
 						throw std::runtime_error(
 						    "GraphToMLIR GroupedQuantizedMatMulNode requires output-major UInt8 block storage");
 					}
+					if (usesPreparedLayout && *usesPreparedLayout != matchesPrepared)
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR GroupedQuantizedMatMulNode requires a consistent prepared storage layout");
+					}
+					usesPreparedLayout = matchesPrepared;
 				}
 				if (totalOutputWidth != outputInfos[0].shape[1] ||
 				    node.params.expressedShape != std::vector<std::size_t>{ totalOutputWidth, k })
@@ -1848,6 +1860,11 @@ namespace litenn
 				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
 				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_projection_count",
 				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.rhsStorages.size())));
+				if (usesPreparedLayout.value_or(false))
+				{
+					generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_prepared_layout",
+					                 builder_.getUnitAttr());
+				}
 				for (std::size_t i = 0; i < node.outputWidths.size(); ++i)
 				{
 					generic->setAttr(std::format("litenn.ggml_block_grouped_quantized_matmul_output_width{}", i),

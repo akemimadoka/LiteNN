@@ -172,6 +172,19 @@ Priority classes for the GGUF/Qwen decode work:
                       parity tests and the output-major Q4_K/Q6_K/Q8_0 AOT regression with prepared artifacts. Remaining
                       production work: grouped Q/K/V and gate/up prepared routing, full-decode A/B, and default-policy
                       selection.
+                      Progress on 2026-07-07: grouped Q/K/V and gate/up prepared routing is now implemented for
+                      `GroupedQuantizedMatMulNode` as well. The CPU AOT prepack planner records projection-local
+                      expressed shapes for each grouped RHS variable, GraphToMLIR marks consistent prepared grouped
+                      storage, and LLVM lowering calls
+                      `litenn_cpu_ggml_block_grouped_matmul{2,3}_{q4k,q6k}_prepacked_f32`. Validation passed the grouped
+                      Q4_K AOT regression with prepacked external weights, plus the ordinary Q4/Q6 prepared-helper and
+                      output-major quantized-matmul regressions. Remaining production work: full-decode A/B and
+                      default-policy selection.
+                      Progress on 2026-07-07: added `GGMLGroupedProjectionPrepackedHelper/{Q4_K,Q6_K}/...` benchmark
+                      rows for Qwen Q/K/V and gate/up projection shapes. A short gate/up `T8` smoke measured about
+                      `4.78 ms` real for Q4_K and `4.93 ms` real for Q6_K, both with `max_abs_delta=0`, giving the next
+                      full-decode A/B run a direct grouped-prepared helper surface to compare against direct and
+                      Q8_K-staged grouped rows.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.
@@ -251,6 +264,10 @@ Priority classes for the GGUF/Qwen decode work:
                       state update, and unattributed host overhead per token. `benchmark/profile_bundle.py` imports those
                       fields into `runtime_buckets`, per-step JSON, Markdown tables, and Chrome trace events so measured
                       runs can separate module time from CLI/runtime shell costs.
+                - [x] Module helper/non-helper split. Completed on 2026-07-07: GGUF decode stream stats now include
+                      `helper_total_ms` and `module_non_helper_ms`, and the profile bundle plus decode comparison tools
+                      preserve those fields as runtime buckets and comparison columns. This separates sidecar helper
+                      time from generated-code/runtime-entry work before full per-node non-helper instrumentation lands.
                 - [ ] Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                       residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately.
                       This is the next blocker once quantized projection time is reduced.
@@ -430,7 +447,10 @@ Priority classes for the GGUF/Qwen decode work:
                 round-trip support, CPU MLIR lowering to `litenn_cpu_ggml_block_grouped_matmul2_f32` /
                 `litenn_cpu_ggml_block_grouped_matmul3_f32`, and a projection-span sidecar that accepts independent
                 output-major GGML rhs memrefs. Validation passed the grouped Q4_K AOT regression, the quantized
-                projection storage preservation regression, and `GGUFLLaMAQuantizedExecution.*`.
+                projection storage preservation regression, and `GGUFLLaMAQuantizedExecution.*`. On 2026-07-07 this
+                grouped route gained opt-in prepared Q4_K/Q6_K external-weight support without concatenating weights;
+                the grouped Q4_K AOT regression now also validates
+                `litenn_cpu_ggml_block_grouped_matmul3_q4k_prepacked_f32`.
           - [x] Add active-prefix attention helper benchmark rows for Qwen-shaped rank-3 KV caches. A short 2026-07-03
                 run measured one KV-head helper call at about `0.022 ms` for 128 active rows, `0.470 ms` for 2048 rows,
                 and `2.53 ms` for 8192 rows, which makes grouped KV-head/online-softmax work measurable before adding a

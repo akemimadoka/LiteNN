@@ -2868,6 +2868,10 @@ Priority classes:
             input/output shapes, requested/resolved thread counts, calls, total/average milliseconds, and explicit
             `attribution=helper-derived`. This closes the P2 observability gate without pretending the current runtime
             has stable per-layer node ids; native per-layer ids remain a later runtime metadata improvement.
+      - [x] Split module helper and non-helper decode time. Completed on 2026-07-07: GGUF decode `--stream-stats`
+            emits `helper_total_ms` and `module_non_helper_ms`, and the profile bundle plus decode comparison tools
+            preserve those fields as runtime buckets and comparison columns. This isolates generated-code/runtime-entry
+            time from sidecar helper time before true per-layer non-helper timing is available.
 - [x] P0: Add production-shaped GGML helper benchmark and estimator coverage:
       benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
       `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current
@@ -2916,6 +2920,16 @@ Priority classes:
       decode CLI/smoke path exposes `--cpu-aot-ggml-prepacked-weights` with cache-key isolation. Validation passed the
       Q4/Q6 helper parity tests and the output-major Q4_K/Q6_K/Q8_0 CPU AOT regression with prepared artifacts. Grouped
       projection routing and default enablement remain gated on full-decode A/B evidence.
+- [x] P0: Route prepared Q4_K/Q6_K weights through separated CPU AOT for grouped projection nodes:
+      completed on 2026-07-07 for `GroupedQuantizedMatMulNode` Q/K/V-style and gate/up-style RHS variables. The opt-in
+      prepack planner now handles each projection RHS independently with projection-local expressed shapes, GraphToMLIR
+      accepts consistent prepared grouped storage, and LLVM lowering calls
+      `litenn_cpu_ggml_block_grouped_matmul{2,3}_{q4k,q6k}_prepacked_f32` without materializing a concatenated weight.
+      Validation passed the grouped Q4_K AOT regression with prepacked external weights, plus the existing Q4/Q6 helper
+      parity and output-major quantized-matmul regressions. `litenn_bench` also has
+      `GGMLGroupedProjectionPrepackedHelper/{Q4_K,Q6_K}/...` rows; a short gate/up `T8` smoke measured about `4.78 ms`
+      real for Q4_K and `4.93 ms` real for Q6_K, both with `max_abs_delta=0`. Default enablement remains gated on
+      full-decode A/B evidence.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
