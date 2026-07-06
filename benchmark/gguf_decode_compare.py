@@ -371,9 +371,11 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "fallbackUsed",
         "fallbackCount",
         "topHelper",
+        "helperTotalMs",
         "helperSharePercent",
         "topOperator",
         "operatorSharePercent",
+        "residualMs",
         "residualSharePercent",
         "topNode",
         "topNodeKind",
@@ -387,12 +389,13 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper Share | Top Node | Top Operator | Operator Share | Residual Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---|---|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper ms | Helper Share | Top Node | Top Operator | Operator Share | Residual ms | Residual Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
         format_percent = lambda value: "n/a" if value is None else f"{float(value):.2f}%"
+        format_ms = lambda value: "n/a" if value is None else f"{float(value):.3f}"
         format_optional = lambda value: "n/a" if value is None else str(value)
         lines.append(
             f"| {row['implementation']} | {row['backend']} | {row.get('decodeMode', 'decode')} | "
@@ -400,9 +403,11 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{float(row['msPerToken']):.4f} | "
             f"{float(row['tokensPerSecond']):.3f} | {format_delta(row['vsLlamaCppPercent'])} | "
             f"{format_delta(row['vsPyTorchPercent'])} | {row.get('topHelper') or 'n/a'} | "
+            f"{format_ms(row.get('helperTotalMs'))} | "
             f"{format_percent(row.get('helperSharePercent'))} | {row.get('topNode') or 'n/a'} | "
             f"{row.get('topOperator') or 'n/a'} | "
-            f"{format_percent(row.get('operatorSharePercent'))} | {format_percent(row.get('residualSharePercent'))} | "
+            f"{format_percent(row.get('operatorSharePercent'))} | {format_ms(row.get('residualMs'))} | "
+            f"{format_percent(row.get('residualSharePercent'))} | "
             f"{format_optional(row['fallbackUsed'])} | "
             f"{format_optional(row.get('fallbackCount'))} |"
         )
