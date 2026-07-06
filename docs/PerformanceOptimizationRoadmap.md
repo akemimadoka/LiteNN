@@ -185,12 +185,13 @@ Priority classes for the GGUF/Qwen decode work:
                 leaking external model paths into the repository. Add a small benchmark driver that accepts a model path
                 at runtime, builds or locates `llama-bench`, captures TG-only rows for T2/T4/T8/T16/T32, and emits an
                 anonymized comparison table against LiteNN stateful CPU AOT cache-hit runs.
-          - [ ] P0: Make `gguf_decode_compare.py` phase-aware for profile-summary inputs.
-                The current `--litenn-profile-summary` path can compare top-helper/operator shares, but it treats
-                prompt replay plus generation steps as one generation bucket. The 2026-07-06 default profile therefore
-                reports about `1.56 t/s` from the comparison table even though steady generated-token steps are about
-                `430.7 ms/token` (`~2.32 t/s`). Add prompt/generation phase separation to the JSON/Markdown/CSV output
-                before using those comparison rows as acceptance data.
+          - [x] P0: Make `gguf_decode_compare.py` phase-aware for profile-summary inputs.
+                Completed on 2026-07-06. `--litenn-profile-summary` now emits separate `profile-summary-all`,
+                `profile-summary-prompt_replay`, and `profile-summary-generation` rows when the input bundle contains
+                matching steps, and recomputes top helper/operator/node attribution for each selected phase. The default
+                Qwen profile now reports the full mixed replay+generation path at about `1.56 t/s`, while the steady
+                generated-token phase is visible as about `430.7 ms/token` (`~2.32 t/s`). Use the generation row for
+                steady decode acceptance and the all row for end-to-end prompt replay plus decode regressions.
           - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
                 Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                 residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is

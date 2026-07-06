@@ -114,84 +114,135 @@ def litenn_row(path: Path) -> dict[str, object]:
     }
 
 
-def litenn_profile_summary_row(path: Path) -> dict[str, object]:
+def as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def helper_percent(total_ms: float, denominator_ms: float) -> float | None:
+    return (total_ms * 100.0 / denominator_ms) if denominator_ms > 0.0 else None
+
+
+def rank_totals(items: list[dict[str, object]], key_fields: tuple[str, ...]) -> list[dict[str, object]]:
+    totals: dict[tuple[str, ...], dict[str, object]] = {}
+    for item in items:
+        key = tuple(str(item.get(field, "unknown")) for field in key_fields)
+        total = totals.setdefault(
+            key,
+            {
+                **{field: key[index] for index, field in enumerate(key_fields)},
+                "calls": 0,
+                "total_ms": 0.0,
+            },
+        )
+        total["calls"] = as_int(total.get("calls")) + as_int(item.get("calls"))
+        total["total_ms"] = as_float(total.get("total_ms")) + as_float(item.get("total_ms"))
+    return sorted(totals.values(), key=lambda item: (-as_float(item.get("total_ms")), str(item)))
+
+
+def litenn_profile_summary_rows(path: Path) -> list[dict[str, object]]:
     summary = load_json(path)
     if not isinstance(summary, dict) or "steps" not in summary:
         raise SystemExit(f"unsupported LiteNN GGUF decode summary: {path}")
     steps = summary.get("steps")
-    helpers = summary.get("helpers")
-    operators = summary.get("operators")
+    helper_events = summary.get("helper_events")
     node_timings = summary.get("node_timings")
     if not isinstance(steps, list):
         raise SystemExit(f"LiteNN GGUF decode summary has no steps array: {path}")
 
     step_dicts = [step for step in steps if isinstance(step, dict)]
-    total_step_ms = float(summary.get("total_step_ms", 0.0))
-    if total_step_ms <= 0.0:
-        total_step_ms = sum(float(step.get("step_ms", 0.0)) for step in step_dicts)
-    def generated_tokens(step: dict[str, object]) -> int:
-        try:
-            return int(step.get("generated_tokens", 0) or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    token_count = max(
-        [generated_tokens(step) for step in step_dicts if generated_tokens(step) > 0],
-        default=sum(1 for step in step_dicts if step.get("phase") == "generation"),
-    )
-    if total_step_ms <= 0.0 or token_count <= 0:
+    helper_event_dicts = [helper for helper in helper_events if isinstance(helper, dict)] if isinstance(helper_events, list) else []
+    node_timing_dicts = [node for node in node_timings if isinstance(node, dict)] if isinstance(node_timings, list) else []
+    if not step_dicts:
         raise SystemExit(f"LiteNN GGUF decode summary must contain positive time and generated tokens: {path}")
 
-    helper_rows = helpers if isinstance(helpers, list) else []
-    top_helper = next((helper for helper in helper_rows if isinstance(helper, dict)), None)
-    top_helper_name = None
-    top_helper_share = None
-    if isinstance(top_helper, dict):
-        top_helper_name = str(top_helper.get("helper", "unknown"))
-        percent = top_helper.get("percent_of_steps")
-        top_helper_share = float(percent) if percent is not None else None
-    operator_rows = operators if isinstance(operators, list) else []
-    top_operator = next((operator for operator in operator_rows if isinstance(operator, dict)), None)
-    top_operator_name = None
-    top_operator_share = None
-    if isinstance(top_operator, dict):
-        top_operator_name = f"{top_operator.get('operator', 'unknown')}/{top_operator.get('role', 'unknown')}"
-        percent = top_operator.get("percent_of_steps")
-        top_operator_share = float(percent) if percent is not None else None
-    residual_percent = summary.get("residual_percent_of_steps")
-    residual_share = float(residual_percent) if residual_percent is not None else None
-    node_rows = node_timings if isinstance(node_timings, list) else []
-    top_node = max(
-        (node for node in node_rows if isinstance(node, dict)),
-        key=lambda node: float(node.get("total_ms", 0.0) or 0.0),
-        default=None,
-    )
-    top_node_name = str(top_node.get("node_name", "unknown")) if isinstance(top_node, dict) else None
-    top_node_kind = str(top_node.get("node_kind", "unknown")) if isinstance(top_node, dict) else None
+    def make_row(label: str, selected_steps: list[dict[str, object]]) -> dict[str, object] | None:
+        if not selected_steps:
+            return None
+        selected_step_ids = {as_int(step.get("step")) for step in selected_steps}
+        total_step_ms = sum(as_float(step.get("step_ms")) for step in selected_steps)
+        helper_ms = sum(as_float(step.get("helper_total_ms")) for step in selected_steps)
+        residual_ms = sum(as_float(step.get("residual_ms")) for step in selected_steps)
+        token_count = len(selected_steps) if label == "generation" else sum(
+            1 for step in selected_steps if step.get("phase") == "generation"
+        )
+        if token_count <= 0:
+            token_count = max((as_int(step.get("generated_tokens")) for step in selected_steps), default=0)
+        if total_step_ms <= 0.0 or token_count <= 0:
+            return None
 
-    tokens_per_second = token_count * 1000.0 / total_step_ms
-    return {
-        "implementation": "LiteNN",
-        "backend": "cpu-aot",
-        "decodeMode": "profile-summary",
-        "config": "from-profile-bundle",
-        "tokens": token_count,
-        "totalMs": total_step_ms,
-        "promptReplayMs": None,
-        "generationMs": total_step_ms,
-        "msPerToken": total_step_ms / token_count,
-        "tokensPerSecond": tokens_per_second,
-        "fallbackUsed": None,
-        "fallbackCount": None,
-        "topHelper": top_helper_name,
-        "helperSharePercent": top_helper_share,
-        "topOperator": top_operator_name,
-        "operatorSharePercent": top_operator_share,
-        "residualSharePercent": residual_share,
-        "topNode": top_node_name,
-        "topNodeKind": top_node_kind,
-        "source": str(path),
-    }
+        selected_helpers = [
+            helper for helper in helper_event_dicts if as_int(helper.get("step")) in selected_step_ids
+        ]
+        helper_rows = rank_totals(selected_helpers, ("helper", "detail"))
+        top_helper = helper_rows[0] if helper_rows else None
+        top_helper_name = str(top_helper.get("helper", "unknown")) if isinstance(top_helper, dict) else None
+        top_helper_share = (
+            helper_percent(as_float(top_helper.get("total_ms")), total_step_ms)
+            if isinstance(top_helper, dict)
+            else None
+        )
+
+        operator_rows = rank_totals(selected_helpers, ("operator", "role"))
+        top_operator = operator_rows[0] if operator_rows else None
+        top_operator_name = (
+            f"{top_operator.get('operator', 'unknown')}/{top_operator.get('role', 'unknown')}"
+            if isinstance(top_operator, dict)
+            else None
+        )
+        top_operator_share = (
+            helper_percent(as_float(top_operator.get("total_ms")), total_step_ms)
+            if isinstance(top_operator, dict)
+            else None
+        )
+
+        selected_nodes = [node for node in node_timing_dicts if as_int(node.get("step")) in selected_step_ids]
+        node_rows = rank_totals(selected_nodes, ("node_kind", "node_name"))
+        top_node = node_rows[0] if node_rows else None
+        top_node_name = str(top_node.get("node_name", "unknown")) if isinstance(top_node, dict) else None
+        top_node_kind = str(top_node.get("node_kind", "unknown")) if isinstance(top_node, dict) else None
+
+        tokens_per_second = token_count * 1000.0 / total_step_ms
+        return {
+            "implementation": "LiteNN",
+            "backend": "cpu-aot",
+            "decodeMode": f"profile-summary-{label}",
+            "config": "from-profile-bundle",
+            "tokens": token_count,
+            "totalMs": total_step_ms,
+            "promptReplayMs": total_step_ms if label == "prompt_replay" else None,
+            "generationMs": total_step_ms if label == "generation" else None,
+            "msPerToken": total_step_ms / token_count,
+            "tokensPerSecond": tokens_per_second,
+            "fallbackUsed": None,
+            "fallbackCount": None,
+            "topHelper": top_helper_name,
+            "helperSharePercent": top_helper_share,
+            "topOperator": top_operator_name,
+            "operatorSharePercent": top_operator_share,
+            "residualSharePercent": helper_percent(residual_ms, total_step_ms),
+            "helperTotalMs": helper_ms,
+            "residualMs": residual_ms,
+            "topNode": top_node_name,
+            "topNodeKind": top_node_kind,
+            "source": str(path),
+        }
+
+    rows = [
+        make_row("all", step_dicts),
+        make_row("prompt_replay", [step for step in step_dicts if step.get("phase") == "prompt_replay"]),
+        make_row("generation", [step for step in step_dicts if step.get("phase") == "generation"]),
+    ]
+    return [row for row in rows if row is not None]
 
 
 def llama_rows(path: Path) -> list[dict[str, object]]:
@@ -367,7 +418,8 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     rows = [litenn_row(path) for path in args.litenn_smoke_report]
-    rows.extend(litenn_profile_summary_row(path) for path in args.litenn_profile_summary)
+    for path in args.litenn_profile_summary:
+        rows.extend(litenn_profile_summary_rows(path))
     for path in args.llama_bench_json:
         rows.extend(llama_rows(path))
     for path in args.pytorch_json:
