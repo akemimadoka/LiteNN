@@ -1333,9 +1333,10 @@ namespace
 		{
 			outputUnits = positiveLhsRows * ((positiveOutColumns + 3) / 4);
 		}
-		return std::format("format={} lhs={}x{} out={}x{} requested_threads={} resolved_threads={}",
-		                   QuantizedBlockFormatName(format), lhsRows, lhsColumns, outRows, outColumns,
-		                   requestedThreadCount,
+		return std::format("format={} activation={} lhs={}x{} out={}x{} requested_threads={} resolved_threads={}",
+		                   QuantizedBlockFormatName(format),
+		                   activationDotMode == GGMLActivationDotMode::Q8KStaged ? "q8k_staged" : "direct", lhsRows,
+		                   lhsColumns, outRows, outColumns, requestedThreadCount,
 		                   ResolveGGMLBlockMatMulThreadCount(format, activationDotMode, operations, outputUnits,
 		                                                     requestedThreadCount));
 	}

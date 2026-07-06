@@ -861,6 +861,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "helper": helper.helper,
             "detail": helper.detail,
             "format": detail_value(helper.detail, "format"),
+            "activation": detail_value(helper.detail, "activation"),
             "lhs_shape": detail_value(helper.detail, "lhs"),
             "out_shape": detail_value(helper.detail, "out"),
             "query_shape": detail_value(helper.detail, "query") or detail_value(helper.detail, "queries"),
@@ -1080,19 +1081,22 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "",
             "## Node Timings",
             "",
-            "| Step | Node kind | Node | Helper | Format | LHS | Out | Calls | Total ms | Attribution |",
-            "| ---: | --- | --- | --- | --- | --- | --- | ---: | ---: | --- |",
+            "| Step | Node kind | Node | Helper | Format | Activation | LHS | Out | Calls | Total ms | Attribution |",
+            "| ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- |",
         ]
     )
     for timing in sorted(node_timing_dicts, key=lambda item: (int(item["step"]), -float(item["total_ms"])))[:80]:
         md_lines.append(
             f"| {timing['step']} | `{timing['node_kind']}` | `{timing['node_name']}` | `{timing['helper']}` | "
-            f"`{timing.get('format') or 'n/a'}` | `{timing.get('lhs_shape') or 'n/a'}` | "
+            f"`{timing.get('format') or 'n/a'}` | `{timing.get('activation') or 'n/a'}` | "
+            f"`{timing.get('lhs_shape') or 'n/a'}` | "
             f"`{timing.get('out_shape') or 'n/a'}` | {timing['calls']} | {float(timing['total_ms']):.3f} | "
             f"`{timing['attribution']}` |"
         )
     if not node_timing_dicts:
-        md_lines.append("| 0 | `none` | `none` | `none` | `n/a` | `n/a` | `n/a` | 0 | 0.000 | `none` |")
+        md_lines.append(
+            "| 0 | `none` | `none` | `none` | `n/a` | `n/a` | `n/a` | `n/a` | 0 | 0.000 | `none` |"
+        )
     md_lines.extend(
         [
             "",
