@@ -1717,6 +1717,12 @@ namespace
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} begin position={}", step + 1, step));
 			const auto stepStart = std::chrono::steady_clock::now();
 			const bool isPromptReplayStep = step + 1 < initialTokenIds.size();
+			double inputPrepMs = 0.0;
+			double moduleRunMs = 0.0;
+			double helperProfileEmitMs = 0.0;
+			double logitsOutputMs = 0.0;
+			double samplingMs = 0.0;
+			double stateUpdateMs = 0.0;
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
 			std::optional<LiteNN::CompiledModuleCPUHelperProfiler> helperProfiler;
 			if (diagnostics)
@@ -1725,11 +1731,18 @@ namespace
 			}
 			if (options.statefulDecode)
 			{
+				const auto inputPrepStart = std::chrono::steady_clock::now();
 				StoreScalarTokenId(statefulInputs.front(), currentToken);
+				const auto inputPrepEnd = std::chrono::steady_clock::now();
+				inputPrepMs = std::chrono::duration<double, std::milli>(inputPrepEnd - inputPrepStart).count();
+				const auto moduleRunStart = std::chrono::steady_clock::now();
 				outputs = decodeModule.RunTensors(statefulInputs);
+				const auto moduleRunEnd = std::chrono::steady_clock::now();
+				moduleRunMs = std::chrono::duration<double, std::milli>(moduleRunEnd - moduleRunStart).count();
 			}
 			else
 			{
+				const auto inputPrepStart = std::chrono::steady_clock::now();
 				std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 				inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
 				inputs.push_back(currentPosition);
@@ -1758,12 +1771,22 @@ namespace
 					}
 					caches.clear();
 				}
+				const auto inputPrepEnd = std::chrono::steady_clock::now();
+				inputPrepMs = std::chrono::duration<double, std::milli>(inputPrepEnd - inputPrepStart).count();
+				const auto moduleRunStart = std::chrono::steady_clock::now();
 				outputs = decodeModule.RunTensors(inputs);
+				const auto moduleRunEnd = std::chrono::steady_clock::now();
+				moduleRunMs = std::chrono::duration<double, std::milli>(moduleRunEnd - moduleRunStart).count();
 			}
 			if (helperProfiler)
 			{
+				const auto helperProfileEmitStart = std::chrono::steady_clock::now();
 				LogGGUFHelperProfile(diagnostics, step + 1, helperProfiler->Snapshot());
+				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
+				helperProfileEmitMs =
+				    std::chrono::duration<double, std::milli>(helperProfileEmitEnd - helperProfileEmitStart).count();
 			}
+			const auto logitsOutputStart = std::chrono::steady_clock::now();
 			if (outputs.empty() || (!options.statefulDecode && outputs.size() < 2))
 			{
 				throw std::runtime_error("decode-loop produced no outputs");
@@ -1779,6 +1802,9 @@ namespace
 			{
 				WriteLastTokenLogitsText(outputs.front(), *options.logitsOutputPath);
 			}
+			const auto logitsOutputEnd = std::chrono::steady_clock::now();
+			logitsOutputMs = std::chrono::duration<double, std::milli>(logitsOutputEnd - logitsOutputStart).count();
+			const auto samplingStart = std::chrono::steady_clock::now();
 			if (isPromptReplayStep)
 			{
 				currentToken = initialTokenIds[step + 1];
@@ -1794,6 +1820,9 @@ namespace
 					stoppedOnEos = true;
 				}
 			}
+			const auto samplingEnd = std::chrono::steady_clock::now();
+			samplingMs = std::chrono::duration<double, std::milli>(samplingEnd - samplingStart).count();
+			const auto stateUpdateStart = std::chrono::steady_clock::now();
 			lastOutputCount = outputs.size();
 			if (!options.statefulDecode)
 			{
@@ -1804,8 +1833,13 @@ namespace
 					caches.push_back(std::move(outputs[i]));
 				}
 			}
+			const auto stateUpdateEnd = std::chrono::steady_clock::now();
+			stateUpdateMs = std::chrono::duration<double, std::milli>(stateUpdateEnd - stateUpdateStart).count();
 			const auto stepEnd = std::chrono::steady_clock::now();
 			const auto stepMs = std::chrono::duration<double, std::milli>(stepEnd - stepStart).count();
+			const auto accountedStepMs =
+			    inputPrepMs + moduleRunMs + helperProfileEmitMs + logitsOutputMs + samplingMs + stateUpdateMs;
+			const auto hostOverheadMs = accountedStepMs >= stepMs ? 0.0 : stepMs - accountedStepMs;
 			stepTimesMs.push_back(stepMs);
 			if (isPromptReplayStep)
 			{
@@ -1831,13 +1865,22 @@ namespace
 				    generationMs == 0.0 ? 0.0 : static_cast<double>(generatedTokenCount) * 1000.0 / generationMs;
 				std::cout << "stream stats step=" << (step + 1) << " position=" << step
 				          << " phase=" << (isPromptReplayStep ? "prompt_replay" : "generation") << " step_ms=" << stepMs
-				          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
-				          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
-				          << " generated_tokens=" << generatedTokenCount
+				          << " input_prep_ms=" << inputPrepMs << " module_run_ms=" << moduleRunMs
+				          << " helper_profile_emit_ms=" << helperProfileEmitMs << " logits_output_ms=" << logitsOutputMs
+				          << " sampling_ms=" << samplingMs << " state_update_ms=" << stateUpdateMs
+				          << " host_overhead_ms=" << hostOverheadMs << " prompt_replay_steps=" << promptReplayStepCount
+				          << " prompt_replay_ms=" << promptReplayMs << " generation_steps=" << generationStepCount
+				          << " generation_ms=" << generationMs << " generated_tokens=" << generatedTokenCount
 				          << " generated_tokens_per_second=" << liveTokensPerSecond
 				          << " eos=" << (stoppedOnEos ? "true" : "false") << '\n';
 				std::cout.flush();
 			}
+			LogGGUFDiagnostic(diagnostics,
+			                  std::format("decode step {} buckets input_prep_ms={:.3f} module_run_ms={:.3f} "
+			                              "helper_profile_emit_ms={:.3f} logits_output_ms={:.3f} "
+			                              "sampling_ms={:.3f} state_update_ms={:.3f} host_overhead_ms={:.3f}",
+			                              step + 1, inputPrepMs, moduleRunMs, helperProfileEmitMs, logitsOutputMs,
+			                              samplingMs, stateUpdateMs, hostOverheadMs));
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
 			{

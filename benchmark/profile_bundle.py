@@ -65,6 +65,13 @@ class GGUFDecodeStep:
     step_ms: float
     generated_tokens: int
     tokens_per_second: float
+    input_prep_ms: float | None = None
+    module_run_ms: float | None = None
+    helper_profile_emit_ms: float | None = None
+    logits_output_ms: float | None = None
+    sampling_ms: float | None = None
+    state_update_ms: float | None = None
+    host_overhead_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -532,6 +539,16 @@ def parse_key_values(line: str) -> dict[str, str]:
     return values
 
 
+def optional_float(values: dict[str, str], key: str) -> float | None:
+    raw = values.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def resolve_report_path(raw: object, base: Path) -> Path:
     path = Path(str(raw))
     if path.is_absolute():
@@ -671,6 +688,13 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             step_ms=float(values["step_ms"]),
                             generated_tokens=int(values.get("generated_tokens", "0")),
                             tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
+                            input_prep_ms=optional_float(values, "input_prep_ms"),
+                            module_run_ms=optional_float(values, "module_run_ms"),
+                            helper_profile_emit_ms=optional_float(values, "helper_profile_emit_ms"),
+                            logits_output_ms=optional_float(values, "logits_output_ms"),
+                            sampling_ms=optional_float(values, "sampling_ms"),
+                            state_update_ms=optional_float(values, "state_update_ms"),
+                            host_overhead_ms=optional_float(values, "host_overhead_ms"),
                         )
                     except (KeyError, ValueError):
                         continue
@@ -740,6 +764,24 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     def helper_percent(total_ms: float, denominator_ms: float) -> float | None:
         return total_ms * 100.0 / denominator_ms if denominator_ms > 0.0 else None
 
+    runtime_bucket_specs = [
+        ("input_prep", "input_prep_ms", "stream_stats_input_prep"),
+        ("module_run", "module_run_ms", "stream_stats_module_run"),
+        ("helper_profile_emit", "helper_profile_emit_ms", "stream_stats_helper_profile_emit"),
+        ("logits_output", "logits_output_ms", "stream_stats_logits_output"),
+        ("sampling", "sampling_ms", "stream_stats_sampling"),
+        ("state_update", "state_update_ms", "stream_stats_state_update"),
+        ("host_overhead", "host_overhead_ms", "stream_stats_unattributed_host_overhead"),
+    ]
+
+    def runtime_accounted_ms(step: GGUFDecodeStep) -> float:
+        return sum(
+            value
+            for _, field_name, _ in runtime_bucket_specs
+            for value in (getattr(step, field_name),)
+            if value is not None
+        )
+
     step_dicts = [
         {
             "step": step.step,
@@ -747,6 +789,14 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "step_ms": step.step_ms,
             "generated_tokens": step.generated_tokens,
             "generated_tokens_per_second": step.tokens_per_second,
+            "input_prep_ms": step.input_prep_ms,
+            "module_run_ms": step.module_run_ms,
+            "helper_profile_emit_ms": step.helper_profile_emit_ms,
+            "logits_output_ms": step.logits_output_ms,
+            "sampling_ms": step.sampling_ms,
+            "state_update_ms": step.state_update_ms,
+            "host_overhead_ms": step.host_overhead_ms,
+            "runtime_accounted_ms": runtime_accounted_ms(step),
             "helper_total_ms": sum(
                 float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values()
             ),
@@ -822,6 +872,35 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 "attribution": "step_ms_minus_helper_total",
             }
         )
+    runtime_buckets: list[dict[str, object]] = []
+    for phase in ("all", "prompt_replay", "generation"):
+        selected_steps = (
+            step_dicts
+            if phase == "all"
+            else [step for step in step_dicts if str(step.get("phase", "")) == phase]
+        )
+        if not selected_steps:
+            continue
+        total_phase_ms = sum(float(step["step_ms"]) for step in selected_steps)
+        for bucket_name, field_name, attribution in runtime_bucket_specs:
+            selected_values = [step.get(field_name) for step in selected_steps if step.get(field_name) is not None]
+            if not selected_values:
+                continue
+            total_bucket_ms = sum(float(value) for value in selected_values)
+            runtime_buckets.append(
+                {
+                    "bucket": bucket_name,
+                    "phase": phase,
+                    "steps": len(selected_steps),
+                    "steps_with_values": len(selected_values),
+                    "total_ms": total_bucket_ms,
+                    "avg_ms_per_step": total_bucket_ms / len(selected_steps),
+                    "avg_ms_per_measured_step": total_bucket_ms / len(selected_values),
+                    "percent_of_phase_steps": helper_percent(total_bucket_ms, total_phase_ms),
+                    "percent_of_all_steps": helper_percent(total_bucket_ms, total_step_ms),
+                    "attribution": attribution,
+                }
+            )
     top_residual_steps = sorted(
         (
             {
@@ -913,6 +992,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "helpers": ranked_helpers,
         "operators": ranked_operators,
         "residual_buckets": residual_buckets,
+        "runtime_buckets": runtime_buckets,
         "top_residual_steps": top_residual_steps[:20],
         "steps": step_dicts,
         "helper_events": helper_dicts,
@@ -945,6 +1025,30 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             }
         )
         cursor_us += step.step_ms * 1000.0
+    for step in analysis.steps:
+        runtime_cursor_us = step_starts.get(step.step, 0.0)
+        for bucket_name, field_name, attribution in runtime_bucket_specs:
+            value = getattr(step, field_name)
+            if value is None or value <= 0.0:
+                continue
+            trace_events.append(
+                {
+                    "name": f"decode_loop_{bucket_name}",
+                    "cat": "litenn.gguf.runtime_bucket",
+                    "ph": "X",
+                    "pid": DEFAULT_TRACE_PID + 1,
+                    "tid": 4,
+                    "ts": runtime_cursor_us,
+                    "dur": value * 1000.0,
+                    "args": {
+                        "step": step.step,
+                        "phase": step.phase,
+                        "bucket": bucket_name,
+                        "attribution": attribution,
+                    },
+                }
+            )
+            runtime_cursor_us += value * 1000.0
     for helper in analysis.helpers:
         trace_events.append(
             {
@@ -989,6 +1093,9 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
     trace_path = out_dir / "gguf_decode_trace.json"
     trace_path.write_text(json.dumps({ "traceEvents": trace_events }, indent=2), encoding="utf-8")
+
+    def format_optional_ms(value: object) -> str:
+        return "n/a" if value is None else f"{float(value):.3f}"
 
     md_lines = [
         "# GGUF Decode Summary",
@@ -1055,6 +1162,28 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     md_lines.extend(
         [
             "",
+            "## Runtime Buckets",
+            "",
+            "| Bucket | Phase | Steps | Measured steps | Total ms | Avg ms/step | Avg ms/measured step | % of phase | % of all steps | Attribution |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for bucket in runtime_buckets:
+        percent_phase = bucket["percent_of_phase_steps"]
+        percent_all = bucket["percent_of_all_steps"]
+        md_lines.append(
+            f"| `{bucket['bucket']}` | `{bucket['phase']}` | {bucket['steps']} | {bucket['steps_with_values']} | "
+            f"{float(bucket['total_ms']):.3f} | {float(bucket['avg_ms_per_step']):.3f} | "
+            f"{float(bucket['avg_ms_per_measured_step']):.3f} | "
+            f"{'n/a' if percent_phase is None else f'{float(percent_phase):.2f}%'} | "
+            f"{'n/a' if percent_all is None else f'{float(percent_all):.2f}%'} | "
+            f"`{bucket['attribution']}` |"
+        )
+    if not runtime_buckets:
+        md_lines.append("| `none` | `none` | 0 | 0 | 0.000 | 0.000 | 0.000 | n/a | n/a | `none` |")
+    md_lines.extend(
+        [
+            "",
             "## Top Residual Steps",
             "",
             "| Step | Phase | Step ms | Helper ms | Residual ms | Residual % | Top operator |",
@@ -1102,8 +1231,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "",
             "## Steps",
             "",
-            "| Step | Phase | Step ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
-            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
+            "| Step | Phase | Step ms | Module ms | Host overhead ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
         ]
     )
     for step in analysis.steps:
@@ -1132,6 +1261,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
         md_lines.append(
             f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | "
+            f"{format_optional_ms(step_summary['module_run_ms'])} | "
+            f"{format_optional_ms(step_summary['host_overhead_ms'])} | "
             f"{float(step_summary['helper_total_ms']):.3f} | {helper_percent_text} | "
             f"{float(step_summary['residual_ms']):.3f} | {residual_percent_text} | "
             f"{top_helper_text} | {top_operator_text} | {step.tokens_per_second:.3f} |"

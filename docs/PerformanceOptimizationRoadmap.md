@@ -213,6 +213,11 @@ Priority classes for the GGUF/Qwen decode work:
                       `residual_buckets`, `top_residual_steps`, Markdown residual tables, and Chrome trace residual
                       events using the stable `step_ms - helper_total_ms` attribution. This makes prompt-replay,
                       generation, and per-step residual drift visible in comparison artifacts.
+                - [x] Decode-loop runtime buckets. Completed on 2026-07-07: GGUF decode `--stream-stats` now reports
+                      input preparation, compiled-module runtime, helper-profile emission, logits output, sampling,
+                      state update, and unattributed host overhead per token. `benchmark/profile_bundle.py` imports those
+                      fields into `runtime_buckets`, per-step JSON, Markdown tables, and Chrome trace events so measured
+                      runs can separate module time from CLI/runtime shell costs.
                 - [ ] Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                       residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately.
                       This is the next blocker once quantized projection time is reduced.
