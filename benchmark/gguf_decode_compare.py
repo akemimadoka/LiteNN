@@ -110,6 +110,13 @@ def litenn_row(path: Path) -> dict[str, object]:
         "residualSharePercent": None,
         "topNode": None,
         "topNodeKind": None,
+        "topFormat": None,
+        "topActivation": None,
+        "topResolvedThreads": None,
+        "moduleRunMs": None,
+        "moduleRunSharePercent": None,
+        "hostOverheadMs": None,
+        "hostOverheadSharePercent": None,
         "source": str(path),
     }
 
@@ -210,6 +217,11 @@ def litenn_profile_summary_rows(path: Path) -> list[dict[str, object]]:
         top_node = node_rows[0] if node_rows else None
         top_node_name = str(top_node.get("node_name", "unknown")) if isinstance(top_node, dict) else None
         top_node_kind = str(top_node.get("node_kind", "unknown")) if isinstance(top_node, dict) else None
+        top_node_event = max(selected_nodes, key=lambda node: as_float(node.get("total_ms")), default=None)
+        module_run_ms = sum(as_float(step.get("module_run_ms")) for step in selected_steps if step.get("module_run_ms") is not None)
+        host_overhead_ms = sum(
+            as_float(step.get("host_overhead_ms")) for step in selected_steps if step.get("host_overhead_ms") is not None
+        )
 
         tokens_per_second = token_count * 1000.0 / total_step_ms
         return {
@@ -234,6 +246,25 @@ def litenn_profile_summary_rows(path: Path) -> list[dict[str, object]]:
             "residualMs": residual_ms,
             "topNode": top_node_name,
             "topNodeKind": top_node_kind,
+            "topFormat": (
+                str(top_node_event.get("format"))
+                if isinstance(top_node_event, dict) and top_node_event.get("format") is not None
+                else None
+            ),
+            "topActivation": (
+                str(top_node_event.get("activation"))
+                if isinstance(top_node_event, dict) and top_node_event.get("activation") is not None
+                else None
+            ),
+            "topResolvedThreads": (
+                str(top_node_event.get("resolved_threads"))
+                if isinstance(top_node_event, dict) and top_node_event.get("resolved_threads") is not None
+                else None
+            ),
+            "moduleRunMs": module_run_ms if module_run_ms > 0.0 else None,
+            "moduleRunSharePercent": helper_percent(module_run_ms, total_step_ms) if module_run_ms > 0.0 else None,
+            "hostOverheadMs": host_overhead_ms if host_overhead_ms > 0.0 else None,
+            "hostOverheadSharePercent": helper_percent(host_overhead_ms, total_step_ms) if host_overhead_ms > 0.0 else None,
             "source": str(path),
         }
 
@@ -278,6 +309,13 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
                 "residualSharePercent": None,
                 "topNode": None,
                 "topNodeKind": None,
+                "topFormat": None,
+                "topActivation": None,
+                "topResolvedThreads": None,
+                "moduleRunMs": None,
+                "moduleRunSharePercent": None,
+                "hostOverheadMs": None,
+                "hostOverheadSharePercent": None,
                 "source": str(path),
             }
         )
@@ -317,6 +355,13 @@ def pytorch_rows(path: Path) -> list[dict[str, object]]:
                 "residualSharePercent": entry.get("residualSharePercent"),
                 "topNode": entry.get("topNode"),
                 "topNodeKind": entry.get("topNodeKind"),
+                "topFormat": entry.get("topFormat"),
+                "topActivation": entry.get("topActivation"),
+                "topResolvedThreads": entry.get("topResolvedThreads"),
+                "moduleRunMs": entry.get("moduleRunMs"),
+                "moduleRunSharePercent": entry.get("moduleRunSharePercent"),
+                "hostOverheadMs": entry.get("hostOverheadMs"),
+                "hostOverheadSharePercent": entry.get("hostOverheadSharePercent"),
                 "source": str(path),
             }
         )
@@ -375,8 +420,15 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         "helperSharePercent",
         "topOperator",
         "operatorSharePercent",
+        "topFormat",
+        "topActivation",
+        "topResolvedThreads",
         "residualMs",
         "residualSharePercent",
+        "moduleRunMs",
+        "moduleRunSharePercent",
+        "hostOverheadMs",
+        "hostOverheadSharePercent",
         "topNode",
         "topNodeKind",
         "source",
@@ -389,8 +441,8 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper ms | Helper Share | Top Node | Top Operator | Operator Share | Residual ms | Residual Share | Fallback | Fallback Count |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|",
+        "| Implementation | Backend | Mode | Config | ms/token | token/s | vs llama.cpp | vs PyTorch/HF | Top Helper | Helper ms | Helper Share | Top Node | Top Operator | Operator Share | Format | Activation | Threads | Module ms | Module Share | Host Overhead ms | Host Overhead Share | Residual ms | Residual Share | Fallback | Fallback Count |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         format_delta = lambda value: "n/a" if value is None else f"{float(value):+.2f}%"
@@ -406,7 +458,11 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
             f"{format_ms(row.get('helperTotalMs'))} | "
             f"{format_percent(row.get('helperSharePercent'))} | {row.get('topNode') or 'n/a'} | "
             f"{row.get('topOperator') or 'n/a'} | "
-            f"{format_percent(row.get('operatorSharePercent'))} | {format_ms(row.get('residualMs'))} | "
+            f"{format_percent(row.get('operatorSharePercent'))} | "
+            f"{row.get('topFormat') or 'n/a'} | {row.get('topActivation') or 'n/a'} | "
+            f"{row.get('topResolvedThreads') or 'n/a'} | {format_ms(row.get('moduleRunMs'))} | "
+            f"{format_percent(row.get('moduleRunSharePercent'))} | {format_ms(row.get('hostOverheadMs'))} | "
+            f"{format_percent(row.get('hostOverheadSharePercent'))} | {format_ms(row.get('residualMs'))} | "
             f"{format_percent(row.get('residualSharePercent'))} | "
             f"{format_optional(row['fallbackUsed'])} | "
             f"{format_optional(row.get('fallbackCount'))} |"

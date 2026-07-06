@@ -50,7 +50,9 @@ Priority classes for the GGUF/Qwen decode work:
     compact configuration string in comparison tables.
   - [x] Profile-summary comparison slice: `benchmark/gguf_decode_compare.py --litenn-profile-summary
     <gguf_decode_summary.json>` can compare already-bundled decode runs directly and carries top-helper/helper-share plus
-    top-operator/operator-share and residual-share columns into Markdown/CSV/JSON outputs.
+    top-operator/operator-share and residual-share columns into Markdown/CSV/JSON outputs. Updated on 2026-07-07: the
+    comparison rows also surface top-node format, activation path, resolved helper threads, compiled-module runtime, and
+    host-overhead totals when the source summary contains GGUF decode runtime buckets.
   - [x] Timeline output: fine-grained Chrome Trace / Perfetto JSON for import, conversion, lowering, MLIR/LLVM compile,
     object load, runtime schedule, transfers, synchronization, GPU dispatches, and decode-loop token phases.
     - [x] Qwen smoke slice: direct GGUF/Qwen smoke logs are streamed to disk during execution, the wrapper emits
