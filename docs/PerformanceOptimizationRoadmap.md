@@ -199,9 +199,13 @@ Priority classes for the GGUF/Qwen decode work:
                 generated-token phase is visible as about `430.7 ms/token` (`~2.32 t/s`). Use the generation row for
                 steady decode acceptance and the all row for end-to-end prompt replay plus decode regressions.
           - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
-                Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
-                residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately. This is
-                the next blocker once quantized projection time is reduced.
+                - [x] Profile-bundle residual buckets. Completed on 2026-07-06: `benchmark/profile_bundle.py` now emits
+                      `residual_buckets`, `top_residual_steps`, Markdown residual tables, and Chrome trace residual
+                      events using the stable `step_ms - helper_total_ms` attribution. This makes prompt-replay,
+                      generation, and per-step residual drift visible in comparison artifacts.
+                - [ ] Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
+                      residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately.
+                      This is the next blocker once quantized projection time is reduced.
           - [ ] P1: Skip full-vocabulary logits projection for prompt replay steps that cannot be sampled.
                 The July 5 run spends about `53 ms` per logits projection and executes one on every prompt replay step.
                 Skipping all but the last replay logits improves prompt/prefill latency, though it is not a steady-state

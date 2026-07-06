@@ -799,6 +799,45 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         }
         for step in analysis.steps
     ]
+    residual_buckets: list[dict[str, object]] = []
+    for phase in ("all", "prompt_replay", "generation"):
+        selected_steps = (
+            step_dicts
+            if phase == "all"
+            else [step for step in step_dicts if str(step.get("phase", "")) == phase]
+        )
+        if not selected_steps:
+            continue
+        total_phase_ms = sum(float(step["step_ms"]) for step in selected_steps)
+        residual_phase_ms = sum(float(step["residual_ms"]) for step in selected_steps)
+        residual_buckets.append(
+            {
+                "bucket": "non_helper_residual",
+                "phase": phase,
+                "steps": len(selected_steps),
+                "total_ms": residual_phase_ms,
+                "avg_ms_per_step": residual_phase_ms / len(selected_steps),
+                "percent_of_phase_steps": helper_percent(residual_phase_ms, total_phase_ms),
+                "percent_of_all_steps": helper_percent(residual_phase_ms, total_step_ms),
+                "attribution": "step_ms_minus_helper_total",
+            }
+        )
+    top_residual_steps = sorted(
+        (
+            {
+                "step": int(step["step"]),
+                "phase": step["phase"],
+                "step_ms": step["step_ms"],
+                "helper_total_ms": step["helper_total_ms"],
+                "residual_ms": step["residual_ms"],
+                "residual_percent_of_step": step["residual_percent_of_step"],
+                "top_operator": step["top_operator"],
+            }
+            for step in step_dicts
+            if float(step["residual_ms"]) > 0.0
+        ),
+        key=lambda item: (-float(item["residual_ms"]), int(item["step"])),
+    )
     helper_dicts = [
         {
             "step": helper.step,
@@ -872,6 +911,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
         "helpers": ranked_helpers,
         "operators": ranked_operators,
+        "residual_buckets": residual_buckets,
+        "top_residual_steps": top_residual_steps[:20],
         "steps": step_dicts,
         "helper_events": helper_dicts,
         "node_timings": node_timing_dicts,
@@ -924,6 +965,27 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 },
             }
         )
+    for step in step_dicts:
+        residual_ms = float(step["residual_ms"])
+        if residual_ms <= 0.0:
+            continue
+        trace_events.append(
+            {
+                "name": "decode_step_non_helper_residual",
+                "cat": "litenn.gguf.residual",
+                "ph": "X",
+                "pid": DEFAULT_TRACE_PID + 1,
+                "tid": 3,
+                "ts": step_starts.get(int(step["step"]), 0.0) + float(step["helper_total_ms"]) * 1000.0,
+                "dur": residual_ms * 1000.0,
+                "args": {
+                    "step": step["step"],
+                    "phase": step["phase"],
+                    "residual_percent_of_step": step["residual_percent_of_step"],
+                    "attribution": "step_ms_minus_helper_total",
+                },
+            }
+        )
     trace_path = out_dir / "gguf_decode_trace.json"
     trace_path.write_text(json.dumps({ "traceEvents": trace_events }, indent=2), encoding="utf-8")
 
@@ -968,6 +1030,51 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
     if not ranked_operators:
         md_lines.append("| `none` | `none` | 0 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
+            "## Residual Buckets",
+            "",
+            "| Bucket | Phase | Steps | Total ms | Avg ms/step | % of phase | % of all steps | Attribution |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for bucket in residual_buckets:
+        percent_phase = bucket["percent_of_phase_steps"]
+        percent_all = bucket["percent_of_all_steps"]
+        md_lines.append(
+            f"| `{bucket['bucket']}` | `{bucket['phase']}` | {bucket['steps']} | "
+            f"{float(bucket['total_ms']):.3f} | {float(bucket['avg_ms_per_step']):.3f} | "
+            f"{'n/a' if percent_phase is None else f'{float(percent_phase):.2f}%'} | "
+            f"{'n/a' if percent_all is None else f'{float(percent_all):.2f}%'} | "
+            f"`{bucket['attribution']}` |"
+        )
+    if not residual_buckets:
+        md_lines.append("| `none` | `none` | 0 | 0.000 | 0.000 | n/a | n/a | `none` |")
+    md_lines.extend(
+        [
+            "",
+            "## Top Residual Steps",
+            "",
+            "| Step | Phase | Step ms | Helper ms | Residual ms | Residual % | Top operator |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for step in top_residual_steps[:20]:
+        residual_percent = step["residual_percent_of_step"]
+        top_operator = step["top_operator"]
+        top_operator_text = (
+            "`none`"
+            if not isinstance(top_operator, dict)
+            else f"`{top_operator['operator']}/{top_operator['role']}` {float(top_operator['total_ms']):.3f} ms"
+        )
+        md_lines.append(
+            f"| {step['step']} | `{step['phase']}` | {float(step['step_ms']):.3f} | "
+            f"{float(step['helper_total_ms']):.3f} | {float(step['residual_ms']):.3f} | "
+            f"{'n/a' if residual_percent is None else f'{float(residual_percent):.2f}%'} | {top_operator_text} |"
+        )
+    if not top_residual_steps:
+        md_lines.append("| 0 | `none` | 0.000 | 0.000 | 0.000 | n/a | `none` |")
     md_lines.extend(
         [
             "",
