@@ -180,11 +180,11 @@ Priority classes for the GGUF/Qwen decode work:
                 llama.cpp `llama-bench` matrix on the same machine measured about `4.65 t/s` at T2, `4.64 t/s` at T4,
                 `4.29 t/s` at T8, `3.47 t/s` at T16, and `2.35 t/s` at T32 with `ngl=0` and `flash_attn=0`. Therefore
                 the next thread-policy work should wait for packed kernels; otherwise T4/T8 retuning makes LiteNN worse.
-          - [ ] P0: Add a repository-owned CPU-only llama.cpp control harness.
-                The manual 2026-07-06 run is useful evidence, but the next comparison should be reproducible without
-                leaking external model paths into the repository. Add a small benchmark driver that accepts a model path
-                at runtime, builds or locates `llama-bench`, captures TG-only rows for T2/T4/T8/T16/T32, and emits an
-                anonymized comparison table against LiteNN stateful CPU AOT cache-hit runs.
+          - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
+                Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
+                or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and
+                redacts `model_filename` in the saved JSON unless `--keep-model-filename` is requested. Example:
+                `python311 benchmark/run_llama_cpp_control.py --model <model.gguf> --llama-bench <llama-bench> --output-json build/llama_control.json --output-md build/llama_control.md`.
           - [x] P0: Make `gguf_decode_compare.py` phase-aware for profile-summary inputs.
                 Completed on 2026-07-06. `--litenn-profile-summary` now emits separate `profile-summary-all`,
                 `profile-summary-prompt_replay`, and `profile-summary-generation` rows when the input bundle contains
