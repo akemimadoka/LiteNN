@@ -128,10 +128,48 @@ def attach_profile_bundle(row: dict[str, object], thread_count: int, report_path
     row["profileTrace"] = str(bundle_dir / "gguf_decode_trace.json")
 
 
-def write_outputs(out_dir: Path, rows: list[dict[str, object]], commands: list[list[str]]) -> None:
+def write_profile_compare(out_dir: Path, rows: list[dict[str, object]], python: str) -> dict[str, object] | None:
+    summaries = [
+        Path(str(row["profileSummary"]))
+        for row in rows
+        if row.get("profileSummary") is not None and Path(str(row["profileSummary"])).exists()
+    ]
+    if not summaries:
+        return None
+
+    compare_dir = out_dir / "profile_summary_compare"
+    compare_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        python,
+        str(repo_root() / "benchmark" / "gguf_decode_compare.py"),
+        "--output-dir",
+        str(compare_dir),
+    ]
+    for summary in summaries:
+        command.extend(["--litenn-profile-summary", str(summary)])
+
+    stdout_path = compare_dir / "gguf_decode_compare.stdout.txt"
+    stderr_path = compare_dir / "gguf_decode_compare.stderr.txt"
+    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
+        completed = subprocess.run(command, text=True, stdout=stdout, stderr=stderr, check=False)
+
+    return {
+        "returncode": completed.returncode,
+        "outputDir": str(compare_dir),
+        "json": str(compare_dir / "gguf_decode_compare.json"),
+        "markdown": str(compare_dir / "gguf_decode_compare.md"),
+        "csv": str(compare_dir / "gguf_decode_compare.csv"),
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+    }
+
+
+def write_outputs(
+    out_dir: Path, rows: list[dict[str, object]], commands: list[list[str]], profile_compare: dict[str, object] | None
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "gguf_decode_thread_matrix.json").write_text(
-        json.dumps({ "rows": rows, "commands": commands }, indent=2) + "\n",
+        json.dumps({ "rows": rows, "commands": commands, "profileCompare": profile_compare }, indent=2) + "\n",
         encoding="utf-8",
     )
     lines = [
@@ -170,6 +208,18 @@ def write_outputs(out_dir: Path, rows: list[dict[str, object]], commands: list[l
             )
             + " |"
         )
+    if profile_compare is not None:
+        lines.extend(
+            [
+                "",
+                "## Profile-Summary Compare",
+                "",
+                f"- returncode: {profile_compare.get('returncode')}",
+                f"- markdown: `{profile_compare.get('markdown')}`",
+                f"- csv: `{profile_compare.get('csv')}`",
+                f"- json: `{profile_compare.get('json')}`",
+            ]
+        )
     (out_dir / "gguf_decode_thread_matrix.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -194,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--profile-bundles", action="store_true")
+    parser.add_argument("--no-profile-compare", action="store_true")
     parser.add_argument("--redacted-model-name", default="<model>")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -266,7 +317,10 @@ def main() -> int:
                     "report": str(report_path),
                 }
             )
-    write_outputs(args.out_dir, rows, commands)
+    profile_compare = None
+    if args.profile_bundles and not args.no_profile_compare:
+        profile_compare = write_profile_compare(args.out_dir, rows, args.python)
+    write_outputs(args.out_dir, rows, commands, profile_compare)
     return 0 if all(row.get("returncode") in (None, 0) for row in rows) else 1
 
 
