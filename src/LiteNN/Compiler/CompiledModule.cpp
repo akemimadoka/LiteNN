@@ -2102,6 +2102,105 @@ namespace
 		}
 	}
 
+	constexpr std::uint64_t kGGMLQ6KPreparedScaleCount = 16;
+	constexpr std::uint64_t kGGMLQ6KPreparedLanes = 256;
+	constexpr std::uint64_t kGGMLQ6KPreparedScaleBytes = kGGMLQ6KPreparedScaleCount * sizeof(float);
+	constexpr std::uint64_t kGGMLQ6KPreparedQuantOffset = kGGMLQ6KPreparedScaleBytes;
+	constexpr std::uint64_t kGGMLQ6KPreparedBlockBytes = kGGMLQ6KPreparedQuantOffset + kGGMLQ6KPreparedLanes;
+
+	void StoreGGMLQ6KPreparedScale(std::uint8_t* block, std::uint64_t group, float value)
+	{
+		std::memcpy(block + group * sizeof(float), &value, sizeof(float));
+	}
+
+	float LoadGGMLQ6KPreparedScale(const std::uint8_t* block, std::uint64_t group)
+	{
+		float value = 0.0F;
+		std::memcpy(&value, block + group * sizeof(float), sizeof(float));
+		return value;
+	}
+
+	std::int8_t LoadGGMLQ6KPreparedQuant(const std::uint8_t* block, std::uint64_t lane)
+	{
+		return static_cast<std::int8_t>(block[kGGMLQ6KPreparedQuantOffset + lane]);
+	}
+
+	void PrepareGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, std::uint8_t* out)
+	{
+		const auto d = ReadGGMLF16Strided(block, byteStride, 208);
+		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+		{
+			for (std::uint64_t segment = 0; segment < 4; ++segment)
+			{
+				for (std::uint64_t group = 0; group < 2; ++group)
+				{
+					const auto groupIndex = halfBlock * 8 + segment * 2 + group;
+					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
+					const auto scale = d * static_cast<float>(static_cast<std::int8_t>(
+					                           GGMLBlockByte(block, byteStride, 192 + scaleOffset)));
+					StoreGGMLQ6KPreparedScale(out, groupIndex, scale);
+					for (std::uint64_t local = 0; local < 16; ++local)
+					{
+						const auto laneInSegment = group * 16 + local;
+						const auto lane = groupIndex * 16 + local;
+						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
+						const auto ql = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, qlOffset));
+						const auto lowFour = segment >= 2 ? ((ql >> 4U) & 15U) : (ql & 15U);
+						const auto qhOffset = halfBlock * 32 + laneInSegment;
+						const auto qh = static_cast<std::uint32_t>(GGMLBlockByte(block, byteStride, 128 + qhOffset));
+						const auto highTwo = (qh >> (segment * 2)) & 3U;
+						const auto quant = static_cast<std::int32_t>(lowFour | (highTwo << 4U)) - 32;
+						out[kGGMLQ6KPreparedQuantOffset + lane] =
+						    static_cast<std::uint8_t>(static_cast<std::int8_t>(quant));
+					}
+				}
+			}
+		}
+	}
+
+	void AccumulateGGMLQ6KPreparedBlockF32x4(const std::uint8_t* const blocks[4], const bool valid[4], const float* lhs,
+	                                         std::int64_t lhsStride, float acc[4])
+	{
+		const bool allValid = valid[0] && valid[1] && valid[2] && valid[3];
+		for (std::uint64_t group = 0; group < kGGMLQ6KPreparedScaleCount; ++group)
+		{
+			float quantSum[4] = {};
+			for (std::uint64_t local = 0; local < 16; ++local)
+			{
+				const auto lane = group * 16 + local;
+				const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+				if (allValid)
+				{
+					for (int column = 0; column < 4; ++column)
+					{
+						quantSum[column] +=
+						    lhsValue * static_cast<float>(LoadGGMLQ6KPreparedQuant(blocks[column], lane));
+					}
+				}
+				else
+				{
+					for (int column = 0; column < 4; ++column)
+					{
+						if (!valid[column])
+						{
+							continue;
+						}
+						quantSum[column] +=
+						    lhsValue * static_cast<float>(LoadGGMLQ6KPreparedQuant(blocks[column], lane));
+					}
+				}
+			}
+
+			for (int column = 0; column < 4; ++column)
+			{
+				if (allValid || valid[column])
+				{
+					acc[column] += LoadGGMLQ6KPreparedScale(blocks[column], group) * quantSum[column];
+				}
+			}
+		}
+	}
+
 	void AccumulateGGMLQ6KBlockQ8Kx4(const std::uint8_t* const blocks[4], const bool valid[4], std::int64_t byteStride,
 	                                 const GGMLQ8KActivationBlock& lhs, float acc[4])
 	{
@@ -2786,6 +2885,165 @@ namespace
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
 		                            requestedThreadCount, affinityPolicyValue, GGMLActivationDotMode::Q8KStaged);
+	}
+
+	extern "C" std::uint64_t litenn_cpu_ggml_q6k_prepacked_block_bytes()
+	{
+		return kGGMLQ6KPreparedBlockBytes;
+	}
+
+	extern "C" void litenn_cpu_ggml_prepack_q6k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
+	                                                std::int64_t rhsOffset, std::int64_t rhsBytes,
+	                                                std::int64_t rhsStride, std::int64_t rows, std::int64_t columns,
+	                                                std::uint8_t*, std::uint8_t* packedAligned,
+	                                                std::int64_t packedOffset, std::int64_t packedBytes,
+	                                                std::int64_t packedStride)
+	{
+		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q6_K);
+		if (!layout || !rhsAligned || !packedAligned || rhsOffset < 0 || rhsBytes < 0 || rhsStride <= 0 || rows < 0 ||
+		    columns < 0 || packedOffset < 0 || packedBytes < 0 || packedStride != 1 ||
+		    static_cast<std::uint64_t>(columns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+		const auto blockCount = static_cast<std::uint64_t>(columns) / layout->elementsPerBlock;
+		const auto rowBytes = blockCount * layout->bytesPerBlock;
+		const auto packedRowBytes = blockCount * kGGMLQ6KPreparedBlockBytes;
+		if (static_cast<std::uint64_t>(rhsBytes) < static_cast<std::uint64_t>(rows) * rowBytes ||
+		    static_cast<std::uint64_t>(packedBytes) < static_cast<std::uint64_t>(rows) * packedRowBytes)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < rows; ++row)
+		{
+			for (std::uint64_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
+			{
+				const auto* sourceBlock =
+				    rhsAligned + rhsOffset +
+				    (static_cast<std::uint64_t>(row) * rowBytes + blockIndex * layout->bytesPerBlock) *
+				        static_cast<std::uint64_t>(rhsStride);
+				auto* targetBlock = packedAligned + packedOffset + static_cast<std::uint64_t>(row) * packedRowBytes +
+				                    blockIndex * kGGMLQ6KPreparedBlockBytes;
+				PrepareGGMLQ6KBlockF32(sourceBlock, rhsStride, targetBlock);
+			}
+		}
+	}
+
+	extern "C" void litenn_cpu_ggml_block_matmul_q6k_prepacked_f32(
+	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+	    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
+	{
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("format=GGML_Q6_K activation=direct_prepacked lhs={}x{} out={}x{} requested_threads={}",
+		                      lhsRows, lhsColumns, outRows, outColumns, requestedThreadCount)
+		        : std::string{});
+		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q6_K);
+		if (!layout || !lhsAligned || !rhsAligned || !outAligned || lhsRows < 0 || lhsColumns < 0 || outRows < 0 ||
+		    outColumns < 0 || lhsRows != outRows || lhsColumns == 0 || outColumns == 0 || rhsOffset < 0 ||
+		    rhsBytes < 0 || rhsStride != 1 || static_cast<std::uint64_t>(lhsColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+		const auto blockCount = static_cast<std::uint64_t>(lhsColumns) / layout->elementsPerBlock;
+		const auto rowBytes = blockCount * kGGMLQ6KPreparedBlockBytes;
+		if (static_cast<std::uint64_t>(rhsBytes) < static_cast<std::uint64_t>(outColumns) * rowBytes)
+		{
+			return;
+		}
+
+		struct Context
+		{
+			const float* lhsAligned{};
+			std::int64_t lhsOffset{};
+			std::int64_t lhsRowStride{};
+			std::int64_t lhsColumnStride{};
+			const std::uint8_t* rhsAligned{};
+			std::int64_t rhsOffset{};
+			float* outAligned{};
+			std::int64_t outOffset{};
+			std::int64_t outColumns{};
+			std::int64_t outRowStride{};
+			std::int64_t outColumnStride{};
+			std::uint64_t blockCount{};
+			std::uint64_t rowBytes{};
+			std::uint64_t columnGroupsPerRow{};
+		};
+		Context context{ .lhsAligned = lhsAligned,
+			             .lhsOffset = lhsOffset,
+			             .lhsRowStride = lhsRowStride,
+			             .lhsColumnStride = lhsColumnStride,
+			             .rhsAligned = rhsAligned,
+			             .rhsOffset = rhsOffset,
+			             .outAligned = outAligned,
+			             .outOffset = outOffset,
+			             .outColumns = outColumns,
+			             .outRowStride = outRowStride,
+			             .outColumnStride = outColumnStride,
+			             .blockCount = blockCount,
+			             .rowBytes = rowBytes,
+			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4 };
+		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
+			const auto& ctx = *static_cast<const Context*>(userData);
+			for (std::uint64_t groupIndex = begin; groupIndex < end; ++groupIndex)
+			{
+				const auto row = static_cast<std::int64_t>(groupIndex / ctx.columnGroupsPerRow);
+				const auto columnBase = (groupIndex % ctx.columnGroupsPerRow) * static_cast<std::uint64_t>(4);
+				const auto* lhsRow = ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
+				float acc[4] = {};
+				bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
+					              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
+					              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
+					              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
+				{
+					const auto* lhsBlock =
+					    lhsRow + static_cast<std::int64_t>(blockIndex * kGGMLQ6KPreparedLanes) * ctx.lhsColumnStride;
+					const std::uint8_t* blocks[4] = {};
+					for (int localColumn = 0; localColumn < 4; ++localColumn)
+					{
+						if (!valid[localColumn])
+						{
+							continue;
+						}
+						const auto column = columnBase + static_cast<std::uint64_t>(localColumn);
+						blocks[localColumn] = ctx.rhsAligned + ctx.rhsOffset + column * ctx.rowBytes +
+						                      blockIndex * kGGMLQ6KPreparedBlockBytes;
+					}
+					AccumulateGGMLQ6KPreparedBlockF32x4(blocks, valid, lhsBlock, ctx.lhsColumnStride, acc);
+				}
+				for (int localColumn = 0; localColumn < 4; ++localColumn)
+				{
+					if (!valid[localColumn])
+					{
+						continue;
+					}
+					const auto column = static_cast<std::int64_t>(columnBase + static_cast<std::uint64_t>(localColumn));
+					ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
+					    acc[localColumn];
+				}
+			}
+		};
+		const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * context.columnGroupsPerRow;
+		const auto operations = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(outColumns) *
+		                        static_cast<std::uint64_t>(lhsColumns);
+		const auto threadCount =
+		    ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat::GGML_Q6_K, GGMLActivationDotMode::DirectFloat32,
+		                                      operations, outputGroups, requestedThreadCount);
+		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
+		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
+		                                ? CPUAOTAffinityPolicy::Compact
+		                                : CPUAOTAffinityPolicy::None;
+		if (threadCount <= 1)
+		{
+			body(0, outputGroups, &context);
+			return;
+		}
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
 	}
 
 	extern "C" void litenn_cpu_ggml_block_grouped_matmul2_f32(
@@ -6153,6 +6411,12 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_q8k_staged_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_q8k_staged_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_q6k_prepacked_block_bytes",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_q6k_prepacked_block_bytes));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_prepack_q6k_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_prepack_q6k_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_q6k_prepacked_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_q6k_prepacked_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_grouped_matmul2_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul2_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32",

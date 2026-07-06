@@ -144,6 +144,14 @@ Priority classes for the GGUF/Qwen decode work:
                       separated compiled weights with an explicit layout/version tag and a fallback to source GGML
                       layout. The first target is output-major Qwen gate/up, FFN-down, hidden/output, KV, and logits
                       projections.
+                      Progress on 2026-07-07: added a Q6_K prepacked sidecar ABI and `litenn_bench`
+                      `GGMLBlockMatMulQ6KPrepackedHelper/...` rows. The sidecar expands each Q6_K block into 16 prepared
+                      float scales plus 256 signed quant lanes and validates against the direct helper, but it remains
+                      benchmark-only until full Qwen-shaped measurements justify routing AOT weights through this format.
+                      Short validation on 2026-07-07 passed
+                      `GGUFLLaMAQuantizedExecution.Q6KPrepackedHelperMatchesDirectHelper`; `qwen_ffn_down/T1` improved
+                      from about `32.2 ms` direct to `15.1 ms` prepacked, and `T8` improved from about `4.77 ms` to
+                      `2.28 ms`, both with `max_abs_delta=0`.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

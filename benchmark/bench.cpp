@@ -56,6 +56,21 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" std::uint64_t litenn_cpu_ggml_q6k_prepacked_block_bytes();
+
+extern "C" void litenn_cpu_ggml_prepack_q6k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
+                                                std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride,
+                                                std::int64_t rows, std::int64_t columns, std::uint8_t*,
+                                                std::uint8_t* packedAligned, std::int64_t packedOffset,
+                                                std::int64_t packedBytes, std::int64_t packedStride);
+
+extern "C" void litenn_cpu_ggml_block_matmul_q6k_prepacked_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
 extern "C" void litenn_cpu_ggml_block_grouped_matmul2_f32(
     const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
     std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
@@ -1364,6 +1379,73 @@ namespace
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 		state.counters["q8k_staged"] = benchmark::Counter(q8KStaged ? 1.0 : 0.0);
+	}
+
+	void BMGGMLQ6KPrepackedMatMulHelper(benchmark::State& state, std::size_t batch, std::size_t inputWidth,
+	                                    std::size_t outputWidth, std::uint64_t threadCount)
+	{
+		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q6_K);
+		if (!layout || inputWidth % layout->elementsPerBlock != 0)
+		{
+			state.SkipWithError("unsupported GGML_Q6_K prepacked benchmark shape");
+			return;
+		}
+		auto rhs = MakeGGMLBenchmarkStorage(QuantizedBlockFormat::GGML_Q6_K, outputWidth, inputWidth);
+		auto lhs = MakeInputData(batch * inputWidth);
+		std::vector<float> directReference(batch * outputWidth);
+		std::vector<float> output(batch * outputWidth);
+		const auto preparedBlockBytes = litenn_cpu_ggml_q6k_prepacked_block_bytes();
+		const auto blockCount = inputWidth / layout->elementsPerBlock;
+		std::vector<std::uint8_t> packed(outputWidth * blockCount * preparedBlockBytes);
+
+		litenn_cpu_ggml_prepack_q6k_f32(nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1,
+		                                static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(inputWidth),
+		                                nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()), 1);
+		litenn_cpu_ggml_block_matmul_f32(nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch),
+		                                 static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+		                                 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr,
+		                                 directReference.data(), 0, static_cast<std::int64_t>(batch),
+		                                 static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth),
+		                                 1, static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q6_K), threadCount,
+		                                 static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		litenn_cpu_ggml_block_matmul_q6k_prepacked_f32(
+		    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+		    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data(), 0,
+		    static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0, static_cast<std::int64_t>(batch),
+		    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1, threadCount,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		state.counters["max_abs_delta"] =
+		    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, directReference)));
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			litenn_cpu_ggml_block_matmul_q6k_prepacked_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0,
+			    static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(outputWidth), 1, threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			benchmark::DoNotOptimize(output.data());
+		}
+
+		for (auto _ : state)
+		{
+			litenn_cpu_ggml_block_matmul_q6k_prepacked_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0,
+			    static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(outputWidth), 1, threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+		state.counters["prepacked"] = benchmark::Counter(1.0);
+		state.counters["prepared_block_bytes"] = benchmark::Counter(static_cast<double>(preparedBlockBytes));
 	}
 
 	std::size_t TotalOutputWidth(std::span<const std::size_t> outputWidths)
@@ -3893,6 +3975,20 @@ namespace
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
+			}
+		}
+		for (const auto threadCount : kGGMLThreadCounts)
+		{
+			for (const auto shape : kGGMLProjectionBenchmarkSpecs)
+			{
+				auto* benchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("GGMLBlockMatMulQ6KPrepackedHelper/Q6_K/{}/T{}/batch:1/in:{}/out:{}", shape.name,
+				                threadCount, shape.inputWidth, shape.outputWidth),
+				    [=](benchmark::State& state) {
+					    BMGGMLQ6KPrepackedMatMulHelper(state, 1, shape.inputWidth, shape.outputWidth,
+					                                   static_cast<std::uint64_t>(threadCount));
+				    });
+				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
 		}
 		for (const auto format : ggmlBlockFormats)
