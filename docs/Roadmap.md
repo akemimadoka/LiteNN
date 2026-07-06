@@ -2909,6 +2909,13 @@ Priority classes:
       `qwen_ffn_down/T1` from about `33.4 ms` direct to `15.0 ms` prepacked, both with `max_abs_delta=0`; prepack-only
       rows measured about `6.94 ms` for Q4_K `5120->13824` and `14.9 ms` for Q6_K `13824->5120`, so production routing
       should cache prepared weights in the separated shared weight store.
+- [x] P0: Route prepared Q4_K/Q6_K weights through separated CPU AOT for ordinary projection nodes:
+      completed on 2026-07-07 for non-grouped `QuantizedMatMulNode` RHS variables. The opt-in
+      `CompilerOptions::enableCPUAOTGGMLPrepackedWeights` writes prepared Q4_K/Q6_K payloads into the separated weights
+      region, GraphToMLIR marks prepared RHS placeholders, LLVM lowering calls the matching prepared helper, and the GGUF
+      decode CLI/smoke path exposes `--cpu-aot-ggml-prepacked-weights` with cache-key isolation. Validation passed the
+      Q4/Q6 helper parity tests and the output-major Q4_K/Q6_K/Q8_0 CPU AOT regression with prepared artifacts. Grouped
+      projection routing and default enablement remain gated on full-decode A/B evidence.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

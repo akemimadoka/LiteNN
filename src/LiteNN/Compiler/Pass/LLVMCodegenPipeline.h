@@ -25,6 +25,7 @@ namespace litenn
 		std::uint64_t ggmlBlockMatMulThreadCount{};
 		std::uint64_t ggmlBlockMatMulAffinityPolicy{};
 		bool enableGGMLQ8KStagedMatMul{};
+		bool enableGGMLPrepackedWeights{};
 	};
 
 	// Registers LLVM dialect translation interfaces (LLVMDialect + BuiltinDialect).

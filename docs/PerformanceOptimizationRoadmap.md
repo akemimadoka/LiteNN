@@ -162,6 +162,16 @@ Priority classes for the GGUF/Qwen decode work:
                       all with `max_abs_delta=0`. One-time prepack cost measured about `6.94 ms` for Q4_K
                       `5120->13824` and `14.9 ms` for Q6_K `13824->5120`, reinforcing that prepared weights should be
                       stored in the shared separated weight cache rather than regenerated per step.
+                      Progress on 2026-07-07: the prepared path is now available in separated CPU AOT artifacts for
+                      ordinary Q4_K/Q6_K `QuantizedMatMulNode` weights whose variable storage is used only as that RHS.
+                      `CompilerOptions::enableCPUAOTGGMLPrepackedWeights` externalizes those weights in prepared layout,
+                      GraphToMLIR marks the prepared RHS placeholder, and LLVM lowering calls
+                      `litenn_cpu_ggml_block_matmul_{q4k,q6k}_prepacked_f32`. The GGUF decode CLI and smoke tooling
+                      expose this as `--cpu-aot-ggml-prepacked-weights`, include it in the AOT cache key, and force
+                      external regions because the option changes weight layout. Validation passed the Q4/Q6 helper
+                      parity tests and the output-major Q4_K/Q6_K/Q8_0 AOT regression with prepared artifacts. Remaining
+                      production work: grouped Q/K/V and gate/up prepared routing, full-decode A/B, and default-policy
+                      selection.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

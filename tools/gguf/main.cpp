@@ -84,7 +84,7 @@ namespace
 		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul]\n"
+		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -93,7 +93,7 @@ namespace
 		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul]\n"
+		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -102,7 +102,7 @@ namespace
 		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul]\n"
+		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -239,6 +239,7 @@ namespace
 		bool pagedReferenceDecode{};
 		std::optional<std::size_t> pagedResidentPageCount;
 		bool enableCPUAOTQ8KStagedMatMul{};
+		bool enableCPUAOTGGMLPrepackedWeights{};
 		std::optional<std::size_t> cpuAOTThreadCount;
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
 		std::optional<std::uint8_t> cpuAOTLLVMOptLevel;
@@ -332,6 +333,10 @@ namespace
 			else if (arg == "--cpu-aot-q8k-staged-matmul")
 			{
 				options.enableCPUAOTQ8KStagedMatMul = true;
+			}
+			else if (arg == "--cpu-aot-ggml-prepacked-weights")
+			{
+				options.enableCPUAOTGGMLPrepackedWeights = true;
 			}
 			else if (arg == "--cpu-aot-threads")
 			{
@@ -1256,13 +1261,14 @@ namespace
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto residentPagesText =
 		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
-		const auto keyText = std::format(
-		    "gguf-decode-{}-v5|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
-		    "q8k_staged={}|paged_resident_pages={}",
-		    decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
-		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
-		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
-		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, residentPagesText);
+		const auto keyText =
+		    std::format("gguf-decode-{}-v5|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
+		                "q8k_staged={}|ggml_prepacked_weights={}|paged_resident_pages={}",
+		                decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
+		                requestedTokenCount, options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0,
+		                options.cpuAOTThreadCount, static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
+		                options.cpuAOTParallelMinFlops, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0,
+		                options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0, residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -2027,6 +2033,7 @@ namespace
 			options.enableCUDANativeAOT = false;
 		}
 		options.enableCPUAOTGGMLQ8KStagedMatMul = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_Q8K_STAGED_MATMUL"));
+		options.enableCPUAOTGGMLPrepackedWeights = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_GGML_PREPACKED_WEIGHTS"));
 		options.enableCompileDiagnostics = TruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS"));
 		return options;
 	}
@@ -2059,6 +2066,11 @@ namespace
 		if (decodeOptions.enableCPUAOTQ8KStagedMatMul)
 		{
 			compilerOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
+		}
+		if (decodeOptions.enableCPUAOTGGMLPrepackedWeights)
+		{
+			compilerOptions.enableCPUAOTGGMLPrepackedWeights = true;
+			compilerOptions.enableCPUAOTExternalRegions = true;
 		}
 	}
 

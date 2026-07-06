@@ -1422,6 +1422,27 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+		if (blockFormat == QuantizedBlockFormat::GGML_Q4_K || blockFormat == QuantizedBlockFormat::GGML_Q6_K)
+		{
+			CompilerOptions prepackedOptions;
+			prepackedOptions.enableCPUAOTExternalRegions = true;
+			prepackedOptions.enableCPUAOTGGMLPrepackedWeights = true;
+			prepackedOptions.cpuAOTThreadCount = 2;
+			const auto prepackedArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
+			const auto expectedHelper = blockFormat == QuantizedBlockFormat::GGML_Q4_K
+			                                ? "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32"
+			                                : "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32";
+			EXPECT_TRUE(ByteSpanContains(prepackedArtifact.Instructions(), expectedHelper));
+			const auto externalInfos = prepackedArtifact.ExternalTensorInfos();
+			EXPECT_TRUE(std::ranges::any_of(externalInfos, [&](const auto& info) {
+				return info.region == "weights" && info.name.find(".prepacked.") != std::string::npos &&
+				       info.byteSize > quantizedWeight->Data().NumElements();
+			}));
+			auto prepackedCompiled = prepackedArtifact.Load();
+			const auto prepackedActual = prepackedCompiled.RunTensors(inputs);
+			ASSERT_EQ(prepackedActual.size(), 1u);
+			ExpectTensorNear(prepackedActual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+		}
 		if (blockFormat == QuantizedBlockFormat::GGML_Q6_K)
 		{
 			CompilerOptions options;

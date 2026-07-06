@@ -168,6 +168,8 @@ namespace LiteNN
 		/// Opt in to Q8_K activation-staged GGML block MatMul helpers for formats where small numeric deltas are
 		/// allowed.
 		bool enableCPUAOTGGMLQ8KStagedMatMul{};
+		/// Opt in to compile-time prepared GGML_Q4_K/GGML_Q6_K weight payloads in separated CPU AOT artifacts.
+		bool enableCPUAOTGGMLPrepackedWeights{};
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };
 		/// Prefer Vulkan native AOT kernels before falling back to CPU AOT bridge.

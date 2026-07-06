@@ -319,6 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Opt in to Q8_K-staged GGML_Q6_K CPU AOT matmul for A/B profiling",
     )
     parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weights",
+        action="store_true",
+        help="Opt in to prepared GGML_Q4_K/GGML_Q6_K CPU AOT weight payloads for A/B profiling",
+    )
+    parser.add_argument(
         "--no-compile-diagnostics",
         action="store_true",
         help="Suppress LiteNN decode compile/run progress diagnostics",
@@ -656,6 +661,8 @@ def main() -> int:
             decode_cmd.extend(["--cpu-aot-parallel-min-flops", str(args.cpu_aot_parallel_min_flops)])
         if args.cpu_aot_q8k_staged_matmul:
             decode_cmd.append("--cpu-aot-q8k-staged-matmul")
+        if args.cpu_aot_ggml_prepacked_weights:
+            decode_cmd.append("--cpu-aot-ggml-prepacked-weights")
         decode_cmd.append("--no-compile-diagnostics" if args.no_compile_diagnostics else "--compile-diagnostics")
         decode = run_step(
             "litenn_decode_token_ids",
@@ -718,6 +725,7 @@ def main() -> int:
             "affinity": args.cpu_aot_affinity,
             "parallel_min_flops": args.cpu_aot_parallel_min_flops,
             "q8k_staged_matmul": args.cpu_aot_q8k_staged_matmul,
+            "ggml_prepacked_weights": args.cpu_aot_ggml_prepacked_weights,
             "compile_diagnostics": not args.no_compile_diagnostics,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),

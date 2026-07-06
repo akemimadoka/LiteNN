@@ -26,6 +26,7 @@
 #include <format>
 #include <limits>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -158,6 +159,18 @@ namespace litenn
 		bool IsPromotedConstantVariableName(std::string_view name)
 		{
 			return name.starts_with("constant.");
+		}
+
+		std::optional<std::size_t> GGMLPreparedBlockBytes(QuantizedBlockFormat format)
+		{
+			switch (format)
+			{
+			case QuantizedBlockFormat::GGML_Q4_K:
+			case QuantizedBlockFormat::GGML_Q6_K:
+				return 320;
+			default:
+				return std::nullopt;
+			}
 		}
 
 		// Extract tensor data to DenseElementsAttr
@@ -1238,8 +1251,19 @@ namespace litenn
 				{
 					const auto layout = GetQuantizedBlockLayout(node.params.blockFormat);
 					if (!node.transposeRhs || rhsInfo.dtype != DataType::UInt8 || rhsInfo.shape.size() != 1 ||
-					    !layout || k % layout->elementsPerBlock != 0 ||
-					    rhsInfo.shape[0] != n * (k / layout->elementsPerBlock) * layout->bytesPerBlock)
+					    !layout || k % layout->elementsPerBlock != 0)
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR GGML QuantizedMatMulNode requires output-major UInt8 block storage");
+					}
+					const auto blockCount = k / layout->elementsPerBlock;
+					const auto expectedSourceBytes = n * blockCount * layout->bytesPerBlock;
+					const auto preparedBlockBytes = GGMLPreparedBlockBytes(node.params.blockFormat);
+					const auto expectedPreparedBytes =
+					    preparedBlockBytes ? std::optional<std::size_t>{ n * blockCount * *preparedBlockBytes }
+					                       : std::nullopt;
+					const auto usesPreparedLayout = expectedPreparedBytes && rhsInfo.shape[0] == *expectedPreparedBytes;
+					if (rhsInfo.shape[0] != expectedSourceBytes && !usesPreparedLayout)
 					{
 						throw std::runtime_error(
 						    "GraphToMLIR GGML QuantizedMatMulNode requires output-major UInt8 block storage");
@@ -1280,6 +1304,11 @@ namespace litenn
 						generic->setAttr(
 						    "litenn.ggml_block_quantized_matmul",
 						    builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
+						if (usesPreparedLayout)
+						{
+							generic->setAttr("litenn.ggml_block_quantized_matmul_prepared_layout",
+							                 builder_.getUnitAttr());
+						}
 						valueMap[nodeId] = { generic.getResult(0) };
 						return;
 					}

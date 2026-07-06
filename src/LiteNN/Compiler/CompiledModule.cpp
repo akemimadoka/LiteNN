@@ -4961,6 +4961,176 @@ namespace
 		return offset;
 	}
 
+	bool IsCPUAOTPrepackedGGMLFormat(QuantizedBlockFormat format)
+	{
+		return format == QuantizedBlockFormat::GGML_Q4_K || format == QuantizedBlockFormat::GGML_Q6_K;
+	}
+
+	std::optional<std::uint64_t> GGMLPrepackedBlockBytes(QuantizedBlockFormat format)
+	{
+		switch (format)
+		{
+		case QuantizedBlockFormat::GGML_Q4_K:
+			return kGGMLQ4KPreparedBlockBytes;
+		case QuantizedBlockFormat::GGML_Q6_K:
+			return kGGMLQ6KPreparedBlockBytes;
+		default:
+			return std::nullopt;
+		}
+	}
+
+	std::optional<std::vector<std::size_t>> GGMLPrepackedStorageShape(const QuantizationParams& params)
+	{
+		if (params.scheme != QuantizationScheme::Block || !IsCPUAOTPrepackedGGMLFormat(params.blockFormat) ||
+		    params.storageType != DataType::UInt8 || params.expressedShape.size() != 2)
+		{
+			return std::nullopt;
+		}
+		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
+		const auto preparedBlockBytes = GGMLPrepackedBlockBytes(params.blockFormat);
+		if (!layout || !preparedBlockBytes || params.expressedShape[1] % layout->elementsPerBlock != 0)
+		{
+			return std::nullopt;
+		}
+		const auto blockCount = params.expressedShape[1] / layout->elementsPerBlock;
+		if (params.expressedShape[0] > std::numeric_limits<std::size_t>::max() / blockCount ||
+		    params.expressedShape[0] * blockCount > std::numeric_limits<std::size_t>::max() / *preparedBlockBytes)
+		{
+			return std::nullopt;
+		}
+		return std::vector<std::size_t>{ params.expressedShape[0] * blockCount *
+			                             static_cast<std::size_t>(*preparedBlockBytes) };
+	}
+
+	std::optional<std::uint64_t> AppendGGMLPrepackedPayloadBytes(std::vector<std::byte>& bytes,
+	                                                             const Tensor<PolymorphicDevice>& tensor,
+	                                                             const QuantizationParams& params,
+	                                                             std::uint64_t alignment)
+	{
+		const auto preparedShape = GGMLPrepackedStorageShape(params);
+		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
+		const auto preparedBlockBytes = GGMLPrepackedBlockBytes(params.blockFormat);
+		if (!preparedShape || !layout || !preparedBlockBytes || tensor.DType() != DataType::UInt8 ||
+		    tensor.Shape().NumDim() != 1)
+		{
+			return std::nullopt;
+		}
+		const auto rows = params.expressedShape[0];
+		const auto columns = params.expressedShape[1];
+		const auto blockCount = columns / layout->elementsPerBlock;
+		const auto sourceRowBytes = blockCount * layout->bytesPerBlock;
+		const auto preparedRowBytes = blockCount * *preparedBlockBytes;
+		if (tensor.NumElements() < rows * sourceRowBytes)
+		{
+			return std::nullopt;
+		}
+
+		const auto offset = AlignUpU64(static_cast<std::uint64_t>(bytes.size()), alignment);
+		if (bytes.size() < offset)
+		{
+			bytes.resize(static_cast<std::size_t>(offset));
+		}
+		const auto oldSize = bytes.size();
+		const auto preparedByteSize = (*preparedShape)[0];
+		bytes.resize(oldSize + preparedByteSize);
+		std::optional<Tensor<CPU>> ownedCPU;
+		const void* sourceRaw = tensor.UnsafeRawData();
+		if (tensor.CurDevice().template As<CPU>() == nullptr)
+		{
+			ownedCPU = tensor.CopyToDevice(CPU{});
+			sourceRaw = ownedCPU->UnsafeRawData();
+		}
+		const auto* source = static_cast<const std::uint8_t*>(sourceRaw);
+		auto* target = reinterpret_cast<std::uint8_t*>(bytes.data() + oldSize);
+		for (std::size_t row = 0; row < rows; ++row)
+		{
+			for (std::size_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
+			{
+				const auto* sourceBlock = source + row * sourceRowBytes + blockIndex * layout->bytesPerBlock;
+				auto* targetBlock = target + row * preparedRowBytes + blockIndex * *preparedBlockBytes;
+				if (params.blockFormat == QuantizedBlockFormat::GGML_Q4_K)
+				{
+					PrepareGGMLQ4KBlockF32(sourceBlock, 1, targetBlock);
+				}
+				else
+				{
+					PrepareGGMLQ6KBlockF32(sourceBlock, 1, targetBlock);
+				}
+			}
+		}
+		return offset;
+	}
+
+	std::optional<std::size_t> TryGetVariableRefIndex(const Subgraph& subgraph, NodeOutput output)
+	{
+		if (output.port != 0 || output.node >= subgraph.NodeCount())
+		{
+			return std::nullopt;
+		}
+		const auto* variable = std::get_if<VariableRefNode>(&subgraph.GetNodeEntry(output.node).node);
+		return variable ? std::optional<std::size_t>{ variable->variableIndex } : std::nullopt;
+	}
+
+	std::vector<std::optional<QuantizationParams>> BuildCPUAOTPrepackedGGMLVariablePlans(const Graph& graph,
+	                                                                                     const CompilerOptions& options)
+	{
+		std::vector<std::optional<QuantizationParams>> plans(graph.VariableCount());
+		if (!options.enableCPUAOTGGMLPrepackedWeights)
+		{
+			return plans;
+		}
+
+		std::vector<std::size_t> variableRefCounts(graph.VariableCount());
+		std::vector<std::size_t> prepackUseCounts(graph.VariableCount());
+		std::vector<bool> rejected(graph.VariableCount());
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			for (const auto& entry : subgraph.Nodes())
+			{
+				if (const auto* variable = std::get_if<VariableRefNode>(&entry.node);
+				    variable && variable->variableIndex < variableRefCounts.size())
+				{
+					++variableRefCounts[variable->variableIndex];
+				}
+			}
+			for (const auto& entry : subgraph.Nodes())
+			{
+				if (const auto* matmul = std::get_if<QuantizedMatMulNode>(&entry.node))
+				{
+					if (!matmul->transposeRhs || !IsCPUAOTPrepackedGGMLFormat(matmul->params.blockFormat))
+					{
+						continue;
+					}
+					const auto variableIndex = TryGetVariableRefIndex(subgraph, matmul->rhsStorage);
+					if (!variableIndex || *variableIndex >= plans.size())
+					{
+						continue;
+					}
+					auto& plan = plans[*variableIndex];
+					if (plan && (plan->blockFormat != matmul->params.blockFormat ||
+					             plan->expressedShape != matmul->params.expressedShape))
+					{
+						rejected[*variableIndex] = true;
+						continue;
+					}
+					plan = matmul->params;
+					++prepackUseCounts[*variableIndex];
+				}
+			}
+		}
+
+		for (std::size_t i = 0; i < plans.size(); ++i)
+		{
+			if (!plans[i] || rejected[i] || variableRefCounts[i] != prepackUseCounts[i] ||
+			    !graph.GetVariable(i)->Quantization() || !GGMLPrepackedStorageShape(*plans[i]))
+			{
+				plans[i] = std::nullopt;
+			}
+		}
+		return plans;
+	}
+
 	struct CPUMLIRExternalizedGraph
 	{
 		Graph graph;
@@ -5279,12 +5449,19 @@ namespace
 		}
 
 		CPUMLIRExternalizedGraph result;
+		const auto prepackedVariablePlans = BuildCPUAOTPrepackedGGMLVariablePlans(graph, options);
 		std::uint64_t projectedWeightBytes = 0;
 		for (std::size_t variableIndex = 0; variableIndex < graph.VariableCount(); ++variableIndex)
 		{
 			const auto& data = graph.GetVariable(variableIndex)->Data();
+			const auto variableBytes =
+			    prepackedVariablePlans[variableIndex] &&
+			            GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex])
+			        ? static_cast<std::uint64_t>(
+			              (*GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex]))[0])
+			        : static_cast<std::uint64_t>(data.NumElements()) * ElementByteSize(data.DType());
 			projectedWeightBytes = AlignUpU64(projectedWeightBytes, 64);
-			projectedWeightBytes += static_cast<std::uint64_t>(data.NumElements()) * ElementByteSize(data.DType());
+			projectedWeightBytes += variableBytes;
 		}
 		if (projectedWeightBytes > std::numeric_limits<std::size_t>::max())
 		{
@@ -5338,17 +5515,33 @@ namespace
 					if (inserted)
 					{
 						constexpr std::uint64_t kAlignment = 64;
-						const auto offset =
-						    AppendTensorPayloadBytes(result.weights, graph.GetVariable(variable->variableIndex)->Data(),
-						                             output.dtype, output.shape, kAlignment);
+						const auto& variableData = graph.GetVariable(variable->variableIndex)->Data();
+						const auto& prepackedPlan = prepackedVariablePlans[variable->variableIndex];
+						const auto prepackedShape =
+						    prepackedPlan ? GGMLPrepackedStorageShape(*prepackedPlan) : std::nullopt;
+						const auto offset = prepackedPlan && prepackedShape
+						                        ? AppendGGMLPrepackedPayloadBytes(result.weights, variableData,
+						                                                          *prepackedPlan, kAlignment)
+						                        : AppendTensorPayloadBytes(result.weights, variableData, output.dtype,
+						                                                   output.shape, kAlignment);
 						if (!offset)
 						{
 							return std::nullopt;
 						}
 						it->second = result.externalTensorInfos.size();
+						const auto externalShape =
+						    prepackedShape
+						        ? std::span<const std::size_t>{ prepackedShape->data(), prepackedShape->size() }
+						        : std::span<const std::size_t>{ output.shape.data(), output.shape.size() };
+						const auto externalByteSize = prepackedShape
+						                                  ? static_cast<std::uint64_t>((*prepackedShape)[0])
+						                                  : TensorByteSizeForShape(output.dtype, output.shape);
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-						    name, kWeightsRegionName, output.dtype, result.weights, output.shape, *offset,
-						    TensorByteSizeForShape(output.dtype, output.shape), kAlignment));
+						    prepackedShape ? std::format("{}.prepacked.{}", name,
+						                                 QuantizedBlockFormatName(prepackedPlan->blockFormat))
+						                   : name,
+						    kWeightsRegionName, output.dtype, result.weights, externalShape, *offset, externalByteSize,
+						    kAlignment));
 					}
 					directExternalByNode[subgraphId][nodeId] = it->second;
 					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], it->second);
@@ -15626,6 +15819,7 @@ namespace
 			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
 			            .ggmlBlockMatMulAffinityPolicy = static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy),
 			            .enableGGMLQ8KStagedMatMul = options.enableCPUAOTGGMLQ8KStagedMatMul,
+			            .enableGGMLPrepackedWeights = options.enableCPUAOTGGMLPrepackedWeights,
 			        });
 			if (mlir::failed(pm.run(*module)))
 			{

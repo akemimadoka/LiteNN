@@ -40,6 +40,8 @@ namespace litenn
 	{
 		constexpr llvm::StringLiteral kApplyReluAttr = "litenn.apply_relu";
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulAttr = "litenn.ggml_block_quantized_matmul";
+		constexpr llvm::StringLiteral kGGMLBlockQuantizedMatMulPreparedLayoutAttr =
+		    "litenn.ggml_block_quantized_matmul_prepared_layout";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedQuantizedMatMulAttr =
 		    "litenn.ggml_block_grouped_quantized_matmul";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedQuantizedMatMulProjectionCountAttr =
@@ -66,6 +68,10 @@ namespace litenn
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulQ4KPrepackedHelper =
+		    "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulQ6KPrepackedHelper =
+		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
@@ -284,13 +290,39 @@ namespace litenn
 			auto dynamicRhsType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, rhsType.getElementType());
 			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                            outType.getElementType());
-			auto funcType = builder.getFunctionType(
-			    mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64, i64 }, mlir::TypeRange{});
 			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatAttr.getInt());
-			const auto helperName =
-			    options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K
-			        ? kGGMLBlockMatMulQ8KStagedHelper
-			        : kGGMLBlockMatMulHelper;
+			const auto hasPreparedLayout = op->hasAttr(kGGMLBlockQuantizedMatMulPreparedLayoutAttr);
+			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
+			if (hasPreparedLayout)
+			{
+				if (!options.enableGGMLPrepackedWeights)
+				{
+					return mlir::failure();
+				}
+				if (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
+				{
+					helperName = kGGMLBlockMatMulQ4KPrepackedHelper;
+				}
+				else if (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+				{
+					helperName = kGGMLBlockMatMulQ6KPrepackedHelper;
+				}
+				else
+				{
+					return mlir::failure();
+				}
+			}
+			else if (options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+			{
+				helperName = kGGMLBlockMatMulQ8KStagedHelper;
+			}
+			auto funcType = hasPreparedLayout
+			                    ? builder.getFunctionType(
+			                          mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64 },
+			                          mlir::TypeRange{})
+			                    : builder.getFunctionType(
+			                          mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64, i64 },
+			                          mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
 			if (!helper)
 			{
@@ -312,9 +344,17 @@ namespace litenn
 			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
 			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
-			builder.create<mlir::func::CallOp>(
-			    loc, helper,
-			    mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format, threadCount, affinityPolicy });
+			if (hasPreparedLayout)
+			{
+				builder.create<mlir::func::CallOp>(
+				    loc, helper, mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, threadCount, affinityPolicy });
+			}
+			else
+			{
+				builder.create<mlir::func::CallOp>(
+				    loc, helper,
+				    mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, format, threadCount, affinityPolicy });
+			}
 			op.erase();
 			return mlir::success();
 		}
