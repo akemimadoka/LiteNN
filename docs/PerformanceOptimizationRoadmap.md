@@ -149,10 +149,16 @@ Priority classes for the GGUF/Qwen decode work:
                       The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
                       repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML
                       block accumulation in `litenn_cpu_ggml_block_matmul_f32` with `x4` output grouping.
-                - [ ] Add Qwen-shaped packed-kernel benchmark rows for the exact top profile rows and require
-                      full-decode profile evidence before switching the default route. Acceptance target for this
-                      tranche: bring default stateful CPU AOT below `300 ms/generated token` on the local Qwen2.5 14B
-                      Q4_K_M control run without increasing residual/fallback share.
+                - [x] Add Qwen-shaped packed-kernel benchmark rows for the exact top profile rows and require
+                      full-decode profile evidence before switching the default route. Completed the benchmark-surface
+                      portion on 2026-07-06: grouped projection helper rows now use the full
+                      `T0/T1/T2/T4/T8/T16/T32` GGML thread matrix, so gate/up, hidden/output, KV, and logits rows can be
+                      compared around the low-thread region where the CPU-only llama.cpp control run peaks. Acceptance
+                      smoke: `GGMLGroupedProjectionHelper/Q4_K/qwen_gate_up/(separate|concatenated)/T2/T4/T8` executed
+                      successfully with `max_abs_delta=0` for concatenated rows.
+                      target for the actual packed-kernel tranche remains: bring default stateful CPU AOT below
+                      `300 ms/generated token` on the local Qwen2.5 14B Q4_K_M control run without increasing
+                      residual/fallback share.
           - [ ] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
                 The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
                 T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full

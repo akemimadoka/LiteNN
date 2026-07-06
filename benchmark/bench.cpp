@@ -115,7 +115,6 @@ namespace
 
 	constexpr std::array<std::size_t, 4> kBatchSizes = { 1, 32, 128, 512 };
 	constexpr std::array<int, 7> kGGMLThreadCounts = { 0, 1, 2, 4, 8, 16, 32 };
-	constexpr std::array<int, 4> kGGMLGroupedThreadCounts = { 0, 1, 16, 32 };
 	constexpr int kWarmupIterations = 5;
 	constexpr std::size_t kInputWidth = 784;
 	constexpr std::size_t kLoRAOutputWidth = 512;
@@ -3791,7 +3790,7 @@ namespace
 		}
 		for (const auto format : ggmlBlockFormats)
 		{
-			for (const auto threadCount : kGGMLGroupedThreadCounts)
+			for (const auto threadCount : kGGMLThreadCounts)
 			{
 				for (const auto shape : kGGMLGroupedProjectionBenchmarkSpecs)
 				{
