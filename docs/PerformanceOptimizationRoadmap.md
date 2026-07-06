@@ -145,6 +145,12 @@ Priority classes for the GGUF/Qwen decode work:
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.
+                      Progress on 2026-07-06: grouped Q8_K-staged helper wrappers and benchmark rows were added for
+                      two-/three-projection GGML helpers. A short Q4_K gate/up T8 smoke showed direct grouped output
+                      matches the separate-reference path (`max_abs_delta=0`) and is slightly faster than separate
+                      helper calls, while Q8_K-staged grouped rows remained slower and had about `1.36` max absolute
+                      delta. Keep staged grouped routing benchmark-only until packed kernels or step-level activation
+                      reuse make it win.
                 - [ ] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
                       The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
                       repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML

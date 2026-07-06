@@ -56,6 +56,46 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride, float*,
+    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t out0Columns, std::uint64_t out1Columns,
+    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride, float*,
+    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t out0Columns, std::uint64_t out1Columns,
+    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul3_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+    const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset, std::int64_t rhs2Bytes,
+    std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+    const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset, std::int64_t rhs2Bytes,
+    std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
 extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
     const float*, const float* dataAligned, std::int64_t dataOffset, std::int64_t dataDim0, std::int64_t dataDim1,
     std::int64_t dataDim2, std::int64_t dataStride0, std::int64_t dataStride1, std::int64_t dataStride2,
@@ -101,11 +141,32 @@ namespace
 		MLP512,
 	};
 
+	enum class GGMLGroupedProjectionMode
+	{
+		Separate,
+		Grouped,
+		Concatenated,
+	};
+
 	struct ModelSpec
 	{
 		std::string_view name;
 		Graph (*build)(std::size_t, std::mt19937&);
 	};
+
+	std::string_view GGMLGroupedProjectionModeName(GGMLGroupedProjectionMode mode)
+	{
+		switch (mode)
+		{
+		case GGMLGroupedProjectionMode::Separate:
+			return "separate";
+		case GGMLGroupedProjectionMode::Grouped:
+			return "grouped";
+		case GGMLGroupedProjectionMode::Concatenated:
+			return "concatenated";
+		}
+		throw std::invalid_argument("unsupported GGML grouped projection mode");
+	}
 
 	constexpr std::array<ModelKind, 3> kModelKinds = {
 		ModelKind::Linear,
@@ -1318,7 +1379,7 @@ namespace
 	void InvokeGGMLSeparateProjectionHelper(std::span<const std::vector<std::uint8_t>> rhsSegments,
 	                                        std::span<const std::size_t> outputWidths, QuantizedBlockFormat format,
 	                                        std::span<const float> lhs, std::size_t inputWidth,
-	                                        std::uint64_t threadCount, std::span<float> output)
+	                                        std::uint64_t threadCount, bool q8KStaged, std::span<float> output)
 	{
 		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
 		std::size_t outputOffset = 0;
@@ -1326,31 +1387,70 @@ namespace
 		{
 			const auto outputWidth = outputWidths[projection];
 			const auto& rhs = rhsSegments[projection];
-			litenn_cpu_ggml_block_matmul_f32(
-			    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
-			    1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(),
-			    static_cast<std::int64_t>(outputOffset), 1, static_cast<std::int64_t>(outputWidth),
-			    static_cast<std::int64_t>(totalOutputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
-			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			const auto invoke =
+			    q8KStaged ? litenn_cpu_ggml_block_matmul_q8k_staged_f32 : litenn_cpu_ggml_block_matmul_f32;
+			invoke(nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth),
+			       static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0,
+			       static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(),
+			       static_cast<std::int64_t>(outputOffset), 1, static_cast<std::int64_t>(outputWidth),
+			       static_cast<std::int64_t>(totalOutputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
+			       static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
 			outputOffset += outputWidth;
 		}
 	}
 
 	void InvokeGGMLConcatenatedProjectionHelper(std::span<const std::uint8_t> rhs, std::size_t outputWidth,
 	                                            QuantizedBlockFormat format, std::span<const float> lhs,
-	                                            std::size_t inputWidth, std::uint64_t threadCount,
+	                                            std::size_t inputWidth, std::uint64_t threadCount, bool q8KStaged,
 	                                            std::span<float> output)
 	{
-		litenn_cpu_ggml_block_matmul_f32(
-		    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1,
-		    nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(), 0, 1,
-		    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
-		    static_cast<std::uint64_t>(format), threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		const auto invoke = q8KStaged ? litenn_cpu_ggml_block_matmul_q8k_staged_f32 : litenn_cpu_ggml_block_matmul_f32;
+		invoke(nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+		       1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(), 0, 1,
+		       static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+		       static_cast<std::uint64_t>(format), threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+	}
+
+	void InvokeGGMLGroupedProjectionHelper(std::span<const std::vector<std::uint8_t>> rhsSegments,
+	                                       std::span<const std::size_t> outputWidths, QuantizedBlockFormat format,
+	                                       std::span<const float> lhs, std::size_t inputWidth,
+	                                       std::uint64_t threadCount, bool q8KStaged, std::span<float> output)
+	{
+		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
+		if (rhsSegments.size() == 2 && outputWidths.size() == 2)
+		{
+			const auto invoke = q8KStaged ? litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32
+			                              : litenn_cpu_ggml_block_grouped_matmul2_f32;
+			invoke(nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth),
+			       static_cast<std::int64_t>(inputWidth), 1, nullptr, rhsSegments[0].data(), 0,
+			       static_cast<std::int64_t>(rhsSegments[0].size()), 1, nullptr, rhsSegments[1].data(), 0,
+			       static_cast<std::int64_t>(rhsSegments[1].size()), 1, nullptr, output.data(), 0, 1,
+			       static_cast<std::int64_t>(totalOutputWidth), static_cast<std::int64_t>(totalOutputWidth), 1,
+			       static_cast<std::uint64_t>(format), outputWidths[0], outputWidths[1], threadCount,
+			       static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			return;
+		}
+		if (rhsSegments.size() == 3 && outputWidths.size() == 3)
+		{
+			const auto invoke = q8KStaged ? litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32
+			                              : litenn_cpu_ggml_block_grouped_matmul3_f32;
+			invoke(nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth),
+			       static_cast<std::int64_t>(inputWidth), 1, nullptr, rhsSegments[0].data(), 0,
+			       static_cast<std::int64_t>(rhsSegments[0].size()), 1, nullptr, rhsSegments[1].data(), 0,
+			       static_cast<std::int64_t>(rhsSegments[1].size()), 1, nullptr, rhsSegments[2].data(), 0,
+			       static_cast<std::int64_t>(rhsSegments[2].size()), 1, nullptr, output.data(), 0, 1,
+			       static_cast<std::int64_t>(totalOutputWidth), static_cast<std::int64_t>(totalOutputWidth), 1,
+			       static_cast<std::uint64_t>(format), outputWidths[0], outputWidths[1], outputWidths[2], threadCount,
+			       static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			return;
+		}
+		InvokeGGMLSeparateProjectionHelper(rhsSegments, outputWidths, format, lhs, inputWidth, threadCount, q8KStaged,
+		                                   output);
 	}
 
 	void BMGGMLGroupedProjectionHelper(benchmark::State& state, QuantizedBlockFormat format,
 	                                   const GGMLGroupedProjectionBenchmarkSpec& spec, std::uint64_t threadCount,
-	                                   bool concatenated)
+	                                   GGMLGroupedProjectionMode mode, bool q8KStaged)
 	{
 		const auto layout = GetQuantizedBlockLayout(format);
 		if (!layout)
@@ -1373,25 +1473,29 @@ namespace
 
 		std::vector<float> output(totalOutputWidth);
 		auto invoke = [&] {
-			if (concatenated)
+			if (mode == GGMLGroupedProjectionMode::Concatenated)
 			{
 				InvokeGGMLConcatenatedProjectionHelper(concatenatedRhs, totalOutputWidth, format, lhs, spec.inputWidth,
-				                                       threadCount, output);
+				                                       threadCount, q8KStaged, output);
+			}
+			else if (mode == GGMLGroupedProjectionMode::Grouped)
+			{
+				InvokeGGMLGroupedProjectionHelper(rhsSegments, outputWidths, format, lhs, spec.inputWidth, threadCount,
+				                                  q8KStaged, output);
 			}
 			else
 			{
 				InvokeGGMLSeparateProjectionHelper(rhsSegments, outputWidths, format, lhs, spec.inputWidth, threadCount,
-				                                   output);
+				                                   q8KStaged, output);
 			}
 		};
 
-		if (concatenated)
+		if (mode != GGMLGroupedProjectionMode::Separate || q8KStaged)
 		{
 			std::vector<float> separateReference(totalOutputWidth);
 			InvokeGGMLSeparateProjectionHelper(rhsSegments, outputWidths, format, lhs, spec.inputWidth, threadCount,
-			                                   separateReference);
-			InvokeGGMLConcatenatedProjectionHelper(concatenatedRhs, totalOutputWidth, format, lhs, spec.inputWidth,
-			                                       threadCount, output);
+			                                   false, separateReference);
+			invoke();
 			state.counters["max_abs_delta"] =
 			    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, separateReference)));
 		}
@@ -1409,9 +1513,12 @@ namespace
 			benchmark::ClobberMemory();
 		}
 
-		state.counters["concatenated"] = benchmark::Counter(concatenated ? 1.0 : 0.0);
+		state.counters["concatenated"] =
+		    benchmark::Counter(mode == GGMLGroupedProjectionMode::Concatenated ? 1.0 : 0.0);
+		state.counters["grouped"] = benchmark::Counter(mode == GGMLGroupedProjectionMode::Grouped ? 1.0 : 0.0);
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(totalOutputWidth));
 		state.counters["projection_count"] = benchmark::Counter(static_cast<double>(spec.projectionCount));
+		state.counters["q8k_staged"] = benchmark::Counter(q8KStaged ? 1.0 : 0.0);
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
@@ -3796,16 +3903,42 @@ namespace
 				{
 					const auto totalOutputWidth = TotalOutputWidth(
 					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
-					for (const auto concatenated : { false, true })
+					for (const auto mode : { GGMLGroupedProjectionMode::Separate, GGMLGroupedProjectionMode::Grouped,
+					                         GGMLGroupedProjectionMode::Concatenated })
 					{
 						auto* benchmarkCase = benchmark::RegisterBenchmark(
 						    std::format("GGMLGroupedProjectionHelper/{}/{}/{}/T{}/batch:1/in:{}/out:{}",
 						                GGMLBlockFormatBenchmarkName(format), shape.name,
-						                concatenated ? "concatenated" : "separate", threadCount, shape.inputWidth,
+						                GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
 						                totalOutputWidth),
 						    [=](benchmark::State& state) {
 							    BMGGMLGroupedProjectionHelper(state, format, shape,
-							                                  static_cast<std::uint64_t>(threadCount), concatenated);
+							                                  static_cast<std::uint64_t>(threadCount), mode, false);
+						    });
+						benchmarkCase->Unit(benchmark::kMillisecond);
+					}
+				}
+			}
+		}
+		for (const auto format : ggmlQ8KStagedBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				for (const auto shape : kGGMLGroupedProjectionBenchmarkSpecs)
+				{
+					const auto totalOutputWidth = TotalOutputWidth(
+					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
+					for (const auto mode : { GGMLGroupedProjectionMode::Separate, GGMLGroupedProjectionMode::Grouped,
+					                         GGMLGroupedProjectionMode::Concatenated })
+					{
+						auto* benchmarkCase = benchmark::RegisterBenchmark(
+						    std::format("GGMLGroupedProjectionQ8KStagedHelper/{}/{}/{}/T{}/batch:1/in:{}/out:{}",
+						                GGMLBlockFormatBenchmarkName(format), shape.name,
+						                GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
+						                totalOutputWidth),
+						    [=](benchmark::State& state) {
+							    BMGGMLGroupedProjectionHelper(state, format, shape,
+							                                  static_cast<std::uint64_t>(threadCount), mode, true);
 						    });
 						benchmarkCase->Unit(benchmark::kMillisecond);
 					}
