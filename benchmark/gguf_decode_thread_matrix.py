@@ -241,6 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-aot-cache-write", action="store_true")
     parser.add_argument("--llvm-opt-level", type=int, choices=(0, 1, 2, 3))
     parser.add_argument("--cpu-aot-affinity", choices=("none", "compact"))
+    parser.add_argument(
+        "--cpu-aot-q8k-staged-matmul",
+        action="store_true",
+        help="Forward Q8_K-staged GGML_Q6_K CPU AOT matmul opt-in to qwen_smoke.py",
+    )
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--profile-bundles", action="store_true")
@@ -289,6 +294,8 @@ def main() -> int:
             command.extend(["--llvm-opt-level", str(args.llvm_opt_level)])
         if args.cpu_aot_affinity is not None:
             command.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
+        if args.cpu_aot_q8k_staged_matmul:
+            command.append("--cpu-aot-q8k-staged-matmul")
         if thread_count > 0:
             command.extend(["--cpu-aot-threads", str(thread_count)])
         if args.stateful:
