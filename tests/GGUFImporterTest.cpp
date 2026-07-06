@@ -48,6 +48,21 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" std::uint64_t litenn_cpu_ggml_q4k_prepacked_block_bytes();
+
+extern "C" void litenn_cpu_ggml_prepack_q4k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
+                                                std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride,
+                                                std::int64_t rows, std::int64_t columns, std::uint8_t*,
+                                                std::uint8_t* packedAligned, std::int64_t packedOffset,
+                                                std::int64_t packedBytes, std::int64_t packedStride);
+
+extern "C" void litenn_cpu_ggml_block_matmul_q4k_prepacked_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q6k_prepacked_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepack_q6k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
@@ -1551,6 +1566,55 @@ TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActi
 		{
 			EXPECT_NEAR(staged[i], direct[i], 1.0e-4F);
 		}
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, Q4KPrepackedHelperMatchesDirectHelper)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 7;
+	constexpr std::size_t rows = 3;
+
+	std::vector<float> inputValues(rows * inFeatures);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.0625F;
+	}
+	std::vector<float> weightValues(outFeatures * inFeatures);
+	for (std::size_t i = 0; i < weightValues.size(); ++i)
+	{
+		weightValues[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+	}
+	const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+	const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K);
+	const auto& storage = quantizedWeight->Data();
+	const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+	const auto preparedBlockBytes = litenn_cpu_ggml_q4k_prepacked_block_bytes();
+	ASSERT_GT(preparedBlockBytes, 0u);
+	const auto blockCount = inFeatures / GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q4_K)->elementsPerBlock;
+	std::vector<std::uint8_t> packed(outFeatures * blockCount * preparedBlockBytes);
+	litenn_cpu_ggml_prepack_q4k_f32(nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
+	                                static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(inFeatures),
+	                                nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()), 1);
+
+	std::vector<float> direct(rows * outFeatures);
+	std::vector<float> prepacked(rows * outFeatures);
+	litenn_cpu_ggml_block_matmul_f32(nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows),
+	                                 static_cast<std::int64_t>(inFeatures), static_cast<std::int64_t>(inFeatures), 1,
+	                                 nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
+	                                 nullptr, direct.data(), 0, static_cast<std::int64_t>(rows),
+	                                 static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(outFeatures), 1,
+	                                 static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), 2,
+	                                 static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+	litenn_cpu_ggml_block_matmul_q4k_prepacked_f32(
+	    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+	    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()),
+	    1, nullptr, prepacked.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+	    static_cast<std::int64_t>(outFeatures), 1, 2, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+
+	for (std::size_t i = 0; i < direct.size(); ++i)
+	{
+		EXPECT_NEAR(prepacked[i], direct[i], 1.0e-4F);
 	}
 }
 

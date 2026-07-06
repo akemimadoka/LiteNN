@@ -152,6 +152,16 @@ Priority classes for the GGUF/Qwen decode work:
                       `GGUFLLaMAQuantizedExecution.Q6KPrepackedHelperMatchesDirectHelper`; `qwen_ffn_down/T1` improved
                       from about `32.2 ms` direct to `15.1 ms` prepacked, and `T8` improved from about `4.77 ms` to
                       `2.28 ms`, both with `max_abs_delta=0`.
+                      Progress on 2026-07-07: extended the sidecar family to Q4_K and renamed the benchmark surface to
+                      `GGMLBlockMatMulPrepackedHelper/{Q4_K,Q6_K}/...`, plus added
+                      `GGMLBlockMatMulPrepackWeight/...` rows to isolate one-time conversion cost. Validation passed
+                      `GGUFLLaMAQuantizedExecution.Q4KPrepackedHelperMatchesDirectHelper` and the existing Q6_K parity
+                      test. Short Qwen-shaped rows measured Q4_K `qwen_ffn_up/T1` from about `30.0 ms` direct to
+                      `22.7 ms` prepacked, and `T8` from about `3.94 ms` to `3.36 ms`; Q6_K `qwen_ffn_down/T1`
+                      remained about `33.4 ms` direct to `15.0 ms` prepacked, and `T8` about `4.68 ms` to `2.21 ms`,
+                      all with `max_abs_delta=0`. One-time prepack cost measured about `6.94 ms` for Q4_K
+                      `5120->13824` and `14.9 ms` for Q6_K `13824->5120`, reinforcing that prepared weights should be
+                      stored in the shared separated weight cache rather than regenerated per step.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

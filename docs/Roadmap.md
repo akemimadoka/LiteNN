@@ -2899,6 +2899,16 @@ Priority classes:
       `GGMLBlockMatMulHelper/Q6_K/qwen_ffn_down/T1` at about `49.9 ms` CPU and the matching `T16` row at about
       `4.58 ms` CPU, confirming Q6_K still needs the higher-priority Q8_K/vec-dot replacement for single-thread
       latency.
+- [x] P0: Add benchmark-only prepared-weight sidecars for Q4_K/Q6_K projection helpers:
+      completed on 2026-07-07 as evidence for the production packed-weight tranche without switching the default AOT
+      route. The new C ABI prepares output-major Q4_K/Q6_K blocks into float scale metadata plus expanded quant lanes,
+      validates with `GGUFLLaMAQuantizedExecution.Q4KPrepackedHelperMatchesDirectHelper` and
+      `Q6KPrepackedHelperMatchesDirectHelper`, and exposes
+      `GGMLBlockMatMulPrepackedHelper/{Q4_K,Q6_K}/...` plus `GGMLBlockMatMulPrepackWeight/...` benchmark rows. Short
+      Qwen-shaped rows measured Q4_K `qwen_ffn_up/T1` from about `30.0 ms` direct to `22.7 ms` prepacked and Q6_K
+      `qwen_ffn_down/T1` from about `33.4 ms` direct to `15.0 ms` prepacked, both with `max_abs_delta=0`; prepack-only
+      rows measured about `6.94 ms` for Q4_K `5120->13824` and `14.9 ms` for Q6_K `13824->5120`, so production routing
+      should cache prepared weights in the separated shared weight store.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
