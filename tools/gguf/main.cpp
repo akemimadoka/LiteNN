@@ -1273,6 +1273,8 @@ namespace
 		return hash;
 	}
 
+	constexpr std::string_view kCPUAOTGGMLPrepackedLayout = "expanded_f32_scales_v1";
+
 	std::optional<std::filesystem::path>
 	DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
 	                   const LiteNN::CompilerOptions& options, std::string_view decodeMode,
@@ -1291,13 +1293,14 @@ namespace
 		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v5|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
-		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|"
+		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}|"
 		    "paged_resident_pages={}",
 		    decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
 		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
 		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
-		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy), residentPagesText);
+		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy), kCPUAOTGGMLPrepackedLayout,
+		    residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -1313,11 +1316,12 @@ namespace
 		std::error_code ec;
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
-		const auto keyText =
-		    std::format("gguf-shared-weights-v2|{}|{}|{}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}",
-		                std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
-		                options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
-		                static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy));
+		const auto keyText = std::format("gguf-shared-weights-v2|{}|{}|{}|ggml_prepacked_weights={}|"
+		                                 "ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}",
+		                                 std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
+		                                 options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
+		                                 static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
+		                                 kCPUAOTGGMLPrepackedLayout);
 		return std::filesystem::path(root) / "_weights" / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
 	}
 

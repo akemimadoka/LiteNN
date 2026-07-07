@@ -88,7 +88,8 @@ def litenn_row(path: Path) -> dict[str, object]:
             f"aff={cpu_aot_options.get('affinity', 'default')},"
             f"q8k={int(bool(cpu_aot_options.get('q8k_staged_matmul', False)))},"
             f"prepack={int(bool(cpu_aot_options.get('ggml_prepacked_weights', False)))},"
-            f"prepack_policy={cpu_aot_options.get('ggml_prepacked_weight_policy', 'default')}"
+            f"prepack_policy={cpu_aot_options.get('ggml_prepacked_weight_policy', 'default')},"
+            f"prepack_layout={cpu_aot_options.get('ggml_prepacked_layout', 'legacy')}"
         )
     return {
         "implementation": "LiteNN",

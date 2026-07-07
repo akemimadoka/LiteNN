@@ -232,6 +232,10 @@ Priority classes for the GGUF/Qwen decode work:
                       instead of accepting any marker attribute, and separated weight names include
                       `.prepacked.expanded_f32_scales_v1.<format>`. This gives compact/v3 repacks an explicit ABI split
                       point and prevents future layout/helper mismatches from being diagnosed only by byte size.
+                      Cache/report isolation slice completed on 2026-07-08: GGUF decode AOT cache keys, shared-weight
+                      cache keys, `qwen_smoke.py` reports, `gguf_decode_compare.py` config labels, and
+                      `gguf_decode_thread_matrix.py` Markdown rows now carry the prepared layout token. Compact/v3 can
+                      therefore be benchmarked without silently reusing expanded-v1 shared weights or mixing result rows.
                 - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
                       This should store interleaved/repacked blocks rather than expanding every block into float scale
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF

@@ -736,6 +736,7 @@ def main() -> int:
             "q8k_staged_matmul": args.cpu_aot_q8k_staged_matmul,
             "ggml_prepacked_weights": args.cpu_aot_ggml_prepacked_weights,
             "ggml_prepacked_weight_policy": args.cpu_aot_ggml_prepacked_weight_policy,
+            "ggml_prepacked_layout": "expanded_f32_scales_v1",
             "compile_diagnostics": not args.no_compile_diagnostics,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),

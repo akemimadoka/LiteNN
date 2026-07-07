@@ -2959,6 +2959,8 @@ Priority classes:
       Layout-tagging slice completed on 2026-07-08: prepared layout markers are now integer ids, LLVM lowering rejects
       unknown ids, and separated weight names include `.prepacked.expanded_f32_scales_v1.<format>`. This gives compact
       v3 repacks an explicit ABI split point before new layouts are introduced.
+      Cache/report isolation slice completed on 2026-07-08: GGUF decode AOT cache keys, shared-weight cache keys,
+      qwen-smoke reports, decode comparison labels, and thread-matrix rows now include the prepared layout token.
 - [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.

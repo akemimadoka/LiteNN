@@ -105,12 +105,15 @@ def summarize_report(
     analyze_text = step_text(report, "analyze")
     cpu_aot_options = report.get("cpu_aot_options")
     report_policy = None
+    report_layout = None
     if isinstance(cpu_aot_options, dict):
         report_policy = cpu_aot_options.get("ggml_prepacked_weight_policy")
+        report_layout = cpu_aot_options.get("ggml_prepacked_layout")
     return {
         "threadCount": thread_count,
         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
         "prepackedWeightPolicy": report_policy if report_policy is not None else (prepacked_weight_policy or "default"),
+        "prepackedLayout": report_layout or "legacy",
         "returncode": returncode,
         "decodeMode": report.get("decode_mode"),
         "backendPolicy": report.get("backend_policy"),
@@ -201,8 +204,8 @@ def write_outputs(
     lines = [
         "# GGUF Decode Thread Matrix",
         "",
-        "| Policy | Threads | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
-        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Policy | Layout | Threads | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
+        "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in rows:
         def value(key: str) -> str:
@@ -218,6 +221,7 @@ def write_outputs(
             + " | ".join(
                 [
                     value("prepackedWeightPolicy"),
+                    value("prepackedLayout"),
                     value("threadLabel"),
                     value("returncode"),
                     value("decodeMode"),
@@ -373,6 +377,7 @@ def main() -> int:
                         "threadCount": thread_count,
                         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
                         "prepackedWeightPolicy": policy_label,
+                        "prepackedLayout": "expanded_f32_scales_v1",
                     }
                 )
                 continue
