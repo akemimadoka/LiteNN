@@ -67,14 +67,14 @@ def read_text(path: Path | None) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def first_float(pattern: re.Pattern[str], text: str) -> float | None:
-    match = pattern.search(text)
-    return float(match.group("value")) if match is not None else None
+def last_float(pattern: re.Pattern[str], text: str) -> float | None:
+    matches = list(pattern.finditer(text))
+    return float(matches[-1].group("value")) if matches else None
 
 
-def first_int(pattern: re.Pattern[str], text: str) -> int | None:
-    match = pattern.search(text)
-    return int(match.group("value")) if match is not None else None
+def last_int(pattern: re.Pattern[str], text: str) -> int | None:
+    matches = list(pattern.finditer(text))
+    return int(matches[-1].group("value")) if matches else None
 
 
 def load_report(path: Path) -> dict[str, object]:
@@ -115,14 +115,14 @@ def summarize_report(
         "decodeMode": report.get("decode_mode"),
         "backendPolicy": report.get("backend_policy"),
         "maxCacheLength": report.get("max_cache_length"),
-        "runMs": first_float(RUN_MS_RE, decode_text),
-        "buildMs": first_float(BUILD_MS_RE, decode_text + "\n" + analyze_text),
-        "generatedTokens": first_int(GENERATED_TOKENS_RE, decode_text),
-        "msPerGeneratedToken": first_float(MS_PER_GENERATED_TOKEN_RE, decode_text),
-        "generatedTokensPerSecond": first_float(TOKENS_PER_SECOND_RE, decode_text),
-        "promptReplayMs": first_float(PROMPT_REPLAY_MS_RE, decode_text),
-        "generationMs": first_float(GENERATION_MS_RE, decode_text),
-        "fallbackCount": first_int(FALLBACK_COUNT_RE, decode_text),
+        "runMs": last_float(RUN_MS_RE, decode_text),
+        "buildMs": last_float(BUILD_MS_RE, decode_text + "\n" + analyze_text),
+        "generatedTokens": last_int(GENERATED_TOKENS_RE, decode_text),
+        "msPerGeneratedToken": last_float(MS_PER_GENERATED_TOKEN_RE, decode_text),
+        "generatedTokensPerSecond": last_float(TOKENS_PER_SECOND_RE, decode_text),
+        "promptReplayMs": last_float(PROMPT_REPLAY_MS_RE, decode_text),
+        "generationMs": last_float(GENERATION_MS_RE, decode_text),
+        "fallbackCount": last_int(FALLBACK_COUNT_RE, decode_text),
         "report": str(report_path),
         "trace": report.get("trace"),
         "waterfall": report.get("waterfall"),
