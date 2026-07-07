@@ -2971,6 +2971,10 @@ Priority classes:
       `litenn_cpu_ggml_block_grouped_matmul{2,3}_q8k_staged_f32` for non-prepacked GGML_Q6_K grouped projections when
       `enableCPUAOTGGMLQ8KStagedMatMul` is enabled, with both 2-way and 3-way groups covered by
       `GGUFLLaMAQuantizedExecution.CompilesGroupedQ6KProjectionToQ8KStagedHelper`.
+      Kernel slice completed on 2026-07-08: Q6_K x Q8_K AVX2 now has an all-valid x4 output-column fast path for
+      common no-tail decode rows. Short aggregate smokes measured `qwen_gate_up/grouped/T8` staged at about `6.72 ms`
+      mean versus `15.8 ms` direct grouped, and `qwen_qkv/grouped/T8` staged at about `1.85 ms` mean versus `4.02 ms`
+      direct grouped.
 - [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before

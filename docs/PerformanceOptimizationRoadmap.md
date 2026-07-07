@@ -252,6 +252,10 @@ Priority classes for the GGUF/Qwen decode work:
                       `enableCPUAOTGGMLQ8KStagedMatMul` is enabled. Validation is covered by
                       `GGUFLLaMAQuantizedExecution.CompilesGroupedQ6KProjectionToQ8KStagedHelper`, including both
                       2-way gate/up-style and 3-way QKV-style groups.
+                      Kernel slice completed on 2026-07-08: added a Q6_K x Q8_K AVX2 all-valid x4 output-column
+                      fast path for the common no-tail decode rows. Short aggregate smokes measured Q6_K
+                      `qwen_gate_up/grouped/T8` staged at `6.72 ms` mean versus `15.8 ms` direct grouped, and
+                      `qwen_qkv/grouped/T8` staged at `1.85 ms` mean versus `4.02 ms` direct grouped.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
