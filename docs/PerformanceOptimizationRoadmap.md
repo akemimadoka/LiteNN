@@ -227,6 +227,16 @@ Priority classes for the GGUF/Qwen decode work:
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
                       already lost on production-shaped rows without compact repack + vec-dot kernels.
+                      First implementation slice completed on 2026-07-08: added the C ABI
+                      `litenn_cpu_ggml_prepare_q8k_activation_f32`,
+                      `litenn_cpu_ggml_q8k_activation_block_bytes`, and
+                      `litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32`, plus
+                      `GGMLBlockMatMulQ8KPreparedActivationHelper/...` benchmark rows. The new helper consumes a
+                      caller-provided Q8_K activation workspace and matches the internal staged helper for Q4_K/Q5_K/Q6_K
+                      in `GGUFLLaMAQuantizedExecution.Q8KPreparedActivationHelperMatchesInternalStaging`. A short
+                      Q6_K `qwen_ffn_down/T8` smoke measured about `6.90 ms` real for prepared activation versus
+                      `8.14 ms` for internal per-helper staging, showing the reuse path is worth wiring into graph/AOT
+                      lowering once compact vec-dot kernels land.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
@@ -244,6 +254,9 @@ Priority classes for the GGUF/Qwen decode work:
                       helper calls, while Q8_K-staged grouped rows remained slower and had about `1.36` max absolute
                       delta. Keep staged grouped routing benchmark-only until packed kernels or step-level activation
                       reuse make it win.
+                      Progress on 2026-07-08: the first reusable-activation ABI landed for non-grouped helpers, so this
+                      item is now blocked on graph/AOT ownership of the staged workspace rather than raw helper
+                      availability.
                 - [ ] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
                       The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
                       repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML

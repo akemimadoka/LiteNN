@@ -56,6 +56,23 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_staged_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes();
+
+extern "C" void litenn_cpu_ggml_prepare_q8k_activation_f32(const float*, const float* lhsAligned,
+                                                           std::int64_t lhsOffset, std::int64_t lhsRows,
+                                                           std::int64_t lhsColumns, std::int64_t lhsRowStride,
+                                                           std::int64_t lhsColumnStride, std::uint8_t*,
+                                                           std::uint8_t* stagedAligned, std::int64_t stagedOffset,
+                                                           std::int64_t stagedBytes, std::int64_t stagedStride);
+
+extern "C" void litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32(
+    const std::uint8_t*, const std::uint8_t* lhsQ8KAligned, std::int64_t lhsQ8KOffset, std::int64_t lhsQ8KBytes,
+    std::int64_t lhsQ8KStride, std::int64_t lhsRows, std::int64_t lhsColumns, const std::uint8_t*,
+    const std::uint8_t* rhsAligned, std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*,
+    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q4k_prepacked_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepack_q4k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
@@ -1434,6 +1451,66 @@ namespace
 		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 		state.counters["q8k_staged"] = benchmark::Counter(q8KStaged ? 1.0 : 0.0);
+	}
+
+	void BMGGMLBlockMatMulPreparedQ8KActivationHelper(benchmark::State& state, QuantizedBlockFormat format,
+	                                                  std::size_t batch, std::size_t inputWidth,
+	                                                  std::size_t outputWidth, std::uint64_t threadCount)
+	{
+		const auto layout = GetQuantizedBlockLayout(format);
+		const auto activationBlockBytes = litenn_cpu_ggml_q8k_activation_block_bytes();
+		if (!layout || activationBlockBytes == 0 || inputWidth % layout->elementsPerBlock != 0)
+		{
+			state.SkipWithError("unsupported GGML Q8_K prepared activation benchmark shape");
+			return;
+		}
+		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
+		auto lhs = MakeInputData(batch * inputWidth);
+		std::vector<float> internalReference(batch * outputWidth);
+		std::vector<float> output(batch * outputWidth);
+		const auto blockCount = inputWidth / layout->elementsPerBlock;
+		std::vector<std::uint8_t> stagedActivation(batch * blockCount * activationBlockBytes);
+
+		litenn_cpu_ggml_prepare_q8k_activation_f32(
+		    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+		    static_cast<std::int64_t>(inputWidth), 1, nullptr, stagedActivation.data(), 0,
+		    static_cast<std::int64_t>(stagedActivation.size()), 1);
+		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+		    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+		    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1,
+		    nullptr, internalReference.data(), 0, static_cast<std::int64_t>(batch),
+		    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+		    static_cast<std::uint64_t>(format), threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		const auto invokePrepared = [&] {
+			litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32(
+			    nullptr, stagedActivation.data(), 0, static_cast<std::int64_t>(stagedActivation.size()), 1,
+			    static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth), nullptr, rhs.data(), 0,
+			    static_cast<std::int64_t>(rhs.size()), 1, nullptr, output.data(), 0, static_cast<std::int64_t>(batch),
+			    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+			    static_cast<std::uint64_t>(format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+		invokePrepared();
+		state.counters["max_abs_delta"] =
+		    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, internalReference)));
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invokePrepared();
+			benchmark::DoNotOptimize(output.data());
+		}
+
+		for (auto _ : state)
+		{
+			invokePrepared();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["output_columns"] = benchmark::Counter(static_cast<double>(outputWidth));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+		state.counters["q8k_prepared_activation"] = benchmark::Counter(1.0);
+		state.counters["activation_bytes"] = benchmark::Counter(static_cast<double>(stagedActivation.size()));
 	}
 
 	using GGMLPrepackFn = void (*)(const std::uint8_t*, const std::uint8_t*, std::int64_t, std::int64_t, std::int64_t,
@@ -4261,6 +4338,25 @@ namespace
 					    [=](benchmark::State& state) {
 						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
 						                            static_cast<std::uint64_t>(threadCount), true);
+					    });
+					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
+			}
+		}
+		for (const auto format : ggmlQ8KStagedBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				for (const auto shape : kGGMLProjectionBenchmarkSpecs)
+				{
+					auto* benchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("GGMLBlockMatMulQ8KPreparedActivationHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
+					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+					                shape.outputWidth),
+					    [=](benchmark::State& state) {
+						    BMGGMLBlockMatMulPreparedQ8KActivationHelper(state, format, 1, shape.inputWidth,
+						                                                 shape.outputWidth,
+						                                                 static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}

@@ -2957,6 +2957,11 @@ Priority classes:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot
       kernels and validated on full decode.
+      First slice completed on 2026-07-08: added an explicit reusable Q8_K activation C ABI
+      (`litenn_cpu_ggml_prepare_q8k_activation_f32`,
+      `litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32`) plus parity coverage and benchmark rows. The new path
+      matches internal staging for Q4_K/Q5_K/Q6_K and gives the graph/AOT lowering a concrete workspace target for the
+      next slice.
 - [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before
