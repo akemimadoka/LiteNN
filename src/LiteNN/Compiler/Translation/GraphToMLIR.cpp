@@ -173,6 +173,8 @@ namespace litenn
 			}
 		}
 
+		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
+
 		// Extract tensor data to DenseElementsAttr
 		DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<PolymorphicDevice>& tensor)
 		{
@@ -1307,7 +1309,7 @@ namespace litenn
 						if (usesPreparedLayout)
 						{
 							generic->setAttr("litenn.ggml_block_quantized_matmul_prepared_layout",
-							                 builder_.getUnitAttr());
+							                 builder_.getI64IntegerAttr(kGGMLPreparedLayoutExpandedF32ScalesV1));
 						}
 						valueMap[nodeId] = { generic.getResult(0) };
 						return;
@@ -1863,7 +1865,7 @@ namespace litenn
 				if (usesPreparedLayout.value_or(false))
 				{
 					generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_prepared_layout",
-					                 builder_.getUnitAttr());
+					                 builder_.getI64IntegerAttr(kGGMLPreparedLayoutExpandedF32ScalesV1));
 				}
 				for (std::size_t i = 0; i < node.outputWidths.size(); ++i)
 				{

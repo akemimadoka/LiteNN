@@ -2956,6 +2956,9 @@ Priority classes:
       helper smokes measured grouped gate/up at about `3.67 ms` for Q4_K and `4.23 ms` for Q6_K. This improves the
       current expanded prepared layout, but does not close the compact-layout requirement because shared prepared
       weights are still much larger than raw GGUF.
+      Layout-tagging slice completed on 2026-07-08: prepared layout markers are now integer ids, LLVM lowering rejects
+      unknown ids, and separated weight names include `.prepacked.expanded_f32_scales_v1.<format>`. This gives compact
+      v3 repacks an explicit ABI split point before new layouts are introduced.
 - [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.

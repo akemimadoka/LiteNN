@@ -90,6 +90,7 @@ namespace litenn
 		    "litenn_cpu_ggml_block_grouped_matmul3_q6k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
+		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
 
 		bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
 		{
@@ -312,11 +313,16 @@ namespace litenn
 			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                            outType.getElementType());
 			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatAttr.getInt());
-			const auto hasPreparedLayout = op->hasAttr(kGGMLBlockQuantizedMatMulPreparedLayoutAttr);
+			auto preparedLayoutAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedMatMulPreparedLayoutAttr);
+			const auto hasPreparedLayout = preparedLayoutAttr != nullptr;
 			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
 			if (hasPreparedLayout)
 			{
 				if (!options.enableGGMLPrepackedWeights)
+				{
+					return mlir::failure();
+				}
+				if (preparedLayoutAttr.getInt() != kGGMLPreparedLayoutExpandedF32ScalesV1)
 				{
 					return mlir::failure();
 				}
@@ -453,11 +459,17 @@ namespace litenn
 			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                            outType.getElementType());
 			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatAttr.getInt());
-			const auto hasPreparedLayout = op->hasAttr(kGGMLBlockGroupedQuantizedMatMulPreparedLayoutAttr);
+			auto preparedLayoutAttr =
+			    op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockGroupedQuantizedMatMulPreparedLayoutAttr);
+			const auto hasPreparedLayout = preparedLayoutAttr != nullptr;
 			llvm::StringRef helperName;
 			if (hasPreparedLayout)
 			{
 				if (!options.enableGGMLPrepackedWeights)
+				{
+					return mlir::failure();
+				}
+				if (preparedLayoutAttr.getInt() != kGGMLPreparedLayoutExpandedF32ScalesV1)
 				{
 					return mlir::failure();
 				}

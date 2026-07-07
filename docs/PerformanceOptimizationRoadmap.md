@@ -227,6 +227,11 @@ Priority classes for the GGUF/Qwen decode work:
                       expected float-ordering range (`~3.7e-4` to `~1.6e-3`). This improves the current expanded
                       prepared layout but does not close the compact-layout requirement; v3 repack still needs to keep
                       shared weight size near raw GGUF size.
+                      Layout-tagging slice completed on 2026-07-08: GraphToMLIR now emits an integer prepared-layout
+                      id for the current expanded-F32-scale layout, LLVM lowering rejects unknown prepared layout ids
+                      instead of accepting any marker attribute, and separated weight names include
+                      `.prepacked.expanded_f32_scales_v1.<format>`. This gives compact/v3 repacks an explicit ABI split
+                      point and prevents future layout/helper mismatches from being diagnosed only by byte size.
                 - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
                       This should store interleaved/repacked blocks rather than expanding every block into float scale
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF

@@ -1494,7 +1494,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutM
 			EXPECT_TRUE(ByteSpanContains(prepackedArtifact.Instructions(), expectedHelper));
 			const auto externalInfos = prepackedArtifact.ExternalTensorInfos();
 			EXPECT_TRUE(std::ranges::any_of(externalInfos, [&](const auto& info) {
-				return info.region == "weights" && info.name.find(".prepacked.") != std::string::npos &&
+				return info.region == "weights" &&
+				       info.name.find(".prepacked.expanded_f32_scales_v1.") != std::string::npos &&
 				       info.byteSize > quantizedWeight->Data().NumElements();
 			}));
 			auto prepackedCompiled = prepackedArtifact.Load();
@@ -1524,9 +1525,9 @@ TEST(GGUFLLaMAQuantizedExecution, CPUAOTPrepackedWeightPolicyRoutesOnlyProfitabl
 	constexpr std::size_t rows = 2;
 	const std::array cases = {
 		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight", false,
-		            "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32", ".prepacked.GGML_Q4_K" },
+		            "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32", ".prepacked.expanded_f32_scales_v1.GGML_Q4_K" },
 		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight", true,
-		            "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32", ".prepacked.GGML_Q6_K" },
+		            "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32", ".prepacked.expanded_f32_scales_v1.GGML_Q6_K" },
 	};
 
 	for (const auto& [ggmlType, blockFormat, name, shouldPrepack, prepackedHelper, prepackedName] : cases)
@@ -1698,7 +1699,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	    ByteSpanContains(prepackedArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_q4k_prepacked_f32"));
 	const auto externalInfos = prepackedArtifact.ExternalTensorInfos();
 	const auto prepackedWeightCount = std::ranges::count_if(externalInfos, [](const auto& info) {
-		return info.region == "weights" && info.name.find(".prepacked.GGML_Q4_K") != std::string::npos;
+		return info.region == "weights" &&
+		       info.name.find(".prepacked.expanded_f32_scales_v1.GGML_Q4_K") != std::string::npos;
 	});
 	EXPECT_EQ(prepackedWeightCount, outFeatures.size());
 	auto prepackedCompiled = prepackedArtifact.Load();

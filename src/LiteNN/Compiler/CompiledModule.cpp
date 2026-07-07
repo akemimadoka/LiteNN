@@ -5799,6 +5799,8 @@ namespace
 		}
 	}
 
+	constexpr std::string_view kGGMLPrepackedExpandedF32ScalesV1Name = "expanded_f32_scales_v1";
+
 	std::optional<std::vector<std::size_t>> GGMLPrepackedStorageShape(const QuantizationParams& params)
 	{
 		if (params.scheme != QuantizationScheme::Block || !IsCPUAOTPrepackedGGMLFormat(params.blockFormat) ||
@@ -6383,9 +6385,10 @@ namespace
 						                                  ? static_cast<std::uint64_t>((*prepackedShape)[0])
 						                                  : TensorByteSizeForShape(output.dtype, output.shape);
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
-						    prepackedShape ? std::format("{}.prepacked.{}", name,
-						                                 QuantizedBlockFormatName(prepackedPlan->blockFormat))
-						                   : name,
+						    prepackedShape
+						        ? std::format("{}.prepacked.{}.{}", name, kGGMLPrepackedExpandedF32ScalesV1Name,
+						                      QuantizedBlockFormatName(prepackedPlan->blockFormat))
+						        : name,
 						    kWeightsRegionName, output.dtype, result.weights, externalShape, *offset, externalByteSize,
 						    kAlignment));
 					}
