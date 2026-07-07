@@ -76,6 +76,10 @@ namespace litenn
 		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q8KStagedHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Q8KStagedHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q4KPrepackedHelper =
 		    "litenn_cpu_ggml_block_grouped_matmul2_q4k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q6KPrepackedHelper =
@@ -473,7 +477,20 @@ namespace litenn
 			}
 			else
 			{
-				helperName = projectionCount == 2 ? kGGMLBlockGroupedMatMul2Helper : kGGMLBlockGroupedMatMul3Helper;
+				const auto enableQ8KStaged =
+				    options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K;
+				if (enableQ8KStaged && projectionCount == 2)
+				{
+					helperName = kGGMLBlockGroupedMatMul2Q8KStagedHelper;
+				}
+				else if (enableQ8KStaged && projectionCount == 3)
+				{
+					helperName = kGGMLBlockGroupedMatMul3Q8KStagedHelper;
+				}
+				else
+				{
+					helperName = projectionCount == 2 ? kGGMLBlockGroupedMatMul2Helper : kGGMLBlockGroupedMatMul3Helper;
+				}
 			}
 			llvm::SmallVector<mlir::Type> argTypes;
 			argTypes.push_back(dynamicLhsType);

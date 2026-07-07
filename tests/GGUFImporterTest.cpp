@@ -1708,6 +1708,98 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ6KProjectionToQ8KStagedHelper)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t rows = 2;
+	const std::array<std::size_t, 2> twoWay{ 3, 5 };
+	const std::array<std::size_t, 3> threeWay{ 2, 1, 3 };
+
+	const auto runCase = [&](std::span<const std::size_t> outFeatures, std::string_view expectedHelper) {
+		SCOPED_TRACE(expectedHelper);
+		Graph graph;
+		std::vector<Layer::LinearLayer> layers(outFeatures.size());
+		std::vector<Tensor<CPU>> dequantizedWeights;
+		dequantizedWeights.reserve(outFeatures.size());
+		for (std::size_t projection = 0; projection < outFeatures.size(); ++projection)
+		{
+			std::vector<float> weightValues(outFeatures[projection] * inFeatures);
+			for (std::size_t i = 0; i < weightValues.size(); ++i)
+			{
+				weightValues[i] = static_cast<float>(static_cast<int>((i + projection * 11) % 29) - 14) *
+				                  (0.03125F + projection * 0.005F);
+			}
+			const auto plainWeight =
+			    Variable::Create(MakeFloatTensor(weightValues, { outFeatures[projection], inFeatures }));
+			const auto quantizedWeight =
+			    QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K);
+			dequantizedWeights.push_back(GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "grouped_q6_k.weight"));
+			const auto weightVariable = graph.AddVariable(quantizedWeight);
+			layers[projection] = Layer::LinearLayer{
+				.weightVariable = weightVariable,
+				.inFeatures = inFeatures,
+				.outFeatures = outFeatures[projection],
+				.dtype = DataType::Float32,
+				.weightQuantization = *quantizedWeight->Quantization(),
+				.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+				.transposeWeight = true,
+			};
+		}
+
+		Subgraph forward;
+		const auto inputNode = forward.AddParam(DataType::Float32, { rows, inFeatures });
+		const auto outputs = Layer::AddLinearProjectionGroup(forward, layers, { inputNode, 0 });
+		forward.SetResults(outputs);
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+
+		std::vector<float> inputValues(rows * inFeatures);
+		for (std::size_t i = 0; i < inputValues.size(); ++i)
+		{
+			inputValues[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.0625F;
+		}
+		std::array<Tensor<CPU>, 1> inputs = { MakeFloatTensor(inputValues, { rows, inFeatures }) };
+		std::vector<Tensor<CPU>> expected;
+		expected.reserve(outFeatures.size());
+		for (const auto width : outFeatures)
+		{
+			expected.emplace_back(Uninitialized, ShapeView{ rows, width }, DataType::Float32);
+		}
+		for (std::size_t projection = 0; projection < outFeatures.size(); ++projection)
+		{
+			const auto* weightData = static_cast<const float*>(dequantizedWeights[projection].UnsafeRawData());
+			auto* expectedData = static_cast<float*>(expected[projection].UnsafeRawData());
+			for (std::size_t row = 0; row < rows; ++row)
+			{
+				for (std::size_t column = 0; column < outFeatures[projection]; ++column)
+				{
+					float sum = 0.0F;
+					for (std::size_t reduction = 0; reduction < inFeatures; ++reduction)
+					{
+						sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
+					}
+					expectedData[row * outFeatures[projection] + column] = sum;
+				}
+			}
+		}
+
+		CompilerOptions options;
+		options.enableCPUAOTGGMLQ8KStagedMatMul = true;
+		options.cpuAOTThreadCount = 2;
+		const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+		EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), expectedHelper));
+		const auto compiled = artifact.Load();
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), expected.size());
+		for (std::size_t i = 0; i < expected.size(); ++i)
+		{
+			ExpectTensorNear(actual[i], expected[i], { .absolute = 4.0e-3, .relative = 1.0e-5 });
+		}
+	};
+
+	runCase(twoWay, "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32");
+	runCase(threeWay, "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32");
+}
+
 TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
 {
 	constexpr std::size_t inFeatures = 256;

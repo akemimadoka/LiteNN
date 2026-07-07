@@ -246,6 +246,12 @@ Priority classes for the GGUF/Qwen decode work:
                       which confirms the already-grouped helper only stages lhs once; the high-return work is now
                       eliminating any remaining separate-projection fallback and replacing the current dot loop with
                       compact llama.cpp-class vec-dot kernels.
+                      AOT-visible slice completed on 2026-07-08: LLVM lowering now routes non-prepacked grouped
+                      GGML_Q6_K projection groups to
+                      `litenn_cpu_ggml_block_grouped_matmul{2,3}_q8k_staged_f32` when
+                      `enableCPUAOTGGMLQ8KStagedMatMul` is enabled. Validation is covered by
+                      `GGUFLLaMAQuantizedExecution.CompilesGroupedQ6KProjectionToQ8KStagedHelper`, including both
+                      2-way gate/up-style and 3-way QKV-style groups.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
