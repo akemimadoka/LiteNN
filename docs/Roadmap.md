@@ -2962,6 +2962,11 @@ Priority classes:
       `litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32`) plus parity coverage and benchmark rows. The new path
       matches internal staging for Q4_K/Q5_K/Q6_K and gives the graph/AOT lowering a concrete workspace target for the
       next slice.
+      Second slice completed on 2026-07-08: added grouped 2-way/3-way prepared-activation ABI
+      (`litenn_cpu_ggml_block_grouped_matmul{2,3}_q8k_prepared_activation_f32`), grouped parity coverage, and grouped
+      benchmark rows. The short Q6_K `qwen_gate_up/grouped/T8` smoke measured prepared activation at about `17.1 ms`
+      versus `16.5 ms` for internal staged grouped helper, confirming grouped helpers already avoid repeated lhs staging;
+      remaining high-return work is fallback elimination plus compact vec-dot kernels.
 - [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before

@@ -237,6 +237,15 @@ Priority classes for the GGUF/Qwen decode work:
                       Q6_K `qwen_ffn_down/T8` smoke measured about `6.90 ms` real for prepared activation versus
                       `8.14 ms` for internal per-helper staging, showing the reuse path is worth wiring into graph/AOT
                       lowering once compact vec-dot kernels land.
+                      Second implementation slice completed on 2026-07-08: added grouped prepared-activation helper
+                      ABI for 2-way and 3-way projection groups
+                      (`litenn_cpu_ggml_block_grouped_matmul{2,3}_q8k_prepared_activation_f32`), parity coverage in
+                      `GGUFLLaMAQuantizedExecution.Q8KPreparedActivationGroupedHelperMatchesInternalStaging`, and
+                      `GGMLGroupedProjectionQ8KPreparedActivationHelper/...` benchmark rows. A short Q6_K
+                      `qwen_gate_up/grouped/T8` smoke measured `17.1 ms` prepared versus `16.5 ms` internal staged,
+                      which confirms the already-grouped helper only stages lhs once; the high-return work is now
+                      eliminating any remaining separate-projection fallback and replacing the current dot loop with
+                      compact llama.cpp-class vec-dot kernels.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a

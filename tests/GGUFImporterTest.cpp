@@ -65,6 +65,47 @@ extern "C" void litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride, float*,
+    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t out0Columns, std::uint64_t out1Columns,
+    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_q8k_prepared_activation_f32(
+    const std::uint8_t*, const std::uint8_t* lhsQ8KAligned, std::int64_t lhsQ8KOffset, std::int64_t lhsQ8KBytes,
+    std::int64_t lhsQ8KStride, std::int64_t lhsRows, std::int64_t lhsColumns, const std::uint8_t*,
+    const std::uint8_t* rhs0Aligned, std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride,
+    const std::uint8_t*, const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes,
+    std::int64_t rhs1Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+    const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset, std::int64_t rhs2Bytes,
+    std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul3_q8k_prepared_activation_f32(
+    const std::uint8_t*, const std::uint8_t* lhsQ8KAligned, std::int64_t lhsQ8KOffset, std::int64_t lhsQ8KBytes,
+    std::int64_t lhsQ8KStride, std::int64_t lhsRows, std::int64_t lhsColumns, const std::uint8_t*,
+    const std::uint8_t* rhs0Aligned, std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride,
+    const std::uint8_t*, const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes,
+    std::int64_t rhs1Stride, const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset,
+    std::int64_t rhs2Bytes, std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset,
+    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+    std::uint64_t formatValue, std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns,
+    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q4k_prepacked_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepack_q4k_f32(const std::uint8_t*, const std::uint8_t* rhsAligned,
@@ -1777,6 +1818,112 @@ TEST(GGUFLLaMAQuantizedExecution, Q8KPreparedActivationHelperMatchesInternalStag
 		for (std::size_t i = 0; i < internal.size(); ++i)
 		{
 			EXPECT_NEAR(prepared[i], internal[i], 1.0e-4F);
+		}
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, Q8KPreparedActivationGroupedHelperMatchesInternalStaging)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t rows = 2;
+	const std::array cases{
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.grouped" },
+		std::tuple{ GGML_TYPE_Q5_K, QuantizedBlockFormat::GGML_Q5_K, "q5_k.grouped" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.grouped" },
+	};
+
+	std::vector<float> inputValues(rows * inFeatures);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 41) - 20) * 0.03125F;
+	}
+
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		SCOPED_TRACE(name);
+		const auto layout = GetQuantizedBlockLayout(blockFormat);
+		ASSERT_TRUE(layout.has_value());
+		const auto activationBlockBytes = litenn_cpu_ggml_q8k_activation_block_bytes();
+		ASSERT_GT(activationBlockBytes, 0u);
+		const auto blockCount = inFeatures / layout->elementsPerBlock;
+		std::vector<std::uint8_t> stagedActivation(rows * blockCount * activationBlockBytes);
+		litenn_cpu_ggml_prepare_q8k_activation_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, stagedActivation.data(), 0,
+		    static_cast<std::int64_t>(stagedActivation.size()), 1);
+
+		const auto makeQuantized = [&](std::size_t outFeatures, int seed) {
+			std::vector<float> weightValues(outFeatures * inFeatures);
+			for (std::size_t i = 0; i < weightValues.size(); ++i)
+			{
+				weightValues[i] = static_cast<float>((static_cast<int>(i % 31) - 15) * ((seed % 5) + 1)) * 0.03125F;
+			}
+			const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+			return QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+		};
+
+		constexpr std::size_t out0 = 3;
+		constexpr std::size_t out1 = 5;
+		const auto q20 = makeQuantized(out0, 1);
+		const auto q21 = makeQuantized(out1, 2);
+		const auto& s20 = q20->Data();
+		const auto& s21 = q21->Data();
+		const auto* b20 = static_cast<const std::uint8_t*>(s20.UnsafeRawData());
+		const auto* b21 = static_cast<const std::uint8_t*>(s21.UnsafeRawData());
+		std::vector<float> internal2(rows * (out0 + out1));
+		std::vector<float> prepared2(rows * (out0 + out1));
+		litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, b20, 0, static_cast<std::int64_t>(s20.NumElements()), 1,
+		    nullptr, b21, 0, static_cast<std::int64_t>(s21.NumElements()), 1, nullptr, internal2.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(out0 + out1),
+		    static_cast<std::int64_t>(out0 + out1), 1, static_cast<std::uint64_t>(blockFormat), out0, out1, 2,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		litenn_cpu_ggml_block_grouped_matmul2_q8k_prepared_activation_f32(
+		    nullptr, stagedActivation.data(), 0, static_cast<std::int64_t>(stagedActivation.size()), 1,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures), nullptr, b20, 0,
+		    static_cast<std::int64_t>(s20.NumElements()), 1, nullptr, b21, 0,
+		    static_cast<std::int64_t>(s21.NumElements()), 1, nullptr, prepared2.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(out0 + out1),
+		    static_cast<std::int64_t>(out0 + out1), 1, static_cast<std::uint64_t>(blockFormat), out0, out1, 2,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		for (std::size_t i = 0; i < internal2.size(); ++i)
+		{
+			EXPECT_NEAR(prepared2[i], internal2[i], 1.0e-4F);
+		}
+
+		constexpr std::size_t out2 = 4;
+		const auto q30 = makeQuantized(out0, 3);
+		const auto q31 = makeQuantized(out1, 4);
+		const auto q32 = makeQuantized(out2, 5);
+		const auto& s30 = q30->Data();
+		const auto& s31 = q31->Data();
+		const auto& s32 = q32->Data();
+		const auto* b30 = static_cast<const std::uint8_t*>(s30.UnsafeRawData());
+		const auto* b31 = static_cast<const std::uint8_t*>(s31.UnsafeRawData());
+		const auto* b32 = static_cast<const std::uint8_t*>(s32.UnsafeRawData());
+		std::vector<float> internal3(rows * (out0 + out1 + out2));
+		std::vector<float> prepared3(rows * (out0 + out1 + out2));
+		litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, b30, 0, static_cast<std::int64_t>(s30.NumElements()), 1,
+		    nullptr, b31, 0, static_cast<std::int64_t>(s31.NumElements()), 1, nullptr, b32, 0,
+		    static_cast<std::int64_t>(s32.NumElements()), 1, nullptr, internal3.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(out0 + out1 + out2),
+		    static_cast<std::int64_t>(out0 + out1 + out2), 1, static_cast<std::uint64_t>(blockFormat), out0, out1, out2,
+		    2, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		litenn_cpu_ggml_block_grouped_matmul3_q8k_prepared_activation_f32(
+		    nullptr, stagedActivation.data(), 0, static_cast<std::int64_t>(stagedActivation.size()), 1,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures), nullptr, b30, 0,
+		    static_cast<std::int64_t>(s30.NumElements()), 1, nullptr, b31, 0,
+		    static_cast<std::int64_t>(s31.NumElements()), 1, nullptr, b32, 0,
+		    static_cast<std::int64_t>(s32.NumElements()), 1, nullptr, prepared3.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(out0 + out1 + out2),
+		    static_cast<std::int64_t>(out0 + out1 + out2), 1, static_cast<std::uint64_t>(blockFormat), out0, out1, out2,
+		    2, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		for (std::size_t i = 0; i < internal3.size(); ++i)
+		{
+			EXPECT_NEAR(prepared3[i], internal3[i], 1.0e-4F);
 		}
 	}
 }
