@@ -256,6 +256,14 @@ Priority classes for the GGUF/Qwen decode work:
                       fast path for the common no-tail decode rows. Short aggregate smokes measured Q6_K
                       `qwen_gate_up/grouped/T8` staged at `6.72 ms` mean versus `15.8 ms` direct grouped, and
                       `qwen_qkv/grouped/T8` staged at `1.85 ms` mean versus `4.02 ms` direct grouped.
+                      Follow-up slice completed on 2026-07-08: extended the all-valid AVX2 fast path to Q4_K/Q5_K
+                      and widened AOT staged lowering from Q6_K-only to Q4_K/Q5_K/Q6_K for both single and grouped
+                      projection helpers. Aggregate smokes measured Q4_K `qwen_gate_up/grouped/T8` staged at
+                      `4.52 ms` versus `7.62 ms` direct, Q5_K at `5.33 ms` versus `14.1 ms`, and single
+                      `qwen_ffn_down/T8` staged wins for Q4_K/Q5_K/Q6_K (`2.08/3.82/3.69 ms` versus
+                      `2.79/5.97/4.67 ms`). Validation is covered by
+                      `GGUFLLaMAQuantizedExecution.CompilesOutputMajorKQuantAndQ8_0MatMulWithoutMaterializingWeight`
+                      and `GGUFLLaMAQuantizedExecution.CompilesGroupedKQuantProjectionToQ8KStagedHelper`.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a

@@ -137,6 +137,13 @@ namespace litenn
 			return width;
 		}
 
+		bool supportsGGMLQ8KStagedMatMul(LiteNN::QuantizedBlockFormat format)
+		{
+			return format == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+			       format == LiteNN::QuantizedBlockFormat::GGML_Q5_K ||
+			       format == LiteNN::QuantizedBlockFormat::GGML_Q6_K;
+		}
+
 		bool hasMatMulPayload(mlir::linalg::GenericOp op)
 		{
 			auto& block = op.getRegion().front();
@@ -326,7 +333,7 @@ namespace litenn
 					return mlir::failure();
 				}
 			}
-			else if (options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+			else if (options.enableGGMLQ8KStagedMatMul && supportsGGMLQ8KStagedMatMul(blockFormat))
 			{
 				helperName = kGGMLBlockMatMulQ8KStagedHelper;
 			}
@@ -478,7 +485,7 @@ namespace litenn
 			else
 			{
 				const auto enableQ8KStaged =
-				    options.enableGGMLQ8KStagedMatMul && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K;
+				    options.enableGGMLQ8KStagedMatMul && supportsGGMLQ8KStagedMatMul(blockFormat);
 				if (enableQ8KStaged && projectionCount == 2)
 				{
 					helperName = kGGMLBlockGroupedMatMul2Q8KStagedHelper;

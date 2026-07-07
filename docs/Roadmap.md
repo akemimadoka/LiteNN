@@ -2975,6 +2975,10 @@ Priority classes:
       common no-tail decode rows. Short aggregate smokes measured `qwen_gate_up/grouped/T8` staged at about `6.72 ms`
       mean versus `15.8 ms` direct grouped, and `qwen_qkv/grouped/T8` staged at about `1.85 ms` mean versus `4.02 ms`
       direct grouped.
+      Follow-up completed on 2026-07-08: Q4_K/Q5_K gained the same all-valid AVX2 fast path and AOT staged lowering now
+      covers Q4_K/Q5_K/Q6_K single and grouped projections. Short smokes measured Q4_K `qwen_gate_up/grouped/T8`
+      staged at about `4.52 ms` versus `7.62 ms` direct, Q5_K at about `5.33 ms` versus `14.1 ms`, and single
+      `qwen_ffn_down/T8` staged wins for Q4_K/Q5_K/Q6_K.
 - [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before

@@ -1736,6 +1736,68 @@ namespace
 			}
 		}
 	}
+
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ4KBlockQ8Kx4AVX2AllValid(const std::uint8_t* const blocks[4],
+	                                                                std::int64_t byteStride,
+	                                                                const GGMLQ8KActivationBlock& lhs, float acc[4])
+	{
+		const float d[4] = {
+			ReadGGMLF16Strided(blocks[0], byteStride, 0),
+			ReadGGMLF16Strided(blocks[1], byteStride, 0),
+			ReadGGMLF16Strided(blocks[2], byteStride, 0),
+			ReadGGMLF16Strided(blocks[3], byteStride, 0),
+		};
+		const float dmin[4] = {
+			ReadGGMLF16Strided(blocks[0], byteStride, 2),
+			ReadGGMLF16Strided(blocks[1], byteStride, 2),
+			ReadGGMLF16Strided(blocks[2], byteStride, 2),
+			ReadGGMLF16Strided(blocks[3], byteStride, 2),
+		};
+
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale[4] = {};
+			std::uint32_t minimum[4] = {};
+			for (int column = 0; column < 4; ++column)
+			{
+				GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
+			}
+
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			std::int32_t quantSum[4] = {};
+			for (std::uint64_t group = 0; group < 2; ++group)
+			{
+				std::uint8_t raw[4][16] = {};
+				for (std::uint64_t local = 0; local < 16; ++local)
+				{
+					const auto localLane = group * 16 + local;
+					for (int column = 0; column < 4; ++column)
+					{
+						const auto quantByte = static_cast<std::uint32_t>(
+						    GGMLBlockByte(blocks[column], byteStride, 16 + quantPairOffset + localLane));
+						raw[column][local] =
+						    static_cast<std::uint8_t>(useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U));
+					}
+				}
+				const auto q8Offset = subblock * 32 + group * 16;
+				for (int column = 0; column < 4; ++column)
+				{
+					quantSum[column] += DotGGMLQ8KWithU8Raw16AVX2(lhs.qs + q8Offset, raw[column], 0);
+				}
+			}
+
+			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
+			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
+			for (int column = 0; column < 4; ++column)
+			{
+				const auto combinedScale = lhs.d * d[column];
+				acc[column] +=
+				    combinedScale * static_cast<float>(scale[column]) * static_cast<float>(quantSum[column]) -
+				    lhs.d * dmin[column] * static_cast<float>(minimum[column]) * static_cast<float>(lhsSum);
+			}
+		}
+	}
 #endif
 
 	float DotGGMLQ5KBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs,
@@ -2012,6 +2074,71 @@ namespace
 					    combinedScale * static_cast<float>(scale[column]) * static_cast<float>(quantSum[column]) -
 					    lhs.d * dmin[column] * static_cast<float>(minimum[column]) * static_cast<float>(lhsSum);
 				}
+			}
+		}
+	}
+
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ5KBlockQ8Kx4AVX2AllValid(const std::uint8_t* const blocks[4],
+	                                                                std::int64_t byteStride,
+	                                                                const GGMLQ8KActivationBlock& lhs, float acc[4])
+	{
+		const float d[4] = {
+			ReadGGMLF16Strided(blocks[0], byteStride, 0),
+			ReadGGMLF16Strided(blocks[1], byteStride, 0),
+			ReadGGMLF16Strided(blocks[2], byteStride, 0),
+			ReadGGMLF16Strided(blocks[3], byteStride, 0),
+		};
+		const float dmin[4] = {
+			ReadGGMLF16Strided(blocks[0], byteStride, 2),
+			ReadGGMLF16Strided(blocks[1], byteStride, 2),
+			ReadGGMLF16Strided(blocks[2], byteStride, 2),
+			ReadGGMLF16Strided(blocks[3], byteStride, 2),
+		};
+
+		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
+		{
+			std::uint32_t scale[4] = {};
+			std::uint32_t minimum[4] = {};
+			for (int column = 0; column < 4; ++column)
+			{
+				GGMLQ4Or5KScaleMin(blocks[column], byteStride, subblock, scale[column], minimum[column]);
+			}
+
+			const auto quantPairOffset = (subblock / 2) * 32;
+			const auto useHighNibble = (subblock % 2) != 0;
+			std::int32_t quantSum[4] = {};
+			for (std::uint64_t group = 0; group < 2; ++group)
+			{
+				std::uint8_t raw[4][16] = {};
+				for (std::uint64_t local = 0; local < 16; ++local)
+				{
+					const auto localLane = group * 16 + local;
+					for (int column = 0; column < 4; ++column)
+					{
+						const auto quantByte = static_cast<std::uint32_t>(
+						    GGMLBlockByte(blocks[column], byteStride, 48 + quantPairOffset + localLane));
+						const auto highBits =
+						    static_cast<std::uint32_t>(GGMLBlockByte(blocks[column], byteStride, 16 + localLane));
+						auto quant = useHighNibble ? ((quantByte >> 4U) & 15U) : (quantByte & 15U);
+						quant |= ((highBits >> subblock) & 1U) << 4U;
+						raw[column][local] = static_cast<std::uint8_t>(quant);
+					}
+				}
+				const auto q8Offset = subblock * 32 + group * 16;
+				for (int column = 0; column < 4; ++column)
+				{
+					quantSum[column] += DotGGMLQ8KWithU8Raw16AVX2(lhs.qs + q8Offset, raw[column], 0);
+				}
+			}
+
+			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
+			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
+			for (int column = 0; column < 4; ++column)
+			{
+				const auto combinedScale = lhs.d * d[column];
+				acc[column] +=
+				    combinedScale * static_cast<float>(scale[column]) * static_cast<float>(quantSum[column]) -
+				    lhs.d * dmin[column] * static_cast<float>(minimum[column]) * static_cast<float>(lhsSum);
 			}
 		}
 	}
@@ -2955,7 +3082,16 @@ namespace
 #if LITENN_HAS_X86_AVX2_TARGET
 								if (LiteNNCPUHasAVX2())
 								{
-									AccumulateGGMLQ4KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+									if (valid[0] && valid[1] && valid[2] && valid[3])
+									{
+										AccumulateGGMLQ4KBlockQ8Kx4AVX2AllValid(blocks, ctx.rhsStride, *lhsQ8KBlock,
+										                                        acc);
+									}
+									else
+									{
+										AccumulateGGMLQ4KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock,
+										                                acc);
+									}
 								}
 								else
 #endif
@@ -2966,7 +3102,16 @@ namespace
 #if LITENN_HAS_X86_AVX2_TARGET
 								if (LiteNNCPUHasAVX2())
 								{
-									AccumulateGGMLQ5KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock, acc);
+									if (valid[0] && valid[1] && valid[2] && valid[3])
+									{
+										AccumulateGGMLQ5KBlockQ8Kx4AVX2AllValid(blocks, ctx.rhsStride, *lhsQ8KBlock,
+										                                        acc);
+									}
+									else
+									{
+										AccumulateGGMLQ5KBlockQ8Kx4AVX2(blocks, valid, ctx.rhsStride, *lhsQ8KBlock,
+										                                acc);
+									}
 								}
 								else
 #endif

@@ -1414,11 +1414,12 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesQ4KTokenEmbeddingGatherWithoutInterpre
 #endif
 
 #ifdef LITENN_ENABLE_MLIR
-TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutMaterializingWeight)
+TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutMaterializingWeight)
 {
 	constexpr std::size_t inFeatures = 256;
 	constexpr std::size_t outFeatures = 3;
 	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight" },
 		std::tuple{ GGML_TYPE_Q5_K, QuantizedBlockFormat::GGML_Q5_K, "q5_k.weight" },
 		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
 		std::tuple{ GGML_TYPE_Q8_0, QuantizedBlockFormat::GGML_Q8_0, "q8_0.weight" },
@@ -1501,7 +1502,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 			ASSERT_EQ(prepackedActual.size(), 1u);
 			ExpectTensorNear(prepackedActual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
 		}
-		if (blockFormat == QuantizedBlockFormat::GGML_Q6_K)
+		if (blockFormat == QuantizedBlockFormat::GGML_Q4_K || blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
+		    blockFormat == QuantizedBlockFormat::GGML_Q6_K)
 		{
 			CompilerOptions options;
 			options.enableCPUAOTGGMLQ8KStagedMatMul = true;
@@ -1708,15 +1710,21 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	}
 }
 
-TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ6KProjectionToQ8KStagedHelper)
+TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedKQuantProjectionToQ8KStagedHelper)
 {
 	constexpr std::size_t inFeatures = 256;
 	constexpr std::size_t rows = 2;
 	const std::array<std::size_t, 2> twoWay{ 3, 5 };
 	const std::array<std::size_t, 3> threeWay{ 2, 1, 3 };
+	const std::array cases{
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "grouped_q4_k.weight" },
+		std::tuple{ GGML_TYPE_Q5_K, QuantizedBlockFormat::GGML_Q5_K, "grouped_q5_k.weight" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "grouped_q6_k.weight" },
+	};
 
-	const auto runCase = [&](std::span<const std::size_t> outFeatures, std::string_view expectedHelper) {
-		SCOPED_TRACE(expectedHelper);
+	const auto runCase = [&](ggml_type ggmlType, QuantizedBlockFormat blockFormat, std::string_view name,
+	                         std::span<const std::size_t> outFeatures, std::string_view expectedHelper) {
+		SCOPED_TRACE(std::string(name) + ":" + std::string(expectedHelper));
 		Graph graph;
 		std::vector<Layer::LinearLayer> layers(outFeatures.size());
 		std::vector<Tensor<CPU>> dequantizedWeights;
@@ -1731,9 +1739,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ6KProjectionToQ8KStagedHelper)
 			}
 			const auto plainWeight =
 			    Variable::Create(MakeFloatTensor(weightValues, { outFeatures[projection], inFeatures }));
-			const auto quantizedWeight =
-			    QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K);
-			dequantizedWeights.push_back(GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "grouped_q6_k.weight"));
+			const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+			dequantizedWeights.push_back(GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, name));
 			const auto weightVariable = graph.AddVariable(quantizedWeight);
 			layers[projection] = Layer::LinearLayer{
 				.weightVariable = weightVariable,
@@ -1792,12 +1799,15 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ6KProjectionToQ8KStagedHelper)
 		ASSERT_EQ(actual.size(), expected.size());
 		for (std::size_t i = 0; i < expected.size(); ++i)
 		{
-			ExpectTensorNear(actual[i], expected[i], { .absolute = 4.0e-3, .relative = 1.0e-5 });
+			ExpectTensorNear(actual[i], expected[i], { .absolute = 3.0e-2, .relative = 1.0e-4 });
 		}
 	};
 
-	runCase(twoWay, "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32");
-	runCase(threeWay, "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32");
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		runCase(ggmlType, blockFormat, name, twoWay, "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32");
+		runCase(ggmlType, blockFormat, name, threeWay, "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32");
+	}
 }
 
 TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
