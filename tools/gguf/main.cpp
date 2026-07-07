@@ -1301,7 +1301,8 @@ namespace
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
-	std::optional<std::filesystem::path> DecodeAOTSharedWeightsPath(std::string_view modelPath)
+	std::optional<std::filesystem::path> DecodeAOTSharedWeightsPath(std::string_view modelPath,
+	                                                                const LiteNN::CompilerOptions& options)
 	{
 		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
 		if (root == nullptr || std::string_view(root).empty())
@@ -1312,8 +1313,11 @@ namespace
 		std::error_code ec;
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
-		const auto keyText = std::format("gguf-shared-weights-v1|{}|{}|{}",
-		                                 std::filesystem::absolute(model, ec).string(), modelSize, lastWrite);
+		const auto keyText =
+		    std::format("gguf-shared-weights-v2|{}|{}|{}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}",
+		                std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
+		                options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
+		                static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy));
 		return std::filesystem::path(root) / "_weights" / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
 	}
 
@@ -1679,7 +1683,7 @@ namespace
 				                              projection.publicOutputIndices.size(), projection.stateAliases.size()));
 				const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions,
 				                                          decodeMode, options.pagedResidentPageCount);
-				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath);
+				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath, compilerOptions);
 				return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot stateful decode module", [&] {
 					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, sharedWeightsPath,
 					                                 diagnostics);
@@ -1693,7 +1697,7 @@ namespace
 			decodePlan = TimedGGUFDiagnostic(diagnostics, "gguf build executable plan",
 			                                 [&] { return LiteNN::Detail::BuildExecutablePlanFromGraph(graph); });
 			const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode);
-			const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath);
+			const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath, compilerOptions);
 			return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot decode module", [&] {
 				return LoadOrCompileDecodeModule(decodePlan, compilerOptions, cachePath, sharedWeightsPath,
 				                                 diagnostics);
