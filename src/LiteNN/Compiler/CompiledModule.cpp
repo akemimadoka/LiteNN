@@ -2394,6 +2394,83 @@ namespace
 		}
 	}
 
+	void AccumulateGGMLQ4KPreparedBlockF32x4AllValid(const std::uint8_t* const blocks[4], const float* lhs,
+	                                                 std::int64_t lhsStride, const float* lhsSubblockSums, float acc[4])
+	{
+		for (std::uint64_t subblock = 0; subblock < kGGMLQ4KPreparedSubblockCount; ++subblock)
+		{
+			float quantSum[4] = {};
+			float lhsSum = lhsSubblockSums ? lhsSubblockSums[subblock] : 0.0F;
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; ++laneInSubblock)
+			{
+				const auto lane = subblock * 32 + laneInSubblock;
+				const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+				if (!lhsSubblockSums)
+				{
+					lhsSum += lhsValue;
+				}
+				for (int column = 0; column < 4; ++column)
+				{
+					quantSum[column] += lhsValue * static_cast<float>(LoadGGMLQ4KPreparedQuant(blocks[column], lane));
+				}
+			}
+			for (int column = 0; column < 4; ++column)
+			{
+				acc[column] += LoadGGMLQ4KPreparedScale(blocks[column], subblock) * quantSum[column] -
+				               LoadGGMLQ4KPreparedMin(blocks[column], subblock) * lhsSum;
+			}
+		}
+	}
+
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2 float HorizontalSumF32AVX2(__m256 values)
+	{
+		alignas(32) float lanes[8];
+		_mm256_store_ps(lanes, values);
+		float total = 0.0F;
+		for (float lane : lanes)
+		{
+			total += lane;
+		}
+		return total;
+	}
+
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ4KPreparedBlockF32x4AllValidAVX2(const std::uint8_t* const blocks[4],
+	                                                                        const float* lhs,
+	                                                                        const float* lhsSubblockSums, float acc[4])
+	{
+		for (std::uint64_t subblock = 0; subblock < kGGMLQ4KPreparedSubblockCount; ++subblock)
+		{
+			__m256 quantSum[4] = { _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps() };
+			auto lhsSumVector = _mm256_setzero_ps();
+			for (std::uint64_t laneInSubblock = 0; laneInSubblock < 32; laneInSubblock += 8)
+			{
+				const auto lane = subblock * 32 + laneInSubblock;
+				const auto lhsValues = _mm256_loadu_ps(lhs + lane);
+				if (!lhsSubblockSums)
+				{
+					lhsSumVector = _mm256_add_ps(lhsSumVector, lhsValues);
+				}
+				for (int column = 0; column < 4; ++column)
+				{
+					const auto quantBytes = _mm_loadl_epi64(
+					    reinterpret_cast<const __m128i*>(blocks[column] + kGGMLQ4KPreparedQuantOffset + lane));
+					const auto quant32 = _mm256_cvtepu8_epi32(quantBytes);
+					const auto quantF32 = _mm256_cvtepi32_ps(quant32);
+					quantSum[column] = _mm256_add_ps(quantSum[column], _mm256_mul_ps(lhsValues, quantF32));
+				}
+			}
+			const auto lhsSum = lhsSubblockSums ? lhsSubblockSums[subblock] : HorizontalSumF32AVX2(lhsSumVector);
+			for (int column = 0; column < 4; ++column)
+			{
+				acc[column] +=
+				    LoadGGMLQ4KPreparedScale(blocks[column], subblock) * HorizontalSumF32AVX2(quantSum[column]) -
+				    LoadGGMLQ4KPreparedMin(blocks[column], subblock) * lhsSum;
+			}
+		}
+	}
+#endif
+
 	void PrepareGGMLQ6KBlockF32(const std::uint8_t* block, std::int64_t byteStride, std::uint8_t* out)
 	{
 		const auto d = ReadGGMLF16Strided(block, byteStride, 208);
@@ -2469,6 +2546,58 @@ namespace
 			}
 		}
 	}
+
+	void AccumulateGGMLQ6KPreparedBlockF32x4AllValid(const std::uint8_t* const blocks[4], const float* lhs,
+	                                                 std::int64_t lhsStride, float acc[4])
+	{
+		for (std::uint64_t group = 0; group < kGGMLQ6KPreparedScaleCount; ++group)
+		{
+			float quantSum[4] = {};
+			for (std::uint64_t local = 0; local < 16; ++local)
+			{
+				const auto lane = group * 16 + local;
+				const auto lhsValue = lhs[static_cast<std::int64_t>(lane) * lhsStride];
+				for (int column = 0; column < 4; ++column)
+				{
+					quantSum[column] += lhsValue * static_cast<float>(LoadGGMLQ6KPreparedQuant(blocks[column], lane));
+				}
+			}
+
+			for (int column = 0; column < 4; ++column)
+			{
+				acc[column] += LoadGGMLQ6KPreparedScale(blocks[column], group) * quantSum[column];
+			}
+		}
+	}
+
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2 void AccumulateGGMLQ6KPreparedBlockF32x4AllValidAVX2(const std::uint8_t* const blocks[4],
+	                                                                        const float* lhs, float acc[4])
+	{
+		for (std::uint64_t group = 0; group < kGGMLQ6KPreparedScaleCount; ++group)
+		{
+			__m256 quantSum[4] = { _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps() };
+			for (std::uint64_t local = 0; local < 16; local += 8)
+			{
+				const auto lane = group * 16 + local;
+				const auto lhsValues = _mm256_loadu_ps(lhs + lane);
+				for (int column = 0; column < 4; ++column)
+				{
+					const auto quantBytes = _mm_loadl_epi64(
+					    reinterpret_cast<const __m128i*>(blocks[column] + kGGMLQ6KPreparedQuantOffset + lane));
+					const auto quant32 = _mm256_cvtepi8_epi32(quantBytes);
+					const auto quantF32 = _mm256_cvtepi32_ps(quant32);
+					quantSum[column] = _mm256_add_ps(quantSum[column], _mm256_mul_ps(lhsValues, quantF32));
+				}
+			}
+
+			for (int column = 0; column < 4; ++column)
+			{
+				acc[column] += LoadGGMLQ6KPreparedScale(blocks[column], group) * HorizontalSumF32AVX2(quantSum[column]);
+			}
+		}
+	}
+#endif
 
 	void AccumulateGGMLQ6KBlockQ8Kx4(const std::uint8_t* const blocks[4], const bool valid[4], std::int64_t byteStride,
 	                                 const GGMLQ8KActivationBlock& lhs, float acc[4])
@@ -3430,7 +3559,13 @@ namespace
 			std::uint64_t blockCount{};
 			std::uint64_t rowBytes{};
 			std::uint64_t columnGroupsPerRow{};
+			bool useAVX2Prepared{};
 		};
+#if LITENN_HAS_X86_AVX2_TARGET
+		const auto useAVX2Prepared = lhsColumnStride == 1 && LiteNNCPUHasAVX2();
+#else
+		const auto useAVX2Prepared = false;
+#endif
 		Context context{ .lhsAligned = lhsAligned,
 			             .lhsOffset = lhsOffset,
 			             .lhsRowStride = lhsRowStride,
@@ -3445,7 +3580,8 @@ namespace
 			             .lhsSubblockSums = lhsSubblockSums.data(),
 			             .blockCount = blockCount,
 			             .rowBytes = rowBytes,
-			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4 };
+			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
+			             .useAVX2Prepared = useAVX2Prepared };
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
 			for (std::uint64_t groupIndex = begin; groupIndex < end; ++groupIndex)
@@ -3458,6 +3594,7 @@ namespace
 					              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
 					              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
 					              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+				const auto allValid = columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns);
 				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 				{
 					const auto* lhsBlock =
@@ -3466,6 +3603,26 @@ namespace
 					    ctx.lhsSubblockSums +
 					    (static_cast<std::uint64_t>(row) * ctx.blockCount + blockIndex) * kGGMLQ4KPreparedSubblockCount;
 					const std::uint8_t* blocks[4] = {};
+					if (allValid)
+					{
+						for (int localColumn = 0; localColumn < 4; ++localColumn)
+						{
+							const auto column = columnBase + static_cast<std::uint64_t>(localColumn);
+							blocks[localColumn] = ctx.rhsAligned + ctx.rhsOffset + column * ctx.rowBytes +
+							                      blockIndex * kGGMLQ4KPreparedBlockBytes;
+						}
+#if LITENN_HAS_X86_AVX2_TARGET
+						if (ctx.useAVX2Prepared)
+						{
+							AccumulateGGMLQ4KPreparedBlockF32x4AllValidAVX2(blocks, lhsBlock, lhsSums, acc);
+							continue;
+						}
+#endif
+						AccumulateGGMLQ4KPreparedBlockF32x4AllValid(blocks, lhsBlock, ctx.lhsColumnStride, lhsSums,
+						                                            acc);
+						continue;
+					}
+
 					for (int localColumn = 0; localColumn < 4; ++localColumn)
 					{
 						if (!valid[localColumn])
@@ -3477,6 +3634,17 @@ namespace
 						                      blockIndex * kGGMLQ4KPreparedBlockBytes;
 					}
 					AccumulateGGMLQ4KPreparedBlockF32x4(blocks, valid, lhsBlock, ctx.lhsColumnStride, lhsSums, acc);
+				}
+				if (allValid)
+				{
+					for (int localColumn = 0; localColumn < 4; ++localColumn)
+					{
+						const auto column =
+						    static_cast<std::int64_t>(columnBase + static_cast<std::uint64_t>(localColumn));
+						ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
+						    acc[localColumn];
+					}
+					continue;
 				}
 				for (int localColumn = 0; localColumn < 4; ++localColumn)
 				{
@@ -3593,7 +3761,13 @@ namespace
 			std::uint64_t blockCount{};
 			std::uint64_t rowBytes{};
 			std::uint64_t columnGroupsPerRow{};
+			bool useAVX2Prepared{};
 		};
+#if LITENN_HAS_X86_AVX2_TARGET
+		const auto useAVX2Prepared = lhsColumnStride == 1 && LiteNNCPUHasAVX2();
+#else
+		const auto useAVX2Prepared = false;
+#endif
 		Context context{ .lhsAligned = lhsAligned,
 			             .lhsOffset = lhsOffset,
 			             .lhsRowStride = lhsRowStride,
@@ -3607,7 +3781,8 @@ namespace
 			             .outColumnStride = outColumnStride,
 			             .blockCount = blockCount,
 			             .rowBytes = rowBytes,
-			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4 };
+			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
+			             .useAVX2Prepared = useAVX2Prepared };
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
 			for (std::uint64_t groupIndex = begin; groupIndex < end; ++groupIndex)
@@ -3620,11 +3795,31 @@ namespace
 					              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
 					              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
 					              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+				const auto allValid = columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns);
 				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 				{
 					const auto* lhsBlock =
 					    lhsRow + static_cast<std::int64_t>(blockIndex * kGGMLQ6KPreparedLanes) * ctx.lhsColumnStride;
 					const std::uint8_t* blocks[4] = {};
+					if (allValid)
+					{
+						for (int localColumn = 0; localColumn < 4; ++localColumn)
+						{
+							const auto column = columnBase + static_cast<std::uint64_t>(localColumn);
+							blocks[localColumn] = ctx.rhsAligned + ctx.rhsOffset + column * ctx.rowBytes +
+							                      blockIndex * kGGMLQ6KPreparedBlockBytes;
+						}
+#if LITENN_HAS_X86_AVX2_TARGET
+						if (ctx.useAVX2Prepared)
+						{
+							AccumulateGGMLQ6KPreparedBlockF32x4AllValidAVX2(blocks, lhsBlock, acc);
+							continue;
+						}
+#endif
+						AccumulateGGMLQ6KPreparedBlockF32x4AllValid(blocks, lhsBlock, ctx.lhsColumnStride, acc);
+						continue;
+					}
+
 					for (int localColumn = 0; localColumn < 4; ++localColumn)
 					{
 						if (!valid[localColumn])
@@ -3636,6 +3831,17 @@ namespace
 						                      blockIndex * kGGMLQ6KPreparedBlockBytes;
 					}
 					AccumulateGGMLQ6KPreparedBlockF32x4(blocks, valid, lhsBlock, ctx.lhsColumnStride, acc);
+				}
+				if (allValid)
+				{
+					for (int localColumn = 0; localColumn < 4; ++localColumn)
+					{
+						const auto column =
+						    static_cast<std::int64_t>(columnBase + static_cast<std::uint64_t>(localColumn));
+						ctx.outAligned[ctx.outOffset + row * ctx.outRowStride + column * ctx.outColumnStride] =
+						    acc[localColumn];
+					}
+					continue;
 				}
 				for (int localColumn = 0; localColumn < 4; ++localColumn)
 				{

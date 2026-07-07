@@ -219,6 +219,14 @@ Priority classes for the GGUF/Qwen decode work:
                       `ggml_gemv_q4_K_8x*_q8_K`, `ggml_gemv_q6_K_8x*_q8_K`, and `block_q4_Kx8/x16` /
                       `block_q6_Kx8` layouts). LiteNN's current prepared layout is a useful proof that layout matters,
                       but it is too expanded to be the production answer.
+                      Follow-up kernel slice completed on 2026-07-08: prepared Q4_K/Q6_K helpers now use a
+                      runtime-gated AVX2 `lhsColumnStride == 1` fast path for complete x4 output-column groups while
+                      preserving the scalar tail path. Validation passed the Q4/Q6 prepacked helper parity tests and
+                      the prepared-weight policy AOT regression. Short Qwen-shaped `T8` helper smokes measured grouped
+                      gate/up at about `3.67 ms` for Q4_K and `4.23 ms` for Q6_K, with direct-helper deltas in the
+                      expected float-ordering range (`~3.7e-4` to `~1.6e-3`). This improves the current expanded
+                      prepared layout but does not close the compact-layout requirement; v3 repack still needs to keep
+                      shared weight size near raw GGUF size.
                 - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
                       This should store interleaved/repacked blocks rather than expanding every block into float scale
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF
@@ -328,10 +336,10 @@ Priority classes for the GGUF/Qwen decode work:
                 Matrix tooling completed on 2026-07-06: `benchmark/gguf_decode_thread_matrix.py` runs LiteNN stateful
                 CPU AOT decode across auto/T2/T4/T8/T16/T32, supports cache-hit and profile-bundle modes, and redacts the
                 model path in saved command manifests. Updated on 2026-07-07: profile-bundle matrix runs also invoke
-                `gguf_decode_compare.py` over the generated summaries and write `profile_summary_compare/` next to the
-                matrix artifacts; the matrix can also forward `--cpu-aot-q8k-staged-matmul` so direct-vs-staged
-                activation paths are captured by the same full-decode A/B harness. Use it for the next full-decode
-                acceptance run before changing default thread policy.
+                      `gguf_decode_compare.py` over the generated summaries and write `profile_summary_compare/` next to the
+                      matrix artifacts; the matrix can also forward `--cpu-aot-q8k-staged-matmul` so direct-vs-staged
+                      activation paths are captured by the same full-decode A/B harness. Use it for the next full-decode
+                      acceptance run before changing default thread policy.
           - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
                 or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and

@@ -2950,6 +2950,12 @@ Priority classes:
       Interpreter fallback. The gap is still concentrated in Q4_K/Q6_K projection helpers. The next production tranche
       is therefore compact repacked Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels with step-level activation staging, not a
       blanket thread-policy change.
+      Follow-up kernel slice completed on 2026-07-08: prepared Q4_K/Q6_K helpers now use a runtime-gated AVX2
+      `lhsColumnStride == 1` path for complete x4 output-column groups while preserving scalar tails. Validation passed
+      the Q4/Q6 prepacked helper parity tests and the prepared-weight policy AOT regression. Short Qwen-shaped `T8`
+      helper smokes measured grouped gate/up at about `3.67 ms` for Q4_K and `4.23 ms` for Q6_K. This improves the
+      current expanded prepared layout, but does not close the compact-layout requirement because shared prepared
+      weights are still much larger than raw GGUF.
 - [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.
