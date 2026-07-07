@@ -197,6 +197,17 @@ Priority classes for the GGUF/Qwen decode work:
                       `--cpu-aot-ggml-prepacked-weight-policies disabled,profitable,all` in one pass, writing
                       policy-separated work directories and a Policy column in the summary. This turns the next real
                       full-decode run into a single controlled thread x prepared-weight-policy matrix.
+                      Profile on 2026-07-07: a local Qwen2.5-Coder 14B Q4_K_M `T8`, `max_tokens=8`,
+                      stateful CPU AOT run compared prepared-weight policies against a CPU-only `llama-bench`
+                      `T8`, `ngl=0`, `flash_attn=0` control. Generation-phase results were: disabled
+                      `1232.2 ms/token` (`0.812 tok/s`), profitable `1063.1 ms/token` (`0.941 tok/s`), all
+                      `861.6 ms/token` (`1.161 tok/s`), and llama.cpp `235.1 ms/token` (`4.254 tok/s`). The
+                      policy-aware cache fix was required because shared weights differ sharply by layout:
+                      raw `~8.98 GB`, profitable `~10.10 GB`, all `~17.93 GB`. Conclusion: prepared weights are real
+                      full-decode wins (`all` is about `30%` faster than disabled), but even the all-prepared path is
+                      only about `27%` of the llama.cpp CPU decode throughput; the remaining top row is Q4_K prepared
+                      FFN gate/up (`~45.5%` of generation step time), so the next high-yield work is a production
+                      packed/repacked vector-dot microkernel rather than more scheduler plumbing.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

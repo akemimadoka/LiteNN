@@ -2940,6 +2940,11 @@ Priority classes:
       Follow-up completed on 2026-07-07: `benchmark/gguf_decode_thread_matrix.py` accepts
       `--cpu-aot-ggml-prepacked-weight-policies disabled,profitable,all`, emits policy-separated work directories, and
       adds a Policy column so one run can capture the thread x prepared-weight-policy full-decode matrix.
+      Profile completed on 2026-07-07: local Qwen2.5-Coder 14B Q4_K_M `T8`, `max_tokens=8`, stateful CPU AOT
+      measured disabled `1232.2 ms/token`, profitable `1063.1 ms/token`, and all `861.6 ms/token`; a CPU-only
+      `llama-bench` `T8`, `ngl=0`, `flash_attn=0` control measured `235.1 ms/token`. Prepared weights therefore win
+      in full decode, but all-prepared Q4_K/Q6_K still reaches only about `27%` of llama.cpp throughput and expands the
+      shared weight cache to about `17.93 GB`, so default selection remains a memory/speed policy decision.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
