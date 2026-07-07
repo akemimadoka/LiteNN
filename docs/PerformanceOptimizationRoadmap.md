@@ -208,6 +208,33 @@ Priority classes for the GGUF/Qwen decode work:
                       only about `27%` of the llama.cpp CPU decode throughput; the remaining top row is Q4_K prepared
                       FFN gate/up (`~45.5%` of generation step time), so the next high-yield work is a production
                       packed/repacked vector-dot microkernel rather than more scheduler plumbing.
+                      Follow-up analysis on 2026-07-07: `docs/PerformanceAnalysis_2026-07-07.md` adds a cache-hit
+                      phase profile and a llama.cpp source audit. A cache-hit `T8` policy matrix measured disabled
+                      `1188.6 ms/token`, profitable `1033.0 ms/token`, and a short all-prepared sample at
+                      `816.9 ms/token`; the CPU-only llama.cpp `T8` control remained `235.1 ms/token`. The evidence
+                      keeps the top generated-token gap inside Q4_K/Q6_K projection helpers, not host overhead,
+                      active-prefix attention, KV append, or Interpreter fallback.
+                      Source audit target: llama.cpp routes Q4_K/Q6_K through Q8_K activation staging and compact
+                      repacked GEMV/vec-dot kernels (`ggml_vec_dot_q4_K_q8_K`, `ggml_vec_dot_q6_K_q8_K`,
+                      `ggml_gemv_q4_K_8x*_q8_K`, `ggml_gemv_q6_K_8x*_q8_K`, and `block_q4_Kx8/x16` /
+                      `block_q6_Kx8` layouts). LiteNN's current prepared layout is a useful proof that layout matters,
+                      but it is too expanded to be the production answer.
+                - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
+                      This should store interleaved/repacked blocks rather than expanding every block into float scale
+                      metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF
+                      footprint while preserving or improving the all-prepared full-decode speed.
+                - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
+                      Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
+                      projection helpers. Do not route the existing per-helper staged prototype by default; it has
+                      already lost on production-shaped rows without compact repack + vec-dot kernels.
+                - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
+                      Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
+                      FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
+                      portable compact kernel first, then add x86 AVX2/AVX512/VNNI variants behind runtime feature
+                      checks.
+                - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
+                      defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
+                      secondary lever.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

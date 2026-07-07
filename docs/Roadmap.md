@@ -2945,6 +2945,22 @@ Priority classes:
       `llama-bench` `T8`, `ngl=0`, `flash_attn=0` control measured `235.1 ms/token`. Prepared weights therefore win
       in full decode, but all-prepared Q4_K/Q6_K still reaches only about `27%` of llama.cpp throughput and expands the
       shared weight cache to about `17.93 GB`, so default selection remains a memory/speed policy decision.
+      Follow-up analysis recorded in `docs/PerformanceAnalysis_2026-07-07.md`: a cache-hit phase profile and llama.cpp
+      source audit confirm that LiteNN is not mainly behind in host overhead, active-prefix attention, KV append, or
+      Interpreter fallback. The gap is still concentrated in Q4_K/Q6_K projection helpers. The next production tranche
+      is therefore compact repacked Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels with step-level activation staging, not a
+      blanket thread-policy change.
+- [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
+      add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
+      raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.
+- [ ] P0: Add step-level Q8_K activation staging for decode projections:
+      stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
+      logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot
+      kernels and validated on full decode.
+- [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
+      target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
+      `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before
+      changing default prepared-weight or thread policy.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
