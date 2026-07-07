@@ -324,6 +324,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Opt in to prepared GGML_Q4_K/GGML_Q6_K CPU AOT weight payloads for A/B profiling",
     )
     parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-policy",
+        choices=("disabled", "profitable", "all"),
+        help="Select prepared GGML CPU AOT weight policy; legacy --cpu-aot-ggml-prepacked-weights remains all-format opt-in",
+    )
+    parser.add_argument(
         "--no-compile-diagnostics",
         action="store_true",
         help="Suppress LiteNN decode compile/run progress diagnostics",
@@ -663,6 +668,10 @@ def main() -> int:
             decode_cmd.append("--cpu-aot-q8k-staged-matmul")
         if args.cpu_aot_ggml_prepacked_weights:
             decode_cmd.append("--cpu-aot-ggml-prepacked-weights")
+        if args.cpu_aot_ggml_prepacked_weight_policy is not None:
+            decode_cmd.extend(
+                ["--cpu-aot-ggml-prepacked-weight-policy", args.cpu_aot_ggml_prepacked_weight_policy]
+            )
         decode_cmd.append("--no-compile-diagnostics" if args.no_compile_diagnostics else "--compile-diagnostics")
         decode = run_step(
             "litenn_decode_token_ids",
@@ -726,6 +735,7 @@ def main() -> int:
             "parallel_min_flops": args.cpu_aot_parallel_min_flops,
             "q8k_staged_matmul": args.cpu_aot_q8k_staged_matmul,
             "ggml_prepacked_weights": args.cpu_aot_ggml_prepacked_weights,
+            "ggml_prepacked_weight_policy": args.cpu_aot_ggml_prepacked_weight_policy,
             "compile_diagnostics": not args.no_compile_diagnostics,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),

@@ -185,6 +185,14 @@ Priority classes for the GGUF/Qwen decode work:
                       `4.78 ms` real for Q4_K and `4.93 ms` real for Q6_K, both with `max_abs_delta=0`, giving the next
                       full-decode A/B run a direct grouped-prepared helper surface to compare against direct and
                       Q8_K-staged grouped rows.
+                      Progress on 2026-07-07: added an explicit prepared-weight policy
+                      `disabled|profitable|all` to `CompilerOptions`, the GGUF decode CLI, `qwen_smoke.py`, and the
+                      thread-matrix harness. The legacy `--cpu-aot-ggml-prepacked-weights` switch remains an all-format
+                      experiment, while `profitable` currently routes only Q6_K through prepared separated weights
+                      because isolated helper evidence shows the clearest win there; Q4_K remains direct until
+                      full-decode A/B proves it should be promoted. Validation locks this behavior with
+                      `GGUFLLaMAQuantizedExecution.CPUAOTPrepackedWeightPolicyRoutesOnlyProfitableFormats`, and
+                      `gguf_decode_compare.py` now records the policy in its config column.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

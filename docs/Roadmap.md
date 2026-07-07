@@ -2930,6 +2930,13 @@ Priority classes:
       `GGMLGroupedProjectionPrepackedHelper/{Q4_K,Q6_K}/...` rows; a short gate/up `T8` smoke measured about `4.78 ms`
       real for Q4_K and `4.93 ms` real for Q6_K, both with `max_abs_delta=0`. Default enablement remains gated on
       full-decode A/B evidence.
+- [x] P0: Add an evidence-gated prepared-weight policy for CPU AOT GGML decode:
+      completed on 2026-07-07 with `CompilerOptions::cpuAOTGGMLPrepackedWeightPolicy` and CLI/smoke/matrix support for
+      `disabled|profitable|all`. The legacy `--cpu-aot-ggml-prepacked-weights` switch still means all-format opt-in;
+      `profitable` currently routes only Q6_K through separated prepared weights because the isolated helper evidence is
+      strong there while Q4_K is still mixed. `gguf_decode_compare.py` records the policy in comparison configs, and
+      `GGUFLLaMAQuantizedExecution.CPUAOTPrepackedWeightPolicyRoutesOnlyProfitableFormats` locks the Q6-on/Q4-off
+      behavior until full-decode A/B justifies changing the default.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

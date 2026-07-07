@@ -5126,6 +5126,24 @@ namespace
 		return format == QuantizedBlockFormat::GGML_Q4_K || format == QuantizedBlockFormat::GGML_Q6_K;
 	}
 
+	bool ShouldPrepackCPUAOTGGMLFormat(QuantizedBlockFormat format, const CompilerOptions& options)
+	{
+		if (options.enableCPUAOTGGMLPrepackedWeights)
+		{
+			return IsCPUAOTPrepackedGGMLFormat(format);
+		}
+		switch (options.cpuAOTGGMLPrepackedWeightPolicy)
+		{
+		case CPUAOTGGMLPrepackedWeightPolicy::Disabled:
+			return false;
+		case CPUAOTGGMLPrepackedWeightPolicy::Profitable:
+			return format == QuantizedBlockFormat::GGML_Q6_K;
+		case CPUAOTGGMLPrepackedWeightPolicy::All:
+			return IsCPUAOTPrepackedGGMLFormat(format);
+		}
+		return false;
+	}
+
 	std::optional<std::uint64_t> GGMLPrepackedBlockBytes(QuantizedBlockFormat format)
 	{
 		switch (format)
@@ -5235,7 +5253,8 @@ namespace
 	                                                                                     const CompilerOptions& options)
 	{
 		std::vector<std::optional<QuantizationParams>> plans(graph.VariableCount());
-		if (!options.enableCPUAOTGGMLPrepackedWeights)
+		if (!options.enableCPUAOTGGMLPrepackedWeights &&
+		    options.cpuAOTGGMLPrepackedWeightPolicy == CPUAOTGGMLPrepackedWeightPolicy::Disabled)
 		{
 			return plans;
 		}
@@ -5245,7 +5264,7 @@ namespace
 		std::vector<bool> rejected(graph.VariableCount());
 		const auto recordPrepackUse = [&](const Subgraph& subgraph, NodeOutput storage,
 		                                  const QuantizationParams& params) {
-			if (!IsCPUAOTPrepackedGGMLFormat(params.blockFormat))
+			if (!ShouldPrepackCPUAOTGGMLFormat(params.blockFormat, options))
 			{
 				return;
 			}
@@ -16012,7 +16031,9 @@ namespace
 			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
 			            .ggmlBlockMatMulAffinityPolicy = static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy),
 			            .enableGGMLQ8KStagedMatMul = options.enableCPUAOTGGMLQ8KStagedMatMul,
-			            .enableGGMLPrepackedWeights = options.enableCPUAOTGGMLPrepackedWeights,
+			            .enableGGMLPrepackedWeights =
+			                options.enableCPUAOTGGMLPrepackedWeights ||
+			                options.cpuAOTGGMLPrepackedWeightPolicy != CPUAOTGGMLPrepackedWeightPolicy::Disabled,
 			        });
 			if (mlir::failed(pm.run(*module)))
 			{

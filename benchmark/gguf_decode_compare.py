@@ -87,7 +87,8 @@ def litenn_row(path: Path) -> dict[str, object]:
             f"T={cpu_aot_options.get('thread_count', 'auto')},"
             f"aff={cpu_aot_options.get('affinity', 'default')},"
             f"q8k={int(bool(cpu_aot_options.get('q8k_staged_matmul', False)))},"
-            f"prepack={int(bool(cpu_aot_options.get('ggml_prepacked_weights', False)))}"
+            f"prepack={int(bool(cpu_aot_options.get('ggml_prepacked_weights', False)))},"
+            f"prepack_policy={cpu_aot_options.get('ggml_prepacked_weight_policy', 'default')}"
         )
     return {
         "implementation": "LiteNN",

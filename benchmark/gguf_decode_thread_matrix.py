@@ -251,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Forward prepared GGML_Q4_K/GGML_Q6_K CPU AOT weight opt-in to qwen_smoke.py",
     )
+    parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-policy",
+        choices=("disabled", "profitable", "all"),
+        help="Forward prepared GGML CPU AOT weight policy to qwen_smoke.py",
+    )
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--profile-bundles", action="store_true")
@@ -303,6 +308,8 @@ def main() -> int:
             command.append("--cpu-aot-q8k-staged-matmul")
         if args.cpu_aot_ggml_prepacked_weights:
             command.append("--cpu-aot-ggml-prepacked-weights")
+        if args.cpu_aot_ggml_prepacked_weight_policy is not None:
+            command.extend(["--cpu-aot-ggml-prepacked-weight-policy", args.cpu_aot_ggml_prepacked_weight_policy])
         if thread_count > 0:
             command.extend(["--cpu-aot-threads", str(thread_count)])
         if args.stateful:

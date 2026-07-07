@@ -1457,6 +1457,96 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorQ5KQ6KAndQ8_0MatMulWithoutM
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, CPUAOTPrepackedWeightPolicyRoutesOnlyProfitableFormats)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 3;
+	constexpr std::size_t rows = 2;
+	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight", false,
+		            "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32", ".prepacked.GGML_Q4_K" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight", true,
+		            "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32", ".prepacked.GGML_Q6_K" },
+	};
+
+	for (const auto& [ggmlType, blockFormat, name, shouldPrepack, prepackedHelper, prepackedName] : cases)
+	{
+		SCOPED_TRACE(name);
+		std::vector<float> weightValues(outFeatures * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>((i * 3) % 19) - 9) * 0.125F;
+		}
+		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+
+		Graph graph;
+		const auto weightVariable = graph.AddVariable(quantizedWeight);
+		const Layer::LinearLayer layer{
+			.weightVariable = weightVariable,
+			.inFeatures = inFeatures,
+			.outFeatures = outFeatures,
+			.dtype = DataType::Float32,
+			.weightQuantization = *quantizedWeight->Quantization(),
+			.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+			.transposeWeight = true,
+		};
+		Subgraph forward;
+		const auto inputNode = forward.AddParam(DataType::Float32, { rows, inFeatures });
+		const auto output = Layer::AddLinear(forward, layer, { inputNode, 0 });
+		forward.SetResults({ output });
+		graph.SetForward(graph.AddSubgraph(std::move(forward)));
+
+		std::vector<float> inputValues(rows * inFeatures);
+		for (std::size_t i = 0; i < inputValues.size(); ++i)
+		{
+			inputValues[i] = static_cast<float>(static_cast<int>((i * 5) % 17) - 8) * 0.25F;
+		}
+		std::array<Tensor<CPU>, 1> inputs = { MakeFloatTensor(inputValues, { rows, inFeatures }) };
+		const auto dequantized = GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, name);
+		Tensor<CPU> expected(Uninitialized, { rows, outFeatures }, DataType::Float32);
+		const auto* weightData = static_cast<const float*>(dequantized.UnsafeRawData());
+		auto* expectedData = static_cast<float*>(expected.UnsafeRawData());
+		for (std::size_t row = 0; row < rows; ++row)
+		{
+			for (std::size_t column = 0; column < outFeatures; ++column)
+			{
+				float sum = 0.0F;
+				for (std::size_t reduction = 0; reduction < inFeatures; ++reduction)
+				{
+					sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
+				}
+				expectedData[row * outFeatures + column] = sum;
+			}
+		}
+
+		CompilerOptions options;
+		options.enableCPUAOTExternalRegions = true;
+		options.cpuAOTGGMLPrepackedWeightPolicy = CPUAOTGGMLPrepackedWeightPolicy::Profitable;
+		options.cpuAOTThreadCount = 2;
+		const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+		if (shouldPrepack)
+		{
+			EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), prepackedHelper));
+		}
+		else
+		{
+			EXPECT_TRUE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_ggml_block_matmul_f32"));
+			EXPECT_FALSE(ByteSpanContains(artifact.Instructions(), prepackedHelper));
+		}
+		const auto externalInfos = artifact.ExternalTensorInfos();
+		const auto hasPreparedPayload = std::ranges::any_of(externalInfos, [&](const auto& info) {
+			return info.region == "weights" && info.name.find(prepackedName) != std::string::npos;
+		});
+		EXPECT_EQ(hasPreparedPayload, shouldPrepack);
+
+		auto compiled = artifact.Load();
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), 1u);
+		ExpectTensorNear(actual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+}
+
 TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializingConcatenatedWeight)
 {
 	constexpr std::size_t inFeatures = 256;
