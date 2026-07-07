@@ -2937,6 +2937,9 @@ Priority classes:
       strong there while Q4_K is still mixed. `gguf_decode_compare.py` records the policy in comparison configs, and
       `GGUFLLaMAQuantizedExecution.CPUAOTPrepackedWeightPolicyRoutesOnlyProfitableFormats` locks the Q6-on/Q4-off
       behavior until full-decode A/B justifies changing the default.
+      Follow-up completed on 2026-07-07: `benchmark/gguf_decode_thread_matrix.py` accepts
+      `--cpu-aot-ggml-prepacked-weight-policies disabled,profitable,all`, emits policy-separated work directories, and
+      adds a Policy column so one run can capture the thread x prepared-weight-policy full-decode matrix.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

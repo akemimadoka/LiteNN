@@ -23,6 +23,7 @@ TOKENS_PER_SECOND_RE = re.compile(r"\bgenerated_tokens_per_second=(?P<value>[0-9
 PROMPT_REPLAY_MS_RE = re.compile(r"\bprompt_replay_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATION_MS_RE = re.compile(r"\bgeneration_ms=(?P<value>[0-9.eE+-]+)\b")
 FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
+PREPACKED_WEIGHT_POLICIES = ("disabled", "profitable", "all")
 
 
 def repo_root() -> Path:
@@ -42,6 +43,22 @@ def parse_threads(text: str) -> list[int]:
     if not threads:
         raise argparse.ArgumentTypeError("at least one thread count is required")
     return threads
+
+
+def parse_prepacked_weight_policies(text: str) -> list[str]:
+    policies = []
+    for item in text.split(","):
+        policy = item.strip().lower()
+        if not policy:
+            continue
+        if policy not in PREPACKED_WEIGHT_POLICIES:
+            raise argparse.ArgumentTypeError(
+                "prepacked weight policies must be one or more of disabled, profitable, all"
+            )
+        policies.append(policy)
+    if not policies:
+        raise argparse.ArgumentTypeError("at least one prepacked weight policy is required")
+    return policies
 
 
 def read_text(path: Path | None) -> str:
@@ -80,13 +97,20 @@ def step_text(report: dict[str, object], name: str) -> str:
     return ""
 
 
-def summarize_report(thread_count: int, report_path: Path, returncode: int) -> dict[str, object]:
+def summarize_report(
+    thread_count: int, prepacked_weight_policy: str | None, report_path: Path, returncode: int
+) -> dict[str, object]:
     report = load_report(report_path)
     decode_text = step_text(report, "litenn_decode_token_ids") or step_text(report, "litenn_replay_from_golden")
     analyze_text = step_text(report, "analyze")
+    cpu_aot_options = report.get("cpu_aot_options")
+    report_policy = None
+    if isinstance(cpu_aot_options, dict):
+        report_policy = cpu_aot_options.get("ggml_prepacked_weight_policy")
     return {
         "threadCount": thread_count,
         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
+        "prepackedWeightPolicy": report_policy if report_policy is not None else (prepacked_weight_policy or "default"),
         "returncode": returncode,
         "decodeMode": report.get("decode_mode"),
         "backendPolicy": report.get("backend_policy"),
@@ -110,8 +134,10 @@ def redact_command(command: list[str], model: Path, replacement: str) -> list[st
     return [replacement if item == model_text else item for item in command]
 
 
-def attach_profile_bundle(row: dict[str, object], thread_count: int, report_path: Path, out_dir: Path, python: str) -> None:
-    bundle_dir = out_dir / f"threads_{thread_count}_profile_bundle"
+def attach_profile_bundle(
+    row: dict[str, object], bundle_label: str, report_path: Path, out_dir: Path, python: str
+) -> None:
+    bundle_dir = out_dir / f"{bundle_label}_profile_bundle"
     command = [
         python,
         str(repo_root() / "benchmark" / "profile_bundle.py"),
@@ -175,8 +201,8 @@ def write_outputs(
     lines = [
         "# GGUF Decode Thread Matrix",
         "",
-        "| Threads | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
-        "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Policy | Threads | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in rows:
         def value(key: str) -> str:
@@ -191,6 +217,7 @@ def write_outputs(
             "| "
             + " | ".join(
                 [
+                    value("prepackedWeightPolicy"),
                     value("threadLabel"),
                     value("returncode"),
                     value("decodeMode"),
@@ -256,6 +283,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("disabled", "profitable", "all"),
         help="Forward prepared GGML CPU AOT weight policy to qwen_smoke.py",
     )
+    parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-policies",
+        type=parse_prepacked_weight_policies,
+        help="Comma-separated prepared-weight policy matrix, e.g. disabled,profitable,all",
+    )
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--profile-bundles", action="store_true")
@@ -267,77 +299,101 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.cpu_aot_ggml_prepacked_weight_policy is not None and args.cpu_aot_ggml_prepacked_weight_policies is not None:
+        raise SystemExit("provide either --cpu-aot-ggml-prepacked-weight-policy or --cpu-aot-ggml-prepacked-weight-policies")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model = args.model.resolve()
+    prepacked_weight_policies: list[str | None]
+    if args.cpu_aot_ggml_prepacked_weight_policy is not None:
+        prepacked_weight_policies = [args.cpu_aot_ggml_prepacked_weight_policy]
+    elif args.cpu_aot_ggml_prepacked_weight_policies is not None:
+        prepacked_weight_policies = list(args.cpu_aot_ggml_prepacked_weight_policies)
+    else:
+        prepacked_weight_policies = [None]
+    use_policy_axis = len(prepacked_weight_policies) > 1 or prepacked_weight_policies[0] is not None
 
     rows: list[dict[str, object]] = []
     commands: list[list[str]] = []
-    for thread_count in args.threads:
-        workdir = args.out_dir / f"threads_{thread_count}"
-        command = [
-            args.python,
-            str(args.qwen_smoke),
-            "--model",
-            str(model),
-            "--workdir",
-            str(workdir),
-            "--max-tokens",
-            str(args.max_tokens),
-        ]
-        if args.litenn is not None:
-            command.extend(["--litenn", str(args.litenn)])
-        if args.prompt is not None:
-            command.extend(["--prompt", args.prompt])
-        else:
-            command.extend(["--token-ids", args.token_ids])
-        if args.llamacpp_tokenizer_tool is not None:
-            command.extend(["--llamacpp-tokenizer-tool", str(args.llamacpp_tokenizer_tool)])
-        if args.max_cache_length is not None:
-            command.extend(["--max-cache-length", str(args.max_cache_length)])
-        if args.aot_cache_dir is not None:
-            command.extend(["--aot-cache-dir", str(args.aot_cache_dir)])
-        if args.require_aot_cache_hit:
-            command.append("--require-aot-cache-hit")
-        if args.no_aot_cache_write:
-            command.append("--no-aot-cache-write")
-        if args.llvm_opt_level is not None:
-            command.extend(["--llvm-opt-level", str(args.llvm_opt_level)])
-        if args.cpu_aot_affinity is not None:
-            command.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
-        if args.cpu_aot_q8k_staged_matmul:
-            command.append("--cpu-aot-q8k-staged-matmul")
-        if args.cpu_aot_ggml_prepacked_weights:
-            command.append("--cpu-aot-ggml-prepacked-weights")
-        if args.cpu_aot_ggml_prepacked_weight_policy is not None:
-            command.extend(["--cpu-aot-ggml-prepacked-weight-policy", args.cpu_aot_ggml_prepacked_weight_policy])
-        if thread_count > 0:
-            command.extend(["--cpu-aot-threads", str(thread_count)])
-        if args.stateful:
-            command.append("--stateful")
-        if args.stream_stats:
-            command.append("--stream-stats")
-
-        commands.append(redact_command(command, model, args.redacted_model_name))
-        if args.dry_run:
-            rows.append({ "threadCount": thread_count, "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}" })
-            continue
-
-        completed = subprocess.run(command, text=True, check=False)
-        report_path = workdir / "qwen_smoke_report.json"
-        if report_path.exists():
-            row = summarize_report(thread_count, report_path, completed.returncode)
-            if args.profile_bundles:
-                attach_profile_bundle(row, thread_count, report_path, args.out_dir, args.python)
-            rows.append(row)
-        else:
-            rows.append(
-                {
-                    "threadCount": thread_count,
-                    "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
-                    "returncode": completed.returncode,
-                    "report": str(report_path),
-                }
+    for prepacked_weight_policy in prepacked_weight_policies:
+        policy_label = prepacked_weight_policy or "default"
+        for thread_count in args.threads:
+            bundle_label = (
+                f"policy_{policy_label}_threads_{thread_count}" if use_policy_axis else f"threads_{thread_count}"
             )
+            workdir = args.out_dir / (
+                f"policy_{policy_label}/threads_{thread_count}" if use_policy_axis else f"threads_{thread_count}"
+            )
+            command = [
+                args.python,
+                str(args.qwen_smoke),
+                "--model",
+                str(model),
+                "--workdir",
+                str(workdir),
+                "--max-tokens",
+                str(args.max_tokens),
+            ]
+            if args.litenn is not None:
+                command.extend(["--litenn", str(args.litenn)])
+            if args.prompt is not None:
+                command.extend(["--prompt", args.prompt])
+            else:
+                command.extend(["--token-ids", args.token_ids])
+            if args.llamacpp_tokenizer_tool is not None:
+                command.extend(["--llamacpp-tokenizer-tool", str(args.llamacpp_tokenizer_tool)])
+            if args.max_cache_length is not None:
+                command.extend(["--max-cache-length", str(args.max_cache_length)])
+            if args.aot_cache_dir is not None:
+                command.extend(["--aot-cache-dir", str(args.aot_cache_dir)])
+            if args.require_aot_cache_hit:
+                command.append("--require-aot-cache-hit")
+            if args.no_aot_cache_write:
+                command.append("--no-aot-cache-write")
+            if args.llvm_opt_level is not None:
+                command.extend(["--llvm-opt-level", str(args.llvm_opt_level)])
+            if args.cpu_aot_affinity is not None:
+                command.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
+            if args.cpu_aot_q8k_staged_matmul:
+                command.append("--cpu-aot-q8k-staged-matmul")
+            if args.cpu_aot_ggml_prepacked_weights:
+                command.append("--cpu-aot-ggml-prepacked-weights")
+            if prepacked_weight_policy is not None:
+                command.extend(["--cpu-aot-ggml-prepacked-weight-policy", prepacked_weight_policy])
+            if thread_count > 0:
+                command.extend(["--cpu-aot-threads", str(thread_count)])
+            if args.stateful:
+                command.append("--stateful")
+            if args.stream_stats:
+                command.append("--stream-stats")
+
+            commands.append(redact_command(command, model, args.redacted_model_name))
+            if args.dry_run:
+                rows.append(
+                    {
+                        "threadCount": thread_count,
+                        "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
+                        "prepackedWeightPolicy": policy_label,
+                    }
+                )
+                continue
+
+            completed = subprocess.run(command, text=True, check=False)
+            report_path = workdir / "qwen_smoke_report.json"
+            if report_path.exists():
+                row = summarize_report(thread_count, prepacked_weight_policy, report_path, completed.returncode)
+                if args.profile_bundles:
+                    attach_profile_bundle(row, bundle_label, report_path, args.out_dir, args.python)
+                rows.append(row)
+            else:
+                rows.append(
+                    {
+                        "threadCount": thread_count,
+                        "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
+                        "prepackedWeightPolicy": policy_label,
+                        "returncode": completed.returncode,
+                        "report": str(report_path),
+                    }
+                )
     profile_compare = None
     if args.profile_bundles and not args.no_profile_compare:
         profile_compare = write_profile_compare(args.out_dir, rows, args.python)

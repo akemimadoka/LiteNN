@@ -193,6 +193,10 @@ Priority classes for the GGUF/Qwen decode work:
                       full-decode A/B proves it should be promoted. Validation locks this behavior with
                       `GGUFLLaMAQuantizedExecution.CPUAOTPrepackedWeightPolicyRoutesOnlyProfitableFormats`, and
                       `gguf_decode_compare.py` now records the policy in its config column.
+                      Progress on 2026-07-07: `benchmark/gguf_decode_thread_matrix.py` can now run
+                      `--cpu-aot-ggml-prepacked-weight-policies disabled,profitable,all` in one pass, writing
+                      policy-separated work directories and a Policy column in the summary. This turns the next real
+                      full-decode run into a single controlled thread x prepared-weight-policy matrix.
                 - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.
