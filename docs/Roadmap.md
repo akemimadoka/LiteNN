@@ -2961,6 +2961,10 @@ Priority classes:
       v3 repacks an explicit ABI split point before new layouts are introduced.
       Cache/report isolation slice completed on 2026-07-08: GGUF decode AOT cache keys, shared-weight cache keys,
       qwen-smoke reports, decode comparison labels, and thread-matrix rows now include the prepared layout token.
+      AVX2 reduction slice completed on 2026-07-12: prepared Q4_K/Q6_K kernels now perform their 8-lane Float32
+      horizontal reduction entirely in registers. Q4_K stayed neutral in short T8 smokes; Q6_K hidden improved from
+      about `0.757 ms` CPU to `0.558 ms`, FFN-up from about `1.98 ms` to `1.74 ms`, and grouped gate/up from about
+      `4.23 ms` to `3.91 ms`.
 - [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.

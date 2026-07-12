@@ -2425,14 +2425,9 @@ namespace
 #if LITENN_HAS_X86_AVX2_TARGET
 	LITENN_TARGET_AVX2 float HorizontalSumF32AVX2(__m256 values)
 	{
-		alignas(32) float lanes[8];
-		_mm256_store_ps(lanes, values);
-		float total = 0.0F;
-		for (float lane : lanes)
-		{
-			total += lane;
-		}
-		return total;
+		const auto halves = _mm_add_ps(_mm256_castps256_ps128(values), _mm256_extractf128_ps(values, 1));
+		const auto pairs = _mm_hadd_ps(halves, halves);
+		return _mm_cvtss_f32(_mm_hadd_ps(pairs, pairs));
 	}
 
 	LITENN_TARGET_AVX2 void AccumulateGGMLQ4KPreparedBlockF32x4AllValidAVX2(const std::uint8_t* const blocks[4],

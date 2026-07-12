@@ -236,6 +236,11 @@ Priority classes for the GGUF/Qwen decode work:
                       cache keys, `qwen_smoke.py` reports, `gguf_decode_compare.py` config labels, and
                       `gguf_decode_thread_matrix.py` Markdown rows now carry the prepared layout token. Compact/v3 can
                       therefore be benchmarked without silently reusing expanded-v1 shared weights or mixing result rows.
+                      AVX2 reduction slice completed on 2026-07-12: the expanded-v1 Q4_K/Q6_K kernels now reduce
+                      eight Float32 lanes entirely in registers instead of spilling each accumulator to a temporary
+                      array. Q4_K remained neutral; short Qwen-shaped T8 smokes moved Q6_K hidden from about `0.757 ms`
+                      CPU to `0.558 ms`, FFN-up from about `1.98 ms` to `1.74 ms`, and grouped gate/up from about
+                      `4.23 ms` to `3.91 ms`. This is retained as a production-v1 improvement while compact-v3 is built.
                 - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
                       This should store interleaved/repacked blocks rather than expanding every block into float scale
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF
