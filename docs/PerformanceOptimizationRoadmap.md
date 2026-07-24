@@ -246,13 +246,14 @@ Priority classes for the GGUF/Qwen decode work:
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF
                       footprint while preserving or improving the all-prepared full-decode speed.
                       Runtime prototype completed on 2026-07-25: added a versioned 64-byte header, x4 output-row
-                      byte-interleaved Q4_K/Q6_K payload, prepack/runtime C ABI, JIT symbol registration, parity and
+                      block-grouped Q4_K/Q6_K payload, prepack/runtime C ABI, JIT symbol registration, parity and
                       padded-tail coverage, and production-shape benchmark rows. Storage ratio is effectively `1.00`
                       on Qwen shapes and compact output exactly matches the Q8_K-staged helper. Dedicated AVX2 x4
-                      kernels removed the initial ~2x strided-decoder regression; Q6_K T8 is now approximately neutral
-                      (`hidden 1.53 vs 1.52 ms`, FFN-up `3.56 vs 3.64 ms`, FFN-down `4.00 vs 3.87 ms`), while Q4_K
-                      remains slower (`1.25 vs 0.857 ms`, `2.65 vs 1.70 ms`, `3.07 vs 2.78 ms`). Keep v3 experimental
-                      and out of AOT routing until the Q4_K kernel and expanded-v1 comparison meet the acceptance gate.
+                      kernels removed the initial ~2x strided-decoder regression. A follow-up block-grouped repack lets
+                      the mature byte-stride-1 vec-dot consume four contiguous raw blocks directly: Q6_K T8 now beats
+                      staged on hidden/FFN-up/FFN-down (`1.32 vs 1.48 ms`, `2.85 vs 3.63 ms`, `3.33 vs 3.77 ms`);
+                      Q4_K FFN-down also wins (`2.67 vs 2.78 ms`) while hidden/FFN-up remain about 10% slower. Keep v3
+                      experimental and out of AOT routing until Q4_K and expanded-v1 meet the acceptance gate.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has

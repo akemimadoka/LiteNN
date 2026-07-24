@@ -2968,10 +2968,11 @@ Priority classes:
 - [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.
-      Runtime prototype completed on 2026-07-25: a 64-byte v3 header plus x4 row-interleaved payload keeps Qwen-shaped
+      Runtime prototype completed on 2026-07-25: a 64-byte v3 header plus x4 block-grouped payload keeps Qwen-shaped
       storage at effectively `1.00x` raw GGUF size. The new prepack/runtime ABI, tail handling, JIT symbols, parity test,
-      and benchmark rows cover Q4_K/Q6_K. Dedicated AVX2 kernels brought Q6_K close to staged parity, but Q4_K remains
-      slower on T8 production rows, so compact-v3 is intentionally not routed by AOT yet.
+      and benchmark rows cover Q4_K/Q6_K. Reusing the mature byte-stride-1 vec-dot makes Q6_K faster than staged on
+      the tested T8 production rows; Q4_K is mixed and expanded-v1 remains the speed gate, so compact-v3 is
+      intentionally not routed by AOT yet.
 - [ ] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot

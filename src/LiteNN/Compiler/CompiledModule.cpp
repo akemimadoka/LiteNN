@@ -3685,11 +3685,9 @@ namespace
 			for (std::uint64_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
 			{
 				const auto* sourceBlock = source + row * sourceRowBytes + blockIndex * layout->bytesPerBlock;
-				auto* targetBlock = payload + (group * blockCount + blockIndex) * layout->bytesPerBlock * 4 + lane;
-				for (std::uint64_t byte = 0; byte < layout->bytesPerBlock; ++byte)
-				{
-					targetBlock[byte * 4] = sourceBlock[byte];
-				}
+				auto* targetBlock = payload + (group * blockCount + blockIndex) * layout->bytesPerBlock * 4 +
+				                    lane * layout->bytesPerBlock;
+				std::memcpy(targetBlock, sourceBlock, static_cast<std::size_t>(layout->bytesPerBlock));
 			}
 		}
 	}
@@ -3788,9 +3786,9 @@ namespace
 					    ctx.payload + (columnGroup * ctx.blockCount + blockIndex) * ctx.bytesPerBlock * 4;
 					const std::uint8_t* blocks[4] = {
 						interleavedBlock,
-						interleavedBlock + 1,
-						interleavedBlock + 2,
-						interleavedBlock + 3,
+						interleavedBlock + ctx.bytesPerBlock,
+						interleavedBlock + ctx.bytesPerBlock * 2,
+						interleavedBlock + ctx.bytesPerBlock * 3,
 					};
 					const auto& lhsBlock = ctx.staged[row * ctx.blockCount + blockIndex];
 					if (ctx.format == QuantizedBlockFormat::GGML_Q4_K)
@@ -3800,16 +3798,16 @@ namespace
 						{
 							if (valid[0] && valid[1] && valid[2] && valid[3])
 							{
-								AccumulateGGMLQ4KCompactInterleavedQ8Kx4AVX2(interleavedBlock, lhsBlock, acc);
+								AccumulateGGMLQ4KBlockQ8Kx4AVX2AllValid(blocks, 1, lhsBlock, acc);
 							}
 							else
 							{
-								AccumulateGGMLQ4KBlockQ8Kx4AVX2(blocks, valid, 4, lhsBlock, acc);
+								AccumulateGGMLQ4KBlockQ8Kx4AVX2(blocks, valid, 1, lhsBlock, acc);
 							}
 							continue;
 						}
 #endif
-						AccumulateGGMLQ4KBlockQ8Kx4(blocks, valid, 4, lhsBlock, acc);
+						AccumulateGGMLQ4KBlockQ8Kx4(blocks, valid, 1, lhsBlock, acc);
 					}
 					else
 					{
@@ -3818,16 +3816,16 @@ namespace
 						{
 							if (valid[0] && valid[1] && valid[2] && valid[3])
 							{
-								AccumulateGGMLQ6KCompactInterleavedQ8Kx4AVX2(interleavedBlock, lhsBlock, acc);
+								AccumulateGGMLQ6KBlockQ8Kx4AVX2AllValid(blocks, 1, lhsBlock, acc);
 							}
 							else
 							{
-								AccumulateGGMLQ6KBlockQ8Kx4AVX2(blocks, valid, 4, lhsBlock, acc);
+								AccumulateGGMLQ6KBlockQ8Kx4AVX2(blocks, valid, 1, lhsBlock, acc);
 							}
 							continue;
 						}
 #endif
-						AccumulateGGMLQ6KBlockQ8Kx4(blocks, valid, 4, lhsBlock, acc);
+						AccumulateGGMLQ6KBlockQ8Kx4(blocks, valid, 1, lhsBlock, acc);
 					}
 				}
 				for (std::uint64_t lane = 0; lane < 4; ++lane)
