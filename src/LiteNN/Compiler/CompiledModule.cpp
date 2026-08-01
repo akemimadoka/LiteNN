@@ -92,7 +92,6 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -101,9 +100,11 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <semaphore>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -370,6 +371,17 @@ namespace
 
 	using LiteNNCPUParallelForBody = void (*)(std::uint64_t begin, std::uint64_t end, void* userData);
 
+	void LiteNNCPUThreadRelax()
+	{
+#if LITENN_HAS_X86_AVX2_TARGET
+		_mm_pause();
+#elif defined(__aarch64__)
+		__asm__ volatile("yield" ::: "memory");
+#else
+		std::this_thread::yield();
+#endif
+	}
+
 	std::size_t LiteNNCPUHardwareThreadCount()
 	{
 		const auto hardware = std::thread::hardware_concurrency();
@@ -477,23 +489,26 @@ namespace
 			workers_.reserve(workerCount);
 			for (std::size_t i = 0; i < workerCount; ++i)
 			{
-				workers_.emplace_back([this, i] { WorkerLoop(i); });
+				auto worker = std::make_unique<Worker>();
+				auto* workerPtr = worker.get();
+				worker->thread = std::thread([this, workerPtr, i] { WorkerLoop(*workerPtr, i); });
+				workers_.push_back(std::move(worker));
 			}
 		}
 
 		~LiteNNCPUThreadPool()
 		{
-			{
-				std::lock_guard lock(mutex_);
-				stopping_ = true;
-				++generation_;
-			}
-			start_.notify_all();
+			stopping_.store(true, std::memory_order_release);
 			for (auto& worker : workers_)
 			{
-				if (worker.joinable())
+				worker->generation.fetch_add(1, std::memory_order_release);
+				worker->start.release();
+			}
+			for (auto& worker : workers_)
+			{
+				if (worker->thread.joinable())
 				{
-					worker.join();
+					worker->thread.join();
 				}
 			}
 		}
@@ -521,27 +536,36 @@ namespace
 			std::unique_lock runLock(runMutex_);
 			const auto desiredWorkers =
 			    std::min<std::size_t>(static_cast<std::size_t>(participantCount - 1), workers_.size());
+			begin_ = begin;
+			end_ = end;
+			grain_ = grain;
+			body_ = body;
+			userData_ = userData;
+			affinityPolicy_ = affinityPolicy;
+			next_.store(begin, std::memory_order_relaxed);
+			workersDone_.store(0, std::memory_order_relaxed);
+			desiredWorkers_ = desiredWorkers;
+			for (std::size_t i = 0; i < desiredWorkers; ++i)
 			{
-				std::lock_guard lock(mutex_);
-				begin_ = begin;
-				end_ = end;
-				grain_ = grain;
-				body_ = body;
-				userData_ = userData;
-				affinityPolicy_ = affinityPolicy;
-				next_.store(begin, std::memory_order_relaxed);
-				workersDone_ = 0;
-				desiredWorkers_ = desiredWorkers;
-				++generation_;
+				workers_[i]->generation.fetch_add(1, std::memory_order_release);
+				workers_[i]->start.release();
 			}
-			start_.notify_all();
 			RunTasks();
 
-			std::unique_lock lock(mutex_);
-			done_.wait(lock, [&] { return workersDone_ == desiredWorkers; });
+			while (workersDone_.load(std::memory_order_acquire) != desiredWorkers)
+			{
+				LiteNNCPUThreadRelax();
+			}
 		}
 
 	private:
+		struct Worker
+		{
+			std::binary_semaphore start{ 0 };
+			std::atomic<std::uint64_t> generation{};
+			std::thread thread;
+		};
+
 		void RunTasks()
 		{
 			while (true)
@@ -556,50 +580,36 @@ namespace
 			}
 		}
 
-		void WorkerLoop(std::size_t workerIndex)
+		void WorkerLoop(Worker& worker, std::size_t workerIndex)
 		{
+			constexpr std::size_t pollRounds = LITENN_HAS_X86_AVX2_TARGET ? 65536 : 64;
 			LiteNNCPUThreadAffinityState affinity;
-			std::uint64_t seenGeneration = 0;
+			auto observedGeneration = worker.generation.load(std::memory_order_relaxed);
 			while (true)
 			{
-				bool participate = false;
-				CPUAOTAffinityPolicy affinityPolicy = CPUAOTAffinityPolicy::None;
+				for (std::size_t round = 0; round < pollRounds; ++round)
 				{
-					std::unique_lock lock(mutex_);
-					start_.wait(lock, [&] { return stopping_ || generation_ != seenGeneration; });
-					if (stopping_)
+					if (worker.generation.load(std::memory_order_acquire) != observedGeneration)
 					{
-						return;
+						break;
 					}
-					seenGeneration = generation_;
-					participate = workerIndex < desiredWorkers_;
-					affinityPolicy = affinityPolicy_;
+					LiteNNCPUThreadRelax();
+				}
+				worker.start.acquire();
+				observedGeneration = worker.generation.load(std::memory_order_acquire);
+				if (stopping_.load(std::memory_order_acquire))
+				{
+					return;
 				}
 
-				if (participate)
-				{
-					affinity.Apply(affinityPolicy, workerIndex + 1);
-					RunTasks();
-
-					std::lock_guard lock(mutex_);
-					++workersDone_;
-					if (workersDone_ == desiredWorkers_)
-					{
-						done_.notify_one();
-					}
-				}
-				else
-				{
-					affinity.Apply(CPUAOTAffinityPolicy::None, workerIndex);
-				}
+				affinity.Apply(affinityPolicy_, workerIndex + 1);
+				RunTasks();
+				workersDone_.fetch_add(1, std::memory_order_release);
 			}
 		}
 
-		std::vector<std::thread> workers_;
+		std::vector<std::unique_ptr<Worker>> workers_;
 		std::mutex runMutex_;
-		std::mutex mutex_;
-		std::condition_variable start_;
-		std::condition_variable done_;
 		std::atomic<std::uint64_t> next_{ 0 };
 		std::uint64_t begin_{};
 		std::uint64_t end_{};
@@ -608,9 +618,8 @@ namespace
 		void* userData_{};
 		CPUAOTAffinityPolicy affinityPolicy_{ CPUAOTAffinityPolicy::None };
 		std::size_t desiredWorkers_{};
-		std::size_t workersDone_{};
-		std::uint64_t generation_{};
-		bool stopping_{};
+		std::atomic<std::size_t> workersDone_{};
+		std::atomic<bool> stopping_{};
 	};
 
 	LiteNNCPUThreadPool& GetLiteNNCPUThreadPool()
