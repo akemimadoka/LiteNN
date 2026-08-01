@@ -241,7 +241,7 @@ Priority classes for the GGUF/Qwen decode work:
                       array. Q4_K remained neutral; short Qwen-shaped T8 smokes moved Q6_K hidden from about `0.757 ms`
                       CPU to `0.558 ms`, FFN-up from about `1.98 ms` to `1.74 ms`, and grouped gate/up from about
                       `4.23 ms` to `3.91 ms`. This is retained as a production-v1 improvement while compact-v3 is built.
-                - [ ] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
+                - [x] Add a compact prepared-weight layout v3 for GGML_Q4_K/GGML_Q6_K decode projections.
                       This should store interleaved/repacked blocks rather than expanding every block into float scale
                       metadata plus wide quant lanes. Acceptance: shared weight size stays close to the raw GGUF
                       footprint while preserving or improving the all-prepared full-decode speed.
@@ -258,7 +258,7 @@ Priority classes for the GGUF/Qwen decode work:
                       `CPUAOTGGMLPrepackedWeightLayout::{ExpandedF32ScalesV1,CompactBlockGroupedV3}` compiler option,
                       layout-aware separated-weight generation, compact layout id `3` in GraphToMLIR, and matching
                       LLVM helper dispatch. Q4_K/Q6_K compact artifacts execute with Q8_K-staged parity and are smaller
-                      than expanded-v1 in regression coverage. Existing callers retain expanded-v1 by default.
+                      than expanded-v1 in regression coverage. Expanded-v1 remained the default for the acceptance phase.
                       Evaluation-surface slice completed on 2026-08-01: the GGUF decode CLI, environment-backed CLI
                       configuration, `qwen_smoke.py`, reports, decode artifact keys, and shared-weight keys now use the
                       selected layout instead of a hardcoded expanded-v1 token. The thread-matrix harness can run
@@ -307,8 +307,15 @@ Priority classes for the GGUF/Qwen decode work:
                       cache identity, and the `field-interleaved-v4` CLI/script token. Single projection and grouped
                       2/3-projection helpers load the v4 payload directly; grouped helpers share one Q8_K activation
                       staging pass while preserving each projection's x8 boundary. Full/tail, Q4_K/Q6_K, single/grouped
-                      AOT load-and-run coverage passes in the complete 81-test GGUF importer suite. Real 14B cache-hit
-                      acceptance remains open before v4 becomes the default.
+                      AOT load-and-run coverage passes in the complete 81-test GGUF importer suite.
+                      Real 14B acceptance completed on 2026-08-01 under the same stateful O0/T8/all-prepared eight-token
+                      cache-hit conditions as v1/v3. The v4 separated weights are `9,160,094,784` bytes: only `1.98%`
+                      above compact-v3 and `48.91%` below expanded-v1. Two no-fallback runs with identical generated tokens
+                      measured `403.054` and `449.863 ms/token` (`2.481` and `2.223 tok/s`), beating compact-v3 by
+                      `20.3%` and `11.1%` and expanded-v1 by `16.4%` and `6.7%`. The first v4 cache population measured
+                      `27.306 s` compile, `7.199 s` metadata construction, and `19.840 s` weight writing. Field-interleaved-v4
+                      is now the compiler and smoke-driver default whenever prepared GGML weights are enabled; v1/v3 remain
+                      explicit comparison/compatibility selections.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has

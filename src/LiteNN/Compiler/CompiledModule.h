@@ -188,7 +188,7 @@ namespace LiteNN
 		CPUAOTGGMLPrepackedWeightPolicy cpuAOTGGMLPrepackedWeightPolicy{ CPUAOTGGMLPrepackedWeightPolicy::Disabled };
 		/// Physical layout used for prepared GGML_Q4_K/GGML_Q6_K weights.
 		CPUAOTGGMLPrepackedWeightLayout cpuAOTGGMLPrepackedWeightLayout{
-			CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1
+			CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4
 		};
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };

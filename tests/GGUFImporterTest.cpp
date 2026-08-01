@@ -1518,6 +1518,7 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutM
 			CompilerOptions prepackedOptions;
 			prepackedOptions.enableCPUAOTExternalRegions = true;
 			prepackedOptions.enableCPUAOTGGMLPrepackedWeights = true;
+			prepackedOptions.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1;
 			prepackedOptions.cpuAOTThreadCount = 2;
 			const auto prepackedArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
 			const auto expectedHelper = blockFormat == QuantizedBlockFormat::GGML_Q4_K
@@ -1653,6 +1654,7 @@ TEST(GGUFLLaMAQuantizedExecution, CPUAOTPrepackedWeightPolicyRoutesOnlyProfitabl
 		CompilerOptions options;
 		options.enableCPUAOTExternalRegions = true;
 		options.cpuAOTGGMLPrepackedWeightPolicy = CPUAOTGGMLPrepackedWeightPolicy::Profitable;
+		options.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1;
 		options.cpuAOTThreadCount = 2;
 		const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
 		if (shouldPrepack)
@@ -1762,6 +1764,7 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	CompilerOptions prepackedOptions;
 	prepackedOptions.enableCPUAOTExternalRegions = true;
 	prepackedOptions.enableCPUAOTGGMLPrepackedWeights = true;
+	prepackedOptions.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1;
 	prepackedOptions.cpuAOTThreadCount = 2;
 	const auto prepackedArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
 	EXPECT_TRUE(

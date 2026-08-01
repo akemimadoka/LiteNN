@@ -337,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cpu-aot-ggml-prepacked-weight-layout",
         choices=tuple(PREPACKED_LAYOUT_TOKENS),
-        default="expanded-v1",
+        default="field-interleaved-v4",
         help="Select expanded-v1, compact-v3, or field-interleaved-v4 prepared GGML CPU AOT weight layout",
     )
     parser.add_argument(

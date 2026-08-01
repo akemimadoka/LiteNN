@@ -2965,7 +2965,7 @@ Priority classes:
       horizontal reduction entirely in registers. Q4_K stayed neutral in short T8 smokes; Q6_K hidden improved from
       about `0.757 ms` CPU to `0.558 ms`, FFN-up from about `1.98 ms` to `1.74 ms`, and grouped gate/up from about
       `4.23 ms` to `3.91 ms`.
-- [ ] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
+- [x] P0: Replace expanded prepared GGML decode weights with compact llama.cpp-class repacked layouts:
       add versioned compact Q4_K/Q6_K prepared layouts for decode projections, keep shared prepared weights close to
       raw GGUF size, and route AOT placeholders to the matching helper ABI only when the layout tag matches.
       Runtime prototype completed on 2026-07-25: a 64-byte v3 header plus x4 block-grouped payload keeps Qwen-shaped
@@ -2975,7 +2975,7 @@ Priority classes:
       Single-projection AOT slice completed on 2026-08-01: `CompilerOptions` now exposes an explicit expanded-v1 or
       compact-v3 prepared-weight layout, externalization writes and names the matching physical payload, GraphToMLIR
       emits compact layout id `3`, and LLVM dispatches only that id to the compact Q8_K helper. Q4_K/Q6_K artifact-load
-      execution and payload-size regressions pass. Expanded-v1 remains the default while full-decode policy data is
+      execution and payload-size regressions pass. Expanded-v1 remained the default while full-decode policy data was
       collected.
       Evaluation-surface slice completed on 2026-08-01: GGUF CLI users can select
       `--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3`; the smoke report, decode cache, and shared-weight
@@ -3011,8 +3011,13 @@ Priority classes:
       storage validation, LLVM helper selection, externalized prepared-weight generation, cache identity, and the
       `field-interleaved-v4` CLI/script token. Single projection and grouped 2/3-projection helpers load v4 payloads
       directly; grouped helpers stage the shared Q8_K activation once and keep per-projection x8 boundaries. Q4_K/Q6_K
-      single/grouped AOT load-and-run coverage passes in the complete 81-test GGUF importer suite. Real 14B cache-hit
-      acceptance remains open before v4 becomes the default.
+      single/grouped AOT load-and-run coverage passes in the complete 81-test GGUF importer suite.
+      Real 14B acceptance completed on 2026-08-01 with stateful O0/T8/all-prepared eight-token cache-hit decode. V4
+      stores `9,160,094,784` separated-weight bytes, only `1.98%` above compact-v3 and `48.91%` below expanded-v1.
+      Two no-fallback runs produced identical tokens at `403.054` and `449.863 ms/token` (`2.481` and `2.223 tok/s`),
+      beating compact-v3 by `20.3%` and `11.1%` and expanded-v1 by `16.4%` and `6.7%`. Initial cache population spent
+      `27.306 s` compiling, `7.199 s` building metadata, and `19.840 s` writing weights. Field-interleaved-v4 is now
+      the compiler and smoke-driver default when prepared GGML weights are enabled; v1/v3 remain explicit selections.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
