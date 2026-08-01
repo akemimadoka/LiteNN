@@ -539,6 +539,13 @@ Priority classes for the GGUF/Qwen decode work:
                 - [ ] Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
                       residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately.
                       This is the next blocker once quantized projection time is reduced.
+                - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
+                      2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
+                      build repeat-penalty membership once only when enabled, and consume the last Tensor logits row
+                      through a view instead of copying it. A cache-hit Qwen2.5-Coder-14B Q4_K_M T8 run preserved the
+                      exact generated token sequence while reducing generation sampling from the previous
+                      `~9-11 ms/token` to `0.119-0.221 ms/token` (`0.162 ms` mean over eight tokens). Sampling is no
+                      longer a material share of steady decode latency.
           - [ ] P1: Skip full-vocabulary logits projection for prompt replay steps that cannot be sampled.
                 The July 5 run spends about `53 ms` per logits projection and executes one on every prompt replay step.
                 Skipping all but the last replay logits improves prompt/prefill latency, though it is not a steady-state
