@@ -86,7 +86,7 @@ namespace
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -97,7 +97,7 @@ namespace
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -108,7 +108,7 @@ namespace
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -259,9 +259,14 @@ namespace
 		{
 			return "compact_block_grouped_v3";
 		}
-		if (value != "expanded_f32_scales_v1" && value != "compact_block_grouped_v3")
+		if (value == "field-interleaved" || value == "field-interleaved-v4")
 		{
-			throw std::runtime_error("cpu-aot-ggml-prepacked-weight-layout must be expanded-v1 or compact-v3");
+			return "field_interleaved_v4";
+		}
+		if (value != "expanded_f32_scales_v1" && value != "compact_block_grouped_v3" && value != "field_interleaved_v4")
+		{
+			throw std::runtime_error(
+			    "cpu-aot-ggml-prepacked-weight-layout must be expanded-v1, compact-v3, or field-interleaved-v4");
 		}
 		return value;
 	}
@@ -1309,6 +1314,8 @@ namespace
 			return "expanded_f32_scales_v1";
 		case LiteNN::CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3:
 			return "compact_block_grouped_v3";
+		case LiteNN::CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4:
+			return "field_interleaved_v4";
 		}
 		return "unknown";
 	}
@@ -2093,6 +2100,10 @@ namespace
 		if (layout == "compact_block_grouped_v3")
 		{
 			return LiteNN::CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3;
+		}
+		if (layout == "field_interleaved_v4")
+		{
+			return LiteNN::CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
 		}
 		throw std::runtime_error("unsupported CPU AOT GGML prepacked weight layout");
 	}

@@ -93,6 +93,7 @@ namespace LiteNN
 		Source = 0,
 		GGMLExpandedF32ScalesV1 = 1,
 		GGMLCompactBlockGroupedV3 = 3,
+		GGMLFieldInterleavedV4 = 4,
 	};
 
 	struct QuantizationParams
@@ -595,7 +596,8 @@ namespace LiteNN
 		case QuantizationScheme::Block:
 			if (params.storageLayout != QuantizedStorageLayout::Source &&
 			    params.storageLayout != QuantizedStorageLayout::GGMLExpandedF32ScalesV1 &&
-			    params.storageLayout != QuantizedStorageLayout::GGMLCompactBlockGroupedV3)
+			    params.storageLayout != QuantizedStorageLayout::GGMLCompactBlockGroupedV3 &&
+			    params.storageLayout != QuantizedStorageLayout::GGMLFieldInterleavedV4)
 			{
 				throw std::runtime_error("Unsupported quantized storage layout");
 			}

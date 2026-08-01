@@ -3006,8 +3006,13 @@ Priority classes:
       loadable scale/min vectors and Q6_K remains `1.00x`; portable full/tail and AVX2 x8 paths match staged output
       exactly. Relative to paired-dot v3, T8 rows measured Q4 hidden `0.506 vs 0.801 ms`, Q4 FFN-down
       `1.36 vs 2.16 ms`, Q6 FFN-down `1.74 vs 2.76 ms`, and Q6 logits `14.3 vs 20.0 ms`. JIT symbols and benchmark
-      coverage are complete. The item remains open for an explicit AOT layout id, externalized v4 weights, grouped
-      projection ABI, CLI/cache isolation, and real 14B cache-hit acceptance.
+      coverage are complete.
+      AOT wiring completed on 2026-08-01: explicit layout id `4` is carried through quantization metadata, Plan/MLIR
+      storage validation, LLVM helper selection, externalized prepared-weight generation, cache identity, and the
+      `field-interleaved-v4` CLI/script token. Single projection and grouped 2/3-projection helpers load v4 payloads
+      directly; grouped helpers stage the shared Q8_K activation once and keep per-projection x8 boundaries. Q4_K/Q6_K
+      single/grouped AOT load-and-run coverage passes in the complete 81-test GGUF importer suite. Real 14B cache-hit
+      acceptance remains open before v4 becomes the default.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the

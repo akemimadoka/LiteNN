@@ -75,6 +75,8 @@ namespace litenn
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ6KPrepackedHelper =
 		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulCompactQ8KHelper = "litenn_cpu_ggml_block_matmul_compact_q8k_f32";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulFieldInterleavedV4Q8KHelper =
+		    "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q8KStagedHelper =
@@ -85,6 +87,10 @@ namespace litenn
 		    "litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3CompactQ8KHelper =
 		    "litenn_cpu_ggml_block_grouped_matmul3_compact_q8k_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2FieldInterleavedV4Q8KHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3FieldInterleavedV4Q8KHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q4KPrepackedHelper =
 		    "litenn_cpu_ggml_block_grouped_matmul2_q4k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q6KPrepackedHelper =
@@ -97,6 +103,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
 		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
 		constexpr std::int64_t kGGMLPreparedLayoutCompactBlockGroupedV3 = 3;
+		constexpr std::int64_t kGGMLPreparedLayoutFieldInterleavedV4 = 4;
 
 		bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
 		{
@@ -325,6 +332,8 @@ namespace litenn
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutExpandedF32ScalesV1;
 			const auto usesCompactPreparedLayout =
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutCompactBlockGroupedV3;
+			const auto usesFieldInterleavedPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutFieldInterleavedV4;
 			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
 			if (hasPreparedLayout)
 			{
@@ -332,12 +341,17 @@ namespace litenn
 				{
 					return mlir::failure();
 				}
-				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout)
+				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout && !usesFieldInterleavedPreparedLayout)
 				{
 					return mlir::failure();
 				}
-				if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
-				                                  blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				if (usesFieldInterleavedPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                           blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				{
+					helperName = kGGMLBlockMatMulFieldInterleavedV4Q8KHelper;
+				}
+				else if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                       blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
 				{
 					helperName = kGGMLBlockMatMulCompactQ8KHelper;
 				}
@@ -481,6 +495,8 @@ namespace litenn
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutExpandedF32ScalesV1;
 			const auto usesCompactPreparedLayout =
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutCompactBlockGroupedV3;
+			const auto usesFieldInterleavedPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutFieldInterleavedV4;
 			llvm::StringRef helperName;
 			if (hasPreparedLayout)
 			{
@@ -488,12 +504,18 @@ namespace litenn
 				{
 					return mlir::failure();
 				}
-				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout)
+				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout && !usesFieldInterleavedPreparedLayout)
 				{
 					return mlir::failure();
 				}
-				if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
-				                                  blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				if (usesFieldInterleavedPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                           blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				{
+					helperName = projectionCount == 2 ? kGGMLBlockGroupedMatMul2FieldInterleavedV4Q8KHelper
+					                                  : kGGMLBlockGroupedMatMul3FieldInterleavedV4Q8KHelper;
+				}
+				else if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                       blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
 				{
 					helperName = projectionCount == 2 ? kGGMLBlockGroupedMatMul2CompactQ8KHelper
 					                                  : kGGMLBlockGroupedMatMul3CompactQ8KHelper;

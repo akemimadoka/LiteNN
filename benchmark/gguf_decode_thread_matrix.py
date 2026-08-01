@@ -24,10 +24,11 @@ PROMPT_REPLAY_MS_RE = re.compile(r"\bprompt_replay_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATION_MS_RE = re.compile(r"\bgeneration_ms=(?P<value>[0-9.eE+-]+)\b")
 FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
 PREPACKED_WEIGHT_POLICIES = ("disabled", "profitable", "all")
-PREPACKED_WEIGHT_LAYOUTS = ("expanded-v1", "compact-v3")
+PREPACKED_WEIGHT_LAYOUTS = ("expanded-v1", "compact-v3", "field-interleaved-v4")
 PREPACKED_LAYOUT_TOKENS = {
     "expanded-v1": "expanded_f32_scales_v1",
     "compact-v3": "compact_block_grouped_v3",
+    "field-interleaved-v4": "field_interleaved_v4",
 }
 
 
@@ -73,7 +74,9 @@ def parse_prepacked_weight_layouts(text: str) -> list[str]:
         if not layout:
             continue
         if layout not in PREPACKED_WEIGHT_LAYOUTS:
-            raise argparse.ArgumentTypeError("prepacked weight layouts must be expanded-v1 or compact-v3")
+            raise argparse.ArgumentTypeError(
+                "prepacked weight layouts must be expanded-v1, compact-v3, or field-interleaved-v4"
+            )
         layouts.append(layout)
     if not layouts:
         raise argparse.ArgumentTypeError("at least one prepacked weight layout is required")
@@ -319,7 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cpu-aot-ggml-prepacked-weight-layouts",
         type=parse_prepacked_weight_layouts,
-        help="Comma-separated prepared-weight layout matrix, e.g. expanded-v1,compact-v3",
+        help="Comma-separated prepared-weight layout matrix, e.g. expanded-v1,compact-v3,field-interleaved-v4",
     )
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")

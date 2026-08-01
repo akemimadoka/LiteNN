@@ -1555,6 +1555,22 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutM
 			const auto compactActual = compactCompiled.RunTensors(inputs);
 			ASSERT_EQ(compactActual.size(), 1u);
 			ExpectTensorNear(compactActual[0], expected, { .absolute = 3.0e-2, .relative = 1.0e-4 });
+
+			prepackedOptions.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
+			const auto fieldInterleavedArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
+			EXPECT_TRUE(ByteSpanContains(fieldInterleavedArtifact.Instructions(),
+			                             "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+			const auto fieldInterleavedExternalInfos = fieldInterleavedArtifact.ExternalTensorInfos();
+			const auto fieldInterleavedWeight =
+			    std::ranges::find_if(fieldInterleavedExternalInfos, [](const auto& info) {
+				    return info.region == "weights" &&
+				           info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
+			    });
+			ASSERT_NE(fieldInterleavedWeight, fieldInterleavedExternalInfos.end());
+			auto fieldInterleavedCompiled = fieldInterleavedArtifact.Load();
+			const auto fieldInterleavedActual = fieldInterleavedCompiled.RunTensors(inputs);
+			ASSERT_EQ(fieldInterleavedActual.size(), 1u);
+			ExpectTensorNear(fieldInterleavedActual[0], expected, { .absolute = 3.0e-2, .relative = 1.0e-4 });
 		}
 		if (blockFormat == QuantizedBlockFormat::GGML_Q4_K || blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
 		    blockFormat == QuantizedBlockFormat::GGML_Q6_K)
@@ -1896,6 +1912,26 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedKQuantProjectionToQ8KStagedHelp
 			for (std::size_t i = 0; i < expected.size(); ++i)
 			{
 				ExpectTensorNear(compactActual[i], expected[i], { .absolute = 3.0e-2, .relative = 1.0e-4 });
+			}
+
+			options.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
+			const auto fieldInterleavedArtifact =
+			    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+			const auto fieldInterleavedHelper =
+			    outFeatures.size() == 2 ? "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32"
+			                            : "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32";
+			EXPECT_TRUE(ByteSpanContains(fieldInterleavedArtifact.Instructions(), fieldInterleavedHelper));
+			const auto fieldInterleavedWeightCount =
+			    std::ranges::count_if(fieldInterleavedArtifact.ExternalTensorInfos(), [](const auto& info) {
+				    return info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
+			    });
+			EXPECT_EQ(fieldInterleavedWeightCount, outFeatures.size());
+			auto fieldInterleavedCompiled = fieldInterleavedArtifact.Load();
+			const auto fieldInterleavedActual = fieldInterleavedCompiled.RunTensors(inputs);
+			ASSERT_EQ(fieldInterleavedActual.size(), expected.size());
+			for (std::size_t i = 0; i < expected.size(); ++i)
+			{
+				ExpectTensorNear(fieldInterleavedActual[i], expected[i], { .absolute = 3.0e-2, .relative = 1.0e-4 });
 			}
 		}
 	};

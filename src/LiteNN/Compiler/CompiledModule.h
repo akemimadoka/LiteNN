@@ -147,6 +147,7 @@ namespace LiteNN
 	{
 		ExpandedF32ScalesV1 = 1,
 		CompactBlockGroupedV3 = 3,
+		FieldInterleavedV4 = 4,
 	};
 
 	struct CompiledModuleExternalTensorInfo

@@ -301,8 +301,14 @@ Priority classes for the GGUF/Qwen decode work:
                       Portable full/tail execution and AVX2 x8 execution both match Q8_K-staged output exactly. Against
                       the paired-dot v3 T8 rows, v4 measured Q4 hidden `0.506 vs 0.801 ms`, Q4 FFN-down
                       `1.36 vs 2.16 ms`, Q6 FFN-down `1.74 vs 2.76 ms`, and Q6 logits `14.3 vs 20.0 ms`. JIT symbols and
-                      benchmark rows are available; AOT layout id, externalized-weight generation, grouped projection
-                      ABI, and real 14B cache-hit acceptance remain open before v4 can be selected by users.
+                      benchmark rows are available.
+                      AOT wiring completed on 2026-08-01: explicit layout id `4` now propagates through quantization
+                      metadata, Plan-to-MLIR validation, LLVM helper selection, externalized prepared-weight payloads,
+                      cache identity, and the `field-interleaved-v4` CLI/script token. Single projection and grouped
+                      2/3-projection helpers load the v4 payload directly; grouped helpers share one Q8_K activation
+                      staging pass while preserving each projection's x8 boundary. Full/tail, Q4_K/Q6_K, single/grouped
+                      AOT load-and-run coverage passes in the complete 81-test GGUF importer suite. Real 14B cache-hit
+                      acceptance remains open before v4 becomes the default.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
@@ -360,7 +366,10 @@ Priority classes for the GGUF/Qwen decode work:
                       x8 prototype completed on 2026-08-01: field-interleaved-v4 groups eight output rows and converts
                       each four-byte quant chunk into eight Int32 partial sums per AVX2 load. Production-shaped T8
                       single-projection rows improve by roughly `6.6%` to `37%` over paired-dot v3 with exact parity.
-                      Remaining work is AOT/grouped wiring and full-decode acceptance; only then may v4 replace v3.
+                      AOT/grouped wiring completed on 2026-08-01: externalized v4 weights, id-4 MLIR lowering,
+                      single-projection and shared-staging grouped 2/3 helpers, CLI/cache isolation, and load-and-run
+                      regression coverage are complete. Full 14B decode acceptance remains the final gate before v4
+                      may replace v3.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

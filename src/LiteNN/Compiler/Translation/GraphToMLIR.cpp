@@ -175,7 +175,9 @@ namespace litenn
 
 		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
 		constexpr std::int64_t kGGMLPreparedLayoutCompactBlockGroupedV3 = 3;
+		constexpr std::int64_t kGGMLPreparedLayoutFieldInterleavedV4 = 4;
 		constexpr std::size_t kGGMLCompactBlockGroupedHeaderBytes = 64;
+		constexpr std::size_t kGGMLFieldInterleavedV4HeaderBytes = 64;
 
 		std::optional<std::size_t> GGMLCompactBlockGroupedBytes(QuantizedBlockFormat format, std::size_t rows,
 		                                                        std::size_t columns)
@@ -196,6 +198,30 @@ namespace litenn
 				return std::nullopt;
 			}
 			return kGGMLCompactBlockGroupedHeaderBytes + paddedRows * blockCount * layout->bytesPerBlock;
+		}
+
+		std::optional<std::size_t> GGMLFieldInterleavedV4Bytes(QuantizedBlockFormat format, std::size_t rows,
+		                                                       std::size_t columns)
+		{
+			const auto layout = GetQuantizedBlockLayout(format);
+			const auto groupBlockBytes = format == QuantizedBlockFormat::GGML_Q4_K ? std::optional<std::size_t>{ 1184 }
+			                             : format == QuantizedBlockFormat::GGML_Q6_K
+			                                 ? std::optional<std::size_t>{ 1680 }
+			                                 : std::nullopt;
+			if (!layout || !groupBlockBytes || columns == 0 || columns % layout->elementsPerBlock != 0 ||
+			    rows > std::numeric_limits<std::size_t>::max() - 7)
+			{
+				return std::nullopt;
+			}
+			const auto rowGroups = (rows + 7) / 8;
+			const auto blockCount = columns / layout->elementsPerBlock;
+			if (rowGroups != 0 &&
+			    blockCount > (std::numeric_limits<std::size_t>::max() - kGGMLFieldInterleavedV4HeaderBytes) /
+			                     rowGroups / *groupBlockBytes)
+			{
+				return std::nullopt;
+			}
+			return kGGMLFieldInterleavedV4HeaderBytes + rowGroups * blockCount * *groupBlockBytes;
 		}
 
 		// Extract tensor data to DenseElementsAttr
@@ -1288,6 +1314,8 @@ namespace litenn
 					    preparedBlockBytes ? std::optional<std::size_t>{ n * blockCount * *preparedBlockBytes }
 					                       : std::nullopt;
 					const auto expectedCompactBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, n, k);
+					const auto expectedFieldInterleavedBytes =
+					    GGMLFieldInterleavedV4Bytes(node.params.blockFormat, n, k);
 					std::optional<std::int64_t> preparedLayout;
 					std::optional<std::size_t> expectedStorageBytes;
 					switch (node.params.storageLayout)
@@ -1302,6 +1330,10 @@ namespace litenn
 					case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
 						expectedStorageBytes = expectedCompactBytes;
 						preparedLayout = kGGMLPreparedLayoutCompactBlockGroupedV3;
+						break;
+					case QuantizedStorageLayout::GGMLFieldInterleavedV4:
+						expectedStorageBytes = expectedFieldInterleavedBytes;
+						preparedLayout = kGGMLPreparedLayoutFieldInterleavedV4;
 						break;
 					default:
 						break;
@@ -1844,6 +1876,9 @@ namespace litenn
 				case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
 					preparedLayout = kGGMLPreparedLayoutCompactBlockGroupedV3;
 					break;
+				case QuantizedStorageLayout::GGMLFieldInterleavedV4:
+					preparedLayout = kGGMLPreparedLayoutFieldInterleavedV4;
+					break;
 				default:
 					throw std::runtime_error(
 					    "GraphToMLIR GroupedQuantizedMatMulNode has an unsupported explicit storage layout");
@@ -1865,6 +1900,9 @@ namespace litenn
 						break;
 					case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
 						expectedStorageBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, width, k);
+						break;
+					case QuantizedStorageLayout::GGMLFieldInterleavedV4:
+						expectedStorageBytes = GGMLFieldInterleavedV4Bytes(node.params.blockFormat, width, k);
 						break;
 					default:
 						break;

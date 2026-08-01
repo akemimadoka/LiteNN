@@ -41,6 +41,7 @@ TIMED_LINE_RE = re.compile(r"^\[LiteNN (?P<category>compile|gguf)\] (?P<label>.+
 PREPACKED_LAYOUT_TOKENS = {
     "expanded-v1": "expanded_f32_scales_v1",
     "compact-v3": "compact_block_grouped_v3",
+    "field-interleaved-v4": "field_interleaved_v4",
 }
 
 
@@ -337,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cpu-aot-ggml-prepacked-weight-layout",
         choices=tuple(PREPACKED_LAYOUT_TOKENS),
         default="expanded-v1",
-        help="Select expanded-v1 or compact-v3 prepared GGML CPU AOT weight layout",
+        help="Select expanded-v1, compact-v3, or field-interleaved-v4 prepared GGML CPU AOT weight layout",
     )
     parser.add_argument(
         "--no-compile-diagnostics",

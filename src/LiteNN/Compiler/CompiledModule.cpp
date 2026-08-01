@@ -4235,6 +4235,292 @@ namespace
 		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
 	}
 
+	struct GGMLFieldInterleavedV4MatMulProjection
+	{
+		const std::uint8_t* payload{};
+		std::uint64_t outColumns{};
+		std::uint64_t outputColumnOffset{};
+		std::uint64_t groupOffset{};
+		std::uint64_t groupBlockBytes{};
+	};
+
+	void LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(
+	    const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride,
+	    std::span<const GGMLBlockMatMulProjection> sourceProjections, float* outAligned, std::int64_t outOffset,
+	    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+	    std::uint64_t formatValue, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
+	{
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || !lhsAligned || !outAligned || lhsRows < 0 || lhsColumns <= 0 || outRows < 0 || outColumns <= 0 ||
+		    lhsRows != outRows || sourceProjections.size() < 2 || sourceProjections.size() > 3 ||
+		    (format != QuantizedBlockFormat::GGML_Q4_K && format != QuantizedBlockFormat::GGML_Q6_K) ||
+		    static_cast<std::uint64_t>(lhsColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+
+		std::vector<GGMLFieldInterleavedV4MatMulProjection> projections;
+		projections.reserve(sourceProjections.size());
+		std::uint64_t outputColumnOffset = 0;
+		std::uint64_t groupOffset = 0;
+		for (const auto& source : sourceProjections)
+		{
+			if (source.outColumns <= 0 ||
+			    static_cast<std::uint64_t>(source.outColumns) >
+			        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - outputColumnOffset)
+			{
+				return;
+			}
+			const auto* header = ResolveGGMLFieldInterleavedV4Header(
+			    source.rhsAligned, source.rhsOffset, source.rhsBytes, source.rhsStride, format,
+			    static_cast<std::uint64_t>(source.outColumns), static_cast<std::uint64_t>(lhsColumns));
+			if (!header)
+			{
+				return;
+			}
+			const auto width = static_cast<std::uint64_t>(source.outColumns);
+			projections.push_back({
+			    .payload = reinterpret_cast<const std::uint8_t*>(header + 1),
+			    .outColumns = width,
+			    .outputColumnOffset = outputColumnOffset,
+			    .groupOffset = groupOffset,
+			    .groupBlockBytes = header->bytesPerGroupBlock,
+			});
+			outputColumnOffset += width;
+			groupOffset += (width + 7) / 8;
+		}
+		if (outputColumnOffset != static_cast<std::uint64_t>(outColumns))
+		{
+			return;
+		}
+
+		const auto blockCount = static_cast<std::uint64_t>(lhsColumns) / layout->elementsPerBlock;
+		std::vector<GGMLQ8KActivationBlock> staged(
+		    static_cast<std::size_t>(static_cast<std::uint64_t>(lhsRows) * blockCount));
+		for (std::int64_t row = 0; row < lhsRows; ++row)
+		{
+			const auto* lhsRow = lhsAligned + lhsOffset + row * lhsRowStride;
+			for (std::uint64_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
+			{
+				QuantizeGGMLQ8KActivationBlock(
+				    lhsRow + static_cast<std::int64_t>(blockIndex * layout->elementsPerBlock) * lhsColumnStride,
+				    lhsColumnStride,
+				    staged[static_cast<std::size_t>(static_cast<std::uint64_t>(row) * blockCount + blockIndex)]);
+			}
+		}
+
+		bool useAVX2 = false;
+#if LITENN_HAS_X86_AVX2_TARGET
+		useAVX2 = LiteNNCPUHasAVX2();
+#endif
+		struct Context
+		{
+			const GGMLFieldInterleavedV4MatMulProjection* projections{};
+			std::uint64_t projectionCount{};
+			const GGMLQ8KActivationBlock* staged{};
+			float* outAligned{};
+			std::int64_t outOffset{};
+			std::int64_t outRowStride{};
+			std::int64_t outColumnStride{};
+			std::uint64_t blockCount{};
+			std::uint64_t groupsPerRow{};
+			QuantizedBlockFormat format{};
+			bool useAVX2{};
+		};
+		Context context{
+			.projections = projections.data(),
+			.projectionCount = projections.size(),
+			.staged = staged.data(),
+			.outAligned = outAligned,
+			.outOffset = outOffset,
+			.outRowStride = outRowStride,
+			.outColumnStride = outColumnStride,
+			.blockCount = blockCount,
+			.groupsPerRow = groupOffset,
+			.format = format,
+			.useAVX2 = useAVX2,
+		};
+		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
+			const auto& ctx = *static_cast<const Context*>(userData);
+			for (std::uint64_t outputGroup = begin; outputGroup < end; ++outputGroup)
+			{
+				const auto row = outputGroup / ctx.groupsPerRow;
+				const auto groupWithinRow = outputGroup % ctx.groupsPerRow;
+				const GGMLFieldInterleavedV4MatMulProjection* projection = nullptr;
+				for (std::uint64_t projectionIndex = 0; projectionIndex < ctx.projectionCount; ++projectionIndex)
+				{
+					const auto& candidate = ctx.projections[projectionIndex];
+					if (groupWithinRow >= candidate.groupOffset &&
+					    groupWithinRow < candidate.groupOffset + (candidate.outColumns + 7) / 8)
+					{
+						projection = &candidate;
+						break;
+					}
+				}
+				if (!projection)
+				{
+					continue;
+				}
+				const auto projectionGroup = groupWithinRow - projection->groupOffset;
+				const auto columnBase = projectionGroup * 8;
+				bool valid[8];
+				bool allValid = true;
+				for (std::uint64_t lane = 0; lane < 8; ++lane)
+				{
+					valid[lane] = columnBase + lane < projection->outColumns;
+					allValid = allValid && valid[lane];
+				}
+				float acc[8] = {};
+				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
+				{
+					const auto* packedBlock = projection->payload + (projectionGroup * ctx.blockCount + blockIndex) *
+					                                                    projection->groupBlockBytes;
+					const auto& lhsBlock = ctx.staged[row * ctx.blockCount + blockIndex];
+					if (ctx.format == QuantizedBlockFormat::GGML_Q4_K)
+					{
+						const auto& block = *reinterpret_cast<const GGMLQ4KFieldInterleaved8Block*>(packedBlock);
+#if LITENN_HAS_X86_AVX2_TARGET
+						if (allValid && ctx.useAVX2)
+						{
+							AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8AVX2(block, lhsBlock, acc);
+						}
+						else
+#endif
+						{
+							AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8(block, valid, lhsBlock, acc);
+						}
+					}
+					else
+					{
+						const auto& block = *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock);
+#if LITENN_HAS_X86_AVX2_TARGET
+						if (allValid && ctx.useAVX2)
+						{
+							AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8AVX2(block, lhsBlock, acc);
+						}
+						else
+#endif
+						{
+							AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8(block, valid, lhsBlock, acc);
+						}
+					}
+				}
+				for (std::uint64_t lane = 0; lane < 8; ++lane)
+				{
+					if (valid[lane])
+					{
+						const auto outputColumn = projection->outputColumnOffset + columnBase + lane;
+						ctx.outAligned[ctx.outOffset + static_cast<std::int64_t>(row) * ctx.outRowStride +
+						               static_cast<std::int64_t>(outputColumn) * ctx.outColumnStride] = acc[lane];
+					}
+				}
+			}
+		};
+		const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * groupOffset;
+		const auto operations = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(lhsColumns) *
+		                        static_cast<std::uint64_t>(outColumns);
+		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
+		                                                           outputGroups, requestedThreadCount);
+		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
+		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
+		                                ? CPUAOTAffinityPolicy::Compact
+		                                : CPUAOTAffinityPolicy::None;
+		if (threadCount <= 1)
+		{
+			body(0, outputGroups, &context);
+			return;
+		}
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+	}
+
+	extern "C" void litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
+	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+	    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+	    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+	    float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	    std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t out0Columns,
+	    std::uint64_t out1Columns, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
+	{
+		if (out0Columns > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+		    out1Columns > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+		{
+			return;
+		}
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
+		                                            outRows, outColumns, requestedThreadCount)
+		        : std::string{});
+		const std::array projections{
+			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
+			                           .rhsOffset = rhs0Offset,
+			                           .rhsBytes = rhs0Bytes,
+			                           .rhsStride = rhs0Stride,
+			                           .outColumns = static_cast<std::int64_t>(out0Columns) },
+			GGMLBlockMatMulProjection{ .rhsAligned = rhs1Aligned,
+			                           .rhsOffset = rhs1Offset,
+			                           .rhsBytes = rhs1Bytes,
+			                           .rhsStride = rhs1Stride,
+			                           .outColumns = static_cast<std::int64_t>(out1Columns) },
+		};
+		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
+		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,
+		                                                  outColumns, outRowStride, outColumnStride, formatValue,
+		                                                  requestedThreadCount, affinityPolicyValue);
+	}
+
+	extern "C" void litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32(
+	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+	    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+	    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+	    const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset, std::int64_t rhs2Bytes,
+	    std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+	    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+	    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns,
+	    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue)
+	{
+		if (out0Columns > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+		    out1Columns > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+		    out2Columns > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+		{
+			return;
+		}
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
+		                                            outRows, outColumns, requestedThreadCount)
+		        : std::string{});
+		const std::array projections{
+			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
+			                           .rhsOffset = rhs0Offset,
+			                           .rhsBytes = rhs0Bytes,
+			                           .rhsStride = rhs0Stride,
+			                           .outColumns = static_cast<std::int64_t>(out0Columns) },
+			GGMLBlockMatMulProjection{ .rhsAligned = rhs1Aligned,
+			                           .rhsOffset = rhs1Offset,
+			                           .rhsBytes = rhs1Bytes,
+			                           .rhsStride = rhs1Stride,
+			                           .outColumns = static_cast<std::int64_t>(out1Columns) },
+			GGMLBlockMatMulProjection{ .rhsAligned = rhs2Aligned,
+			                           .rhsOffset = rhs2Offset,
+			                           .rhsBytes = rhs2Bytes,
+			                           .rhsStride = rhs2Stride,
+			                           .outColumns = static_cast<std::int64_t>(out2Columns) },
+		};
+		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
+		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,
+		                                                  outColumns, outRowStride, outColumnStride, formatValue,
+		                                                  requestedThreadCount, affinityPolicyValue);
+	}
+
 	void AccumulateGGMLCompactBlockQ8Kx4(QuantizedBlockFormat format, const std::uint8_t* const blocks[4],
 	                                     const bool valid[4], const GGMLQ8KActivationBlock& lhsBlock, float acc[4])
 	{
@@ -7070,6 +7356,7 @@ namespace
 
 	constexpr std::string_view kGGMLPrepackedExpandedF32ScalesV1Name = "expanded_f32_scales_v1";
 	constexpr std::string_view kGGMLPrepackedCompactBlockGroupedV3Name = "compact_block_grouped_v3";
+	constexpr std::string_view kGGMLPrepackedFieldInterleavedV4Name = "field_interleaved_v4";
 
 	std::string_view GGMLPrepackedLayoutName(CPUAOTGGMLPrepackedWeightLayout preparedLayout)
 	{
@@ -7079,6 +7366,8 @@ namespace
 			return kGGMLPrepackedExpandedF32ScalesV1Name;
 		case CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3:
 			return kGGMLPrepackedCompactBlockGroupedV3Name;
+		case CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4:
+			return kGGMLPrepackedFieldInterleavedV4Name;
 		}
 		return "unknown";
 	}
@@ -7091,6 +7380,8 @@ namespace
 			return QuantizedStorageLayout::GGMLExpandedF32ScalesV1;
 		case CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3:
 			return QuantizedStorageLayout::GGMLCompactBlockGroupedV3;
+		case CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4:
+			return QuantizedStorageLayout::GGMLFieldInterleavedV4;
 		}
 		return QuantizedStorageLayout::Source;
 	}
@@ -7118,6 +7409,17 @@ namespace
 				return std::nullopt;
 			}
 			return std::vector<std::size_t>{ static_cast<std::size_t>(*compactBytes) };
+		}
+		if (preparedLayout == CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4)
+		{
+			const auto interleavedBytes =
+			    GGMLFieldInterleavedV4ByteSize(params.blockFormat, static_cast<std::uint64_t>(params.expressedShape[0]),
+			                                   static_cast<std::uint64_t>(params.expressedShape[1]));
+			if (!interleavedBytes || *interleavedBytes > std::numeric_limits<std::size_t>::max())
+			{
+				return std::nullopt;
+			}
+			return std::vector<std::size_t>{ static_cast<std::size_t>(*interleavedBytes) };
 		}
 		if (preparedLayout != CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1)
 		{
@@ -7179,6 +7481,14 @@ namespace
 		if (preparedLayout == CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3)
 		{
 			litenn_cpu_ggml_prepack_compact_interleaved(
+			    source, source, 0, static_cast<std::int64_t>(tensor.NumElements()), 1, static_cast<std::int64_t>(rows),
+			    static_cast<std::int64_t>(columns), static_cast<std::uint64_t>(params.blockFormat), target, target, 0,
+			    static_cast<std::int64_t>(preparedByteSize), 1);
+			return offset;
+		}
+		if (preparedLayout == CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4)
+		{
+			litenn_cpu_ggml_prepack_field_interleaved_v4(
 			    source, source, 0, static_cast<std::int64_t>(tensor.NumElements()), 1, static_cast<std::int64_t>(rows),
 			    static_cast<std::int64_t>(columns), static_cast<std::uint64_t>(params.blockFormat), target, target, 0,
 			    static_cast<std::int64_t>(preparedByteSize), 1);
@@ -9127,6 +9437,12 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_prepack_field_interleaved_v4));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32));
+		RegisterJITRuntimeSymbol(
+		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
+		    reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32));
+		RegisterJITRuntimeSymbol(
+		    "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32",
+		    reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_grouped_matmul3_compact_q8k_f32",
