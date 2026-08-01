@@ -3040,6 +3040,12 @@ Priority classes:
       to `8.69/13.3 ms`. A selective no-fallback acceptance run reproduced the exact token sequence at
       `360.743 ms/token` (`2.772 tok/s`) and reduced the step-16 Q6_K logits row from `16.486` to `14.049 ms`, while
       whole-step latency remained inside the observed host-frequency range.
+      The v4 AVX2 kernels now use a separate AVX2+F16C runtime gate and convert eight packed FP16 scales with one
+      `vcvtph2ps`; CPUs without both features retain the portable implementation. Exact-parity T8 medians improved
+      Q4_K hidden/up/down from `0.355/0.709/0.715` to `0.283/0.549/0.508 ms` and Q6_K from
+      `0.413/1.16/1.15` to `0.338/0.970/1.00 ms`. A real 14B cache-hit run generated the identical token sequence with
+      no fallback at `314.807 ms/token` (`3.177 tok/s`), a `12.7%` latency reduction from the preceding selective-x16
+      run and `7.9%` below the prior best `341.854 ms/token` scalar-conversion run.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
@@ -3079,6 +3085,9 @@ Priority classes:
       activation loads across adjacent x8 groups, but real-model evidence limits it to output widths >=8192. This closes
       the logits-specific slice; gate/up, hidden/output, FFN-down, and KV still require dedicated low-thread kernels, so
       the overall P0 remains open.
+      F16C progress completed on 2026-08-01: vector FP16 scale conversion accelerates both x8 and x16 v4 kernels behind
+      an AVX2+F16C feature gate and reduced real 14B generated-token latency to `314.807 ms`. The step-16 helper total is
+      still about `288 ms`, so further work remains concentrated in quantized projection kernels rather than host code.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

@@ -384,6 +384,14 @@ Priority classes for the GGUF/Qwen decode work:
                       projections remain on x8. A selective no-fallback acceptance run reproduced the exact token
                       sequence at `360.743 ms/token` (`2.772 tok/s`) and reduced the step-16 Q6_K logits row from
                       `16.486` to `14.049 ms`; overall decode remains within the observed host-frequency variance.
+                      F16 scale conversion follow-up completed on 2026-08-01: v4 AVX2 kernels now require and
+                      runtime-check F16C, then convert all eight packed FP16 block scales with one `vcvtph2ps` instead
+                      of eight calls through the portable scalar decoder. CPUs without AVX2+F16C keep the existing
+                      portable path. Exact-parity T8 medians improved Q4_K hidden/up/down from `0.355/0.709/0.715` to
+                      `0.283/0.549/0.508 ms` and Q6_K from `0.413/1.16/1.15` to `0.338/0.970/1.00 ms`; T1 gains were
+                      larger. The real 14B cache-hit run reproduced identical tokens with no fallback at
+                      `314.807 ms/token` (`3.177 tok/s`), reducing latency by `12.7%` from the immediately preceding
+                      selective-x16 run and by `7.9%` from the prior best `341.854 ms/token` scalar-conversion run.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
@@ -409,6 +417,10 @@ Priority classes for the GGUF/Qwen decode work:
                       measured production gate is output width >=8192 for single projections only. This accelerates
                       vocabulary projections while preserving x8 scheduling for the dominant gate/up, hidden, down,
                       and KV rows. This P0 remains open for new kernels targeting those dominant rows.
+                      The next dominant-row slice replaced scalar FP16 scale decoding inside all v4 AVX2 x8/x16
+                      kernels with runtime-gated F16C vector conversion. This produced broad T1/T8 gains and a measured
+                      `314.807 ms/token` real decode result, but the remaining projection helpers still account for
+                      roughly `288 ms` of the final profiled step and keep this P0 open.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

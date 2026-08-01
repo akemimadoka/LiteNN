@@ -79,9 +79,11 @@
 #include <immintrin.h>
 #define LITENN_HAS_X86_AVX2_TARGET 1
 #define LITENN_TARGET_AVX2 __attribute__((target("avx2")))
+#define LITENN_TARGET_AVX2_F16C __attribute__((target("avx2,f16c")))
 #else
 #define LITENN_HAS_X86_AVX2_TARGET 0
 #define LITENN_TARGET_AVX2
+#define LITENN_TARGET_AVX2_F16C
 #endif
 
 #include <algorithm>
@@ -1393,6 +1395,15 @@ namespace
 		static const bool supported = [] {
 			__builtin_cpu_init();
 			return __builtin_cpu_supports("avx2");
+		}();
+		return supported;
+	}
+
+	bool LiteNNCPUHasAVX2F16C()
+	{
+		static const bool supported = [] {
+			__builtin_cpu_init();
+			return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("f16c");
 		}();
 		return supported;
 	}
@@ -4097,17 +4108,12 @@ namespace
 	}
 
 #if LITENN_HAS_X86_AVX2_TARGET
-	LITENN_TARGET_AVX2 __m256 LoadGGMLFieldInterleavedF16x8(const std::uint16_t values[8])
+	LITENN_TARGET_AVX2_F16C __m256 LoadGGMLFieldInterleavedF16x8(const std::uint16_t values[8])
 	{
-		float converted[8];
-		for (std::uint64_t lane = 0; lane < 8; ++lane)
-		{
-			converted[lane] = ReadGGMLF16Strided(reinterpret_cast<const std::uint8_t*>(&values[lane]), 1, 0);
-		}
-		return _mm256_loadu_ps(converted);
+		return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(values)));
 	}
 
-	LITENN_TARGET_AVX2 void
+	LITENN_TARGET_AVX2_F16C void
 	AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8AVX2(const GGMLQ4KFieldInterleaved8Block& block,
 	                                                  const GGMLQ8KActivationBlock& lhs, float acc[8])
 	{
@@ -4151,7 +4157,7 @@ namespace
 		_mm256_storeu_ps(acc, accumulators);
 	}
 
-	LITENN_TARGET_AVX2 void
+	LITENN_TARGET_AVX2_F16C void
 	AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8AVX2(const GGMLQ6KFieldInterleaved8Block& block,
 	                                                  const GGMLQ8KActivationBlock& lhs, float acc[8])
 	{
@@ -4218,7 +4224,7 @@ namespace
 		_mm256_storeu_ps(acc, accumulators);
 	}
 
-	LITENN_TARGET_AVX2 void
+	LITENN_TARGET_AVX2_F16C void
 	AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx16AVX2(const GGMLQ4KFieldInterleaved8Block& block0,
 	                                                   const GGMLQ4KFieldInterleaved8Block& block1,
 	                                                   const GGMLQ8KActivationBlock& lhs, float acc[16])
@@ -4284,7 +4290,7 @@ namespace
 		_mm256_storeu_ps(acc + 8, accumulators1);
 	}
 
-	LITENN_TARGET_AVX2 void
+	LITENN_TARGET_AVX2_F16C void
 	AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX2(const GGMLQ6KFieldInterleaved8Block& block0,
 	                                                   const GGMLQ6KFieldInterleaved8Block& block1,
 	                                                   const GGMLQ8KActivationBlock& lhs, float acc[16])
@@ -4415,7 +4421,7 @@ namespace
 
 		bool useAVX2 = false;
 #if LITENN_HAS_X86_AVX2_TARGET
-		useAVX2 = LiteNNCPUHasAVX2();
+		useAVX2 = LiteNNCPUHasAVX2F16C();
 #endif
 		struct Context
 		{
@@ -4640,7 +4646,7 @@ namespace
 
 		bool useAVX2 = false;
 #if LITENN_HAS_X86_AVX2_TARGET
-		useAVX2 = LiteNNCPUHasAVX2();
+		useAVX2 = LiteNNCPUHasAVX2F16C();
 #endif
 		struct Context
 		{
