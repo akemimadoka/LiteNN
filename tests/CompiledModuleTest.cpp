@@ -2876,6 +2876,20 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto corruptedImage = separated.Image();
 	corruptedImage.weights = { .data = corruptedWeights.data(), .size = corruptedWeights.size() };
 	EXPECT_THROW((void) CompiledModuleSeparatedArtifact::CopyFromImage(corruptedImage), std::runtime_error);
+
+	auto trustedWeights = std::make_shared<std::vector<std::byte>>(std::move(corruptedWeights));
+	std::shared_ptr<const void> trustedOwner = trustedWeights;
+	EXPECT_NO_THROW((void) CompiledModuleSeparatedArtifact::FromOwnedRegionsWithTrustedBorrowedWeights(
+	    std::vector<std::byte>(separated.Metadata().begin(), separated.Metadata().end()),
+	    std::vector<std::byte>(separated.Constants().begin(), separated.Constants().end()),
+	    { .data = trustedWeights->data(), .size = trustedWeights->size() }, trustedOwner,
+	    std::vector<std::byte>(separated.Instructions().begin(), separated.Instructions().end())));
+	EXPECT_THROW((void) CompiledModuleSeparatedArtifact::FromOwnedRegionsWithTrustedBorrowedWeights(
+	                 std::vector<std::byte>(separated.Metadata().begin(), separated.Metadata().end()),
+	                 std::vector<std::byte>(separated.Constants().begin(), separated.Constants().end()),
+	                 { .data = trustedWeights->data(), .size = trustedWeights->size() - 1 }, trustedOwner,
+	                 std::vector<std::byte>(separated.Instructions().begin(), separated.Instructions().end())),
+	             std::runtime_error);
 }
 
 TEST(CompiledModuleTest, CPUMlirExternalRegionsLoadAndMatchInterpreter)

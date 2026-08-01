@@ -272,6 +272,11 @@ namespace LiteNN
 		FromOwnedRegionsWithBorrowedWeights(std::vector<std::byte> metadata, std::vector<std::byte> constants,
 		                                    CompiledModuleRegion weights, std::shared_ptr<const void> weightsOwner,
 		                                    std::vector<std::byte> instructions);
+		/// Builds an artifact from a caller-attested immutable weight region without hashing its contents.
+		/// Metadata, constants, instructions, region shape, alignment, and tensor ranges remain validated.
+		static CompiledModuleSeparatedArtifact FromOwnedRegionsWithTrustedBorrowedWeights(
+		    std::vector<std::byte> metadata, std::vector<std::byte> constants, CompiledModuleRegion weights,
+		    std::shared_ptr<const void> weightsOwner, std::vector<std::byte> instructions);
 		static CompiledModuleSeparatedArtifact FromExportedSymbols(CompiledModuleSeparatedExportedSymbols symbols);
 
 		CompiledModule<CPU> Load() const;

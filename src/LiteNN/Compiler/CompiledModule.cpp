@@ -7525,7 +7525,8 @@ namespace
 		return { static_cast<const std::byte*>(region.data), region.size };
 	}
 
-	void ValidateSeparatedRegion(CompiledModuleRegion region, const CompiledModuleRegionInfo& expected)
+	void ValidateSeparatedRegion(CompiledModuleRegion region, const CompiledModuleRegionInfo& expected,
+	                             bool validateChecksum = true)
 	{
 		const auto bytes = RegionBytes(region, expected.name);
 		if (bytes.size() != expected.size)
@@ -7540,8 +7541,7 @@ namespace
 			throw std::runtime_error(std::format("Compiled module separated '{}' region is not aligned to {} bytes",
 			                                     expected.name, expected.alignment));
 		}
-		const auto checksum = ChecksumBytes(bytes);
-		if (checksum != expected.checksum)
+		if (validateChecksum && ChecksumBytes(bytes) != expected.checksum)
 		{
 			throw std::runtime_error(
 			    std::format("Compiled module separated '{}' region checksum mismatch", expected.name));
@@ -7562,12 +7562,13 @@ namespace
 		    std::format("Compiled module separated external tensor references invalid '{}' region", name));
 	}
 
-	SeparatedMetadata ValidateSeparatedImage(CompiledModuleSeparatedImage image)
+	SeparatedMetadata ValidateSeparatedImage(CompiledModuleSeparatedImage image, bool validateWeightsChecksum = true)
 	{
 		const auto metadataBytes = RegionBytes(image.metadata, kMetadataRegionName);
 		auto metadata = DeserializeSeparatedMetadata(metadataBytes);
 		ValidateSeparatedRegion(image.constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
-		ValidateSeparatedRegion(image.weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
+		ValidateSeparatedRegion(image.weights, FindRegionInfo(metadata.regions, kWeightsRegionName),
+		                        validateWeightsChecksum);
 		ValidateSeparatedRegion(image.instructions, FindRegionInfo(metadata.regions, kInstructionsRegionName));
 		return metadata;
 	}
@@ -19318,6 +19319,28 @@ CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegion
 	    .weights = weights,
 	    .instructions = { .data = instructions.data(), .size = instructions.size() },
 	});
+	return CompiledModuleSeparatedArtifact(
+	    std::move(metadata), std::move(constants), weights, std::move(weightsOwner), std::move(instructions),
+	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),
+	    separatedMetadata.legacyMetadata.backend);
+}
+
+CompiledModuleSeparatedArtifact CompiledModuleSeparatedArtifact::FromOwnedRegionsWithTrustedBorrowedWeights(
+    std::vector<std::byte> metadata, std::vector<std::byte> constants, CompiledModuleRegion weights,
+    std::shared_ptr<const void> weightsOwner, std::vector<std::byte> instructions)
+{
+	if (weights.size != 0 && !weightsOwner)
+	{
+		throw std::runtime_error("Trusted borrowed separated artifact weights require an owner");
+	}
+	auto separatedMetadata = ValidateSeparatedImage(
+	    {
+	        .metadata = { .data = metadata.data(), .size = metadata.size() },
+	        .constants = { .data = constants.data(), .size = constants.size() },
+	        .weights = weights,
+	        .instructions = { .data = instructions.data(), .size = instructions.size() },
+	    },
+	    false);
 	return CompiledModuleSeparatedArtifact(
 	    std::move(metadata), std::move(constants), weights, std::move(weightsOwner), std::move(instructions),
 	    std::move(separatedMetadata.legacyMetadata.inputSpecs), std::move(separatedMetadata.legacyMetadata.outputSpecs),

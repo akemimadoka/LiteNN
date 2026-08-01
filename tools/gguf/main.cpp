@@ -1495,9 +1495,16 @@ namespace
 				                                   referencedWeights->generic_string());
 				auto mappedWeights = std::make_shared<MappedReadOnlyFile>(*referencedWeights);
 				std::shared_ptr<const void> mappedOwner = mappedWeights;
-				return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegionsWithBorrowedWeights(
+				auto artifact = LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegionsWithTrustedBorrowedWeights(
 				    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), mappedWeights->Region(),
-				    std::move(mappedOwner), ReadBinaryFile(files.instructions));
+				    mappedOwner, ReadBinaryFile(files.instructions));
+				const auto expectedIdentity =
+				    DecodeAOTSharedWeightsIdentity(mappedWeights->Region().size, artifact.ExternalTensorInfos());
+				if (referencedWeights->parent_path().filename() != expectedIdentity)
+				{
+					throw std::runtime_error("gguf decode aot cache shared weight layout identity mismatch");
+				}
+				return artifact;
 			}
 			return LiteNN::CompiledModuleSeparatedArtifact::FromOwnedRegions(
 			    ReadBinaryFile(files.metadata), ReadBinaryFile(files.constants), ReadBinaryFile(files.weights),
@@ -1542,6 +1549,13 @@ namespace
 
 		std::filesystem::create_directories(cachePath);
 		const auto files = DecodeAOTCacheFilesFor(cachePath);
+		std::error_code removeError;
+		std::filesystem::remove(files.complete, removeError);
+		if (removeError)
+		{
+			throw std::runtime_error("Failed to invalidate gguf decode aot cache complete marker: " +
+			                         removeError.message());
+		}
 		auto metadata = TimedGGUFDiagnostic(diagnostics, "gguf decode aot cache build metadata",
 		                                    [&] { return artifact.BuildSeparatedMetadata(); });
 		LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache regions: metadata={} constants={} weights={} "
@@ -1564,6 +1578,13 @@ namespace
 			if (!sharedSizeMatches || !std::filesystem::exists(sharedComplete))
 			{
 				std::filesystem::create_directories(resolvedSharedWeightsPath.parent_path());
+				removeError.clear();
+				std::filesystem::remove(sharedComplete, removeError);
+				if (removeError)
+				{
+					throw std::runtime_error("Failed to invalidate shared weight complete marker: " +
+					                         removeError.message());
+				}
 				WriteBinaryFileTimed(resolvedSharedWeightsPath, artifact.Weights(), diagnostics,
 				                     "gguf decode aot shared weight store write weights");
 				WriteBinaryFileTimed(sharedComplete, std::span<const std::byte>{}, diagnostics,
