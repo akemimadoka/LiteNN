@@ -2985,8 +2985,22 @@ Priority classes:
       `GroupedQuantizedMatMulNode` through `litenn_cpu_ggml_block_grouped_matmul{2,3}_compact_q8k_f32`, staging each
       activation row once for all projections. `QuantizedStorageLayout` is now an explicit graph/plan/package/rodata-v5
       semantic instead of a byte-size guess, which removes the Q4_K width-2 ambiguity where compact-v3 and expanded-v1
-      both occupy 640 bytes. Q4_K/Q6_K grouped AOT execution and all affected regression suites pass. The item remains
-      open only for a real cache-hit 14B expanded-v1 versus compact-v3 matrix and evidence-based default selection.
+      both occupy 640 bytes. Q4_K/Q6_K grouped AOT execution and all affected regression suites pass.
+      Controlled acceptance matrix completed on 2026-08-01: Qwen2.5-Coder 14B Q4_K_M stateful CPU AOT at O0/T8 with
+      all prepared weights measured expanded-v1 at `482.108 ms/token` (`2.074 tok/s`) and the first compact-v3 kernel at
+      `626.098 ms/token` (`1.597 tok/s`). Compact-v3 cuts separated weights from `17,929,588,736` to `8,982,164,544`
+      bytes (`-49.9%`), cache-population work from `91.433 s` to `49.335 s` (`-46.0%`), and sampled peak working set from
+      about `33.8` to `20.4 GiB`, but the initial latency regression was `29.9%`; it remains opt-in.
+      SIMD follow-up completed on 2026-08-01: compact Q4_K/Q6_K x4 AVX2 kernels now decode nibbles/bitplanes and reduce
+      integer dot products entirely in registers. The same cache-hit run improved to `567.607 ms/token`
+      (`1.762 tok/s`), reducing latency by `9.34%`; step-16 helper time fell from `592.755` to `528.082 ms` with identical
+      output and no fallback. The remaining `17.7%` expanded-v1 latency gap keeps this item open for an x8
+      field-interleaved repack/GEMV kernel before any default-policy change.
+- [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
+      explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
+      when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
+      compile/cache key, preserve strict ABI validation in artifact metadata, and regression-test concurrent population
+      plus reuse so a metadata-only compiler change does not duplicate multi-GB weights.
 - [ ] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot

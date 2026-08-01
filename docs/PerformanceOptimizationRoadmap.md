@@ -273,8 +273,21 @@ Priority classes for the GGUF/Qwen decode work:
                       v5; GraphToMLIR validates bytes against that semantic tag instead of inferring layout from size.
                       This fixes the real Q4_K width-2 collision where compact-v3 and expanded-v1 are both 640 bytes.
                       Q4_K/Q6_K two- and three-way AOT execution, the complete 80-test GGUF suite, and the affected
-                      package/rodata regression suites pass. The remaining acceptance gate is a real cache-hit 14B
-                      expanded-v1 versus compact-v3 decode matrix before changing the default policy.
+                      package/rodata regression suites pass.
+                      Controlled 14B acceptance matrix completed on 2026-08-01: for Qwen2.5-Coder 14B Q4_K_M,
+                      stateful CPU AOT, O0, T8, all-prepared, and an eight-token cache-hit decode, expanded-v1 measured
+                      `482.108 ms/token` (`2.074 tok/s`) while the first compact-v3 kernel measured `626.098 ms/token`
+                      (`1.597 tok/s`). Compact-v3 reduces separated weights from `17,929,588,736` to
+                      `8,982,164,544` bytes (`-49.9%`), cache-population work from `91.433 s` to `49.335 s` (`-46.0%`),
+                      and sampled peak working set from about `33.8` to `20.4 GiB`, but its initial decode latency was
+                      `29.9%` higher. Compact-v3 must therefore remain opt-in.
+                      Register-decode slice completed on 2026-08-01: the compact Q4_K/Q6_K x4 AVX2 path now extracts
+                      nibbles/bitplanes and performs integer horizontal reduction in SIMD registers instead of building
+                      byte arrays and spilling lane sums. The same cache-hit decode improved to `567.607 ms/token`
+                      (`1.762 tok/s`), a `9.34%` latency reduction and `10.3%` throughput gain; step-16 helper time fell
+                      from `592.755` to `528.082 ms`, with identical generated tokens and no fallback. The remaining
+                      expanded-v1 latency gap is `17.7%`; the next acceptance slice is an x8 field-interleaved
+                      Q4_K/Q6_K repack/GEMV kernel rather than a default-policy change.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
@@ -321,6 +334,11 @@ Priority classes for the GGUF/Qwen decode work:
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
                       portable compact kernel first, then add x86 AVX2/AVX512/VNNI variants behind runtime feature
                       checks.
+                      AVX2 register-decode slice completed on 2026-08-01: compact x4 kernels now decode Q4_K/Q6_K
+                      directly from contiguous blocks and reduce Q8_K dot products without temporary arrays. The real
+                      T8 14B cache-hit result improved by `9.34%`, but production acceptance remains open because
+                      expanded-v1 is still `17.7%` faster. Next implement an x8 field-interleaved prepared layout and
+                      GEMV loop that shares decoded scales/lanes across more output rows, then evaluate AVX512/VNNI.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
