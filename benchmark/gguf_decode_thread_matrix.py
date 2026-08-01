@@ -24,6 +24,11 @@ PROMPT_REPLAY_MS_RE = re.compile(r"\bprompt_replay_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATION_MS_RE = re.compile(r"\bgeneration_ms=(?P<value>[0-9.eE+-]+)\b")
 FALLBACK_COUNT_RE = re.compile(r"\bfallback_count=(?P<value>\d+)\b")
 PREPACKED_WEIGHT_POLICIES = ("disabled", "profitable", "all")
+PREPACKED_WEIGHT_LAYOUTS = ("expanded-v1", "compact-v3")
+PREPACKED_LAYOUT_TOKENS = {
+    "expanded-v1": "expanded_f32_scales_v1",
+    "compact-v3": "compact_block_grouped_v3",
+}
 
 
 def repo_root() -> Path:
@@ -59,6 +64,20 @@ def parse_prepacked_weight_policies(text: str) -> list[str]:
     if not policies:
         raise argparse.ArgumentTypeError("at least one prepacked weight policy is required")
     return policies
+
+
+def parse_prepacked_weight_layouts(text: str) -> list[str]:
+    layouts = []
+    for item in text.split(","):
+        layout = item.strip().lower()
+        if not layout:
+            continue
+        if layout not in PREPACKED_WEIGHT_LAYOUTS:
+            raise argparse.ArgumentTypeError("prepacked weight layouts must be expanded-v1 or compact-v3")
+        layouts.append(layout)
+    if not layouts:
+        raise argparse.ArgumentTypeError("at least one prepacked weight layout is required")
+    return layouts
 
 
 def read_text(path: Path | None) -> str:
@@ -292,6 +311,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_prepacked_weight_policies,
         help="Comma-separated prepared-weight policy matrix, e.g. disabled,profitable,all",
     )
+    parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-layout",
+        choices=PREPACKED_WEIGHT_LAYOUTS,
+        help="Forward one prepared GGML CPU AOT weight layout to qwen_smoke.py",
+    )
+    parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-layouts",
+        type=parse_prepacked_weight_layouts,
+        help="Comma-separated prepared-weight layout matrix, e.g. expanded-v1,compact-v3",
+    )
     parser.add_argument("--stateful", action="store_true", default=True)
     parser.add_argument("--stream-stats", action="store_true")
     parser.add_argument("--profile-bundles", action="store_true")
@@ -305,6 +334,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.cpu_aot_ggml_prepacked_weight_policy is not None and args.cpu_aot_ggml_prepacked_weight_policies is not None:
         raise SystemExit("provide either --cpu-aot-ggml-prepacked-weight-policy or --cpu-aot-ggml-prepacked-weight-policies")
+    if args.cpu_aot_ggml_prepacked_weight_layout is not None and args.cpu_aot_ggml_prepacked_weight_layouts is not None:
+        raise SystemExit("provide either --cpu-aot-ggml-prepacked-weight-layout or --cpu-aot-ggml-prepacked-weight-layouts")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model = args.model.resolve()
     prepacked_weight_policies: list[str | None]
@@ -315,18 +346,33 @@ def main() -> int:
     else:
         prepacked_weight_policies = [None]
     use_policy_axis = len(prepacked_weight_policies) > 1 or prepacked_weight_policies[0] is not None
+    if args.cpu_aot_ggml_prepacked_weight_layout is not None:
+        prepacked_weight_layouts = [args.cpu_aot_ggml_prepacked_weight_layout]
+    elif args.cpu_aot_ggml_prepacked_weight_layouts is not None:
+        prepacked_weight_layouts = list(args.cpu_aot_ggml_prepacked_weight_layouts)
+    else:
+        prepacked_weight_layouts = ["expanded-v1"]
+    use_layout_axis = len(prepacked_weight_layouts) > 1 or args.cpu_aot_ggml_prepacked_weight_layout is not None
 
     rows: list[dict[str, object]] = []
     commands: list[list[str]] = []
-    for prepacked_weight_policy in prepacked_weight_policies:
+    matrix_cases = [
+        (prepacked_weight_policy, prepacked_weight_layout)
+        for prepacked_weight_layout in prepacked_weight_layouts
+        for prepacked_weight_policy in prepacked_weight_policies
+    ]
+    for prepacked_weight_policy, prepacked_weight_layout in matrix_cases:
         policy_label = prepacked_weight_policy or "default"
+        layout_token = PREPACKED_LAYOUT_TOKENS[prepacked_weight_layout]
         for thread_count in args.threads:
-            bundle_label = (
-                f"policy_{policy_label}_threads_{thread_count}" if use_policy_axis else f"threads_{thread_count}"
-            )
-            workdir = args.out_dir / (
-                f"policy_{policy_label}/threads_{thread_count}" if use_policy_axis else f"threads_{thread_count}"
-            )
+            case_labels = []
+            if use_layout_axis:
+                case_labels.append(f"layout_{prepacked_weight_layout}")
+            if use_policy_axis:
+                case_labels.append(f"policy_{policy_label}")
+            case_labels.append(f"threads_{thread_count}")
+            bundle_label = "_".join(case_labels)
+            workdir = args.out_dir.joinpath(*case_labels)
             command = [
                 args.python,
                 str(args.qwen_smoke),
@@ -363,6 +409,7 @@ def main() -> int:
                 command.append("--cpu-aot-ggml-prepacked-weights")
             if prepacked_weight_policy is not None:
                 command.extend(["--cpu-aot-ggml-prepacked-weight-policy", prepacked_weight_policy])
+            command.extend(["--cpu-aot-ggml-prepacked-weight-layout", prepacked_weight_layout])
             if thread_count > 0:
                 command.extend(["--cpu-aot-threads", str(thread_count)])
             if args.stateful:
@@ -377,7 +424,7 @@ def main() -> int:
                         "threadCount": thread_count,
                         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
                         "prepackedWeightPolicy": policy_label,
-                        "prepackedLayout": "expanded_f32_scales_v1",
+                        "prepackedLayout": layout_token,
                     }
                 )
                 continue
@@ -395,6 +442,7 @@ def main() -> int:
                         "threadCount": thread_count,
                         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
                         "prepackedWeightPolicy": policy_label,
+                        "prepackedLayout": layout_token,
                         "returncode": completed.returncode,
                         "report": str(report_path),
                     }

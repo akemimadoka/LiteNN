@@ -2978,6 +2978,10 @@ Priority classes:
       execution and payload-size regressions pass. Grouped projections intentionally stay on their shared staged path
       under compact selection until a grouped compact helper can reuse one staged activation workspace; expanded-v1
       remains the compatibility default while full-decode policy data is collected.
+      Evaluation-surface slice completed on 2026-08-01: GGUF CLI users can select
+      `--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3`; the smoke report, decode cache, and shared-weight
+      cache record the selected canonical layout. The thread matrix now supports a layout axis in addition to policy
+      and thread axes, so compact-v3 can be evaluated on a real cache-hit decode without artifact contamination.
 - [ ] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot

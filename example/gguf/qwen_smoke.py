@@ -38,6 +38,11 @@ from pathlib import Path
 TRACE_PID = 1
 TIMED_LINE_RE = re.compile(r"^\[LiteNN (?P<category>compile|gguf)\] (?P<label>.+): ok (?P<ms>[0-9]+(?:\.[0-9]+)?) ms$")
 
+PREPACKED_LAYOUT_TOKENS = {
+    "expanded-v1": "expanded_f32_scales_v1",
+    "compact-v3": "compact_block_grouped_v3",
+}
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -327,6 +332,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--cpu-aot-ggml-prepacked-weight-policy",
         choices=("disabled", "profitable", "all"),
         help="Select prepared GGML CPU AOT weight policy; legacy --cpu-aot-ggml-prepacked-weights remains all-format opt-in",
+    )
+    parser.add_argument(
+        "--cpu-aot-ggml-prepacked-weight-layout",
+        choices=tuple(PREPACKED_LAYOUT_TOKENS),
+        default="expanded-v1",
+        help="Select expanded-v1 or compact-v3 prepared GGML CPU AOT weight layout",
     )
     parser.add_argument(
         "--no-compile-diagnostics",
@@ -672,6 +683,9 @@ def main() -> int:
             decode_cmd.extend(
                 ["--cpu-aot-ggml-prepacked-weight-policy", args.cpu_aot_ggml_prepacked_weight_policy]
             )
+        decode_cmd.extend(
+            ["--cpu-aot-ggml-prepacked-weight-layout", args.cpu_aot_ggml_prepacked_weight_layout]
+        )
         decode_cmd.append("--no-compile-diagnostics" if args.no_compile_diagnostics else "--compile-diagnostics")
         decode = run_step(
             "litenn_decode_token_ids",
@@ -736,7 +750,7 @@ def main() -> int:
             "q8k_staged_matmul": args.cpu_aot_q8k_staged_matmul,
             "ggml_prepacked_weights": args.cpu_aot_ggml_prepacked_weights,
             "ggml_prepacked_weight_policy": args.cpu_aot_ggml_prepacked_weight_policy,
-            "ggml_prepacked_layout": "expanded_f32_scales_v1",
+            "ggml_prepacked_layout": PREPACKED_LAYOUT_TOKENS[args.cpu_aot_ggml_prepacked_weight_layout],
             "compile_diagnostics": not args.no_compile_diagnostics,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),

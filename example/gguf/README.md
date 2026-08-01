@@ -306,6 +306,13 @@ An experimental separated-artifact cache can be enabled with
 the current 14B CPU AOT instruction object is large enough that first-run cache
 population is not yet a good default user experience.
 
+Prepared Q4_K/Q6_K experiments can select `--cpu-aot-ggml-prepacked-weight-policy all`
+with either `--cpu-aot-ggml-prepacked-weight-layout expanded-v1` or `compact-v3`.
+The layout is part of both the decode artifact key and shared-weight key, so the
+same cache root can safely hold both variants. For a controlled matrix, use
+`benchmark/gguf_decode_thread_matrix.py --cpu-aot-ggml-prepacked-weight-layouts
+expanded-v1,compact-v3`; it combines the layout axis with policy and thread axes.
+
 Compare generated text after replay:
 
 ```powershell

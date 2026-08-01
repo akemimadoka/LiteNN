@@ -261,6 +261,12 @@ Priority classes for the GGUF/Qwen decode work:
                       than expanded-v1 in regression coverage. Grouped projections deliberately remain on the shared
                       staged helper when compact is selected, pending a grouped compact ABI that reuses one activation
                       workspace. Existing callers retain expanded-v1 by default.
+                      Evaluation-surface slice completed on 2026-08-01: the GGUF decode CLI, environment-backed CLI
+                      configuration, `qwen_smoke.py`, reports, decode artifact keys, and shared-weight keys now use the
+                      selected layout instead of a hardcoded expanded-v1 token. The thread-matrix harness can run
+                      `--cpu-aot-ggml-prepacked-weight-layouts expanded-v1,compact-v3` together with policy and thread
+                      axes, with isolated work directories and canonical layout labels. This enables a controlled
+                      cache-hit full-decode acceptance run without cross-layout cache reuse.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has

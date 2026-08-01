@@ -85,7 +85,8 @@ namespace
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
 		          << "  " << executable
 		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -95,7 +96,8 @@ namespace
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
 		          << "  " << executable
 		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
@@ -105,7 +107,8 @@ namespace
 		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all]\n"
+		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3]\n"
 		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
 		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
@@ -243,6 +246,26 @@ namespace
 		return value;
 	}
 
+	std::string ParseGGMLPrepackedWeightLayout(std::string_view text)
+	{
+		std::string value{ text };
+		std::ranges::transform(value, value.begin(),
+		                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+		if (value == "expanded" || value == "expanded-v1")
+		{
+			return "expanded_f32_scales_v1";
+		}
+		if (value == "compact" || value == "compact-v3")
+		{
+			return "compact_block_grouped_v3";
+		}
+		if (value != "expanded_f32_scales_v1" && value != "compact_block_grouped_v3")
+		{
+			throw std::runtime_error("cpu-aot-ggml-prepacked-weight-layout must be expanded-v1 or compact-v3");
+		}
+		return value;
+	}
+
 	struct DecodeLoopCommandOptions
 	{
 		std::string inputPath;
@@ -264,6 +287,7 @@ namespace
 		bool enableCPUAOTQ8KStagedMatMul{};
 		bool enableCPUAOTGGMLPrepackedWeights{};
 		std::optional<std::string> cpuAOTGGMLPrepackedWeightPolicy;
+		std::optional<std::string> cpuAOTGGMLPrepackedWeightLayout;
 		std::optional<std::size_t> cpuAOTThreadCount;
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
 		std::optional<std::uint8_t> cpuAOTLLVMOptLevel;
@@ -365,6 +389,10 @@ namespace
 			else if (arg == "--cpu-aot-ggml-prepacked-weight-policy")
 			{
 				options.cpuAOTGGMLPrepackedWeightPolicy = ParseGGMLPrepackedWeightPolicy(requireValue(arg));
+			}
+			else if (arg == "--cpu-aot-ggml-prepacked-weight-layout")
+			{
+				options.cpuAOTGGMLPrepackedWeightLayout = ParseGGMLPrepackedWeightLayout(requireValue(arg));
 			}
 			else if (arg == "--cpu-aot-threads")
 			{
@@ -1273,7 +1301,17 @@ namespace
 		return hash;
 	}
 
-	constexpr std::string_view kCPUAOTGGMLPrepackedLayout = "expanded_f32_scales_v1";
+	std::string_view CPUAOTGGMLPrepackedWeightLayoutName(LiteNN::CPUAOTGGMLPrepackedWeightLayout layout)
+	{
+		switch (layout)
+		{
+		case LiteNN::CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1:
+			return "expanded_f32_scales_v1";
+		case LiteNN::CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3:
+			return "compact_block_grouped_v3";
+		}
+		return "unknown";
+	}
 
 	std::optional<std::filesystem::path>
 	DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
@@ -1299,8 +1337,8 @@ namespace
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
 		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
 		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
-		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy), kCPUAOTGGMLPrepackedLayout,
-		    residentPagesText);
+		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
+		    CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout), residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
 	}
 
@@ -1321,7 +1359,7 @@ namespace
 		                                 std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
 		                                 options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		                                 static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
-		                                 kCPUAOTGGMLPrepackedLayout);
+		                                 CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout));
 		return std::filesystem::path(root) / "_weights" / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
 	}
 
@@ -2046,6 +2084,19 @@ namespace
 		throw std::runtime_error("unsupported CPU AOT GGML prepacked weight policy");
 	}
 
+	LiteNN::CPUAOTGGMLPrepackedWeightLayout ToCompilerPrepackedWeightLayout(std::string_view layout)
+	{
+		if (layout == "expanded_f32_scales_v1")
+		{
+			return LiteNN::CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1;
+		}
+		if (layout == "compact_block_grouped_v3")
+		{
+			return LiteNN::CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3;
+		}
+		throw std::runtime_error("unsupported CPU AOT GGML prepacked weight layout");
+	}
+
 	std::optional<std::uint64_t> ParseU64Env(const char* name)
 	{
 		if (const char* value = std::getenv(name))
@@ -2112,6 +2163,11 @@ namespace
 				options.enableCPUAOTExternalRegions = true;
 			}
 		}
+		if (const char* layout = std::getenv("LITENN_CPU_AOT_GGML_PREPACKED_WEIGHT_LAYOUT"))
+		{
+			options.cpuAOTGGMLPrepackedWeightLayout =
+			    ToCompilerPrepackedWeightLayout(ParseGGMLPrepackedWeightLayout(layout));
+		}
 		options.enableCompileDiagnostics = TruthyEnvValue(std::getenv("LITENN_COMPILE_DIAGNOSTICS"));
 		return options;
 	}
@@ -2158,6 +2214,11 @@ namespace
 			{
 				compilerOptions.enableCPUAOTExternalRegions = true;
 			}
+		}
+		if (decodeOptions.cpuAOTGGMLPrepackedWeightLayout)
+		{
+			compilerOptions.cpuAOTGGMLPrepackedWeightLayout =
+			    ToCompilerPrepackedWeightLayout(*decodeOptions.cpuAOTGGMLPrepackedWeightLayout);
 		}
 	}
 
