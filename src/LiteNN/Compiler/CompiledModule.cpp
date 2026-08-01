@@ -92,6 +92,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -398,6 +399,156 @@ namespace
 		return LiteNNCPUHardwareThreadCount();
 	}
 
+	struct LiteNNCPUThreadAffinityTarget
+	{
+#ifdef _WIN32
+		WORD group{};
+		KAFFINITY mask{};
+#elif defined(__linux__)
+		std::size_t processor{};
+#endif
+	};
+
+	const std::vector<LiteNNCPUThreadAffinityTarget>& LiteNNCPUCompactAffinityTargets()
+	{
+		static const auto targets = [] {
+			std::vector<std::vector<LiteNNCPUThreadAffinityTarget>> cores;
+#ifdef _WIN32
+			DWORD bytes = 0;
+			if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes) &&
+			    GetLastError() == ERROR_INSUFFICIENT_BUFFER && bytes != 0)
+			{
+				std::vector<std::byte> storage(bytes);
+				if (GetLogicalProcessorInformationEx(
+				        RelationProcessorCore,
+				        reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(storage.data()), &bytes))
+				{
+					std::size_t offset = 0;
+					while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= bytes)
+					{
+						const auto* info =
+						    reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(storage.data() + offset);
+						if (info->Size == 0 || offset + info->Size > bytes)
+						{
+							break;
+						}
+						std::vector<LiteNNCPUThreadAffinityTarget> siblings;
+						for (WORD groupIndex = 0; groupIndex < info->Processor.GroupCount; ++groupIndex)
+						{
+							const auto& groupMask = info->Processor.GroupMask[groupIndex];
+							for (std::size_t bit = 0; bit < sizeof(KAFFINITY) * 8; ++bit)
+							{
+								const auto mask = static_cast<KAFFINITY>(1) << bit;
+								if ((groupMask.Mask & mask) != 0)
+								{
+									siblings.push_back({ .group = groupMask.Group, .mask = mask });
+								}
+							}
+						}
+						if (!siblings.empty())
+						{
+							cores.push_back(std::move(siblings));
+						}
+						offset += info->Size;
+					}
+				}
+			}
+#elif defined(__linux__)
+			cpu_set_t available;
+			CPU_ZERO(&available);
+			if (pthread_getaffinity_np(pthread_self(), sizeof(available), &available) == 0)
+			{
+				struct LinuxCore
+				{
+					int package{};
+					int core{};
+					std::vector<LiteNNCPUThreadAffinityTarget> siblings;
+				};
+				std::vector<LinuxCore> linuxCores;
+				auto readTopologyValue = [](std::size_t processor, std::string_view name) -> std::optional<int> {
+					std::ifstream input(std::format("/sys/devices/system/cpu/cpu{}/topology/{}", processor, name));
+					int value = 0;
+					return input >> value ? std::optional<int>{ value } : std::nullopt;
+				};
+				for (std::size_t processor = 0; processor < CPU_SETSIZE; ++processor)
+				{
+					if (!CPU_ISSET(processor, &available))
+					{
+						continue;
+					}
+					const auto package = readTopologyValue(processor, "physical_package_id");
+					const auto core = readTopologyValue(processor, "core_id");
+					if (!package || !core)
+					{
+						continue;
+					}
+					auto found = std::ranges::find_if(linuxCores, [&](const LinuxCore& candidate) {
+						return candidate.package == *package && candidate.core == *core;
+					});
+					if (found == linuxCores.end())
+					{
+						linuxCores.push_back({ .package = *package, .core = *core });
+						found = std::prev(linuxCores.end());
+					}
+					found->siblings.push_back({ .processor = processor });
+				}
+				for (auto& core : linuxCores)
+				{
+					cores.push_back(std::move(core.siblings));
+				}
+			}
+#endif
+
+			std::vector<LiteNNCPUThreadAffinityTarget> result;
+			for (std::size_t siblingIndex = 0;; ++siblingIndex)
+			{
+				const auto previousSize = result.size();
+				for (const auto& core : cores)
+				{
+					if (siblingIndex < core.size())
+					{
+						result.push_back(core[siblingIndex]);
+					}
+				}
+				if (result.size() == previousSize)
+				{
+					break;
+				}
+			}
+			if (result.empty())
+			{
+#ifdef _WIN32
+				const auto groupCount = GetActiveProcessorGroupCount();
+				for (WORD group = 0; group < groupCount; ++group)
+				{
+					const auto processorCount = GetActiveProcessorCount(group);
+					for (DWORD processor = 0; processor < processorCount && processor < sizeof(KAFFINITY) * 8;
+					     ++processor)
+					{
+						result.push_back({ .group = group,
+						                   .mask = static_cast<KAFFINITY>(1) << static_cast<std::size_t>(processor) });
+					}
+				}
+#elif defined(__linux__)
+				cpu_set_t available;
+				CPU_ZERO(&available);
+				if (pthread_getaffinity_np(pthread_self(), sizeof(available), &available) == 0)
+				{
+					for (std::size_t processor = 0; processor < CPU_SETSIZE; ++processor)
+					{
+						if (CPU_ISSET(processor, &available))
+						{
+							result.push_back({ .processor = processor });
+						}
+					}
+				}
+#endif
+			}
+			return result;
+		}();
+		return targets;
+	}
+
 	class LiteNNCPUThreadAffinityState
 	{
 	public:
@@ -414,21 +565,18 @@ namespace
 			{
 				return;
 			}
-			const auto hardware = LiteNNCPUHardwareThreadCount();
-			if (hardware == 0 || workerSlot >= hardware)
+			const auto& targets = LiteNNCPUCompactAffinityTargets();
+			if (workerSlot >= targets.size())
 			{
 				return;
 			}
 #ifdef _WIN32
-			if (workerSlot >= sizeof(DWORD_PTR) * 8)
+			const GROUP_AFFINITY target{
+				.Mask = targets[workerSlot].mask,
+				.Group = targets[workerSlot].group,
+			};
+			if (SetThreadGroupAffinity(GetCurrentThread(), &target, &previousGroupAffinity_))
 			{
-				return;
-			}
-			const DWORD_PTR mask = static_cast<DWORD_PTR>(1) << workerSlot;
-			const auto previous = SetThreadAffinityMask(GetCurrentThread(), mask);
-			if (previous != 0)
-			{
-				previousMask_ = previous;
 				activePolicy_ = policy;
 			}
 #elif defined(__linux__)
@@ -440,7 +588,7 @@ namespace
 			}
 			cpu_set_t targetSet;
 			CPU_ZERO(&targetSet);
-			CPU_SET(workerSlot, &targetSet);
+			CPU_SET(targets[workerSlot].processor, &targetSet);
 			if (pthread_setaffinity_np(pthread_self(), sizeof(targetSet), &targetSet) == 0)
 			{
 				previousSet_ = currentSet;
@@ -465,7 +613,7 @@ namespace
 				return;
 			}
 #ifdef _WIN32
-			SetThreadAffinityMask(GetCurrentThread(), previousMask_);
+			SetThreadGroupAffinity(GetCurrentThread(), &previousGroupAffinity_, nullptr);
 #elif defined(__linux__)
 			pthread_setaffinity_np(pthread_self(), sizeof(previousSet_), &previousSet_);
 #endif
@@ -474,7 +622,7 @@ namespace
 
 		CPUAOTAffinityPolicy activePolicy_{ CPUAOTAffinityPolicy::None };
 #ifdef _WIN32
-		DWORD_PTR previousMask_{};
+		GROUP_AFFINITY previousGroupAffinity_{};
 #elif defined(__linux__)
 		cpu_set_t previousSet_{};
 #endif
@@ -527,6 +675,8 @@ namespace
 			const auto taskCount = (end - begin + grain - 1) / grain;
 			const auto participantCount = std::min<std::uint64_t>(
 			    std::max<std::uint64_t>(1, static_cast<std::uint64_t>(requestedThreads)), taskCount);
+			static thread_local LiteNNCPUThreadAffinityState callerAffinity;
+			callerAffinity.Apply(affinityPolicy, 0);
 			if (participantCount <= 1 || workers_.empty())
 			{
 				body(begin, end, userData);

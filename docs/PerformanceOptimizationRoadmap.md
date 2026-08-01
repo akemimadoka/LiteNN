@@ -929,13 +929,20 @@ beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP s
     thread inside an otherwise eligible chain. Tests and diagnostic runs can still force the sidecar path by setting
     `CompilerOptions::cpuAOTParallelMinFlops` to `1`.
 - [x] Add a configurable worker-affinity policy for multithread experiments.
-  - Implementation: `CompilerOptions::cpuAOTAffinityPolicy` defaults to `None`; `Compact` pins the CPU AOT helper's
-    persistent worker threads to low-numbered CPUs while the policy remains active and restores their prior affinity
-    when the policy is disabled or workers exit. Benchmark/profile entry points can set it through
-    `LITENN_CPU_AOT_AFFINITY=compact`.
+  - Implementation: `CompilerOptions::cpuAOTAffinityPolicy` defaults to `None`; `Compact` builds a topology-aware
+    physical-core-first target list, pins the caller plus persistent workers while the policy remains active, and
+    restores their prior processor-group/CPU-set affinity when the policy is disabled or the threads exit. Windows
+    uses processor-core relationships and full group affinity; Linux respects the process's allowed CPU set and groups
+    logical CPUs by package/core before placing SMT siblings. Benchmark/profile entry points can set it explicitly.
   - Evaluation: local Windows `MLP(784->512->256->10)/batch:128` sidecar-helper runs with
     `LITENN_CPU_AOT_THREADS=16` and `LITENN_CPU_AOT_PARALLEL_MIN_FLOPS=1` did not improve with compact affinity; the
-    measured real time regressed versus no affinity. Keep affinity opt-in until topology-aware policies are available.
+    measured real time regressed versus no affinity. A 2026-08-02 audit found that the original logical-index mapping
+    assigned slots 1 through 7 to only four physical cores on the 16-core/32-thread Windows reference host. The fixed
+    physical-core mapping reduced a cache-hit 14B O0/T8/all/v4 decode from the broken Compact result of
+    `765.725 ms/token` to `454.803 ms/token`, but it remained slower than scheduler-managed `None` at
+    `277.218 ms/token`: one compact 32 MiB L3 domain cannot supply this streaming-weight workload as effectively as
+    the scheduler's cross-domain placement. Keep `None` as the decode default; a future bandwidth-aware scatter policy
+    requires an independent acceptance matrix rather than changing `Compact` semantics.
 - [x] Add profile counters for helper layer shapes and selected grain/thread counts.
   - Implementation: `litenn_profile` now prints a CPU AOT parallel-selection table with fused layer count, selected
     parallel layer count, total FLOPs, per-layer `m/k/n`, selected helper threads, gate reason, and an emitted-object

@@ -635,7 +635,12 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             auditable against emitted-object behavior while tuning T16 gates.
 - [x] Add an explicit CPU AOT worker-affinity policy hook for multithread experiments:
       `CompilerOptions::cpuAOTAffinityPolicy` defaults to no pinning, while benchmark/profile entry points can opt into
-      compact worker pinning for local measurements.
+      compact worker pinning for local measurements. Correctness follow-up completed on 2026-08-02: Compact now maps
+      the caller and workers to distinct physical cores before SMT siblings, handles Windows processor groups, and
+      respects Linux allowed CPU sets. This fixed a logical-index mapping that placed T8 on only four physical cores;
+      real 14B cache-hit decode improved from the broken Compact result of `765.725` to `454.803 ms/token`, but remained
+      slower than scheduler-managed `None` at `277.218 ms/token`. Keep no-pinning as the production decode default;
+      bandwidth-aware cross-cache-domain scattering is separate nonblocking work.
 - [x] Extend `litenn_profile` with first-class CPU AOT instruction stats instead of relying on manual objdump report synthesis.
 - [x] Extend `litenn_profile` with CPU AOT parallel-helper selection counters.
       The profile report now prints layer shapes, estimated FLOPs, selected helper thread counts, sidecar-vs-MLIR gate
