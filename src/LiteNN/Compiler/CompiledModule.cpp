@@ -4130,6 +4130,8 @@ namespace
 		const auto dmin = LoadGGMLFieldInterleavedF16x8(block.dmin);
 		const auto lhsD = _mm256_set1_ps(lhs.d);
 		auto accumulators = _mm256_loadu_ps(acc);
+		auto scaledQuantSum = _mm256_setzero_si256();
+		auto scaledMinimumSum = _mm256_setzero_si256();
 		const auto nibbleMask = _mm256_set1_epi8(15);
 		const auto pairOnes = _mm256_set1_epi16(1);
 		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
@@ -4151,18 +4153,19 @@ namespace
 				quantSum =
 				    _mm256_add_epi32(quantSum, _mm256_madd_epi16(_mm256_maddubs_epi16(quantBytes, q8Bytes), pairOnes));
 			}
-			const auto scale = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[subblock]))));
-			const auto minimum = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.minimums[subblock]))));
+			const auto scale =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[subblock])));
+			const auto minimum =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.minimums[subblock])));
 			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
 			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
-			const auto quantContribution =
-			    _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d), scale), _mm256_cvtepi32_ps(quantSum));
-			const auto minimumContribution = _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, dmin), minimum),
-			                                               _mm256_set1_ps(static_cast<float>(lhsSum)));
-			accumulators = _mm256_add_ps(accumulators, _mm256_sub_ps(quantContribution, minimumContribution));
+			scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_mullo_epi32(quantSum, scale));
+			scaledMinimumSum =
+			    _mm256_add_epi32(scaledMinimumSum, _mm256_mullo_epi32(minimum, _mm256_set1_epi32(lhsSum)));
 		}
+		const auto blockContribution = _mm256_sub_ps(_mm256_mul_ps(d, _mm256_cvtepi32_ps(scaledQuantSum)),
+		                                             _mm256_mul_ps(dmin, _mm256_cvtepi32_ps(scaledMinimumSum)));
+		accumulators = _mm256_add_ps(accumulators, _mm256_mul_ps(lhsD, blockContribution));
 		_mm256_storeu_ps(acc, accumulators);
 	}
 
@@ -4173,6 +4176,7 @@ namespace
 		const auto d = LoadGGMLFieldInterleavedF16x8(block.d);
 		const auto lhsD = _mm256_set1_ps(lhs.d);
 		auto accumulators = _mm256_loadu_ps(acc);
+		auto scaledQuantSum = _mm256_setzero_si256();
 		const auto lowFourMask = _mm256_set1_epi8(15);
 		const auto highTwoMask = _mm256_set1_epi8(3);
 		const auto pairOnes = _mm256_set1_epi16(1);
@@ -4222,14 +4226,14 @@ namespace
 					}
 					quantSum = _mm256_sub_epi32(
 					    quantSum, _mm256_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
-					const auto scale = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
-					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[scaleOffset]))));
-					accumulators =
-					    _mm256_add_ps(accumulators, _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d), scale),
-					                                              _mm256_cvtepi32_ps(quantSum)));
+					const auto scale = _mm256_cvtepi8_epi32(
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[scaleOffset])));
+					scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_mullo_epi32(quantSum, scale));
 				}
 			}
 		}
+		accumulators =
+		    _mm256_add_ps(accumulators, _mm256_mul_ps(_mm256_mul_ps(lhsD, d), _mm256_cvtepi32_ps(scaledQuantSum)));
 		_mm256_storeu_ps(acc, accumulators);
 	}
 
@@ -4245,6 +4249,10 @@ namespace
 		const auto lhsD = _mm256_set1_ps(lhs.d);
 		auto accumulators0 = _mm256_loadu_ps(acc);
 		auto accumulators1 = _mm256_loadu_ps(acc + 8);
+		auto scaledQuantSum0 = _mm256_setzero_si256();
+		auto scaledQuantSum1 = _mm256_setzero_si256();
+		auto scaledMinimumSum0 = _mm256_setzero_si256();
+		auto scaledMinimumSum1 = _mm256_setzero_si256();
 		const auto nibbleMask = _mm256_set1_epi8(15);
 		const auto pairOnes = _mm256_set1_epi16(1);
 		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
@@ -4273,28 +4281,28 @@ namespace
 				quantSum1 = _mm256_add_epi32(quantSum1,
 				                             _mm256_madd_epi16(_mm256_maddubs_epi16(quantBytes1, q8Bytes), pairOnes));
 			}
-			const auto scale0 = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[subblock]))));
-			const auto scale1 = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[subblock]))));
-			const auto minimum0 = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.minimums[subblock]))));
-			const auto minimum1 = _mm256_cvtepi32_ps(
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.minimums[subblock]))));
+			const auto scale0 =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[subblock])));
+			const auto scale1 =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[subblock])));
+			const auto minimum0 =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.minimums[subblock])));
+			const auto minimum1 =
+			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.minimums[subblock])));
 			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
 			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
-			const auto lhsSumVector = _mm256_set1_ps(static_cast<float>(lhsSum));
-			accumulators0 = _mm256_add_ps(
-			    accumulators0,
-			    _mm256_sub_ps(
-			        _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d0), scale0), _mm256_cvtepi32_ps(quantSum0)),
-			        _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, dmin0), minimum0), lhsSumVector)));
-			accumulators1 = _mm256_add_ps(
-			    accumulators1,
-			    _mm256_sub_ps(
-			        _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d1), scale1), _mm256_cvtepi32_ps(quantSum1)),
-			        _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, dmin1), minimum1), lhsSumVector)));
+			const auto lhsSumVector = _mm256_set1_epi32(lhsSum);
+			scaledQuantSum0 = _mm256_add_epi32(scaledQuantSum0, _mm256_mullo_epi32(quantSum0, scale0));
+			scaledQuantSum1 = _mm256_add_epi32(scaledQuantSum1, _mm256_mullo_epi32(quantSum1, scale1));
+			scaledMinimumSum0 = _mm256_add_epi32(scaledMinimumSum0, _mm256_mullo_epi32(minimum0, lhsSumVector));
+			scaledMinimumSum1 = _mm256_add_epi32(scaledMinimumSum1, _mm256_mullo_epi32(minimum1, lhsSumVector));
 		}
+		const auto blockContribution0 = _mm256_sub_ps(_mm256_mul_ps(d0, _mm256_cvtepi32_ps(scaledQuantSum0)),
+		                                              _mm256_mul_ps(dmin0, _mm256_cvtepi32_ps(scaledMinimumSum0)));
+		const auto blockContribution1 = _mm256_sub_ps(_mm256_mul_ps(d1, _mm256_cvtepi32_ps(scaledQuantSum1)),
+		                                              _mm256_mul_ps(dmin1, _mm256_cvtepi32_ps(scaledMinimumSum1)));
+		accumulators0 = _mm256_add_ps(accumulators0, _mm256_mul_ps(lhsD, blockContribution0));
+		accumulators1 = _mm256_add_ps(accumulators1, _mm256_mul_ps(lhsD, blockContribution1));
 		_mm256_storeu_ps(acc, accumulators0);
 		_mm256_storeu_ps(acc + 8, accumulators1);
 	}
@@ -4309,6 +4317,8 @@ namespace
 		const auto lhsD = _mm256_set1_ps(lhs.d);
 		auto accumulators0 = _mm256_loadu_ps(acc);
 		auto accumulators1 = _mm256_loadu_ps(acc + 8);
+		auto scaledQuantSum0 = _mm256_setzero_si256();
+		auto scaledQuantSum1 = _mm256_setzero_si256();
 		const auto lowFourMask = _mm256_set1_epi8(15);
 		const auto highTwoMask = _mm256_set1_epi8(3);
 		const auto pairOnes = _mm256_set1_epi16(1);
@@ -4373,19 +4383,19 @@ namespace
 					const auto correction = _mm256_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16]));
 					quantSum0 = _mm256_sub_epi32(quantSum0, correction);
 					quantSum1 = _mm256_sub_epi32(quantSum1, correction);
-					const auto scale0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
-					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[scaleOffset]))));
-					const auto scale1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
-					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[scaleOffset]))));
-					accumulators0 =
-					    _mm256_add_ps(accumulators0, _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d0), scale0),
-					                                               _mm256_cvtepi32_ps(quantSum0)));
-					accumulators1 =
-					    _mm256_add_ps(accumulators1, _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(lhsD, d1), scale1),
-					                                               _mm256_cvtepi32_ps(quantSum1)));
+					const auto scale0 = _mm256_cvtepi8_epi32(
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[scaleOffset])));
+					const auto scale1 = _mm256_cvtepi8_epi32(
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[scaleOffset])));
+					scaledQuantSum0 = _mm256_add_epi32(scaledQuantSum0, _mm256_mullo_epi32(quantSum0, scale0));
+					scaledQuantSum1 = _mm256_add_epi32(scaledQuantSum1, _mm256_mullo_epi32(quantSum1, scale1));
 				}
 			}
 		}
+		accumulators0 =
+		    _mm256_add_ps(accumulators0, _mm256_mul_ps(_mm256_mul_ps(lhsD, d0), _mm256_cvtepi32_ps(scaledQuantSum0)));
+		accumulators1 =
+		    _mm256_add_ps(accumulators1, _mm256_mul_ps(_mm256_mul_ps(lhsD, d1), _mm256_cvtepi32_ps(scaledQuantSum1)));
 		_mm256_storeu_ps(acc, accumulators0);
 		_mm256_storeu_ps(acc + 8, accumulators1);
 	}
