@@ -4132,6 +4132,10 @@ namespace
 			}
 		}
 
+		bool useAVX2 = false;
+#if LITENN_HAS_X86_AVX2_TARGET
+		useAVX2 = LiteNNCPUHasAVX2();
+#endif
 		struct Context
 		{
 			const std::uint8_t* payload{};
@@ -4145,6 +4149,7 @@ namespace
 			std::uint64_t groupBlockBytes{};
 			std::uint64_t groupsPerRow{};
 			QuantizedBlockFormat format{};
+			bool useAVX2{};
 		};
 		const auto groupsPerRow = (static_cast<std::uint64_t>(outColumns) + 7) / 8;
 		Context context{
@@ -4159,6 +4164,7 @@ namespace
 			.groupBlockBytes = header->bytesPerGroupBlock,
 			.groupsPerRow = groupsPerRow,
 			.format = format,
+			.useAVX2 = useAVX2,
 		};
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
@@ -4183,7 +4189,7 @@ namespace
 					{
 						const auto& block = *reinterpret_cast<const GGMLQ4KFieldInterleaved8Block*>(packedBlock);
 #if LITENN_HAS_X86_AVX2_TARGET
-						if (allValid && LiteNNCPUHasAVX2())
+						if (allValid && ctx.useAVX2)
 						{
 							AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8AVX2(block, lhsBlock, acc);
 						}
@@ -4197,7 +4203,7 @@ namespace
 					{
 						const auto& block = *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock);
 #if LITENN_HAS_X86_AVX2_TARGET
-						if (allValid && LiteNNCPUHasAVX2())
+						if (allValid && ctx.useAVX2)
 						{
 							AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8AVX2(block, lhsBlock, acc);
 						}

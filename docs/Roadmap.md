@@ -3018,6 +3018,10 @@ Priority classes:
       beating compact-v3 by `20.3%` and `11.1%` and expanded-v1 by `16.4%` and `6.7%`. Initial cache population spent
       `27.306 s` compiling, `7.199 s` building metadata, and `19.840 s` writing weights. Field-interleaved-v4 is now
       the compiler and smoke-driver default when prepared GGML weights are enabled; v1/v3 remain explicit selections.
+      A 256-bit AVX512VL/VNNI `vpdpbusd` prototype was rejected on 2026-08-01: it was neutral for Q4_K and regressed
+      Q6_K FFN-down/logits medians from `1.86/13.4 ms` to `2.01/15.7 ms` on Ryzen 9 9950X, with up to about `9.8e-4`
+      extra Float32 difference. The path was removed; future AVX512 work must justify a true x16 layout/kernel instead
+      of substituting one instruction in the x8 loop.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the

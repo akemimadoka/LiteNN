@@ -316,6 +316,12 @@ Priority classes for the GGUF/Qwen decode work:
                       `27.306 s` compile, `7.199 s` metadata construction, and `19.840 s` weight writing. Field-interleaved-v4
                       is now the compiler and smoke-driver default whenever prepared GGML weights are enabled; v1/v3 remain
                       explicit comparison/compatibility selections.
+                      AVX512VL/VNNI experiment rejected on 2026-08-01: replacing the AVX2 `maddubs + madd` sequence with
+                      256-bit `vpdpbusd` on Ryzen 9 9950X did not improve Q4_K and regressed Q6_K FFN-down/logits medians
+                      from `1.86/13.4 ms` to `2.01/15.7 ms`; it also introduced up to about `9.8e-4` extra Float32
+                      difference on the production-shaped benchmark. The VNNI path was removed. The safe CPU-feature
+                      check hoist remains; future AVX512 work must evaluate a true x16 layout/kernel rather than merely
+                      substituting the x8 dot instruction.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
