@@ -81,6 +81,10 @@ namespace litenn
 		    "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Q8KStagedHelper =
 		    "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2CompactQ8KHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32";
+		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3CompactQ8KHelper =
+		    "litenn_cpu_ggml_block_grouped_matmul3_compact_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q4KPrepackedHelper =
 		    "litenn_cpu_ggml_block_grouped_matmul2_q4k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q6KPrepackedHelper =
@@ -473,6 +477,10 @@ namespace litenn
 			auto preparedLayoutAttr =
 			    op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockGroupedQuantizedMatMulPreparedLayoutAttr);
 			const auto hasPreparedLayout = preparedLayoutAttr != nullptr;
+			const auto usesExpandedPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutExpandedF32ScalesV1;
+			const auto usesCompactPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutCompactBlockGroupedV3;
 			llvm::StringRef helperName;
 			if (hasPreparedLayout)
 			{
@@ -480,23 +488,33 @@ namespace litenn
 				{
 					return mlir::failure();
 				}
-				if (preparedLayoutAttr.getInt() != kGGMLPreparedLayoutExpandedF32ScalesV1)
+				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout)
 				{
 					return mlir::failure();
 				}
-				if (projectionCount == 2 && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
+				if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                  blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				{
+					helperName = projectionCount == 2 ? kGGMLBlockGroupedMatMul2CompactQ8KHelper
+					                                  : kGGMLBlockGroupedMatMul3CompactQ8KHelper;
+				}
+				else if (usesExpandedPreparedLayout && projectionCount == 2 &&
+				         blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
 				{
 					helperName = kGGMLBlockGroupedMatMul2Q4KPrepackedHelper;
 				}
-				else if (projectionCount == 2 && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+				else if (usesExpandedPreparedLayout && projectionCount == 2 &&
+				         blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
 				{
 					helperName = kGGMLBlockGroupedMatMul2Q6KPrepackedHelper;
 				}
-				else if (projectionCount == 3 && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
+				else if (usesExpandedPreparedLayout && projectionCount == 3 &&
+				         blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
 				{
 					helperName = kGGMLBlockGroupedMatMul3Q4KPrepackedHelper;
 				}
-				else if (projectionCount == 3 && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+				else if (usesExpandedPreparedLayout && projectionCount == 3 &&
+				         blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
 				{
 					helperName = kGGMLBlockGroupedMatMul3Q6KPrepackedHelper;
 				}
@@ -529,7 +547,7 @@ namespace litenn
 				argTypes.push_back(dynamicRhsType);
 			}
 			argTypes.push_back(dynamicOutType);
-			const auto scalarArgumentCount = projectionCount + (hasPreparedLayout ? 2 : 3);
+			const auto scalarArgumentCount = projectionCount + (usesExpandedPreparedLayout ? 2 : 3);
 			for (std::size_t i = 0; i < scalarArgumentCount; ++i)
 			{
 				argTypes.push_back(i64);
@@ -555,7 +573,7 @@ namespace litenn
 				callArgs.push_back(builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult());
 			}
 			callArgs.push_back(builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult());
-			if (!hasPreparedLayout)
+			if (!usesExpandedPreparedLayout)
 			{
 				callArgs.push_back(
 				    builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult());

@@ -258,15 +258,23 @@ Priority classes for the GGUF/Qwen decode work:
                       `CPUAOTGGMLPrepackedWeightLayout::{ExpandedF32ScalesV1,CompactBlockGroupedV3}` compiler option,
                       layout-aware separated-weight generation, compact layout id `3` in GraphToMLIR, and matching
                       LLVM helper dispatch. Q4_K/Q6_K compact artifacts execute with Q8_K-staged parity and are smaller
-                      than expanded-v1 in regression coverage. Grouped projections deliberately remain on the shared
-                      staged helper when compact is selected, pending a grouped compact ABI that reuses one activation
-                      workspace. Existing callers retain expanded-v1 by default.
+                      than expanded-v1 in regression coverage. Existing callers retain expanded-v1 by default.
                       Evaluation-surface slice completed on 2026-08-01: the GGUF decode CLI, environment-backed CLI
                       configuration, `qwen_smoke.py`, reports, decode artifact keys, and shared-weight keys now use the
                       selected layout instead of a hardcoded expanded-v1 token. The thread-matrix harness can run
                       `--cpu-aot-ggml-prepacked-weight-layouts expanded-v1,compact-v3` together with policy and thread
                       axes, with isolated work directories and canonical layout labels. This enables a controlled
                       cache-hit full-decode acceptance run without cross-layout cache reuse.
+                      Grouped AOT slice completed on 2026-08-01: compact-v3 now routes two- and three-projection
+                      `GroupedQuantizedMatMulNode` operations through
+                      `litenn_cpu_ggml_block_grouped_matmul{2,3}_compact_q8k_f32`, stages each activation row once, and
+                      shares that workspace across Q/K/V- and gate/up-style projections. A new explicit
+                      `QuantizedStorageLayout` field is preserved by executable plans, vNext model packages, and rodata
+                      v5; GraphToMLIR validates bytes against that semantic tag instead of inferring layout from size.
+                      This fixes the real Q4_K width-2 collision where compact-v3 and expanded-v1 are both 640 bytes.
+                      Q4_K/Q6_K two- and three-way AOT execution, the complete 80-test GGUF suite, and the affected
+                      package/rodata regression suites pass. The remaining acceptance gate is a real cache-hit 14B
+                      expanded-v1 versus compact-v3 decode matrix before changing the default policy.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has

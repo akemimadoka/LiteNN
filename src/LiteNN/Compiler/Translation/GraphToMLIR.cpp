@@ -1289,18 +1289,27 @@ namespace litenn
 					                       : std::nullopt;
 					const auto expectedCompactBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, n, k);
 					std::optional<std::int64_t> preparedLayout;
-					if (expectedPreparedBytes && rhsInfo.shape[0] == *expectedPreparedBytes)
+					std::optional<std::size_t> expectedStorageBytes;
+					switch (node.params.storageLayout)
 					{
+					case QuantizedStorageLayout::Source:
+						expectedStorageBytes = expectedSourceBytes;
+						break;
+					case QuantizedStorageLayout::GGMLExpandedF32ScalesV1:
+						expectedStorageBytes = expectedPreparedBytes;
 						preparedLayout = kGGMLPreparedLayoutExpandedF32ScalesV1;
-					}
-					else if (expectedCompactBytes && rhsInfo.shape[0] == *expectedCompactBytes)
-					{
+						break;
+					case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
+						expectedStorageBytes = expectedCompactBytes;
 						preparedLayout = kGGMLPreparedLayoutCompactBlockGroupedV3;
+						break;
+					default:
+						break;
 					}
-					if (rhsInfo.shape[0] != expectedSourceBytes && !preparedLayout)
+					if (!expectedStorageBytes || rhsInfo.shape[0] != *expectedStorageBytes)
 					{
 						throw std::runtime_error(
-						    "GraphToMLIR GGML QuantizedMatMulNode requires output-major UInt8 block storage");
+						    "GraphToMLIR GGML QuantizedMatMulNode storage shape does not match its explicit layout");
 					}
 
 					{
@@ -1819,27 +1828,53 @@ namespace litenn
 				const auto preparedBlockBytes = GGMLPreparedBlockBytes(node.params.blockFormat);
 				const auto preparedRowBytes =
 				    preparedBlockBytes ? (k / layout->elementsPerBlock) * *preparedBlockBytes : std::size_t{ 0 };
-				std::optional<bool> usesPreparedLayout;
+				std::optional<std::int64_t> preparedLayout;
+				switch (node.params.storageLayout)
+				{
+				case QuantizedStorageLayout::Source:
+					break;
+				case QuantizedStorageLayout::GGMLExpandedF32ScalesV1:
+					if (!preparedBlockBytes)
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR GroupedQuantizedMatMulNode format does not support expanded prepared storage");
+					}
+					preparedLayout = kGGMLPreparedLayoutExpandedF32ScalesV1;
+					break;
+				case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
+					preparedLayout = kGGMLPreparedLayoutCompactBlockGroupedV3;
+					break;
+				default:
+					throw std::runtime_error(
+					    "GraphToMLIR GroupedQuantizedMatMulNode has an unsupported explicit storage layout");
+				}
 				std::size_t totalOutputWidth = 0;
 				for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
 				{
 					const auto rhsInfo = sg.GetOutputInfo(node.rhsStorages[i]);
 					const auto width = node.outputWidths[i];
 					totalOutputWidth += width;
-					const auto matchesSource = rhsInfo.shape.size() == 1 && rhsInfo.shape[0] == width * sourceRowBytes;
-					const auto matchesPrepared =
-					    preparedBlockBytes && rhsInfo.shape.size() == 1 && rhsInfo.shape[0] == width * preparedRowBytes;
-					if (rhsInfo.dtype != DataType::UInt8 || (!matchesSource && !matchesPrepared))
+					std::optional<std::size_t> expectedStorageBytes;
+					switch (node.params.storageLayout)
+					{
+					case QuantizedStorageLayout::Source:
+						expectedStorageBytes = width * sourceRowBytes;
+						break;
+					case QuantizedStorageLayout::GGMLExpandedF32ScalesV1:
+						expectedStorageBytes = width * preparedRowBytes;
+						break;
+					case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
+						expectedStorageBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, width, k);
+						break;
+					default:
+						break;
+					}
+					if (rhsInfo.dtype != DataType::UInt8 || rhsInfo.shape.size() != 1 || !expectedStorageBytes ||
+					    rhsInfo.shape[0] != *expectedStorageBytes)
 					{
 						throw std::runtime_error(
-						    "GraphToMLIR GroupedQuantizedMatMulNode requires output-major UInt8 block storage");
+						    "GraphToMLIR GroupedQuantizedMatMulNode storage shape does not match its explicit layout");
 					}
-					if (usesPreparedLayout && *usesPreparedLayout != matchesPrepared)
-					{
-						throw std::runtime_error(
-						    "GraphToMLIR GroupedQuantizedMatMulNode requires a consistent prepared storage layout");
-					}
-					usesPreparedLayout = matchesPrepared;
 				}
 				if (totalOutputWidth != outputInfos[0].shape[1] ||
 				    node.params.expressedShape != std::vector<std::size_t>{ totalOutputWidth, k })
@@ -1894,10 +1929,10 @@ namespace litenn
 				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
 				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_projection_count",
 				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.rhsStorages.size())));
-				if (usesPreparedLayout.value_or(false))
+				if (preparedLayout)
 				{
 					generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_prepared_layout",
-					                 builder_.getI64IntegerAttr(kGGMLPreparedLayoutExpandedF32ScalesV1));
+					                 builder_.getI64IntegerAttr(*preparedLayout));
 				}
 				for (std::size_t i = 0; i < node.outputWidths.size(); ++i)
 				{

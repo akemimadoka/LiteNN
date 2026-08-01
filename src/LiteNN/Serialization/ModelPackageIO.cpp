@@ -323,6 +323,7 @@ namespace LiteNN::Serialization
 				    << ",\"packedFormat\":" << EnumValue(q.packedFormat)
 				    << ",\"packedOrder\":" << EnumValue(q.packedOrder)
 				    << ",\"blockScaleLayout\":" << EnumValue(q.blockScaleLayout)
+				    << ",\"storageLayout\":" << EnumValue(q.storageLayout)
 				    << ",\"storageType\":" << EnumValue(q.storageType)
 				    << ",\"expressedType\":" << EnumValue(q.expressedType) << ",\"axis\":" << q.axis
 				    << ",\"groupSize\":" << q.groupSize << ",\"scales\":";
@@ -954,6 +955,8 @@ namespace LiteNN::Serialization
 				    static_cast<PackedNibbleOrder>(AsUInt(Member(quantObject, "packedOrder", label), label));
 				q.blockScaleLayout =
 				    static_cast<BlockScaleLayout>(AsUInt(Member(quantObject, "blockScaleLayout", label), label));
+				q.storageLayout =
+				    static_cast<QuantizedStorageLayout>(AsUInt(Member(quantObject, "storageLayout", label), label));
 				q.storageType = static_cast<DataType>(AsUInt(Member(quantObject, "storageType", label), label));
 				q.expressedType = static_cast<DataType>(AsUInt(Member(quantObject, "expressedType", label), label));
 				q.axis = AsInt(Member(quantObject, "axis", label), label);
@@ -1229,6 +1232,7 @@ namespace LiteNN::Serialization
 				.scales = PlanAttributeFloatList(op, "scales"),
 				.zeroPoints = PlanAttributeIntList(op, "zeroPoints"),
 				.expressedShape = PlanAttributeSizeList(op, "expressedShape"),
+				.storageLayout = PlanAttributeEnum<QuantizedStorageLayout>(op, "storageLayout"),
 			};
 		}
 

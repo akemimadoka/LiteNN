@@ -88,6 +88,13 @@ namespace LiteNN
 		PerBlockFloat32,
 	};
 
+	enum class QuantizedStorageLayout : std::uint32_t
+	{
+		Source = 0,
+		GGMLExpandedF32ScalesV1 = 1,
+		GGMLCompactBlockGroupedV3 = 3,
+	};
+
 	struct QuantizationParams
 	{
 		QuantizationScheme scheme{ QuantizationScheme::Affine };
@@ -103,6 +110,7 @@ namespace LiteNN
 		std::vector<float> scales;
 		std::vector<std::int32_t> zeroPoints;
 		std::vector<std::size_t> expressedShape;
+		QuantizedStorageLayout storageLayout{ QuantizedStorageLayout::Source };
 	};
 
 	struct QuantizedBlockLayout
@@ -144,6 +152,11 @@ namespace LiteNN
 	}
 
 	inline std::string_view BlockScaleLayoutName(BlockScaleLayout layout)
+	{
+		return EnumToString<EnumToStringStyle::Unqualified>(layout);
+	}
+
+	inline std::string_view QuantizedStorageLayoutName(QuantizedStorageLayout layout)
 	{
 		return EnumToString<EnumToStringStyle::Unqualified>(layout);
 	}
@@ -526,6 +539,10 @@ namespace LiteNN
 		switch (params.scheme)
 		{
 		case QuantizationScheme::Affine: {
+			if (params.storageLayout != QuantizedStorageLayout::Source)
+			{
+				throw std::runtime_error("Affine quantization requires source storage layout");
+			}
 			if (params.blockFormat != QuantizedBlockFormat::Scalar)
 			{
 				throw std::runtime_error("Affine quantization requires scalar storage format");
@@ -576,6 +593,18 @@ namespace LiteNN
 			break;
 		}
 		case QuantizationScheme::Block:
+			if (params.storageLayout != QuantizedStorageLayout::Source &&
+			    params.storageLayout != QuantizedStorageLayout::GGMLExpandedF32ScalesV1 &&
+			    params.storageLayout != QuantizedStorageLayout::GGMLCompactBlockGroupedV3)
+			{
+				throw std::runtime_error("Unsupported quantized storage layout");
+			}
+			if (params.storageLayout != QuantizedStorageLayout::Source &&
+			    (params.blockFormat != QuantizedBlockFormat::GGML_Q4_K &&
+			     params.blockFormat != QuantizedBlockFormat::GGML_Q6_K))
+			{
+				throw std::runtime_error("Prepared GGML storage layouts currently require GGML_Q4_K or GGML_Q6_K");
+			}
 			if (!IsGGMLQuantizedBlockFormat(params.blockFormat) &&
 			    !IsPackedNibbleQuantizedBlockFormat(params.blockFormat))
 			{

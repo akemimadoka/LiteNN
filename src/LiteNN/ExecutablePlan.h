@@ -268,6 +268,7 @@ namespace LiteNN
 		AddPlanAttribute(attrs, "packedFormat", params.packedFormat);
 		AddPlanAttribute(attrs, "packedOrder", params.packedOrder);
 		AddPlanAttribute(attrs, "blockScaleLayout", params.blockScaleLayout);
+		AddPlanAttribute(attrs, "storageLayout", params.storageLayout);
 		AddPlanAttribute(attrs, "storageType", params.storageType);
 		AddPlanAttribute(attrs, "expressedType", params.expressedType);
 		AddPlanAttribute(attrs, "axis", params.axis);

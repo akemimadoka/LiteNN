@@ -2975,13 +2975,18 @@ Priority classes:
       Single-projection AOT slice completed on 2026-08-01: `CompilerOptions` now exposes an explicit expanded-v1 or
       compact-v3 prepared-weight layout, externalization writes and names the matching physical payload, GraphToMLIR
       emits compact layout id `3`, and LLVM dispatches only that id to the compact Q8_K helper. Q4_K/Q6_K artifact-load
-      execution and payload-size regressions pass. Grouped projections intentionally stay on their shared staged path
-      under compact selection until a grouped compact helper can reuse one staged activation workspace; expanded-v1
-      remains the compatibility default while full-decode policy data is collected.
+      execution and payload-size regressions pass. Expanded-v1 remains the default while full-decode policy data is
+      collected.
       Evaluation-surface slice completed on 2026-08-01: GGUF CLI users can select
       `--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3`; the smoke report, decode cache, and shared-weight
       cache record the selected canonical layout. The thread matrix now supports a layout axis in addition to policy
       and thread axes, so compact-v3 can be evaluated on a real cache-hit decode without artifact contamination.
+      Grouped AOT slice completed on 2026-08-01: compact-v3 now supports two- and three-way
+      `GroupedQuantizedMatMulNode` through `litenn_cpu_ggml_block_grouped_matmul{2,3}_compact_q8k_f32`, staging each
+      activation row once for all projections. `QuantizedStorageLayout` is now an explicit graph/plan/package/rodata-v5
+      semantic instead of a byte-size guess, which removes the Q4_K width-2 ambiguity where compact-v3 and expanded-v1
+      both occupy 640 bytes. Q4_K/Q6_K grouped AOT execution and all affected regression suites pass. The item remains
+      open only for a real cache-hit 14B expanded-v1 versus compact-v3 matrix and evidence-based default selection.
 - [ ] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot

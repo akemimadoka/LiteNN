@@ -378,9 +378,11 @@ namespace LiteNN::Debug
 				    }
 				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
 				    {
-					    return std::format("QuantizedMatMulNode(lhs={}, rhsStorage={}, format={}, transposeRhs={})",
-					                       FormatValueRef(value.lhs), FormatValueRef(value.rhsStorage),
-					                       QuantizedBlockFormatName(value.params.blockFormat), value.transposeRhs);
+					    return std::format(
+					        "QuantizedMatMulNode(lhs={}, rhsStorage={}, format={}, storageLayout={}, transposeRhs={})",
+					        FormatValueRef(value.lhs), FormatValueRef(value.rhsStorage),
+					        QuantizedBlockFormatName(value.params.blockFormat),
+					        QuantizedStorageLayoutName(value.params.storageLayout), value.transposeRhs);
 				    }
 				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
 				    {
