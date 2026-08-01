@@ -74,6 +74,7 @@ namespace litenn
 		    "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ6KPrepackedHelper =
 		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32";
+		constexpr llvm::StringLiteral kGGMLBlockMatMulCompactQ8KHelper = "litenn_cpu_ggml_block_matmul_compact_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q8KStagedHelper =
@@ -91,6 +92,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI32Helper = "litenn_cpu_ggml_block_get_rows_i32_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGetRowsI64Helper = "litenn_cpu_ggml_block_get_rows_i64_f32";
 		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
+		constexpr std::int64_t kGGMLPreparedLayoutCompactBlockGroupedV3 = 3;
 
 		bool isDimMap(mlir::AffineMap map, std::initializer_list<unsigned> dims)
 		{
@@ -315,6 +317,10 @@ namespace litenn
 			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatAttr.getInt());
 			auto preparedLayoutAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedMatMulPreparedLayoutAttr);
 			const auto hasPreparedLayout = preparedLayoutAttr != nullptr;
+			const auto usesExpandedPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutExpandedF32ScalesV1;
+			const auto usesCompactPreparedLayout =
+			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutCompactBlockGroupedV3;
 			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
 			if (hasPreparedLayout)
 			{
@@ -322,15 +328,20 @@ namespace litenn
 				{
 					return mlir::failure();
 				}
-				if (preparedLayoutAttr.getInt() != kGGMLPreparedLayoutExpandedF32ScalesV1)
+				if (!usesExpandedPreparedLayout && !usesCompactPreparedLayout)
 				{
 					return mlir::failure();
 				}
-				if (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
+				if (usesCompactPreparedLayout && (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+				                                  blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K))
+				{
+					helperName = kGGMLBlockMatMulCompactQ8KHelper;
+				}
+				else if (usesExpandedPreparedLayout && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K)
 				{
 					helperName = kGGMLBlockMatMulQ4KPrepackedHelper;
 				}
-				else if (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
+				else if (usesExpandedPreparedLayout && blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K)
 				{
 					helperName = kGGMLBlockMatMulQ6KPrepackedHelper;
 				}
@@ -343,7 +354,7 @@ namespace litenn
 			{
 				helperName = kGGMLBlockMatMulQ8KStagedHelper;
 			}
-			auto funcType = hasPreparedLayout
+			auto funcType = usesExpandedPreparedLayout
 			                    ? builder.getFunctionType(
 			                          mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64 },
 			                          mlir::TypeRange{})
@@ -371,7 +382,7 @@ namespace litenn
 			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
 			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
-			if (hasPreparedLayout)
+			if (usesExpandedPreparedLayout)
 			{
 				builder.create<mlir::func::CallOp>(
 				    loc, helper, mlir::ValueRange{ dynamicLhs, dynamicRhs, dynamicOut, threadCount, affinityPolicy });

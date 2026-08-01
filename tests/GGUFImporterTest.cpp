@@ -1514,10 +1514,31 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutM
 				       info.name.find(".prepacked.expanded_f32_scales_v1.") != std::string::npos &&
 				       info.byteSize > quantizedWeight->Data().NumElements();
 			}));
+			const auto expandedWeight = std::ranges::find_if(externalInfos, [](const auto& info) {
+				return info.region == "weights" &&
+				       info.name.find(".prepacked.expanded_f32_scales_v1.") != std::string::npos;
+			});
+			ASSERT_NE(expandedWeight, externalInfos.end());
 			auto prepackedCompiled = prepackedArtifact.Load();
 			const auto prepackedActual = prepackedCompiled.RunTensors(inputs);
 			ASSERT_EQ(prepackedActual.size(), 1u);
 			ExpectTensorNear(prepackedActual[0], expected, { .absolute = 2.0e-3, .relative = 1.0e-5 });
+
+			prepackedOptions.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3;
+			const auto compactArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
+			EXPECT_TRUE(
+			    ByteSpanContains(compactArtifact.Instructions(), "litenn_cpu_ggml_block_matmul_compact_q8k_f32"));
+			const auto compactExternalInfos = compactArtifact.ExternalTensorInfos();
+			const auto compactWeight = std::ranges::find_if(compactExternalInfos, [](const auto& info) {
+				return info.region == "weights" &&
+				       info.name.find(".prepacked.compact_block_grouped_v3.") != std::string::npos;
+			});
+			ASSERT_NE(compactWeight, compactExternalInfos.end());
+			EXPECT_LT(compactWeight->byteSize, expandedWeight->byteSize);
+			auto compactCompiled = compactArtifact.Load();
+			const auto compactActual = compactCompiled.RunTensors(inputs);
+			ASSERT_EQ(compactActual.size(), 1u);
+			ExpectTensorNear(compactActual[0], expected, { .absolute = 3.0e-2, .relative = 1.0e-4 });
 		}
 		if (blockFormat == QuantizedBlockFormat::GGML_Q4_K || blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
 		    blockFormat == QuantizedBlockFormat::GGML_Q6_K)
@@ -1725,6 +1746,22 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedQ4KProjectionWithoutMaterializi
 	for (std::size_t i = 0; i < expected.size(); ++i)
 	{
 		ExpectTensorNear(prepackedActual[i], expected[i], { .absolute = 2.0e-3, .relative = 1.0e-5 });
+	}
+
+	prepackedOptions.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3;
+	prepackedOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
+	const auto compactArtifact = Compiler<CPU>::CompileArtifact(plan, prepackedOptions);
+	EXPECT_TRUE(
+	    ByteSpanContains(compactArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32"));
+	EXPECT_FALSE(std::ranges::any_of(compactArtifact.ExternalTensorInfos(), [](const auto& info) {
+		return info.name.find(".prepacked.compact_block_grouped_v3.") != std::string::npos;
+	}));
+	auto compactCompiled = compactArtifact.Load();
+	const auto compactActual = compactCompiled.RunTensors(inputs);
+	ASSERT_EQ(compactActual.size(), expected.size());
+	for (std::size_t i = 0; i < expected.size(); ++i)
+	{
+		ExpectTensorNear(compactActual[i], expected[i], { .absolute = 3.0e-2, .relative = 1.0e-4 });
 	}
 }
 

@@ -253,7 +253,14 @@ Priority classes for the GGUF/Qwen decode work:
                       the mature byte-stride-1 vec-dot consume four contiguous raw blocks directly: Q6_K T8 now beats
                       staged on hidden/FFN-up/FFN-down (`1.32 vs 1.48 ms`, `2.85 vs 3.63 ms`, `3.33 vs 3.77 ms`);
                       Q4_K FFN-down also wins (`2.67 vs 2.78 ms`) while hidden/FFN-up remain about 10% slower. Keep v3
-                      experimental and out of AOT routing until Q4_K and expanded-v1 meet the acceptance gate.
+                      experimental until Q4_K and expanded-v1 meet the acceptance gate.
+                      Single-projection AOT slice completed on 2026-08-01: added the explicit
+                      `CPUAOTGGMLPrepackedWeightLayout::{ExpandedF32ScalesV1,CompactBlockGroupedV3}` compiler option,
+                      layout-aware separated-weight generation, compact layout id `3` in GraphToMLIR, and matching
+                      LLVM helper dispatch. Q4_K/Q6_K compact artifacts execute with Q8_K-staged parity and are smaller
+                      than expanded-v1 in regression coverage. Grouped projections deliberately remain on the shared
+                      staged helper when compact is selected, pending a grouped compact ABI that reuses one activation
+                      workspace. Existing callers retain expanded-v1 by default.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has

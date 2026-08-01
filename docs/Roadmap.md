@@ -2971,8 +2971,13 @@ Priority classes:
       Runtime prototype completed on 2026-07-25: a 64-byte v3 header plus x4 block-grouped payload keeps Qwen-shaped
       storage at effectively `1.00x` raw GGUF size. The new prepack/runtime ABI, tail handling, JIT symbols, parity test,
       and benchmark rows cover Q4_K/Q6_K. Reusing the mature byte-stride-1 vec-dot makes Q6_K faster than staged on
-      the tested T8 production rows; Q4_K is mixed and expanded-v1 remains the speed gate, so compact-v3 is
-      intentionally not routed by AOT yet.
+      the tested T8 production rows; Q4_K is mixed and expanded-v1 remains the speed gate.
+      Single-projection AOT slice completed on 2026-08-01: `CompilerOptions` now exposes an explicit expanded-v1 or
+      compact-v3 prepared-weight layout, externalization writes and names the matching physical payload, GraphToMLIR
+      emits compact layout id `3`, and LLVM dispatches only that id to the compact Q8_K helper. Q4_K/Q6_K artifact-load
+      execution and payload-size regressions pass. Grouped projections intentionally stay on their shared staged path
+      under compact selection until a grouped compact helper can reuse one staged activation workspace; expanded-v1
+      remains the compatibility default while full-decode policy data is collected.
 - [ ] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot

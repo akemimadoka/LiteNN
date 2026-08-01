@@ -143,6 +143,12 @@ namespace LiteNN
 		All = 2,
 	};
 
+	enum class CPUAOTGGMLPrepackedWeightLayout : std::uint32_t
+	{
+		ExpandedF32ScalesV1 = 1,
+		CompactBlockGroupedV3 = 3,
+	};
+
 	struct CompiledModuleExternalTensorInfo
 	{
 		std::string name;
@@ -177,8 +183,12 @@ namespace LiteNN
 		bool enableCPUAOTGGMLQ8KStagedMatMul{};
 		/// Opt in to compile-time prepared GGML_Q4_K/GGML_Q6_K weight payloads in separated CPU AOT artifacts.
 		bool enableCPUAOTGGMLPrepackedWeights{};
-		/// Prepared GGML weight layout selection. The legacy boolean above maps to All when true.
+		/// Prepared GGML weight selection policy. The legacy boolean above maps to All when true.
 		CPUAOTGGMLPrepackedWeightPolicy cpuAOTGGMLPrepackedWeightPolicy{ CPUAOTGGMLPrepackedWeightPolicy::Disabled };
+		/// Physical layout used for prepared GGML_Q4_K/GGML_Q6_K weights.
+		CPUAOTGGMLPrepackedWeightLayout cpuAOTGGMLPrepackedWeightLayout{
+			CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1
+		};
 		/// Prefer CUDA native AOT kernels before falling back to CPU AOT bridge.
 		bool enableCUDANativeAOT{ true };
 		/// Prefer Vulkan native AOT kernels before falling back to CPU AOT bridge.

@@ -2794,156 +2794,6 @@ namespace
 		}
 	}
 
-	LITENN_TARGET_AVX2 __m128i LoadInterleavedU8x4AsI32(const std::uint8_t* address)
-	{
-		std::uint32_t packed = 0;
-		std::memcpy(&packed, address, sizeof(packed));
-		return _mm_cvtepu8_epi32(_mm_cvtsi32_si128(static_cast<std::int32_t>(packed)));
-	}
-
-	LITENN_TARGET_AVX2 __m128i LoadInterleavedI8x4AsI32(const std::uint8_t* address)
-	{
-		std::uint32_t packed = 0;
-		std::memcpy(&packed, address, sizeof(packed));
-		return _mm_cvtepi8_epi32(_mm_cvtsi32_si128(static_cast<std::int32_t>(packed)));
-	}
-
-	LITENN_TARGET_AVX2 void DeinterleaveU8x16x4(const std::uint8_t* interleaved, __m128i columns[4])
-	{
-		const auto chunk0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(interleaved));
-		const auto chunk1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(interleaved + 16));
-		const auto chunk2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(interleaved + 32));
-		const auto chunk3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(interleaved + 48));
-		for (int column = 0; column < 4; ++column)
-		{
-			const auto mask =
-			    _mm_setr_epi8(static_cast<char>(column), static_cast<char>(column + 4), static_cast<char>(column + 8),
-			                  static_cast<char>(column + 12), -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-			const auto part0 = _mm_shuffle_epi8(chunk0, mask);
-			const auto part1 = _mm_slli_si128(_mm_shuffle_epi8(chunk1, mask), 4);
-			const auto part2 = _mm_slli_si128(_mm_shuffle_epi8(chunk2, mask), 8);
-			const auto part3 = _mm_slli_si128(_mm_shuffle_epi8(chunk3, mask), 12);
-			columns[column] = _mm_or_si128(_mm_or_si128(part0, part1), _mm_or_si128(part2, part3));
-		}
-	}
-
-	LITENN_TARGET_AVX2 void AccumulateGGMLQ4KCompactInterleavedQ8Kx4AVX2(const std::uint8_t* interleavedBlock,
-	                                                                     const GGMLQ8KActivationBlock& lhs,
-	                                                                     float acc[4])
-	{
-		const std::uint8_t* blocks[4] = {
-			interleavedBlock,
-			interleavedBlock + 1,
-			interleavedBlock + 2,
-			interleavedBlock + 3,
-		};
-		const float d[4] = {
-			ReadGGMLF16Strided(blocks[0], 4, 0),
-			ReadGGMLF16Strided(blocks[1], 4, 0),
-			ReadGGMLF16Strided(blocks[2], 4, 0),
-			ReadGGMLF16Strided(blocks[3], 4, 0),
-		};
-		const float dmin[4] = {
-			ReadGGMLF16Strided(blocks[0], 4, 2),
-			ReadGGMLF16Strided(blocks[1], 4, 2),
-			ReadGGMLF16Strided(blocks[2], 4, 2),
-			ReadGGMLF16Strided(blocks[3], 4, 2),
-		};
-		auto accumulators = _mm_loadu_ps(acc);
-		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
-		{
-			std::uint32_t scales[4] = {};
-			std::uint32_t minimums[4] = {};
-			for (int column = 0; column < 4; ++column)
-			{
-				GGMLQ4Or5KScaleMin(blocks[column], 4, subblock, scales[column], minimums[column]);
-			}
-			const auto quantPairOffset = (subblock / 2) * 32;
-			const auto useHighNibble = (subblock % 2) != 0;
-			std::int32_t quantSums[4] = {};
-			for (std::uint64_t group = 0; group < 2; ++group)
-			{
-				__m128i quantBytes[4];
-				DeinterleaveU8x16x4(interleavedBlock + (16 + quantPairOffset + group * 16) * 4, quantBytes);
-				const auto nibbleMask = _mm_set1_epi8(15);
-				for (int column = 0; column < 4; ++column)
-				{
-					const auto quants = useHighNibble ? _mm_and_si128(_mm_srli_epi16(quantBytes[column], 4), nibbleMask)
-					                                  : _mm_and_si128(quantBytes[column], nibbleMask);
-					quantSums[column] += DotGGMLQ8KWithU8Vector16AVX2(lhs.qs + subblock * 32 + group * 16, quants, 0);
-				}
-			}
-			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
-			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
-			const auto scale =
-			    _mm_mul_ps(_mm_set1_ps(lhs.d),
-			               _mm_mul_ps(_mm_loadu_ps(d),
-			                          _mm_cvtepi32_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(scales)))));
-			const auto minimum =
-			    _mm_mul_ps(_mm_set1_ps(lhs.d * static_cast<float>(lhsSum)),
-			               _mm_mul_ps(_mm_loadu_ps(dmin),
-			                          _mm_cvtepi32_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(minimums)))));
-			const auto quantSumVector = _mm_loadu_si128(reinterpret_cast<const __m128i*>(quantSums));
-			accumulators =
-			    _mm_add_ps(accumulators, _mm_sub_ps(_mm_mul_ps(scale, _mm_cvtepi32_ps(quantSumVector)), minimum));
-		}
-		_mm_storeu_ps(acc, accumulators);
-	}
-
-	LITENN_TARGET_AVX2 void AccumulateGGMLQ6KCompactInterleavedQ8Kx4AVX2(const std::uint8_t* interleavedBlock,
-	                                                                     const GGMLQ8KActivationBlock& lhs,
-	                                                                     float acc[4])
-	{
-		const std::uint8_t* blocks[4] = {
-			interleavedBlock,
-			interleavedBlock + 1,
-			interleavedBlock + 2,
-			interleavedBlock + 3,
-		};
-		const float d[4] = {
-			ReadGGMLF16Strided(blocks[0], 4, 208),
-			ReadGGMLF16Strided(blocks[1], 4, 208),
-			ReadGGMLF16Strided(blocks[2], 4, 208),
-			ReadGGMLF16Strided(blocks[3], 4, 208),
-		};
-		auto accumulators = _mm_loadu_ps(acc);
-		const auto nibbleMask = _mm_set1_epi32(15);
-		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
-		{
-			for (std::uint64_t segment = 0; segment < 4; ++segment)
-			{
-				for (std::uint64_t group = 0; group < 2; ++group)
-				{
-					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
-					const auto scales = LoadInterleavedI8x4AsI32(interleavedBlock + (192 + scaleOffset) * 4);
-					auto quantSums = _mm_setzero_si128();
-					for (std::uint64_t local = 0; local < 16; ++local)
-					{
-						const auto laneInSegment = group * 16 + local;
-						const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
-						const auto qhOffset = halfBlock * 32 + laneInSegment;
-						auto low = LoadInterleavedU8x4AsI32(interleavedBlock + qlOffset * 4);
-						low = segment >= 2 ? _mm_and_si128(_mm_srli_epi32(low, 4), nibbleMask)
-						                   : _mm_and_si128(low, nibbleMask);
-						const auto high = _mm_and_si128(
-						    _mm_srl_epi32(LoadInterleavedU8x4AsI32(interleavedBlock + (128 + qhOffset) * 4),
-						                  _mm_cvtsi32_si128(static_cast<int>(segment * 2))),
-						    _mm_set1_epi32(3));
-						const auto quant =
-						    _mm_sub_epi32(_mm_or_si128(low, _mm_slli_epi32(high, 4)), _mm_set1_epi32(32));
-						const auto q8Offset = halfBlock * 128 + segment * 32 + laneInSegment;
-						quantSums = _mm_add_epi32(
-						    quantSums,
-						    _mm_mullo_epi32(quant, _mm_set1_epi32(static_cast<std::int32_t>(lhs.qs[q8Offset]))));
-					}
-					const auto scale =
-					    _mm_mul_ps(_mm_set1_ps(lhs.d), _mm_mul_ps(_mm_loadu_ps(d), _mm_cvtepi32_ps(scales)));
-					accumulators = _mm_add_ps(accumulators, _mm_mul_ps(scale, _mm_cvtepi32_ps(quantSums)));
-				}
-			}
-		}
-		_mm_storeu_ps(acc, accumulators);
-	}
 #endif
 
 	float DotGGMLBlockF32(const std::uint8_t* block, std::int64_t byteStride, const float* lhs, std::int64_t lhsStride,
@@ -6265,8 +6115,22 @@ namespace
 	}
 
 	constexpr std::string_view kGGMLPrepackedExpandedF32ScalesV1Name = "expanded_f32_scales_v1";
+	constexpr std::string_view kGGMLPrepackedCompactBlockGroupedV3Name = "compact_block_grouped_v3";
 
-	std::optional<std::vector<std::size_t>> GGMLPrepackedStorageShape(const QuantizationParams& params)
+	std::string_view GGMLPrepackedLayoutName(CPUAOTGGMLPrepackedWeightLayout preparedLayout)
+	{
+		switch (preparedLayout)
+		{
+		case CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1:
+			return kGGMLPrepackedExpandedF32ScalesV1Name;
+		case CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3:
+			return kGGMLPrepackedCompactBlockGroupedV3Name;
+		}
+		return "unknown";
+	}
+
+	std::optional<std::vector<std::size_t>> GGMLPrepackedStorageShape(const QuantizationParams& params,
+	                                                                  CPUAOTGGMLPrepackedWeightLayout preparedLayout)
 	{
 		if (params.scheme != QuantizationScheme::Block || !IsCPUAOTPrepackedGGMLFormat(params.blockFormat) ||
 		    params.storageType != DataType::UInt8 || params.expressedShape.size() != 2)
@@ -6274,8 +6138,27 @@ namespace
 			return std::nullopt;
 		}
 		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
+		if (!layout || params.expressedShape[1] % layout->elementsPerBlock != 0)
+		{
+			return std::nullopt;
+		}
+		if (preparedLayout == CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3)
+		{
+			const auto compactBytes =
+			    GGMLCompactInterleavedByteSize(params.blockFormat, static_cast<std::uint64_t>(params.expressedShape[0]),
+			                                   static_cast<std::uint64_t>(params.expressedShape[1]));
+			if (!compactBytes || *compactBytes > std::numeric_limits<std::size_t>::max())
+			{
+				return std::nullopt;
+			}
+			return std::vector<std::size_t>{ static_cast<std::size_t>(*compactBytes) };
+		}
+		if (preparedLayout != CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1)
+		{
+			return std::nullopt;
+		}
 		const auto preparedBlockBytes = GGMLPrepackedBlockBytes(params.blockFormat);
-		if (!layout || !preparedBlockBytes || params.expressedShape[1] % layout->elementsPerBlock != 0)
+		if (!preparedBlockBytes)
 		{
 			return std::nullopt;
 		}
@@ -6292,13 +6175,12 @@ namespace
 	std::optional<std::uint64_t> AppendGGMLPrepackedPayloadBytes(std::vector<std::byte>& bytes,
 	                                                             const Tensor<PolymorphicDevice>& tensor,
 	                                                             const QuantizationParams& params,
+	                                                             CPUAOTGGMLPrepackedWeightLayout preparedLayout,
 	                                                             std::uint64_t alignment)
 	{
-		const auto preparedShape = GGMLPrepackedStorageShape(params);
+		const auto preparedShape = GGMLPrepackedStorageShape(params, preparedLayout);
 		const auto layout = GetQuantizedBlockLayout(params.blockFormat);
-		const auto preparedBlockBytes = GGMLPrepackedBlockBytes(params.blockFormat);
-		if (!preparedShape || !layout || !preparedBlockBytes || tensor.DType() != DataType::UInt8 ||
-		    tensor.Shape().NumDim() != 1)
+		if (!preparedShape || !layout || tensor.DType() != DataType::UInt8 || tensor.Shape().NumDim() != 1)
 		{
 			return std::nullopt;
 		}
@@ -6306,7 +6188,6 @@ namespace
 		const auto columns = params.expressedShape[1];
 		const auto blockCount = columns / layout->elementsPerBlock;
 		const auto sourceRowBytes = blockCount * layout->bytesPerBlock;
-		const auto preparedRowBytes = blockCount * *preparedBlockBytes;
 		if (tensor.NumElements() < rows * sourceRowBytes)
 		{
 			return std::nullopt;
@@ -6329,6 +6210,21 @@ namespace
 		}
 		const auto* source = static_cast<const std::uint8_t*>(sourceRaw);
 		auto* target = reinterpret_cast<std::uint8_t*>(bytes.data() + oldSize);
+		if (preparedLayout == CPUAOTGGMLPrepackedWeightLayout::CompactBlockGroupedV3)
+		{
+			litenn_cpu_ggml_prepack_compact_interleaved(
+			    source, source, 0, static_cast<std::int64_t>(tensor.NumElements()), 1, static_cast<std::int64_t>(rows),
+			    static_cast<std::int64_t>(columns), static_cast<std::uint64_t>(params.blockFormat), target, target, 0,
+			    static_cast<std::int64_t>(preparedByteSize), 1);
+			return offset;
+		}
+		const auto preparedBlockBytes = GGMLPrepackedBlockBytes(params.blockFormat);
+		if (!preparedBlockBytes)
+		{
+			bytes.resize(oldSize);
+			return std::nullopt;
+		}
+		const auto preparedRowBytes = blockCount * *preparedBlockBytes;
 		for (std::size_t row = 0; row < rows; ++row)
 		{
 			for (std::size_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
@@ -6412,7 +6308,9 @@ namespace
 					}
 					recordPrepackUse(subgraph, matmul->rhsStorage, matmul->params);
 				}
-				else if (const auto* grouped = std::get_if<GroupedQuantizedMatMulNode>(&entry.node))
+				else if (const auto* grouped = std::get_if<GroupedQuantizedMatMulNode>(&entry.node);
+				         grouped && options.cpuAOTGGMLPrepackedWeightLayout ==
+				                        CPUAOTGGMLPrepackedWeightLayout::ExpandedF32ScalesV1)
 				{
 					if (!grouped->transposeRhs || grouped->rhsStorages.size() != grouped->outputWidths.size())
 					{
@@ -6436,7 +6334,8 @@ namespace
 		for (std::size_t i = 0; i < plans.size(); ++i)
 		{
 			if (!plans[i] || rejected[i] || variableRefCounts[i] != prepackUseCounts[i] ||
-			    !graph.GetVariable(i)->Quantization() || !GGMLPrepackedStorageShape(*plans[i]))
+			    !graph.GetVariable(i)->Quantization() ||
+			    !GGMLPrepackedStorageShape(*plans[i], options.cpuAOTGGMLPrepackedWeightLayout))
 			{
 				plans[i] = std::nullopt;
 			}
@@ -6769,9 +6668,10 @@ namespace
 			const auto& data = graph.GetVariable(variableIndex)->Data();
 			const auto variableBytes =
 			    prepackedVariablePlans[variableIndex] &&
-			            GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex])
-			        ? static_cast<std::uint64_t>(
-			              (*GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex]))[0])
+			            GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex],
+			                                      options.cpuAOTGGMLPrepackedWeightLayout)
+			        ? static_cast<std::uint64_t>((*GGMLPrepackedStorageShape(
+			              *prepackedVariablePlans[variableIndex], options.cpuAOTGGMLPrepackedWeightLayout))[0])
 			        : static_cast<std::uint64_t>(data.NumElements()) * ElementByteSize(data.DType());
 			projectedWeightBytes = AlignUpU64(projectedWeightBytes, 64);
 			projectedWeightBytes += variableBytes;
@@ -6831,12 +6731,15 @@ namespace
 						const auto& variableData = graph.GetVariable(variable->variableIndex)->Data();
 						const auto& prepackedPlan = prepackedVariablePlans[variable->variableIndex];
 						const auto prepackedShape =
-						    prepackedPlan ? GGMLPrepackedStorageShape(*prepackedPlan) : std::nullopt;
-						const auto offset = prepackedPlan && prepackedShape
-						                        ? AppendGGMLPrepackedPayloadBytes(result.weights, variableData,
-						                                                          *prepackedPlan, kAlignment)
-						                        : AppendTensorPayloadBytes(result.weights, variableData, output.dtype,
-						                                                   output.shape, kAlignment);
+						    prepackedPlan
+						        ? GGMLPrepackedStorageShape(*prepackedPlan, options.cpuAOTGGMLPrepackedWeightLayout)
+						        : std::nullopt;
+						const auto offset =
+						    prepackedPlan && prepackedShape
+						        ? AppendGGMLPrepackedPayloadBytes(result.weights, variableData, *prepackedPlan,
+						                                          options.cpuAOTGGMLPrepackedWeightLayout, kAlignment)
+						        : AppendTensorPayloadBytes(result.weights, variableData, output.dtype, output.shape,
+						                                   kAlignment);
 						if (!offset)
 						{
 							return std::nullopt;
@@ -6851,7 +6754,8 @@ namespace
 						                                  : TensorByteSizeForShape(output.dtype, output.shape);
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
 						    prepackedShape
-						        ? std::format("{}.prepacked.{}.{}", name, kGGMLPrepackedExpandedF32ScalesV1Name,
+						        ? std::format("{}.prepacked.{}.{}", name,
+						                      GGMLPrepackedLayoutName(options.cpuAOTGGMLPrepackedWeightLayout),
 						                      QuantizedBlockFormatName(prepackedPlan->blockFormat))
 						        : name,
 						    kWeightsRegionName, output.dtype, result.weights, externalShape, *offset, externalByteSize,

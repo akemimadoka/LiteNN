@@ -174,6 +174,29 @@ namespace litenn
 		}
 
 		constexpr std::int64_t kGGMLPreparedLayoutExpandedF32ScalesV1 = 1;
+		constexpr std::int64_t kGGMLPreparedLayoutCompactBlockGroupedV3 = 3;
+		constexpr std::size_t kGGMLCompactBlockGroupedHeaderBytes = 64;
+
+		std::optional<std::size_t> GGMLCompactBlockGroupedBytes(QuantizedBlockFormat format, std::size_t rows,
+		                                                        std::size_t columns)
+		{
+			const auto layout = GetQuantizedBlockLayout(format);
+			if (!layout || (format != QuantizedBlockFormat::GGML_Q4_K && format != QuantizedBlockFormat::GGML_Q6_K) ||
+			    columns == 0 || columns % layout->elementsPerBlock != 0 ||
+			    rows > std::numeric_limits<std::size_t>::max() - 3)
+			{
+				return std::nullopt;
+			}
+			const auto paddedRows = (rows + 3) & ~std::size_t{ 3 };
+			const auto blockCount = columns / layout->elementsPerBlock;
+			if (paddedRows != 0 &&
+			    blockCount > (std::numeric_limits<std::size_t>::max() - kGGMLCompactBlockGroupedHeaderBytes) /
+			                     paddedRows / layout->bytesPerBlock)
+			{
+				return std::nullopt;
+			}
+			return kGGMLCompactBlockGroupedHeaderBytes + paddedRows * blockCount * layout->bytesPerBlock;
+		}
 
 		// Extract tensor data to DenseElementsAttr
 		DenseElementsAttr convertTensorToAttr(MLIRContext& ctx, const Tensor<PolymorphicDevice>& tensor)
@@ -1264,8 +1287,17 @@ namespace litenn
 					const auto expectedPreparedBytes =
 					    preparedBlockBytes ? std::optional<std::size_t>{ n * blockCount * *preparedBlockBytes }
 					                       : std::nullopt;
-					const auto usesPreparedLayout = expectedPreparedBytes && rhsInfo.shape[0] == *expectedPreparedBytes;
-					if (rhsInfo.shape[0] != expectedSourceBytes && !usesPreparedLayout)
+					const auto expectedCompactBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, n, k);
+					std::optional<std::int64_t> preparedLayout;
+					if (expectedPreparedBytes && rhsInfo.shape[0] == *expectedPreparedBytes)
+					{
+						preparedLayout = kGGMLPreparedLayoutExpandedF32ScalesV1;
+					}
+					else if (expectedCompactBytes && rhsInfo.shape[0] == *expectedCompactBytes)
+					{
+						preparedLayout = kGGMLPreparedLayoutCompactBlockGroupedV3;
+					}
+					if (rhsInfo.shape[0] != expectedSourceBytes && !preparedLayout)
 					{
 						throw std::runtime_error(
 						    "GraphToMLIR GGML QuantizedMatMulNode requires output-major UInt8 block storage");
@@ -1306,10 +1338,10 @@ namespace litenn
 						generic->setAttr(
 						    "litenn.ggml_block_quantized_matmul",
 						    builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
-						if (usesPreparedLayout)
+						if (preparedLayout)
 						{
 							generic->setAttr("litenn.ggml_block_quantized_matmul_prepared_layout",
-							                 builder_.getI64IntegerAttr(kGGMLPreparedLayoutExpandedF32ScalesV1));
+							                 builder_.getI64IntegerAttr(*preparedLayout));
 						}
 						valueMap[nodeId] = { generic.getResult(0) };
 						return;
