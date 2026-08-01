@@ -1974,8 +1974,17 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesMixedQ4KQ6KProjectionToGroupedFieldInt
 		const auto quantizedWeight =
 		    QuantizeGGMLVariable(*plainWeight, formats[projection].first, formats[projection].second);
 		dequantizedWeights.push_back(GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "mixed.weight"));
+		std::vector<float> biasValues(outFeatures[projection]);
+		for (std::size_t i = 0; i < biasValues.size(); ++i)
+		{
+			biasValues[i] = static_cast<float>(projection + i + 1) * 0.03125F;
+		}
+		const auto biasVariable =
+		    graph.AddVariable(Variable::Create(MakeFloatTensor(biasValues, { 1, outFeatures[projection] })));
 		layers[projection] = Layer::LinearLayer{
 			.weightVariable = graph.AddVariable(quantizedWeight),
+			.biasVariable = biasVariable,
+			.biasShape = { 1, outFeatures[projection] },
 			.inFeatures = inFeatures,
 			.outFeatures = outFeatures[projection],
 			.dtype = DataType::Float32,
@@ -2020,7 +2029,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesMixedQ4KQ6KProjectionToGroupedFieldInt
 				{
 					sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
 				}
-				expectedData[row * outFeatures[projection] + column] = sum;
+				expectedData[row * outFeatures[projection] + column] =
+				    sum + static_cast<float>(projection + column + 1) * 0.03125F;
 			}
 		}
 	}

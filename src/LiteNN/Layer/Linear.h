@@ -168,8 +168,21 @@ namespace LiteNN::Layer
 		}
 		const auto& first = layers.front();
 		if (inputInfo.dtype != first.dtype || inputInfo.shape.size() != 2 || inputInfo.shape[1] != first.inFeatures ||
-		    !first.weightQuantization || first.biasVariable || !first.transposeWeight ||
-		    first.weightStorageShape.size() != 1)
+		    !first.weightQuantization || !first.transposeWeight || first.weightStorageShape.size() != 1)
+		{
+			return false;
+		}
+		const auto hasValidBiasShape = [](const LinearLayer& layer) {
+			if (!layer.biasVariable)
+			{
+				return true;
+			}
+			const auto shape =
+			    layer.biasShape.empty() ? std::vector<std::size_t>{ 1, layer.outFeatures } : layer.biasShape;
+			return shape == std::vector<std::size_t>{ layer.outFeatures } ||
+			       shape == std::vector<std::size_t>{ 1, layer.outFeatures };
+		};
+		if (!hasValidBiasShape(first))
 		{
 			return false;
 		}
@@ -182,7 +195,7 @@ namespace LiteNN::Layer
 		}
 		for (const auto& layer : layers.subspan(1))
 		{
-			if (layer.dtype != first.dtype || layer.inFeatures != first.inFeatures || layer.biasVariable ||
+			if (layer.dtype != first.dtype || layer.inFeatures != first.inFeatures || !hasValidBiasShape(layer) ||
 			    !layer.weightQuantization || !layer.transposeWeight || layer.weightStorageShape.size() != 1)
 			{
 				return false;
@@ -248,10 +261,23 @@ namespace LiteNN::Layer
 		std::size_t offset = 0;
 		for (std::size_t i = 0; i < layers.size(); ++i)
 		{
-			outputs.push_back(
-			    { subgraph.AddNode(SliceNode{ grouped, 1, offset, outputWidths[i] },
-			                       { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
-			      0 });
+			auto output = NodeOutput{
+				subgraph.AddNode(SliceNode{ grouped, 1, offset, outputWidths[i] },
+				                 { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
+				0,
+			};
+			if (layers[i].biasVariable)
+			{
+				const auto biasShape = layers[i].biasShape.empty()
+				                           ? std::vector<std::size_t>{ 1, layers[i].outFeatures }
+				                           : layers[i].biasShape;
+				const auto bias = subgraph.AddNode(VariableRefNode{ *layers[i].biasVariable },
+				                                   { OutputInfo{ layers[i].dtype, biasShape } });
+				output = { subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, output, { bias, 0 } },
+					                        { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
+					       0 };
+			}
+			outputs.push_back(output);
 			offset += outputWidths[i];
 		}
 		return outputs;
