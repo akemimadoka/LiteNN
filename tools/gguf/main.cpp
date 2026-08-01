@@ -59,68 +59,67 @@ namespace
 
 	void PrintUsage(std::string_view executable)
 	{
-		std::cerr << "Usage:\n"
-		          << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
-		          << "  " << executable << " --import-external <input.gguf> <output.ltnn> <weights.bin>\n"
-		          << "  " << executable
-		          << " --analyze-llm <input.gguf> [profile] [--dequantized-budget-bytes N|--dequantized-budget-mib N]\n"
-		          << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
-		          << "[max-cache-length]\n"
-		          << "  " << executable
-		          << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
-		          << "  " << executable
-		          << " --lower-llama-quantized <input.gguf> <output.ltnn> <weights.bin> <sequence-length> "
-		             "[position-offset]\n"
-		          << "  " << executable
-		          << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
-		          << "  " << executable
-		          << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
-		             "<max-cache-length>\n"
-		          << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
-		          << "  " << executable
-		          << " --dump-llama-token-id-logits <input.gguf> <comma-token-ids> <output.txt> [position-offset]\n"
-		          << "  " << executable
-		          << " --tokenize-llama-prompt <input.gguf> <prompt> <tokens.json> [--chat-template]\n"
-		          << "  " << executable << " --run-llama-prompt <input.gguf> <prompt> [position-offset]\n"
-		          << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
-		          << "  " << executable
-		          << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
-		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
-		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
-		          << "  " << executable
-		          << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
-		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
-		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
-		          << "  " << executable
-		          << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
-		             "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		             "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		             "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--compile-only] "
-		             "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		             "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
-		             "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
-		             "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
-		             "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
-		             "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
-		          << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
-		          << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
-		          << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
-		          << "  " << executable << " --compile-cuda-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
-		          << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
+		std::cerr
+		    << "Usage:\n"
+		    << "  " << executable << " --import <input.gguf> <output.ltnn>\n"
+		    << "  " << executable << " --import-external <input.gguf> <output.ltnn> <weights.bin>\n"
+		    << "  " << executable
+		    << " --analyze-llm <input.gguf> [profile] [--dequantized-budget-bytes N|--dequantized-budget-mib N]\n"
+		    << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
+		    << "[max-cache-length]\n"
+		    << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
+		    << "  " << executable
+		    << " --lower-llama-quantized <input.gguf> <output.ltnn> <weights.bin> <sequence-length> "
+		       "[position-offset]\n"
+		    << "  " << executable
+		    << " --lower-llama-decode <input.gguf> <output.ltnn> <sequence-length> <past-length>\n"
+		    << "  " << executable
+		    << " --lower-llama-decode-stateful <input.gguf> <output.ltnn> <weights.bin> <past-length> "
+		       "<max-cache-length>\n"
+		    << "  " << executable << " --run-llama-token-ids <input.gguf> <comma-token-ids> [position-offset]\n"
+		    << "  " << executable
+		    << " --dump-llama-token-id-logits <input.gguf> <comma-token-ids> <output.txt> [position-offset]\n"
+		    << "  " << executable << " --tokenize-llama-prompt <input.gguf> <prompt> <tokens.json> [--chat-template]\n"
+		    << "  " << executable << " --run-llama-prompt <input.gguf> <prompt> [position-offset]\n"
+		    << "  " << executable << " --run-llama-package-token-ids <input.ltnn> <comma-token-ids>\n"
+		    << "  " << executable
+		    << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
+		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
+		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
+		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
+		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		       "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
+		    << "  " << executable
+		    << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
+		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
+		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
+		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
+		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		       "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
+		    << "  " << executable
+		    << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
+		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
+		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
+		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
+		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
+		       "[--cpu-aot-ggml-prepacked-weight-layout expanded-v1|compact-v3|field-interleaved-v4]\n"
+		    << "  " << executable << " --compile-cpu <input.ltnn> <output.o> [symbol-prefix]\n"
+		    << "  " << executable << " --compile-cuda <input.ltnn> <output.o> [symbol-prefix]\n"
+		    << "  " << executable << " --compile-cpu-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
+		    << "  " << executable << " --compile-cuda-separated <input.ltnn> <output-dir> [symbol-prefix]\n"
+		    << "  " << executable << " <input.gguf> <output.ltnn>  (alias for --import)\n";
 	}
 
 	std::size_t ParseSize(std::string_view text, std::string_view label, bool allowZero = false)
@@ -293,6 +292,7 @@ namespace
 		bool statefulDecode{ true };
 		bool streamTokens{};
 		bool streamStats{};
+		bool profileHelpers{};
 		bool compileOnly{};
 		bool pagedReferenceDecode{};
 		std::optional<std::size_t> pagedResidentPageCount;
@@ -376,6 +376,10 @@ namespace
 			else if (arg == "--stream-stats")
 			{
 				options.streamStats = true;
+			}
+			else if (arg == "--profile-helpers")
+			{
+				options.profileHelpers = true;
 			}
 			else if (arg == "--compile-only")
 			{
@@ -1892,7 +1896,7 @@ namespace
 			double stateUpdateMs = 0.0;
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
 			std::optional<LiteNN::CompiledModuleCPUHelperProfiler> helperProfiler;
-			if (diagnostics)
+			if (options.profileHelpers)
 			{
 				helperProfiler.emplace();
 			}
@@ -1954,14 +1958,10 @@ namespace
 					helperTotalMs += event.totalMilliseconds;
 				}
 				moduleNonHelperMs = moduleRunMs >= helperTotalMs ? moduleRunMs - helperTotalMs : 0.0;
-				LogGGUFHelperProfile(diagnostics, step + 1, helperEvents);
+				LogGGUFHelperProfile(true, step + 1, helperEvents);
 				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
 				helperProfileEmitMs =
 				    std::chrono::duration<double, std::milli>(helperProfileEmitEnd - helperProfileEmitStart).count();
-			}
-			else
-			{
-				moduleNonHelperMs = moduleRunMs;
 			}
 			const auto logitsOutputStart = std::chrono::steady_clock::now();
 			if (outputs.empty() || (!options.statefulDecode && outputs.size() < 2))
@@ -2043,24 +2043,42 @@ namespace
 				std::cout << "stream stats step=" << (step + 1) << " position=" << step
 				          << " phase=" << (isPromptReplayStep ? "prompt_replay" : "generation") << " step_ms=" << stepMs
 				          << " input_prep_ms=" << inputPrepMs << " module_run_ms=" << moduleRunMs
-				          << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
-				          << " helper_profile_emit_ms=" << helperProfileEmitMs << " logits_output_ms=" << logitsOutputMs
-				          << " sampling_ms=" << samplingMs << " state_update_ms=" << stateUpdateMs
-				          << " host_overhead_ms=" << hostOverheadMs << " prompt_replay_steps=" << promptReplayStepCount
-				          << " prompt_replay_ms=" << promptReplayMs << " generation_steps=" << generationStepCount
-				          << " generation_ms=" << generationMs << " generated_tokens=" << generatedTokenCount
+				          << " helper_profile_enabled=" << (helperProfiler ? "true" : "false");
+				if (helperProfiler)
+				{
+					std::cout << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
+					          << " helper_profile_emit_ms=" << helperProfileEmitMs;
+				}
+				std::cout << " logits_output_ms=" << logitsOutputMs << " sampling_ms=" << samplingMs
+				          << " state_update_ms=" << stateUpdateMs << " host_overhead_ms=" << hostOverheadMs
+				          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
+				          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
+				          << " generated_tokens=" << generatedTokenCount
 				          << " generated_tokens_per_second=" << liveTokensPerSecond
 				          << " eos=" << (stoppedOnEos ? "true" : "false") << '\n';
 				std::cout.flush();
 			}
-			LogGGUFDiagnostic(diagnostics,
-			                  std::format("decode step {} buckets input_prep_ms={:.3f} module_run_ms={:.3f} "
-			                              "helper_total_ms={:.3f} module_non_helper_ms={:.3f} "
-			                              "helper_profile_emit_ms={:.3f} logits_output_ms={:.3f} "
-			                              "sampling_ms={:.3f} state_update_ms={:.3f} host_overhead_ms={:.3f}",
-			                              step + 1, inputPrepMs, moduleRunMs, helperTotalMs, moduleNonHelperMs,
-			                              helperProfileEmitMs, logitsOutputMs, samplingMs, stateUpdateMs,
-			                              hostOverheadMs));
+			if (helperProfiler)
+			{
+				LogGGUFDiagnostic(diagnostics,
+				                  std::format("decode step {} buckets input_prep_ms={:.3f} module_run_ms={:.3f} "
+				                              "helper_profile_enabled=true helper_total_ms={:.3f} "
+				                              "module_non_helper_ms={:.3f} helper_profile_emit_ms={:.3f} "
+				                              "logits_output_ms={:.3f} sampling_ms={:.3f} state_update_ms={:.3f} "
+				                              "host_overhead_ms={:.3f}",
+				                              step + 1, inputPrepMs, moduleRunMs, helperTotalMs, moduleNonHelperMs,
+				                              helperProfileEmitMs, logitsOutputMs, samplingMs, stateUpdateMs,
+				                              hostOverheadMs));
+			}
+			else
+			{
+				LogGGUFDiagnostic(diagnostics,
+				                  std::format("decode step {} buckets input_prep_ms={:.3f} module_run_ms={:.3f} "
+				                              "helper_profile_enabled=false logits_output_ms={:.3f} sampling_ms={:.3f} "
+				                              "state_update_ms={:.3f} host_overhead_ms={:.3f}",
+				                              step + 1, inputPrepMs, moduleRunMs, logitsOutputMs, samplingMs,
+				                              stateUpdateMs, hostOverheadMs));
+			}
 			LogGGUFDiagnostic(diagnostics, std::format("decode step {} ok {:.3f} ms", step + 1, stepTimesMs.back()));
 			if (stoppedOnEos)
 			{

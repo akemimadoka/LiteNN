@@ -67,6 +67,7 @@ class GGUFDecodeStep:
     tokens_per_second: float
     input_prep_ms: float | None = None
     module_run_ms: float | None = None
+    helper_profile_enabled: bool = False
     helper_total_ms: float | None = None
     module_non_helper_ms: float | None = None
     helper_profile_emit_ms: float | None = None
@@ -692,6 +693,9 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             tokens_per_second=float(values.get("generated_tokens_per_second", "0")),
                             input_prep_ms=optional_float(values, "input_prep_ms"),
                             module_run_ms=optional_float(values, "module_run_ms"),
+                            helper_profile_enabled=values.get(
+                                "helper_profile_enabled", "true" if "helper_total_ms" in values else "false"
+                            ) == "true",
                             helper_total_ms=optional_float(values, "helper_total_ms"),
                             module_non_helper_ms=optional_float(values, "module_non_helper_ms"),
                             helper_profile_emit_ms=optional_float(values, "helper_profile_emit_ms"),
@@ -781,6 +785,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     ]
 
     def helper_total_ms_for_step(step: GGUFDecodeStep) -> float:
+        if not step.helper_profile_enabled:
+            return 0.0
         if step.helper_total_ms is not None:
             return step.helper_total_ms
         return sum(float(helper["total_ms"]) for helper in helper_totals_by_step.get(step.step, {}).values())
@@ -811,6 +817,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "generated_tokens_per_second": step.tokens_per_second,
             "input_prep_ms": step.input_prep_ms,
             "module_run_ms": step.module_run_ms,
+            "helper_profile_enabled": step.helper_profile_enabled,
             "stream_helper_total_ms": step.helper_total_ms,
             "module_non_helper_ms": step.module_non_helper_ms,
             "helper_profile_emit_ms": step.helper_profile_emit_ms,
@@ -820,9 +827,17 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "host_overhead_ms": step.host_overhead_ms,
             "runtime_accounted_ms": runtime_accounted_ms(step),
             "helper_total_ms": helper_total_ms_for_step(step),
-            "helper_percent_of_step": helper_percent(helper_total_ms_for_step(step), step.step_ms),
-            "residual_ms": max(0.0, step.step_ms - helper_total_ms_for_step(step)),
-            "residual_percent_of_step": helper_percent(max(0.0, step.step_ms - helper_total_ms_for_step(step)), step.step_ms),
+            "helper_percent_of_step": (
+                helper_percent(helper_total_ms_for_step(step), step.step_ms) if step.helper_profile_enabled else None
+            ),
+            "residual_ms": (
+                max(0.0, step.step_ms - helper_total_ms_for_step(step)) if step.helper_profile_enabled else None
+            ),
+            "residual_percent_of_step": (
+                helper_percent(max(0.0, step.step_ms - helper_total_ms_for_step(step)), step.step_ms)
+                if step.helper_profile_enabled
+                else None
+            ),
             "top_helper": next(
                 (
                     {
@@ -865,15 +880,18 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
         if not selected_steps:
             continue
-        total_phase_ms = sum(float(step["step_ms"]) for step in selected_steps)
-        residual_phase_ms = sum(float(step["residual_ms"]) for step in selected_steps)
+        measured_steps = [step for step in selected_steps if step["residual_ms"] is not None]
+        if not measured_steps:
+            continue
+        total_phase_ms = sum(float(step["step_ms"]) for step in measured_steps)
+        residual_phase_ms = sum(float(step["residual_ms"]) for step in measured_steps)
         residual_buckets.append(
             {
                 "bucket": "non_helper_residual",
                 "phase": phase,
-                "steps": len(selected_steps),
+                "steps": len(measured_steps),
                 "total_ms": residual_phase_ms,
-                "avg_ms_per_step": residual_phase_ms / len(selected_steps),
+                "avg_ms_per_step": residual_phase_ms / len(measured_steps),
                 "percent_of_phase_steps": helper_percent(residual_phase_ms, total_phase_ms),
                 "percent_of_all_steps": helper_percent(residual_phase_ms, total_step_ms),
                 "attribution": "step_ms_minus_helper_total",
@@ -920,7 +938,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 "top_operator": step["top_operator"],
             }
             for step in step_dicts
-            if float(step["residual_ms"]) > 0.0
+            if step["residual_ms"] is not None and float(step["residual_ms"]) > 0.0
         ),
         key=lambda item: (-float(item["residual_ms"]), int(item["step"])),
     )
@@ -992,8 +1010,12 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "helper_event_count": len(analysis.helpers),
         "total_step_ms": total_step_ms,
         "total_helper_ms": sum(float(helper["total_ms"]) for helper in ranked_helpers),
-        "total_residual_ms": sum(float(step["residual_ms"]) for step in step_dicts),
-        "residual_percent_of_steps": helper_percent(sum(float(step["residual_ms"]) for step in step_dicts), total_step_ms),
+        "total_residual_ms": sum(
+            float(step["residual_ms"]) for step in step_dicts if step["residual_ms"] is not None
+        ),
+        "residual_percent_of_steps": helper_percent(
+            sum(float(step["residual_ms"]) for step in step_dicts if step["residual_ms"] is not None), total_step_ms
+        ) if any(step["residual_ms"] is not None for step in step_dicts) else None,
         "generation_step_count": sum(1 for step in analysis.steps if step.phase == "generation"),
         "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
         "helpers": ranked_helpers,
@@ -1078,6 +1100,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             }
         )
     for step in step_dicts:
+        if step["residual_ms"] is None:
+            continue
         residual_ms = float(step["residual_ms"])
         if residual_ms <= 0.0:
             continue
@@ -1271,8 +1295,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             f"{format_optional_ms(step_summary['module_run_ms'])} | "
             f"{format_optional_ms(step_summary['module_non_helper_ms'])} | "
             f"{format_optional_ms(step_summary['host_overhead_ms'])} | "
-            f"{float(step_summary['helper_total_ms']):.3f} | {helper_percent_text} | "
-            f"{float(step_summary['residual_ms']):.3f} | {residual_percent_text} | "
+            f"{format_optional_ms(step_summary['helper_total_ms'] if step_summary['helper_profile_enabled'] else None)} | "
+            f"{helper_percent_text} | {format_optional_ms(step_summary['residual_ms'])} | {residual_percent_text} | "
             f"{top_helper_text} | {top_operator_text} | {step.tokens_per_second:.3f} |"
         )
     md_path = out_dir / "gguf_decode_summary.md"
@@ -1374,7 +1398,7 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
             "## Next Diagnostics",
             "",
             "- Open `trace.json` in `chrome://tracing` or Perfetto to inspect the current command-level waterfall.",
-            "- When profiling GGUF decode with `--stream-stats` and `LITENN_COMPILE_DIAGNOSTICS=1`, open `gguf_decode_trace.json` and `gguf_decode_summary.md` for token-step and helper attribution.",
+            "- Use `--stream-stats --profile-helpers` when GGUF helper attribution is required; omit `--profile-helpers` for representative throughput measurements.",
             "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; convert it to collapsed stacks and pass `--collapsed-stacks` to generate Speedscope/flame graph output.",
             "- Pass private model files through `--sensitive-path` so manifest, summary, trace, stdout, and stderr redact them.",
             "",

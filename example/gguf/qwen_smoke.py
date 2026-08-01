@@ -368,6 +368,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stream-tokens", action="store_true", help="Mirror generated token events to stdout")
     parser.add_argument("--stream-stats", action="store_true", help="Mirror per-step live decode statistics to stdout")
     parser.add_argument(
+        "--profile-helpers",
+        action="store_true",
+        help="Enable intrusive per-helper runtime attribution; use only for profiling, not throughput measurements",
+    )
+    parser.add_argument(
         "--compile-only",
         action="store_true",
         help="Build/load the decode artifact for the requested token capacity, then stop before token execution",
@@ -657,6 +662,8 @@ def main() -> int:
             decode_cmd.append("--stream-tokens")
         if args.stream_stats:
             decode_cmd.append("--stream-stats")
+        if args.profile_helpers:
+            decode_cmd.append("--profile-helpers")
         if args.compile_only:
             decode_cmd.append("--compile-only")
         if args.paged_reference_decode:
@@ -753,6 +760,7 @@ def main() -> int:
             "ggml_prepacked_weight_policy": args.cpu_aot_ggml_prepacked_weight_policy,
             "ggml_prepacked_layout": PREPACKED_LAYOUT_TOKENS[args.cpu_aot_ggml_prepacked_weight_layout],
             "compile_diagnostics": not args.no_compile_diagnostics,
+            "profile_helpers": args.profile_helpers,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),
         "fallback_used": False,
