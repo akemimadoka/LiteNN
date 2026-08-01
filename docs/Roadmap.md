@@ -2994,8 +2994,13 @@ Priority classes:
       SIMD follow-up completed on 2026-08-01: compact Q4_K/Q6_K x4 AVX2 kernels now decode nibbles/bitplanes and reduce
       integer dot products entirely in registers. The same cache-hit run improved to `567.607 ms/token`
       (`1.762 tok/s`), reducing latency by `9.34%`; step-16 helper time fell from `592.755` to `528.082 ms` with identical
-      output and no fallback. The remaining `17.7%` expanded-v1 latency gap keeps this item open for an x8
-      field-interleaved repack/GEMV kernel before any default-policy change.
+      output and no fallback. The remaining expanded-v1 latency gap was `17.7%` after this slice.
+      Paired-dot follow-up completed on 2026-08-01: complete x4 blocks now evaluate two output columns in each 256-bit
+      AVX2 dot, sharing Q8_K loads, multiply-adds, zero-point correction, and reduction. The same run improved again to
+      `505.917 ms/token` (`1.977 tok/s`), another `10.87%` latency reduction and `19.2%` cumulatively from the first
+      compact kernel; step-16 helper time fell to `475.246 ms`. Compact-v3 is now only `4.94%` slower than expanded-v1
+      while retaining `49.9%` lower prepared-weight storage. It remains opt-in pending repeated acceptance and an x8
+      field-interleaved scale/quant reuse kernel.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the

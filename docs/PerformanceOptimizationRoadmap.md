@@ -286,8 +286,15 @@ Priority classes for the GGUF/Qwen decode work:
                       byte arrays and spilling lane sums. The same cache-hit decode improved to `567.607 ms/token`
                       (`1.762 tok/s`), a `9.34%` latency reduction and `10.3%` throughput gain; step-16 helper time fell
                       from `592.755` to `528.082 ms`, with identical generated tokens and no fallback. The remaining
-                      expanded-v1 latency gap is `17.7%`; the next acceptance slice is an x8 field-interleaved
-                      Q4_K/Q6_K repack/GEMV kernel rather than a default-policy change.
+                      expanded-v1 latency gap was `17.7%` after this slice.
+                      Paired-dot slice completed on 2026-08-01: complete x4 compact blocks now evaluate two output
+                      columns per 256-bit AVX2 dot, sharing the Q8_K load, multiply-add, zero-point correction, and
+                      horizontal reduction. The same real cache-hit run improved again to `505.917 ms/token`
+                      (`1.977 tok/s`), another `10.87%` latency reduction and a cumulative `19.2%` reduction from the
+                      first compact kernel; step-16 helper time fell to `475.246 ms`. Compact-v3 is now only `4.94%`
+                      slower than expanded-v1 while using `49.9%` fewer prepared-weight bytes. It remains opt-in until
+                      repeated acceptance runs close or reverse that final gap; the next kernel slice is x8
+                      field-interleaved scale/quant reuse.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
@@ -337,8 +344,11 @@ Priority classes for the GGUF/Qwen decode work:
                       AVX2 register-decode slice completed on 2026-08-01: compact x4 kernels now decode Q4_K/Q6_K
                       directly from contiguous blocks and reduce Q8_K dot products without temporary arrays. The real
                       T8 14B cache-hit result improved by `9.34%`, but production acceptance remains open because
-                      expanded-v1 is still `17.7%` faster. Next implement an x8 field-interleaved prepared layout and
-                      GEMV loop that shares decoded scales/lanes across more output rows, then evaluate AVX512/VNNI.
+                      expanded-v1 was still `17.7%` faster after that slice.
+                      Paired-dot follow-up completed on 2026-08-01: two compact columns now share one 256-bit Q8_K dot
+                      sequence. Real decode improved from `567.607` to `505.917 ms/token`; the expanded-v1 gap is down
+                      to `4.94%`. Next implement an x8 field-interleaved prepared layout and GEMV loop that shares
+                      decoded scales/lanes across more output rows, then evaluate AVX512/VNNI.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

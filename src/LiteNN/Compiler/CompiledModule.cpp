@@ -1370,6 +1370,27 @@ namespace
 		return _mm_cvtsi128_si32(sum128);
 	}
 
+	LITENN_TARGET_AVX2 __m128i DotGGMLQ8KWithU8Vector16PairAVX2(const std::int8_t* q8, __m128i rawBytes0,
+	                                                            __m128i rawBytes1, std::int16_t zeroPoint)
+	{
+		auto rawBytes = _mm256_castsi128_si256(rawBytes0);
+		rawBytes = _mm256_inserti128_si256(rawBytes, rawBytes1, 1);
+		const auto q8Bytes128 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q8));
+		const auto q8Bytes = _mm256_broadcastsi128_si256(q8Bytes128);
+		auto sums = _mm256_madd_epi16(_mm256_maddubs_epi16(rawBytes, q8Bytes), _mm256_set1_epi16(1));
+		sums = _mm256_hadd_epi32(sums, sums);
+		sums = _mm256_hadd_epi32(sums, sums);
+		auto pair = _mm_unpacklo_epi32(_mm256_castsi256_si128(sums), _mm256_extracti128_si256(sums, 1));
+		if (zeroPoint != 0)
+		{
+			auto q8Sum = _mm_madd_epi16(_mm_maddubs_epi16(_mm_set1_epi8(1), q8Bytes128), _mm_set1_epi16(1));
+			q8Sum = _mm_hadd_epi32(q8Sum, q8Sum);
+			q8Sum = _mm_hadd_epi32(q8Sum, q8Sum);
+			pair = _mm_sub_epi32(pair, _mm_set1_epi32(_mm_cvtsi128_si32(q8Sum) * zeroPoint));
+		}
+		return pair;
+	}
+
 	LITENN_TARGET_AVX2 std::int32_t DotGGMLQ8KWithU8Raw16AVX2(const std::int8_t* q8, const std::uint8_t* raw,
 	                                                          std::int16_t zeroPoint)
 	{
@@ -1834,16 +1855,25 @@ namespace
 			{
 				const auto q8Offset = subblock * 32 + group * 16;
 				const auto quantOffset = 16 + quantPairOffset + group * 16;
+				__m128i quantBytes[4];
 				for (int column = 0; column < 4; ++column)
 				{
-					auto quantBytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(blocks[column] + quantOffset));
+					quantBytes[column] =
+					    _mm_loadu_si128(reinterpret_cast<const __m128i*>(blocks[column] + quantOffset));
 					if (useHighNibble)
 					{
-						quantBytes = _mm_srli_epi16(quantBytes, 4);
+						quantBytes[column] = _mm_srli_epi16(quantBytes[column], 4);
 					}
-					quantBytes = _mm_and_si128(quantBytes, nibbleMask);
-					quantSum[column] += DotGGMLQ8KWithU8Vector16AVX2(lhs.qs + q8Offset, quantBytes, 0);
+					quantBytes[column] = _mm_and_si128(quantBytes[column], nibbleMask);
 				}
+				const auto sums01 =
+				    DotGGMLQ8KWithU8Vector16PairAVX2(lhs.qs + q8Offset, quantBytes[0], quantBytes[1], 0);
+				const auto sums23 =
+				    DotGGMLQ8KWithU8Vector16PairAVX2(lhs.qs + q8Offset, quantBytes[2], quantBytes[3], 0);
+				quantSum[0] += _mm_cvtsi128_si32(sums01);
+				quantSum[1] += _mm_extract_epi32(sums01, 1);
+				quantSum[2] += _mm_cvtsi128_si32(sums23);
+				quantSum[3] += _mm_extract_epi32(sums23, 1);
 			}
 
 			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
@@ -2872,10 +2902,11 @@ namespace
 					const auto qlOffset = halfBlock * 64 + laneInSegment + (segment % 2) * 32;
 					const auto qhOffset = 128 + halfBlock * 32 + laneInSegment;
 					const auto q8Offset = halfBlock * 128 + segment * 32 + laneInSegment;
+					float scale[4];
+					__m128i quantBytes[4];
 					for (int column = 0; column < 4; ++column)
 					{
-						const auto scale =
-						    static_cast<float>(static_cast<std::int8_t>(blocks[column][192 + scaleOffset]));
+						scale[column] = static_cast<float>(static_cast<std::int8_t>(blocks[column][192 + scaleOffset]));
 						auto lowFour = _mm_loadu_si128(reinterpret_cast<const __m128i*>(blocks[column] + qlOffset));
 						if (segment >= 2)
 						{
@@ -2884,9 +2915,21 @@ namespace
 						lowFour = _mm_and_si128(lowFour, lowFourMask);
 						auto highTwo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(blocks[column] + qhOffset));
 						highTwo = _mm_and_si128(_mm_srli_epi16(highTwo, static_cast<int>(segment * 2)), highTwoMask);
-						const auto quantBytes = _mm_or_si128(lowFour, _mm_slli_epi16(highTwo, 4));
-						const auto quantSum = DotGGMLQ8KWithU8Vector16AVX2(lhs.qs + q8Offset, quantBytes, 32);
-						acc[column] += lhs.d * d[column] * scale * static_cast<float>(quantSum);
+						quantBytes[column] = _mm_or_si128(lowFour, _mm_slli_epi16(highTwo, 4));
+					}
+					const auto sums01 =
+					    DotGGMLQ8KWithU8Vector16PairAVX2(lhs.qs + q8Offset, quantBytes[0], quantBytes[1], 32);
+					const auto sums23 =
+					    DotGGMLQ8KWithU8Vector16PairAVX2(lhs.qs + q8Offset, quantBytes[2], quantBytes[3], 32);
+					const std::int32_t quantSum[4] = {
+						_mm_cvtsi128_si32(sums01),
+						_mm_extract_epi32(sums01, 1),
+						_mm_cvtsi128_si32(sums23),
+						_mm_extract_epi32(sums23, 1),
+					};
+					for (int column = 0; column < 4; ++column)
+					{
+						acc[column] += lhs.d * d[column] * scale[column] * static_cast<float>(quantSum[column]);
 					}
 				}
 			}
