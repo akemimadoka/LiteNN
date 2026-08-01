@@ -1066,6 +1066,26 @@ TEST(GGUFLLMGeneration, AppliesRepeatPenaltyBeforeGreedySampling)
 	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler, history), 2);
 }
 
+TEST(GGUFLLMGeneration, GreedySamplingKeepsLowestTokenIdForTiedLogits)
+{
+	GGUF::LLMSamplerState sampler{ .config = { .mode = GGUF::LLMSamplingMode::Greedy } };
+	const std::array<float, 4> logits{ 1.0f, 3.0f, 3.0f, 2.0f };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler), 1);
+	EXPECT_EQ(sampler.drawCount, 0u);
+}
+
+TEST(GGUFLLMGeneration, ZeroTemperatureUsesGreedySamplingWithoutAdvancingRng)
+{
+	GGUF::LLMSamplerState sampler{
+		.config = { .mode = GGUF::LLMSamplingMode::Random, .temperature = 0.0f, .topK = 1, .topP = 0.25f }
+	};
+	const std::array<float, 4> logits{ -1.0f, 2.0f, 4.0f, 3.0f };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler), 2);
+	EXPECT_EQ(sampler.drawCount, 0u);
+}
+
 TEST(GGUFLLMGeneration, SelectsFromLastRowOfLiteNNTensorLogits)
 {
 	auto generation = GGUF::BeginGeneration({ .tokenIds = { 0 }, .callerProvided = true });

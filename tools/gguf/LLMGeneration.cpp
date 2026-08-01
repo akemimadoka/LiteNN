@@ -8,6 +8,7 @@
 #include <random>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_set>
 
 namespace LiteNN::GGUF
 {
@@ -19,11 +20,6 @@ namespace LiteNN::GGUF
 			float logit{};
 			double weight{};
 		};
-
-		bool AppearsInHistory(std::span<const std::int32_t> history, std::int32_t tokenId)
-		{
-			return std::ranges::find(history, tokenId) != history.end();
-		}
 
 		float ApplyRepeatPenalty(float logit, float penalty)
 		{
@@ -58,6 +54,11 @@ namespace LiteNN::GGUF
 				throw std::runtime_error("LLM sampling requires a non-empty logits vector representable as int32 ids");
 			}
 
+			std::unordered_set<std::int32_t> seenTokens;
+			if (config.repeatPenalty > 1.0f)
+			{
+				seenTokens.insert(history.begin(), history.end());
+			}
 			std::vector<Candidate> candidates;
 			candidates.reserve(logits.size());
 			for (std::size_t i = 0; i < logits.size(); ++i)
@@ -67,7 +68,7 @@ namespace LiteNN::GGUF
 					throw std::runtime_error("LLM sampling logits must be finite");
 				}
 				const auto tokenId = static_cast<std::int32_t>(i);
-				const auto adjusted = AppearsInHistory(history, tokenId)
+				const auto adjusted = config.repeatPenalty > 1.0f && seenTokens.contains(tokenId)
 				                          ? ApplyRepeatPenalty(logits[i], config.repeatPenalty)
 				                          : logits[i];
 				candidates.push_back({ .tokenId = tokenId, .logit = adjusted, .weight = 0.0 });
@@ -84,6 +85,59 @@ namespace LiteNN::GGUF
 				candidates.resize(config.topK);
 			}
 			return candidates;
+		}
+
+		std::int32_t SelectGreedyToken(std::span<const float> logits, const LLMSamplingConfig& config,
+		                               std::span<const std::int32_t> history)
+		{
+			if (logits.empty() || logits.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+			{
+				throw std::runtime_error("LLM sampling requires a non-empty logits vector representable as int32 ids");
+			}
+			std::unordered_set<std::int32_t> seenTokens;
+			if (config.repeatPenalty > 1.0f)
+			{
+				seenTokens.insert(history.begin(), history.end());
+			}
+			std::int32_t bestToken = 0;
+			float bestLogit = -std::numeric_limits<float>::infinity();
+			for (std::size_t i = 0; i < logits.size(); ++i)
+			{
+				if (!std::isfinite(logits[i]))
+				{
+					throw std::runtime_error("LLM sampling logits must be finite");
+				}
+				const auto tokenId = static_cast<std::int32_t>(i);
+				const auto adjusted = config.repeatPenalty > 1.0f && seenTokens.contains(tokenId)
+				                          ? ApplyRepeatPenalty(logits[i], config.repeatPenalty)
+				                          : logits[i];
+				if (adjusted > bestLogit)
+				{
+					bestLogit = adjusted;
+					bestToken = tokenId;
+				}
+			}
+			return bestToken;
+		}
+
+		std::span<const float> LastTokenLogitsView(const Tensor<CPU>& logits)
+		{
+			if (logits.DType() != DataType::Float32)
+			{
+				throw std::runtime_error("LLM logits post-processing currently requires Float32 logits");
+			}
+			const auto shape = logits.Shape();
+			const auto* data = static_cast<const float*>(logits.UnsafeRawData());
+			if (shape.NumDim() == 1 && shape[0] > 0)
+			{
+				return { data, shape[0] };
+			}
+			if (shape.NumDim() != 2 || shape[0] == 0 || shape[1] == 0)
+			{
+				throw std::runtime_error(
+				    "LLM logits post-processing expects rank-1 [vocab] or rank-2 [sequence, vocab]");
+			}
+			return { data + (shape[0] - 1) * shape[1], shape[1] };
 		}
 	} // namespace
 
@@ -210,11 +264,11 @@ namespace LiteNN::GGUF
 	                             std::span<const std::int32_t> history)
 	{
 		ValidateSamplingConfig(sampler.config);
-		auto candidates = BuildCandidates(logits, sampler.config, history);
 		if (sampler.config.mode == LLMSamplingMode::Greedy || sampler.config.temperature == 0.0f)
 		{
-			return candidates.front().tokenId;
+			return SelectGreedyToken(logits, sampler.config, history);
 		}
+		auto candidates = BuildCandidates(logits, sampler.config, history);
 
 		const auto maxLogit = candidates.front().logit;
 		double totalWeight = 0.0;
@@ -265,8 +319,7 @@ namespace LiteNN::GGUF
 	std::int32_t SelectNextToken(const Tensor<CPU>& logits, LLMSamplerState& sampler,
 	                             std::span<const std::int32_t> history)
 	{
-		const auto lastTokenLogits = ExtractLastTokenLogits(logits);
-		return SelectNextToken(lastTokenLogits, sampler, history);
+		return SelectNextToken(LastTokenLogitsView(logits), sampler, history);
 	}
 
 	std::int32_t StepGeneration(LLMGenerationState& generation, std::span<const float> logits, LLMSamplerState& sampler)
@@ -287,7 +340,6 @@ namespace LiteNN::GGUF
 
 	std::int32_t StepGeneration(LLMGenerationState& generation, const Tensor<CPU>& logits, LLMSamplerState& sampler)
 	{
-		const auto lastTokenLogits = ExtractLastTokenLogits(logits);
-		return StepGeneration(generation, lastTokenLogits, sampler);
+		return StepGeneration(generation, LastTokenLogitsView(logits), sampler);
 	}
 } // namespace LiteNN::GGUF
