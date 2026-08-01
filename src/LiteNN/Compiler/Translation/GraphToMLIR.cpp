@@ -1827,13 +1827,9 @@ namespace litenn
 			              std::span<const OutputInfo> outputInfos, std::vector<SmallVector<Value>>& valueMap,
 			              std::map<std::size_t, Value>&, std::map<std::size_t, Value>&)
 			{
-				const auto isGGMLBlockQuantizedMatMul = node.params.scheme == QuantizationScheme::Block &&
-				                                        (node.params.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
-				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
-				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K ||
-				                                         node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0);
-				if (!isGGMLBlockQuantizedMatMul || !node.transposeRhs || node.rhsStorages.size() < 2 ||
-				    node.rhsStorages.size() > 3 || node.rhsStorages.size() != node.outputWidths.size())
+				if (!node.transposeRhs || node.rhsStorages.size() < 2 || node.rhsStorages.size() > 3 ||
+				    node.rhsStorages.size() != node.outputWidths.size() ||
+				    node.rhsStorages.size() != node.projectionParams.size())
 				{
 					throw std::runtime_error(
 					    "GraphToMLIR GroupedQuantizedMatMulNode currently supports two or three transposed GGML "
@@ -1850,18 +1846,27 @@ namespace litenn
 					throw std::runtime_error(
 					    "GraphToMLIR GroupedQuantizedMatMulNode CPU AOT lowering requires rank-2 tensors");
 				}
-				const auto layout = GetQuantizedBlockLayout(node.params.blockFormat);
+				const auto& commonParams = node.projectionParams.front();
+				const auto isGGMLBlockQuantizedMatMul = [](const QuantizationParams& params) {
+					return params.scheme == QuantizationScheme::Block &&
+					       (params.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
+					        params.blockFormat == QuantizedBlockFormat::GGML_Q5_K ||
+					        params.blockFormat == QuantizedBlockFormat::GGML_Q6_K ||
+					        params.blockFormat == QuantizedBlockFormat::GGML_Q8_0);
+				};
+				const auto layout = GetQuantizedBlockLayout(commonParams.blockFormat);
 				const auto k = lhsInfo.shape[1];
-				if (!layout || k % layout->elementsPerBlock != 0 || outputInfos[0].dtype != node.params.expressedType)
+				if (!layout || !isGGMLBlockQuantizedMatMul(commonParams) || k % layout->elementsPerBlock != 0 ||
+				    outputInfos[0].dtype != commonParams.expressedType)
 				{
 					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode shape metadata is inconsistent");
 				}
 				const auto sourceRowBytes = (k / layout->elementsPerBlock) * layout->bytesPerBlock;
-				const auto preparedBlockBytes = GGMLPreparedBlockBytes(node.params.blockFormat);
+				const auto preparedBlockBytes = GGMLPreparedBlockBytes(commonParams.blockFormat);
 				const auto preparedRowBytes =
 				    preparedBlockBytes ? (k / layout->elementsPerBlock) * *preparedBlockBytes : std::size_t{ 0 };
 				std::optional<std::int64_t> preparedLayout;
-				switch (node.params.storageLayout)
+				switch (commonParams.storageLayout)
 				{
 				case QuantizedStorageLayout::Source:
 					break;
@@ -1886,11 +1891,20 @@ namespace litenn
 				std::size_t totalOutputWidth = 0;
 				for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
 				{
+					const auto& params = node.projectionParams[i];
+					if (!isGGMLBlockQuantizedMatMul(params) || params.blockFormat != commonParams.blockFormat ||
+					    params.storageLayout != commonParams.storageLayout ||
+					    params.expressedType != commonParams.expressedType ||
+					    params.expressedShape != std::vector<std::size_t>{ node.outputWidths[i], k })
+					{
+						throw std::runtime_error(
+						    "GraphToMLIR GroupedQuantizedMatMulNode currently requires a common format and layout");
+					}
 					const auto rhsInfo = sg.GetOutputInfo(node.rhsStorages[i]);
 					const auto width = node.outputWidths[i];
 					totalOutputWidth += width;
 					std::optional<std::size_t> expectedStorageBytes;
-					switch (node.params.storageLayout)
+					switch (params.storageLayout)
 					{
 					case QuantizedStorageLayout::Source:
 						expectedStorageBytes = width * sourceRowBytes;
@@ -1899,10 +1913,10 @@ namespace litenn
 						expectedStorageBytes = width * preparedRowBytes;
 						break;
 					case QuantizedStorageLayout::GGMLCompactBlockGroupedV3:
-						expectedStorageBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, width, k);
+						expectedStorageBytes = GGMLCompactBlockGroupedBytes(params.blockFormat, width, k);
 						break;
 					case QuantizedStorageLayout::GGMLFieldInterleavedV4:
-						expectedStorageBytes = GGMLFieldInterleavedV4Bytes(node.params.blockFormat, width, k);
+						expectedStorageBytes = GGMLFieldInterleavedV4Bytes(params.blockFormat, width, k);
 						break;
 					default:
 						break;
@@ -1914,8 +1928,7 @@ namespace litenn
 						    "GraphToMLIR GroupedQuantizedMatMulNode storage shape does not match its explicit layout");
 					}
 				}
-				if (totalOutputWidth != outputInfos[0].shape[1] ||
-				    node.params.expressedShape != std::vector<std::size_t>{ totalOutputWidth, k })
+				if (totalOutputWidth != outputInfos[0].shape[1])
 				{
 					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode output width metadata is invalid");
 				}
@@ -1964,7 +1977,7 @@ namespace litenn
 					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
 				    });
 				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul",
-				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.params.blockFormat)));
+				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(commonParams.blockFormat)));
 				generic->setAttr("litenn.ggml_block_grouped_quantized_matmul_projection_count",
 				                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.rhsStorages.size())));
 				if (preparedLayout)

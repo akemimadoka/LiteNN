@@ -650,7 +650,8 @@ namespace LiteNN::Runtime
 		             const GroupedQuantizedMatMulNode& node, std::vector<std::vector<Tensor<D>>>& slots,
 		             std::span<const Tensor<D>> inputs, D& device)
 		{
-			if (node.rhsStorages.size() != node.outputWidths.size() || node.rhsStorages.empty())
+			if (node.rhsStorages.size() != node.outputWidths.size() ||
+			    node.rhsStorages.size() != node.projectionParams.size() || node.rhsStorages.empty())
 			{
 				throw std::runtime_error("GroupedQuantizedMatMulNode projection metadata is inconsistent");
 			}
@@ -672,8 +673,7 @@ namespace LiteNN::Runtime
 			std::size_t columnOffset = 0;
 			for (std::size_t projection = 0; projection < node.rhsStorages.size(); ++projection)
 			{
-				auto params = node.params;
-				params.expressedShape = { node.outputWidths[projection], lhsCPU.Shape()[1] };
+				const auto& params = node.projectionParams[projection];
 				auto rhsCPU = [&]() {
 					if constexpr (std::same_as<D, CPU>)
 					{

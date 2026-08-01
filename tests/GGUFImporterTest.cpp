@@ -3670,7 +3670,11 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithQuantizedMatMulNo
 		{
 			++groupedQuantizedMatMulNodeCount;
 			coveredProjectionCount += groupedQuantizedMatMul->rhsStorages.size();
-			EXPECT_EQ(groupedQuantizedMatMul->params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+			ASSERT_EQ(groupedQuantizedMatMul->projectionParams.size(), groupedQuantizedMatMul->rhsStorages.size());
+			for (const auto& params : groupedQuantizedMatMul->projectionParams)
+			{
+				EXPECT_EQ(params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
+			}
 		}
 	}
 	EXPECT_LT(quantizedMatMulNodeCount, 7u);

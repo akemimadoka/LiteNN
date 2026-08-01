@@ -176,7 +176,7 @@ namespace LiteNN
 		{
 			NodeOutput lhs;
 			std::vector<NodeOutput> rhsStorages;
-			QuantizationParams params;
+			std::vector<QuantizationParams> projectionParams;
 			std::vector<std::size_t> outputWidths;
 			bool transposeRhs{};
 		};

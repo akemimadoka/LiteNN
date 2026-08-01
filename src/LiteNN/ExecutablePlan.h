@@ -260,22 +260,23 @@ namespace LiteNN
 	}
 
 	inline void AddPlanQuantizationAttributes(std::vector<ExecutablePlanAttribute>& attrs,
-	                                          const QuantizationParams& params)
+	                                          const QuantizationParams& params, std::string_view prefix = {})
 	{
-		AddPlanAttribute(attrs, "scheme", params.scheme);
-		AddPlanAttribute(attrs, "granularity", params.granularity);
-		AddPlanAttribute(attrs, "blockFormat", params.blockFormat);
-		AddPlanAttribute(attrs, "packedFormat", params.packedFormat);
-		AddPlanAttribute(attrs, "packedOrder", params.packedOrder);
-		AddPlanAttribute(attrs, "blockScaleLayout", params.blockScaleLayout);
-		AddPlanAttribute(attrs, "storageLayout", params.storageLayout);
-		AddPlanAttribute(attrs, "storageType", params.storageType);
-		AddPlanAttribute(attrs, "expressedType", params.expressedType);
-		AddPlanAttribute(attrs, "axis", params.axis);
-		AddPlanAttribute(attrs, "groupSize", params.groupSize);
-		AddPlanAttribute(attrs, "scales", params.scales);
-		AddPlanAttribute(attrs, "zeroPoints", params.zeroPoints);
-		AddPlanAttribute(attrs, "expressedShape", params.expressedShape);
+		const auto name = [prefix](std::string_view suffix) { return std::string(prefix) + std::string(suffix); };
+		AddPlanAttribute(attrs, name("scheme"), params.scheme);
+		AddPlanAttribute(attrs, name("granularity"), params.granularity);
+		AddPlanAttribute(attrs, name("blockFormat"), params.blockFormat);
+		AddPlanAttribute(attrs, name("packedFormat"), params.packedFormat);
+		AddPlanAttribute(attrs, name("packedOrder"), params.packedOrder);
+		AddPlanAttribute(attrs, name("blockScaleLayout"), params.blockScaleLayout);
+		AddPlanAttribute(attrs, name("storageLayout"), params.storageLayout);
+		AddPlanAttribute(attrs, name("storageType"), params.storageType);
+		AddPlanAttribute(attrs, name("expressedType"), params.expressedType);
+		AddPlanAttribute(attrs, name("axis"), params.axis);
+		AddPlanAttribute(attrs, name("groupSize"), params.groupSize);
+		AddPlanAttribute(attrs, name("scales"), params.scales);
+		AddPlanAttribute(attrs, name("zeroPoints"), params.zeroPoints);
+		AddPlanAttribute(attrs, name("expressedShape"), params.expressedShape);
 	}
 
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const ParamRefNode& node)
@@ -361,7 +362,10 @@ namespace LiteNN
 	inline std::vector<ExecutablePlanAttribute> PlanAttributesForNode(const GroupedQuantizedMatMulNode& node)
 	{
 		std::vector<ExecutablePlanAttribute> attrs;
-		AddPlanQuantizationAttributes(attrs, node.params);
+		for (std::size_t i = 0; i < node.projectionParams.size(); ++i)
+		{
+			AddPlanQuantizationAttributes(attrs, node.projectionParams[i], std::format("projection{}.", i));
+		}
 		AddPlanAttribute(attrs, "outputWidths", node.outputWidths);
 		AddPlanAttribute(attrs, "transposeRhs", node.transposeRhs);
 		return attrs;

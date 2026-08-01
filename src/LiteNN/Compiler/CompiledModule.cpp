@@ -7923,16 +7923,13 @@ namespace
 					{
 						continue;
 					}
-					if (grouped->params.expressedShape.size() != 2)
+					if (grouped->rhsStorages.size() != grouped->projectionParams.size())
 					{
 						continue;
 					}
 					for (std::size_t i = 0; i < grouped->rhsStorages.size(); ++i)
 					{
-						auto projectionParams = grouped->params;
-						projectionParams.expressedShape = { grouped->outputWidths[i],
-							                                grouped->params.expressedShape[1] };
-						recordPrepackUse(subgraph, grouped->rhsStorages[i], projectionParams);
+						recordPrepackUse(subgraph, grouped->rhsStorages[i], grouped->projectionParams[i]);
 					}
 				}
 			}
@@ -8569,27 +8566,20 @@ namespace
 				else if (auto* groupedMatMul = std::get_if<GroupedQuantizedMatMulNode>(&remappedNode))
 				{
 					const auto& originalNode = std::get<GroupedQuantizedMatMulNode>(entry.node);
-					std::optional<QuantizedStorageLayout> storageLayout;
-					for (const auto rhsStorage : originalNode.rhsStorages)
+					if (groupedMatMul->projectionParams.size() != originalNode.rhsStorages.size())
 					{
-						const auto variableIndex = TryGetVariableRefIndex(original, rhsStorage);
+						return std::nullopt;
+					}
+					for (std::size_t i = 0; i < originalNode.rhsStorages.size(); ++i)
+					{
+						const auto variableIndex = TryGetVariableRefIndex(original, originalNode.rhsStorages[i]);
 						if (!variableIndex || *variableIndex >= prepackedVariablePlans.size() ||
 						    !prepackedVariablePlans[*variableIndex])
 						{
-							storageLayout = std::nullopt;
-							break;
+							continue;
 						}
-						const auto current = prepackedVariablePlans[*variableIndex]->storageLayout;
-						if (storageLayout && *storageLayout != current)
-						{
-							storageLayout = std::nullopt;
-							break;
-						}
-						storageLayout = current;
-					}
-					if (storageLayout)
-					{
-						groupedMatMul->params.storageLayout = *storageLayout;
+						groupedMatMul->projectionParams[i].storageLayout =
+						    prepackedVariablePlans[*variableIndex]->storageLayout;
 					}
 				}
 				if (auto* variable = std::get_if<VariableRefNode>(&remappedNode))

@@ -1216,23 +1216,24 @@ namespace LiteNN::Serialization
 			return tensor.CopyToDevice(PolymorphicDevice{ CPU{} });
 		}
 
-		QuantizationParams PlanQuantizationParams(const ExecutablePlanOp& op)
+		QuantizationParams PlanQuantizationParams(const ExecutablePlanOp& op, std::string_view prefix = {})
 		{
+			const auto name = [prefix](std::string_view suffix) { return std::string(prefix) + std::string(suffix); };
 			return {
-				.scheme = PlanAttributeEnum<QuantizationScheme>(op, "scheme"),
-				.granularity = PlanAttributeEnum<QuantizationGranularity>(op, "granularity"),
-				.blockFormat = PlanAttributeEnum<QuantizedBlockFormat>(op, "blockFormat"),
-				.packedFormat = PlanAttributeEnum<PackedNibbleFormat>(op, "packedFormat"),
-				.packedOrder = PlanAttributeEnum<PackedNibbleOrder>(op, "packedOrder"),
-				.blockScaleLayout = PlanAttributeEnum<BlockScaleLayout>(op, "blockScaleLayout"),
-				.storageType = PlanAttributeEnum<DataType>(op, "storageType"),
-				.expressedType = PlanAttributeEnum<DataType>(op, "expressedType"),
-				.axis = PlanAttributeInt(op, "axis"),
-				.groupSize = PlanAttributeSize(op, "groupSize"),
-				.scales = PlanAttributeFloatList(op, "scales"),
-				.zeroPoints = PlanAttributeIntList(op, "zeroPoints"),
-				.expressedShape = PlanAttributeSizeList(op, "expressedShape"),
-				.storageLayout = PlanAttributeEnum<QuantizedStorageLayout>(op, "storageLayout"),
+				.scheme = PlanAttributeEnum<QuantizationScheme>(op, name("scheme")),
+				.granularity = PlanAttributeEnum<QuantizationGranularity>(op, name("granularity")),
+				.blockFormat = PlanAttributeEnum<QuantizedBlockFormat>(op, name("blockFormat")),
+				.packedFormat = PlanAttributeEnum<PackedNibbleFormat>(op, name("packedFormat")),
+				.packedOrder = PlanAttributeEnum<PackedNibbleOrder>(op, name("packedOrder")),
+				.blockScaleLayout = PlanAttributeEnum<BlockScaleLayout>(op, name("blockScaleLayout")),
+				.storageType = PlanAttributeEnum<DataType>(op, name("storageType")),
+				.expressedType = PlanAttributeEnum<DataType>(op, name("expressedType")),
+				.axis = PlanAttributeInt(op, name("axis")),
+				.groupSize = PlanAttributeSize(op, name("groupSize")),
+				.scales = PlanAttributeFloatList(op, name("scales")),
+				.zeroPoints = PlanAttributeIntList(op, name("zeroPoints")),
+				.expressedShape = PlanAttributeSizeList(op, name("expressedShape")),
+				.storageLayout = PlanAttributeEnum<QuantizedStorageLayout>(op, name("storageLayout")),
 			};
 		}
 
@@ -1302,11 +1303,18 @@ namespace LiteNN::Serialization
 					throw std::runtime_error(
 					    "vNext GroupedQuantizedMatMulNode descriptor requires three or four inputs");
 				}
+				const auto outputWidths = PlanAttributeSizeList(op, "outputWidths");
+				std::vector<QuantizationParams> projectionParams;
+				projectionParams.reserve(outputWidths.size());
+				for (std::size_t i = 0; i < outputWidths.size(); ++i)
+				{
+					projectionParams.push_back(PlanQuantizationParams(op, std::format("projection{}.", i)));
+				}
 				return GroupedQuantizedMatMulNode{
 					.lhs = RequireNodeInput(inputs, 0, op.kind),
 					.rhsStorages = std::vector<NodeOutput>(inputs.begin() + 1, inputs.end()),
-					.params = PlanQuantizationParams(op),
-					.outputWidths = PlanAttributeSizeList(op, "outputWidths"),
+					.projectionParams = std::move(projectionParams),
+					.outputWidths = std::move(outputWidths),
 					.transposeRhs = PlanAttributeBool(op, "transposeRhs"),
 				};
 			}

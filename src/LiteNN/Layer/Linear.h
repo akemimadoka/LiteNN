@@ -215,8 +215,10 @@ namespace LiteNN::Layer
 		}
 
 		std::vector<NodeOutput> rhsStorages;
+		std::vector<QuantizationParams> projectionParams;
 		std::vector<std::size_t> outputWidths;
 		rhsStorages.reserve(layers.size());
+		projectionParams.reserve(layers.size());
 		outputWidths.reserve(layers.size());
 		for (const auto& layer : layers)
 		{
@@ -224,14 +226,13 @@ namespace LiteNN::Layer
 			const auto storage = subgraph.AddNode(VariableRefNode{ layer.weightVariable },
 			                                      { OutputInfo{ params.storageType, layer.weightStorageShape } });
 			rhsStorages.push_back({ storage, 0 });
+			projectionParams.push_back(params);
 			outputWidths.push_back(layer.outFeatures);
 		}
 
 		const auto totalOutputWidth = std::accumulate(outputWidths.begin(), outputWidths.end(), std::size_t{ 0 });
-		auto groupedParams = *layers.front().weightQuantization;
-		groupedParams.expressedShape = { totalOutputWidth, layers.front().inFeatures };
 		const auto grouped = NodeOutput{
-			subgraph.AddNode(GroupedQuantizedMatMulNode{ input, rhsStorages, groupedParams, outputWidths, true },
+			subgraph.AddNode(GroupedQuantizedMatMulNode{ input, rhsStorages, projectionParams, outputWidths, true },
 			                 { OutputInfo{ layers.front().dtype, { inputInfo.shape[0], totalOutputWidth } } }),
 			0,
 		};
