@@ -452,9 +452,25 @@ Priority classes for the GGUF/Qwen decode work:
                       the private SIMD helpers exactly as intended, but worse whole-kernel register allocation raised
                       the same 14B run from `299.370` to `345.568 ms/token` (`+15.4%`). The native ABI remains the
                       measured production choice; prologue instruction counts alone are not an acceptance signal.
+                      Block-level integer reduction completed on 2026-08-02: the Q4_K and Q6_K v4 x8/x16 kernels now
+                      accumulate `dot * subblock_scale` (and Q4_K minimum correction) in Int32 for the complete
+                      256-element quantization block, matching the production x86 kernel structure before one final
+                      Float32 conversion and `d * lhs.d` scale. All 42 targeted GGUF quantized/decode tests passed. The
+                      same cache-hit 14B O0/T8/all/v4 run preserved the exact token sequence with no fallback and
+                      improved from `299.370` to `277.218 ms/token` (`-7.40%`, `3.607 tok/s`); step-16 helper time fell
+                      from about `288` to `243.026 ms`, with grouped gate/up `95.197 -> 85.156 ms`, Q6_K FFN-down
+                      `50.331 -> 45.163 ms`, Q4_K FFN-down `40.532 -> 35.745 ms`, and hidden/output
+                      `30.062 -> 27.824 ms`. An odd/even Q4_K subblock-template experiment was separately rejected:
+                      eliminating the nibble branch expanded the x8 kernel and regressed production-shaped hidden,
+                      FFN-down, and grouped gate/up microbenchmarks by roughly `17-40%`.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
+                - [ ] Split CPU GGML sidecars and architecture-specific microkernels out of `CompiledModule.cpp` into
+                      focused translation units. A single v4 kernel edit currently recompiles the monolithic compiler
+                      implementation for about `130 s` on the Windows reference machine even with `--parallel 12`.
+                      Acceptance: changing one CPU microkernel rebuilds only its runtime object and affected links; this
+                      engineering-throughput task does not block runtime-kernel P0 acceptance.
                 - [x] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

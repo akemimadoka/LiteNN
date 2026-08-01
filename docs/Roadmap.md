@@ -3112,6 +3112,15 @@ Priority classes:
       kernel disassembly, but changed register allocation enough to regress real decode from `299.370` to
       `345.568 ms/token` (`+15.4%`). Keep the native Win64 ABI until a whole-loop kernel can be evaluated without this
       allocator tradeoff.
+      Block-level integer reduction completed on 2026-08-02: Q4_K/Q6_K v4 x8 and x16 kernels now keep scaled dot sums
+      (plus the Q4_K minimum correction) in Int32 for each complete 256-element block and perform one final Float32
+      conversion/scale, following the production x86 kernel structure. All 42 targeted GGUF quantized/decode tests
+      passed. The same cache-hit 14B O0/T8/all/v4 profile preserved exact tokens with no fallback and improved from
+      `299.370` to `277.218 ms/token` (`-7.40%`, `3.607 tok/s`); step-16 helper time fell from about `288` to
+      `243.026 ms`, including grouped gate/up `95.197 -> 85.156 ms`, Q6_K down `50.331 -> 45.163 ms`, Q4_K down
+      `40.532 -> 35.745 ms`, and hidden/output `30.062 -> 27.824 ms`. A Q4_K odd/even subblock-template variant was
+      rejected because eliminating the nibble branch expanded the x8 kernel and regressed production-shaped
+      hidden/down/grouped rows by roughly `17-40%`.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
@@ -3395,6 +3404,9 @@ These improvements do not require a compatibility break and should not block vNe
 
 - Improve production CPU GEMM and convolution kernels, or integrate a backend library, without changing public graph/model
   APIs.
+- Split CPU GGML runtime sidecars and architecture-specific microkernels out of the monolithic `CompiledModule.cpp` so
+  kernel iteration rebuilds focused objects instead of spending about `130 s` recompiling the complete compiler
+  implementation on the Windows reference machine. This improves engineering feedback and does not block runtime P0.
 - Expand CUDA native lowering coverage for reductions, normalization, convolutions, attention, and fused training kernels.
 - Add richer benchmark rows for compile time, train-step latency, workspace pressure, and numerical drift.
 - Replace environment-variable notes in older performance documents with CLI/config examples where the core library already
