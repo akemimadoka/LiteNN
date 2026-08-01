@@ -6,6 +6,7 @@
 #include <LLaMABuilder.h>
 
 #ifdef LITENN_ENABLE_MLIR
+#include <DecodeAOTCache.h>
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
 #include <LiteNN/Runtime/Interpreter.h>
@@ -29,6 +30,36 @@
 #include <gguf.h>
 
 using namespace LiteNN;
+
+#ifdef LITENN_ENABLE_MLIR
+TEST(GGUFAOTCache, SharedWeightIdentityTracksExternalTensorLayoutAndContent)
+{
+	std::array tensors{
+		CompiledModuleExternalTensorInfo{
+		    .name = "weight_a", .region = "weights", .byteOffset = 0, .byteSize = 64, .alignment = 64, .checksum = 11 },
+		CompiledModuleExternalTensorInfo{ .name = "weight_b",
+		                                  .region = "weights",
+		                                  .byteOffset = 64,
+		                                  .byteSize = 32,
+		                                  .alignment = 64,
+		                                  .checksum = 22 },
+		CompiledModuleExternalTensorInfo{
+		    .name = "constant", .region = "constants", .byteOffset = 0, .byteSize = 8, .alignment = 8, .checksum = 33 },
+	};
+	const auto identity = GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, tensors);
+
+	auto changed = tensors;
+	changed[1].byteOffset = 128;
+	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	changed = tensors;
+	changed[1].checksum = 23;
+	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	changed = tensors;
+	changed[2].checksum = 34;
+	EXPECT_EQ(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(97, tensors), identity);
+}
+#endif
 
 #ifdef LITENN_ENABLE_MLIR
 extern "C" void

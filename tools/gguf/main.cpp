@@ -4,6 +4,8 @@
 #include "LLaMABuilder.h"
 
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+#include "DecodeAOTCache.h"
+
 #include <LiteNN/Compiler/CompiledModule.h>
 #endif
 #ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
@@ -50,6 +52,11 @@
 
 namespace
 {
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	using LiteNN::GGUF::Tooling::DecodeAOTSharedWeightsIdentity;
+	using LiteNN::GGUF::Tooling::FNV1a;
+#endif
+
 	void PrintUsage(std::string_view executable)
 	{
 		std::cerr << "Usage:\n"
@@ -1295,17 +1302,6 @@ namespace
 		WriteBinaryFileTimed(path, bytes, diagnostics, label);
 	}
 
-	std::uint64_t FNV1a(std::string_view text)
-	{
-		std::uint64_t hash = 14695981039346656037ull;
-		for (const unsigned char ch : text)
-		{
-			hash ^= ch;
-			hash *= 1099511628211ull;
-		}
-		return hash;
-	}
-
 	std::string_view CPUAOTGGMLPrepackedWeightLayoutName(LiteNN::CPUAOTGGMLPrepackedWeightLayout layout)
 	{
 		switch (layout)
@@ -1364,7 +1360,7 @@ namespace
 		std::error_code ec;
 		const auto modelSize = std::filesystem::file_size(model, ec);
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
-		const auto keyText = std::format("gguf-shared-weights-v2|{}|{}|{}|ggml_prepacked_weights={}|"
+		const auto keyText = std::format("gguf-shared-weights-v3|{}|{}|{}|ggml_prepacked_weights={}|"
 		                                 "ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}",
 		                                 std::filesystem::absolute(model, ec).string(), modelSize, lastWrite,
 		                                 options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
@@ -1515,23 +1511,28 @@ namespace
 		                     "gguf decode aot cache write constants");
 		if (sharedWeightsPath && !artifact.Weights().empty())
 		{
-			const auto sharedComplete = sharedWeightsPath->parent_path() / "complete";
-			const auto sharedSizeMatches = std::filesystem::exists(*sharedWeightsPath) &&
-			                               std::filesystem::file_size(*sharedWeightsPath) == artifact.Weights().size();
+			const auto resolvedSharedWeightsPath =
+			    sharedWeightsPath->parent_path() /
+			    DecodeAOTSharedWeightsIdentity(artifact.Weights().size(), artifact.ExternalTensorInfos()) /
+			    "weights.bin";
+			const auto sharedComplete = resolvedSharedWeightsPath.parent_path() / "complete";
+			const auto sharedSizeMatches =
+			    std::filesystem::exists(resolvedSharedWeightsPath) &&
+			    std::filesystem::file_size(resolvedSharedWeightsPath) == artifact.Weights().size();
 			if (!sharedSizeMatches || !std::filesystem::exists(sharedComplete))
 			{
-				std::filesystem::create_directories(sharedWeightsPath->parent_path());
-				WriteBinaryFileTimed(*sharedWeightsPath, artifact.Weights(), diagnostics,
+				std::filesystem::create_directories(resolvedSharedWeightsPath.parent_path());
+				WriteBinaryFileTimed(resolvedSharedWeightsPath, artifact.Weights(), diagnostics,
 				                     "gguf decode aot shared weight store write weights");
 				WriteBinaryFileTimed(sharedComplete, std::span<const std::byte>{}, diagnostics,
 				                     "gguf decode aot shared weight store write complete marker");
 			}
 			else
 			{
-				LogGGUFDiagnostic(diagnostics,
-				                  "gguf decode aot shared weight store: reused " + sharedWeightsPath->generic_string());
+				LogGGUFDiagnostic(diagnostics, "gguf decode aot shared weight store: reused " +
+				                                   resolvedSharedWeightsPath.generic_string());
 			}
-			WriteTextFileTimed(files.weightReference, std::filesystem::absolute(*sharedWeightsPath).string(),
+			WriteTextFileTimed(files.weightReference, std::filesystem::absolute(resolvedSharedWeightsPath).string(),
 			                   diagnostics, "gguf decode aot cache write weights reference");
 		}
 		else
