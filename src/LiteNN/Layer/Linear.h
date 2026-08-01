@@ -188,7 +188,13 @@ namespace LiteNN::Layer
 				return false;
 			}
 			const auto& params = *layer.weightQuantization;
-			if (params.scheme != firstParams.scheme || params.blockFormat != firstParams.blockFormat ||
+			const auto mixedKQuantFormats = params.blockFormat != firstParams.blockFormat &&
+			                                (firstParams.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
+			                                 firstParams.blockFormat == QuantizedBlockFormat::GGML_Q6_K) &&
+			                                (params.blockFormat == QuantizedBlockFormat::GGML_Q4_K ||
+			                                 params.blockFormat == QuantizedBlockFormat::GGML_Q6_K);
+			if (params.scheme != firstParams.scheme ||
+			    (params.blockFormat != firstParams.blockFormat && !mixedKQuantFormats) ||
 			    params.storageType != firstParams.storageType || params.expressedType != firstParams.expressedType ||
 			    params.granularity != firstParams.granularity ||
 			    params.expressedShape != std::vector<std::size_t>{ layer.outFeatures, layer.inFeatures })

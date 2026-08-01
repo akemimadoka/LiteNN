@@ -1861,17 +1861,13 @@ namespace litenn
 				{
 					throw std::runtime_error("GraphToMLIR GroupedQuantizedMatMulNode shape metadata is inconsistent");
 				}
-				const auto sourceRowBytes = (k / layout->elementsPerBlock) * layout->bytesPerBlock;
-				const auto preparedBlockBytes = GGMLPreparedBlockBytes(commonParams.blockFormat);
-				const auto preparedRowBytes =
-				    preparedBlockBytes ? (k / layout->elementsPerBlock) * *preparedBlockBytes : std::size_t{ 0 };
 				std::optional<std::int64_t> preparedLayout;
 				switch (commonParams.storageLayout)
 				{
 				case QuantizedStorageLayout::Source:
 					break;
 				case QuantizedStorageLayout::GGMLExpandedF32ScalesV1:
-					if (!preparedBlockBytes)
+					if (!GGMLPreparedBlockBytes(commonParams.blockFormat))
 					{
 						throw std::runtime_error(
 						    "GraphToMLIR GroupedQuantizedMatMulNode format does not support expanded prepared storage");
@@ -1892,17 +1888,25 @@ namespace litenn
 				for (std::size_t i = 0; i < node.rhsStorages.size(); ++i)
 				{
 					const auto& params = node.projectionParams[i];
-					if (!isGGMLBlockQuantizedMatMul(params) || params.blockFormat != commonParams.blockFormat ||
+					const auto projectionLayout = GetQuantizedBlockLayout(params.blockFormat);
+					if (!isGGMLBlockQuantizedMatMul(params) || !projectionLayout ||
+					    projectionLayout->elementsPerBlock != layout->elementsPerBlock ||
 					    params.storageLayout != commonParams.storageLayout ||
 					    params.expressedType != commonParams.expressedType ||
 					    params.expressedShape != std::vector<std::size_t>{ node.outputWidths[i], k })
 					{
 						throw std::runtime_error(
-						    "GraphToMLIR GroupedQuantizedMatMulNode currently requires a common format and layout");
+						    "GraphToMLIR GroupedQuantizedMatMulNode requires compatible block and storage layouts");
 					}
 					const auto rhsInfo = sg.GetOutputInfo(node.rhsStorages[i]);
 					const auto width = node.outputWidths[i];
 					totalOutputWidth += width;
+					const auto sourceRowBytes =
+					    (k / projectionLayout->elementsPerBlock) * projectionLayout->bytesPerBlock;
+					const auto preparedBlockBytes = GGMLPreparedBlockBytes(params.blockFormat);
+					const auto preparedRowBytes = preparedBlockBytes
+					                                  ? (k / projectionLayout->elementsPerBlock) * *preparedBlockBytes
+					                                  : std::size_t{ 0 };
 					std::optional<std::size_t> expectedStorageBytes;
 					switch (params.storageLayout)
 					{
@@ -1987,6 +1991,9 @@ namespace litenn
 				}
 				for (std::size_t i = 0; i < node.outputWidths.size(); ++i)
 				{
+					generic->setAttr(
+					    std::format("litenn.ggml_block_grouped_quantized_matmul_format{}", i),
+					    builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.projectionParams[i].blockFormat)));
 					generic->setAttr(std::format("litenn.ggml_block_grouped_quantized_matmul_output_width{}", i),
 					                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.outputWidths[i])));
 				}

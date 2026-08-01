@@ -1946,6 +1946,123 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedKQuantProjectionToQ8KStagedHelp
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, CompilesMixedQ4KQ6KProjectionToGroupedFieldInterleavedV4Helper)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t rows = 2;
+	const std::array<std::size_t, 3> outFeatures{ 8, 4, 4 };
+	const std::array formats{
+		std::pair{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K },
+		std::pair{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K },
+		std::pair{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K },
+	};
+
+	Graph graph;
+	std::array<Layer::LinearLayer, 3> layers;
+	std::vector<Tensor<CPU>> dequantizedWeights;
+	dequantizedWeights.reserve(layers.size());
+	for (std::size_t projection = 0; projection < layers.size(); ++projection)
+	{
+		std::vector<float> weightValues(outFeatures[projection] * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>((i + projection * 13) % 31) - 15) *
+			                  (0.025F + static_cast<float>(projection) * 0.00625F);
+		}
+		const auto plainWeight =
+		    Variable::Create(MakeFloatTensor(weightValues, { outFeatures[projection], inFeatures }));
+		const auto quantizedWeight =
+		    QuantizeGGMLVariable(*plainWeight, formats[projection].first, formats[projection].second);
+		dequantizedWeights.push_back(GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "mixed.weight"));
+		layers[projection] = Layer::LinearLayer{
+			.weightVariable = graph.AddVariable(quantizedWeight),
+			.inFeatures = inFeatures,
+			.outFeatures = outFeatures[projection],
+			.dtype = DataType::Float32,
+			.weightQuantization = *quantizedWeight->Quantization(),
+			.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+			.transposeWeight = true,
+		};
+	}
+
+	Subgraph forward;
+	const auto inputNode = forward.AddParam(DataType::Float32, { rows, inFeatures });
+	const auto outputs = Layer::AddLinearProjectionGroup(forward, layers, { inputNode, 0 });
+	forward.SetResults(outputs);
+	graph.SetForward(graph.AddSubgraph(std::move(forward)));
+	const auto& builtForward = graph.GetSubgraph(graph.Forward());
+	EXPECT_EQ(std::ranges::count_if(
+	              builtForward.Nodes(),
+	              [](const auto& entry) { return std::holds_alternative<GroupedQuantizedMatMulNode>(entry.node); }),
+	          1);
+
+	std::vector<float> inputValues(rows * inFeatures);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 19) - 9) * 0.0625F;
+	}
+	std::array<Tensor<CPU>, 1> inputs = { MakeFloatTensor(inputValues, { rows, inFeatures }) };
+	std::array<Tensor<CPU>, 3> expected{
+		Tensor<CPU>(Uninitialized, ShapeView{ rows, outFeatures[0] }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, ShapeView{ rows, outFeatures[1] }, DataType::Float32),
+		Tensor<CPU>(Uninitialized, ShapeView{ rows, outFeatures[2] }, DataType::Float32),
+	};
+	for (std::size_t projection = 0; projection < layers.size(); ++projection)
+	{
+		const auto* weightData = static_cast<const float*>(dequantizedWeights[projection].UnsafeRawData());
+		auto* expectedData = static_cast<float*>(expected[projection].UnsafeRawData());
+		for (std::size_t row = 0; row < rows; ++row)
+		{
+			for (std::size_t column = 0; column < outFeatures[projection]; ++column)
+			{
+				float sum = 0.0F;
+				for (std::size_t reduction = 0; reduction < inFeatures; ++reduction)
+				{
+					sum += inputValues[row * inFeatures + reduction] * weightData[column * inFeatures + reduction];
+				}
+				expectedData[row * outFeatures[projection] + column] = sum;
+			}
+		}
+	}
+	const auto expectOutputs = [&](auto& compiled) {
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), expected.size());
+		for (std::size_t projection = 0; projection < expected.size(); ++projection)
+		{
+			ExpectTensorNear(actual[projection], expected[projection], { .absolute = 3.0e-2, .relative = 1.0e-4 });
+		}
+	};
+
+	CompilerOptions sourceOptions;
+	sourceOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;
+	sourceOptions.cpuAOTThreadCount = 2;
+	const auto sourceArtifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), sourceOptions);
+	EXPECT_TRUE(
+	    ByteSpanContains(sourceArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_mixed_q8k_staged_f32"));
+	auto sourceCompiled = sourceArtifact.Load();
+	expectOutputs(sourceCompiled);
+
+	sourceOptions.enableCPUAOTGGMLQ8KStagedMatMul = false;
+	const auto directArtifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), sourceOptions);
+	EXPECT_TRUE(ByteSpanContains(directArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_mixed_f32"));
+	auto directCompiled = directArtifact.Load();
+	expectOutputs(directCompiled);
+
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.enableCPUAOTGGMLPrepackedWeights = true;
+	options.enableCPUAOTGGMLQ8KStagedMatMul = true;
+	options.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
+	options.cpuAOTThreadCount = 2;
+	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	EXPECT_TRUE(ByteSpanContains(artifact.Instructions(),
+	                             "litenn_cpu_ggml_block_grouped_matmul3_mixed_field_interleaved_v4_q8k_f32"));
+	auto compiled = artifact.Load();
+	expectOutputs(compiled);
+}
+
 TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
 {
 	constexpr std::size_t inFeatures = 256;
