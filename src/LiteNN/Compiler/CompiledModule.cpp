@@ -7562,28 +7562,6 @@ namespace
 		    std::format("Compiled module separated external tensor references invalid '{}' region", name));
 	}
 
-	void ValidateExternalTensorChecksums(std::span<const CompiledModuleExternalTensorInfo> infos,
-	                                     CompiledModuleSeparatedImage image)
-	{
-		for (const auto& info : infos)
-		{
-			const auto region = SeparatedImageRegionBytes(image, info.region);
-			if (info.byteOffset > region.size() || info.byteSize > region.size() - info.byteOffset)
-			{
-				throw std::runtime_error(std::format(
-				    "Compiled module separated external tensor '{}' byte range is out of bounds", info.name));
-			}
-			const auto tensorBytes =
-			    std::span<const std::byte>{ region.data() + static_cast<std::ptrdiff_t>(info.byteOffset),
-				                            static_cast<std::size_t>(info.byteSize) };
-			if (ChecksumBytes(tensorBytes) != info.checksum)
-			{
-				throw std::runtime_error(
-				    std::format("Compiled module separated external tensor '{}' checksum mismatch", info.name));
-			}
-		}
-	}
-
 	SeparatedMetadata ValidateSeparatedImage(CompiledModuleSeparatedImage image)
 	{
 		const auto metadataBytes = RegionBytes(image.metadata, kMetadataRegionName);
@@ -7591,7 +7569,6 @@ namespace
 		ValidateSeparatedRegion(image.constants, FindRegionInfo(metadata.regions, kConstantsRegionName));
 		ValidateSeparatedRegion(image.weights, FindRegionInfo(metadata.regions, kWeightsRegionName));
 		ValidateSeparatedRegion(image.instructions, FindRegionInfo(metadata.regions, kInstructionsRegionName));
-		ValidateExternalTensorChecksums(metadata.externalTensorInfos, image);
 		return metadata;
 	}
 
@@ -19403,7 +19380,23 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions
 CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions() &&
 {
 	auto owner = std::make_shared<CompiledModuleSeparatedArtifact>(std::move(*this));
-	auto module = owner->LoadBorrowedExternalRegions();
+	auto metadata = DeserializeSeparatedMetadata(owner->metadata_);
+	auto constants =
+	    RegionBytes({ .data = owner->constants_.data(), .size = owner->constants_.size() }, kConstantsRegionName);
+	auto weights = RegionBytes(owner->WeightsRegion(), kWeightsRegionName);
+	auto instructions = RestoreLegacyInstructionsFromSeparated(
+	    metadata.legacyMetadata.backend,
+	    RegionBytes({ .data = owner->instructions_.data(), .size = owner->instructions_.size() },
+	                kInstructionsRegionName),
+	    constants);
+	auto module = CompiledModule<CPU>::Load({
+	    .rodata = metadata.legacyRodata.data(),
+	    .rodataSize = metadata.legacyRodata.size(),
+	    .instructions = instructions.data(),
+	    .instructionSize = instructions.size(),
+	});
+	module.impl_->borrowedExternalConstants = constants;
+	module.impl_->borrowedExternalWeights = weights;
 	module.impl_->borrowedExternalOwners.push_back(std::move(owner));
 	return module;
 }
