@@ -41,6 +41,9 @@ Priority classes for the GGUF/Qwen decode work:
   - [x] GGUF decode parser slice: the bundle now converts `--stream-stats` and helper diagnostics into
     `gguf_decode_summary.json`, `gguf_decode_summary.md`, and `gguf_decode_trace.json` for token-step and helper
     attribution, including residual/non-helper share.
+  - [x] Low-overhead measurement slice: `--stream-stats` records step/runtime buckets without enabling helper timing;
+    detailed helper attribution is now an explicit `--profile-helpers` opt-in. Smoke reports record that choice and the
+    bundle reports helper/residual attribution as unavailable instead of manufacturing zero-valued shares.
   - [x] Existing-run import slice: `benchmark/profile_bundle.py --qwen-smoke-report <qwen_smoke_report.json>` can
     rebuild the same decode helper/step attribution from a completed Qwen smoke directory, linking the original
     `qwen_smoke_trace.json` and waterfall into the bundle manifest so large-model evidence can be re-summarized without
@@ -437,6 +440,14 @@ Priority classes for the GGUF/Qwen decode work:
                       kernels with runtime-gated F16C vector conversion. This produced broad T1/T8 gains and a measured
                       `314.807 ms/token` real decode result, but the remaining projection helpers still account for
                       roughly `288 ms` of the final profiled step and keep this P0 open.
+                      A 2026-08-02 scheduling follow-up reduced v4 dynamic task fan-out from roughly eight to four tasks
+                      per requested worker. Exact-parity helper tests and all 42 targeted GGUF quantized/decode tests
+                      passed. Under the same cache-hit 14B O0/T8/all-prepared profile, generated-token latency improved
+                      from `307.082` to `299.370 ms/token` (`-2.51%`); step-16 grouped gate/up, Q6_K down, Q4_K down,
+                      and hidden helper totals improved by about `5.8%`, `4.9%`, `2.7%`, and `4.5%` respectively.
+                      A separate attempt to keep x8 accumulators in YMM registers across the complete K loop was
+                      rejected despite promising short microbenchmarks: real decode regressed to `342.163 ms/token`
+                      and every dominant projection family slowed, indicating harmful register pressure/codegen.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
@@ -519,6 +530,9 @@ Priority classes for the GGUF/Qwen decode work:
                 helper parity. A cache-hit 14B run preserved the generated token sequence, reduced step-16 helper time
                 from `338.182` to `302.936 ms` (`-10.4%`), and reduced the eight-token generation mean from `355.983`
                 to `342.513 ms/token` (`-3.8%`). Wide Q6_K/logits rows remain bandwidth/kernel limited.
+                A production-profiled v4 grain follow-up on 2026-08-02 reduced dynamic task claims without adopting the
+                rejected one-static-task-per-worker policy. Four tasks per worker improved the same 14B T8 run from
+                `307.082` to `299.370 ms/token` with identical tokens and no fallback, while preserving work stealing.
           - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
                 or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and

@@ -652,6 +652,9 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       - [x] Parse GGUF decode `--stream-stats` and helper diagnostic output into `gguf_decode_summary.json`,
             `gguf_decode_summary.md`, and `gguf_decode_trace.json` so token-step and helper attribution are bundled
             with the command logs.
+      - [x] Separate lightweight step statistics from helper instrumentation: `--stream-stats` no longer enables helper
+            timers implicitly, `--profile-helpers` opts into detailed attribution, and profile bundles report missing
+            attribution as unavailable rather than as zero helper time.
       - [x] Include helper percentage attribution in the GGUF decode bundle summary: total helper share, per-step helper
             share, residual/non-helper share, and per-step top helper are now recorded so large residual/non-helper time
             remains visible.
@@ -3097,6 +3100,14 @@ Priority classes:
       F16C progress completed on 2026-08-01: vector FP16 scale conversion accelerates both x8 and x16 v4 kernels behind
       an AVX2+F16C feature gate and reduced real 14B generated-token latency to `314.807 ms`. The step-16 helper total is
       still about `288 ms`, so further work remains concentrated in quantized projection kernels rather than host code.
+      Scheduling progress completed on 2026-08-02: v4 single/grouped helpers now create about four dynamic tasks per
+      requested worker instead of eight. This keeps enough work stealing for T8/T16 imbalance while reducing atomic
+      task claims and improving contiguous weight access. The same cache-hit 14B T8 profile preserved the exact token
+      sequence and reduced generated-token latency from `307.082` to `299.370 ms/token` (`-2.51%`); the final grouped
+      gate/up, Q6_K down, Q4_K down, and hidden rows improved by about `5.8%`, `4.9%`, `2.7%`, and `4.5%` respectively.
+      Keeping the x8 accumulator live across every K block was also tested and rejected: it regressed real decode from
+      `307.082` to `342.163 ms/token`, consistent with register-pressure and instruction-scheduling costs that isolated
+      microbenchmarks did not expose.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
