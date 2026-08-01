@@ -2125,6 +2125,28 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFu
 		{
 			EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "at element " << i;
 		}
+
+		const auto originalInput = inputValues[0];
+		inputValues[0] = 6.5F;
+		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
+		    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
+		    static_cast<std::int64_t>(packed.size()), 1, nullptr, packedOutput.data(), 0,
+		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		for (std::size_t i = 0; i < staged.size(); ++i)
+		{
+			EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "after in-place mutation at element " << i;
+		}
+		inputValues[0] = originalInput;
 	}
 }
 

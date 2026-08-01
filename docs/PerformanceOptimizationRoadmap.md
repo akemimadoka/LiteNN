@@ -322,7 +322,7 @@ Priority classes for the GGUF/Qwen decode work:
                       difference on the production-shaped benchmark. The VNNI path was removed. The safe CPU-feature
                       check hoist remains; future AVX512 work must evaluate a true x16 layout/kernel rather than merely
                       substituting the x8 dot instruction.
-                - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
+                - [x] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
                       already lost on production-shaped rows without compact repack + vec-dot kernels.
@@ -363,6 +363,17 @@ Priority classes for the GGUF/Qwen decode work:
                       `2.79/5.97/4.67 ms`). Validation is covered by
                       `GGUFLLaMAQuantizedExecution.CompilesOutputMajorKQuantAndQ8_0MatMulWithoutMaterializingWeight`
                       and `GGUFLLaMAQuantizedExecution.CompilesGroupedKQuantProjectionToQ8KStagedHelper`.
+                      Completed for the production field-interleaved-v4 path on 2026-08-01: single-projection helpers
+                      share a bounded thread-local Q8_K workspace containing both the exact Float32 source snapshot and
+                      staged blocks. Reuse requires a bitwise source match, so arena-buffer reuse and in-place mutation
+                      invalidate safely; grouped helpers that already stage once do not pay the snapshot cost. Steady
+                      T8 helper medians moved Q4_K/Q6_K hidden rows from about `0.52/0.70 ms` to `0.28/0.42 ms` with
+                      `max_abs_delta=0`. Two real 14B cache-hit runs produced the same token sequence with no fallback;
+                      the step-16 Q4_K/Q6_K KV rows fell from about `38.35/13.14 ms` before reuse to
+                      `25.13/9.21 ms` and `11.84/4.67 ms` in the two runs. Generated-token latency ranged from
+                      `341.854` to `427.627 ms/token`, versus the earlier v4 two-run range of
+                      `403.054-449.863 ms/token`; projection-frequency noise remains visible, but the reused KV
+                      staging reduction is consistent.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
@@ -386,7 +397,7 @@ Priority classes for the GGUF/Qwen decode work:
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
-                - [ ] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
+                - [x] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.
                       Progress on 2026-07-06: grouped Q8_K-staged helper wrappers and benchmark rows were added for
@@ -398,6 +409,10 @@ Priority classes for the GGUF/Qwen decode work:
                       Progress on 2026-07-08: the first reusable-activation ABI landed for non-grouped helpers, so this
                       item is now blocked on graph/AOT ownership of the staged workspace rather than raw helper
                       availability.
+                      Completed on 2026-08-01 by the content-validated field-interleaved-v4 thread workspace described
+                      above. This preserves the existing artifact ABI while sharing Q's staged hidden vector with the
+                      separate mixed-format K/V helpers. Memory is bounded by the largest activation seen by each
+                      calling thread and does not scale with token count or context capacity.
                 - [ ] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
                       The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
                       repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML

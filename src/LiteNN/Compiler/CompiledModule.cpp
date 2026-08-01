@@ -1487,6 +1487,92 @@ namespace
 		out.d = 1.0F / inverseScale;
 	}
 
+	class GGMLQ8KActivationThreadCache
+	{
+	public:
+		const GGMLQ8KActivationBlock* Prepare(const float* lhs, std::int64_t rows, std::int64_t columns,
+		                                      std::int64_t rowStride, std::int64_t columnStride)
+		{
+			const auto elementCount = static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns);
+			if (Matches(lhs, rows, columns, rowStride, columnStride, elementCount))
+			{
+				return blocks_.data();
+			}
+
+			source_.resize(elementCount);
+			if (columnStride == 1 && rowStride == columns)
+			{
+				std::memcpy(source_.data(), lhs, elementCount * sizeof(float));
+			}
+			else
+			{
+				for (std::int64_t row = 0; row < rows; ++row)
+				{
+					for (std::int64_t column = 0; column < columns; ++column)
+					{
+						source_[static_cast<std::size_t>(row * columns + column)] =
+						    lhs[row * rowStride + column * columnStride];
+					}
+				}
+			}
+
+			const auto blockCount = static_cast<std::size_t>(columns / 256);
+			blocks_.resize(static_cast<std::size_t>(rows) * blockCount);
+			for (std::int64_t row = 0; row < rows; ++row)
+			{
+				const auto* sourceRow = source_.data() + static_cast<std::size_t>(row * columns);
+				for (std::size_t block = 0; block < blockCount; ++block)
+				{
+					QuantizeGGMLQ8KActivationBlock(sourceRow + block * 256, 1,
+					                               blocks_[static_cast<std::size_t>(row) * blockCount + block]);
+				}
+			}
+			rows_ = rows;
+			columns_ = columns;
+			return blocks_.data();
+		}
+
+	private:
+		bool Matches(const float* lhs, std::int64_t rows, std::int64_t columns, std::int64_t rowStride,
+		             std::int64_t columnStride, std::size_t elementCount) const
+		{
+			if (rows_ != rows || columns_ != columns || source_.size() != elementCount)
+			{
+				return false;
+			}
+			if (columnStride == 1 && rowStride == columns)
+			{
+				return std::memcmp(source_.data(), lhs, elementCount * sizeof(float)) == 0;
+			}
+			for (std::int64_t row = 0; row < rows; ++row)
+			{
+				for (std::int64_t column = 0; column < columns; ++column)
+				{
+					const auto& cached = source_[static_cast<std::size_t>(row * columns + column)];
+					const auto& current = lhs[row * rowStride + column * columnStride];
+					if (std::memcmp(&cached, &current, sizeof(float)) != 0)
+					{
+						return false;
+					}
+				}
+			}
+			return true;
+		}
+
+		std::int64_t rows_{ -1 };
+		std::int64_t columns_{ -1 };
+		std::vector<float> source_;
+		std::vector<GGMLQ8KActivationBlock> blocks_;
+	};
+
+	const GGMLQ8KActivationBlock* PrepareCachedGGMLQ8KActivation(const float* lhs, std::int64_t rows,
+	                                                             std::int64_t columns, std::int64_t rowStride,
+	                                                             std::int64_t columnStride)
+	{
+		thread_local GGMLQ8KActivationThreadCache cache;
+		return cache.Prepare(lhs, rows, columns, rowStride, columnStride);
+	}
+
 	extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes()
 	{
 		return kGGMLQ8KActivationBlockBytes;
@@ -4163,18 +4249,11 @@ namespace
 		                                            outRows, outColumns, requestedThreadCount)
 		        : std::string{});
 		const auto blockCount = header->blockCount;
-		std::vector<GGMLQ8KActivationBlock> staged(
-		    static_cast<std::size_t>(static_cast<std::uint64_t>(lhsRows) * blockCount));
-		for (std::int64_t row = 0; row < lhsRows; ++row)
+		const auto* staged =
+		    PrepareCachedGGMLQ8KActivation(lhsAligned + lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride);
+		if (lhsRows > 0 && !staged)
 		{
-			const auto* lhsRow = lhsAligned + lhsOffset + row * lhsRowStride;
-			for (std::uint64_t blockIndex = 0; blockIndex < blockCount; ++blockIndex)
-			{
-				QuantizeGGMLQ8KActivationBlock(
-				    lhsRow + static_cast<std::int64_t>(blockIndex * layout->elementsPerBlock) * lhsColumnStride,
-				    lhsColumnStride,
-				    staged[static_cast<std::size_t>(static_cast<std::uint64_t>(row) * blockCount + blockIndex)]);
-			}
+			return;
 		}
 
 		bool useAVX2 = false;
@@ -4199,7 +4278,7 @@ namespace
 		const auto groupsPerRow = (static_cast<std::uint64_t>(outColumns) + 7) / 8;
 		Context context{
 			.payload = reinterpret_cast<const std::uint8_t*>(header + 1),
-			.staged = staged.data(),
+			.staged = staged,
 			.outAligned = outAligned,
 			.outOffset = outOffset,
 			.outColumns = outColumns,

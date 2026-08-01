@@ -3027,6 +3027,12 @@ Priority classes:
       calls in a stateful Qwen token while keeping memory bounded independently of context length. A cache-hit 14B T8
       profile reduced this row from about `15.9` to `0.287 ms/step` (`-98.2%`) with identical generated tokens and no
       fallback. The remaining dispatch cost is too small to justify a separate batching ABI without new evidence.
+      Field-interleaved-v4 single projections now also share a bounded, content-validated Q8_K activation workspace.
+      This lets mixed-format Q/K/V helpers reuse one quantization without trusting arena pointers: a Float32 bitwise
+      snapshot invalidates the cache on in-place mutation. Two real 14B T8 cache-hit runs kept exact generated tokens
+      and no fallback; Q4_K/Q6_K KV helper rows dropped from about `38.35/13.14 ms` to `25.13/9.21 ms` and
+      `11.84/4.67 ms`, while generated-token latency ranged from `341.854` to `427.627 ms/token` under visible host
+      frequency variance.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
