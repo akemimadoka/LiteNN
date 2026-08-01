@@ -1336,11 +1336,14 @@ namespace
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto residentPagesText =
 		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
+		constexpr std::uint32_t decodePlanCacheVersion = 6;
 		const auto keyText = std::format(
-		    "gguf-decode-{}-v5|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|affinity={}|min_flops={}|"
+		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
+		    "affinity={}|min_flops={}|"
 		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}|"
 		    "paged_resident_pages={}",
-		    decodeMode, std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
+		    decodeMode, decodePlanCacheVersion, LiteNN::CPUAOTCompilationCacheVersion,
+		    std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
 		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
 		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,

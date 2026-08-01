@@ -42,6 +42,8 @@ using namespace LiteNN;
 
 namespace
 {
+	static_assert(CPUAOTCompilationCacheVersion > 0);
+
 	class ScopedCerrCapture
 	{
 	public:
