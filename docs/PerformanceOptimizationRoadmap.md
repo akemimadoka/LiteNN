@@ -392,6 +392,15 @@ Priority classes for the GGUF/Qwen decode work:
                       larger. The real 14B cache-hit run reproduced identical tokens with no fallback at
                       `314.807 ms/token` (`3.177 tok/s`), reducing latency by `12.7%` from the immediately preceding
                       selective-x16 run and by `7.9%` from the prior best `341.854 ms/token` scalar-conversion run.
+                      Two follow-up instruction experiments were rejected on 2026-08-01 after production-shape and
+                      full-decode validation. A runtime-gated AVX-512 VNNI x8 path reduced the dot instruction count
+                      but regressed T8 Q4_K hidden/up/down from the established `0.283/0.549/0.508 ms` range to about
+                      `0.299/0.642/0.709 ms` on the Ryzen 9 9950X; Q6_K also broadly regressed. Sharing one Q4_K byte
+                      load across low/high nibbles produced an isolated `0.208 ms` hidden-row sample, but two real
+                      decode runs raised the step-16 `5120->5120` helper total from the recent `32.8-37.3 ms` range to
+                      `42.8-43.6 ms` and reduced generated-token throughput. Both implementations were removed. Future
+                      ISA/layout changes must pass repeated full-decode evidence rather than instruction-count or one
+                      microbenchmark evidence alone.
                 - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
@@ -461,7 +470,7 @@ Priority classes for the GGUF/Qwen decode work:
                       target for the actual packed-kernel tranche remains: bring default stateful CPU AOT below
                       `300 ms/generated token` on the local Qwen2.5 14B Q4_K_M control run without increasing
                       residual/fallback share.
-          - [ ] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
+          - [x] P0: Run full-decode thread/grain A/B instead of extrapolating from isolated helpers.
                 The July 5 helper rows show Q4_K grouped gate/up improving from about `3.60 ms` at T16 to `2.96 ms` at
                 T32, while the real decode path resolves default helpers to T16. Validate default/T8/T16/T32 in full
                 stateful decode with helper share, residual share, and generated-token TPS before changing defaults.
@@ -495,6 +504,12 @@ Priority classes for the GGUF/Qwen decode work:
                       matrix artifacts; the matrix can also forward `--cpu-aot-q8k-staged-matmul` so direct-vs-staged
                       activation paths are captured by the same full-decode A/B harness. Use it for the next full-decode
                       acceptance run before changing default thread policy.
+                Completed measurement slice on 2026-08-01 with the v4 all-prepared stateful artifact and identical
+                generated tokens. The first cache-hit pass measured T4 `339.890 ms/token`, T16 `305.097`, and T32
+                `319.923`; an immediate repeat measured T8 `314.078`, T16 `347.432`, and T32 `326.426`. Ordering,
+                temperature, and memory-frequency effects were large enough to reverse the T8/T16 ranking, while T4
+                was consistently weak and T32 did not win. Keep explicit T8/current defaults for now; hardware-aware
+                retuning remains under the separate post-kernel policy item instead of reopening this measurement task.
           - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
                 or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and
@@ -684,6 +699,20 @@ Priority classes for the GGUF/Qwen decode work:
                 a second constants/weights copy after reading the shared cache blob.
                 Updated on 2026-07-05: cache hits map the shared weight store as a borrowed separated-artifact weights
                 region instead of reading the multi-GB blob into a temporary vector.
+          - [x] Make shared-weight cache identity include the compiled external tensor layout and content checksums.
+                Completed on 2026-08-01: shared weights are nested under a deterministic layout identity derived from
+                total bytes plus every external tensor name, offset, size, alignment, and checksum. Mixed Q/K/V
+                grouping can no longer reuse a same-sized but differently ordered weight blob; the real 14B cache-hit
+                path validates and reproduces the exact token sequence.
+          - [x] Remove graph materialization and repeated multi-GB validation from trusted cache hits. Completed on
+                2026-08-01: the importer has a metadata-only path (`35.6 ms` on the 14B control), stateful cache hits
+                create inputs from the compiled module ABI, and full tensor payload import occurs only on cache miss.
+                Generic separated-artifact APIs retain full checksums; the internal content-addressed cache uses an
+                explicit trusted-borrowed factory after complete-marker, size, layout-identity, metadata, constants,
+                instruction, alignment, and tensor-range validation. Cache `build_ms` fell from about `31.4 s` to
+                `18.8 ms`; artifact read/load fell to `4.5/5.5 ms`, sampled peak working set fell from about `26.8` to
+                `8.4-8.8 GiB`, and generated tokens remained identical. The skipped sequential read appears as normal
+                demand paging in the cold first step rather than blocking every process startup.
           - [x] P2: Replace repeated cache-local weight blobs with borrowed/mapped shared weight regions. Completed on
                 2026-07-05: cache hits mmap the model-level shared weight store through borrowed separated regions.
                 Directly borrowing GGUF/source-package tensor offsets is deferred until separated-artifact metadata can

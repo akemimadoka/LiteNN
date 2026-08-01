@@ -3185,6 +3185,16 @@ Priority classes:
             copy of the shared weight blob after reading it.
             Updated on 2026-07-05: GGUF decode cache hits map the shared weight store as a borrowed separated-artifact
             weights region instead of reading the multi-GB blob into a temporary vector.
+      - [x] Isolate shared weights by compiled tensor layout/content identity. Completed on 2026-08-01: the shared
+            store key includes every external tensor's name, offset, size, alignment, and checksum, preventing a
+            same-sized cache blob from being reused after projection grouping changes weight ordering.
+      - [x] Add metadata-only, cache-first stateful startup and an explicit trusted-cache validation boundary.
+            Completed on 2026-08-01: cache hits no longer import tensor payloads or rebuild the decode graph, and the
+            compiled module ABI drives state/input allocation directly. Default separated-artifact loading remains
+            checksum-strict; only complete, content-addressed internal cache entries skip the 9 GB weight scan while
+            retaining structural and non-weight-region validation. On the 14B control, cache `build_ms` fell from
+            about `31.4 s` to `18.8 ms`, with exact generated-token parity and peak working set reduced from about
+            `26.8` to `8.4-8.8 GiB`.
       - [x] P2: Replace repeated cache-local weight blobs with borrowed/mapped shared weight regions. Completed on
             2026-07-05: cache hits mmap the model-level shared weight store and load it through borrowed separated
             regions, eliminating the extra read/copy on cache hit. Directly borrowing GGUF/source-package tensor
