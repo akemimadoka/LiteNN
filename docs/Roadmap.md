@@ -3033,6 +3033,13 @@ Priority classes:
       and no fallback; Q4_K/Q6_K KV helper rows dropped from about `38.35/13.14 ms` to `25.13/9.21 ms` and
       `11.84/4.67 ms`, while generated-token latency ranged from `341.854` to `427.627 ms/token` under visible host
       frequency variance.
+      A true AVX2 x16 execution tile now shares Q8_K loads across two adjacent v4 x8 groups without changing the weight
+      ABI. Blanket use was rejected after a real 14B run exposed regressions in 1024-column KV and ordinary Q4_K rows.
+      The retained dispatch is deliberately evidence-gated to single projections with at least 8192 output columns;
+      grouped and narrower projections stay on x8. Q4_K/Q6_K logits microbench medians improved from about `10.3/15.1`
+      to `8.69/13.3 ms`. A selective no-fallback acceptance run reproduced the exact token sequence at
+      `360.743 ms/token` (`2.772 tok/s`) and reduced the step-16 Q6_K logits row from `16.486` to `14.049 ms`, while
+      whole-step latency remained inside the observed host-frequency range.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
@@ -3068,6 +3075,10 @@ Priority classes:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before
       changing default prepared-weight or thread policy.
+      Wide-output progress completed on 2026-08-01: the v4 single-projection helper has an AVX2 x16 tile that shares
+      activation loads across adjacent x8 groups, but real-model evidence limits it to output widths >=8192. This closes
+      the logits-specific slice; gate/up, hidden/output, FFN-down, and KV still require dedicated low-thread kernels, so
+      the overall P0 remains open.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

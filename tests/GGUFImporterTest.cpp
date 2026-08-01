@@ -2068,8 +2068,8 @@ TEST(GGUFLLaMAQuantizedExecution, CompactInterleavedQ8KHelperMatchesStagedAndSta
 TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFullAndTailGroups)
 {
 	constexpr std::size_t inFeatures = 256;
-	constexpr std::size_t outFeatures = 15;
 	constexpr std::size_t rows = 2;
+	const std::array outputWidths{ std::size_t{ 15 }, std::size_t{ 8192 } };
 	const std::array cases = {
 		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, std::size_t{ 1184 }, "q4_k.weight" },
 		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, std::size_t{ 1680 }, "q6_k.weight" },
@@ -2081,72 +2081,76 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFu
 		inputValues[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.0625F;
 	}
 
-	for (const auto& [ggmlType, blockFormat, groupBlockBytes, name] : cases)
+	for (const auto outFeatures : outputWidths)
 	{
-		SCOPED_TRACE(name);
-		std::vector<float> weightValues(outFeatures * inFeatures);
-		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		SCOPED_TRACE(outFeatures);
+		for (const auto& [ggmlType, blockFormat, groupBlockBytes, name] : cases)
 		{
-			weightValues[i] = static_cast<float>(static_cast<int>(i % 27) - 13) * 0.125F;
-		}
-		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
-		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
-		const auto& storage = quantizedWeight->Data();
-		const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
-		const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(static_cast<std::uint64_t>(blockFormat),
-		                                                                    static_cast<std::int64_t>(outFeatures),
-		                                                                    static_cast<std::int64_t>(inFeatures));
-		ASSERT_EQ(packedBytes, 64u + 2u * groupBlockBytes);
-		std::vector<std::uint8_t> packed(packedBytes);
-		litenn_cpu_ggml_prepack_field_interleaved_v4(
-		    nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
-		    static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(inFeatures),
-		    static_cast<std::uint64_t>(blockFormat), nullptr, packed.data(), 0,
-		    static_cast<std::int64_t>(packed.size()), 1);
+			SCOPED_TRACE(name);
+			std::vector<float> weightValues(outFeatures * inFeatures);
+			for (std::size_t i = 0; i < weightValues.size(); ++i)
+			{
+				weightValues[i] = static_cast<float>(static_cast<int>(i % 27) - 13) * 0.125F;
+			}
+			const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+			const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+			const auto& storage = quantizedWeight->Data();
+			const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+			const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(static_cast<std::uint64_t>(blockFormat),
+			                                                                    static_cast<std::int64_t>(outFeatures),
+			                                                                    static_cast<std::int64_t>(inFeatures));
+			ASSERT_EQ(packedBytes, 64u + ((outFeatures + 7) / 8) * groupBlockBytes);
+			std::vector<std::uint8_t> packed(packedBytes);
+			litenn_cpu_ggml_prepack_field_interleaved_v4(
+			    nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
+			    static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::uint64_t>(blockFormat), nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1);
 
-		std::vector<float> staged(rows * outFeatures);
-		std::vector<float> packedOutput(rows * outFeatures, std::numeric_limits<float>::quiet_NaN());
-		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
-		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
-		    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
-		    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
-		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
-		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
-		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
-		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
-		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
-		    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
-		    static_cast<std::int64_t>(packed.size()), 1, nullptr, packedOutput.data(), 0,
-		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
-		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
-		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			std::vector<float> staged(rows * outFeatures);
+			std::vector<float> packedOutput(rows * outFeatures, std::numeric_limits<float>::quiet_NaN());
+			litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+			    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
+			    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, packedOutput.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
 
-		for (std::size_t i = 0; i < staged.size(); ++i)
-		{
-			EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "at element " << i;
-		}
+			for (std::size_t i = 0; i < staged.size(); ++i)
+			{
+				EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "at element " << i;
+			}
 
-		const auto originalInput = inputValues[0];
-		inputValues[0] = 6.5F;
-		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
-		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
-		    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
-		    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
-		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
-		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
-		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
-		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
-		    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
-		    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
-		    static_cast<std::int64_t>(packed.size()), 1, nullptr, packedOutput.data(), 0,
-		    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
-		    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
-		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
-		for (std::size_t i = 0; i < staged.size(); ++i)
-		{
-			EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "after in-place mutation at element " << i;
+			const auto originalInput = inputValues[0];
+			inputValues[0] = 6.5F;
+			litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+			    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, storageBytes, 0,
+			    static_cast<std::int64_t>(storage.NumElements()), 1, nullptr, staged.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, inputValues.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, packedOutput.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			for (std::size_t i = 0; i < staged.size(); ++i)
+			{
+				EXPECT_NEAR(packedOutput[i], staged[i], 1.0e-4F) << "after in-place mutation at element " << i;
+			}
+			inputValues[0] = originalInput;
 		}
-		inputValues[0] = originalInput;
 	}
 }
 
