@@ -72,6 +72,22 @@ extern "C" void litenn_cpu_ggml_block_matmul_compact_q8k_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" std::uint64_t litenn_cpu_ggml_field_interleaved_v4_bytes(std::uint64_t formatValue, std::int64_t rows,
+                                                                    std::int64_t columns);
+
+extern "C" void litenn_cpu_ggml_prepack_field_interleaved_v4(
+    const std::uint8_t*, const std::uint8_t* rhsAligned, std::int64_t rhsOffset, std::int64_t rhsBytes,
+    std::int64_t rhsStride, std::int64_t rows, std::int64_t columns, std::uint64_t formatValue, std::uint8_t*,
+    std::uint8_t* packedAligned, std::int64_t packedOffset, std::int64_t packedBytes, std::int64_t packedStride);
+
+extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepare_q8k_activation_f32(const float*, const float* lhsAligned,
@@ -1546,6 +1562,65 @@ namespace
 		state.counters["raw_bytes"] = benchmark::Counter(static_cast<double>(rhs.size()));
 		state.counters["storage_ratio"] =
 		    benchmark::Counter(static_cast<double>(compact.size()) / static_cast<double>(rhs.size()));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+	}
+
+	void BMGGMLFieldInterleavedV4MatMulHelper(benchmark::State& state, QuantizedBlockFormat format, std::size_t batch,
+	                                          std::size_t inputWidth, std::size_t outputWidth,
+	                                          std::uint64_t threadCount)
+	{
+		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
+		auto lhs = MakeInputData(batch * inputWidth);
+		const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(static_cast<std::uint64_t>(format),
+		                                                                    static_cast<std::int64_t>(outputWidth),
+		                                                                    static_cast<std::int64_t>(inputWidth));
+		if (packedBytes == 0)
+		{
+			state.SkipWithError("unsupported field-interleaved-v4 GGML benchmark shape");
+			return;
+		}
+		std::vector<std::uint8_t> packed(packedBytes);
+		litenn_cpu_ggml_prepack_field_interleaved_v4(
+		    nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1, static_cast<std::int64_t>(outputWidth),
+		    static_cast<std::int64_t>(inputWidth), static_cast<std::uint64_t>(format), nullptr, packed.data(), 0,
+		    static_cast<std::int64_t>(packed.size()), 1);
+		std::vector<float> stagedReference(batch * outputWidth);
+		std::vector<float> output(batch * outputWidth);
+		litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+		    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+		    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1,
+		    nullptr, stagedReference.data(), 0, static_cast<std::int64_t>(batch),
+		    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+		    static_cast<std::uint64_t>(format), threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		const auto invoke = [&] {
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0,
+			    static_cast<std::int64_t>(batch), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(outputWidth), 1, static_cast<std::uint64_t>(format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+		invoke();
+		state.counters["max_abs_delta"] =
+		    benchmark::Counter(static_cast<double>(MaxAbsDifference(output, stagedReference)));
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["packed_bytes"] = benchmark::Counter(static_cast<double>(packed.size()));
+		state.counters["raw_bytes"] = benchmark::Counter(static_cast<double>(rhs.size()));
+		state.counters["storage_ratio"] =
+		    benchmark::Counter(static_cast<double>(packed.size()) / static_cast<double>(rhs.size()));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
@@ -4552,6 +4627,24 @@ namespace
 					                shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLCompactInterleavedMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
+						                                         static_cast<std::uint64_t>(threadCount));
+					    });
+					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
+			}
+		}
+		for (const auto format : ggmlCompactInterleavedBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				for (const auto shape : kGGMLProjectionBenchmarkSpecs)
+				{
+					auto* benchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("GGMLBlockMatMulFieldInterleavedV4Helper/{}/{}/T{}/batch:1/in:{}/out:{}",
+					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+					                shape.outputWidth),
+					    [=](benchmark::State& state) {
+						    BMGGMLFieldInterleavedV4MatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
 						                                         static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);

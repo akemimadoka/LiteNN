@@ -295,6 +295,14 @@ Priority classes for the GGUF/Qwen decode work:
                       slower than expanded-v1 while using `49.9%` fewer prepared-weight bytes. It remains opt-in until
                       repeated acceptance runs close or reverse that final gap; the next kernel slice is x8
                       field-interleaved scale/quant reuse.
+                      Field-interleaved v4 kernel prototype completed on 2026-08-01: a separate version-4 header and
+                      prepack/runtime ABI interleave four-byte quant chunks across eight output rows. Q4_K stores
+                      unpacked per-subblock scale/min vectors at `1.0278x` raw block bytes; Q6_K remains `1.00x` raw.
+                      Portable full/tail execution and AVX2 x8 execution both match Q8_K-staged output exactly. Against
+                      the paired-dot v3 T8 rows, v4 measured Q4 hidden `0.506 vs 0.801 ms`, Q4 FFN-down
+                      `1.36 vs 2.16 ms`, Q6 FFN-down `1.74 vs 2.76 ms`, and Q6 logits `14.3 vs 20.0 ms`. JIT symbols and
+                      benchmark rows are available; AOT layout id, externalized-weight generation, grouped projection
+                      ABI, and real 14B cache-hit acceptance remain open before v4 can be selected by users.
                 - [ ] Add a decode-step Q8_K activation workspace keyed by the normalized hidden vector.
                       Quantize each hidden vector once per layer/step and pass the staged activation to all compatible
                       projection helpers. Do not route the existing per-helper staged prototype by default; it has
@@ -349,6 +357,10 @@ Priority classes for the GGUF/Qwen decode work:
                       sequence. Real decode improved from `567.607` to `505.917 ms/token`; the expanded-v1 gap is down
                       to `4.94%`. Next implement an x8 field-interleaved prepared layout and GEMV loop that shares
                       decoded scales/lanes across more output rows, then evaluate AVX512/VNNI.
+                      x8 prototype completed on 2026-08-01: field-interleaved-v4 groups eight output rows and converts
+                      each four-byte quant chunk into eight Int32 partial sums per AVX2 load. Production-shaped T8
+                      single-projection rows improve by roughly `6.6%` to `37%` over paired-dot v3 with exact parity.
+                      Remaining work is AOT/grouped wiring and full-decode acceptance; only then may v4 replace v3.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

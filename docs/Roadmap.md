@@ -3001,6 +3001,13 @@ Priority classes:
       compact kernel; step-16 helper time fell to `475.246 ms`. Compact-v3 is now only `4.94%` slower than expanded-v1
       while retaining `49.9%` lower prepared-weight storage. It remains opt-in pending repeated acceptance and an x8
       field-interleaved scale/quant reuse kernel.
+      Field-interleaved v4 kernel prototype completed on 2026-08-01: a distinct v4 header plus prepack/runtime ABI
+      interleaves four-byte quant chunks across eight output rows. Q4_K uses `1.0278x` raw block bytes for directly
+      loadable scale/min vectors and Q6_K remains `1.00x`; portable full/tail and AVX2 x8 paths match staged output
+      exactly. Relative to paired-dot v3, T8 rows measured Q4 hidden `0.506 vs 0.801 ms`, Q4 FFN-down
+      `1.36 vs 2.16 ms`, Q6 FFN-down `1.74 vs 2.76 ms`, and Q6 logits `14.3 vs 20.0 ms`. JIT symbols and benchmark
+      coverage are complete. The item remains open for an explicit AOT layout id, externalized v4 weights, grouped
+      projection ABI, CLI/cache isolation, and real 14B cache-hit acceptance.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
