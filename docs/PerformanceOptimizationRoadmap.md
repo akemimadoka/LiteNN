@@ -510,6 +510,15 @@ Priority classes for the GGUF/Qwen decode work:
                 temperature, and memory-frequency effects were large enough to reverse the T8/T16 ranking, while T4
                 was consistently weak and T32 did not win. Keep explicit T8/current defaults for now; hardware-aware
                 retuning remains under the separate post-kernel policy item instead of reopening this measurement task.
+                Graph-wide scheduling follow-up completed on 2026-08-01: the persistent CPU AOT pool now signals only
+                the workers selected for the current helper, uses a spin barrier for the calling thread, and lets
+                participating workers poll briefly for the next helper before sleeping. This replaces per-helper
+                `notify_all` wakeups of all 31 workers on the 32-thread host and avoids a kernel sleep/wakeup at each
+                short operator. Q4_K T8 hidden/FFN-up/FFN-down medians measured `0.118/0.425/0.466 ms` versus the
+                established `0.283/0.549/0.508 ms`; Q6_K hidden measured `0.206 ms` versus `0.338 ms`, all with exact
+                helper parity. A cache-hit 14B run preserved the generated token sequence, reduced step-16 helper time
+                from `338.182` to `302.936 ms` (`-10.4%`), and reduced the eight-token generation mean from `355.983`
+                to `342.513 ms/token` (`-3.8%`). Wide Q6_K/logits rows remain bandwidth/kernel limited.
           - [x] P0: Add a repository-owned CPU-only llama.cpp control harness.
                 Completed on 2026-07-06. `benchmark/run_llama_cpp_control.py` accepts the GGUF path at runtime, locates
                 or accepts a `llama-bench` executable, runs a CPU-only TG matrix for T2/T4/T8/T16/T32 by default, and

@@ -3161,6 +3161,14 @@ Priority classes:
       2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
       `Q6_K/qwen_ffn_down` about `3.28 ms` real), while explicit `T32` remains available when isolated helper rows prove
       it wins.
+      - [x] Remove per-helper all-worker wakeups from the persistent CPU AOT pool. Selected workers now receive
+            directed signals and briefly poll for the next helper, while the calling thread uses a spin completion
+            barrier. Regression coverage changes requested thread counts repeatedly in one process. On the 14B T8
+            cache-hit run, step-16 helper time fell from `338.182` to `302.936 ms`, generation averaged
+            `342.513 ms/token`, and output tokens remained identical.
+      - [ ] Make worker polling duration an explicit runtime scheduling policy with an adaptive/low-power option;
+            preserve the measured hybrid default while allowing latency-sensitive and power-sensitive applications to
+            choose deliberately without environment-variable-only library behavior.
 - [x] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.
