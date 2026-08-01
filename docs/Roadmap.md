@@ -3022,6 +3022,11 @@ Priority classes:
       Q6_K FFN-down/logits medians from `1.86/13.4 ms` to `2.01/15.7 ms` on Ryzen 9 9950X, with up to about `9.8e-4`
       extra Float32 difference. The path was removed; future AVX512 work must justify a true x16 layout/kernel instead
       of substituting one instruction in the x8 loop.
+      The CPU dynamic-RoPE helper now caches one thread-local frequency/angle table for the most recent
+      `(headDim, base, frequencyScale, position)`. This removes repeated `pow/sin/cos` work across the 2304 Q/K head
+      calls in a stateful Qwen token while keeping memory bounded independently of context length. A cache-hit 14B T8
+      profile reduced this row from about `15.9` to `0.287 ms/step` (`-98.2%`) with identical generated tokens and no
+      fallback. The remaining dispatch cost is too small to justify a separate batching ABI without new evidence.
 - [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the

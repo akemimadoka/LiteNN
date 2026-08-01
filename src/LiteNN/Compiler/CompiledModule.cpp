@@ -764,6 +764,52 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	struct RoPEAtPositionsThreadCache
+	{
+		std::int64_t columns{};
+		double base{};
+		double frequencyScale{};
+		std::int64_t position{};
+		bool frequenciesValid{};
+		bool anglesValid{};
+		std::vector<double> frequencies;
+		std::vector<double> cosines;
+		std::vector<double> sines;
+
+		void Prepare(std::int64_t newColumns, double newBase, double newFrequencyScale, std::int64_t newPosition)
+		{
+			const auto pairCount = static_cast<std::size_t>(newColumns / 2);
+			if (!frequenciesValid || columns != newColumns || base != newBase)
+			{
+				columns = newColumns;
+				base = newBase;
+				frequencies.resize(pairCount);
+				cosines.resize(pairCount);
+				sines.resize(pairCount);
+				for (std::size_t pair = 0; pair < pairCount; ++pair)
+				{
+					frequencies[pair] = std::pow(base, -2.0 * static_cast<double>(pair) / static_cast<double>(columns));
+				}
+				frequenciesValid = true;
+				anglesValid = false;
+			}
+
+			if (!anglesValid || position != newPosition || frequencyScale != newFrequencyScale)
+			{
+				position = newPosition;
+				frequencyScale = newFrequencyScale;
+				const auto positionValue = static_cast<double>(position);
+				for (std::size_t pair = 0; pair < pairCount; ++pair)
+				{
+					const auto angle = positionValue * frequencies[pair] * frequencyScale;
+					cosines[pair] = std::cos(angle);
+					sines[pair] = std::sin(angle);
+				}
+				anglesValid = true;
+			}
+		}
+	};
+
 	extern "C" void litenn_cpu_rope_at_positions_f32(const float*, const float* inputAligned, std::int64_t inputOffset,
 	                                                 std::int64_t inputRows, std::int64_t inputColumns,
 	                                                 std::int64_t inputRowStride, std::int64_t inputColumnStride,
@@ -788,16 +834,15 @@ namespace
 
 		const auto* input = inputAligned + inputOffset;
 		auto* out = outAligned + outOffset;
+		thread_local RoPEAtPositionsThreadCache cache;
 		for (std::int64_t row = 0; row < inputRows; ++row)
 		{
-			const auto position = static_cast<double>(positionAligned[positionOffset + row * positionStride]);
+			const auto position = positionAligned[positionOffset + row * positionStride];
+			cache.Prepare(inputColumns, base, frequencyScale, position);
 			for (std::int64_t pair = 0; pair < inputColumns / 2; ++pair)
 			{
-				const auto angle =
-				    position * std::pow(base, -2.0 * static_cast<double>(pair) / static_cast<double>(inputColumns)) *
-				    frequencyScale;
-				const auto cosine = std::cos(angle);
-				const auto sine = std::sin(angle);
+				const auto cosine = cache.cosines[static_cast<std::size_t>(pair)];
+				const auto sine = cache.sines[static_cast<std::size_t>(pair)];
 				const auto first = static_cast<double>(input[row * inputRowStride + pair * 2 * inputColumnStride]);
 				const auto second =
 				    static_cast<double>(input[row * inputRowStride + (pair * 2 + 1) * inputColumnStride]);

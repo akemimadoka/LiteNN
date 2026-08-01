@@ -483,10 +483,17 @@ Priority classes for the GGUF/Qwen decode work:
                 The July 6 profile shows the final vocabulary projection costs about `7%` of total decode time even
                 after grouped projection work. Golden-logit and API runs still need full public logits, but text-only
                 decode can use a projection+sampler path that keeps only the selected token/top-k candidates.
-          - [ ] P1: Batch or fuse per-head RoPE helper calls after projection work moves.
+          - [x] P1: Eliminate repeated per-head RoPE transcendental work after projection work moves.
                 RoPE is not the current top bottleneck, but the default profile still shows `55296` helper calls over
                 24 steps and about `13-14 ms` per decode step. Once projection kernels are reduced, convert per-head
                 RoPE calls into a batched per-layer helper or fuse it into the Q/K layout path.
+                Progress on 2026-08-01: the CPU helper now keeps one bounded thread-local frequency/angle table keyed by
+                `(headDim, base, frequencyScale, position)`. Stateful decode therefore computes `pow/sin/cos` once for
+                the current token instead of repeating them across all 2304 Q/K head calls; the cache retains only one
+                head-sized entry and does not grow with the requested context length. A cache-hit Qwen2.5-Coder 14B
+                Q4_K_M T8 run reduced the 2304-call RoPE row from about `15.9 ms/step` to `0.287 ms/step` (`-98.2%`)
+                with identical generated tokens and no fallback. The residual dispatch cost is now below `0.3 ms/step`,
+                so structural batching/fusion is no longer justified without a future profile regression.
     - [x] P2: Add context-extension validation gates before reporting long-context readiness. Completed on 2026-07-05:
           `ValidateLLaMAContextRequest` rejects requests beyond model context, requires explicit RoPE scaling metadata
           when exceeding the original trained context, accepts implemented linear scaling within its factor-derived

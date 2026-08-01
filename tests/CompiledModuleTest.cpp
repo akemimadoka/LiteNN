@@ -5,6 +5,7 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 #include <LiteNN/Compiler/Dump.h>
 #include <LiteNN/Layer/LoRA.h>
+#include <LiteNN/Layer/RoPE.h>
 #include <LiteNN/Pass/ConstFoldPass.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
@@ -2329,6 +2330,31 @@ TEST(CompiledModuleTest, RunIntoWritesCallerProvidedOutputBuffer)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 1), 22.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 2), 33.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
+}
+
+TEST(CompiledModuleTest, DynamicRoPECacheInvalidatesAcrossPositions)
+{
+	Graph graph;
+	Subgraph subgraph;
+	const auto input = subgraph.AddParam(DataType::Float32, { 1, 8 });
+	const auto positions = subgraph.AddParam(DataType::Int64, { 1 });
+	const auto output = Layer::AddRoPEAtPositions(subgraph, { input, 0 }, { positions, 0 }, 10000.0, 0.5);
+	subgraph.SetResults({ output });
+	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	Runtime::Interpreter<CPU> interpreter;
+	auto compiled = Compiler<CPU>::Compile(plan);
+	const Tensor<CPU> values({ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 }, { 1, 8 }, DataType::Float32);
+	for (const auto position : { std::int64_t{ 3 }, std::int64_t{ 4 }, std::int64_t{ 3 } })
+	{
+		std::array<Tensor<CPU>, 2> inputs = { values,
+			                                  Tensor<CPU>({ static_cast<double>(position) }, { 1 }, DataType::Int64) };
+		const auto expected = interpreter.RunForward(plan, inputs);
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), 1u);
+		ExpectTensorNear(actual[0], expected[0], 1e-6f);
+	}
 }
 
 TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
