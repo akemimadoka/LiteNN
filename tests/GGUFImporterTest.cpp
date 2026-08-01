@@ -2069,7 +2069,7 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFu
 {
 	constexpr std::size_t inFeatures = 256;
 	constexpr std::size_t rows = 2;
-	const std::array outputWidths{ std::size_t{ 15 }, std::size_t{ 8192 } };
+	const std::array outputWidths{ std::size_t{ 15 }, std::size_t{ 32768 } };
 	const std::array cases = {
 		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, std::size_t{ 1184 }, "q4_k.weight" },
 		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, std::size_t{ 1680 }, "q6_k.weight" },

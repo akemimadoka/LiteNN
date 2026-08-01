@@ -4441,7 +4441,7 @@ namespace
 			bool useAVX2{};
 		};
 		const auto groupsPerRow = (static_cast<std::uint64_t>(outColumns) + 7) / 8;
-		const auto wideOutputBenefitsFromX16 = outColumns >= 8192;
+		const auto wideOutputBenefitsFromX16 = outColumns >= 32768;
 		const auto groupSpan =
 		    useAVX2 && wideOutputBenefitsFromX16 && (outColumns % 16) == 0 ? std::uint64_t{ 2 } : std::uint64_t{ 1 };
 		const auto workItemsPerRow = (groupsPerRow + groupSpan - 1) / groupSpan;

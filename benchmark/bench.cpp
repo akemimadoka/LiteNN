@@ -88,6 +88,26 @@ extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride, float*,
+    float* outAligned, std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t out0Columns, std::uint64_t out1Columns,
+    std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
+extern "C" void litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32(
+    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
+    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
+    std::int64_t rhs0Offset, std::int64_t rhs0Bytes, std::int64_t rhs0Stride, const std::uint8_t*,
+    const std::uint8_t* rhs1Aligned, std::int64_t rhs1Offset, std::int64_t rhs1Bytes, std::int64_t rhs1Stride,
+    const std::uint8_t*, const std::uint8_t* rhs2Aligned, std::int64_t rhs2Offset, std::int64_t rhs2Bytes,
+    std::int64_t rhs2Stride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, std::uint64_t formatValue,
+    std::uint64_t out0Columns, std::uint64_t out1Columns, std::uint64_t out2Columns, std::uint64_t requestedThreadCount,
+    std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepare_q8k_activation_f32(const float*, const float* lhsAligned,
@@ -2036,6 +2056,37 @@ namespace
 		}
 	}
 
+	void InvokeGGMLGroupedFieldInterleavedV4ProjectionHelper(std::span<const std::vector<std::uint8_t>> rhsSegments,
+	                                                         std::span<const std::size_t> outputWidths,
+	                                                         QuantizedBlockFormat format, std::span<const float> lhs,
+	                                                         std::size_t inputWidth, std::uint64_t threadCount,
+	                                                         std::span<float> output)
+	{
+		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
+		if (rhsSegments.size() == 2 && outputWidths.size() == 2)
+		{
+			litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
+			    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+			    1, nullptr, rhsSegments[0].data(), 0, static_cast<std::int64_t>(rhsSegments[0].size()), 1, nullptr,
+			    rhsSegments[1].data(), 0, static_cast<std::int64_t>(rhsSegments[1].size()), 1, nullptr, output.data(),
+			    0, 1, static_cast<std::int64_t>(totalOutputWidth), static_cast<std::int64_t>(totalOutputWidth), 1,
+			    static_cast<std::uint64_t>(format), outputWidths[0], outputWidths[1], threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			return;
+		}
+		if (rhsSegments.size() == 3 && outputWidths.size() == 3)
+		{
+			litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32(
+			    nullptr, lhs.data(), 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+			    1, nullptr, rhsSegments[0].data(), 0, static_cast<std::int64_t>(rhsSegments[0].size()), 1, nullptr,
+			    rhsSegments[1].data(), 0, static_cast<std::int64_t>(rhsSegments[1].size()), 1, nullptr,
+			    rhsSegments[2].data(), 0, static_cast<std::int64_t>(rhsSegments[2].size()), 1, nullptr, output.data(),
+			    0, 1, static_cast<std::int64_t>(totalOutputWidth), static_cast<std::int64_t>(totalOutputWidth), 1,
+			    static_cast<std::uint64_t>(format), outputWidths[0], outputWidths[1], outputWidths[2], threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		}
+	}
+
 	void BMGGMLGroupedProjectionHelper(benchmark::State& state, QuantizedBlockFormat format,
 	                                   const GGMLGroupedProjectionBenchmarkSpec& spec, std::uint64_t threadCount,
 	                                   GGMLGroupedProjectionMode mode, bool q8KStaged)
@@ -2236,6 +2287,81 @@ namespace
 		state.counters["projection_count"] = benchmark::Counter(static_cast<double>(spec.projectionCount));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 		state.counters["prepared_block_bytes"] = benchmark::Counter(static_cast<double>(preparedBlockByteCount));
+	}
+
+	void BMGGMLGroupedFieldInterleavedV4ProjectionHelper(benchmark::State& state, QuantizedBlockFormat format,
+	                                                     const GGMLGroupedProjectionBenchmarkSpec& spec,
+	                                                     std::uint64_t threadCount)
+	{
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || spec.inputWidth % layout->elementsPerBlock != 0)
+		{
+			state.SkipWithError("unsupported GGML grouped field-interleaved-v4 benchmark shape");
+			return;
+		}
+
+		const auto outputWidths = std::span<const std::size_t>(spec.outputWidths.data(), spec.projectionCount);
+		const auto totalOutputWidth = TotalOutputWidth(outputWidths);
+		auto lhs = MakeInputData(spec.inputWidth);
+		std::vector<std::vector<std::uint8_t>> sourceSegments;
+		std::vector<std::vector<std::uint8_t>> packedSegments;
+		sourceSegments.reserve(spec.projectionCount);
+		packedSegments.reserve(spec.projectionCount);
+		std::size_t sourceBytes = 0;
+		std::size_t packedBytes = 0;
+		for (const auto outputWidth : outputWidths)
+		{
+			auto source = MakeGGMLBenchmarkStorage(format, outputWidth, spec.inputWidth);
+			const auto segmentPackedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(
+			    static_cast<std::uint64_t>(format), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(spec.inputWidth));
+			if (segmentPackedBytes == 0)
+			{
+				state.SkipWithError("failed to size grouped field-interleaved-v4 payload");
+				return;
+			}
+			std::vector<std::uint8_t> packed(segmentPackedBytes);
+			litenn_cpu_ggml_prepack_field_interleaved_v4(
+			    nullptr, source.data(), 0, static_cast<std::int64_t>(source.size()), 1,
+			    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(spec.inputWidth),
+			    static_cast<std::uint64_t>(format), nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()),
+			    1);
+			sourceBytes += source.size();
+			packedBytes += packed.size();
+			sourceSegments.push_back(std::move(source));
+			packedSegments.push_back(std::move(packed));
+		}
+
+		std::vector<float> reference(totalOutputWidth);
+		std::vector<float> output(totalOutputWidth);
+		InvokeGGMLGroupedProjectionHelper(sourceSegments, outputWidths, format, lhs, spec.inputWidth, threadCount, true,
+		                                  reference);
+		InvokeGGMLGroupedFieldInterleavedV4ProjectionHelper(packedSegments, outputWidths, format, lhs, spec.inputWidth,
+		                                                    threadCount, output);
+		state.counters["max_abs_delta"] = benchmark::Counter(static_cast<double>(MaxAbsDifference(output, reference)));
+
+		const auto invoke = [&] {
+			InvokeGGMLGroupedFieldInterleavedV4ProjectionHelper(packedSegments, outputWidths, format, lhs,
+			                                                    spec.inputWidth, threadCount, output);
+		};
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		state.counters["grouped"] = benchmark::Counter(1.0);
+		state.counters["packed_bytes"] = benchmark::Counter(static_cast<double>(packedBytes));
+		state.counters["projection_count"] = benchmark::Counter(static_cast<double>(spec.projectionCount));
+		state.counters["storage_ratio"] =
+		    benchmark::Counter(static_cast<double>(packedBytes) / static_cast<double>(sourceBytes));
+		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
 	void BMKVScatterUpdateHelper(benchmark::State& state, const KVAppendBenchmarkSpec& spec, bool aliasOutput)
@@ -4717,6 +4843,26 @@ namespace
 					    [=](benchmark::State& state) {
 						    BMGGMLGroupedPrepackedProjectionHelper(state, format, shape,
 						                                           static_cast<std::uint64_t>(threadCount));
+					    });
+					benchmarkCase->Unit(benchmark::kMillisecond);
+				}
+			}
+		}
+		for (const auto format : ggmlCompactInterleavedBlockFormats)
+		{
+			for (const auto threadCount : kGGMLThreadCounts)
+			{
+				for (const auto shape : kGGMLGroupedProjectionBenchmarkSpecs)
+				{
+					const auto totalOutputWidth = TotalOutputWidth(
+					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
+					auto* benchmarkCase = benchmark::RegisterBenchmark(
+					    std::format("GGMLGroupedProjectionFieldInterleavedV4Helper/{}/{}/T{}/batch:1/in:{}/out:{}",
+					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+					                totalOutputWidth),
+					    [=](benchmark::State& state) {
+						    BMGGMLGroupedFieldInterleavedV4ProjectionHelper(state, format, shape,
+						                                                    static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}

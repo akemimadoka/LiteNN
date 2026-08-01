@@ -380,7 +380,7 @@ Priority classes for the GGUF/Qwen decode work:
                       and Q6_K logits from about `15.1` to `13.3 ms`, with exact staged-helper parity. Applying x16 to
                       every aligned projection was rejected by the real 14B profile because 1024-column KV rows and
                       ordinary Q4_K rows regressed enough to erase the logits gain. The production dispatch therefore
-                      uses x16 only for single projections with at least 8192 output columns; grouped and narrower
+                      uses x16 only for single projections with at least 32768 output columns; grouped and narrower
                       projections remain on x8. A selective no-fallback acceptance run reproduced the exact token
                       sequence at `360.743 ms/token` (`2.772 tok/s`) and reduced the step-16 Q6_K logits row from
                       `16.486` to `14.049 ms`; overall decode remains within the observed host-frequency variance.
@@ -414,9 +414,16 @@ Priority classes for the GGUF/Qwen decode work:
                       v3 as the prepared-weight default while v1/v3 remain explicit comparison layouts.
                       Wide-output x16 follow-up completed on 2026-08-01: adjacent x8 v4 groups share Q8_K source
                       broadcasts in one AVX2 tile. Microbenchmarks and real decode rejected blanket x16 routing, so the
-                      measured production gate is output width >=8192 for single projections only. This accelerates
+                      measured production gate is output width >=32768 for single projections only. This accelerates
                       vocabulary projections while preserving x8 scheduling for the dominant gate/up, hidden, down,
                       and KV rows. This P0 remains open for new kernels targeting those dominant rows.
+                      The grouped-v4 benchmark follow-up exposed why the stricter threshold matters: Q4_K gate/up x8
+                      evaluates both 13824-column projections in about `2.26 ms` at T1, while a single 13824-column
+                      projection routed through x16 took about `2.21 ms`. The threshold was raised from 8192 to 32768
+                      so FFN-width projections cannot enter the slower tile; the new grouped benchmark covers Q/K/V and
+                      gate/up across the complete T0/T1/T2/T4/T8/T16/T32 matrix with exact reference parity. After the
+                      correction, the single Q4_K FFN-up row fell to `1.34/0.359 ms` at T1/T8, about `39%/35%` faster
+                      than its former x16 route.
                       The next dominant-row slice replaced scalar FP16 scale decoding inside all v4 AVX2 x8/x16
                       kernels with runtime-gated F16C vector conversion. This produced broad T1/T8 gains and a measured
                       `314.807 ms/token` real decode result, but the remaining projection helpers still account for

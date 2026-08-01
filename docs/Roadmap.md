@@ -3035,7 +3035,7 @@ Priority classes:
       frequency variance.
       A true AVX2 x16 execution tile now shares Q8_K loads across two adjacent v4 x8 groups without changing the weight
       ABI. Blanket use was rejected after a real 14B run exposed regressions in 1024-column KV and ordinary Q4_K rows.
-      The retained dispatch is deliberately evidence-gated to single projections with at least 8192 output columns;
+      The retained dispatch is deliberately evidence-gated to single projections with at least 32768 output columns;
       grouped and narrower projections stay on x8. Q4_K/Q6_K logits microbench medians improved from about `10.3/15.1`
       to `8.69/13.3 ms`. A selective no-fallback acceptance run reproduced the exact token sequence at
       `360.743 ms/token` (`2.772 tok/s`) and reduced the step-16 Q6_K logits row from `16.486` to `14.049 ms`, while
@@ -3082,9 +3082,14 @@ Priority classes:
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before
       changing default prepared-weight or thread policy.
       Wide-output progress completed on 2026-08-01: the v4 single-projection helper has an AVX2 x16 tile that shares
-      activation loads across adjacent x8 groups, but real-model evidence limits it to output widths >=8192. This closes
+      activation loads across adjacent x8 groups, but real-model evidence limits it to output widths >=32768. This closes
       the logits-specific slice; gate/up, hidden/output, FFN-down, and KV still require dedicated low-thread kernels, so
       the overall P0 remains open.
+      A grouped-v4 benchmark now covers Q/K/V and gate/up shapes across T0/T1/T2/T4/T8/T16/T32. It showed that a Q4_K
+      x8 grouped gate/up call computes both 13824-column outputs in about `2.26 ms` at T1, while one 13824-column x16
+      single projection took about `2.21 ms`; this evidence raised the x16 threshold from 8192 to 32768 and prevents FFN
+      projections from entering the slower tile. The corrected single Q4_K FFN-up row measured `1.34/0.359 ms` at
+      T1/T8, about `39%/35%` faster than the former x16 route, with exact reference parity.
       F16C progress completed on 2026-08-01: vector FP16 scale conversion accelerates both x8 and x16 v4 kernels behind
       an AVX2+F16C feature gate and reduced real 14B generated-token latency to `314.807 ms`. The step-16 helper total is
       still about `288 ms`, so further work remains concentrated in quantized projection kernels rather than host code.
