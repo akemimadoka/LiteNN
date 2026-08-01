@@ -1244,6 +1244,23 @@ namespace LiteNN::GGUF
 		};
 	}
 
+	ImportResult ImportGGUFMetadata(const std::filesystem::path& inputPath)
+	{
+		auto loaded = LoadGGUFContext(inputPath);
+
+		Graph graph;
+		ImportMetadata(graph, loaded.gguf.get());
+		graph.SetForward(graph.AddSubgraph(Subgraph{}));
+
+		return {
+			.model = ModelGraph(std::move(graph)),
+			.summary = {
+				.tensorCount = static_cast<std::size_t>(gguf_get_n_tensors(loaded.gguf.get())),
+				.metadataCount = static_cast<std::size_t>(gguf_get_n_kv(loaded.gguf.get())),
+			},
+		};
+	}
+
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath)
 	{
 		auto result = ImportGGUFArchive(inputPath);

@@ -166,6 +166,7 @@ namespace LiteNN::GGUF
 	LLaMAContextValidationReport ValidateLLaMAContextRequest(const LLaMAHyperparameters& hyperparameters,
 	                                                         std::size_t requestedTokenCount,
 	                                                         std::size_t maxCacheLength);
+	ImportResult ImportGGUFMetadata(const std::filesystem::path& inputPath);
 	ImportResult ImportGGUFArchive(const std::filesystem::path& inputPath);
 	ImportSummary ConvertGGUFArchive(const std::filesystem::path& inputPath, const std::filesystem::path& outputPath);
 	ImportSummary ConvertGGUFArchiveExternalWeights(const std::filesystem::path& inputPath,

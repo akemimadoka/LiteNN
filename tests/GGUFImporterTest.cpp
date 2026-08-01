@@ -775,6 +775,25 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 	EXPECT_EQ(rawBytes[17], 0x7fu);
 }
 
+TEST(GGUFImporter, ImportsMetadataWithoutReadingTensorPayloads)
+{
+	const auto path = WriteSupportedFixture();
+	auto imported = GGUF::ImportGGUFMetadata(path);
+	std::filesystem::remove(path);
+
+	EXPECT_EQ(imported.summary.tensorCount, 2u);
+	EXPECT_EQ(imported.summary.metadataCount, 5u);
+	EXPECT_EQ(imported.model.UnsafeGraphView().VariableCount(), 0u);
+	EXPECT_TRUE(imported.model.UnsafeGraphView().VariableNames().empty());
+
+	const auto* architecture = imported.model.UnsafeGraphView().FindMetadata("general.architecture");
+	ASSERT_NE(architecture, nullptr);
+	EXPECT_EQ(std::get<std::string>(architecture->value), "llama");
+	const auto* tokens = imported.model.UnsafeGraphView().FindMetadata("tokenizer.ggml.tokens");
+	ASSERT_NE(tokens, nullptr);
+	EXPECT_EQ(std::get<std::vector<std::string>>(tokens->value), (std::vector<std::string>{ "<s>", "hello", "world" }));
+}
+
 TEST(GGUFImporter, RejectsUnsupportedTensorTypes)
 {
 	const auto path = WriteUnsupportedFixture();

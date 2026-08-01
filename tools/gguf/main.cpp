@@ -1010,6 +1010,25 @@ namespace
 		return MakeTokenIdTensor(ids, plan);
 	}
 
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+	LiteNN::Tensor<LiteNN::CPU> MakeTokenIdTensorForModule(std::int32_t tokenId,
+	                                                       std::span<const LiteNN::CompiledTensorSpec> inputSpecs)
+	{
+		if (inputSpecs.empty() || inputSpecs.front().type.dtype != LiteNN::DataType::Int32 ||
+		    !inputSpecs.front().type.IsFullyStatic() ||
+		    LiteNN::Detail::Product(inputSpecs.front().type.StaticShape()) != 1)
+		{
+			throw std::runtime_error("Compiled LLM module first input must be a scalar Int32 token id");
+		}
+		LiteNN::CPU cpu;
+		LiteNN::Tensor<LiteNN::CPU> tensor(LiteNN::Uninitialized, inputSpecs.front().type.StaticShape(),
+		                                   LiteNN::DataType::Int32, cpu);
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Int32, tensor.UnsafeRawData(),
+		                                               LiteNN::DataType::Int32, &tokenId, 1);
+		return tensor;
+	}
+#endif
+
 	LiteNN::Tensor<LiteNN::CPU> MakeDecodePositionTensor(std::int64_t position, const LiteNN::ExecutablePlan& plan)
 	{
 		if (plan.inputs.size() < 2 || plan.inputs[1].type.dtype != LiteNN::DataType::Int64 ||
@@ -1489,6 +1508,29 @@ namespace
 		                           [&] { return std::move(artifact).LoadBorrowedExternalRegions(); });
 	}
 
+	std::optional<LiteNN::CompiledModule<LiteNN::CPU>>
+	TryLoadDecodeAOTCache(const std::optional<std::filesystem::path>& cachePath, bool diagnostics)
+	{
+		if (!cachePath)
+		{
+			return std::nullopt;
+		}
+		if (!DecodeAOTCacheComplete(*cachePath))
+		{
+			LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
+			return std::nullopt;
+		}
+		try
+		{
+			return LoadDecodeAOTCache(*cachePath, diagnostics);
+		}
+		catch (const std::exception& ex)
+		{
+			LogGGUFDiagnostic(diagnostics, std::format("gguf decode aot cache: ignored invalid cache ({})", ex.what()));
+			return std::nullopt;
+		}
+	}
+
 	void WriteDecodeAOTCache(const std::filesystem::path& cachePath, const LiteNN::CompiledModuleArtifact& artifact,
 	                         const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
 	{
@@ -1549,25 +1591,14 @@ namespace
 	LiteNN::CompiledModule<LiteNN::CPU>
 	LoadOrCompileDecodeModule(const LiteNN::ExecutablePlan& plan, const LiteNN::CompilerOptions& options,
 	                          const std::optional<std::filesystem::path>& cachePath,
-	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
+	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics,
+	                          bool cacheAlreadyChecked = false)
 	{
-		if (cachePath)
+		if (!cacheAlreadyChecked)
 		{
-			if (DecodeAOTCacheComplete(*cachePath))
+			if (auto cached = TryLoadDecodeAOTCache(cachePath, diagnostics))
 			{
-				try
-				{
-					return LoadDecodeAOTCache(*cachePath, diagnostics);
-				}
-				catch (const std::exception& ex)
-				{
-					LogGGUFDiagnostic(diagnostics,
-					                  std::format("gguf decode aot cache: ignored invalid cache ({})", ex.what()));
-				}
-			}
-			else
-			{
-				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
+				return std::move(*cached);
 			}
 		}
 		ThrowDecodeAOTCacheMiss(cachePath);
@@ -1593,25 +1624,14 @@ namespace
 	LiteNN::CompiledModule<LiteNN::CPU>
 	LoadOrCompileDecodeModule(const LiteNN::Runtime::RuntimeSchedule& schedule, const LiteNN::CompilerOptions& options,
 	                          const std::optional<std::filesystem::path>& cachePath,
-	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics)
+	                          const std::optional<std::filesystem::path>& sharedWeightsPath, bool diagnostics,
+	                          bool cacheAlreadyChecked = false)
 	{
-		if (cachePath)
+		if (!cacheAlreadyChecked)
 		{
-			if (DecodeAOTCacheComplete(*cachePath))
+			if (auto cached = TryLoadDecodeAOTCache(cachePath, diagnostics))
 			{
-				try
-				{
-					return LoadDecodeAOTCache(*cachePath, diagnostics);
-				}
-				catch (const std::exception& ex)
-				{
-					LogGGUFDiagnostic(diagnostics,
-					                  std::format("gguf decode aot cache: ignored invalid cache ({})", ex.what()));
-				}
-			}
-			else
-			{
-				LogGGUFDiagnostic(diagnostics, "gguf decode aot cache: miss");
+				return std::move(*cached);
 			}
 		}
 		ThrowDecodeAOTCacheMiss(cachePath);
@@ -1652,14 +1672,14 @@ namespace
 		const auto diagnostics = compilerOptions.enableCompileDiagnostics;
 		LogGGUFDiagnostic(diagnostics, std::format("decode-loop start input={} requested_steps={}", options.inputPath,
 		                                           options.steps));
-		auto imported = TimedGGUFDiagnostic(diagnostics, "gguf import archive",
-		                                    [&] { return LiteNN::GGUF::ImportGGUFArchive(options.inputPath); });
-		const auto importSummary = imported.summary;
+		auto metadataImport = TimedGGUFDiagnostic(diagnostics, "gguf import metadata",
+		                                          [&] { return LiteNN::GGUF::ImportGGUFMetadata(options.inputPath); });
+		const auto importSummary = metadataImport.summary;
 		auto initialTokenIds = options.initialTokenIds;
 		if (options.exactPrompt)
 		{
 			initialTokenIds = TimedGGUFDiagnostic(diagnostics, "gguf tokenize exact prompt", [&] {
-				return TokenizePrompt(options.inputPath, *options.exactPrompt, imported.model.UnsafeGraphView(),
+				return TokenizePrompt(options.inputPath, *options.exactPrompt, metadataImport.model.UnsafeGraphView(),
 				                      options.applyChatTemplate);
 			});
 		}
@@ -1667,9 +1687,10 @@ namespace
 		{
 			throw std::runtime_error("decode-loop requires at least one initial token");
 		}
-		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(imported.model.UnsafeGraphView());
-		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(imported.model.UnsafeGraphView());
-		auto tokenPieces = CopyTokenPieces(imported.model.UnsafeGraphView());
+		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(metadataImport.model.UnsafeGraphView());
+		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(metadataImport.model.UnsafeGraphView());
+		auto tokenPieces = CopyTokenPieces(metadataImport.model.UnsafeGraphView());
+		metadataImport = {};
 		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
 		const auto maxCacheLength = options.maxCacheLength.value_or(requestedTokenCount);
 		const auto contextValidation =
@@ -1712,18 +1733,39 @@ namespace
 		                                    : options.statefulDecode     ? "stateful"
 		                                                                 : "functional";
 		LiteNN::ExecutablePlan decodePlan;
+		std::optional<LiteNN::GGUF::ImportResult> imported;
+		const auto ensureTensorPayloadsImported = [&]() -> LiteNN::GGUF::ImportResult& {
+			if (!imported)
+			{
+				imported.emplace(TimedGGUFDiagnostic(diagnostics, "gguf import tensor payloads", [&] {
+					return LiteNN::GGUF::ImportGGUFArchive(options.inputPath);
+				}));
+			}
+			return *imported;
+		};
 		LiteNN::CompiledModule<LiteNN::CPU> decodeModule = [&] {
 			if (options.statefulDecode)
 			{
+				const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions,
+				                                          decodeMode, options.pagedResidentPageCount);
+				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath, compilerOptions);
+				if (auto cached = TryLoadDecodeAOTCache(cachePath, diagnostics))
+				{
+					LogGGUFDiagnostic(diagnostics,
+					                  "gguf decode aot cache hit skipped graph and tensor payload materialization");
+					return std::move(*cached);
+				}
+				ThrowDecodeAOTCacheMiss(cachePath);
+				auto& archive = ensureTensorPayloadsImported();
 				auto schedule = TimedGGUFDiagnostic(diagnostics, "gguf build stateful decode runtime schedule", [&] {
 					return LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(
-					    imported.model.UnsafeGraphView(), { .prefillSequenceLength = 1,
-					                                        .decodePastLength = 0,
-					                                        .maxCacheLength = maxCacheLength,
-					                                        .preserveQuantizedWeights = true,
-					                                        .dynamicDecodePosition = true,
-					                                        .usePagedReferenceDecode = options.pagedReferenceDecode,
-					                                        .pagedResidentPageCount = options.pagedResidentPageCount });
+					    archive.model.UnsafeGraphView(), { .prefillSequenceLength = 1,
+					                                       .decodePastLength = 0,
+					                                       .maxCacheLength = maxCacheLength,
+					                                       .preserveQuantizedWeights = true,
+					                                       .dynamicDecodePosition = true,
+					                                       .usePagedReferenceDecode = options.pagedReferenceDecode,
+					                                       .pagedResidentPageCount = options.pagedResidentPageCount });
 				});
 				decodePlan = schedule.module.plan;
 				const auto projection =
@@ -1734,17 +1776,15 @@ namespace
 				                              schedule.states.size(), schedule.stateValueBindings.size(),
 				                              decodePlan.inputs.size(), projection.functionalOutputCount,
 				                              projection.publicOutputIndices.size(), projection.stateAliases.size()));
-				const auto cachePath = DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions,
-				                                          decodeMode, options.pagedResidentPageCount);
-				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath, compilerOptions);
 				return TimedGGUFDiagnostic(diagnostics, "gguf load-or-compile cpu aot stateful decode module", [&] {
 					return LoadOrCompileDecodeModule(schedule, compilerOptions, cachePath, sharedWeightsPath,
-					                                 diagnostics);
+					                                 diagnostics, true);
 				});
 			}
 
+			auto& archive = ensureTensorPayloadsImported();
 			auto graph = TimedGGUFDiagnostic(diagnostics, "gguf lower decode-capacity graph", [&] {
-				return LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(imported.model.UnsafeGraphView(), maxCacheLength,
+				return LiteNN::GGUF::LowerLLaMACausalLMDecodeCapacity(archive.model.UnsafeGraphView(), maxCacheLength,
 				                                                      { .preserveQuantizedWeights = true });
 			});
 			decodePlan = TimedGGUFDiagnostic(diagnostics, "gguf build executable plan",
@@ -1756,9 +1796,14 @@ namespace
 				                                 diagnostics);
 			});
 		}();
-		LogGGUFDiagnostic(diagnostics,
-		                  std::format("decode-plan inputs={} outputs={} variables={}", decodePlan.inputs.size(),
-		                              decodePlan.outputs.size(), decodePlan.variables.size()));
+		const auto planInputCount =
+		    decodePlan.inputs.empty() ? decodeModule.InputSpecs().size() : decodePlan.inputs.size();
+		const auto planOutputCount =
+		    decodePlan.outputs.empty() ? decodeModule.OutputSpecs().size() : decodePlan.outputs.size();
+		const auto planVariableCount =
+		    decodePlan.variables.empty() ? importSummary.tensorCount : decodePlan.variables.size();
+		LogGGUFDiagnostic(diagnostics, std::format("decode-runtime inputs={} outputs={} variables={}", planInputCount,
+		                                           planOutputCount, planVariableCount));
 		const auto buildEnd = std::chrono::steady_clock::now();
 		if (options.compileOnly)
 		{
@@ -1769,17 +1814,24 @@ namespace
 			          << " fallback_count=0 fallback=false cached_modules=1 build_ms=" << buildMs
 			          << " compile_only=true requested_token_count=" << requestedTokenCount
 			          << " max_cache_length=" << maxCacheLength << " max_run_steps=" << maxRunCount
-			          << " inputs=" << decodePlan.inputs.size() << " outputs=" << decodePlan.outputs.size()
-			          << " variables=" << decodePlan.variables.size() << '\n';
+			          << " inputs=" << planInputCount << " outputs=" << planOutputCount
+			          << " variables=" << planVariableCount << '\n';
 			return;
 		}
-		imported = {};
-		LogGGUFDiagnostic(diagnostics, "decode-loop released imported GGUF archive before token execution");
+		if (imported)
+		{
+			imported.reset();
+			LogGGUFDiagnostic(diagnostics, "decode-loop released imported GGUF tensor payloads before token execution");
+		}
 
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
-		auto currentPosition = MakeDecodePositionTensor(0, decodePlan);
+		std::optional<LiteNN::Tensor<LiteNN::CPU>> currentPosition;
+		if (!options.statefulDecode)
+		{
+			currentPosition.emplace(MakeDecodePositionTensor(0, decodePlan));
+		}
 		std::int32_t currentToken = initialTokenIds.front();
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
@@ -1794,8 +1846,8 @@ namespace
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulInputs;
 		if (options.statefulDecode)
 		{
-			statefulInputs =
-			    MakeZeroStateInputs(decodeModule.InputSpecs(), MakeTokenIdTensorForPlan(currentToken, decodePlan));
+			statefulInputs = MakeZeroStateInputs(decodeModule.InputSpecs(),
+			                                     MakeTokenIdTensorForModule(currentToken, decodeModule.InputSpecs()));
 		}
 		if (options.logitsOutputDirectory)
 		{
@@ -1839,7 +1891,7 @@ namespace
 				const auto inputPrepStart = std::chrono::steady_clock::now();
 				std::vector<LiteNN::Tensor<LiteNN::CPU>> inputs;
 				inputs.push_back(MakeTokenIdTensorForPlan(currentToken, decodePlan));
-				inputs.push_back(currentPosition);
+				inputs.push_back(std::move(*currentPosition));
 				if (caches.empty())
 				{
 					LiteNN::CPU cpu;
@@ -1930,7 +1982,7 @@ namespace
 			lastOutputCount = outputs.size();
 			if (!options.statefulDecode)
 			{
-				currentPosition = std::move(outputs[1]);
+				currentPosition.emplace(std::move(outputs[1]));
 				caches.reserve(outputs.size() - 2);
 				for (std::size_t i = 2; i < outputs.size(); ++i)
 				{
