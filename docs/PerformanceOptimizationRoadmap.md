@@ -448,6 +448,10 @@ Priority classes for the GGUF/Qwen decode work:
                       A separate attempt to keep x8 accumulators in YMM registers across the complete K loop was
                       rejected despite promising short microbenchmarks: real decode regressed to `342.163 ms/token`
                       and every dominant projection family slowed, indicating harmful register pressure/codegen.
+                      A MinGW `sysv_abi` experiment also removed the Win64 nonvolatile-XMM save/restore sequence from
+                      the private SIMD helpers exactly as intended, but worse whole-kernel register allocation raised
+                      the same 14B run from `299.370` to `345.568 ms/token` (`+15.4%`). The native ABI remains the
+                      measured production choice; prologue instruction counts alone are not an acceptance signal.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

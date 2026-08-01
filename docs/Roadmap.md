@@ -3108,6 +3108,10 @@ Priority classes:
       Keeping the x8 accumulator live across every K block was also tested and rejected: it regressed real decode from
       `307.082` to `342.163 ms/token`, consistent with register-pressure and instruction-scheduling costs that isolated
       microbenchmarks did not expose.
+      A Windows-only SysV internal calling-convention experiment removed all Win64 nonvolatile-XMM saves from the v4
+      kernel disassembly, but changed register allocation enough to regress real decode from `299.370` to
+      `345.568 ms/token` (`+15.4%`). Keep the native Win64 ABI until a whole-loop kernel can be evaluated without this
+      allocator tradeoff.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
