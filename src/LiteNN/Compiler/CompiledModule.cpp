@@ -4565,7 +4565,7 @@ namespace
 		                        static_cast<std::uint64_t>(outColumns);
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
 		                                                           outputGroups, requestedThreadCount);
-		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
+		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
 		                                ? CPUAOTAffinityPolicy::Compact
 		                                : CPUAOTAffinityPolicy::None;
@@ -4773,7 +4773,7 @@ namespace
 		                                  : formats.front();
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(schedulingFormat, GGMLActivationDotMode::Q8KStaged,
 		                                                           operations, outputGroups, requestedThreadCount);
-		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
+		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
 		                                ? CPUAOTAffinityPolicy::Compact
 		                                : CPUAOTAffinityPolicy::None;
