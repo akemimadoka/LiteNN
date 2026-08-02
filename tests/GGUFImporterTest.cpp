@@ -2370,6 +2370,53 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFu
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4DecodeThreadPolicyCapsSquareQ4KProjection)
+{
+	constexpr std::size_t features = 2304;
+	std::vector<float> inputValues(features);
+	std::vector<float> weightValues(features * features);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.0625F;
+	}
+	for (std::size_t i = 0; i < weightValues.size(); ++i)
+	{
+		weightValues[i] = static_cast<float>(static_cast<int>(i % 27) - 13) * 0.125F;
+	}
+
+	const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { features, features }));
+	const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K);
+	const auto& storage = quantizedWeight->Data();
+	const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+	const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(
+	    static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), static_cast<std::int64_t>(features),
+	    static_cast<std::int64_t>(features));
+	std::vector<std::uint8_t> packed(packedBytes);
+	litenn_cpu_ggml_prepack_field_interleaved_v4(
+	    nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
+	    static_cast<std::int64_t>(features), static_cast<std::int64_t>(features),
+	    static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), nullptr, packed.data(), 0,
+	    static_cast<std::int64_t>(packed.size()), 1);
+
+	std::vector<float> output(features);
+	std::vector<CompiledModuleCPUHelperProfileEvent> profileEvents;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+		    nullptr, inputValues.data(), 0, 1, static_cast<std::int64_t>(features), static_cast<std::int64_t>(features),
+		    1, nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0, 1,
+		    static_cast<std::int64_t>(features), static_cast<std::int64_t>(features), 1,
+		    static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), 8,
+		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		profileEvents = profiler.Snapshot();
+	}
+	const auto event = std::ranges::find_if(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& candidate) {
+		return candidate.helper == "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
+	});
+	ASSERT_NE(event, profileEvents.end());
+	EXPECT_NE(event->detail.find("requested_threads=8 resolved_threads=4"), std::string::npos) << event->detail;
+}
+
 TEST(GGUFLLaMAQuantizedExecution, Q8KPreparedActivationHelperMatchesInternalStaging)
 {
 	constexpr std::size_t inFeatures = 256;

@@ -3169,6 +3169,15 @@ Priority classes:
       `254.126 ms/token` median is `2.32%` below the preceding stable `260.166 ms/token` result. A Q4_K paired-nibble
       load variant was removed because its cache-hot microbench gain became a real-helper regression under increased
       register and scheduling pressure.
+      Shape-aware v4 decode thread caps completed on 2026-08-02. T4/T8/T16 production-shape medians showed Q4_K
+      hidden favoring T4 (`0.116 ms` versus `0.173/0.247`), Q4_K FFN-down favoring T8 (`0.311 ms`), and grouped
+      gate/up, Q6_K FFN-down, and Q6_K logits favoring T16 (`1.19/0.597/11.4 ms`); 1024-column Q4_K/Q6_K rows
+      favored T2. The configured count is now a hard upper bound with decode-only shape limits, while prefill/batch and
+      sub-1M-operation work retain the generic policy. Profiler details expose the resolved count and regression
+      coverage locks the Q4_K square `T8 -> T4` decision. A real 14B profile reduced the 48-call hidden bucket from
+      `26.348` to `25.186 ms`; three no-profile cache-hit runs generated identical text at `245.097`, `245.177`, and
+      `249.406 ms/token`. Their `245.177 ms/token` median is `3.52%` below the preceding `254.126 ms/token` median and
+      within `4.3%` of the `235.1 ms/token` CPU control result.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

@@ -1575,9 +1575,49 @@ namespace
 		return std::max<std::uint64_t>(1, std::min<std::uint64_t>(capped, outputUnits));
 	}
 
+	std::uint64_t ResolveGGMLFieldInterleavedV4ThreadCount(QuantizedBlockFormat format, std::int64_t lhsRows,
+	                                                       std::int64_t lhsColumns, std::int64_t outColumns,
+	                                                       std::uint64_t outputUnits,
+	                                                       std::uint64_t requestedThreadCount, bool grouped)
+	{
+		const auto operations = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows)) *
+		                        static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsColumns)) *
+		                        static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns));
+		if (outputUnits <= 1 || operations < (1ull << 20))
+		{
+			return 1;
+		}
+		if (lhsRows != 1)
+		{
+			return ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations, outputUnits,
+			                                         requestedThreadCount);
+		}
+
+		const auto requestedOrHardware = requestedThreadCount == 0
+		                                     ? static_cast<std::uint64_t>(LiteNNCPUHardwareThreadCount())
+		                                     : requestedThreadCount;
+		auto shapeLimit = std::uint64_t{ 16 };
+		if (!grouped && outColumns <= 2048)
+		{
+			shapeLimit = 2;
+		}
+		else if (!grouped && format == QuantizedBlockFormat::GGML_Q4_K && lhsColumns == outColumns &&
+		         outColumns <= 8192)
+		{
+			shapeLimit = 4;
+		}
+		else if (!grouped && format == QuantizedBlockFormat::GGML_Q4_K && outColumns <= 8192)
+		{
+			shapeLimit = 8;
+		}
+		return std::max<std::uint64_t>(
+		    1, std::min({ requestedOrHardware, shapeLimit, std::max<std::uint64_t>(1, outputUnits) }));
+	}
+
 	std::string BuildGGMLBlockMatMulProfileDetail(QuantizedBlockFormat format, GGMLActivationDotMode activationDotMode,
 	                                              std::int64_t lhsRows, std::int64_t lhsColumns, std::int64_t outRows,
-	                                              std::int64_t outColumns, std::uint64_t requestedThreadCount)
+	                                              std::int64_t outColumns, std::uint64_t requestedThreadCount,
+	                                              std::optional<std::uint64_t> resolvedThreadCount = std::nullopt)
 	{
 		const auto positiveLhsRows = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows));
 		const auto positiveLhsColumns = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsColumns));
@@ -1594,8 +1634,8 @@ namespace
 		                   QuantizedBlockFormatName(format),
 		                   activationDotMode == GGMLActivationDotMode::Q8KStaged ? "q8k_staged" : "direct", lhsRows,
 		                   lhsColumns, outRows, outColumns, requestedThreadCount,
-		                   ResolveGGMLBlockMatMulThreadCount(format, activationDotMode, operations, outputUnits,
-		                                                     requestedThreadCount));
+		                   resolvedThreadCount.value_or(ResolveGGMLBlockMatMulThreadCount(
+		                       format, activationDotMode, operations, outputUnits, requestedThreadCount)));
 	}
 
 #if LITENN_HAS_X86_AVX2_TARGET
@@ -4316,12 +4356,16 @@ namespace
 		{
 			return;
 		}
+		const auto schedulingUnits =
+		    static_cast<std::uint64_t>(lhsRows) * ((static_cast<std::uint64_t>(outColumns) + 7) / 8);
+		const auto threadCount = ResolveGGMLFieldInterleavedV4ThreadCount(format, lhsRows, lhsColumns, outColumns,
+		                                                                  schedulingUnits, requestedThreadCount, false);
 
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
+		                                            outRows, outColumns, requestedThreadCount, threadCount)
 		        : std::string{});
 		const auto blockCount = header->blockCount;
 		const auto* staged =
@@ -4476,10 +4520,6 @@ namespace
 			}
 		};
 		const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * workItemsPerRow;
-		const auto operations = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(lhsColumns) *
-		                        static_cast<std::uint64_t>(outColumns);
-		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
-		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
@@ -4679,13 +4719,11 @@ namespace
 			}
 		};
 		const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * groupOffset;
-		const auto operations = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(lhsColumns) *
-		                        static_cast<std::uint64_t>(outColumns);
 		const auto schedulingFormat = std::ranges::contains(formats, QuantizedBlockFormat::GGML_Q6_K)
 		                                  ? QuantizedBlockFormat::GGML_Q6_K
 		                                  : formats.front();
-		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(schedulingFormat, GGMLActivationDotMode::Q8KStaged,
-		                                                           operations, outputGroups, requestedThreadCount);
+		const auto threadCount = ResolveGGMLFieldInterleavedV4ThreadCount(
+		    schedulingFormat, lhsRows, lhsColumns, outColumns, outputGroups, requestedThreadCount, true);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
@@ -4712,11 +4750,15 @@ namespace
 		}
 		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
 		const std::array formats{ format, format };
+		const auto profileOutputUnits = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows)) *
+		                                ((static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns)) + 7) / 8);
+		const auto profileThreadCount = ResolveGGMLFieldInterleavedV4ThreadCount(
+		    format, lhsRows, lhsColumns, outColumns, profileOutputUnits, requestedThreadCount, true);
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
+		                                            outRows, outColumns, requestedThreadCount, profileThreadCount)
 		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
@@ -4755,11 +4797,15 @@ namespace
 		}
 		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
 		const std::array formats{ format, format, format };
+		const auto profileOutputUnits = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows)) *
+		                                ((static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns)) + 7) / 8);
+		const auto profileThreadCount = ResolveGGMLFieldInterleavedV4ThreadCount(
+		    format, lhsRows, lhsColumns, outColumns, profileOutputUnits, requestedThreadCount, true);
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
+		                                            outRows, outColumns, requestedThreadCount, profileThreadCount)
 		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
@@ -4813,11 +4859,19 @@ namespace
 			                           .rhsStride = rhs1Stride,
 			                           .outColumns = static_cast<std::int64_t>(out1Columns) },
 		};
+		const auto profileFormat = std::ranges::contains(formats, QuantizedBlockFormat::GGML_Q6_K)
+		                               ? QuantizedBlockFormat::GGML_Q6_K
+		                               : formats.front();
+		const auto profileOutputUnits = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows)) *
+		                                ((static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns)) + 7) / 8);
+		const auto profileThreadCount = ResolveGGMLFieldInterleavedV4ThreadCount(
+		    profileFormat, lhsRows, lhsColumns, outColumns, profileOutputUnits, requestedThreadCount, true);
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
-		        ? BuildGGMLBlockMatMulProfileDetail(formats.front(), GGMLActivationDotMode::Q8KStaged, lhsRows,
-		                                            lhsColumns, outRows, outColumns, requestedThreadCount)
+		        ? BuildGGMLBlockMatMulProfileDetail(profileFormat, GGMLActivationDotMode::Q8KStaged, lhsRows,
+		                                            lhsColumns, outRows, outColumns, requestedThreadCount,
+		                                            profileThreadCount)
 		        : std::string{});
 		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
 		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,
@@ -4862,11 +4916,19 @@ namespace
 			                           .rhsStride = rhs2Stride,
 			                           .outColumns = static_cast<std::int64_t>(out2Columns) },
 		};
+		const auto profileFormat = std::ranges::contains(formats, QuantizedBlockFormat::GGML_Q6_K)
+		                               ? QuantizedBlockFormat::GGML_Q6_K
+		                               : formats.front();
+		const auto profileOutputUnits = static_cast<std::uint64_t>(std::max<std::int64_t>(0, lhsRows)) *
+		                                ((static_cast<std::uint64_t>(std::max<std::int64_t>(0, outColumns)) + 7) / 8);
+		const auto profileThreadCount = ResolveGGMLFieldInterleavedV4ThreadCount(
+		    profileFormat, lhsRows, lhsColumns, outColumns, profileOutputUnits, requestedThreadCount, true);
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
-		        ? BuildGGMLBlockMatMulProfileDetail(formats.front(), GGMLActivationDotMode::Q8KStaged, lhsRows,
-		                                            lhsColumns, outRows, outColumns, requestedThreadCount)
+		        ? BuildGGMLBlockMatMulProfileDetail(profileFormat, GGMLActivationDotMode::Q8KStaged, lhsRows,
+		                                            lhsColumns, outRows, outColumns, requestedThreadCount,
+		                                            profileThreadCount)
 		        : std::string{});
 		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
 		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,

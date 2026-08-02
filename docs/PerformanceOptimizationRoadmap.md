@@ -508,6 +508,19 @@ Priority classes for the GGUF/Qwen decode work:
                       `2.32%` below the preceding stable `260.166 ms/token` result. A separate Q4_K paired-nibble load
                       experiment was removed: its cache-hot microbenchmarks improved, but real helper time regressed to
                       `240.044 ms` because extra live vectors and scheduling pressure outweighed duplicate L1-load removal.
+                      Shape-aware v4 decode thread caps completed on 2026-08-02. A repeated T4/T8/T16 matrix showed
+                      that no single thread count wins all production shapes: Q4_K hidden favored T4
+                      (`0.116 ms` median versus `0.173/0.247`), Q4_K FFN-down favored T8 (`0.311 ms` versus
+                      `0.465/0.338`), while grouped gate/up, Q6_K FFN-down, and Q6_K logits favored T16
+                      (`1.19/0.597/11.4 ms`). Small 1024-column Q4_K/Q6_K projections favored T2. The v4 runtime now
+                      treats the configured count as a hard upper bound and applies decode-only limits of T2 for small
+                      outputs, T4 for square Q4_K hidden projections, T8 for narrow non-square Q4_K projections, and
+                      T16 otherwise; batched/prefill and sub-1M-operation work retain the generic policy. Helper profile
+                      details report the actual resolved count, and a regression locks the Q4_K square `T8 -> T4`
+                      decision. A real 14B profile confirmed `resolved_threads=4` and reduced the 48-call hidden bucket
+                      from `26.348` to `25.186 ms`. Three no-profile cache-hit runs generated identical text at
+                      `245.097`, `245.177`, and `249.406 ms/token`; the `245.177 ms/token` median is `3.52%` below the
+                      preceding `254.126 ms/token` median and within `4.3%` of the `235.1 ms/token` CPU control result.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
