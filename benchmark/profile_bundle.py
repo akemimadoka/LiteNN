@@ -45,6 +45,7 @@ class StepResult:
     end_ns: int
     stdout: Path
     stderr: Path
+    sampler: str = "none"
     sampler_outputs: list[Path] = field(default_factory=list)
 
     @property
@@ -231,6 +232,81 @@ def read_collapsed_stacks(paths: Iterable[Path], replacements: list[tuple[str, s
         CollapsedStack(frames=frames, samples=samples)
         for frames, samples in sorted(merged.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+def merge_collapsed_stacks(stacks: Iterable[CollapsedStack]) -> list[CollapsedStack]:
+    merged: dict[tuple[str, ...], int] = {}
+    for stack in stacks:
+        if stack.frames and stack.samples > 0:
+            merged[stack.frames] = merged.get(stack.frames, 0) + stack.samples
+    return [
+        CollapsedStack(frames=frames, samples=samples)
+        for frames, samples in sorted(merged.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def parse_perf_script_stacks(text: str, replacements: list[tuple[str, str]]) -> list[CollapsedStack]:
+    stacks: list[CollapsedStack] = []
+    frames: list[str] = []
+
+    def flush() -> None:
+        if frames:
+            stacks.append(CollapsedStack(frames=tuple(reversed(frames)), samples=1))
+            frames.clear()
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            flush()
+            continue
+        if not raw_line[0].isspace():
+            flush()
+            continue
+        frame = raw_line.strip()
+        frame = re.sub(r"^(?:0x)?[0-9a-fA-F]+\s+", "", frame)
+        frame = re.sub(r"\s+\([^()]*(?:\([^()]*\)[^()]*)*\)\s*$", "", frame)
+        frame = re.sub(r"\+0x[0-9a-fA-F]+(?:/0x[0-9a-fA-F]+)?$", "", frame)
+        frame = redact_text(frame.replace(";", ":"), replacements).strip()
+        if frame:
+            frames.append(frame)
+    flush()
+    return merge_collapsed_stacks(stacks)
+
+
+def import_linux_perf_stacks(
+    result: StepResult, replacements: list[tuple[str, str]]
+) -> tuple[list[CollapsedStack], dict[str, object]]:
+    if result.sampler != "linux-perf" or not result.sampler_outputs:
+        return [], {}
+    perf = shutil.which("perf")
+    if perf is None:
+        return [], { "status": "perf-not-found" }
+
+    perf_data = result.sampler_outputs[0]
+    completed = subprocess.run(
+        [perf, "script", "-i", str(perf_data)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    script_path = perf_data.parent / "perf_script.txt"
+    stderr_path = perf_data.parent / "perf_script.stderr.txt"
+    write_redacted_text(script_path, completed.stdout, replacements)
+    write_redacted_text(stderr_path, completed.stderr, replacements)
+    outputs: dict[str, object] = {
+        "status": "ok" if completed.returncode == 0 else "failed",
+        "returncode": completed.returncode,
+        "script": str(script_path),
+        "stderr": str(stderr_path),
+    }
+    if completed.returncode != 0:
+        return [], outputs
+    stacks = parse_perf_script_stacks(completed.stdout, replacements)
+    outputs["unique_stacks"] = len(stacks)
+    outputs["total_samples"] = sum(stack.samples for stack in stacks)
+    return stacks, outputs
 
 
 def write_merged_collapsed_stacks(out_dir: Path, stacks: list[CollapsedStack]) -> Path:
@@ -490,6 +566,7 @@ def run_step(
         end_ns=end,
         stdout=stdout_path,
         stderr=stderr_path,
+        sampler=sampler_name,
         sampler_outputs=[path for path in sampler_outputs if path.exists()],
     )
 
@@ -1559,6 +1636,7 @@ def write_manifest(
                 "duration_ms": result.duration_ms,
                 "stdout": str(result.stdout),
                 "stderr": str(result.stderr),
+                "sampler": result.sampler,
                 "sampler_outputs": [str(path) for path in result.sampler_outputs],
             }
             for result in results
@@ -1628,7 +1706,7 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
             "",
             "- Open `trace.json` in `chrome://tracing` or Perfetto to inspect the current command-level waterfall.",
             "- Use `--stream-stats --profile-helpers --profile-nodes` when generated-code node attribution is required; omit both profile flags for representative throughput measurements.",
-            "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; convert it to collapsed stacks and pass `--collapsed-stacks` to generate Speedscope/flame graph output.",
+            "- Use `--sampler linux-perf` on Linux to capture raw `perf.data` and automatically generate collapsed stacks, Speedscope, and flame graph output.",
             "- Pass private model files through `--sensitive-path` so manifest, summary, trace, stdout, and stderr redact them.",
             "",
         ]
@@ -1653,6 +1731,11 @@ def parse_args() -> argparse.Namespace:
         choices=("none", "linux-perf", "windows-xperf"),
         default="none",
         help="Optional platform sampler wrapper for profiled commands",
+    )
+    parser.add_argument(
+        "--skip-sampler-import",
+        action="store_true",
+        help="Keep raw platform sampler output without converting it to collapsed stacks",
     )
     parser.add_argument(
         "--sensitive-path",
@@ -1759,9 +1842,18 @@ def main() -> int:
         if imported_trace_count:
             imported_outputs["merged_trace_event_count"] = imported_trace_count
 
+    native_stacks: list[CollapsedStack] = []
+    sampler_import_outputs: dict[str, object] = {}
+    if not args.skip_sampler_import:
+        for result in results:
+            stacks, outputs = import_linux_perf_stacks(result, replacements)
+            native_stacks.extend(stacks)
+            if outputs:
+                sampler_import_outputs[result.name] = outputs
+
     stack_outputs: dict[str, object] | None = None
-    if args.collapsed_stacks:
-        stacks = read_collapsed_stacks(args.collapsed_stacks, replacements)
+    if args.collapsed_stacks or native_stacks:
+        stacks = merge_collapsed_stacks([*read_collapsed_stacks(args.collapsed_stacks, replacements), *native_stacks])
         collapsed_path = write_merged_collapsed_stacks(out_dir, stacks)
         speedscope_path = write_speedscope(out_dir, stacks)
         flamegraph_svg, flamegraph_html = write_flamegraph(out_dir, stacks)
@@ -1772,6 +1864,11 @@ def main() -> int:
             "flamegraph_html": str(flamegraph_html),
             "total_samples": sum(stack.samples for stack in stacks),
         }
+
+    if sampler_import_outputs:
+        if imported_outputs is None:
+            imported_outputs = {}
+        imported_outputs["platform_sampler"] = sampler_import_outputs
 
     log_evidence: list[LogEvidence] = [
         LogEvidence(name=result.name, stdout=result.stdout, stderr=result.stderr) for result in results

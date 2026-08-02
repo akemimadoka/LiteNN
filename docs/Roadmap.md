@@ -688,12 +688,16 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             the bundle without making platform profilers mandatory.
       - [ ] Add full platform sampling adapters as optional wrappers: Windows ETW/xperf or WPA-export input, Linux `perf`,
             and a macOS Instruments-compatible import path when available.
-            Updated on 2026-07-05: the bundle tool now has optional Linux `perf record` and Windows `xperf` ETW
-            start/stop wrappers; WPA/perf/Instruments export-to-collapsed-stack import remains open.
+            Updated on 2026-08-02: the bundle tool has optional Linux `perf record` and Windows `xperf` ETW start/stop
+            wrappers. Linux capture now runs `perf script` automatically, records redacted conversion diagnostics,
+            folds repeated callchains, and feeds collapsed stacks directly into Speedscope and flame-graph generation.
+            Windows WPA/ETW and macOS Instruments stack import remain open.
       - [x] Normalize collapsed-stack inputs into merged collapsed stacks and Speedscope JSON outputs; render a simple
             built-in SVG/HTML flame graph for first-pass local diagnosis.
-      - [ ] Convert platform-native sampling outputs, such as Linux `perf.data`, Windows ETW/WPA exports, and macOS
-            Instruments exports, into the collapsed-stack input accepted by the bundle tool.
+      - [ ] Convert all platform-native sampling outputs into the collapsed-stack input accepted by the bundle tool.
+            - [x] Linux `perf.data` automatic import through `perf script`, with `--skip-sampler-import` for raw-only
+                  captures.
+            - [ ] Windows ETW/WPA and macOS Instruments import adapters.
       - [ ] Correlate samples with waterfall spans by thread id and timestamp, preserving backend, model, shape,
             token-count, compiler-option, commit, and tool-version metadata in the bundle manifest.
       - [x] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
@@ -702,8 +706,9 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             `speedscope.json` or collapsed stacks, optional flame-graph HTML/SVG, benchmark/profile CSVs, and a short
             Markdown summary of top compile/runtime bottlenecks. Current first slice writes raw logs, `trace.json`,
             `manifest.json`, `summary.md`, `speedscope.json`, and built-in flame graph outputs for collapsed-stack
-            inputs; qwen smoke trace/summary import is now merged into the main bundle trace; platform-native stack
-            import remains open.
+            inputs; qwen smoke trace/summary import is merged into the main bundle trace, and Linux native capture now
+            generates stack outputs in the same command. Windows/macOS stack import and sample/timeline correlation
+            remain open.
 
 Completed notes:
 

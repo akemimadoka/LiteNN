@@ -522,6 +522,12 @@ Priority classes for the GGUF/Qwen decode work:
                       from `26.348` to `25.186 ms`. Three no-profile cache-hit runs generated identical text at
                       `245.097`, `245.177`, and `249.406 ms/token`; the `245.177 ms/token` median is `3.52%` below the
                       preceding `254.126 ms/token` median and within `4.3%` of the `235.1 ms/token` CPU control result.
+                      A refreshed five-repetition helper matrix on 2026-08-02 found local T16 wins over T8 for grouped
+                      Q4_K gate/up (`1.16 vs 1.32 ms`), Q6_K FFN-down (`0.60 vs 0.73 ms`), and Q6_K logits
+                      (`11.49 vs 12.16 ms`), but the matching 16-token whole-model run regressed from T8
+                      `255.927/255.594 ms` to T16 `274.278/275.618 ms` mean/median (`+7.17%` mean). Exact output hashes
+                      matched. Cross-CCD bandwidth contention therefore outweighs isolated-row gains; the automatic
+                      T8 ceiling and Q4_K hidden T4 specialization remain unchanged.
                 - [x] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. Completed on 2026-08-02: the automatic T16 ceiling regressed the profiled 14B run to
                       `299.960 ms/token`; capping automatic decode at T8 reduced it to `285.087 ms/token`. Alternating
@@ -942,8 +948,11 @@ Priority classes for the GGUF/Qwen decode work:
   - [x] Sampling raw capture: optional Linux `perf record` and Windows `xperf` ETW wrappers capture raw platform
     evidence beside the bundle when requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
-  - [ ] Platform-native sampling import: optional Windows ETW/xperf, Linux `perf`, and macOS Instruments import
-    adapters normalize their own raw formats into the collapsed-stack path.
+  - [ ] Platform-native sampling import adapters normalize raw formats into the collapsed-stack path.
+    - [x] Linux `perf`: `--sampler linux-perf` now runs `perf script` automatically after capture, records the redacted
+          script/diagnostics, folds repeated callchains into collapsed stacks, and emits Speedscope plus SVG/HTML flame
+          graphs in the same bundle. `--skip-sampler-import` retains raw-only capture when conversion cost is unwanted.
+    - [ ] Windows ETW/xperf and macOS Instruments import remain pending; raw Windows ETL capture is already available.
   - [x] Flame graph output: collapsed-stack inputs render a simple built-in SVG/HTML flame graph; external renderers can
     still be added later for richer presentation.
   - Bundle output: raw logs, `trace.json`, `speedscope.json`, collapsed stacks, benchmark/profile CSVs, anonymized
