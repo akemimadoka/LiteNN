@@ -22,17 +22,17 @@ jobs:
             run_benchmark: "false"
           - name: compiler-aot
             preset: ci-compiler-aot
-            cmake_prefix: "/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
+            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
             run_tests: "true"
             run_benchmark: "false"
           - name: tools-examples
             preset: ci-tools-examples
-            cmake_prefix: "/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
+            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
             run_tests: "true"
             run_benchmark: "false"
           - name: benchmarks
             preset: ci-benchmarks
-            cmake_prefix: "/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
+            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
             run_tests: "false"
             run_benchmark: "true"
 
