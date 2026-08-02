@@ -700,6 +700,9 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
             - [ ] Windows ETW/WPA and macOS Instruments import adapters.
       - [ ] Correlate samples with waterfall spans by thread id and timestamp, preserving backend, model, shape,
             token-count, compiler-option, commit, and tool-version metadata in the bundle manifest.
+            - [x] Linux `perf script` samples preserve monotonic timestamp, PID/TID, CPU, command, and full stack as
+                  `platform.sampling` instant events in the merged Chrome Trace / Perfetto timeline.
+            - [ ] Add equivalent Windows/macOS event import and richer span ownership metadata.
       - [x] Add a no-local-path-leak profile mode for GGUF/Qwen smoke runs so large private model paths stay outside
             tracked artifacts while the bundle still records enough anonymized model metadata for comparison.
       - [ ] Acceptance: one command produces a profile directory containing raw tool logs, `trace.json`,

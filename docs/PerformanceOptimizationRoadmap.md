@@ -949,9 +949,12 @@ Priority classes for the GGUF/Qwen decode work:
     evidence beside the bundle when requested.
   - [x] Sampling normalization: collapsed-stack inputs are merged and converted to `speedscope.json`.
   - [ ] Platform-native sampling import adapters normalize raw formats into the collapsed-stack path.
-    - [x] Linux `perf`: `--sampler linux-perf` now runs `perf script` automatically after capture, records the redacted
+  - [x] Linux `perf`: `--sampler linux-perf` now runs `perf script` automatically after capture, records the redacted
           script/diagnostics, folds repeated callchains into collapsed stacks, and emits Speedscope plus SVG/HTML flame
-          graphs in the same bundle. `--skip-sampler-import` retains raw-only capture when conversion cost is unwanted.
+          graphs in the same bundle. Individual samples retain monotonic timestamp, PID/TID, CPU, command, and full
+          stack as `platform.sampling` instant events in the merged `trace.json`, allowing Linux samples to align with
+          command and imported decode spans. `--skip-sampler-import` retains raw-only capture when conversion cost is
+          unwanted.
     - [ ] Windows ETW/xperf and macOS Instruments import remain pending; raw Windows ETL capture is already available.
   - [x] Flame graph output: collapsed-stack inputs render a simple built-in SVG/HTML flame graph; external renderers can
     still be added later for richer presentation.

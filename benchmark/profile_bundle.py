@@ -60,6 +60,16 @@ class CollapsedStack:
 
 
 @dataclass(frozen=True)
+class PlatformSample:
+    frames: tuple[str, ...]
+    timestamp_ns: int
+    pid: int
+    tid: int
+    cpu: int
+    command: str
+
+
+@dataclass(frozen=True)
 class GGUFDecodeStep:
     step: int
     phase: str
@@ -245,14 +255,31 @@ def merge_collapsed_stacks(stacks: Iterable[CollapsedStack]) -> list[CollapsedSt
     ]
 
 
-def parse_perf_script_stacks(text: str, replacements: list[tuple[str, str]]) -> list[CollapsedStack]:
-    stacks: list[CollapsedStack] = []
+def parse_perf_script_samples(text: str, replacements: list[tuple[str, str]]) -> list[PlatformSample]:
+    header_pattern = re.compile(
+        r"^\s*(?P<command>.*?)\s+(?P<pid>\d+)(?:/(?P<tid>\d+))?\s+\[(?P<cpu>\d+)\]\s+"
+        r"(?P<timestamp>\d+(?:\.\d+)?):"
+    )
+    samples: list[PlatformSample] = []
     frames: list[str] = []
+    header: re.Match[str] | None = None
 
     def flush() -> None:
-        if frames:
-            stacks.append(CollapsedStack(frames=tuple(reversed(frames)), samples=1))
-            frames.clear()
+        nonlocal header
+        if header is not None and frames:
+            pid = int(header.group("pid"))
+            samples.append(
+                PlatformSample(
+                    frames=tuple(reversed(frames)),
+                    timestamp_ns=int(float(header.group("timestamp")) * 1_000_000_000),
+                    pid=pid,
+                    tid=int(header.group("tid") or pid),
+                    cpu=int(header.group("cpu")),
+                    command=redact_text(header.group("command").strip(), replacements),
+                )
+            )
+        frames.clear()
+        header = None
 
     for raw_line in text.splitlines():
         if not raw_line.strip():
@@ -260,6 +287,7 @@ def parse_perf_script_stacks(text: str, replacements: list[tuple[str, str]]) -> 
             continue
         if not raw_line[0].isspace():
             flush()
+            header = header_pattern.match(raw_line)
             continue
         frame = raw_line.strip()
         frame = re.sub(r"^(?:0x)?[0-9a-fA-F]+\s+", "", frame)
@@ -269,17 +297,24 @@ def parse_perf_script_stacks(text: str, replacements: list[tuple[str, str]]) -> 
         if frame:
             frames.append(frame)
     flush()
-    return merge_collapsed_stacks(stacks)
+    return samples
+
+
+def parse_perf_script_stacks(text: str, replacements: list[tuple[str, str]]) -> list[CollapsedStack]:
+    return merge_collapsed_stacks(
+        CollapsedStack(frames=sample.frames, samples=1)
+        for sample in parse_perf_script_samples(text, replacements)
+    )
 
 
 def import_linux_perf_stacks(
     result: StepResult, replacements: list[tuple[str, str]]
-) -> tuple[list[CollapsedStack], dict[str, object]]:
+) -> tuple[list[CollapsedStack], list[PlatformSample], dict[str, object]]:
     if result.sampler != "linux-perf" or not result.sampler_outputs:
-        return [], {}
+        return [], [], {}
     perf = shutil.which("perf")
     if perf is None:
-        return [], { "status": "perf-not-found" }
+        return [], [], { "status": "perf-not-found" }
 
     perf_data = result.sampler_outputs[0]
     completed = subprocess.run(
@@ -302,11 +337,34 @@ def import_linux_perf_stacks(
         "stderr": str(stderr_path),
     }
     if completed.returncode != 0:
-        return [], outputs
-    stacks = parse_perf_script_stacks(completed.stdout, replacements)
+        return [], [], outputs
+    samples = parse_perf_script_samples(completed.stdout, replacements)
+    stacks = merge_collapsed_stacks(CollapsedStack(frames=sample.frames, samples=1) for sample in samples)
     outputs["unique_stacks"] = len(stacks)
-    outputs["total_samples"] = sum(stack.samples for stack in stacks)
-    return stacks, outputs
+    outputs["total_samples"] = len(samples)
+    return stacks, samples, outputs
+
+
+def platform_sample_trace_events(samples: Iterable[PlatformSample], origin_ns: int) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for sample in samples:
+        events.append(
+            {
+                "name": sample.frames[-1] if sample.frames else "cpu_sample",
+                "cat": "platform.sampling",
+                "ph": "i",
+                "s": "t",
+                "pid": sample.pid,
+                "tid": sample.tid,
+                "ts": (sample.timestamp_ns - origin_ns) / 1000.0,
+                "args": {
+                    "command": sample.command,
+                    "cpu": sample.cpu,
+                    "stack": ";".join(sample.frames),
+                },
+            }
+        )
+    return events
 
 
 def write_merged_collapsed_stacks(out_dir: Path, stacks: list[CollapsedStack]) -> Path:
@@ -1843,13 +1901,19 @@ def main() -> int:
             imported_outputs["merged_trace_event_count"] = imported_trace_count
 
     native_stacks: list[CollapsedStack] = []
+    platform_samples: list[PlatformSample] = []
     sampler_import_outputs: dict[str, object] = {}
     if not args.skip_sampler_import:
         for result in results:
-            stacks, outputs = import_linux_perf_stacks(result, replacements)
+            stacks, samples, outputs = import_linux_perf_stacks(result, replacements)
             native_stacks.extend(stacks)
+            platform_samples.extend(samples)
             if outputs:
                 sampler_import_outputs[result.name] = outputs
+
+    if platform_samples:
+        trace_origin_ns = min((result.start_ns for result in results), default=platform_samples[0].timestamp_ns)
+        imported_trace_events.extend(platform_sample_trace_events(platform_samples, trace_origin_ns))
 
     stack_outputs: dict[str, object] | None = None
     if args.collapsed_stacks or native_stacks:
@@ -1869,6 +1933,7 @@ def main() -> int:
         if imported_outputs is None:
             imported_outputs = {}
         imported_outputs["platform_sampler"] = sampler_import_outputs
+        imported_outputs["platform_sample_trace_events"] = len(platform_samples)
 
     log_evidence: list[LogEvidence] = [
         LogEvidence(name=result.name, stdout=result.stdout, stderr=result.stderr) for result in results
