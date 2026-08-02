@@ -457,6 +457,13 @@ Priority classes for the GGUF/Qwen decode work:
                       with no fallback at `260.166 ms/token` (`3.844 tok/s`), another `1.57%` latency reduction from
                       the immediately preceding `264.313 ms/token` split-kernel baseline. AVX2 x8 remains the fallback
                       on unsupported CPUs, and Q4_K dispatch is unchanged.
+                      A matching true AVX-512 x16 Q4_K tile was evaluated and rejected on 2026-08-02. Isolated square
+                      hidden microbenchmarks looked faster, but FFN-up/down and logits regressed when broadly routed.
+                      After restricting the prototype to square projections, the real 14B helper profile still raised
+                      the 48-call Q4_K `5120x5120` bucket from the preceding roughly `25.9` to `28.65 ms/step`, while
+                      step-16 helper time rose from about `234.4` to `254.6 ms`. A superficially faster unprofiled run
+                      was therefore attributed to host/cache variance, and the Q4_K AVX-512 code and dispatch were
+                      removed. Q4_K needs a different decomposition rather than a direct copy of the Q6_K x16 strategy.
                       A MinGW `sysv_abi` experiment also removed the Win64 nonvolatile-XMM save/restore sequence from
                       the private SIMD helpers exactly as intended, but worse whole-kernel register allocation raised
                       the same 14B run from `299.370` to `345.568 ms/token` (`+15.4%`). The native ABI remains the

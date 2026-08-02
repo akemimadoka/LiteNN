@@ -3121,6 +3121,11 @@ Priority classes:
       tokens with no fallback at `260.166 ms/token` (`3.844 tok/s`), `1.57%` below the immediately preceding
       `264.313 ms/token` baseline. This validates true x16 width as distinct from the rejected 256-bit VNNI substitution,
       while the broader production-kernel P0 remains open for Q4_K and further grouped-projection reductions.
+      A corresponding Q4_K AVX-512 x16 tile was tested and removed on 2026-08-02. Broad routing regressed FFN and logits
+      microbenchmarks; even a square-only gate raised the real 14B 48-call hidden bucket from roughly `25.9` to
+      `28.65 ms/step` and step-16 helper time from about `234.4` to `254.6 ms`. The faster unprofiled sample was host/cache
+      variance rather than attributable kernel gain. Future Q4_K work must change the scale/minimum decomposition or
+      packed representation instead of directly mirroring the successful Q6_K x16 kernel.
       A Windows-only SysV internal calling-convention experiment removed all Win64 nonvolatile-XMM saves from the v4
       kernel disassembly, but changed register allocation enough to regress real decode from `299.370` to
       `345.568 ms/token` (`+15.4%`). Keep the native Win64 ABI until a whole-loop kernel can be evaluated without this
