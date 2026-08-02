@@ -62,6 +62,7 @@ namespace LiteNN
 
 		std::vector<CompiledModuleCPUHelperProfileEvent> Snapshot() const;
 		std::vector<CompiledModuleCPUNodeProfileEvent> SnapshotNodes() const;
+		double NodeInstrumentationMilliseconds() const;
 
 	private:
 		friend struct CompiledModuleCPUHelperProfilerAccess;

@@ -786,18 +786,21 @@ TEST(CompiledModuleTest, CPUAOTNodeProfilingIsOptInAndReportsStablePlanIdentity)
 		CompiledModuleCPUHelperProfiler profiler;
 		(void) uninstrumented.RunTensors(inputs);
 		EXPECT_TRUE(profiler.SnapshotNodes().empty());
+		EXPECT_DOUBLE_EQ(profiler.NodeInstrumentationMilliseconds(), 0.0);
 	}
 
 	CompilerOptions options;
 	options.enableCPUAOTNodeProfiling = true;
 	auto instrumented = Compiler<CPU>::Compile(plan, options);
 	std::vector<CompiledModuleCPUNodeProfileEvent> nodeEvents;
+	double nodeInstrumentationMilliseconds = 0.0;
 	{
 		CompiledModuleCPUHelperProfiler profiler;
 		auto outputs = instrumented.RunTensors(inputs);
 		ASSERT_EQ(outputs.size(), 1u);
 		EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
 		nodeEvents = profiler.SnapshotNodes();
+		nodeInstrumentationMilliseconds = profiler.NodeInstrumentationMilliseconds();
 	}
 
 	const auto binaryEvent = std::ranges::find_if(nodeEvents, [](const auto& event) {
@@ -808,6 +811,7 @@ TEST(CompiledModuleTest, CPUAOTNodeProfilingIsOptInAndReportsStablePlanIdentity)
 	EXPECT_GE(binaryEvent->inclusiveMilliseconds, binaryEvent->selfMilliseconds);
 	EXPECT_GE(binaryEvent->selfMilliseconds, 0.0);
 	EXPECT_DOUBLE_EQ(binaryEvent->helperMilliseconds, 0.0);
+	EXPECT_GT(nodeInstrumentationMilliseconds, 0.0);
 }
 
 TEST(CompiledModuleTest, RunsWithExplicitTypedBufferBindings)

@@ -1924,6 +1924,7 @@ namespace
 		double promptReplayMs = 0.0;
 		double generationMs = 0.0;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulInputs;
+		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulOutputs;
 		std::optional<std::size_t> emitLogitsInputIndex;
 		if (options.statefulDecode)
 		{
@@ -1937,6 +1938,16 @@ namespace
 				throw std::runtime_error("stateful decode module is missing the emit_logits control input");
 			}
 			emitLogitsInputIndex = static_cast<std::size_t>(emitLogits - inputSpecs.begin());
+			statefulOutputs.reserve(decodeModule.OutputSpecs().size());
+			for (const auto& spec : decodeModule.OutputSpecs())
+			{
+				if (!spec.type.IsFullyStatic())
+				{
+					throw std::runtime_error("stateful decode module output must have a static shape");
+				}
+				statefulOutputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() },
+				                             spec.type.dtype, LiteNN::CPU{});
+			}
 		}
 		if (options.logitsOutputDirectory)
 		{
@@ -1954,11 +1965,15 @@ namespace
 			double moduleRunMs = 0.0;
 			double helperTotalMs = 0.0;
 			double moduleNonHelperMs = 0.0;
+			double nodeSelfTotalMs = 0.0;
+			double nodeInstrumentationMs = 0.0;
+			double moduleUnattributedMs = 0.0;
 			double helperProfileEmitMs = 0.0;
 			double logitsOutputMs = 0.0;
 			double samplingMs = 0.0;
 			double stateUpdateMs = 0.0;
-			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
+			std::vector<LiteNN::Tensor<LiteNN::CPU>> allocatedOutputs;
+			std::span<LiteNN::Tensor<LiteNN::CPU>> outputs;
 			std::optional<LiteNN::CompiledModuleCPUHelperProfiler> helperProfiler;
 			if (options.profileHelpers || options.profileNodes)
 			{
@@ -1972,9 +1987,10 @@ namespace
 				const auto inputPrepEnd = std::chrono::steady_clock::now();
 				inputPrepMs = std::chrono::duration<double, std::milli>(inputPrepEnd - inputPrepStart).count();
 				const auto moduleRunStart = std::chrono::steady_clock::now();
-				outputs = decodeModule.RunTensors(statefulInputs);
+				decodeModule.RunTensorsInto(statefulInputs, statefulOutputs);
 				const auto moduleRunEnd = std::chrono::steady_clock::now();
 				moduleRunMs = std::chrono::duration<double, std::milli>(moduleRunEnd - moduleRunStart).count();
+				outputs = statefulOutputs;
 			}
 			else
 			{
@@ -2010,20 +2026,28 @@ namespace
 				const auto inputPrepEnd = std::chrono::steady_clock::now();
 				inputPrepMs = std::chrono::duration<double, std::milli>(inputPrepEnd - inputPrepStart).count();
 				const auto moduleRunStart = std::chrono::steady_clock::now();
-				outputs = decodeModule.RunTensors(inputs);
+				allocatedOutputs = decodeModule.RunTensors(inputs);
 				const auto moduleRunEnd = std::chrono::steady_clock::now();
 				moduleRunMs = std::chrono::duration<double, std::milli>(moduleRunEnd - moduleRunStart).count();
+				outputs = allocatedOutputs;
 			}
 			if (helperProfiler)
 			{
 				const auto helperProfileEmitStart = std::chrono::steady_clock::now();
 				const auto helperEvents = helperProfiler->Snapshot();
 				const auto nodeEvents = helperProfiler->SnapshotNodes();
+				nodeInstrumentationMs = helperProfiler->NodeInstrumentationMilliseconds();
 				for (const auto& event : helperEvents)
 				{
 					helperTotalMs += event.totalMilliseconds;
 				}
+				for (const auto& event : nodeEvents)
+				{
+					nodeSelfTotalMs += event.selfMilliseconds;
+				}
 				moduleNonHelperMs = moduleRunMs >= helperTotalMs ? moduleRunMs - helperTotalMs : 0.0;
+				const auto attributedModuleMs = helperTotalMs + nodeSelfTotalMs + nodeInstrumentationMs;
+				moduleUnattributedMs = moduleRunMs >= attributedModuleMs ? moduleRunMs - attributedModuleMs : 0.0;
 				LogGGUFHelperProfile(options.profileHelpers || options.profileNodes, step + 1, helperEvents);
 				LogGGUFNodeProfile(options.profileNodes, step + 1, nodeEvents);
 				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
@@ -2116,6 +2140,12 @@ namespace
 				{
 					std::cout << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
 					          << " helper_profile_emit_ms=" << helperProfileEmitMs;
+					if (options.profileNodes)
+					{
+						std::cout << " node_self_total_ms=" << nodeSelfTotalMs
+						          << " node_instrumentation_ms=" << nodeInstrumentationMs
+						          << " module_unattributed_ms=" << moduleUnattributedMs;
+					}
 				}
 				std::cout << " logits_output_ms=" << logitsOutputMs << " sampling_ms=" << samplingMs
 				          << " state_update_ms=" << stateUpdateMs << " host_overhead_ms=" << hostOverheadMs
@@ -2137,6 +2167,14 @@ namespace
 				                              step + 1, inputPrepMs, moduleRunMs, helperTotalMs, moduleNonHelperMs,
 				                              helperProfileEmitMs, logitsOutputMs, samplingMs, stateUpdateMs,
 				                              hostOverheadMs));
+				if (options.profileNodes)
+				{
+					LogGGUFDiagnostic(
+					    diagnostics,
+					    std::format("decode step {} node buckets self_ms={:.3f} instrumentation_ms={:.3f} "
+					                "module_unattributed_ms={:.3f}",
+					                step + 1, nodeSelfTotalMs, nodeInstrumentationMs, moduleUnattributedMs));
+				}
 			}
 			else
 			{

@@ -140,6 +140,7 @@ namespace LiteNN
 		std::unordered_map<std::string, CompiledModuleCPUNodeProfileEvent> nodeEvents;
 		std::vector<NodeFrame> nodeStack;
 		double helperMilliseconds{};
+		double nodeInstrumentationMilliseconds{};
 	};
 
 	struct CompiledModuleCPUHelperProfilerAccess
@@ -184,6 +185,8 @@ namespace LiteNN
 			});
 			const auto callbackEnd = std::chrono::steady_clock::now();
 			current->nodeStack.back().start = callbackEnd;
+			current->nodeInstrumentationMilliseconds +=
+			    std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
 			if (parentIndex > 0)
 			{
 				current->nodeStack[parentIndex - 1].childInstrumentationMilliseconds +=
@@ -204,6 +207,8 @@ namespace LiteNN
 			if (frame.subgraphId != subgraphId || frame.nodeId != nodeId || frame.schemaId != schemaId)
 			{
 				current->nodeStack.clear();
+				current->nodeInstrumentationMilliseconds +=
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - callbackStart).count();
 				return;
 			}
 
@@ -222,13 +227,16 @@ namespace LiteNN
 			event.selfMilliseconds += self;
 			event.helperMilliseconds += directHelper;
 
+			const auto callbackEnd = std::chrono::steady_clock::now();
+			current->nodeInstrumentationMilliseconds +=
+			    std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
 			if (!current->nodeStack.empty())
 			{
 				auto& parent = current->nodeStack.back();
 				parent.childInclusiveMilliseconds += inclusive;
 				parent.childHelperMilliseconds += totalHelper;
 				parent.childInstrumentationMilliseconds +=
-				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - callbackStart).count();
+				    std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
 			}
 		}
 	};
@@ -19397,6 +19405,11 @@ std::vector<CompiledModuleCPUNodeProfileEvent> CompiledModuleCPUHelperProfiler::
 		return lhs.nodeId < rhs.nodeId;
 	});
 	return events;
+}
+
+double CompiledModuleCPUHelperProfiler::NodeInstrumentationMilliseconds() const
+{
+	return impl_->nodeInstrumentationMilliseconds;
 }
 
 CompiledModule<CPU>::CompiledModule() = default;

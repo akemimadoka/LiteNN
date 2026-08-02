@@ -70,6 +70,9 @@ class GGUFDecodeStep:
     helper_profile_enabled: bool = False
     helper_total_ms: float | None = None
     module_non_helper_ms: float | None = None
+    node_self_total_ms: float | None = None
+    node_instrumentation_ms: float | None = None
+    module_unattributed_ms: float | None = None
     helper_profile_emit_ms: float | None = None
     logits_output_ms: float | None = None
     sampling_ms: float | None = None
@@ -736,6 +739,9 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             ) == "true",
                             helper_total_ms=optional_float(values, "helper_total_ms"),
                             module_non_helper_ms=optional_float(values, "module_non_helper_ms"),
+                            node_self_total_ms=optional_float(values, "node_self_total_ms"),
+                            node_instrumentation_ms=optional_float(values, "node_instrumentation_ms"),
+                            module_unattributed_ms=optional_float(values, "module_unattributed_ms"),
                             helper_profile_emit_ms=optional_float(values, "helper_profile_emit_ms"),
                             logits_output_ms=optional_float(values, "logits_output_ms"),
                             sampling_ms=optional_float(values, "sampling_ms"),
@@ -852,6 +858,9 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         ("module_run", "module_run_ms", "stream_stats_module_run"),
         ("helper_total", "helper_total_ms", "stream_stats_helper_total"),
         ("module_non_helper", "module_non_helper_ms", "stream_stats_module_run_minus_helper_total"),
+        ("node_self_total", "node_self_total_ms", "stream_stats_native_node_self_total"),
+        ("node_instrumentation", "node_instrumentation_ms", "stream_stats_node_marker_callbacks"),
+        ("module_unattributed", "module_unattributed_ms", "stream_stats_module_minus_helper_self_and_markers"),
         ("helper_profile_emit", "helper_profile_emit_ms", "stream_stats_helper_profile_emit"),
         ("logits_output", "logits_output_ms", "stream_stats_logits_output"),
         ("sampling", "sampling_ms", "stream_stats_sampling"),
@@ -895,6 +904,9 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "helper_profile_enabled": step.helper_profile_enabled,
             "stream_helper_total_ms": step.helper_total_ms,
             "module_non_helper_ms": step.module_non_helper_ms,
+            "node_self_total_ms": step.node_self_total_ms,
+            "node_instrumentation_ms": step.node_instrumentation_ms,
+            "module_unattributed_ms": step.module_unattributed_ms,
             "helper_profile_emit_ms": step.helper_profile_emit_ms,
             "logits_output_ms": step.logits_output_ms,
             "sampling_ms": step.sampling_ms,
@@ -1476,8 +1488,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "",
             "## Steps",
             "",
-            "| Step | Phase | Step ms | Module ms | Module non-helper ms | Host overhead ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
-            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
+            "| Step | Phase | Step ms | Module ms | Module non-helper ms | Node self ms | Marker ms | Module unattributed ms | Host overhead ms | Helper ms | Helper % | Residual ms | Residual % | Top helper | Top operator | Tokens/s |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |",
         ]
     )
     for step in analysis.steps:
@@ -1508,6 +1520,9 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             f"| {step.step} | `{step.phase}` | {step.step_ms:.3f} | "
             f"{format_optional_ms(step_summary['module_run_ms'])} | "
             f"{format_optional_ms(step_summary['module_non_helper_ms'])} | "
+            f"{format_optional_ms(step_summary['node_self_total_ms'])} | "
+            f"{format_optional_ms(step_summary['node_instrumentation_ms'])} | "
+            f"{format_optional_ms(step_summary['module_unattributed_ms'])} | "
             f"{format_optional_ms(step_summary['host_overhead_ms'])} | "
             f"{format_optional_ms(step_summary['helper_total_ms'] if step_summary['helper_profile_enabled'] else None)} | "
             f"{helper_percent_text} | {format_optional_ms(step_summary['residual_ms'])} | {residual_percent_text} | "

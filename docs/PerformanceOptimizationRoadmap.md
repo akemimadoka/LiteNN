@@ -659,7 +659,7 @@ Priority classes for the GGUF/Qwen decode work:
                       Filtering sub-microsecond rows reduced profile emission to `13.0-15.2 ms/step`; the summary retains
                       full self/helper totals while detailed rows retain active stable ids. Profiling changes helper
                       timing, so these runs are attribution evidence rather than representative throughput measurements.
-                - [ ] P0: Validate and remove the measured decode wrapper/elementwise overhead. Use focused
+                - [x] P0: Validate and remove the measured decode wrapper/elementwise overhead. Use focused
                       non-profiled microbenchmarks to separate remaining marker cost from the `~2.7 ms` nested-call
                       bucket, account for the `~6.5-7.1 ms` gap between module non-helper and native self totals, then
                       fuse the `~10 ms` SiLU/unary path with adjacent gate multiplication where legality and numerics
@@ -676,9 +676,20 @@ Priority classes for the GGUF/Qwen decode work:
                           averaged `273.341 ms/token` with a `269.672 ms` median and exact token parity. The historical
                           `245.177 ms` median remains the best recorded result, so this is a structural and modest
                           measured improvement rather than a new throughput record.
-                    - [ ] Attribute and remove the remaining wrapper gap: isolate the `CallNode` bucket and the
-                          `~6.5-7.1 ms` difference between module non-helper and native self totals with non-profiled
-                          focused probes before adding more decode fusion.
+                    - [x] Close the module/native-self attribution gap and remove repeated output allocation. Completed
+                          on 2026-08-02: the CPU node profiler now measures marker callback time independently and the
+                          profile bundle preserves node-self, marker, and module-unattributed buckets. A four-step
+                          cache-hit run measured `17.76-19.79 ms` module non-helper time as `11.54-12.51 ms` node self,
+                          `5.66-6.28 ms` marker callbacks, and only `0.56-1.11 ms` unattributed module time. The former
+                          `~6.5-7.1 ms` gap was therefore predominantly intrusive instrumentation, not production
+                          wrapper work. Stateful decode now preallocates its static logits output and calls
+                          `RunTensorsInto`, removing one `608256`-byte output allocation per generated token. A noisy
+                          warm 15-step sample measured `287.708/290.187 ms` mean/median with exact token parity; it does
+                          not establish a throughput gain over the historical best.
+                - [ ] P0: Validate selective decoder-block call inlining with a non-profiled A/B artifact. The latest
+                      intrusive profile attributes about `3.59 ms/step` self time to 48 `CallNode` wrappers and about
+                      `2.20 ms/step` to normalization. Inlining must demonstrate a steady decode win without reviving
+                      PE/COFF object-size or compile-time failures before it becomes the default.
                 - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
                       2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
                       build repeat-penalty membership once only when enabled, and consume the last Tensor logits row

@@ -3274,6 +3274,15 @@ Priority classes:
             `13.08-15.76 ms/step` inline to `11.4-12.5 ms/step` including helper and residual node self time; an
             unprofiled cache-hit run excluding the first page-fault-heavy step averaged `273.341 ms/token` with exact
             generated-token parity. CPU AOT and decode-plan cache versions were advanced to prevent stale artifacts.
+      - [x] Separate CPU AOT node-marker cost from production wrapper work. Completed on 2026-08-02: profiler snapshots,
+            stream statistics, JSON, Markdown, and trace runtime buckets now expose aggregate node self, marker
+            instrumentation, and remaining module-unattributed time. A four-step 14B cache-hit profile closed
+            `17.76-19.79 ms` module non-helper time into `11.54-12.51 ms` node self, `5.66-6.28 ms` marker callbacks,
+            and `0.56-1.11 ms` unattributed time. Stateful generation also reuses a preallocated logits tensor through
+            `RunTensorsInto`, avoiding a `608256`-byte allocation on every token while preserving exact output ids.
+      - [ ] Validate selective decoder-block `CallNode` inlining with non-profiled A/B evidence. The intrusive profile
+            reports about `3.59 ms/step` call-wrapper self time, but any default change must improve steady decode
+            without materially increasing compile latency, instruction size, or PE/COFF section pressure.
 - [x] P0: Add a measured decode thread/grain model:
       `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
       MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit
