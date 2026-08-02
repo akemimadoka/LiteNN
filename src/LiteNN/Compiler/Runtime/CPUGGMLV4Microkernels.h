@@ -32,6 +32,8 @@ namespace LiteNN::Detail
 	static_assert(sizeof(GGMLQ4KFieldInterleaved8Block) == 1184);
 	static_assert(sizeof(GGMLQ6KFieldInterleaved8Block) == 1680);
 
+	bool CPUHasGGMLV4AVX512F16C();
+
 	void AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8AVX2(const GGMLQ4KFieldInterleaved8Block& block,
 	                                                       const GGMLQ8KActivationBlock& lhs, float acc[8]);
 	void AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8AVX2(const GGMLQ6KFieldInterleaved8Block& block,
@@ -42,4 +44,7 @@ namespace LiteNN::Detail
 	void AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX2(const GGMLQ6KFieldInterleaved8Block& block0,
 	                                                        const GGMLQ6KFieldInterleaved8Block& block1,
 	                                                        const GGMLQ8KActivationBlock& lhs, float acc[16]);
+	void AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX512(const GGMLQ6KFieldInterleaved8Block& block0,
+	                                                          const GGMLQ6KFieldInterleaved8Block& block1,
+	                                                          const GGMLQ8KActivationBlock& lhs, float acc[16]);
 } // namespace LiteNN::Detail

@@ -3113,6 +3113,14 @@ Priority classes:
       Keeping the x8 accumulator live across every K block was also tested and rejected: it regressed real decode from
       `307.082` to `342.163 ms/token`, consistent with register-pressure and instruction-scheduling costs that isolated
       microbenchmarks did not expose.
+      A true AVX-512 Q6_K x16 tile completed on 2026-08-02. It combines adjacent v4 x8 groups in 512-bit vectors,
+      shares Q8_K broadcasts, and is selected only after an AVX512F+BW+VL+F16C runtime check; AVX2 x8 remains the
+      portable x86 fallback and Q4_K routing is unchanged. Exact parity and all 42 targeted quantized/decode tests pass.
+      Production-shaped T8 medians improved hidden `0.249 -> 0.173 ms`, FFN-up `0.841 -> 0.746 ms`, FFN-down
+      `1.03 -> 0.730 ms`, and logits `13.5 -> 12.3 ms`. The cache-hit 14B acceptance run preserved the exact generated
+      tokens with no fallback at `260.166 ms/token` (`3.844 tok/s`), `1.57%` below the immediately preceding
+      `264.313 ms/token` baseline. This validates true x16 width as distinct from the rejected 256-bit VNNI substitution,
+      while the broader production-kernel P0 remains open for Q4_K and further grouped-projection reductions.
       A Windows-only SysV internal calling-convention experiment removed all Win64 nonvolatile-XMM saves from the v4
       kernel disassembly, but changed register allocation enough to regress real decode from `299.370` to
       `345.568 ms/token` (`+15.4%`). Keep the native Win64 ABI until a whole-loop kernel can be evaluated without this

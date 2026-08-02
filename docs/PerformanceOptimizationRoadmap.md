@@ -448,6 +448,15 @@ Priority classes for the GGUF/Qwen decode work:
                       A separate attempt to keep x8 accumulators in YMM registers across the complete K loop was
                       rejected despite promising short microbenchmarks: real decode regressed to `342.163 ms/token`
                       and every dominant projection family slowed, indicating harmful register pressure/codegen.
+                      True AVX-512 x16 Q6_K progress completed on 2026-08-02: the v4 kernel now combines two adjacent
+                      x8 groups in ZMM registers and shares each Q8_K broadcast, behind an AVX512F+BW+VL+F16C runtime
+                      gate. Exact helper parity and all 42 targeted quantized/decode tests pass. T8 medians improved
+                      hidden `0.249 -> 0.173 ms`, FFN-up `0.841 -> 0.746 ms`, FFN-down `1.03 -> 0.730 ms`, and logits
+                      `13.5 -> 12.3 ms`; unlike the rejected 256-bit VNNI substitution, the true x16 tile wins across
+                      both narrow and wide production rows. A cache-hit 14B run reproduced the exact token sequence
+                      with no fallback at `260.166 ms/token` (`3.844 tok/s`), another `1.57%` latency reduction from
+                      the immediately preceding `264.313 ms/token` split-kernel baseline. AVX2 x8 remains the fallback
+                      on unsupported CPUs, and Q4_K dispatch is unchanged.
                       A MinGW `sysv_abi` experiment also removed the Win64 nonvolatile-XMM save/restore sequence from
                       the private SIMD helpers exactly as intended, but worse whole-kernel register allocation raised
                       the same 14B run from `299.370` to `345.568 ms/token` (`+15.4%`). The native ABI remains the

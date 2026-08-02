@@ -3,11 +3,30 @@
 #include <cstdint>
 #include <cstring>
 
+namespace LiteNN::Detail
+{
+	bool CPUHasGGMLV4AVX512F16C()
+	{
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) &&                               \
+    (defined(__GNUC__) || defined(__clang__))
+		static const bool supported = [] {
+			__builtin_cpu_init();
+			return __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") &&
+			       __builtin_cpu_supports("avx512vl") && __builtin_cpu_supports("f16c");
+		}();
+		return supported;
+#else
+		return false;
+#endif
+	}
+} // namespace LiteNN::Detail
+
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) &&                               \
     (defined(__GNUC__) || defined(__clang__))
 #include <immintrin.h>
 
 #define LITENN_TARGET_AVX2_F16C __attribute__((target("avx2,f16c")))
+#define LITENN_TARGET_AVX512_F16C __attribute__((target("avx512f,avx512bw,avx512vl,f16c")))
 
 namespace LiteNN::Detail
 {
@@ -295,6 +314,85 @@ namespace LiteNN::Detail
 		    _mm256_add_ps(accumulators1, _mm256_mul_ps(_mm256_mul_ps(lhsD, d1), _mm256_cvtepi32_ps(scaledQuantSum1)));
 		_mm256_storeu_ps(acc, accumulators0);
 		_mm256_storeu_ps(acc + 8, accumulators1);
+	}
+
+	LITENN_TARGET_AVX512_F16C void
+	AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX512(const GGMLQ6KFieldInterleaved8Block& block0,
+	                                                     const GGMLQ6KFieldInterleaved8Block& block1,
+	                                                     const GGMLQ8KActivationBlock& lhs, float acc[16])
+	{
+		const auto dF16 = _mm256_set_m128i(_mm_loadu_si128(reinterpret_cast<const __m128i*>(block1.d)),
+		                                   _mm_loadu_si128(reinterpret_cast<const __m128i*>(block0.d)));
+		const auto d = _mm512_cvtph_ps(dF16);
+		const auto lhsD = _mm512_set1_ps(lhs.d);
+		auto accumulators = _mm512_loadu_ps(acc);
+		auto scaledQuantSum = _mm512_setzero_si512();
+		const auto lowFourMask = _mm512_set1_epi8(15);
+		const auto highTwoMask = _mm512_set1_epi8(3);
+		const auto pairOnes = _mm512_set1_epi16(1);
+		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
+		{
+			for (std::uint64_t segment = 0; segment < 4; ++segment)
+			{
+				for (std::uint64_t group = 0; group < 2; ++group)
+				{
+					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
+					const auto q8Offset = halfBlock * 128 + segment * 32 + group * 16;
+					auto quantSum = _mm512_setzero_si512();
+					for (std::uint64_t chunk = 0; chunk < 4; ++chunk)
+					{
+						const auto qlOffset = halfBlock * 64 + group * 16 + chunk * 4 + (segment % 2) * 32;
+						const auto qhOffset = halfBlock * 32 + group * 16 + chunk * 4;
+						const auto lowFour0 =
+						    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block0.ql + (qlOffset / 4) * 32));
+						const auto lowFour1 =
+						    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block1.ql + (qlOffset / 4) * 32));
+						auto lowFour = _mm512_inserti64x4(_mm512_castsi256_si512(lowFour0), lowFour1, 1);
+						if (segment >= 2)
+						{
+							lowFour = _mm512_srli_epi16(lowFour, 4);
+						}
+						lowFour = _mm512_and_si512(lowFour, lowFourMask);
+						const auto highTwo0 =
+						    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block0.qh + (qhOffset / 4) * 32));
+						const auto highTwo1 =
+						    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block1.qh + (qhOffset / 4) * 32));
+						auto highTwo = _mm512_inserti64x4(_mm512_castsi256_si512(highTwo0), highTwo1, 1);
+						switch (segment)
+						{
+						case 1:
+							highTwo = _mm512_srli_epi16(highTwo, 2);
+							break;
+						case 2:
+							highTwo = _mm512_srli_epi16(highTwo, 4);
+							break;
+						case 3:
+							highTwo = _mm512_srli_epi16(highTwo, 6);
+							break;
+						default:
+							break;
+						}
+						highTwo = _mm512_and_si512(highTwo, highTwoMask);
+						const auto quantBytes = _mm512_or_si512(lowFour, _mm512_slli_epi16(highTwo, 4));
+						std::uint32_t q8Word = 0;
+						std::memcpy(&q8Word, lhs.qs + q8Offset + chunk * 4, sizeof(q8Word));
+						const auto q8Bytes = _mm512_set1_epi32(static_cast<int>(q8Word));
+						quantSum = _mm512_add_epi32(
+						    quantSum, _mm512_madd_epi16(_mm512_maddubs_epi16(quantBytes, q8Bytes), pairOnes));
+					}
+					quantSum = _mm512_sub_epi32(
+					    quantSum, _mm512_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
+					const auto scales = _mm_unpacklo_epi64(
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[scaleOffset])),
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[scaleOffset])));
+					const auto scale = _mm512_cvtepi8_epi32(scales);
+					scaledQuantSum = _mm512_add_epi32(scaledQuantSum, _mm512_mullo_epi32(quantSum, scale));
+				}
+			}
+		}
+		accumulators =
+		    _mm512_add_ps(accumulators, _mm512_mul_ps(_mm512_mul_ps(lhsD, d), _mm512_cvtepi32_ps(scaledQuantSum)));
+		_mm512_storeu_ps(acc, accumulators);
 	}
 } // namespace LiteNN::Detail
 

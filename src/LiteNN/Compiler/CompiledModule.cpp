@@ -160,7 +160,9 @@ namespace
 	using LiteNN::Detail::AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx16AVX2;
 	using LiteNN::Detail::AccumulateGGMLQ4KFieldInterleavedV4BlockQ8Kx8AVX2;
 	using LiteNN::Detail::AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX2;
+	using LiteNN::Detail::AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX512;
 	using LiteNN::Detail::AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx8AVX2;
+	using LiteNN::Detail::CPUHasGGMLV4AVX512F16C;
 	using LiteNN::Detail::GGMLQ4KFieldInterleaved8Block;
 	using LiteNN::Detail::GGMLQ6KFieldInterleaved8Block;
 	using LiteNN::Detail::GGMLQ8KActivationBlock;
@@ -4287,8 +4289,10 @@ namespace
 		}
 
 		bool useAVX2 = false;
+		bool useAVX512 = false;
 #if LITENN_HAS_X86_AVX2_TARGET
 		useAVX2 = LiteNNCPUHasAVX2F16C();
+		useAVX512 = format == QuantizedBlockFormat::GGML_Q6_K && CPUHasGGMLV4AVX512F16C();
 #endif
 		struct Context
 		{
@@ -4306,11 +4310,13 @@ namespace
 			std::uint64_t workItemsPerRow{};
 			QuantizedBlockFormat format{};
 			bool useAVX2{};
+			bool useAVX512{};
 		};
 		const auto groupsPerRow = (static_cast<std::uint64_t>(outColumns) + 7) / 8;
 		const auto wideOutputBenefitsFromX16 = outColumns >= 32768;
-		const auto groupSpan =
-		    useAVX2 && wideOutputBenefitsFromX16 && (outColumns % 16) == 0 ? std::uint64_t{ 2 } : std::uint64_t{ 1 };
+		const auto groupSpan = useAVX2 && (useAVX512 || wideOutputBenefitsFromX16) && (outColumns % 16) == 0
+		                           ? std::uint64_t{ 2 }
+		                           : std::uint64_t{ 1 };
 		const auto workItemsPerRow = (groupsPerRow + groupSpan - 1) / groupSpan;
 		Context context{
 			.payload = reinterpret_cast<const std::uint8_t*>(header + 1),
@@ -4327,6 +4333,7 @@ namespace
 			.workItemsPerRow = workItemsPerRow,
 			.format = format,
 			.useAVX2 = useAVX2,
+			.useAVX512 = useAVX512,
 		};
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
@@ -4354,9 +4361,16 @@ namespace
 						}
 						else
 						{
-							AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX2(
-							    *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock0),
-							    *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock1), lhsBlock, acc);
+							const auto& block0 = *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock0);
+							const auto& block1 = *reinterpret_cast<const GGMLQ6KFieldInterleaved8Block*>(packedBlock1);
+							if (ctx.useAVX512)
+							{
+								AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX512(block0, block1, lhsBlock, acc);
+							}
+							else
+							{
+								AccumulateGGMLQ6KFieldInterleavedV4BlockQ8Kx16AVX2(block0, block1, lhsBlock, acc);
+							}
 						}
 					}
 					for (std::uint64_t lane = 0; lane < 16; ++lane)
