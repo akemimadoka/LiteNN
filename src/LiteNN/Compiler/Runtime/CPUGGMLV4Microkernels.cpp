@@ -49,10 +49,9 @@ namespace LiteNN::Detail
 		auto scaledQuantSum = _mm256_setzero_si256();
 		auto scaledMinimumSum = _mm256_setzero_si256();
 		const auto nibbleMask = _mm256_set1_epi8(15);
-		const auto pairOnes = _mm256_set1_epi16(1);
 		for (std::uint64_t subblock = 0; subblock < 8; ++subblock)
 		{
-			auto quantSum = _mm256_setzero_si256();
+			auto quantPairSum = _mm256_setzero_si256();
 			for (std::uint64_t chunk = 0; chunk < 8; ++chunk)
 			{
 				const auto sourceOffset = (subblock / 2) * 32 + chunk * 4;
@@ -66,16 +65,15 @@ namespace LiteNN::Detail
 				std::uint32_t q8Word = 0;
 				std::memcpy(&q8Word, lhs.qs + subblock * 32 + chunk * 4, sizeof(q8Word));
 				const auto q8Bytes = _mm256_set1_epi32(static_cast<int>(q8Word));
-				quantSum =
-				    _mm256_add_epi32(quantSum, _mm256_madd_epi16(_mm256_maddubs_epi16(quantBytes, q8Bytes), pairOnes));
+				quantPairSum = _mm256_add_epi16(quantPairSum, _mm256_maddubs_epi16(quantBytes, q8Bytes));
 			}
-			const auto scale =
-			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[subblock])));
+			const auto scaleBytes = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[subblock]));
+			const auto repeatedScale = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(scaleBytes, scaleBytes));
 			const auto minimum =
 			    _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.minimums[subblock])));
 			const auto lhsSum = static_cast<std::int32_t>(lhs.bsums[subblock * 2]) +
 			                    static_cast<std::int32_t>(lhs.bsums[subblock * 2 + 1]);
-			scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_mullo_epi32(quantSum, scale));
+			scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_madd_epi16(quantPairSum, repeatedScale));
 			scaledMinimumSum =
 			    _mm256_add_epi32(scaledMinimumSum, _mm256_mullo_epi32(minimum, _mm256_set1_epi32(lhsSum)));
 		}
@@ -95,7 +93,6 @@ namespace LiteNN::Detail
 		auto scaledQuantSum = _mm256_setzero_si256();
 		const auto lowFourMask = _mm256_set1_epi8(15);
 		const auto highTwoMask = _mm256_set1_epi8(3);
-		const auto pairOnes = _mm256_set1_epi16(1);
 		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
 		{
 			for (std::uint64_t segment = 0; segment < 4; ++segment)
@@ -104,7 +101,9 @@ namespace LiteNN::Detail
 				{
 					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
 					const auto q8Offset = halfBlock * 128 + segment * 32 + group * 16;
-					auto quantSum = _mm256_setzero_si256();
+					// Four Q6_K chunks can exceed Int16; scale two safe partial sums in one maddwd each.
+					auto quantPairSum01 = _mm256_setzero_si256();
+					auto quantPairSum23 = _mm256_setzero_si256();
 					for (std::uint64_t chunk = 0; chunk < 4; ++chunk)
 					{
 						const auto qlOffset = halfBlock * 64 + group * 16 + chunk * 4 + (segment % 2) * 32;
@@ -137,14 +136,25 @@ namespace LiteNN::Detail
 						std::uint32_t q8Word = 0;
 						std::memcpy(&q8Word, lhs.qs + q8Offset + chunk * 4, sizeof(q8Word));
 						const auto q8Bytes = _mm256_set1_epi32(static_cast<int>(q8Word));
-						quantSum = _mm256_add_epi32(
-						    quantSum, _mm256_madd_epi16(_mm256_maddubs_epi16(quantBytes, q8Bytes), pairOnes));
+						const auto pairDot = _mm256_maddubs_epi16(quantBytes, q8Bytes);
+						if (chunk < 2)
+						{
+							quantPairSum01 = _mm256_add_epi16(quantPairSum01, pairDot);
+						}
+						else
+						{
+							quantPairSum23 = _mm256_add_epi16(quantPairSum23, pairDot);
+						}
 					}
-					quantSum = _mm256_sub_epi32(
-					    quantSum, _mm256_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
-					const auto scale = _mm256_cvtepi8_epi32(
-					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[scaleOffset])));
-					scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_mullo_epi32(quantSum, scale));
+					const auto scaleBytes =
+					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block.scales[scaleOffset]));
+					const auto repeatedScale = _mm256_cvtepi8_epi16(_mm_unpacklo_epi8(scaleBytes, scaleBytes));
+					const auto scaledDot = _mm256_add_epi32(_mm256_madd_epi16(quantPairSum01, repeatedScale),
+					                                        _mm256_madd_epi16(quantPairSum23, repeatedScale));
+					const auto scale = _mm256_cvtepi8_epi32(scaleBytes);
+					const auto correction = _mm256_mullo_epi32(
+					    scale, _mm256_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
+					scaledQuantSum = _mm256_add_epi32(scaledQuantSum, _mm256_sub_epi32(scaledDot, correction));
 				}
 			}
 		}
@@ -329,7 +339,6 @@ namespace LiteNN::Detail
 		auto scaledQuantSum = _mm512_setzero_si512();
 		const auto lowFourMask = _mm512_set1_epi8(15);
 		const auto highTwoMask = _mm512_set1_epi8(3);
-		const auto pairOnes = _mm512_set1_epi16(1);
 		for (std::uint64_t halfBlock = 0; halfBlock < 2; ++halfBlock)
 		{
 			for (std::uint64_t segment = 0; segment < 4; ++segment)
@@ -338,7 +347,9 @@ namespace LiteNN::Detail
 				{
 					const auto scaleOffset = halfBlock * 8 + group + segment * 2;
 					const auto q8Offset = halfBlock * 128 + segment * 32 + group * 16;
-					auto quantSum = _mm512_setzero_si512();
+					// Four Q6_K chunks can exceed Int16; scale two safe partial sums in one maddwd each.
+					auto quantPairSum01 = _mm512_setzero_si512();
+					auto quantPairSum23 = _mm512_setzero_si512();
 					for (std::uint64_t chunk = 0; chunk < 4; ++chunk)
 					{
 						const auto qlOffset = halfBlock * 64 + group * 16 + chunk * 4 + (segment % 2) * 32;
@@ -377,16 +388,28 @@ namespace LiteNN::Detail
 						std::uint32_t q8Word = 0;
 						std::memcpy(&q8Word, lhs.qs + q8Offset + chunk * 4, sizeof(q8Word));
 						const auto q8Bytes = _mm512_set1_epi32(static_cast<int>(q8Word));
-						quantSum = _mm512_add_epi32(
-						    quantSum, _mm512_madd_epi16(_mm512_maddubs_epi16(quantBytes, q8Bytes), pairOnes));
+						const auto pairDot = _mm512_maddubs_epi16(quantBytes, q8Bytes);
+						if (chunk < 2)
+						{
+							quantPairSum01 = _mm512_add_epi16(quantPairSum01, pairDot);
+						}
+						else
+						{
+							quantPairSum23 = _mm512_add_epi16(quantPairSum23, pairDot);
+						}
 					}
-					quantSum = _mm512_sub_epi32(
-					    quantSum, _mm512_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
 					const auto scales = _mm_unpacklo_epi64(
 					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block0.scales[scaleOffset])),
 					    _mm_loadl_epi64(reinterpret_cast<const __m128i*>(block1.scales[scaleOffset])));
+					const auto repeatedScaleBytes =
+					    _mm256_set_m128i(_mm_unpackhi_epi8(scales, scales), _mm_unpacklo_epi8(scales, scales));
+					const auto repeatedScale = _mm512_cvtepi8_epi16(repeatedScaleBytes);
+					const auto scaledDot = _mm512_add_epi32(_mm512_madd_epi16(quantPairSum01, repeatedScale),
+					                                        _mm512_madd_epi16(quantPairSum23, repeatedScale));
 					const auto scale = _mm512_cvtepi8_epi32(scales);
-					scaledQuantSum = _mm512_add_epi32(scaledQuantSum, _mm512_mullo_epi32(quantSum, scale));
+					const auto correction = _mm512_mullo_epi32(
+					    scale, _mm512_set1_epi32(32 * static_cast<std::int32_t>(lhs.bsums[q8Offset / 16])));
+					scaledQuantSum = _mm512_add_epi32(scaledQuantSum, _mm512_sub_epi32(scaledDot, correction));
 				}
 			}
 		}

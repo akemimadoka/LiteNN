@@ -496,6 +496,18 @@ Priority classes for the GGUF/Qwen decode work:
                       the higher-weight FFN-up/down medians from `0.802/0.896` to `1.12/1.17 ms`; T1 FFN rows were close
                       to twice as slow. The added Q8 broadcasts and live vectors outweigh saved weight loads on large
                       streaming rows, so the production x8 kernel keeps one segment live at a time.
+                      Pair-sum/scale folding completed on 2026-08-02: Q4_K x8 now accumulates safe Int16 pair dots and
+                      folds pair reduction plus unsigned subblock scaling into one `vpmaddwd`. Q6_K x8 and AVX-512 x16
+                      use two Int16 partial sums so the wider six-bit range cannot overflow, then fold each signed scale
+                      into the same reduction instruction. An immediate same-host helper A/B reduced step-16 helper
+                      time from `244.051` to `238.362 ms`, grouped Q4_K gate/up from `87.409` to `84.598 ms`, and the
+                      hidden/output bucket from `27.500` to `26.348 ms`. Production-shaped Q6_K x16 T8 medians improved
+                      hidden from about `0.173` to `0.112 ms` and FFN-up/down from `0.746/0.730` to `0.714/0.711 ms`,
+                      while logits remained neutral at about `12.3 ms`. Three no-fallback 14B cache-hit runs produced
+                      identical text at `259.299`, `249.367`, and `254.126 ms/token`; the `254.126 ms/token` median is
+                      `2.32%` below the preceding stable `260.166 ms/token` result. A separate Q4_K paired-nibble load
+                      experiment was removed: its cache-hot microbenchmarks improved, but real helper time regressed to
+                      `240.044 ms` because extra live vectors and scheduling pressure outweighed duplicate L1-load removal.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.

@@ -3159,6 +3159,16 @@ Priority classes:
       A Q6_K x8 paired-segment experiment was also rejected: sharing `ql/qh` loads for segment pairs improved the T8
       hidden median from `0.265` to `0.212 ms`, but regressed the dominant FFN-up/down rows from `0.802/0.896` to
       `1.12/1.17 ms` and nearly doubled their T1 latency. Keep the lower-register-pressure per-segment kernel.
+      Pair-sum/scale folding completed on 2026-08-02: Q4_K x8 replaces separate Int32 pair reduction and scale
+      multiplication with safe Int16 pair accumulation plus one `vpmaddwd`; Q6_K x8 and AVX-512 x16 use two bounded
+      Int16 partial sums before the same signed-scale fold. An immediate helper A/B reduced step-16 helper time from
+      `244.051` to `238.362 ms`, grouped Q4_K gate/up from `87.409` to `84.598 ms`, and hidden/output from
+      `27.500` to `26.348 ms`. Q6_K x16 T8 hidden and FFN-up/down medians improved from about
+      `0.173/0.746/0.730` to `0.112/0.714/0.711 ms`, with logits neutral at about `12.3 ms`. Three no-fallback 14B
+      cache-hit runs generated identical text at `259.299`, `249.367`, and `254.126 ms/token`; their
+      `254.126 ms/token` median is `2.32%` below the preceding stable `260.166 ms/token` result. A Q4_K paired-nibble
+      load variant was removed because its cache-hot microbench gain became a real-helper regression under increased
+      register and scheduling pressure.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
