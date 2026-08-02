@@ -3280,9 +3280,12 @@ Priority classes:
             `17.76-19.79 ms` module non-helper time into `11.54-12.51 ms` node self, `5.66-6.28 ms` marker callbacks,
             and `0.56-1.11 ms` unattributed time. Stateful generation also reuses a preallocated logits tensor through
             `RunTensorsInto`, avoiding a `608256`-byte allocation on every token while preserving exact output ids.
-      - [ ] Validate selective decoder-block `CallNode` inlining with non-profiled A/B evidence. The intrusive profile
-            reports about `3.59 ms/step` call-wrapper self time, but any default change must improve steady decode
-            without materially increasing compile latency, instruction size, or PE/COFF section pressure.
+      - [x] Validate selective decoder-block `CallNode` inlining with non-profiled A/B evidence. Rejected on
+            2026-08-02: forced LLVM always-inlining reduced the real 14B module from 52 functions and 245883
+            instructions to 2 functions and 140672 instructions, but object size grew by `2.46%` and compile-artifact
+            time grew by `22.7%`. Exact token ids matched; interleaved no-inline versus inline runs measured
+            `264.743/263.721 ms` versus `265.704/264.153 ms` mean/median, making inline `0.36%/0.16%` slower. The
+            experimental implementation was removed and is not part of the public compiler options or cache ABI.
 - [x] P0: Add a measured decode thread/grain model:
       `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
       MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit

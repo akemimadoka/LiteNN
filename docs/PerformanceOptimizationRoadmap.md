@@ -686,10 +686,16 @@ Priority classes for the GGUF/Qwen decode work:
                           `RunTensorsInto`, removing one `608256`-byte output allocation per generated token. A noisy
                           warm 15-step sample measured `287.708/290.187 ms` mean/median with exact token parity; it does
                           not establish a throughput gain over the historical best.
-                - [ ] P0: Validate selective decoder-block call inlining with a non-profiled A/B artifact. The latest
-                      intrusive profile attributes about `3.59 ms/step` self time to 48 `CallNode` wrappers and about
-                      `2.20 ms/step` to normalization. Inlining must demonstrate a steady decode win without reviving
-                      PE/COFF object-size or compile-time failures before it becomes the default.
+                - [x] P0: Validate selective decoder-block call inlining with a non-profiled A/B artifact. Rejected on
+                      2026-08-02 after a real 14B Q4_K_M interleaved comparison: forced LLVM always-inlining reduced
+                      the module from 52 functions and 245883 instructions to 2 functions and 140672 instructions,
+                      but increased the object from 1054155 to 1080114 bytes and compile-artifact time from
+                      `22435.718 ms` to `27538.612 ms` (`+22.7%`). Exact generated token ids matched, while steady
+                      no-inline versus inline decode measured `264.743/263.721 ms` versus `265.704/264.153 ms`
+                      mean/median (`+0.36%/+0.16%`). The apparent `3.59 ms/step` CallNode self bucket was therefore
+                      instrumentation cost rather than removable production overhead. The experimental option and
+                      pass were removed; optimization returns to the sampler-only vocabulary path and dominant
+                      quantized helpers.
                 - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
                       2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
                       build repeat-penalty membership once only when enabled, and consume the last Tensor logits row
