@@ -3121,6 +3121,10 @@ Priority classes:
       Keeping the x8 accumulator live across every K block was also tested and rejected: it regressed real decode from
       `307.082` to `342.163 ms/token`, consistent with register-pressure and instruction-scheduling costs that isolated
       microbenchmarks did not expose.
+      Static contiguous worker partitioning was also tested and removed on 2026-08-02. Giving each v4 participant one
+      grain-aligned range regressed T8 grouped Q4_K gate/up from `1.31` to `1.42 ms`, Q4_K FFN-up/down from
+      `0.330/0.321` to `0.388/0.375 ms`, and Q6_K hidden from `0.173` to `0.226 ms`. Keep the measured dynamic
+      four-tasks-per-thread schedule; its work stealing helps cross-domain balance on the reference host.
       A true AVX-512 Q6_K x16 tile completed on 2026-08-02. It combines adjacent v4 x8 groups in 512-bit vectors,
       shares Q8_K broadcasts, and is selected only after an AVX512F+BW+VL+F16C runtime check; AVX2 x8 remains the
       portable x86 fallback and Q4_K routing is unchanged. Exact parity and all 42 targeted quantized/decode tests pass.

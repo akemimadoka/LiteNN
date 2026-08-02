@@ -448,6 +448,11 @@ Priority classes for the GGUF/Qwen decode work:
                       A separate attempt to keep x8 accumulators in YMM registers across the complete K loop was
                       rejected despite promising short microbenchmarks: real decode regressed to `342.163 ms/token`
                       and every dominant projection family slowed, indicating harmful register pressure/codegen.
+                      A static contiguous worker-partition experiment was rejected on 2026-08-02. Replacing the v4
+                      helpers' roughly four dynamic tasks per thread with one grain-aligned range per participant
+                      regressed T8 grouped Q4_K gate/up from `1.31` to `1.42 ms`, Q4_K FFN-up/down from
+                      `0.330/0.321` to `0.388/0.375 ms`, and Q6_K hidden from `0.173` to `0.226 ms`. The code was
+                      removed without a full-decode run; dynamic stealing remains useful for cross-domain balance.
                       True AVX-512 x16 Q6_K progress completed on 2026-08-02: the v4 kernel now combines two adjacent
                       x8 groups in ZMM registers and shares each Q8_K broadcast, behind an AVX512F+BW+VL+F16C runtime
                       gate. Exact helper parity and all 42 targeted quantized/decode tests pass. T8 medians improved
