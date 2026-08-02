@@ -3126,6 +3126,11 @@ Priority classes:
       `40.532 -> 35.745 ms`, and hidden/output `30.062 -> 27.824 ms`. A Q4_K odd/even subblock-template variant was
       rejected because eliminating the nibble branch expanded the x8 kernel and regressed production-shaped
       hidden/down/grouped rows by roughly `17-40%`.
+      Re-testing whole-K x8 accumulators after the integer-reduction change kept all 42 targeted tests green but
+      regressed production-shaped Q4_K T8 hidden/FFN-up/FFN-down medians to `0.216/0.399/0.431 ms` and Q6_K to
+      `0.241/1.27/1.24 ms`; it remains rejected due to register pressure and code-generation loss. A no-helper-profile
+      production run measured `278.863 ms/token` versus `277.218 ms/token` with profiling, ruling out instrumentation
+      overhead as the material remaining gap.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
@@ -3410,7 +3415,7 @@ These improvements do not require a compatibility break and should not block vNe
 - Improve production CPU GEMM and convolution kernels, or integrate a backend library, without changing public graph/model
   APIs.
 - Split CPU GGML runtime sidecars and architecture-specific microkernels out of the monolithic `CompiledModule.cpp` so
-  kernel iteration rebuilds focused objects instead of spending about `130 s` recompiling the complete compiler
+  kernel iteration rebuilds focused objects instead of spending `169.5 s` recompiling the complete compiler
   implementation on the Windows reference machine. This improves engineering feedback and does not block runtime P0.
 - Expand CUDA native lowering coverage for reductions, normalization, convolutions, attention, and fused training kernels.
 - Add richer benchmark rows for compile time, train-step latency, workspace pressure, and numerical drift.

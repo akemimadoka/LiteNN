@@ -463,12 +463,19 @@ Priority classes for the GGUF/Qwen decode work:
                       `30.062 -> 27.824 ms`. An odd/even Q4_K subblock-template experiment was separately rejected:
                       eliminating the nibble branch expanded the x8 kernel and regressed production-shaped hidden,
                       FFN-down, and grouped gate/up microbenchmarks by roughly `17-40%`.
+                      The whole-K x8 accumulator design was re-evaluated after block-level integer reduction. All 42
+                      targeted GGUF quantized/decode tests still passed, but production-shaped Q4_K T8 hidden,
+                      FFN-up, and FFN-down medians regressed to `0.216/0.399/0.431 ms`; Q6_K measured
+                      `0.241/1.27/1.24 ms`. The repeated block-call prologues are cheaper than the resulting register
+                      pressure and code-generation loss, so this variant was rejected before an unnecessary 14B run.
+                      A production decode without helper profiling measured `278.863 ms/token`, close to the profiled
+                      `277.218 ms/token`; helper instrumentation is not the remaining performance gap.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
                 - [ ] Split CPU GGML sidecars and architecture-specific microkernels out of `CompiledModule.cpp` into
                       focused translation units. A single v4 kernel edit currently recompiles the monolithic compiler
-                      implementation for about `130 s` on the Windows reference machine even with `--parallel 12`.
+                      implementation for `169.5 s` in the latest Windows measurement even with `--parallel 12`.
                       Acceptance: changing one CPU microkernel rebuilds only its runtime object and affected links; this
                       engineering-throughput task does not block runtime-kernel P0 acceptance.
                 - [x] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
