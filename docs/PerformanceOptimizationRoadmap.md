@@ -473,11 +473,13 @@ Priority classes for the GGUF/Qwen decode work:
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
-                - [ ] Split CPU GGML sidecars and architecture-specific microkernels out of `CompiledModule.cpp` into
-                      focused translation units. A single v4 kernel edit currently recompiles the monolithic compiler
-                      implementation for `169.5 s` in the latest Windows measurement even with `--parallel 12`.
-                      Acceptance: changing one CPU microkernel rebuilds only its runtime object and affected links; this
-                      engineering-throughput task does not block runtime-kernel P0 acceptance.
+                - [x] Split CPU GGML sidecars and architecture-specific microkernels out of `CompiledModule.cpp` into
+                      focused translation units. Completed on 2026-08-02: the Q4_K/Q6_K v4 AVX2/F16C x8/x16 kernels
+                      and their POD layout ABI now live in the internal `Runtime/CPUGGMLV4Microkernels` unit; MLIR,
+                      helper ABI, profiling, scalar fallback, and scheduling remain in `CompiledModule.cpp`. All 42
+                      targeted quantized/decode tests passed. Touching only the microkernel rebuilt its object and three
+                      affected links in `12.996 s`, without compiling `CompiledModule.cpp.obj`, versus `169.5 s` for a
+                      monolithic kernel edit (`-92.3%`). The internal layout header is excluded from installation.
                 - [x] Move Q8_K activation staging from per-helper temporary work into a decode-step activation-staging
                       cache so the same normalized hidden vector can be quantized once and reused across Q/K/V/O,
                       gate/up/down, and logits projections where shapes and tolerances permit.

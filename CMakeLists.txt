@@ -496,6 +496,7 @@ if(LITENN_ENABLE_MLIR)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler
         FILES_MATCHING PATTERN "*.h"
+        PATTERN "Runtime" EXCLUDE
     )
     install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/src/LiteNN/Compiler/Dialect/LiteNNDialect.h.inc

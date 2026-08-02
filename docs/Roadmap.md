@@ -3414,9 +3414,11 @@ These improvements do not require a compatibility break and should not block vNe
 
 - Improve production CPU GEMM and convolution kernels, or integrate a backend library, without changing public graph/model
   APIs.
-- Split CPU GGML runtime sidecars and architecture-specific microkernels out of the monolithic `CompiledModule.cpp` so
-  kernel iteration rebuilds focused objects instead of spending `169.5 s` recompiling the complete compiler
-  implementation on the Windows reference machine. This improves engineering feedback and does not block runtime P0.
+- [x] Split CPU GGML runtime sidecars and architecture-specific microkernels out of the monolithic
+  `CompiledModule.cpp`. Completed on 2026-08-02 for the Q4_K/Q6_K v4 AVX2/F16C x8/x16 family: the internal POD layout
+  ABI and kernels now build in `Runtime/CPUGGMLV4Microkernels`, all 42 targeted quantized/decode tests pass, and a
+  kernel-only rebuild compiles that object plus affected links in `12.996 s` without rebuilding
+  `CompiledModule.cpp.obj`, down from `169.5 s` (`-92.3%`). The internal header is excluded from installation.
 - Expand CUDA native lowering coverage for reductions, normalization, convolutions, attention, and fused training kernels.
 - Add richer benchmark rows for compile time, train-step latency, workspace pressure, and numerical drift.
 - Replace environment-variable notes in older performance documents with CLI/config examples where the core library already
