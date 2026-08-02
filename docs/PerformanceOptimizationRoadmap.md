@@ -973,6 +973,14 @@ beat simple rows, but it can also lose to the packed MLIR fallback on wide MLP s
     `277.218 ms/token`: one compact 32 MiB L3 domain cannot supply this streaming-weight workload as effectively as
     the scheduler's cross-domain placement. Keep `None` as the decode default; a future bandwidth-aware scatter policy
     requires an independent acceptance matrix rather than changing `Compact` semantics.
+  - Bandwidth-oriented follow-up completed on 2026-08-02: added an explicit `Spread` policy and propagated
+    `none|compact|spread` through every CPU helper, compiler option, GGUF CLI, Qwen smoke driver, benchmark environment,
+    and thread-matrix entry point. Spread interleaves the lower/upper halves of the physical-core-first topology before
+    SMT siblings, preserving Compact semantics and prior affinity restoration. Correctness passes for both policies.
+    Current 14B T8 cache-hit samples were Spread `240.774/260.167/285.250 ms/token` (median `260.167`), None
+    `257.998/260.166`, and Compact `300.594`; Spread is therefore an explicit experiment rather than the default.
+    Automatic bandwidth placement remains open until the runtime enumerates actual LLC/NUMA domains and a longer
+    repeated matrix demonstrates a stable win on symmetric and asymmetric hosts.
 - [x] Add profile counters for helper layer shapes and selected grain/thread counts.
   - Implementation: `litenn_profile` now prints a CPU AOT parallel-selection table with fused layer count, selected
     parallel layer count, total FLOPs, per-layer `m/k/n`, selected helper threads, gate reason, and an emitted-object

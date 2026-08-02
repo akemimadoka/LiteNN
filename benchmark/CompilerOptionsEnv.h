@@ -68,6 +68,10 @@ inline LiteNN::CompilerOptions LiteNNBenchCompilerOptionsFromEnvironment()
 		{
 			options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Compact;
 		}
+		else if (value == "spread")
+		{
+			options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Spread;
+		}
 	}
 	options.enableCPUAOTExternalRegions = LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
 	                                      LiteNNBenchTruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));

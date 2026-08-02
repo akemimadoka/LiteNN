@@ -293,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-aot-cache-hit", action="store_true")
     parser.add_argument("--no-aot-cache-write", action="store_true")
     parser.add_argument("--llvm-opt-level", type=int, choices=(0, 1, 2, 3))
-    parser.add_argument("--cpu-aot-affinity", choices=("none", "compact"))
+    parser.add_argument("--cpu-aot-affinity", choices=("none", "compact", "spread"))
     parser.add_argument(
         "--cpu-aot-q8k-staged-matmul",
         action="store_true",

@@ -2643,10 +2643,6 @@ TEST(CompiledModuleTest, RunManyIntoRunsIndependentInvocationsConcurrently)
 
 TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 {
-	CompilerOptions options;
-	options.cpuAOTThreadCount = 4;
-	options.cpuAOTAffinityPolicy = CPUAOTAffinityPolicy::Compact;
-	options.cpuAOTParallelMinFlops = 1;
 	constexpr std::size_t kBatch = 128;
 	constexpr std::size_t kInput = 64;
 	constexpr std::size_t kOutput = 32;
@@ -2661,20 +2657,27 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 
 	auto optimized = graph;
 	FusionPass{}.Run(optimized);
-	auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(optimized), options);
-	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
-	                               artifact.Instructions().size());
-	ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
-
-	auto module = artifact.Load();
-	std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32) };
-	module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
-
-	ASSERT_EQ(expected.size(), 1u);
-	ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
-	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	for (const auto affinityPolicy : { CPUAOTAffinityPolicy::Compact, CPUAOTAffinityPolicy::Spread })
 	{
-		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
+		CompilerOptions options;
+		options.cpuAOTThreadCount = 4;
+		options.cpuAOTAffinityPolicy = affinityPolicy;
+		options.cpuAOTParallelMinFlops = 1;
+		auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(optimized), options);
+		const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+		                               artifact.Instructions().size());
+		ASSERT_NE(instructions.find("litenn_cpu_matmul_bias_relu_parallel_f32"), std::string::npos);
+
+		auto module = artifact.Load();
+		std::array<Tensor<CPU>, 1> outputs = { Tensor<CPU>(Uninitialized, { kBatch, kOutput }, DataType::Float32) };
+		module.RunTensorsInto(std::span<const Tensor<CPU>>(inputs), std::span<Tensor<CPU>>(outputs));
+
+		ASSERT_EQ(expected.size(), 1u);
+		ASSERT_EQ(outputs[0].NumElements(), expected[0].NumElements());
+		for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+		{
+			EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
+		}
 	}
 }
 

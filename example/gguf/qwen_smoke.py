@@ -311,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cpu-aot-affinity",
-        choices=("none", "compact"),
+        choices=("none", "compact", "spread"),
         help="CPU AOT helper affinity policy passed to litenn_gguf_convert",
     )
     parser.add_argument(

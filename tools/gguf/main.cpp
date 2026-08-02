@@ -88,7 +88,7 @@ namespace
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -99,7 +99,7 @@ namespace
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -110,7 +110,7 @@ namespace
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -438,9 +438,13 @@ namespace
 				{
 					options.cpuAOTAffinityPolicy = "compact";
 				}
+				else if (value == "spread")
+				{
+					options.cpuAOTAffinityPolicy = "spread";
+				}
 				else
 				{
-					throw std::runtime_error("cpu-aot-affinity must be 'none' or 'compact'");
+					throw std::runtime_error("cpu-aot-affinity must be 'none', 'compact', or 'spread'");
 				}
 			}
 			else if (arg == "--compile-diagnostics")
@@ -2295,9 +2299,11 @@ namespace
 		}
 		if (decodeOptions.cpuAOTAffinityPolicy)
 		{
-			compilerOptions.cpuAOTAffinityPolicy = *decodeOptions.cpuAOTAffinityPolicy == "compact"
-			                                           ? LiteNN::CPUAOTAffinityPolicy::Compact
-			                                           : LiteNN::CPUAOTAffinityPolicy::None;
+			compilerOptions.cpuAOTAffinityPolicy =
+			    *decodeOptions.cpuAOTAffinityPolicy == "compact"
+			        ? LiteNN::CPUAOTAffinityPolicy::Compact
+			        : (*decodeOptions.cpuAOTAffinityPolicy == "spread" ? LiteNN::CPUAOTAffinityPolicy::Spread
+			                                                           : LiteNN::CPUAOTAffinityPolicy::None);
 		}
 		if (decodeOptions.enableCompileDiagnostics)
 		{

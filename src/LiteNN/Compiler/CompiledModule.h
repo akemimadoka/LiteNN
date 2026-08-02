@@ -134,6 +134,8 @@ namespace LiteNN
 	{
 		None = 0,
 		Compact = 1,
+		/// Interleave the lower and upper halves of the physical-core-first topology for bandwidth experiments.
+		Spread = 2,
 	};
 
 	enum class CPUAOTGGMLPrepackedWeightPolicy : std::uint32_t

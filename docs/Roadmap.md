@@ -641,6 +641,14 @@ large-batch MLP measurements show the first sidecar helper path can lose to the 
       real 14B cache-hit decode improved from the broken Compact result of `765.725` to `454.803 ms/token`, but remained
       slower than scheduler-managed `None` at `277.218 ms/token`. Keep no-pinning as the production decode default;
       bandwidth-aware cross-cache-domain scattering is separate nonblocking work.
+- [x] Add an explicit bandwidth-oriented CPU AOT `Spread` affinity policy:
+      all CPU helper decoders plus compiler, GGUF CLI, Qwen smoke, benchmark environment, and thread-matrix surfaces
+      accept `none|compact|spread`. Spread interleaves the lower and upper halves of the physical-core-first topology
+      before SMT siblings without changing Compact semantics, and both pinned policies pass the parallel-chain
+      correctness test. Real 14B T8 cache-hit samples were Spread `240.774/260.167/285.250 ms/token` (median
+      `260.167`), None `257.998/260.166`, and Compact `300.594`, so None remains the default. Accurate LLC/NUMA-domain
+      enumeration and stable automatic policy selection remain nonblocking work rather than being inferred from this
+      enumeration-order heuristic.
 - [x] Extend `litenn_profile` with first-class CPU AOT instruction stats instead of relying on manual objdump report synthesis.
 - [x] Extend `litenn_profile` with CPU AOT parallel-helper selection counters.
       The profile report now prints layer shapes, estimated FLOPs, selected helper thread counts, sidecar-vs-MLIR gate

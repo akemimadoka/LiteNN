@@ -420,9 +420,15 @@ namespace
 #endif
 	};
 
-	const std::vector<LiteNNCPUThreadAffinityTarget>& LiteNNCPUCompactAffinityTargets()
+	struct LiteNNCPUAffinityTopology
 	{
-		static const auto targets = [] {
+		std::vector<LiteNNCPUThreadAffinityTarget> compact;
+		std::vector<LiteNNCPUThreadAffinityTarget> spread;
+	};
+
+	const LiteNNCPUAffinityTopology& GetLiteNNCPUAffinityTopology()
+	{
+		static const auto topology = [] {
 			std::vector<std::vector<LiteNNCPUThreadAffinityTarget>> cores;
 #ifdef _WIN32
 			DWORD bytes = 0;
@@ -510,23 +516,45 @@ namespace
 			}
 #endif
 
-			std::vector<LiteNNCPUThreadAffinityTarget> result;
+			LiteNNCPUAffinityTopology result;
 			for (std::size_t siblingIndex = 0;; ++siblingIndex)
 			{
-				const auto previousSize = result.size();
+				const auto previousSize = result.compact.size();
 				for (const auto& core : cores)
 				{
 					if (siblingIndex < core.size())
 					{
-						result.push_back(core[siblingIndex]);
+						result.compact.push_back(core[siblingIndex]);
 					}
 				}
-				if (result.size() == previousSize)
+				if (result.compact.size() == previousSize)
 				{
 					break;
 				}
 			}
-			if (result.empty())
+			if (!cores.empty())
+			{
+				// Firmware topology enumeration commonly keeps cache domains contiguous. Interleave its lower and upper
+				// halves without changing Compact semantics; exact LLC/NUMA placement remains a separate policy.
+				const auto secondHalf = (cores.size() + 1) / 2;
+				for (std::size_t siblingIndex = 0;; ++siblingIndex)
+				{
+					const auto previousSize = result.spread.size();
+					for (std::size_t slot = 0; slot < cores.size(); ++slot)
+					{
+						const auto coreIndex = slot % 2 == 0 ? slot / 2 : secondHalf + slot / 2;
+						if (coreIndex < cores.size() && siblingIndex < cores[coreIndex].size())
+						{
+							result.spread.push_back(cores[coreIndex][siblingIndex]);
+						}
+					}
+					if (result.spread.size() == previousSize)
+					{
+						break;
+					}
+				}
+			}
+			if (result.compact.empty())
 			{
 #ifdef _WIN32
 				const auto groupCount = GetActiveProcessorGroupCount();
@@ -536,8 +564,9 @@ namespace
 					for (DWORD processor = 0; processor < processorCount && processor < sizeof(KAFFINITY) * 8;
 					     ++processor)
 					{
-						result.push_back({ .group = group,
-						                   .mask = static_cast<KAFFINITY>(1) << static_cast<std::size_t>(processor) });
+						result.compact.push_back(
+						    { .group = group,
+						      .mask = static_cast<KAFFINITY>(1) << static_cast<std::size_t>(processor) });
 					}
 				}
 #elif defined(__linux__)
@@ -549,15 +578,32 @@ namespace
 					{
 						if (CPU_ISSET(processor, &available))
 						{
-							result.push_back({ .processor = processor });
+							result.compact.push_back({ .processor = processor });
 						}
 					}
 				}
 #endif
 			}
+			if (result.spread.empty())
+			{
+				result.spread = result.compact;
+			}
 			return result;
 		}();
-		return targets;
+		return topology;
+	}
+
+	CPUAOTAffinityPolicy ResolveCPUAOTAffinityPolicy(std::uint64_t value)
+	{
+		switch (static_cast<CPUAOTAffinityPolicy>(value))
+		{
+		case CPUAOTAffinityPolicy::Compact:
+			return CPUAOTAffinityPolicy::Compact;
+		case CPUAOTAffinityPolicy::Spread:
+			return CPUAOTAffinityPolicy::Spread;
+		default:
+			return CPUAOTAffinityPolicy::None;
+		}
 	}
 
 	class LiteNNCPUThreadAffinityState
@@ -572,11 +618,12 @@ namespace
 				return;
 			}
 			Restore();
-			if (policy != CPUAOTAffinityPolicy::Compact)
+			if (policy == CPUAOTAffinityPolicy::None)
 			{
 				return;
 			}
-			const auto& targets = LiteNNCPUCompactAffinityTargets();
+			const auto& topology = GetLiteNNCPUAffinityTopology();
+			const auto& targets = policy == CPUAOTAffinityPolicy::Spread ? topology.spread : topology.compact;
 			if (workerSlot >= targets.size())
 			{
 				return;
@@ -930,9 +977,7 @@ namespace
 	                                                         std::uint64_t threadCount, std::uint64_t affinityPolicy,
 	                                                         bool relu)
 	{
-		const auto policy = affinityPolicy == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                        ? CPUAOTAffinityPolicy::Compact
-		                        : CPUAOTAffinityPolicy::None;
+		const auto policy = ResolveCPUAOTAffinityPolicy(affinityPolicy);
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
@@ -3735,9 +3780,7 @@ namespace
 		const auto operations = outputElements * static_cast<std::uint64_t>(lhsColumns);
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, effectiveActivationDotMode, operations,
 		                                                           outputElements, requestedThreadCount);
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (format == QuantizedBlockFormat::GGML_Q8_0 || format == QuantizedBlockFormat::GGML_Q4_K ||
 		    format == QuantizedBlockFormat::GGML_Q5_K || format == QuantizedBlockFormat::GGML_Q6_K)
 		{
@@ -4438,9 +4481,7 @@ namespace
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
 		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
@@ -4646,9 +4687,7 @@ namespace
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(schedulingFormat, GGMLActivationDotMode::Q8KStaged,
 		                                                           operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
@@ -4991,9 +5030,7 @@ namespace
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
 		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
@@ -5160,9 +5197,7 @@ namespace
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, GGMLActivationDotMode::Q8KStaged, operations,
 		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
@@ -5532,9 +5567,7 @@ namespace
 		    ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat::GGML_Q4_K, GGMLActivationDotMode::DirectFloat32,
 		                                      operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
@@ -5729,9 +5762,7 @@ namespace
 		    ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat::GGML_Q6_K, GGMLActivationDotMode::DirectFloat32,
 		                                      operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
-		const auto affinityPolicy = affinityPolicyValue == static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact)
-		                                ? CPUAOTAffinityPolicy::Compact
-		                                : CPUAOTAffinityPolicy::None;
+		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
