@@ -3071,7 +3071,7 @@ Priority classes:
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
       compile/cache key, preserve strict ABI validation in artifact metadata, and regression-test concurrent population
       plus reuse so a metadata-only compiler change does not duplicate multi-GB weights.
-- [ ] P0: Add step-level Q8_K activation staging for decode projections:
+- [x] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot
       kernels and validated on full decode.
@@ -3097,7 +3097,10 @@ Priority classes:
       covers Q4_K/Q5_K/Q6_K single and grouped projections. Short smokes measured Q4_K `qwen_gate_up/grouped/T8`
       staged at about `4.52 ms` versus `7.62 ms` direct, Q5_K at about `5.33 ms` versus `14.1 ms`, and single
       `qwen_ffn_down/T8` staged wins for Q4_K/Q5_K/Q6_K.
-- [ ] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
+      Production closure completed on 2026-08-02: field-interleaved-v4 uses a bounded, content-validated per-thread
+      Q8_K workspace for single projections and stages once for grouped projections. Mixed-format Q/K/V reuse, exact
+      output parity, and the full 43-test quantized/decode regression set pass without fallback.
+- [x] P0: Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels:
       target the real Qwen decode rows first (`1x5120 -> 1x27648`, `1x5120 -> 1x5120`, `1x13824 -> 1x5120`,
       `1x5120 -> 1x1024`, and `1x5120 -> 152064`), then repeat the cache-hit LiteNN-vs-llama.cpp comparison before
       changing default prepared-weight or thread policy.
@@ -3172,12 +3175,17 @@ Priority classes:
       Shape-aware v4 decode thread caps completed on 2026-08-02. T4/T8/T16 production-shape medians showed Q4_K
       hidden favoring T4 (`0.116 ms` versus `0.173/0.247`), Q4_K FFN-down favoring T8 (`0.311 ms`), and grouped
       gate/up, Q6_K FFN-down, and Q6_K logits favoring T16 (`1.19/0.597/11.4 ms`); 1024-column Q4_K/Q6_K rows
-      favored T2. The configured count is now a hard upper bound with decode-only shape limits, while prefill/batch and
+      favored T2. Explicit thread counts remain a hard upper bound and may select T16, while automatic decode policy
+      caps general projections at T8, square Q4_K hidden projections at T4, and small outputs at T2. Prefill/batch and
       sub-1M-operation work retain the generic policy. Profiler details expose the resolved count and regression
       coverage locks the Q4_K square `T8 -> T4` decision. A real 14B profile reduced the 48-call hidden bucket from
       `26.348` to `25.186 ms`; three no-profile cache-hit runs generated identical text at `245.097`, `245.177`, and
       `249.406 ms/token`. Their `245.177 ms/token` median is `3.52%` below the preceding `254.126 ms/token` median and
       within `4.3%` of the `235.1 ms/token` CPU control result.
+      The final automatic-policy matrix rejected an automatic T16 ceiling: it measured `299.960 ms/token`, while the
+      corrected automatic T8 ceiling measured `285.087 ms/token` under profiling. Alternating unprofiled auto/explicit
+      T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
+      for controlled experiments but is not the production default.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

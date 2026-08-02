@@ -1596,7 +1596,7 @@ namespace
 		const auto requestedOrHardware = requestedThreadCount == 0
 		                                     ? static_cast<std::uint64_t>(LiteNNCPUHardwareThreadCount())
 		                                     : requestedThreadCount;
-		auto shapeLimit = std::uint64_t{ 16 };
+		auto shapeLimit = requestedThreadCount == 0 ? std::uint64_t{ 8 } : std::uint64_t{ 16 };
 		if (!grouped && outColumns <= 2048)
 		{
 			shapeLimit = 2;

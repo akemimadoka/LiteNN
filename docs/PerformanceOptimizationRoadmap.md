@@ -404,7 +404,7 @@ Priority classes for the GGUF/Qwen decode work:
                       `42.8-43.6 ms` and reduced generated-token throughput. Both implementations were removed. Future
                       ISA/layout changes must pass repeated full-decode evidence rather than instruction-count or one
                       microbenchmark evidence alone.
-                - [ ] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
+                - [x] Implement production Q4_K/Q6_K x Q8_K GEMV/vec-dot kernels for the top Qwen decode rows.
                       Start with the measured rows: gate/up `1x5120 -> 1x27648`, hidden/output `1x5120 -> 1x5120`,
                       FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits `1x5120 -> 152064`. Prefer a
                       portable compact kernel first, then add x86 AVX2/AVX512/VNNI variants behind runtime feature
@@ -514,16 +514,19 @@ Priority classes for the GGUF/Qwen decode work:
                       `0.465/0.338`), while grouped gate/up, Q6_K FFN-down, and Q6_K logits favored T16
                       (`1.19/0.597/11.4 ms`). Small 1024-column Q4_K/Q6_K projections favored T2. The v4 runtime now
                       treats the configured count as a hard upper bound and applies decode-only limits of T2 for small
-                      outputs, T4 for square Q4_K hidden projections, T8 for narrow non-square Q4_K projections, and
-                      T16 otherwise; batched/prefill and sub-1M-operation work retain the generic policy. Helper profile
+                      outputs and T4 for square Q4_K hidden projections. Automatic decode caps all remaining projections
+                      at T8; an explicit configured count remains a hard upper bound and may select T16. Batched/prefill
+                      and sub-1M-operation work retain the generic policy. Helper profile
                       details report the actual resolved count, and a regression locks the Q4_K square `T8 -> T4`
                       decision. A real 14B profile confirmed `resolved_threads=4` and reduced the 48-call hidden bucket
                       from `26.348` to `25.186 ms`. Three no-profile cache-hit runs generated identical text at
                       `245.097`, `245.177`, and `249.406 ms/token`; the `245.177 ms/token` median is `3.52%` below the
                       preceding `254.126 ms/token` median and within `4.3%` of the `235.1 ms/token` CPU control result.
-                - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
-                      defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
-                      secondary lever.
+                - [x] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
+                      defaults. Completed on 2026-08-02: the automatic T16 ceiling regressed the profiled 14B run to
+                      `299.960 ms/token`; capping automatic decode at T8 reduced it to `285.087 ms/token`. Alternating
+                      unprofiled auto/explicit-T8 runs measured `279-289` and `268-274 ms/token` under visible host
+                      variance, so the production default stops at T8 while explicit T16 remains an opt-in experiment.
                 - [x] Split CPU GGML sidecars and architecture-specific microkernels out of `CompiledModule.cpp` into
                       focused translation units. Completed on 2026-08-02: the Q4_K/Q6_K v4 AVX2/F16C x8/x16 kernels
                       and their POD layout ABI now live in the internal `Runtime/CPUGGMLV4Microkernels` unit; MLIR,
@@ -547,10 +550,12 @@ Priority classes for the GGUF/Qwen decode work:
                       above. This preserves the existing artifact ABI while sharing Q's staged hidden vector with the
                       separate mixed-format K/V helpers. Memory is bounded by the largest activation seen by each
                       calling thread and does not scale with token count or context capacity.
-                - [ ] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
-                      The llama.cpp control source uses `q8_K` activation dot kernels, `gemv_q4_K/q6_K_*_q8_K`, and
-                      repacked/VNNI/AMX-oriented paths; LiteNN's current hot path still performs direct Float32 x GGML
-                      block accumulation in `litenn_cpu_ggml_block_matmul_f32` with `x4` output grouping.
+                - [x] Implement low-thread packed GEMV microkernels for Q4_K/Q6_K x Q8_K before retuning thread policy.
+                      Completed on 2026-08-02: field-interleaved-v4 provides compact Q8_K activation staging, AVX2 x8
+                      Q4_K/Q6_K kernels, a runtime-gated AVX-512 x16 Q6_K kernel, grouped staging reuse, block-level
+                      integer reduction, pair-sum/scale folding, and shape-aware low-thread dispatch. All 43 targeted
+                      quantized/decode tests pass with exact output and no fallback. Three stable no-profile 14B runs
+                      measured a `245.177 ms/token` median, within `4.3%` of the `235.1 ms/token` CPU control result.
                 - [x] Add Qwen-shaped packed-kernel benchmark rows for the exact top profile rows and require
                       full-decode profile evidence before switching the default route. Completed the benchmark-surface
                       portion on 2026-07-06: grouped projection helper rows now use the full
