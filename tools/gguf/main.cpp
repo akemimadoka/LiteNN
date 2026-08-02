@@ -88,7 +88,8 @@ namespace
 		    << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
+		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
@@ -99,7 +100,8 @@ namespace
 		    << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
+		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
@@ -110,7 +112,8 @@ namespace
 		    << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
-		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--compile-only] "
+		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
+		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
@@ -295,6 +298,7 @@ namespace
 		bool streamTokens{};
 		bool streamStats{};
 		bool profileHelpers{};
+		bool profileNodes{};
 		bool compileOnly{};
 		bool pagedReferenceDecode{};
 		std::optional<std::size_t> pagedResidentPageCount;
@@ -382,6 +386,10 @@ namespace
 			else if (arg == "--profile-helpers")
 			{
 				options.profileHelpers = true;
+			}
+			else if (arg == "--profile-nodes")
+			{
+				options.profileNodes = true;
 			}
 			else if (arg == "--compile-only")
 			{
@@ -1136,6 +1144,45 @@ namespace
 		}
 	}
 
+	void LogGGUFNodeProfile(bool enabled, std::size_t step,
+	                        std::span<const LiteNN::CompiledModuleCPUNodeProfileEvent> events)
+	{
+		if (!enabled || events.empty())
+		{
+			return;
+		}
+		double selfMs = 0.0;
+		double helperMs = 0.0;
+		std::uint64_t calls = 0;
+		std::size_t emittedNodes = 0;
+		for (const auto& event : events)
+		{
+			selfMs += event.selfMilliseconds;
+			helperMs += event.helperMilliseconds;
+			calls += event.calls;
+			if (std::max({ event.inclusiveMilliseconds, event.selfMilliseconds, event.helperMilliseconds }) >= 0.001)
+			{
+				++emittedNodes;
+			}
+		}
+		LogGGUFDiagnostic(enabled, std::format("decode step {} node_profile self_ms={:.3f} helper_ms={:.3f} "
+		                                       "calls={} nodes={} emitted_nodes={}",
+		                                       step, selfMs, helperMs, calls, events.size(), emittedNodes));
+		for (const auto& event : events)
+		{
+			if (std::max({ event.inclusiveMilliseconds, event.selfMilliseconds, event.helperMilliseconds }) < 0.001)
+			{
+				continue;
+			}
+			LogGGUFDiagnostic(
+			    enabled,
+			    std::format("decode step {} node subgraph={} node={} op={} schema={} calls={} inclusive_ms={:.3f} "
+			                "self_ms={:.3f} helper_ms={:.3f}",
+			                step, event.subgraphId, event.nodeId, event.opKind, event.schemaId, event.calls,
+			                event.inclusiveMilliseconds, event.selfMilliseconds, event.helperMilliseconds));
+		}
+	}
+
 	std::vector<std::byte> ReadBinaryFile(const std::filesystem::path& path)
 	{
 		std::ifstream input(path, std::ios::binary);
@@ -1375,14 +1422,15 @@ namespace
 		constexpr std::uint32_t decodePlanCacheVersion = 7;
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
-		    "affinity={}|min_flops={}|"
+		    "affinity={}|min_flops={}|node_profile={}|"
 		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}|"
 		    "paged_resident_pages={}",
 		    decodeMode, decodePlanCacheVersion, LiteNN::CPUAOTCompilationCacheVersion,
 		    std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
 		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
-		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
+		    options.enableCPUAOTNodeProfiling ? 1 : 0, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0,
+		    options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
 		    CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout), residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
@@ -1912,7 +1960,7 @@ namespace
 			double stateUpdateMs = 0.0;
 			std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
 			std::optional<LiteNN::CompiledModuleCPUHelperProfiler> helperProfiler;
-			if (options.profileHelpers)
+			if (options.profileHelpers || options.profileNodes)
 			{
 				helperProfiler.emplace();
 			}
@@ -1970,12 +2018,14 @@ namespace
 			{
 				const auto helperProfileEmitStart = std::chrono::steady_clock::now();
 				const auto helperEvents = helperProfiler->Snapshot();
+				const auto nodeEvents = helperProfiler->SnapshotNodes();
 				for (const auto& event : helperEvents)
 				{
 					helperTotalMs += event.totalMilliseconds;
 				}
 				moduleNonHelperMs = moduleRunMs >= helperTotalMs ? moduleRunMs - helperTotalMs : 0.0;
-				LogGGUFHelperProfile(true, step + 1, helperEvents);
+				LogGGUFHelperProfile(options.profileHelpers || options.profileNodes, step + 1, helperEvents);
+				LogGGUFNodeProfile(options.profileNodes, step + 1, nodeEvents);
 				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
 				helperProfileEmitMs =
 				    std::chrono::duration<double, std::milli>(helperProfileEmitEnd - helperProfileEmitStart).count();
@@ -2060,7 +2110,8 @@ namespace
 				std::cout << "stream stats step=" << (step + 1) << " position=" << step
 				          << " phase=" << (isPromptReplayStep ? "prompt_replay" : "generation") << " step_ms=" << stepMs
 				          << " input_prep_ms=" << inputPrepMs << " module_run_ms=" << moduleRunMs
-				          << " helper_profile_enabled=" << (helperProfiler ? "true" : "false");
+				          << " helper_profile_enabled=" << (helperProfiler ? "true" : "false")
+				          << " node_profile_enabled=" << (options.profileNodes ? "true" : "false");
 				if (helperProfiler)
 				{
 					std::cout << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
@@ -2322,6 +2373,7 @@ namespace
 		{
 			compilerOptions.enableCompileDiagnostics = *decodeOptions.enableCompileDiagnostics;
 		}
+		compilerOptions.enableCPUAOTNodeProfiling = decodeOptions.profileNodes;
 		if (decodeOptions.enableCPUAOTQ8KStagedMatMul)
 		{
 			compilerOptions.enableCPUAOTGGMLQ8KStagedMatMul = true;

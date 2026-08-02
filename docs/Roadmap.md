@@ -2886,12 +2886,19 @@ Priority classes:
       - [x] Add a helper-derived node timing schema. Completed on 2026-07-05:
             `gguf_decode_summary.json` now emits `node_timings` with node kind, node name, helper symbol, GGML format,
             input/output shapes, requested/resolved thread counts, calls, total/average milliseconds, and explicit
-            `attribution=helper-derived`. This closes the P2 observability gate without pretending the current runtime
-            has stable per-layer node ids; native per-layer ids remain a later runtime metadata improvement.
+            `attribution=helper-derived`. At completion time this closed the initial P2 observability gate without
+            pretending the runtime had stable per-layer node ids; native ids are completed by the marker work below.
       - [x] Split module helper and non-helper decode time. Completed on 2026-07-07: GGUF decode `--stream-stats`
             emits `helper_total_ms` and `module_non_helper_ms`, and the profile bundle plus decode comparison tools
             preserve those fields as runtime buckets and comparison columns. This isolates generated-code/runtime-entry
             time from sidecar helper time before true per-layer non-helper timing is available.
+      - [x] Add native stable per-node timing. Completed on 2026-08-02: opt-in CPU AOT instrumentation records
+            subgraph/node/schema identity and operation kind with inclusive, helper, and exclusive self time.
+            `litenn_gguf_convert --profile-nodes` and `profile_bundle.py` expose per-node rows, ranked native node-kind
+            totals, and trace events without changing normal artifacts. A cache-hit 14B diagnostic run reduced the
+            unknown warm non-helper bucket to about `27 ms/step`; corrected native self attribution is led by about
+            `10 ms` of UnaryOp work while nested CallNode frames account for about `2.7-2.8 ms`. Profile output cost is
+            reported separately and these intrusive rows are not throughput evidence.
 - [x] P0: Add production-shaped GGML helper benchmark and estimator coverage:
       benchmark `batch=1` rows for real Qwen decode projection shapes (`5120->5120`, `5120->1024`,
       `5120->13824`, `13824->5120`, and `5120->152064`) and report the full-step projection estimate. The current
@@ -3436,10 +3443,11 @@ Priority classes:
             `qwen_smoke_report.json` through `profile_bundle.py`, then records `profileBundle`, `profileSummary`, and
             `profileTrace` paths in the JSON/Markdown table so the long-context matrix can feed
             `gguf_decode_compare.py --litenn-profile-summary` directly.
-      - [x] Add explicit CPU AOT helper profiling scopes and GGUF decode diagnostics output for helper symbol,
+      - [x] Add explicit CPU AOT helper and native-node profiling scopes and GGUF decode diagnostics output for helper symbol,
             shape/format/thread detail, call count, total time, and average time per decode step. This covers
             sidecar/helper attribution for quantized projections, get-rows, RoPE, KV scatter, and active-prefix
-            attention; per-layer/per-node attribution remains open.
+            attention. Opt-in native plan markers now add stable subgraph/node/schema ids and inclusive/helper/self time
+            for generated non-helper code.
 
 ### Long-Term Deferred Queue
 

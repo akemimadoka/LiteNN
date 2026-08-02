@@ -630,7 +630,7 @@ Priority classes for the GGUF/Qwen decode work:
                 Qwen profile now reports the full mixed replay+generation path at about `1.56 t/s`, while the steady
                 generated-token phase is visible as about `430.7 ms/token` (`~2.32 t/s`). Use the generation row for
                 steady decode acceptance and the all row for end-to-end prompt replay plus decode regressions.
-          - [ ] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
+          - [x] P0: Split the current `~143 ms/step` residual into ranked runtime buckets.
                 - [x] Profile-bundle residual buckets. Completed on 2026-07-06: `benchmark/profile_bundle.py` now emits
                       `residual_buckets`, `top_residual_steps`, Markdown residual tables, and Chrome trace residual
                       events using the stable `step_ms - helper_total_ms` attribution. This makes prompt-replay,
@@ -644,9 +644,26 @@ Priority classes for the GGUF/Qwen decode work:
                       `helper_total_ms` and `module_non_helper_ms`, and the profile bundle plus decode comparison tools
                       preserve those fields as runtime buckets and comparison columns. This separates sidecar helper
                       time from generated-code/runtime-entry work before full per-node non-helper instrumentation lands.
-                - [ ] Add stable per-layer/per-node timing for non-helper generated code and expose RMSNorm, SwiGLU,
-                      residual adds, logits/sampler handling, state aliasing, and runtime entry overhead separately.
-                      This is the next blocker once quantized projection time is reduced.
+                - [x] Add stable per-layer/per-node timing for non-helper generated code. Completed on 2026-08-02:
+                      opt-in `CompilerOptions::enableCPUAOTNodeProfiling` inserts MLIR markers around every
+                      `ExecutablePlan` node and reports stable subgraph/node/schema identity, operation kind, inclusive
+                      time, helper time, and exclusive self time. `litenn_gguf_convert --profile-nodes`,
+                      `qwen_smoke.py`, and `profile_bundle.py` preserve these events and emit ranked native node-kind
+                      totals, per-node JSON/Markdown rows, and trace events. The normal compile/cache path remains
+                      uninstrumented, and profile artifacts have distinct cache identities.
+                      A three-step cache-hit 14B Q4_K_M O3 diagnostic run measured warm module/helper/non-helper times of
+                      `648.992/621.482/27.510 ms` and `583.455/556.285/27.170 ms`. After excluding nested marker callback
+                      overhead, total warm native self time was `20.411-20.723 ms`: `UnaryOpNode` led at
+                      `9.718-10.430 ms`, nested `CallNode` frames fell to `2.687-2.843 ms`, binary elementwise work was
+                      `1.855-1.924 ms`, and grouped plus ordinary quantized wrapper work was `2.611-2.890 ms`.
+                      Filtering sub-microsecond rows reduced profile emission to `13.0-15.2 ms/step`; the summary retains
+                      full self/helper totals while detailed rows retain active stable ids. Profiling changes helper
+                      timing, so these runs are attribution evidence rather than representative throughput measurements.
+                - [ ] P0: Validate and remove the measured decode wrapper/elementwise overhead. Use focused
+                      non-profiled microbenchmarks to separate remaining marker cost from the `~2.7 ms` nested-call
+                      bucket, account for the `~6.5-7.1 ms` gap between module non-helper and native self totals, then
+                      fuse the `~10 ms` SiLU/unary path with adjacent gate multiplication where legality and numerics
+                      permit.
                 - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
                       2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
                       build repeat-penalty membership once only when enabled, and consume the last Tensor logits row

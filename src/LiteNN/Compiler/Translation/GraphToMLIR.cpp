@@ -8,6 +8,7 @@
 #include <LiteNN/Validation/GraphValidator.h>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -322,7 +323,8 @@ namespace litenn
 		class GraphTranslator
 		{
 		public:
-			GraphTranslator(const ExecutablePlan& plan, MLIRContext& ctx) : plan_(plan), ctx_(ctx), builder_(&ctx)
+			GraphTranslator(const ExecutablePlan& plan, MLIRContext& ctx, const GraphToMLIROptions& options)
+			    : plan_(plan), ctx_(ctx), builder_(&ctx), options_(options)
 			{
 			}
 
@@ -330,6 +332,10 @@ namespace litenn
 			{
 				module_ = ModuleOp::create(builder_.getUnknownLoc());
 				builder_.setInsertionPointToStart(module_->getBody());
+				if (options_.enableNodeProfiling)
+				{
+					emitNodeProfileDeclarations();
+				}
 
 				// Emit variable declarations
 				for (std::size_t i = 0; i < plan_.variables.size(); ++i)
@@ -347,6 +353,36 @@ namespace litenn
 			}
 
 		private:
+			static constexpr llvm::StringLiteral kNodeProfileBegin = "litenn_cpu_profile_node_begin";
+			static constexpr llvm::StringLiteral kNodeProfileEnd = "litenn_cpu_profile_node_end";
+
+			void emitNodeProfileDeclarations()
+			{
+				auto i64 = builder_.getI64Type();
+				auto type = builder_.getFunctionType({ i64, i64, i64 }, {});
+				auto begin = builder_.create<func::FuncOp>(builder_.getUnknownLoc(), kNodeProfileBegin, type);
+				begin.setPrivate();
+				auto end = builder_.create<func::FuncOp>(builder_.getUnknownLoc(), kNodeProfileEnd, type);
+				end.setPrivate();
+			}
+
+			void emitNodeProfileMarker(llvm::StringRef callee, const ExecutablePlanSubgraph& subgraph,
+			                           const ExecutablePlanNode& node)
+			{
+				if (!options_.enableNodeProfiling)
+				{
+					return;
+				}
+				auto loc = builder_.getUnknownLoc();
+				auto i64 = builder_.getI64Type();
+				SmallVector<Value> args{
+					builder_.create<arith::ConstantIntOp>(loc, i64, static_cast<std::int64_t>(subgraph.sourceSubgraph)),
+					builder_.create<arith::ConstantIntOp>(loc, i64, static_cast<std::int64_t>(node.sourceNode)),
+					builder_.create<arith::ConstantIntOp>(loc, i64, static_cast<std::int64_t>(node.op.schemaId)),
+				};
+				builder_.create<func::CallOp>(loc, callee, TypeRange{}, args);
+			}
+
 			void emitVariable(std::size_t varIndex)
 			{
 				if (varIndex < plan_.variableNames.size() &&
@@ -416,6 +452,7 @@ namespace litenn
 				for (NodeId nodeId = 0; nodeId < sg.NodeCount(); ++nodeId)
 				{
 					const auto& entry = sg.subgraph.nodes[nodeId];
+					emitNodeProfileMarker(kNodeProfileBegin, sg.subgraph, entry);
 					std::vector<OutputInfo> outputInfos;
 					outputInfos.reserve(entry.outputs.size());
 					for (const auto& output : entry.outputs)
@@ -427,6 +464,7 @@ namespace litenn
 						    emitNode(sg, nodeId, node, outputInfos, valueMap, activationMap, tapeMap);
 					    },
 					    entry.node);
+					emitNodeProfileMarker(kNodeProfileEnd, sg.subgraph, entry);
 				}
 			}
 
@@ -3996,6 +4034,7 @@ namespace litenn
 			MLIRContext& ctx_;
 			OpBuilder builder_;
 			OwningOpRef<ModuleOp> module_;
+			GraphToMLIROptions options_;
 		};
 
 	} // namespace
@@ -4006,12 +4045,13 @@ namespace litenn
 		return translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
 	}
 
-	OwningOpRef<ModuleOp> translateExecutablePlanToMLIR(const ExecutablePlan& plan, MLIRContext& ctx)
+	OwningOpRef<ModuleOp> translateExecutablePlanToMLIR(const ExecutablePlan& plan, MLIRContext& ctx,
+	                                                    const GraphToMLIROptions& options)
 	{
 		ctx.loadDialect<litenn::LiteNNDialect, arith::ArithDialect, linalg::LinalgDialect, math::MathDialect,
-		                tensor::TensorDialect>();
+		                tensor::TensorDialect, func::FuncDialect>();
 		ValidateExecutablePlan(plan);
-		GraphTranslator translator(plan, ctx);
+		GraphTranslator translator(plan, ctx, options);
 		return translator.translate();
 	}
 

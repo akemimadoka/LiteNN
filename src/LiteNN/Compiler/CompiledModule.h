@@ -40,6 +40,18 @@ namespace LiteNN
 		double totalMilliseconds{};
 	};
 
+	struct CompiledModuleCPUNodeProfileEvent
+	{
+		std::uint64_t subgraphId{};
+		std::uint64_t nodeId{};
+		std::uint32_t schemaId{};
+		std::string opKind;
+		std::uint64_t calls{};
+		double inclusiveMilliseconds{};
+		double selfMilliseconds{};
+		double helperMilliseconds{};
+	};
+
 	class CompiledModuleCPUHelperProfiler
 	{
 	public:
@@ -49,6 +61,7 @@ namespace LiteNN
 		~CompiledModuleCPUHelperProfiler();
 
 		std::vector<CompiledModuleCPUHelperProfileEvent> Snapshot() const;
+		std::vector<CompiledModuleCPUNodeProfileEvent> SnapshotNodes() const;
 
 	private:
 		friend struct CompiledModuleCPUHelperProfilerAccess;
@@ -204,6 +217,8 @@ namespace LiteNN
 		std::uint8_t cpuAOTLLVMOptLevel{ 3 };
 		/// Print coarse compiler phase timing diagnostics to stderr.
 		bool enableCompileDiagnostics{};
+		/// Insert CPU AOT node timing markers. This changes the instruction artifact and is profiling-only.
+		bool enableCPUAOTNodeProfiling{};
 
 		static CompilerOptions Defaults();
 	};

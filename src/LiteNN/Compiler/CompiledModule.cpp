@@ -15,6 +15,7 @@
 #endif
 
 #include <LiteNN/Misc.h>
+#include <LiteNN/OpSchema.h>
 #include <LiteNN/Pass/FusionPass.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -122,8 +123,23 @@ namespace LiteNN
 {
 	struct CompiledModuleCPUHelperProfiler::Impl
 	{
+		struct NodeFrame
+		{
+			std::uint64_t subgraphId{};
+			std::uint64_t nodeId{};
+			std::uint32_t schemaId{};
+			std::chrono::steady_clock::time_point start;
+			double helperMillisecondsAtStart{};
+			double childInclusiveMilliseconds{};
+			double childHelperMilliseconds{};
+			double childInstrumentationMilliseconds{};
+		};
+
 		CompiledModuleCPUHelperProfiler::Impl* previous{};
 		std::unordered_map<std::string, CompiledModuleCPUHelperProfileEvent> events;
+		std::unordered_map<std::string, CompiledModuleCPUNodeProfileEvent> nodeEvents;
+		std::vector<NodeFrame> nodeStack;
+		double helperMilliseconds{};
 	};
 
 	struct CompiledModuleCPUHelperProfilerAccess
@@ -149,6 +165,71 @@ namespace LiteNN
 			event.detail = std::string(detail);
 			++event.calls;
 			event.totalMilliseconds += milliseconds;
+			current->helperMilliseconds += milliseconds;
+		}
+
+		static void BeginNode(std::uint64_t subgraphId, std::uint64_t nodeId, std::uint32_t schemaId)
+		{
+			if (current == nullptr)
+			{
+				return;
+			}
+			const auto callbackStart = std::chrono::steady_clock::now();
+			const auto parentIndex = current->nodeStack.size();
+			current->nodeStack.push_back({
+			    .subgraphId = subgraphId,
+			    .nodeId = nodeId,
+			    .schemaId = schemaId,
+			    .helperMillisecondsAtStart = current->helperMilliseconds,
+			});
+			const auto callbackEnd = std::chrono::steady_clock::now();
+			current->nodeStack.back().start = callbackEnd;
+			if (parentIndex > 0)
+			{
+				current->nodeStack[parentIndex - 1].childInstrumentationMilliseconds +=
+				    std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
+			}
+		}
+
+		static void EndNode(std::uint64_t subgraphId, std::uint64_t nodeId, std::uint32_t schemaId)
+		{
+			if (current == nullptr || current->nodeStack.empty())
+			{
+				return;
+			}
+
+			const auto callbackStart = std::chrono::steady_clock::now();
+			auto frame = current->nodeStack.back();
+			current->nodeStack.pop_back();
+			if (frame.subgraphId != subgraphId || frame.nodeId != nodeId || frame.schemaId != schemaId)
+			{
+				current->nodeStack.clear();
+				return;
+			}
+
+			const auto inclusive = std::chrono::duration<double, std::milli>(callbackStart - frame.start).count();
+			const auto totalHelper = std::max(0.0, current->helperMilliseconds - frame.helperMillisecondsAtStart);
+			const auto directHelper = std::max(0.0, totalHelper - frame.childHelperMilliseconds);
+			const auto self = std::max(0.0, inclusive - frame.childInclusiveMilliseconds -
+			                                    frame.childInstrumentationMilliseconds - directHelper);
+			const auto key = std::format("{}:{}:{}", subgraphId, nodeId, schemaId);
+			auto& event = current->nodeEvents[key];
+			event.subgraphId = subgraphId;
+			event.nodeId = nodeId;
+			event.schemaId = schemaId;
+			++event.calls;
+			event.inclusiveMilliseconds += inclusive;
+			event.selfMilliseconds += self;
+			event.helperMilliseconds += directHelper;
+
+			if (!current->nodeStack.empty())
+			{
+				auto& parent = current->nodeStack.back();
+				parent.childInclusiveMilliseconds += inclusive;
+				parent.childHelperMilliseconds += totalHelper;
+				parent.childInstrumentationMilliseconds +=
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - callbackStart).count();
+			}
 		}
 	};
 
@@ -166,6 +247,17 @@ namespace
 	using LiteNN::Detail::GGMLQ4KFieldInterleaved8Block;
 	using LiteNN::Detail::GGMLQ6KFieldInterleaved8Block;
 	using LiteNN::Detail::GGMLQ8KActivationBlock;
+
+	extern "C" void litenn_cpu_profile_node_begin(std::uint64_t subgraphId, std::uint64_t nodeId,
+	                                              std::uint64_t schemaId)
+	{
+		CompiledModuleCPUHelperProfilerAccess::BeginNode(subgraphId, nodeId, static_cast<std::uint32_t>(schemaId));
+	}
+
+	extern "C" void litenn_cpu_profile_node_end(std::uint64_t subgraphId, std::uint64_t nodeId, std::uint64_t schemaId)
+	{
+		CompiledModuleCPUHelperProfilerAccess::EndNode(subgraphId, nodeId, static_cast<std::uint32_t>(schemaId));
+	}
 
 #if defined(__GNUC__) || defined(__clang__)
 #define LITENN_RESTRICT __restrict__
@@ -1636,6 +1728,28 @@ namespace
 		                   lhsColumns, outRows, outColumns, requestedThreadCount,
 		                   resolvedThreadCount.value_or(ResolveGGMLBlockMatMulThreadCount(
 		                       format, activationDotMode, operations, outputUnits, requestedThreadCount)));
+	}
+
+	std::string BuildGGMLMixedBlockMatMulProfileDetail(std::span<const QuantizedBlockFormat> formats,
+	                                                   GGMLActivationDotMode activationDotMode, std::int64_t lhsRows,
+	                                                   std::int64_t lhsColumns, std::int64_t outRows,
+	                                                   std::int64_t outColumns, std::uint64_t requestedThreadCount)
+	{
+		const auto profileFormat = std::ranges::contains(formats, QuantizedBlockFormat::GGML_Q6_K)
+		                               ? QuantizedBlockFormat::GGML_Q6_K
+		                               : formats.front();
+		auto detail = BuildGGMLBlockMatMulProfileDetail(profileFormat, activationDotMode, lhsRows, lhsColumns, outRows,
+		                                                outColumns, requestedThreadCount);
+		detail.append(" formats=");
+		for (std::size_t i = 0; i < formats.size(); ++i)
+		{
+			if (i != 0)
+			{
+				detail.push_back(',');
+			}
+			detail.append(QuantizedBlockFormatName(formats[i]));
+		}
+		return detail;
 	}
 
 #if LITENN_HAS_X86_AVX2_TARGET
@@ -5983,6 +6097,12 @@ namespace
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
 			                      static_cast<QuantizedBlockFormat>(format1Value) };
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::DirectFloat32, lhsRows,
+		                                                 lhsColumns, outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -6014,6 +6134,12 @@ namespace
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
 			                      static_cast<QuantizedBlockFormat>(format1Value) };
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_q8k_staged_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
+		                                                 outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -6049,6 +6175,12 @@ namespace
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
 			                      static_cast<QuantizedBlockFormat>(format1Value),
 			                      static_cast<QuantizedBlockFormat>(format2Value) };
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::DirectFloat32, lhsRows,
+		                                                 lhsColumns, outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -6087,6 +6219,12 @@ namespace
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
 			                      static_cast<QuantizedBlockFormat>(format1Value),
 			                      static_cast<QuantizedBlockFormat>(format2Value) };
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_q8k_staged_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
+		                                                 outRows, outColumns, requestedThreadCount)
+		        : std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -9972,6 +10110,9 @@ namespace
 		RegisterJITRuntimeSymbol("atanf", reinterpret_cast<void*>(&LiteNNRuntimeAtanF));
 		RegisterJITRuntimeSymbol("erff", reinterpret_cast<void*>(&LiteNNRuntimeErfF));
 		RegisterJITRuntimeSymbol("sincosf", reinterpret_cast<void*>(&LiteNNRuntimeSinCosF));
+		RegisterJITRuntimeSymbol("litenn_cpu_profile_node_begin",
+		                         reinterpret_cast<void*>(&litenn_cpu_profile_node_begin));
+		RegisterJITRuntimeSymbol("litenn_cpu_profile_node_end", reinterpret_cast<void*>(&litenn_cpu_profile_node_end));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_rope_at_positions_f32",
@@ -18940,7 +19081,8 @@ namespace
 	                                                         const CompilerOptions& options)
 	{
 		auto module = TimedCompileDiagnostic(options, "cpu-mlir translate graph", [&] {
-			return litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx);
+			return litenn::translateExecutablePlanToMLIR(Detail::BuildExecutablePlanFromGraph(graph), ctx,
+			                                             { .enableNodeProfiling = options.enableCPUAOTNodeProfiling });
 		});
 		if (!module)
 		{
@@ -19144,6 +19286,32 @@ std::vector<CompiledModuleCPUHelperProfileEvent> CompiledModuleCPUHelperProfiler
 			return lhs.totalMilliseconds > rhs.totalMilliseconds;
 		}
 		return lhs.helper < rhs.helper;
+	});
+	return events;
+}
+
+std::vector<CompiledModuleCPUNodeProfileEvent> CompiledModuleCPUHelperProfiler::SnapshotNodes() const
+{
+	std::vector<CompiledModuleCPUNodeProfileEvent> events;
+	events.reserve(impl_->nodeEvents.size());
+	const auto schemas = DefaultOpSchemaRegistry().Schemas();
+	for (const auto& [_, event] : impl_->nodeEvents)
+	{
+		auto snapshot = event;
+		snapshot.opKind = snapshot.schemaId < schemas.size() ? schemas[snapshot.schemaId].kind
+		                                                     : std::format("schema_{}", snapshot.schemaId);
+		events.push_back(std::move(snapshot));
+	}
+	std::ranges::sort(events, [](const auto& lhs, const auto& rhs) {
+		if (lhs.selfMilliseconds != rhs.selfMilliseconds)
+		{
+			return lhs.selfMilliseconds > rhs.selfMilliseconds;
+		}
+		if (lhs.subgraphId != rhs.subgraphId)
+		{
+			return lhs.subgraphId < rhs.subgraphId;
+		}
+		return lhs.nodeId < rhs.nodeId;
 	});
 	return events;
 }

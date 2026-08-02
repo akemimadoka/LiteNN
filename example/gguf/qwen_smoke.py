@@ -373,6 +373,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable intrusive per-helper runtime attribution; use only for profiling, not throughput measurements",
     )
     parser.add_argument(
+        "--profile-nodes",
+        action="store_true",
+        help="Compile an intrusive CPU AOT artifact with stable per-plan-node timing markers",
+    )
+    parser.add_argument(
         "--compile-only",
         action="store_true",
         help="Build/load the decode artifact for the requested token capacity, then stop before token execution",
@@ -664,6 +669,8 @@ def main() -> int:
             decode_cmd.append("--stream-stats")
         if args.profile_helpers:
             decode_cmd.append("--profile-helpers")
+        if args.profile_nodes:
+            decode_cmd.append("--profile-nodes")
         if args.compile_only:
             decode_cmd.append("--compile-only")
         if args.paged_reference_decode:
@@ -761,6 +768,7 @@ def main() -> int:
             "ggml_prepacked_layout": PREPACKED_LAYOUT_TOKENS[args.cpu_aot_ggml_prepacked_weight_layout],
             "compile_diagnostics": not args.no_compile_diagnostics,
             "profile_helpers": args.profile_helpers,
+            "profile_nodes": args.profile_nodes,
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),
         "fallback_used": False,

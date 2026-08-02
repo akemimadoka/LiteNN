@@ -2212,11 +2212,30 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesMixedQ4KQ6KProjectionToGroupedFieldInt
 	expectOutputs(sourceCompiled);
 
 	sourceOptions.enableCPUAOTGGMLQ8KStagedMatMul = false;
+	sourceOptions.enableCPUAOTNodeProfiling = true;
 	const auto directArtifact =
 	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), sourceOptions);
 	EXPECT_TRUE(ByteSpanContains(directArtifact.Instructions(), "litenn_cpu_ggml_block_grouped_matmul3_mixed_f32"));
 	auto directCompiled = directArtifact.Load();
 	expectOutputs(directCompiled);
+	std::vector<CompiledModuleCPUHelperProfileEvent> helperEvents;
+	std::vector<CompiledModuleCPUNodeProfileEvent> nodeEvents;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		(void) directCompiled.RunTensors(inputs);
+		helperEvents = profiler.Snapshot();
+		nodeEvents = profiler.SnapshotNodes();
+	}
+	EXPECT_TRUE(std::ranges::any_of(helperEvents, [](const auto& event) {
+		return event.helper == "litenn_cpu_ggml_block_grouped_matmul3_mixed_f32" && event.calls == 1 &&
+		       event.totalMilliseconds > 0.0 &&
+		       event.detail.find("formats=GGML_Q4_K,GGML_Q6_K,GGML_Q4_K") != std::string::npos;
+	}));
+	const auto groupedNode = std::ranges::find_if(
+	    nodeEvents, [](const auto& event) { return event.opKind == "GroupedQuantizedMatMulNode"; });
+	ASSERT_NE(groupedNode, nodeEvents.end());
+	EXPECT_GT(groupedNode->helperMilliseconds, 0.0);
+	EXPECT_GE(groupedNode->inclusiveMilliseconds, groupedNode->helperMilliseconds);
 
 	CompilerOptions options;
 	options.enableCPUAOTExternalRegions = true;
@@ -3647,18 +3666,29 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntime
 	};
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(plan, inputs);
-	auto compiled = Compiler<CPU>::CompileArtifact(plan).Load();
+	CompilerOptions options;
+	options.enableCPUAOTNodeProfiling = true;
+	auto compiled = Compiler<CPU>::CompileArtifact(plan, options).Load();
 	std::vector<CompiledModuleCPUHelperProfileEvent> profileEvents;
+	std::vector<CompiledModuleCPUNodeProfileEvent> nodeEvents;
 	std::vector<Tensor<CPU>> actual;
 	{
 		CompiledModuleCPUHelperProfiler profiler;
 		actual = compiled.RunTensors(inputs);
 		profileEvents = profiler.Snapshot();
+		nodeEvents = profiler.SnapshotNodes();
 	}
 	EXPECT_TRUE(std::ranges::any_of(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& event) {
 		return event.helper == "litenn_cpu_active_prefix_attention_f32_rank3_grouped" && event.calls > 0 &&
 		       event.detail.find("queries=") != std::string::npos && event.detail.find("keys=") != std::string::npos;
 	}));
+	const auto attentionNode = std::ranges::find_if(nodeEvents, [](const CompiledModuleCPUNodeProfileEvent& event) {
+		return event.opKind == "GroupedActivePrefixAttentionNode";
+	});
+	ASSERT_NE(attentionNode, nodeEvents.end());
+	EXPECT_GT(attentionNode->helperMilliseconds, 0.0);
+	EXPECT_GE(attentionNode->inclusiveMilliseconds, attentionNode->helperMilliseconds);
+	EXPECT_GE(attentionNode->selfMilliseconds, 0.0);
 	ASSERT_EQ(actual.size(), expected.size());
 	ExpectTensorNear(actual[0], expected[0], tolerance);
 	EXPECT_EQ(static_cast<const std::int64_t*>(actual[1].UnsafeRawData())[0], 1);

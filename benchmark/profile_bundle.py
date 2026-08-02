@@ -90,9 +90,34 @@ class GGUFHelperEvent:
 
 
 @dataclass(frozen=True)
+class GGUFNodeEvent:
+    step: int
+    subgraph: int
+    node: int
+    op: str
+    schema: int
+    calls: int
+    inclusive_ms: float
+    self_ms: float
+    helper_ms: float
+
+
+@dataclass(frozen=True)
+class GGUFNodeProfileSummary:
+    step: int
+    self_ms: float
+    helper_ms: float
+    calls: int
+    nodes: int
+    emitted_nodes: int
+
+
+@dataclass(frozen=True)
 class GGUFDecodeAnalysis:
     steps: list[GGUFDecodeStep]
     helpers: list[GGUFHelperEvent]
+    nodes: list[GGUFNodeEvent]
+    node_summaries: list[GGUFNodeProfileSummary]
 
 
 @dataclass(frozen=True)
@@ -671,11 +696,24 @@ def node_kind_for_operator(operator: str, role: str) -> str:
 def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
     steps_by_id: dict[int, GGUFDecodeStep] = {}
     helpers: list[GGUFHelperEvent] = []
+    nodes: list[GGUFNodeEvent] = []
+    node_summaries: list[GGUFNodeProfileSummary] = []
     helper_pattern = re.compile(
         r"decode step (?P<step>\d+) helper (?P<helper>\S+)(?: detail=\"(?P<detail>[^\"]*)\")? "
         r"calls=(?P<calls>\d+) total_ms=(?P<total>[0-9.+\-eE]+) avg_ms=(?P<avg>[0-9.+\-eE]+)"
     )
     step_ok_pattern = re.compile(r"decode step (?P<step>\d+) ok (?P<total>[0-9.+\-eE]+) ms")
+    node_pattern = re.compile(
+        r"decode step (?P<step>\d+) node subgraph=(?P<subgraph>\d+) node=(?P<node>\d+) "
+        r"op=(?P<op>\S+) schema=(?P<schema>\d+) calls=(?P<calls>\d+) "
+        r"inclusive_ms=(?P<inclusive>[0-9.+\-eE]+) self_ms=(?P<self>[0-9.+\-eE]+) "
+        r"helper_ms=(?P<helper>[0-9.+\-eE]+)"
+    )
+    node_summary_pattern = re.compile(
+        r"decode step (?P<step>\d+) node_profile self_ms=(?P<self>[0-9.+\-eE]+) "
+        r"helper_ms=(?P<helper>[0-9.+\-eE]+) calls=(?P<calls>\d+) nodes=(?P<nodes>\d+) "
+        r"emitted_nodes=(?P<emitted>\d+)"
+    )
     for result in results:
         for path in (result.stdout, result.stderr):
             if not path.exists():
@@ -742,17 +780,54 @@ def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis
                             avg_ms=float(match.group("avg")),
                         )
                     )
-    return GGUFDecodeAnalysis(steps=[steps_by_id[key] for key in sorted(steps_by_id)], helpers=helpers)
+                if "decode step " in line and " node subgraph=" in line:
+                    match = node_pattern.search(line)
+                    if match is None:
+                        continue
+                    nodes.append(
+                        GGUFNodeEvent(
+                            step=int(match.group("step")),
+                            subgraph=int(match.group("subgraph")),
+                            node=int(match.group("node")),
+                            op=match.group("op"),
+                            schema=int(match.group("schema")),
+                            calls=int(match.group("calls")),
+                            inclusive_ms=float(match.group("inclusive")),
+                            self_ms=float(match.group("self")),
+                            helper_ms=float(match.group("helper")),
+                        )
+                    )
+                if "decode step " in line and " node_profile " in line:
+                    match = node_summary_pattern.search(line)
+                    if match is None:
+                        continue
+                    node_summaries.append(
+                        GGUFNodeProfileSummary(
+                            step=int(match.group("step")),
+                            self_ms=float(match.group("self")),
+                            helper_ms=float(match.group("helper")),
+                            calls=int(match.group("calls")),
+                            nodes=int(match.group("nodes")),
+                            emitted_nodes=int(match.group("emitted")),
+                        )
+                    )
+    return GGUFDecodeAnalysis(
+        steps=[steps_by_id[key] for key in sorted(steps_by_id)],
+        helpers=helpers,
+        nodes=nodes,
+        node_summaries=node_summaries,
+    )
 
 
 def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> dict[str, object] | None:
-    if not analysis.steps and not analysis.helpers:
+    if not analysis.steps and not analysis.helpers and not analysis.nodes and not analysis.node_summaries:
         return None
 
     step_ms_by_id = { step.step: step.step_ms for step in analysis.steps }
     total_step_ms = sum(step.step_ms for step in analysis.steps)
     helper_totals_by_step: dict[int, dict[tuple[str, str], dict[str, object]]] = {}
     operator_totals_by_step: dict[int, dict[tuple[str, str], dict[str, object]]] = {}
+    node_summaries_by_step = {summary.step: summary for summary in analysis.node_summaries}
     for helper in analysis.helpers:
         step_totals = helper_totals_by_step.setdefault(helper.step, {})
         key = (helper.helper, helper.detail)
@@ -825,6 +900,17 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "sampling_ms": step.sampling_ms,
             "state_update_ms": step.state_update_ms,
             "host_overhead_ms": step.host_overhead_ms,
+            "node_profile_summary": (
+                {
+                    "self_ms": node_summaries_by_step[step.step].self_ms,
+                    "helper_ms": node_summaries_by_step[step.step].helper_ms,
+                    "calls": node_summaries_by_step[step.step].calls,
+                    "nodes": node_summaries_by_step[step.step].nodes,
+                    "emitted_nodes": node_summaries_by_step[step.step].emitted_nodes,
+                }
+                if step.step in node_summaries_by_step
+                else None
+            ),
             "runtime_accounted_ms": runtime_accounted_ms(step),
             "helper_total_ms": helper_total_ms_for_step(step),
             "helper_percent_of_step": (
@@ -957,6 +1043,36 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     ]
     node_timing_dicts = [
         {
+            "step": node.step,
+            "node_kind": node.op,
+            "node_name": f"subgraph{node.subgraph}/node{node.node}",
+            "subgraph": node.subgraph,
+            "node": node.node,
+            "schema": node.schema,
+            "operator": "generated",
+            "role": "plan_node",
+            "helper": "",
+            "detail": "",
+            "format": None,
+            "activation": None,
+            "lhs_shape": None,
+            "out_shape": None,
+            "query_shape": None,
+            "keys_shape": None,
+            "kv_shape": None,
+            "requested_threads": None,
+            "resolved_threads": None,
+            "calls": node.calls,
+            "total_ms": node.self_ms,
+            "inclusive_ms": node.inclusive_ms,
+            "self_ms": node.self_ms,
+            "helper_ms": node.helper_ms,
+            "avg_ms": node.self_ms / node.calls if node.calls else 0.0,
+            "attribution": "native-plan-marker",
+        }
+        for node in analysis.nodes
+    ] + [
+        {
             "step": helper.step,
             "node_kind": node_kind_for_operator(helper.operator, helper.role),
             "node_name": f"{helper.operator}/{helper.role}",
@@ -975,6 +1091,9 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "resolved_threads": detail_value(helper.detail, "resolved_threads"),
             "calls": helper.calls,
             "total_ms": helper.total_ms,
+            "inclusive_ms": helper.total_ms,
+            "self_ms": None,
+            "helper_ms": helper.total_ms,
             "avg_ms": helper.avg_ms,
             "attribution": "helper-derived",
         }
@@ -1004,10 +1123,44 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     )
     for operator in ranked_operators:
         operator["percent_of_steps"] = helper_percent(float(operator["total_ms"]), total_step_ms)
+    native_node_totals: dict[str, dict[str, object]] = {}
+    for node in analysis.nodes:
+        total = native_node_totals.setdefault(
+            node.op,
+            {
+                "node_kind": node.op,
+                "calls": 0,
+                "inclusive_ms": 0.0,
+                "self_ms": 0.0,
+                "helper_ms": 0.0,
+            },
+        )
+        total["calls"] = int(total["calls"]) + node.calls
+        total["inclusive_ms"] = float(total["inclusive_ms"]) + node.inclusive_ms
+        total["self_ms"] = float(total["self_ms"]) + node.self_ms
+        total["helper_ms"] = float(total["helper_ms"]) + node.helper_ms
+    ranked_native_nodes = sorted(
+        native_node_totals.values(), key=lambda item: (-float(item["self_ms"]), str(item["node_kind"]))
+    )
+    total_native_self_ms = sum(float(node["self_ms"]) for node in ranked_native_nodes)
+    for node in ranked_native_nodes:
+        node["percent_of_native_self"] = helper_percent(float(node["self_ms"]), total_native_self_ms)
 
     summary = {
         "step_count": len(analysis.steps),
         "helper_event_count": len(analysis.helpers),
+        "native_node_event_count": len(analysis.nodes),
+        "native_node_profile_summaries": [
+            {
+                "step": node.step,
+                "self_ms": node.self_ms,
+                "helper_ms": node.helper_ms,
+                "calls": node.calls,
+                "nodes": node.nodes,
+                "emitted_nodes": node.emitted_nodes,
+            }
+            for node in analysis.node_summaries
+        ],
         "total_step_ms": total_step_ms,
         "total_helper_ms": sum(float(helper["total_ms"]) for helper in ranked_helpers),
         "total_residual_ms": sum(
@@ -1020,6 +1173,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "prompt_replay_step_count": sum(1 for step in analysis.steps if step.phase == "prompt_replay"),
         "helpers": ranked_helpers,
         "operators": ranked_operators,
+        "native_node_operators": ranked_native_nodes,
         "residual_buckets": residual_buckets,
         "runtime_buckets": runtime_buckets,
         "top_residual_steps": top_residual_steps[:20],
@@ -1099,6 +1253,29 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
                 },
             }
         )
+    for node in analysis.nodes:
+        trace_events.append(
+            {
+                "name": f"{node.op}:sg{node.subgraph}:n{node.node}",
+                "cat": "litenn.gguf.node",
+                "ph": "X",
+                "pid": DEFAULT_TRACE_PID + 1,
+                "tid": 3,
+                "ts": step_starts.get(node.step, 0.0),
+                "dur": node.self_ms * 1000.0,
+                "args": {
+                    "step": node.step,
+                    "subgraph": node.subgraph,
+                    "node": node.node,
+                    "schema": node.schema,
+                    "calls": node.calls,
+                    "inclusive_ms": node.inclusive_ms,
+                    "self_ms": node.self_ms,
+                    "helper_ms": node.helper_ms,
+                    "attribution": "native-plan-marker",
+                },
+            }
+        )
     for step in step_dicts:
         if step["residual_ms"] is None:
             continue
@@ -1133,6 +1310,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "",
         f"- steps: {len(analysis.steps)}",
         f"- helper events: {len(analysis.helpers)}",
+        f"- native node events: {len(analysis.nodes)}",
         f"- total step ms: {summary['total_step_ms']:.3f}",
         f"- total helper ms: {summary['total_helper_ms']:.3f}",
         f"- residual/non-helper ms: {summary['total_residual_ms']:.3f}",
@@ -1169,6 +1347,40 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
     if not ranked_operators:
         md_lines.append("| `none` | `none` | 0 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
+            "## Native Node Profile Totals",
+            "",
+            "| Step | Self ms | Helper ms | Calls | Nodes | Emitted nodes |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for node in analysis.node_summaries:
+        md_lines.append(
+            f"| {node.step} | {node.self_ms:.3f} | {node.helper_ms:.3f} | {node.calls} | "
+            f"{node.nodes} | {node.emitted_nodes} |"
+        )
+    if not analysis.node_summaries:
+        md_lines.append("| 0 | 0.000 | 0.000 | 0 | 0 | 0 |")
+    md_lines.extend(
+        [
+            "",
+            "## Native Node Kinds",
+            "",
+            "| Node kind | Calls | Inclusive ms | Self ms | Helper ms | % of native self |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for node in ranked_native_nodes[:20]:
+        percent = node["percent_of_native_self"]
+        percent_text = "n/a" if percent is None else f"{float(percent):.2f}%"
+        md_lines.append(
+            f"| `{node['node_kind']}` | {node['calls']} | {float(node['inclusive_ms']):.3f} | "
+            f"{float(node['self_ms']):.3f} | {float(node['helper_ms']):.3f} | {percent_text} |"
+        )
+    if not ranked_native_nodes:
+        md_lines.append("| `none` | 0 | 0.000 | 0.000 | 0.000 | n/a |")
     md_lines.extend(
         [
             "",
@@ -1241,8 +1453,8 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             "",
             "## Node Timings",
             "",
-            "| Step | Node kind | Node | Helper | Format | Activation | LHS | Out | Calls | Total ms | Attribution |",
-            "| ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- |",
+            "| Step | Node kind | Node | Helper | Format | Activation | LHS | Out | Calls | Inclusive ms | Self ms | Helper ms | Attribution |",
+            "| ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for timing in sorted(node_timing_dicts, key=lambda item: (int(item["step"]), -float(item["total_ms"])))[:80]:
@@ -1250,12 +1462,14 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
             f"| {timing['step']} | `{timing['node_kind']}` | `{timing['node_name']}` | `{timing['helper']}` | "
             f"`{timing.get('format') or 'n/a'}` | `{timing.get('activation') or 'n/a'}` | "
             f"`{timing.get('lhs_shape') or 'n/a'}` | "
-            f"`{timing.get('out_shape') or 'n/a'}` | {timing['calls']} | {float(timing['total_ms']):.3f} | "
+            f"`{timing.get('out_shape') or 'n/a'}` | {timing['calls']} | "
+            f"{format_optional_ms(timing.get('inclusive_ms'))} | {format_optional_ms(timing.get('self_ms'))} | "
+            f"{format_optional_ms(timing.get('helper_ms'))} | "
             f"`{timing['attribution']}` |"
         )
     if not node_timing_dicts:
         md_lines.append(
-            "| 0 | `none` | `none` | `none` | `n/a` | `n/a` | `n/a` | `n/a` | 0 | 0.000 | `none` |"
+            "| 0 | `none` | `none` | `none` | `n/a` | `n/a` | `n/a` | `n/a` | 0 | 0.000 | 0.000 | 0.000 | `none` |"
         )
     md_lines.extend(
         [
@@ -1398,7 +1612,7 @@ def summarize(out_dir: Path, manifest: dict[str, object]) -> None:
             "## Next Diagnostics",
             "",
             "- Open `trace.json` in `chrome://tracing` or Perfetto to inspect the current command-level waterfall.",
-            "- Use `--stream-stats --profile-helpers` when GGUF helper attribution is required; omit `--profile-helpers` for representative throughput measurements.",
+            "- Use `--stream-stats --profile-helpers --profile-nodes` when generated-code node attribution is required; omit both profile flags for representative throughput measurements.",
             "- Use `--sampler linux-perf` on Linux to capture raw `perf.data`; convert it to collapsed stacks and pass `--collapsed-stacks` to generate Speedscope/flame graph output.",
             "- Pass private model files through `--sensitive-path` so manifest, summary, trace, stdout, and stderr redact them.",
             "",

@@ -773,6 +773,43 @@ TEST(CompiledModuleTest, RunsAfterLoadingFromRodataAndInstructionAddresses)
 	EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 3), 44.0f);
 }
 
+TEST(CompiledModuleTest, CPUAOTNodeProfilingIsOptInAndReportsStablePlanIdentity)
+{
+	auto graph = BuildSimpleAddGraph();
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	Tensor<CPU> a({ 1, 2, 3, 4 }, { 2, 2 }, DataType::Float32);
+	Tensor<CPU> b({ 10, 20, 30, 40 }, { 2, 2 }, DataType::Float32);
+	std::array<Tensor<CPU>, 2> inputs = { std::move(a), std::move(b) };
+
+	{
+		auto uninstrumented = Compiler<CPU>::Compile(plan);
+		CompiledModuleCPUHelperProfiler profiler;
+		(void) uninstrumented.RunTensors(inputs);
+		EXPECT_TRUE(profiler.SnapshotNodes().empty());
+	}
+
+	CompilerOptions options;
+	options.enableCPUAOTNodeProfiling = true;
+	auto instrumented = Compiler<CPU>::Compile(plan, options);
+	std::vector<CompiledModuleCPUNodeProfileEvent> nodeEvents;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		auto outputs = instrumented.RunTensors(inputs);
+		ASSERT_EQ(outputs.size(), 1u);
+		EXPECT_FLOAT_EQ(ReadFloat(outputs[0], 0), 11.0f);
+		nodeEvents = profiler.SnapshotNodes();
+	}
+
+	const auto binaryEvent = std::ranges::find_if(nodeEvents, [](const auto& event) {
+		return event.subgraphId == 0 && event.nodeId == 2 && event.opKind == "BinaryOpNode";
+	});
+	ASSERT_NE(binaryEvent, nodeEvents.end());
+	EXPECT_EQ(binaryEvent->calls, 1u);
+	EXPECT_GE(binaryEvent->inclusiveMilliseconds, binaryEvent->selfMilliseconds);
+	EXPECT_GE(binaryEvent->selfMilliseconds, 0.0);
+	EXPECT_DOUBLE_EQ(binaryEvent->helperMilliseconds, 0.0);
+}
+
 TEST(CompiledModuleTest, RunsWithExplicitTypedBufferBindings)
 {
 	auto graph = BuildSimpleAddGraph();
