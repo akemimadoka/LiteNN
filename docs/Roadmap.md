@@ -3131,6 +3131,9 @@ Priority classes:
       `0.241/1.27/1.24 ms`; it remains rejected due to register pressure and code-generation loss. A no-helper-profile
       production run measured `278.863 ms/token` versus `277.218 ms/token` with profiling, ruling out instrumentation
       overhead as the material remaining gap.
+      A Q6_K x8 paired-segment experiment was also rejected: sharing `ql/qh` loads for segment pairs improved the T8
+      hidden median from `0.265` to `0.212 ms`, but regressed the dominant FFN-up/down rows from `0.802/0.896` to
+      `1.12/1.17 ms` and nearly doubled their T1 latency. Keep the lower-register-pressure per-segment kernel.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and

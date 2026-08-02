@@ -470,6 +470,11 @@ Priority classes for the GGUF/Qwen decode work:
                       pressure and code-generation loss, so this variant was rejected before an unnecessary 14B run.
                       A production decode without helper profiling measured `278.863 ms/token`, close to the profiled
                       `277.218 ms/token`; helper instrumentation is not the remaining performance gap.
+                      A Q6_K x8 paired-segment decode experiment was rejected on 2026-08-02. Sharing each `ql/qh` load
+                      across segments 0/2 and 1/3 improved the T8 hidden median from `0.265` to `0.212 ms`, but increased
+                      the higher-weight FFN-up/down medians from `0.802/0.896` to `1.12/1.17 ms`; T1 FFN rows were close
+                      to twice as slow. The added Q8 broadcasts and live vectors outweigh saved weight loads on large
+                      streaming rows, so the production x8 kernel keeps one segment live at a time.
                 - [ ] Re-run the cache-hit policy matrix after compact Q8_K kernels and only then retune thread/grain
                       defaults. The current data says thread retuning without llama.cpp-class low-thread kernels is a
                       secondary lever.
