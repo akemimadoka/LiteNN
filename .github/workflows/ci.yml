@@ -51,7 +51,7 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
           echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble main' | sudo tee /etc/apt/sources.list.d/llvm-toolchain.list >/dev/null
           sudo apt update
-          sudo apt install g++-16 cmake llvm-23-dev libmlir-23-dev mlir-23-tools libzstd-dev libedit-dev ninja-build python3
+          sudo apt install g++-16 cmake llvm-24-dev libmlir-24-dev mlir-24-tools libzstd-dev libedit-dev ninja-build python3
       - name: configure
         shell: bash
         env:
