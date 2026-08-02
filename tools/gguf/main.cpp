@@ -1064,6 +1064,17 @@ namespace
 		                                               LiteNN::DataType::Int32, &tokenId, 1);
 	}
 
+	void StoreScalarBool(LiteNN::Tensor<LiteNN::CPU>& tensor, bool value)
+	{
+		if (tensor.DType() != LiteNN::DataType::Bool || tensor.NumElements() != 1)
+		{
+			throw std::runtime_error("decode-loop emit_logits input must be Bool with one element");
+		}
+		LiteNN::CPU cpu;
+		LiteNN::DeviceTraits<LiteNN::CPU>::CopyFromCPU(cpu, LiteNN::DataType::Bool, tensor.UnsafeRawData(),
+		                                               LiteNN::DataType::Bool, &value, 1);
+	}
+
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 	LiteNN::CompilerOptions CompilerOptionsFromEnvironment();
 	void ApplyDecodeLoopCompilerOptions(const DecodeLoopCommandOptions& decodeOptions,
@@ -1361,7 +1372,7 @@ namespace
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto residentPagesText =
 		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
-		constexpr std::uint32_t decodePlanCacheVersion = 6;
+		constexpr std::uint32_t decodePlanCacheVersion = 7;
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
 		    "affinity={}|min_flops={}|"
@@ -1784,6 +1795,7 @@ namespace
 					                                       .maxCacheLength = maxCacheLength,
 					                                       .preserveQuantizedWeights = true,
 					                                       .dynamicDecodePosition = true,
+					                                       .conditionalLogits = true,
 					                                       .usePagedReferenceDecode = options.pagedReferenceDecode,
 					                                       .pagedResidentPageCount = options.pagedResidentPageCount });
 				});
@@ -1864,10 +1876,19 @@ namespace
 		double promptReplayMs = 0.0;
 		double generationMs = 0.0;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> statefulInputs;
+		std::optional<std::size_t> emitLogitsInputIndex;
 		if (options.statefulDecode)
 		{
 			statefulInputs = MakeZeroStateInputs(decodeModule.InputSpecs(),
 			                                     MakeTokenIdTensorForModule(currentToken, decodeModule.InputSpecs()));
+			const auto inputSpecs = decodeModule.InputSpecs();
+			const auto emitLogits =
+			    std::ranges::find_if(inputSpecs, [](const auto& input) { return input.name == "emit_logits"; });
+			if (emitLogits == inputSpecs.end())
+			{
+				throw std::runtime_error("stateful decode module is missing the emit_logits control input");
+			}
+			emitLogitsInputIndex = static_cast<std::size_t>(emitLogits - inputSpecs.begin());
 		}
 		if (options.logitsOutputDirectory)
 		{
@@ -1899,6 +1920,7 @@ namespace
 			{
 				const auto inputPrepStart = std::chrono::steady_clock::now();
 				StoreScalarTokenId(statefulInputs.front(), currentToken);
+				StoreScalarBool(statefulInputs[*emitLogitsInputIndex], !isPromptReplayStep);
 				const auto inputPrepEnd = std::chrono::steady_clock::now();
 				inputPrepMs = std::chrono::duration<double, std::milli>(inputPrepEnd - inputPrepStart).count();
 				const auto moduleRunStart = std::chrono::steady_clock::now();

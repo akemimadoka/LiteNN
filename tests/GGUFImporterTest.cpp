@@ -1240,6 +1240,15 @@ TEST(GGUFLLaMAArtifacts, PlansPrefillAndDecodeStepEntries)
 	EXPECT_EQ(plan.attentionExecutionPlans[0].status, "implemented");
 }
 
+TEST(GGUFLLaMAArtifacts, RejectsConditionalLogitsWithoutDynamicPosition)
+{
+	EXPECT_THROW(
+	    GGUF::PlanLLaMAArtifacts(
+	        BuildTinyLLaMAArchive(),
+	        { .prefillSequenceLength = 1, .decodePastLength = 0, .maxCacheLength = 4, .conditionalLogits = true }),
+	    std::runtime_error);
+}
+
 TEST(GGUFLLaMAArtifacts, BuildsDecodeRuntimeScheduleWithPersistentCacheAliases)
 {
 	const auto archive = BuildTinyQwen2Archive();
@@ -3762,6 +3771,78 @@ TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithPublicLogitsOnl
 	EXPECT_EQ(static_cast<const std::int64_t*>(inputs[1].UnsafeRawData())[0], 1);
 	ExpectTensorNear(inputs[2], expected[2], tolerance);
 	ExpectTensorNear(inputs[3], expected[3], tolerance);
+}
+
+TEST(GGUFLLaMACausalLM, ConditionalLogitsSkipsProjectionWhileUpdatingState)
+{
+	auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyLLaMAArchive(), { .prefillSequenceLength = 1,
+	                                                                                 .decodePastLength = 0,
+	                                                                                 .maxCacheLength = 4,
+	                                                                                 .dynamicDecodePosition = true,
+	                                                                                 .conditionalLogits = true });
+	const auto plan = schedule.module.plan;
+	ASSERT_EQ(plan.inputs.size(), 5u);
+	EXPECT_EQ(plan.inputs[0].name, "token_ids");
+	EXPECT_EQ(plan.inputs[1].name, "emit_logits");
+	EXPECT_EQ(plan.inputs[2].name, "current_position");
+
+	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+	const std::vector<float> zeroCache(8, 0.0f);
+	std::array<Tensor<CPU>, 5> interpreterInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),           Tensor<CPU>({ 1.0 }, { 1 }, DataType::Bool),
+		MakeInt64Tensor({ 0 }, { 1 }),           MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(plan, interpreterInputs);
+	ASSERT_EQ(expected.size(), 4u);
+
+	auto artifact = Compiler<CPU>::CompileArtifact(schedule);
+	ASSERT_EQ(artifact.InputSpecs().size(), 5u);
+	EXPECT_EQ(artifact.InputSpecs()[1].name, "emit_logits");
+	ASSERT_EQ(artifact.OutputSpecs().size(), 1u);
+	auto compiled = artifact.Load();
+
+	std::array<Tensor<CPU>, 5> skippedInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),           Tensor<CPU>({ 0.0 }, { 1 }, DataType::Bool),
+		MakeInt64Tensor({ 0 }, { 1 }),           MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	const auto skipped = compiled.RunTensors(skippedInputs);
+	ASSERT_EQ(skipped.size(), 1u);
+	for (std::size_t i = 0; i < skipped[0].NumElements(); ++i)
+	{
+		EXPECT_EQ(ReadFloat(skipped[0], i), 0.0f);
+	}
+	EXPECT_EQ(static_cast<const std::int64_t*>(skippedInputs[2].UnsafeRawData())[0], 1);
+	ExpectTensorNear(skippedInputs[3], expected[2], tolerance);
+	ExpectTensorNear(skippedInputs[4], expected[3], tolerance);
+
+	std::array<Tensor<CPU>, 5> projectedInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),           Tensor<CPU>({ 1.0 }, { 1 }, DataType::Bool),
+		MakeInt64Tensor({ 0 }, { 1 }),           MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	const auto projected = compiled.RunTensors(projectedInputs);
+	ASSERT_EQ(projected.size(), 1u);
+	ExpectTensorNear(projected[0], expected[0], tolerance);
+	EXPECT_EQ(static_cast<const std::int64_t*>(projectedInputs[2].UnsafeRawData())[0], 1);
+	ExpectTensorNear(projectedInputs[3], expected[2], tolerance);
+	ExpectTensorNear(projectedInputs[4], expected[3], tolerance);
+
+	auto pagedSchedule =
+	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyLLaMAArchive(), { .prefillSequenceLength = 1,
+	                                                                     .decodePastLength = 0,
+	                                                                     .maxCacheLength = 4,
+	                                                                     .dynamicDecodePosition = true,
+	                                                                     .conditionalLogits = true,
+	                                                                     .usePagedReferenceDecode = true,
+	                                                                     .pagedResidentPageCount = 1 });
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(pagedSchedule));
+	ASSERT_GE(pagedSchedule.module.plan.inputs.size(), 3u);
+	EXPECT_EQ(pagedSchedule.module.plan.inputs[0].name, "token_ids");
+	EXPECT_EQ(pagedSchedule.module.plan.inputs[1].name, "emit_logits");
+	EXPECT_EQ(pagedSchedule.module.plan.inputs[2].name, "current_position");
 }
 
 TEST(GGUFLLaMACausalLM, KVScatterUpdateHelperSupportsInPlaceAppend)

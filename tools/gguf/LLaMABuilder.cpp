@@ -481,6 +481,10 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("LLaMA artifact plan requires prefillSequenceLength > 0");
 		}
+		if (options.conditionalLogits && !options.dynamicDecodePosition)
+		{
+			throw std::runtime_error("Conditional logits require dynamic decode position");
+		}
 		const auto requiredCacheLength = options.decodePastLength + 1;
 		const auto maxCacheLength = options.maxCacheLength == 0 ? requiredCacheLength : options.maxCacheLength;
 		if (maxCacheLength < requiredCacheLength)
@@ -562,6 +566,15 @@ namespace LiteNN::GGUF
 			.kvCaches = {},
 		};
 
+		std::vector<std::string> decodeInputNames{ "token_ids" };
+		if (options.conditionalLogits)
+		{
+			decodeInputNames.push_back("emit_logits");
+		}
+		if (options.dynamicDecodePosition)
+		{
+			decodeInputNames.push_back("current_position");
+		}
 		LLaMAArtifactEntry decode{
 			.kind = LLaMAArtifactKind::DecodeStep,
 			.name = "decode_step",
@@ -570,8 +583,7 @@ namespace LiteNN::GGUF
 			.maxCacheLength = maxCacheLength,
 			.positionOffset = options.decodePastLength,
 			.dynamicPosition = options.dynamicDecodePosition,
-			.inputNames = options.dynamicDecodePosition ? std::vector<std::string>{ "token_ids", "current_position" }
-			                                            : std::vector<std::string>{ "token_ids" },
+			.inputNames = std::move(decodeInputNames),
 			.outputNames = options.dynamicDecodePosition ? std::vector<std::string>{ "logits", "next_position" }
 			                                             : std::vector<std::string>{ "logits" },
 			.kvCaches = {},
@@ -622,10 +634,12 @@ namespace LiteNN::GGUF
 			    .tokenByteStride = tokenByteStride,
 			});
 			const auto stateName = decode.kvCaches.back().stateBinding.name;
-			const auto valueBase = options.dynamicDecodePosition ? 2uz : 1uz;
-			const auto keyInput = valueBase + blockIndex * 2;
+			const auto inputBase =
+			    1uz + (options.conditionalLogits ? 1uz : 0uz) + (options.dynamicDecodePosition ? 1uz : 0uz);
+			const auto outputBase = options.dynamicDecodePosition ? 2uz : 1uz;
+			const auto keyInput = inputBase + blockIndex * 2;
 			const auto valueInput = keyInput + 1;
-			const auto keyOutput = valueBase + blockIndex * 2;
+			const auto keyOutput = outputBase + blockIndex * 2;
 			const auto valueOutput = keyOutput + 1;
 			decode.stateValueBindings.push_back(
 			    { stateName, 0, Runtime::RuntimeStateValueKind::FunctionInput, keyInput, 0 });
@@ -649,8 +663,9 @@ namespace LiteNN::GGUF
 		    { "read", "write", "increment" });
 		if (options.dynamicDecodePosition)
 		{
-			decode.stateValueBindings.push_back(
-			    { decodeStateABI.currentPosition->name, 0, Runtime::RuntimeStateValueKind::FunctionInput, 1, 0 });
+			decode.stateValueBindings.push_back({ decodeStateABI.currentPosition->name, 0,
+			                                      Runtime::RuntimeStateValueKind::FunctionInput,
+			                                      options.conditionalLogits ? 2uz : 1uz, 0 });
 			decode.stateValueBindings.push_back(
 			    { decodeStateABI.currentPosition->name, 0, Runtime::RuntimeStateValueKind::FunctionOutput, 1, 0 });
 		}
@@ -1406,6 +1421,37 @@ namespace LiteNN::GGUF
 		return Layer::AddLinear(subgraph, model.lmHead, normalized);
 	}
 
+	NodeOutput AddConditionalLLaMALogits(Graph& graph, Subgraph& subgraph, const LLaMACausalLM& model,
+	                                     NodeOutput normalized, std::optional<NodeOutput> emitLogits)
+	{
+		if (!emitLogits)
+		{
+			return Layer::AddLinear(subgraph, model.lmHead, normalized);
+		}
+		const auto normalizedInfo = subgraph.GetOutputInfo(normalized);
+		const std::vector<std::size_t> logitsShape{ normalizedInfo.shape[0], model.lmHead.outFeatures };
+
+		Subgraph thenBranch;
+		const auto thenInput = thenBranch.AddParam(model.dtype, normalizedInfo.shape);
+		const auto thenLogits = Layer::AddLinear(thenBranch, model.lmHead, { thenInput, 0 });
+		thenBranch.SetResults({ thenLogits });
+		const auto thenBranchId = graph.AddSubgraph(std::move(thenBranch));
+
+		Subgraph elseBranch;
+		elseBranch.AddParam(model.dtype, normalizedInfo.shape);
+		const std::array<double, 1> zeroValue{ 0.0 };
+		const auto zero =
+		    Layer::Detail::AddConstant(elseBranch, Tensor<CPU>(std::span<const double>(zeroValue), { 1 }, model.dtype));
+		const auto zeroLogits =
+		    elseBranch.AddNode(BroadcastToNode{ { zero, 0 }, logitsShape }, { OutputInfo{ model.dtype, logitsShape } });
+		elseBranch.SetResults({ { zeroLogits, 0 } });
+		const auto elseBranchId = graph.AddSubgraph(std::move(elseBranch));
+
+		const auto logits = subgraph.AddNode(CondNode{ *emitLogits, thenBranchId, elseBranchId, { normalized } },
+		                                     { OutputInfo{ model.dtype, logitsShape } });
+		return { logits, 0 };
+	}
+
 	LLaMADecodeResult AddLLaMACausalLMDecode(Subgraph& subgraph, const LLaMACausalLM& model,
 	                                         const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
 	                                         std::span<const Layer::KVCachePair> pastCaches, std::size_t positionOffset)
@@ -1433,11 +1479,12 @@ namespace LiteNN::GGUF
 		};
 	}
 
-	LLaMADecodeResult AddLLaMACausalLMDecodeCapacity(Subgraph& subgraph, const LLaMACausalLM& model,
+	LLaMADecodeResult AddLLaMACausalLMDecodeCapacity(Graph& graph, Subgraph& subgraph, const LLaMACausalLM& model,
 	                                                 const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
 	                                                 NodeOutput currentPosition,
 	                                                 std::span<const Layer::KVCachePair> caches,
-	                                                 std::size_t maxCacheLength)
+	                                                 std::size_t maxCacheLength,
+	                                                 std::optional<NodeOutput> emitLogits = std::nullopt)
 	{
 		if (caches.size() != model.blocks.size())
 		{
@@ -1456,18 +1503,16 @@ namespace LiteNN::GGUF
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		return {
-			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
+			.hiddenState = AddConditionalLLaMALogits(graph, subgraph, model, normalized, emitLogits),
 			.updatedCaches = std::move(updatedCaches),
 		};
 	}
 
-	PagedDecodeResult AddLLaMACausalLMDecodePagedReference(Subgraph& subgraph, const LLaMACausalLM& model,
-	                                                       const LLaMAHyperparameters& hyperparameters,
-	                                                       NodeOutput tokenIds, NodeOutput currentPosition,
-	                                                       std::span<const NodeOutput> pagedKVStates,
-	                                                       std::span<const NodeOutput> pageTables,
-	                                                       std::span<const NodeOutput> pageDescriptors,
-	                                                       std::span<const NodeOutput> activeLengths)
+	PagedDecodeResult AddLLaMACausalLMDecodePagedReference(
+	    Graph& graph, Subgraph& subgraph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
+	    NodeOutput tokenIds, NodeOutput currentPosition, std::span<const NodeOutput> pagedKVStates,
+	    std::span<const NodeOutput> pageTables, std::span<const NodeOutput> pageDescriptors,
+	    std::span<const NodeOutput> activeLengths, std::optional<NodeOutput> emitLogits = std::nullopt)
 	{
 		if (pagedKVStates.size() != model.blocks.size() || pageTables.size() != model.blocks.size() ||
 		    pageDescriptors.size() != model.blocks.size() || activeLengths.size() != model.blocks.size())
@@ -1496,7 +1541,7 @@ namespace LiteNN::GGUF
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		return {
-			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
+			.hiddenState = AddConditionalLLaMALogits(graph, subgraph, model, normalized, emitLogits),
 			.kvStates = std::move(updatedKVStates),
 			.pageTables = std::move(updatedPageTables),
 			.pageDescriptors = std::move(updatedPageDescriptors),
@@ -1632,10 +1677,21 @@ namespace LiteNN::GGUF
 
 		Subgraph subgraph;
 		const auto tokenIds = subgraph.AddParam(DataType::Int32, { 1 });
+		std::optional<NodeOutput> emitLogits;
+		if (options.conditionalLogits)
+		{
+			const auto emitLogitsParam = subgraph.AddParam(DataType::Bool, { 1 });
+			emitLogits = NodeOutput{ emitLogitsParam, 0 };
+		}
 		const auto currentPosition = subgraph.AddParam(DataType::Int64, { 1 });
 		std::vector<Layer::KVCachePair> caches;
 		caches.reserve(model.blocks.size());
-		std::vector<std::string> inputNames{ "token_ids", "current_position" };
+		std::vector<std::string> inputNames{ "token_ids" };
+		if (options.conditionalLogits)
+		{
+			inputNames.push_back("emit_logits");
+		}
+		inputNames.push_back("current_position");
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			const auto keys = subgraph.AddParam(model.dtype, cacheShape);
@@ -1665,7 +1721,7 @@ namespace LiteNN::GGUF
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		const LLaMADecodeResult result{
-			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
+			.hiddenState = AddConditionalLLaMALogits(graph, subgraph, model, normalized, emitLogits),
 			.updatedCaches = std::move(updatedCaches),
 		};
 		const std::array<double, 1> one{ 1.0 };
@@ -1718,6 +1774,12 @@ namespace LiteNN::GGUF
 
 		Subgraph subgraph;
 		const auto tokenIds = subgraph.AddParam(DataType::Int32, { 1 });
+		std::optional<NodeOutput> emitLogits;
+		if (options.conditionalLogits)
+		{
+			const auto emitLogitsParam = subgraph.AddParam(DataType::Bool, { 1 });
+			emitLogits = NodeOutput{ emitLogitsParam, 0 };
+		}
 		const auto currentPosition = subgraph.AddParam(DataType::Int64, { 1 });
 		std::vector<NodeOutput> pagedKVStates;
 		std::vector<NodeOutput> pageTables;
@@ -1727,7 +1789,12 @@ namespace LiteNN::GGUF
 		pageTables.reserve(model.blocks.size());
 		pageDescriptors.reserve(model.blocks.size());
 		activeLengths.reserve(model.blocks.size());
-		std::vector<std::string> inputNames{ "token_ids", "current_position" };
+		std::vector<std::string> inputNames{ "token_ids" };
+		if (options.conditionalLogits)
+		{
+			inputNames.push_back("emit_logits");
+		}
+		inputNames.push_back("current_position");
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			const auto pagedKVState = subgraph.AddParam(model.dtype, pagedKVShape);
@@ -1743,9 +1810,9 @@ namespace LiteNN::GGUF
 			inputNames.push_back(std::format("page_descriptor_{}", blockIndex));
 			inputNames.push_back(std::format("active_length_{}", blockIndex));
 		}
-		const auto result = AddLLaMACausalLMDecodePagedReference(subgraph, model, hyperparameters, { tokenIds, 0 },
-		                                                         { currentPosition, 0 }, pagedKVStates, pageTables,
-		                                                         pageDescriptors, activeLengths);
+		const auto result = AddLLaMACausalLMDecodePagedReference(
+		    graph, subgraph, model, hyperparameters, { tokenIds, 0 }, { currentPosition, 0 }, pagedKVStates, pageTables,
+		    pageDescriptors, activeLengths, emitLogits);
 		const std::array<double, 1> one{ 1.0 };
 		const auto oneValue =
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
@@ -1784,15 +1851,21 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("Paged resident page count currently requires paged-reference decode");
 		}
+		if (options.conditionalLogits && !options.dynamicDecodePosition)
+		{
+			throw std::runtime_error("Conditional logits currently require dynamic decode position");
+		}
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
 		auto graph =
 		    options.usePagedReferenceDecode
 		        ? LowerLLaMACausalLMDecodePagedReference(archive, artifacts.decodeStep.maxCacheLength,
 		                                                 { .preserveQuantizedWeights = options.preserveQuantizedWeights,
+		                                                   .conditionalLogits = options.conditionalLogits,
 		                                                   .pagedResidentPageCount = options.pagedResidentPageCount })
 		    : options.dynamicDecodePosition
 		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
-		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights })
+		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights,
+		                                             .conditionalLogits = options.conditionalLogits })
 		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
 		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
@@ -1823,7 +1896,7 @@ namespace LiteNN::GGUF
 			for (std::size_t blockIndex = 0; blockIndex < artifacts.decodeStep.kvCaches.size(); ++blockIndex)
 			{
 				const auto& cache = artifacts.decodeStep.kvCaches[blockIndex];
-				const auto inputBase = 2uz + blockIndex * 4uz;
+				const auto inputBase = 2uz + (options.conditionalLogits ? 1uz : 0uz) + blockIndex * 4uz;
 				const auto outputBase = 2uz + blockIndex * 4uz;
 				stateValueBindings.push_back(
 				    { cache.stateBinding.name, 0, Runtime::RuntimeStateValueKind::FunctionInput, inputBase, 0 });
@@ -1850,7 +1923,8 @@ namespace LiteNN::GGUF
 			if (artifacts.decodeStateABI.currentPosition)
 			{
 				stateValueBindings.push_back({ artifacts.decodeStateABI.currentPosition->name, 0,
-				                               Runtime::RuntimeStateValueKind::FunctionInput, 1, 0 });
+				                               Runtime::RuntimeStateValueKind::FunctionInput,
+				                               options.conditionalLogits ? 2uz : 1uz, 0 });
 				stateValueBindings.push_back({ artifacts.decodeStateABI.currentPosition->name, 0,
 				                               Runtime::RuntimeStateValueKind::FunctionOutput, 1, 0 });
 			}

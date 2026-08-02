@@ -654,10 +654,18 @@ Priority classes for the GGUF/Qwen decode work:
                       exact generated token sequence while reducing generation sampling from the previous
                       `~9-11 ms/token` to `0.119-0.221 ms/token` (`0.162 ms` mean over eight tokens). Sampling is no
                       longer a material share of steady decode latency.
-          - [ ] P1: Skip full-vocabulary logits projection for prompt replay steps that cannot be sampled.
+          - [x] P1: Skip full-vocabulary logits projection for prompt replay steps that cannot be sampled.
                 The July 5 run spends about `53 ms` per logits projection and executes one on every prompt replay step.
                 Skipping all but the last replay logits improves prompt/prefill latency, though it is not a steady-state
                 generated-token TPS fix.
+                Completed on 2026-08-02: stateful dense and paged-reference schedules accept an `emit_logits` Bool and
+                place the lm-head behind a compiled `CondNode`. The CLI passes false for replay-only tokens and true for
+                the last prompt token plus generated tokens; KV and position state aliases update on both branches and
+                the public output remains `logits`. The artifact cache version advanced to v7 while shared physical
+                weights remain separately reusable. A six-token 14B Q4_K_M profile showed five replay steps with
+                `2641` helper calls and no vocabulary projection; the generation step had `2642` calls and exactly one
+                `1x5120 -> 152064` Q6_K logits helper taking `13.997 ms`. All 91 `GGUFImporterTest` cases pass,
+                including compiled false/true branch parity and paged schedule validation.
           - [ ] P1: Add a sampler-only logits path for text generation when public logits are not requested.
                 The July 6 profile shows the final vocabulary projection costs about `7%` of total decode time even
                 after grouped projection work. Golden-logit and API runs still need full public logits, but text-only

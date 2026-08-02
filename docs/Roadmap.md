@@ -3192,6 +3192,13 @@ Priority classes:
       corrected automatic T8 ceiling measured `285.087 ms/token` under profiling. Alternating unprofiled auto/explicit
       T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
       for controlled experiments but is not the production default.
+- [x] P1: Skip vocabulary projection on prompt replay steps that cannot be sampled:
+      completed on 2026-08-02 with an `emit_logits` Bool in stateful dense and paged-reference schedules. The compiled
+      `CondNode` returns zero logits during replay while still updating KV/position aliases, then executes the unchanged
+      lm-head for the final prompt token and generation. The CLI selects the branch automatically, the public output ABI
+      remains logits-only, and decode artifact cache v7 isolates the new input ABI. A real six-token 14B Q4_K_M profile
+      recorded no vocabulary helper in any of five replay steps and exactly one `13.997 ms` Q6_K logits helper in the
+      generation step; all 91 `GGUFImporterTest` cases pass with no fallback in the real-model run.
 - [x] P0: Tile the Q8_0 and Q5_K direct CPU helper paths across four output columns:
       the grouped-output helper now covers all currently supported GGML direct MatMul formats. Validation on 2026-07-02
       passed `GGUFLLaMAQuantizedExecution.*`; a short helper run measured `Q8_0/qwen_kv/T1` at about `2.03 ms` CPU and
