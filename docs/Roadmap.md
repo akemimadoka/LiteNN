@@ -3066,11 +3066,17 @@ Priority classes:
       `0.413/1.16/1.15` to `0.338/0.970/1.00 ms`. A real 14B cache-hit run generated the identical token sequence with
       no fallback at `314.807 ms/token` (`3.177 tok/s`), a `12.7%` latency reduction from the preceding selective-x16
       run and `7.9%` below the prior best `341.854 ms/token` scalar-conversion run.
-- [ ] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
+- [x] P1: Deduplicate shared prepared-weight stores by physical content independently of artifact ABI metadata:
       explicit layout metadata correctly isolates incompatible artifacts, but it can also create a second shared store
       when the physical expanded-v1 bytes are unchanged. Introduce a content/layout payload identity separate from the
       compile/cache key, preserve strict ABI validation in artifact metadata, and regression-test concurrent population
       plus reuse so a metadata-only compiler change does not duplicate multi-GB weights.
+      Completed on 2026-08-02: the payload identity is sorted by physical offset and contains only total bytes plus each
+      weight range's offset, size, and content checksum. Tensor names, declared alignment, metadata ordering, compiler
+      flags, and artifact versioning no longer create duplicate payloads, while offsets and checksums still isolate
+      incompatible bytes. Shared weights are written into unique sibling staging directories and atomically renamed only
+      after both `weights.bin` and `complete` exist; concurrent losers validate and reuse the winner, and failed staging
+      is removed. Two cache-specific tests and all 45 targeted cache/quantized/decode tests pass on Windows.
 - [x] P0: Add step-level Q8_K activation staging for decode projections:
       stage each normalized hidden vector once per layer/step and reuse it across compatible Q/K/V/O, gate/up/down, and
       logits projections. The current per-helper staged prototype remains opt-in until paired with compact vec-dot
@@ -3287,8 +3293,11 @@ Priority classes:
             Updated on 2026-07-05: GGUF decode cache hits map the shared weight store as a borrowed separated-artifact
             weights region instead of reading the multi-GB blob into a temporary vector.
       - [x] Isolate shared weights by compiled tensor layout/content identity. Completed on 2026-08-01: the shared
-            store key includes every external tensor's name, offset, size, alignment, and checksum, preventing a
-            same-sized cache blob from being reused after projection grouping changes weight ordering.
+            store key initially included every external tensor's name, offset, size, alignment, and checksum, preventing
+            a same-sized cache blob from being reused after projection grouping changes weight ordering. Refined on
+            2026-08-02: physical payload identity now uses sorted offset/size/checksum tuples and total bytes, decoupling
+            harmless tensor names, alignment declarations, and metadata order while retaining strict artifact ABI
+            validation. Unique staging directories plus atomic rename make concurrent population corruption-safe.
       - [x] Add metadata-only, cache-first stateful startup and an explicit trusted-cache validation boundary.
             Completed on 2026-08-01: cache hits no longer import tensor payloads or rebuild the decode graph, and the
             compiled module ABI drives state/input allocation directly. Default separated-artifact loading remains

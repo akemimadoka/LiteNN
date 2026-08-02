@@ -121,7 +121,7 @@ Priority classes for the GGUF/Qwen decode work:
                 `6.85 tokens/s` llama.cpp CPU reference. The repaired profile bundle attributes about `82.5%` of step
                 time to timed helpers and about `80.5%` to quantized projection helpers; active-prefix attention is only
                 about `0.16%` and KV append about `0.01%` in the 2K-context run.
-          - [ ] P0: Replace the current direct/staged GGML projection helpers with production packed Q4_K/Q6_K kernels.
+          - [x] P0: Replace the current direct/staged GGML projection helpers with production packed Q4_K/Q6_K kernels.
                 Target the measured top rows first: grouped gate/up `1x5120 -> 1x27648`, hidden/output
                 `1x5120 -> 1x5120`, FFN-down `1x13824 -> 1x5120`, KV `1x5120 -> 1x1024`, and logits
                 `1x5120 -> 152064`. The current Q8_K-staged prototype is not a default-switch candidate on the July 5
@@ -815,10 +815,12 @@ Priority classes for the GGUF/Qwen decode work:
                 Updated on 2026-07-05: cache hits map the shared weight store as a borrowed separated-artifact weights
                 region instead of reading the multi-GB blob into a temporary vector.
           - [x] Make shared-weight cache identity include the compiled external tensor layout and content checksums.
-                Completed on 2026-08-01: shared weights are nested under a deterministic layout identity derived from
-                total bytes plus every external tensor name, offset, size, alignment, and checksum. Mixed Q/K/V
-                grouping can no longer reuse a same-sized but differently ordered weight blob; the real 14B cache-hit
-                path validates and reproduces the exact token sequence.
+                Completed on 2026-08-01 and refined on 2026-08-02: shared weights are nested under a deterministic
+                physical payload identity derived from total bytes plus sorted offset/size/content-checksum tuples.
+                Tensor names, alignment declarations, metadata ordering, and compiler flags no longer duplicate the
+                same payload; changed ranges or bytes remain isolated and artifact metadata retains strict ABI checks.
+                Population writes a complete unique staging directory and atomically renames it, so concurrent writers
+                publish exactly one payload and reuse it without exposing a partial multi-GB file.
           - [x] Remove graph materialization and repeated multi-GB validation from trusted cache hits. Completed on
                 2026-08-01: the importer has a metadata-only path (`35.6 ms` on the 14B control), stateful cache hits
                 create inputs from the compiled module ABI, and full tensor payload import occurs only on cache miss.

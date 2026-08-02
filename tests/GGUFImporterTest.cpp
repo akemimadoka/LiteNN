@@ -14,16 +14,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <ggml.h>
@@ -49,6 +52,14 @@ TEST(GGUFAOTCache, SharedWeightIdentityTracksExternalTensorLayoutAndContent)
 	const auto identity = GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, tensors);
 
 	auto changed = tensors;
+	changed[0].name = "renamed_weight";
+	EXPECT_EQ(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	changed = tensors;
+	changed[0].alignment = 4096;
+	EXPECT_EQ(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	changed = { tensors[1], tensors[0], tensors[2] };
+	EXPECT_EQ(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
+	changed = tensors;
 	changed[1].byteOffset = 128;
 	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
 	changed = tensors;
@@ -58,6 +69,74 @@ TEST(GGUFAOTCache, SharedWeightIdentityTracksExternalTensorLayoutAndContent)
 	changed[2].checksum = 34;
 	EXPECT_EQ(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(96, changed), identity);
 	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(97, tensors), identity);
+}
+
+TEST(GGUFAOTCache, ConcurrentSharedWeightPopulationPublishesOneCompletePayload)
+{
+	const auto root =
+	    std::filesystem::temp_directory_path() /
+	    std::format("litenn-shared-weights-{:016x}",
+	                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+	const auto weightsPath = root / "payload" / "weights.bin";
+	constexpr std::array payload{ std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 }, std::byte{ 4 } };
+	std::atomic<std::uint32_t> published{};
+	std::atomic<std::uint32_t> reused{};
+	const auto populate = [&] {
+		const auto result = GGUF::Tooling::PublishDecodeAOTSharedWeightsAtomically(
+		    weightsPath, payload.size(), [&](const auto& stagingWeights, const auto& stagingComplete) {
+			    std::ofstream(stagingWeights, std::ios::binary)
+			        .write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+			    std::ofstream(stagingComplete, std::ios::binary);
+		    });
+		(result == GGUF::Tooling::SharedWeightsPublishResult::Published ? published : reused).fetch_add(1);
+	};
+	std::array workers{ std::jthread(populate), std::jthread(populate) };
+	for (auto& worker : workers)
+	{
+		worker.join();
+	}
+
+	EXPECT_EQ(published.load(), 1u);
+	EXPECT_EQ(reused.load(), 1u);
+	EXPECT_TRUE(std::filesystem::exists(weightsPath));
+	EXPECT_TRUE(std::filesystem::exists(weightsPath.parent_path() / "complete"));
+	EXPECT_EQ(std::filesystem::file_size(weightsPath), payload.size());
+	for (const auto& entry : std::filesystem::directory_iterator(root))
+	{
+		EXPECT_EQ(entry.path().filename(), "payload");
+	}
+	std::filesystem::remove_all(root);
+}
+
+TEST(GGUFAOTCache, FailedSharedWeightPopulationCleansStagingAndCanRetry)
+{
+	const auto root =
+	    std::filesystem::temp_directory_path() /
+	    std::format("litenn-shared-weights-failure-{:016x}",
+	                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+	const auto weightsPath = root / "payload" / "weights.bin";
+	constexpr std::array payload{ std::byte{ 5 }, std::byte{ 6 }, std::byte{ 7 } };
+
+	EXPECT_THROW(
+	    GGUF::Tooling::PublishDecodeAOTSharedWeightsAtomically(
+	        weightsPath, payload.size(),
+	        [&](const auto& stagingWeights, const auto&) {
+		        std::ofstream(stagingWeights, std::ios::binary).write(reinterpret_cast<const char*>(payload.data()), 1);
+		        throw std::runtime_error("injected staging failure");
+	        }),
+	    std::runtime_error);
+	EXPECT_FALSE(std::filesystem::exists(weightsPath.parent_path()));
+	EXPECT_TRUE(std::filesystem::is_empty(root));
+
+	const auto result = GGUF::Tooling::PublishDecodeAOTSharedWeightsAtomically(
+	    weightsPath, payload.size(), [&](const auto& stagingWeights, const auto& stagingComplete) {
+		    std::ofstream(stagingWeights, std::ios::binary)
+		        .write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+		    std::ofstream(stagingComplete, std::ios::binary);
+	    });
+	EXPECT_EQ(result, GGUF::Tooling::SharedWeightsPublishResult::Published);
+	EXPECT_EQ(std::filesystem::file_size(weightsPath), payload.size());
+	std::filesystem::remove_all(root);
 }
 #endif
 

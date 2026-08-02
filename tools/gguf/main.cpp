@@ -55,6 +55,8 @@ namespace
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 	using LiteNN::GGUF::Tooling::DecodeAOTSharedWeightsIdentity;
 	using LiteNN::GGUF::Tooling::FNV1a;
+	using LiteNN::GGUF::Tooling::PublishDecodeAOTSharedWeightsAtomically;
+	using LiteNN::GGUF::Tooling::SharedWeightsPublishResult;
 #endif
 
 	void PrintUsage(std::string_view executable)
@@ -1579,26 +1581,15 @@ namespace
 			    sharedWeightsPath->parent_path() /
 			    DecodeAOTSharedWeightsIdentity(artifact.Weights().size(), artifact.ExternalTensorInfos()) /
 			    "weights.bin";
-			const auto sharedComplete = resolvedSharedWeightsPath.parent_path() / "complete";
-			const auto sharedSizeMatches =
-			    std::filesystem::exists(resolvedSharedWeightsPath) &&
-			    std::filesystem::file_size(resolvedSharedWeightsPath) == artifact.Weights().size();
-			if (!sharedSizeMatches || !std::filesystem::exists(sharedComplete))
-			{
-				std::filesystem::create_directories(resolvedSharedWeightsPath.parent_path());
-				removeError.clear();
-				std::filesystem::remove(sharedComplete, removeError);
-				if (removeError)
-				{
-					throw std::runtime_error("Failed to invalidate shared weight complete marker: " +
-					                         removeError.message());
-				}
-				WriteBinaryFileTimed(resolvedSharedWeightsPath, artifact.Weights(), diagnostics,
-				                     "gguf decode aot shared weight store write weights");
-				WriteBinaryFileTimed(sharedComplete, std::span<const std::byte>{}, diagnostics,
-				                     "gguf decode aot shared weight store write complete marker");
-			}
-			else
+			const auto publishResult = PublishDecodeAOTSharedWeightsAtomically(
+			    resolvedSharedWeightsPath, artifact.Weights().size(),
+			    [&](const std::filesystem::path& stagingWeights, const std::filesystem::path& stagingComplete) {
+				    WriteBinaryFileTimed(stagingWeights, artifact.Weights(), diagnostics,
+				                         "gguf decode aot shared weight store write weights");
+				    WriteBinaryFileTimed(stagingComplete, std::span<const std::byte>{}, diagnostics,
+				                         "gguf decode aot shared weight store write complete marker");
+			    });
+			if (publishResult == SharedWeightsPublishResult::Reused)
 			{
 				LogGGUFDiagnostic(diagnostics, "gguf decode aot shared weight store: reused " +
 				                                   resolvedSharedWeightsPath.generic_string());
