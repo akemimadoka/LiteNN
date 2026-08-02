@@ -152,6 +152,16 @@ namespace LiteNN
 		Spread = 2,
 	};
 
+	enum class CPUAOTWorkerWaitPolicy : std::uint32_t
+	{
+		/// Adjust the active-poll window from recent helper arrival behavior.
+		Adaptive = 0,
+		/// Block immediately after each helper. Minimizes idle CPU usage at the cost of wake latency.
+		LowPower = 1,
+		/// Keep workers active longer between helpers. Intended for latency-sensitive decode loops.
+		Latency = 2,
+	};
+
 	enum class CPUAOTGGMLPrepackedWeightPolicy : std::uint32_t
 	{
 		Disabled = 0,
@@ -190,6 +200,8 @@ namespace LiteNN
 		std::size_t cpuAOTThreadCount{};
 		/// Optional CPU AOT worker affinity policy. Defaults to no pinning.
 		CPUAOTAffinityPolicy cpuAOTAffinityPolicy{ CPUAOTAffinityPolicy::None };
+		/// Worker wait behavior between consecutive CPU AOT helpers.
+		CPUAOTWorkerWaitPolicy cpuAOTWorkerWaitPolicy{ CPUAOTWorkerWaitPolicy::Adaptive };
 		/// Minimum f32 linear-chain FLOPs before the CPU parallel AOT path is used.
 		std::uint64_t cpuAOTParallelMinFlops{ 1ull << 28 };
 		/// Store CPU AOT constants/variable weights in separated artifact regions when supported.

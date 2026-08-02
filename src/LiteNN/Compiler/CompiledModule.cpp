@@ -693,9 +693,18 @@ namespace
 		return topology;
 	}
 
+	constexpr std::uint64_t kCPUAOTSchedulingFieldMask = 0xff;
+	constexpr std::uint64_t kCPUAOTWorkerWaitPolicyShift = 8;
+
+	std::uint64_t EncodeCPUAOTSchedulingPolicy(CPUAOTAffinityPolicy affinityPolicy, CPUAOTWorkerWaitPolicy waitPolicy)
+	{
+		return static_cast<std::uint64_t>(affinityPolicy) |
+		       (static_cast<std::uint64_t>(waitPolicy) << kCPUAOTWorkerWaitPolicyShift);
+	}
+
 	CPUAOTAffinityPolicy ResolveCPUAOTAffinityPolicy(std::uint64_t value)
 	{
-		switch (static_cast<CPUAOTAffinityPolicy>(value))
+		switch (static_cast<CPUAOTAffinityPolicy>(value & kCPUAOTSchedulingFieldMask))
 		{
 		case CPUAOTAffinityPolicy::Compact:
 			return CPUAOTAffinityPolicy::Compact;
@@ -703,6 +712,20 @@ namespace
 			return CPUAOTAffinityPolicy::Spread;
 		default:
 			return CPUAOTAffinityPolicy::None;
+		}
+	}
+
+	CPUAOTWorkerWaitPolicy ResolveCPUAOTWorkerWaitPolicy(std::uint64_t value)
+	{
+		switch (
+		    static_cast<CPUAOTWorkerWaitPolicy>((value >> kCPUAOTWorkerWaitPolicyShift) & kCPUAOTSchedulingFieldMask))
+		{
+		case CPUAOTWorkerWaitPolicy::LowPower:
+			return CPUAOTWorkerWaitPolicy::LowPower;
+		case CPUAOTWorkerWaitPolicy::Latency:
+			return CPUAOTWorkerWaitPolicy::Latency;
+		default:
+			return CPUAOTWorkerWaitPolicy::Adaptive;
 		}
 	}
 
@@ -823,7 +846,8 @@ namespace
 		LiteNNCPUThreadPool& operator=(const LiteNNCPUThreadPool&) = delete;
 
 		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain, LiteNNCPUParallelForBody body,
-		                 void* userData, std::size_t requestedThreads, CPUAOTAffinityPolicy affinityPolicy)
+		                 void* userData, std::size_t requestedThreads, CPUAOTAffinityPolicy affinityPolicy,
+		                 CPUAOTWorkerWaitPolicy waitPolicy)
 		{
 			if (begin >= end)
 			{
@@ -850,6 +874,7 @@ namespace
 			body_ = body;
 			userData_ = userData;
 			affinityPolicy_ = affinityPolicy;
+			waitPolicy_.store(waitPolicy, std::memory_order_release);
 			next_.store(begin, std::memory_order_relaxed);
 			workersDone_.store(0, std::memory_order_relaxed);
 			desiredWorkers_ = desiredWorkers;
@@ -890,20 +915,36 @@ namespace
 
 		void WorkerLoop(Worker& worker, std::size_t workerIndex)
 		{
-			constexpr std::size_t pollRounds = LITENN_HAS_X86_AVX2_TARGET ? 65536 : 64;
+			constexpr std::size_t kAdaptiveInitialPollRounds = LITENN_HAS_X86_AVX2_TARGET ? 65536 : 64;
+			constexpr std::size_t kAdaptiveMinPollRounds = LITENN_HAS_X86_AVX2_TARGET ? 1024 : 16;
+			constexpr std::size_t kAdaptiveMaxPollRounds = LITENN_HAS_X86_AVX2_TARGET ? 1u << 20 : 1024;
 			LiteNNCPUThreadAffinityState affinity;
+			std::size_t adaptivePollRounds = kAdaptiveInitialPollRounds;
 			auto observedGeneration = worker.generation.load(std::memory_order_relaxed);
 			while (true)
 			{
+				const auto waitPolicy = waitPolicy_.load(std::memory_order_acquire);
+				const auto pollRounds =
+				    waitPolicy == CPUAOTWorkerWaitPolicy::LowPower
+				        ? std::size_t{ 0 }
+				        : (waitPolicy == CPUAOTWorkerWaitPolicy::Latency ? kAdaptiveMaxPollRounds : adaptivePollRounds);
+				bool observedWorkWhilePolling = false;
 				for (std::size_t round = 0; round < pollRounds; ++round)
 				{
 					if (worker.generation.load(std::memory_order_acquire) != observedGeneration)
 					{
+						observedWorkWhilePolling = true;
 						break;
 					}
 					LiteNNCPUThreadRelax();
 				}
 				worker.start.acquire();
+				if (waitPolicy == CPUAOTWorkerWaitPolicy::Adaptive)
+				{
+					adaptivePollRounds = observedWorkWhilePolling
+					                         ? std::min(kAdaptiveMaxPollRounds, adaptivePollRounds * 2)
+					                         : std::max(kAdaptiveMinPollRounds, adaptivePollRounds / 2);
+				}
 				observedGeneration = worker.generation.load(std::memory_order_acquire);
 				if (stopping_.load(std::memory_order_acquire))
 				{
@@ -925,6 +966,7 @@ namespace
 		LiteNNCPUParallelForBody body_{};
 		void* userData_{};
 		CPUAOTAffinityPolicy affinityPolicy_{ CPUAOTAffinityPolicy::None };
+		std::atomic<CPUAOTWorkerWaitPolicy> waitPolicy_{ CPUAOTWorkerWaitPolicy::Adaptive };
 		std::size_t desiredWorkers_{};
 		std::atomic<std::size_t> workersDone_{};
 		std::atomic<bool> stopping_{};
@@ -938,10 +980,11 @@ namespace
 
 	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
 	                          LiteNNCPUParallelForBody body, void* userData, std::uint64_t threadCount,
-	                          CPUAOTAffinityPolicy affinityPolicy)
+	                          CPUAOTAffinityPolicy affinityPolicy,
+	                          CPUAOTWorkerWaitPolicy waitPolicy = CPUAOTWorkerWaitPolicy::Adaptive)
 	{
 		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, static_cast<std::size_t>(threadCount),
-		                                     affinityPolicy);
+		                                     affinityPolicy, waitPolicy);
 	}
 
 	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
@@ -1030,7 +1073,7 @@ namespace
 	                                     const float* LITENN_RESTRICT bias, float* LITENN_RESTRICT out, std::uint64_t m,
 	                                     std::uint64_t k, std::uint64_t n, std::uint64_t biasRows,
 	                                     std::uint64_t requestedThreadCount, bool relu,
-	                                     CPUAOTAffinityPolicy affinityPolicy)
+	                                     CPUAOTAffinityPolicy affinityPolicy, CPUAOTWorkerWaitPolicy waitPolicy)
 	{
 		const auto flops = m * k * n * 2;
 		const auto threadCount = std::min<std::uint64_t>(
@@ -1060,7 +1103,7 @@ namespace
 		};
 
 		const auto grain = std::max<std::uint64_t>(1, (m + threadCount * 4 - 1) / (threadCount * 4));
-		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, m, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	bool ShouldUseCPUSidecarLinearLayer(std::uint64_t m, std::uint64_t k, std::uint64_t n, std::uint64_t flops)
@@ -1078,7 +1121,8 @@ namespace
 	                                                         bool relu)
 	{
 		const auto policy = ResolveCPUAOTAffinityPolicy(affinityPolicy);
-		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicy);
+		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy, waitPolicy);
 	}
 
 	extern "C" void litenn_cpu_swiglu_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
@@ -3974,6 +4018,7 @@ namespace
 		const auto threadCount = ResolveGGMLBlockMatMulThreadCount(format, effectiveActivationDotMode, operations,
 		                                                           outputElements, requestedThreadCount);
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (format == QuantizedBlockFormat::GGML_Q8_0 || format == QuantizedBlockFormat::GGML_Q4_K ||
 		    format == QuantizedBlockFormat::GGML_Q5_K || format == QuantizedBlockFormat::GGML_Q6_K)
 		{
@@ -4152,7 +4197,7 @@ namespace
 				return;
 			}
 			LiteNNCPUParallelFor(0, outputGroups, groupedGrain, groupedBody, &context, groupedThreadCount,
-			                     affinityPolicy);
+			                     affinityPolicy, waitPolicy);
 			return;
 		}
 		const auto grain = std::max<std::uint64_t>(1, outputElements / (std::max<std::uint64_t>(1, threadCount) * 8));
@@ -4161,7 +4206,7 @@ namespace
 			body(0, outputElements, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputElements, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputElements, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	void LiteNNCPUGGMLBlockMatMulF32(const float* lhsBase, const float* lhsAligned, std::int64_t lhsOffset,
@@ -4675,12 +4720,13 @@ namespace
 		const auto outputGroups = static_cast<std::uint64_t>(lhsRows) * workItemsPerRow;
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	struct GGMLFieldInterleavedV4MatMulProjection
@@ -4879,12 +4925,13 @@ namespace
 		    schedulingFormat, lhsRows, lhsColumns, outColumns, outputGroups, requestedThreadCount, true);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	extern "C" void litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
@@ -5246,12 +5293,13 @@ namespace
 		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	struct GGMLCompactMatMulProjection
@@ -5413,12 +5461,13 @@ namespace
 		                                                           outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	extern "C" void litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32(
@@ -5783,12 +5832,13 @@ namespace
 		                                      operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	extern "C" std::uint64_t litenn_cpu_ggml_q6k_prepacked_block_bytes()
@@ -5978,12 +6028,13 @@ namespace
 		                                      operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
+		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
 		if (threadCount <= 1)
 		{
 			body(0, outputGroups, &context);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
 	}
 
 	using GGMLPrepackedMatMulHelperFn = void (*)(const float*, const float*, std::int64_t, std::int64_t, std::int64_t,
@@ -9337,7 +9388,8 @@ namespace
 			                   { lhs->ptr, rhs->ptr, bias->ptr, outPtr, builder.getInt64(m), builder.getInt64(k),
 			                     builder.getInt64(n), builder.getInt64(static_cast<std::uint64_t>(bias->shape[0])),
 			                     builder.getInt64(layerThreadCount),
-			                     builder.getInt64(static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy)),
+			                     builder.getInt64(EncodeCPUAOTSchedulingPolicy(options.cpuAOTAffinityPolicy,
+			                                                                   options.cpuAOTWorkerWaitPolicy)),
 			                     builder.getInt1(fused->pattern == FusionPattern::MatMulBiasAddReLU) });
 			values[nodeId] = ValueRef{ .ptr = outPtr, .dtype = output.dtype, .shape = output.shape };
 			++fusedLayerCount;
@@ -19203,7 +19255,8 @@ namespace
 			litenn::addLLVMCodegenPipeline(
 			    pm, litenn::LLVMCodegenOptions{
 			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
-			            .ggmlBlockMatMulAffinityPolicy = static_cast<std::uint64_t>(options.cpuAOTAffinityPolicy),
+			            .ggmlBlockMatMulAffinityPolicy =
+			                EncodeCPUAOTSchedulingPolicy(options.cpuAOTAffinityPolicy, options.cpuAOTWorkerWaitPolicy),
 			            .enableGGMLQ8KStagedMatMul = options.enableCPUAOTGGMLQ8KStagedMatMul,
 			            .enableGGMLPrepackedWeights =
 			                options.enableCPUAOTGGMLPrepackedWeights ||

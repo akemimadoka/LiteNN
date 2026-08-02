@@ -128,14 +128,17 @@ def summarize_report(
     cpu_aot_options = report.get("cpu_aot_options")
     report_policy = None
     report_layout = None
+    report_worker_wait = None
     if isinstance(cpu_aot_options, dict):
         report_policy = cpu_aot_options.get("ggml_prepacked_weight_policy")
         report_layout = cpu_aot_options.get("ggml_prepacked_layout")
+        report_worker_wait = cpu_aot_options.get("worker_wait")
     return {
         "threadCount": thread_count,
         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
         "prepackedWeightPolicy": report_policy if report_policy is not None else (prepacked_weight_policy or "default"),
         "prepackedLayout": report_layout or "legacy",
+        "workerWait": report_worker_wait or "adaptive",
         "returncode": returncode,
         "decodeMode": report.get("decode_mode"),
         "backendPolicy": report.get("backend_policy"),
@@ -226,8 +229,8 @@ def write_outputs(
     lines = [
         "# GGUF Decode Thread Matrix",
         "",
-        "| Policy | Layout | Threads | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
-        "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Policy | Layout | Threads | Worker wait | RC | Mode | Build ms | Run ms | Gen tokens | ms/token | tok/s | Prompt ms | Generation ms | Fallbacks | Report | Profile summary |",
+        "| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in rows:
         def value(key: str) -> str:
@@ -245,6 +248,7 @@ def write_outputs(
                     value("prepackedWeightPolicy"),
                     value("prepackedLayout"),
                     value("threadLabel"),
+                    value("workerWait"),
                     value("returncode"),
                     value("decodeMode"),
                     value("buildMs"),
@@ -294,6 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-aot-cache-write", action="store_true")
     parser.add_argument("--llvm-opt-level", type=int, choices=(0, 1, 2, 3))
     parser.add_argument("--cpu-aot-affinity", choices=("none", "compact", "spread"))
+    parser.add_argument("--cpu-aot-worker-wait", choices=("adaptive", "low-power", "latency"), default="adaptive")
     parser.add_argument(
         "--cpu-aot-q8k-staged-matmul",
         action="store_true",
@@ -406,6 +411,7 @@ def main() -> int:
                 command.extend(["--llvm-opt-level", str(args.llvm_opt_level)])
             if args.cpu_aot_affinity is not None:
                 command.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
+            command.extend(["--cpu-aot-worker-wait", args.cpu_aot_worker_wait])
             if args.cpu_aot_q8k_staged_matmul:
                 command.append("--cpu-aot-q8k-staged-matmul")
             if args.cpu_aot_ggml_prepacked_weights:
@@ -428,6 +434,7 @@ def main() -> int:
                         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
                         "prepackedWeightPolicy": policy_label,
                         "prepackedLayout": layout_token,
+                        "workerWait": args.cpu_aot_worker_wait,
                     }
                 )
                 continue
@@ -446,6 +453,7 @@ def main() -> int:
                         "threadLabel": "auto" if thread_count == 0 else f"T{thread_count}",
                         "prepackedWeightPolicy": policy_label,
                         "prepackedLayout": layout_token,
+                        "workerWait": args.cpu_aot_worker_wait,
                         "returncode": completed.returncode,
                         "report": str(report_path),
                     }

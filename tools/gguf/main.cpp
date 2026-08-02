@@ -91,7 +91,8 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
+		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -103,7 +104,8 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
+		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -115,7 +117,8 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
-		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
+		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -310,6 +313,7 @@ namespace
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
 		std::optional<std::uint8_t> cpuAOTLLVMOptLevel;
 		std::optional<std::string> cpuAOTAffinityPolicy;
+		std::optional<std::string> cpuAOTWorkerWaitPolicy;
 		std::optional<bool> enableCompileDiagnostics;
 		std::optional<std::size_t> maxCacheLength;
 	};
@@ -456,6 +460,15 @@ namespace
 				{
 					throw std::runtime_error("cpu-aot-affinity must be 'none', 'compact', or 'spread'");
 				}
+			}
+			else if (arg == "--cpu-aot-worker-wait")
+			{
+				const auto value = requireValue(arg);
+				if (value != "adaptive" && value != "low-power" && value != "latency")
+				{
+					throw std::runtime_error("cpu-aot-worker-wait must be 'adaptive', 'low-power', or 'latency'");
+				}
+				options.cpuAOTWorkerWaitPolicy = value;
 			}
 			else if (arg == "--compile-diagnostics")
 			{
@@ -1422,13 +1435,14 @@ namespace
 		constexpr std::uint32_t decodePlanCacheVersion = 8;
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
-		    "affinity={}|min_flops={}|node_profile={}|"
+		    "affinity={}|worker_wait={}|min_flops={}|node_profile={}|"
 		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}|"
 		    "paged_resident_pages={}",
 		    decodeMode, decodePlanCacheVersion, LiteNN::CPUAOTCompilationCacheVersion,
 		    std::filesystem::absolute(model, ec).string(), modelSize, lastWrite, requestedTokenCount,
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
-		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy), options.cpuAOTParallelMinFlops,
+		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
+		    static_cast<std::uint32_t>(options.cpuAOTWorkerWaitPolicy), options.cpuAOTParallelMinFlops,
 		    options.enableCPUAOTNodeProfiling ? 1 : 0, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0,
 		    options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
@@ -2354,6 +2368,18 @@ namespace
 				options.cpuAOTAffinityPolicy = LiteNN::CPUAOTAffinityPolicy::Compact;
 			}
 		}
+		if (const char* workerWait = std::getenv("LITENN_CPU_AOT_WORKER_WAIT"))
+		{
+			const std::string_view value{ workerWait };
+			if (value == "low-power")
+			{
+				options.cpuAOTWorkerWaitPolicy = LiteNN::CPUAOTWorkerWaitPolicy::LowPower;
+			}
+			else if (value == "latency")
+			{
+				options.cpuAOTWorkerWaitPolicy = LiteNN::CPUAOTWorkerWaitPolicy::Latency;
+			}
+		}
 		options.enableCPUAOTExternalRegions = TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_REGIONS")) ||
 		                                      TruthyEnvValue(std::getenv("LITENN_CPU_AOT_EXTERNAL_CONSTANTS"));
 		if (const char* value = std::getenv("LITENN_CPU_AOT_EXTERNAL_REGION_FUSION"))
@@ -2406,6 +2432,14 @@ namespace
 			        ? LiteNN::CPUAOTAffinityPolicy::Compact
 			        : (*decodeOptions.cpuAOTAffinityPolicy == "spread" ? LiteNN::CPUAOTAffinityPolicy::Spread
 			                                                           : LiteNN::CPUAOTAffinityPolicy::None);
+		}
+		if (decodeOptions.cpuAOTWorkerWaitPolicy)
+		{
+			compilerOptions.cpuAOTWorkerWaitPolicy =
+			    *decodeOptions.cpuAOTWorkerWaitPolicy == "low-power"
+			        ? LiteNN::CPUAOTWorkerWaitPolicy::LowPower
+			        : (*decodeOptions.cpuAOTWorkerWaitPolicy == "latency" ? LiteNN::CPUAOTWorkerWaitPolicy::Latency
+			                                                              : LiteNN::CPUAOTWorkerWaitPolicy::Adaptive);
 		}
 		if (decodeOptions.enableCompileDiagnostics)
 		{

@@ -315,6 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="CPU AOT helper affinity policy passed to litenn_gguf_convert",
     )
     parser.add_argument(
+        "--cpu-aot-worker-wait",
+        choices=("adaptive", "low-power", "latency"),
+        default="adaptive",
+        help="CPU AOT worker wait policy passed to litenn_gguf_convert",
+    )
+    parser.add_argument(
         "--cpu-aot-parallel-min-flops",
         type=int,
         help="CPU AOT f32 sidecar minimum FLOP gate passed to litenn_gguf_convert",
@@ -686,6 +692,7 @@ def main() -> int:
             decode_cmd.extend(["--cpu-aot-threads", str(args.cpu_aot_threads)])
         if args.cpu_aot_affinity is not None:
             decode_cmd.extend(["--cpu-aot-affinity", args.cpu_aot_affinity])
+        decode_cmd.extend(["--cpu-aot-worker-wait", args.cpu_aot_worker_wait])
         if args.cpu_aot_parallel_min_flops is not None:
             if args.cpu_aot_parallel_min_flops < 0:
                 raise SystemExit("--cpu-aot-parallel-min-flops must be non-negative")
@@ -761,6 +768,7 @@ def main() -> int:
             "llvm_opt_level": args.llvm_opt_level,
             "thread_count": args.cpu_aot_threads,
             "affinity": args.cpu_aot_affinity,
+            "worker_wait": args.cpu_aot_worker_wait,
             "parallel_min_flops": args.cpu_aot_parallel_min_flops,
             "q8k_staged_matmul": args.cpu_aot_q8k_staged_matmul,
             "ggml_prepacked_weights": args.cpu_aot_ggml_prepacked_weights,

@@ -3298,9 +3298,15 @@ Priority classes:
             barrier. Regression coverage changes requested thread counts repeatedly in one process. On the 14B T8
             cache-hit run, step-16 helper time fell from `338.182` to `302.936 ms`, generation averaged
             `342.513 ms/token`, and output tokens remained identical.
-      - [ ] Make worker polling duration an explicit runtime scheduling policy with an adaptive/low-power option;
-            preserve the measured hybrid default while allowing latency-sensitive and power-sensitive applications to
-            choose deliberately without environment-variable-only library behavior.
+      - [x] Make worker polling duration an explicit runtime scheduling policy with adaptive, low-power, and
+            latency-sensitive modes. Completed on 2026-08-02: `CompilerOptions::cpuAOTWorkerWaitPolicy` is propagated
+            through dense and GGML helpers without expanding the helper ABI, while the GGUF CLI, Qwen smoke driver,
+            cache key, reports, and benchmark tables expose the policy explicitly. `Adaptive` grows or shrinks its
+            bounded polling window from observed work arrivals, `LowPower` blocks immediately, and `Latency` keeps the
+            longest bounded polling window. A real 14B Q4_K_M T8/all/v4/O0 16-token comparison measured
+            Adaptive `255.927/255.594 ms`, LowPower `277.163/276.340 ms`, and Latency `252.958/252.650 ms`
+            mean/median with identical generated-text hashes. Adaptive remains the balanced default; applications can
+            select either extreme without relying on process environment state.
 - [x] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
       Per-layer/per-block reusable decode artifacts or a shape-polymorphic stateful decode artifact must compile once
       per model architecture/weight layout, while runtime KV capacity is provided as state metadata.

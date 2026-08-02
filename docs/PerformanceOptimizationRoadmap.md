@@ -694,8 +694,7 @@ Priority classes for the GGUF/Qwen decode work:
                       no-inline versus inline decode measured `264.743/263.721 ms` versus `265.704/264.153 ms`
                       mean/median (`+0.36%/+0.16%`). The apparent `3.59 ms/step` CallNode self bucket was therefore
                       instrumentation cost rather than removable production overhead. The experimental option and
-                      pass were removed; optimization returns to the sampler-only vocabulary path and dominant
-                      quantized helpers.
+                      pass were removed; optimization returns to the dominant quantized helpers.
                 - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
                       2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
                       build repeat-penalty membership once only when enabled, and consume the last Tensor logits row
@@ -716,9 +715,12 @@ Priority classes for the GGUF/Qwen decode work:
                 `1x5120 -> 152064` Q6_K logits helper taking `13.997 ms`. All 91 `GGUFImporterTest` cases pass,
                 including compiled false/true branch parity and paged schedule validation.
           - [ ] P1: Add a sampler-only logits path for text generation when public logits are not requested.
-                The July 6 profile shows the final vocabulary projection costs about `7%` of total decode time even
-                after grouped projection work. Golden-logit and API runs still need full public logits, but text-only
-                decode can use a projection+sampler path that keeps only the selected token/top-k candidates.
+                This is deferred behind dominant projection work after a 2026-08-02 upper-bound audit. The current
+                Q6_K lm-head scans about 638 MB of quantized weights and measures `12.0/11.9 ms` mean/median at T16,
+                about `5%` of a `245-270 ms` step. Exact greedy or top-k sampling cannot avoid that weight scan; a
+                fused projection+sampler would mainly remove the 608256-byte logits write and about `0.16 ms` of host
+                sampling. Revisit after gate/up/down and QKV projection costs fall, or when approximate/hierarchical
+                vocabulary selection becomes an explicit model contract.
           - [x] P1: Eliminate repeated per-head RoPE transcendental work after projection work moves.
                 RoPE is not the current top bottleneck, but the default profile still shows `55296` helper calls over
                 24 steps and about `13-14 ms` per decode step. Once projection kernels are reduced, convert per-head
@@ -809,6 +811,14 @@ Priority classes for the GGUF/Qwen decode work:
           rows. A short 2026-07-03 run showed `T0` tracks the conservative cap (`Q4_K/qwen_kv` about `0.30 ms` real,
           `Q6_K/qwen_ffn_down` about `3.28 ms` real) while explicit `T32` remains available for isolated helper cases
           where it wins.
+          - [x] Make worker waiting an explicit CPU AOT scheduling policy. Completed on 2026-08-02: the compiler API,
+                runtime helpers, GGUF CLI, Qwen driver, cache key, reports, comparison table, and thread-matrix driver
+                carry `Adaptive`, `LowPower`, or `Latency` without adding a helper ABI argument. Adaptive adjusts a
+                bounded poll window from observed arrivals, LowPower blocks immediately, and Latency uses the longest
+                bounded poll. A real 14B Q4_K_M T8/all/v4/O0 16-token run measured mean/median Adaptive
+                `255.927/255.594 ms`, LowPower `277.163/276.340 ms`, and Latency `252.958/252.650 ms`; generated-text
+                hashes matched. The 1.16% Latency advantage is too small to justify its sustained polling as the
+                library default, so Adaptive remains the balanced policy.
     - [x] P1: Stop using monolithic max-cache-length-shaped CPU AOT decode artifacts as the default long-context path.
           - [x] Make the GGUF decode-loop CLI default to the stateful runtime-schedule path. Completed on 2026-07-04:
                 `--run-llama-*-decode-loop` now builds/loads the logits-only public-output stateful schedule unless
