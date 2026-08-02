@@ -149,6 +149,8 @@ namespace LiteNN::Debug
 				return "BinaryOp::Greater";
 			case BinaryOp::Equal:
 				return "BinaryOp::Equal";
+			case BinaryOp::SwiGLU:
+				return "BinaryOp::SwiGLU";
 			}
 			return std::format("BinaryOp::<invalid:{}>", static_cast<int>(op));
 		}

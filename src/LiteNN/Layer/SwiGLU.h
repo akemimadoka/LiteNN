@@ -69,11 +69,10 @@ namespace LiteNN::Layer
 		const std::array groupedLayers{ layer.gateProjection, layer.upProjection };
 		const auto grouped = AddLinearProjectionGroup(subgraph, groupedLayers, input);
 		const auto gate = grouped[0];
-		const auto gateActivated = AddSiLU(subgraph, gate);
 		const auto up = grouped[1];
-		const auto gated = subgraph.AddNode(
-		    BinaryOpNode{ BinaryOp::Multiply, gateActivated, up },
-		    { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gateActivated).shape } } });
+		const auto gated =
+		    subgraph.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, gate, up },
+		                     { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gate).shape } } });
 		return AddLinear(subgraph, layer.downProjection, { gated, 0 });
 	}
 

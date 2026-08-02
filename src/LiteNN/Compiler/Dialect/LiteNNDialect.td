@@ -51,7 +51,8 @@ def LiteNN_BinaryOpKind : I32EnumAttr<"BinaryOpKind", "litenn binary operation",
   I32EnumAttrCase<"Min",       7>,
   I32EnumAttrCase<"Less",      8>,
   I32EnumAttrCase<"Greater",   9>,
-  I32EnumAttrCase<"Equal",    10>
+  I32EnumAttrCase<"Equal",    10>,
+  I32EnumAttrCase<"SwiGLU",   11>
 ]> {
   let cppNamespace = "::litenn";
 }

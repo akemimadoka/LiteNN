@@ -1419,7 +1419,7 @@ namespace
 		const auto lastWrite = std::filesystem::last_write_time(model, ec).time_since_epoch().count();
 		const auto residentPagesText =
 		    pagedResidentPageCount ? std::to_string(*pagedResidentPageCount) : std::string("auto");
-		constexpr std::uint32_t decodePlanCacheVersion = 7;
+		constexpr std::uint32_t decodePlanCacheVersion = 8;
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
 		    "affinity={}|min_flops={}|node_profile={}|"

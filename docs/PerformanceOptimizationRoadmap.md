@@ -664,6 +664,21 @@ Priority classes for the GGUF/Qwen decode work:
                       bucket, account for the `~6.5-7.1 ms` gap between module non-helper and native self totals, then
                       fuse the `~10 ms` SiLU/unary path with adjacent gate multiplication where legality and numerics
                       permit.
+                    - [x] Fuse exact SwiGLU activation and gate multiplication. Completed on 2026-08-02: `BinaryOp::SwiGLU`
+                          is now a first-class floating-point operation across shape/type validation, Interpreter,
+                          Autograd, LiteNN dialect lowering, and CPU AOT. The Qwen MLP builder emits one node instead of
+                          `negate/exp/add/divide/multiply`; a strided rank-2 CPU helper handles grouped-projection column
+                          views without materialization. The profiled 48-layer decode schedule fell from `8366` to
+                          `8078` node calls (`-288`, `-3.44%`) and removed `UnaryOpNode` from the decode graph. The
+                          original inline fused region cost `13.08-15.76 ms/step`; helper plus residual node self time
+                          measured `11.4-12.5 ms/step`. An unprofiled 16-step fresh-artifact run averaged
+                          `277.804 ms/token`; an immediate cache-hit run, excluding its first page-fault-heavy step,
+                          averaged `273.341 ms/token` with a `269.672 ms` median and exact token parity. The historical
+                          `245.177 ms` median remains the best recorded result, so this is a structural and modest
+                          measured improvement rather than a new throughput record.
+                    - [ ] Attribute and remove the remaining wrapper gap: isolate the `CallNode` bucket and the
+                          `~6.5-7.1 ms` difference between module non-helper and native self totals with non-profiled
+                          focused probes before adding more decode fusion.
                 - [x] Remove full-sort and repeated-history-scan overhead from greedy sampling. Completed on
                       2026-08-01: greedy and zero-temperature sampling now perform one stable argmax pass over logits,
                       build repeat-penalty membership once only when enabled, and consume the last Tensor logits row

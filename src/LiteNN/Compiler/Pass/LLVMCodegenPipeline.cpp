@@ -68,6 +68,8 @@ namespace litenn
 		constexpr llvm::StringLiteral kGroupedPagedAttentionHelper = "litenn_cpu_grouped_paged_attention_f32";
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Attr = "litenn.scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
+		constexpr llvm::StringLiteral kSwiGLUF32Attr = "litenn.swiglu_f32";
+		constexpr llvm::StringLiteral kSwiGLUF32Helper = "litenn_cpu_swiglu_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ4KPrepackedHelper =
@@ -1134,6 +1136,56 @@ namespace litenn
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank3, out).getResult();
 			builder.create<mlir::func::CallOp>(
 			    loc, helper, mlir::ValueRange{ dynamicData, dynamicIndices, dynamicUpdates, dynamicOut });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteSwiGLUF32Call(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                         mlir::OpBuilder& builder)
+		{
+			if (!op->hasAttr(kSwiGLUF32Attr) || op->getNumResults() != 0 || op.getInputs().size() != 2 ||
+			    op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			auto gate = op.getInputs()[0];
+			auto up = op.getInputs()[1];
+			auto out = op.getOutputs()[0];
+			auto gateType = llvm::dyn_cast<mlir::MemRefType>(gate.getType());
+			auto upType = llvm::dyn_cast<mlir::MemRefType>(up.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!gateType || !upType || !outType || gateType.getRank() != 2 || upType.getRank() != 2 ||
+			    outType.getRank() != 2 || !gateType.getElementType().isF32() || !upType.getElementType().isF32() ||
+			    !outType.getElementType().isF32())
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto* mlirContext = builder.getContext();
+			auto dynamicLayoutRank2 = mlir::StridedLayoutAttr::get(
+			    mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicF32Rank2 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                             gateType.getElementType(), dynamicLayoutRank2);
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank2, dynamicF32Rank2 }, mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kSwiGLUF32Helper);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, kSwiGLUF32Helper, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicGate = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, gate).getResult();
+			auto dynamicUp = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, up).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, out).getResult();
+			builder.create<mlir::func::CallOp>(loc, helper, mlir::ValueRange{ dynamicGate, dynamicUp, dynamicOut });
 			op.erase();
 			return mlir::success();
 		}
@@ -2245,6 +2297,10 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
+					if (mlir::succeeded(rewriteSwiGLUF32Call(getOperation(), op, builder)))
+					{
+						continue;
+					}
 					if (mlir::succeeded(rewriteRoPEAtPositionsCall(getOperation(), op, builder)))
 					{
 						continue;

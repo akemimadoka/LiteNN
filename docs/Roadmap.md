@@ -3263,6 +3263,17 @@ Priority classes:
             `GGUFLLaMAQuantizedExecution.CompilesGroupedQ4KProjectionWithoutMaterializingConcatenatedWeight`,
             `GGUFLLaMACausalLM.PreservesQuantizedProjectionStorageWithQuantizedMatMulNodes`, and
             `GGUFLLaMAQuantizedExecution.*`.
+      - [x] Make prepared layouts atomic across mixed-format projection groups. Completed on 2026-08-02: fresh AOT
+            compilation prepackages every member when any compatible group member is selected, and repeatedly clears
+            partially selected groups after shared-variable validation. This prevents profitable Q6_K selection from
+            pairing prepared and source-layout operands in the same Q4_K/Q6_K grouped helper.
+      - [x] Fuse exact SwiGLU activation and gate multiplication after grouped gate/up projection. Completed on
+            2026-08-02 with a first-class `BinaryOp::SwiGLU`, exact Interpreter and Autograd semantics, MLIR lowering,
+            and a strided rank-2 CPU AOT helper. The 48-layer decode graph now executes `288` fewer nodes
+            (`8366 -> 8078`, `-3.44%`) and no separate unary expansion. Native profiling reduced the fused work from
+            `13.08-15.76 ms/step` inline to `11.4-12.5 ms/step` including helper and residual node self time; an
+            unprofiled cache-hit run excluding the first page-fault-heavy step averaged `273.341 ms/token` with exact
+            generated-token parity. CPU AOT and decode-plan cache versions were advanced to prevent stale artifacts.
 - [x] P0: Add a measured decode thread/grain model:
       `requestedThreadCount == 0` now uses an auto policy instead of blindly using every hardware thread: GGML block
       MatMul helpers cap at 16 workers by default, apply smaller caps for tiny output-group counts, and preserve explicit

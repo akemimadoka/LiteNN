@@ -1483,6 +1483,17 @@ TEST(LayerSwiGLU, IdentityProjectionsMatchAnalyticResult)
 	const auto out = Layer::AddSwiGLUMLP(sg, layer, { input, 0 });
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	const auto& forward = graph.GetSubgraph(graph.Forward());
+	EXPECT_EQ(std::ranges::count_if(forward.Nodes(),
+	                                [](const auto& entry) {
+		                                const auto* binary = std::get_if<BinaryOpNode>(&entry.node);
+		                                return binary && binary->op == BinaryOp::SwiGLU;
+	                                }),
+	          1u);
+	EXPECT_FALSE(std::ranges::any_of(forward.Nodes(), [](const auto& entry) {
+		const auto* unary = std::get_if<UnaryOpNode>(&entry.node);
+		return unary && (unary->op == UnaryOp::Negate || unary->op == UnaryOp::Exp);
+	}));
 
 	const auto result = RunSingleIO(graph, { 1.0f, 2.0f }, { 1, 2 });
 	EXPECT_NEAR(ReadFloat(result, 0), 1.0f * (1.0f / (1.0f + std::exp(-1.0f))) * 1.0f, 1e-5f);

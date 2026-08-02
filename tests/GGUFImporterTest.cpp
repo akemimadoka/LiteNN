@@ -2248,6 +2248,20 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesMixedQ4KQ6KProjectionToGroupedFieldInt
 	                             "litenn_cpu_ggml_block_grouped_matmul3_mixed_field_interleaved_v4_q8k_f32"));
 	auto compiled = artifact.Load();
 	expectOutputs(compiled);
+
+	options.enableCPUAOTGGMLPrepackedWeights = false;
+	options.cpuAOTGGMLPrepackedWeightPolicy = CPUAOTGGMLPrepackedWeightPolicy::Profitable;
+	const auto profitableArtifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	EXPECT_TRUE(ByteSpanContains(profitableArtifact.Instructions(),
+	                             "litenn_cpu_ggml_block_grouped_matmul3_mixed_field_interleaved_v4_q8k_f32"));
+	const auto profitablePreparedWeightCount =
+	    std::ranges::count_if(profitableArtifact.ExternalTensorInfos(), [](const auto& info) {
+		    return info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
+	    });
+	EXPECT_EQ(profitablePreparedWeightCount, layers.size());
+	auto profitableCompiled = profitableArtifact.Load();
+	expectOutputs(profitableCompiled);
 }
 
 TEST(GGUFLLaMAQuantizedExecution, Q8KStagedHelperMatchesDirectHelperForExactActivationRows)
@@ -4107,6 +4121,7 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithQuantizedMatMulNo
 	const auto& forward = lowered.GetSubgraph(lowered.Forward());
 	std::size_t quantizedMatMulNodeCount = 0;
 	std::size_t groupedQuantizedMatMulNodeCount = 0;
+	std::size_t fusedSwiGLUNodeCount = 0;
 	std::size_t coveredProjectionCount = 0;
 	for (NodeId nodeId = 0; nodeId < forward.NodeCount(); ++nodeId)
 	{
@@ -4129,10 +4144,16 @@ TEST(GGUFLLaMACausalLM, PreservesQuantizedProjectionStorageWithQuantizedMatMulNo
 				EXPECT_EQ(params.blockFormat, QuantizedBlockFormat::GGML_Q8_0);
 			}
 		}
+		const auto* binary = std::get_if<BinaryOpNode>(&forward.GetNodeEntry(nodeId).node);
+		if (binary && binary->op == BinaryOp::SwiGLU)
+		{
+			++fusedSwiGLUNodeCount;
+		}
 	}
 	EXPECT_LT(quantizedMatMulNodeCount, 7u);
 	EXPECT_GE(groupedQuantizedMatMulNodeCount, 1u);
 	EXPECT_EQ(coveredProjectionCount, 7u);
+	EXPECT_EQ(fusedSwiGLUNodeCount, 1u);
 
 	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
 	EXPECT_NO_THROW(ValidateExecutablePlan(plan));

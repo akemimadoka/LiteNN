@@ -79,6 +79,7 @@ namespace LiteNN::Validation
 		case BinaryOp::Less:
 		case BinaryOp::Greater:
 		case BinaryOp::Equal:
+		case BinaryOp::SwiGLU:
 			return true;
 		}
 		return false;

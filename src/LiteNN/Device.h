@@ -829,6 +829,12 @@ namespace LiteNN
 								broadcastOp(resultShape, dst, shape1, src1, shape2, src2,
 								            [](const auto& a, const auto& b) { return a == b; });
 								break;
+							case BinaryOp::SwiGLU:
+								broadcastOp(resultShape, dst, shape1, src1, shape2, src2,
+								            [](const auto& gate, const auto& up) {
+									            return gate / (static_cast<ResultType>(1) + std::exp(-gate)) * up;
+								            });
+								break;
 							}
 						}
 					});

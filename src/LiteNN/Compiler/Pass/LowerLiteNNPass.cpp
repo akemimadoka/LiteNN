@@ -115,6 +115,19 @@ namespace
 			}
 			return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, lhs, rhs).getResult();
 		}
+		case BinaryOpKind::SwiGLU: {
+			if (!isFloat)
+			{
+				llvm_unreachable("SwiGLU requires floating-point operands");
+			}
+			auto zero = b.create<arith::ConstantOp>(loc, elemType, b.getFloatAttr(elemType, 0.0));
+			auto one = b.create<arith::ConstantOp>(loc, elemType, b.getFloatAttr(elemType, 1.0));
+			auto negated = b.create<arith::SubFOp>(loc, zero, lhs);
+			auto exponential = b.create<math::ExpOp>(loc, negated);
+			auto denominator = b.create<arith::AddFOp>(loc, one, exponential);
+			auto silu = b.create<arith::DivFOp>(loc, lhs, denominator);
+			return b.create<arith::MulFOp>(loc, silu, rhs).getResult();
+		}
 		case BinaryOpKind::MatMul:
 			llvm_unreachable("MatMul handled separately");
 		}
@@ -336,6 +349,10 @@ namespace
 				    Value result = emitBinaryScalar(b, l, kind, args[0], args[1], elemType);
 				    b.create<linalg::YieldOp>(l, result);
 			    });
+			if (kind == BinaryOpKind::SwiGLU && elemType.isF32())
+			{
+				generic->setAttr("litenn.swiglu_f32", rewriter.getUnitAttr());
+			}
 			rewriter.replaceOp(op, generic.getResult(0));
 			return success();
 		}

@@ -497,8 +497,9 @@ namespace LiteNN
 					    }
 					    else if constexpr (std::same_as<T, BinaryOpNode>)
 					    {
-						    if (node.op == BinaryOp::Multiply || node.op == BinaryOp::MatMul ||
-						        node.op == BinaryOp::Divide || node.op == BinaryOp::Max || node.op == BinaryOp::Min)
+						    if (node.op == BinaryOp::Multiply || node.op == BinaryOp::SwiGLU ||
+						        node.op == BinaryOp::MatMul || node.op == BinaryOp::Divide ||
+						        node.op == BinaryOp::Max || node.op == BinaryOp::Min)
 						    {
 							    SaveIfNeeded(fwdSg, graph, node.lhs, saved, insideLoop);
 							    SaveIfNeeded(fwdSg, graph, node.rhs, saved, insideLoop);
@@ -1732,6 +1733,40 @@ namespace LiteNN
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { bV, 0 } },
 				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { aV, 0 } },
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
+				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));
+				break;
+			}
+			case BinaryOp::SwiGLU: {
+				// y = silu(a) * b; dsilu/da = sigmoid(a) * (1 + a * (1 - sigmoid(a))).
+				auto aV = GetForwardValue(fwdSg, bwdSg, node.lhs.node, node.lhs.port, saved, loadMap);
+				auto bV = GetForwardValue(fwdSg, bwdSg, node.rhs.node, node.rhs.port, saved, loadMap);
+				auto one = MakeScalarConstant(bwdSg, outInfo.dtype, outInfo.shape, 1.0);
+				auto negA = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Negate, { aV, 0 } },
+				                          { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto expNegA = bwdSg.AddNode(UnaryOpNode{ UnaryOp::Exp, { negA, 0 } },
+				                             { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto denominator = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Add, { one, 0 }, { expNegA, 0 } },
+				                                 { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto sigmoid = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Divide, { one, 0 }, { denominator, 0 } },
+				                             { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto oneMinusSigmoid = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Subtract, { one, 0 }, { sigmoid, 0 } },
+				                                     { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto aCorrection = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { aV, 0 }, { oneMinusSigmoid, 0 } },
+				                                 { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto derivativeFactor = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Add, { one, 0 }, { aCorrection, 0 } },
+				                                      { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto siluDerivative =
+				    bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { sigmoid, 0 }, { derivativeFactor, 0 } },
+				                  { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto dyTimesB = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { bV, 0 } },
+				                              { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { dyTimesB, 0 }, { siluDerivative, 0 } },
+				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto siluA = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { aV, 0 }, { sigmoid, 0 } },
+				                           { OutputInfo{ outInfo.dtype, outInfo.shape } });
+				auto db = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { siluA, 0 } },
 				                        { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				dstL.push_back(ReduceBroadcastGradient(bwdSg, { da, 0 }, outInfo, li));
 				dstR.push_back(ReduceBroadcastGradient(bwdSg, { db, 0 }, outInfo, ri));

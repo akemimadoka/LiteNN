@@ -4,6 +4,8 @@
 #include <LiteNN/Pass/AutogradPass.h>
 #include <LiteNN/Runtime/Interpreter.h>
 
+#include <array>
+#include <cmath>
 #include <vector>
 
 using namespace LiteNN;
@@ -61,6 +63,32 @@ TEST(AutogradRegression, BroadcastAddReducesParamGradientToOriginalShape)
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[1], 0), 2.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[1], 1), 2.0f);
 	EXPECT_FLOAT_EQ(ReadFloat(gradients[1], 2), 2.0f);
+}
+
+TEST(AutogradRegression, FusedSwiGLUProducesBothInputGradients)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto gate = sg.AddParam(DataType::Float32, { 1 });
+	const auto up = sg.AddParam(DataType::Float32, { 1 });
+	const auto y = sg.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
+	                          { OutputInfo{ DataType::Float32, { 1 } } });
+	sg.SetResults({ { y, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	AutogradPass{}.Run(graph);
+	Runtime::Interpreter<CPU> interpreter;
+	std::array forwardInputs = { Tensor<CPU>({ 1.0f }, { 1 }), Tensor<CPU>({ 2.0f }, { 1 }) };
+	(void) interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), forwardInputs);
+	std::array backwardInputs = { Tensor<CPU>({ 1.0f }, { 1 }), Tensor<CPU>({ 2.0f }, { 1 }),
+		                          Tensor<CPU>({ 1.0f }, { 1 }) };
+	const auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
+
+	ASSERT_EQ(gradients.size(), 2u);
+	const auto sigmoid = 1.0f / (1.0f + std::exp(-1.0f));
+	const auto siluDerivative = sigmoid * (1.0f + (1.0f - sigmoid));
+	EXPECT_NEAR(ReadFloat(gradients[0], 0), 2.0f * siluDerivative, 1e-5f);
+	EXPECT_NEAR(ReadFloat(gradients[1], 0), sigmoid, 1e-5f);
 }
 
 TEST(AutogradRegression, VariableGradientsAreReturnedAfterInputGradientsInVariableIndexOrder)

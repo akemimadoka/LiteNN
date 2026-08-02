@@ -48,6 +48,9 @@ namespace LiteNN
 		Less,
 		Greater,
 		Equal,
+
+		// silu(lhs) * rhs
+		SwiGLU,
 	};
 
 	enum class SortOrder
@@ -218,6 +221,23 @@ namespace LiteNN
 				return std::unexpected("MatMul requires the inner dimensions of the two inputs to match");
 			}
 			return std::vector{ inputShape1[0], inputShape2[1] };
+		}
+	};
+
+	template <>
+	struct BinaryOpTraits<BinaryOp::SwiGLU> : DefaultBinaryOpTraits<BinaryOp::SwiGLU>
+	{
+		static constexpr std::expected<DataType, const char*> ResultType(DataType inputType1, DataType inputType2)
+		{
+			if (inputType1 != inputType2)
+			{
+				return std::unexpected("SwiGLU requires both inputs to have the same data type");
+			}
+			if (!IsFloatingDataType(inputType1))
+			{
+				return std::unexpected("SwiGLU requires floating-point tensors");
+			}
+			return inputType1;
 		}
 	};
 

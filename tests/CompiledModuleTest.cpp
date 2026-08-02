@@ -1302,6 +1302,51 @@ TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 0.0f, 1e-3f);
 }
 
+TEST(CompiledModuleTest, CPUFusedSwiGLUArtifactMatchesInterpreter)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto gateStorage = sg.AddParam(DataType::Float32, { 2, 8 });
+	const auto upStorage = sg.AddParam(DataType::Float32, { 2, 8 });
+	const auto gate =
+	    sg.AddNode(SliceNode{ { gateStorage, 0 }, 1, 2, 4 }, { OutputInfo{ DataType::Float32, { 2, 4 } } });
+	const auto up = sg.AddNode(SliceNode{ { upStorage, 0 }, 1, 3, 4 }, { OutputInfo{ DataType::Float32, { 2, 4 } } });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 2, 4 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	std::array inputs = {
+		Tensor<CPU>({ 99.0f, 99.0f, -4.0f, -1.0f, 0.0f, 1.0f, 99.0f, 99.0f, 99.0f, 99.0f, 2.0f, 4.0f, 8.0f, -8.0f,
+		              99.0f, 99.0f },
+		            { 2, 8 }),
+		Tensor<CPU>({ 99.0f, 99.0f, 99.0f, 0.5f, 1.5f, -2.0f, 3.0f, 99.0f, 99.0f, 99.0f, 99.0f, 4.0f, -0.5f, 0.25f,
+		              2.0f, 99.0f },
+		            { 2, 8 }),
+	};
+	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph));
+	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+	                               artifact.Instructions().size());
+	EXPECT_NE(instructions.find("litenn_cpu_swiglu_f32"), std::string::npos);
+	auto compiled = artifact.Load();
+	std::vector<CompiledModuleCPUHelperProfileEvent> helperEvents;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		const auto actual = compiled.RunTensors(inputs);
+		Runtime::Interpreter<CPU> interpreter;
+		const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+		ASSERT_EQ(actual.size(), expected.size());
+		for (std::size_t i = 0; i < actual.size(); ++i)
+		{
+			ExpectTensorNear(actual[i], expected[i], 1e-5f);
+		}
+		helperEvents = profiler.Snapshot();
+	}
+	EXPECT_TRUE(std::ranges::any_of(helperEvents, [](const auto& event) {
+		return event.helper == "litenn_cpu_swiglu_f32" && event.calls == 1 && event.totalMilliseconds > 0.0;
+	}));
+}
+
 TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
 {
 	ModelBuilder builder;

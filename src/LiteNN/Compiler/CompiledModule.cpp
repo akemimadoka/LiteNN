@@ -1073,6 +1073,37 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy);
 	}
 
+	extern "C" void litenn_cpu_swiglu_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
+	                                      std::int64_t gateRows, std::int64_t gateColumns, std::int64_t gateRowStride,
+	                                      std::int64_t gateColumnStride, const float*, const float* upAligned,
+	                                      std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns,
+	                                      std::int64_t upRowStride, std::int64_t upColumnStride, float*,
+	                                      float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+	                                      std::int64_t outColumns, std::int64_t outRowStride,
+	                                      std::int64_t outColumnStride)
+	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_swiglu_f32",
+		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
+		                                          ? std::format("gate={}x{} up={}x{} out={}x{}", gateRows, gateColumns,
+		                                                        upRows, upColumns, outRows, outColumns)
+		                                          : std::string{});
+		if (gateRows <= 0 || gateColumns <= 0 || gateRows != upRows || gateColumns != upColumns ||
+		    gateRows != outRows || gateColumns != outColumns)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < gateRows; ++row)
+		{
+			for (std::int64_t column = 0; column < gateColumns; ++column)
+			{
+				const auto gate = gateAligned[gateOffset + row * gateRowStride + column * gateColumnStride];
+				const auto up = upAligned[upOffset + row * upRowStride + column * upColumnStride];
+				outAligned[outOffset + row * outRowStride + column * outColumnStride] =
+				    gate / (1.0F + std::exp(-gate)) * up;
+			}
+		}
+	}
+
 	struct RoPEAtPositionsThreadCache
 	{
 		std::int64_t columns{};
@@ -8248,8 +8279,8 @@ namespace
 		std::vector<std::size_t> prepackUseCounts(graph.VariableCount());
 		std::vector<bool> rejected(graph.VariableCount());
 		const auto recordPrepackUse = [&](const Subgraph& subgraph, NodeOutput storage,
-		                                  const QuantizationParams& params) {
-			if (!ShouldPrepackCPUAOTGGMLFormat(params.blockFormat, options))
+		                                  const QuantizationParams& params, bool forceForGroup = false) {
+			if (!forceForGroup && !ShouldPrepackCPUAOTGGMLFormat(params.blockFormat, options))
 			{
 				return;
 			}
@@ -8307,9 +8338,16 @@ namespace
 					{
 						continue;
 					}
+					const auto prepackGroup = std::ranges::any_of(grouped->projectionParams, [&](const auto& params) {
+						return ShouldPrepackCPUAOTGGMLFormat(params.blockFormat, options);
+					});
+					if (!prepackGroup)
+					{
+						continue;
+					}
 					for (std::size_t i = 0; i < grouped->rhsStorages.size(); ++i)
 					{
-						recordPrepackUse(subgraph, grouped->rhsStorages[i], grouped->projectionParams[i]);
+						recordPrepackUse(subgraph, grouped->rhsStorages[i], grouped->projectionParams[i], true);
 					}
 				}
 			}
@@ -8328,6 +8366,50 @@ namespace
 				plans[i]->storageLayout = GGMLPrepackedQuantizedStorageLayout(options.cpuAOTGGMLPrepackedWeightLayout);
 			}
 		}
+
+		// A grouped helper has one physical-layout contract for all projections. Shared variables can make an
+		// otherwise eligible member fall back during the per-variable validation above, so repeatedly clear the
+		// remaining members of any partially selected group until all groups are layout-consistent.
+		bool changed;
+		do
+		{
+			changed = false;
+			for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+			{
+				const auto& subgraph = graph.GetSubgraph(subgraphId);
+				for (const auto& entry : subgraph.Nodes())
+				{
+					const auto* grouped = std::get_if<GroupedQuantizedMatMulNode>(&entry.node);
+					if (!grouped)
+					{
+						continue;
+					}
+					std::vector<std::size_t> variables;
+					variables.reserve(grouped->rhsStorages.size());
+					for (const auto storage : grouped->rhsStorages)
+					{
+						const auto variable = TryGetVariableRefIndex(subgraph, storage);
+						if (!variable || *variable >= plans.size())
+						{
+							variables.clear();
+							break;
+						}
+						variables.push_back(*variable);
+					}
+					const auto selected = std::ranges::count_if(
+					    variables, [&](const auto variable) { return plans[variable].has_value(); });
+					if (selected == 0 || selected == variables.size())
+					{
+						continue;
+					}
+					for (const auto variable : variables)
+					{
+						changed = plans[variable].has_value() || changed;
+						plans[variable] = std::nullopt;
+					}
+				}
+			}
+		} while (changed);
 		return plans;
 	}
 
@@ -10115,6 +10197,7 @@ namespace
 		RegisterJITRuntimeSymbol("litenn_cpu_profile_node_end", reinterpret_cast<void*>(&litenn_cpu_profile_node_end));
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_swiglu_f32", reinterpret_cast<void*>(&litenn_cpu_swiglu_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_rope_at_positions_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_rope_at_positions_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32",

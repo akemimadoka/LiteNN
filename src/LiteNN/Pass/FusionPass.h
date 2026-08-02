@@ -51,6 +51,7 @@ namespace LiteNN
 			case BinaryOp::Pow:
 			case BinaryOp::Max:
 			case BinaryOp::Min:
+			case BinaryOp::SwiGLU:
 				return true;
 			default:
 				return false;
