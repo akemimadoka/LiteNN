@@ -142,6 +142,46 @@ kernel correctness and cache-hot instruction throughput, but it cannot predict t
 Thread sweeps also plateau after the low-thread region on cache-hot Down rows. Adding workers alone is not a credible
 fix; memory concurrency and dispatch behavior must be measured in a cold-stream workload.
 
+## Cache-Cold Projection-Stream Reproduction
+
+The 2026-08-04 benchmark tranche added
+`GGMLFieldInterleavedV4ColdProjectionStream`. It allocates one 64-byte-aligned prepared-weight stream, creates each
+source matrix separately so raw and prepared copies are not retained together, and rotates through a working set far
+larger than the host's 64 MiB aggregate L3. The production-shaped rows use distinct activations per layer so the
+field-interleaved helper must follow the same Q8_K activation cache miss and preparation path as decode. A
+`shared_activation` control keeps the weight stream identical while allowing activation reuse.
+
+The Q4_K_M row follows the observed model order: Q4_K Down weights occur in layers `5, 6, 8, 9, 12, 13, 15, 16, 18,
+19, 21, 22, 24, 25, 27, 28, 30, 31, 33, 34, 36, 37, 39, 40`; the other 24 layers use Q6_K. The benchmark was built
+with the Release configuration and run at T8 with three repetitions:
+
+```text
+build-release\benchmark\litenn_bench.exe \
+  --benchmark_filter=GGMLFieldInterleavedV4ColdProjectionStream \
+  --benchmark_min_time=0.5s --benchmark_repetitions=3 \
+  --benchmark_report_aggregates_only=true
+```
+
+| Stream, median | Sequence | Per call | Effective prepared-byte rate | Cold/hot | Prepared/source |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Q4_K Down x24, distinct activation | `41.175 ms` | `1.716 ms` | `23.85 GB/s` | `2.00x` | `1.0278x` |
+| Q6_K Down x24, distinct activation | `53.221 ms` | `2.218 ms` | `26.18 GB/s` | `1.80x` | `1.0000x` |
+| Real Q4_K_M Down x48, distinct activation | `96.726 ms` | `2.015 ms` | `24.56 GB/s` | `1.96x` | `1.0113x` |
+| Same real x48 weight order, shared activation | `64.065 ms` | `1.335 ms` | `37.08 GB/s` | `1.31x` | `1.0113x` |
+
+The distinct-activation mixed stream is `32.661 ms`, or `51.0%`, slower than the otherwise identical shared-activation
+control. The isolated Q4_K and Q6_K rows are respectively only `8.7%` and `12.5%` above the corresponding real-model
+profile totals (`37.88` and `47.29 ms`). This is a much stronger reproduction than the old single-matrix hot row.
+Validation against the staged reference reported maximum absolute deltas of `8.55e-4` for Q4_K and `4.15e-3` for
+Q6_K.
+
+The A/B result changes the immediate diagnosis. Weight streaming remains material, but it does not by itself explain
+the production Down latency. The dominant reproducible surcharge appears when each layer changes the Float32
+activation: `GGMLQ8KActivationThreadCache` compares and copies the activation and regenerates Q8_K blocks before each
+ordinary Down helper. This directly supports producing the prepared Q8_K activation at the SwiGLU boundary and passing
+it to Down without a second cache lookup, Float32 comparison/copy, and quantization pass. Worker-level timing is still
+needed to split the residual projection time into dispatch, useful work, and barrier wait.
+
 ## Source-Level Interpretation
 
 The current LiteNN field-interleaved helper in `CompiledModule.cpp`:
@@ -158,15 +198,16 @@ LiteNN builds the containing translation unit with `-O3` and uses per-function I
 microkernels. The compile-flag difference remains worth auditing, but the strong cache-hot LiteNN rows make it a lower
 priority than the measured cold-stream Down behavior.
 
-The evidence supports the following explanation:
+The combined full-model and cold-stream evidence supports the following explanation:
 
 1. LiteNN's quantized arithmetic is competitive when repeatedly reading one matrix.
-2. The real model loses memory-level parallelism or pays disproportionate dispatch/barrier cost on ordinary
-   `13824 -> 5120` single projections.
-3. Grouped Gate/Up amortizes this behavior and is close to llama.cpp, while both Q4_K and Q6_K Down remain roughly
-   twice as expensive.
-4. The root cause is not yet proven at the hardware-counter level. Cache misses, memory stalls, worker idle time, and
-   effective concurrent streams must be measured before committing to a final kernel rewrite.
+2. Rotating only the prepared weights costs about `64.1 ms` for the real 48-layer order, while rotating distinct
+   activations raises the same sequence to `96.7 ms`. Q8_K activation invalidation and regeneration is therefore the
+   largest directly isolated surcharge in this Down path.
+3. Grouped Gate/Up reuses one prepared activation across two projections and is close to llama.cpp; ordinary Down
+   receives a new SwiGLU result in every layer and cannot realize that reuse under the current helper ABI.
+4. Cache/DRAM stalls and worker dispatch/barrier behavior remain plausible owners of the residual shared-activation
+   gap, but they are no longer the first implementation target.
 
 Windows system-wide sampling was unavailable in this run because the current process could not enable the required
 performance-profile policy. Internal timers cover almost all module time, but they do not expose PMU cache or stall
@@ -176,15 +217,13 @@ counters.
 
 The next tranche should proceed in this order:
 
-1. Add a cold-stream benchmark that rotates through a working set larger than LLC and can replay the 48-layer Qwen
-   projection order. Report warm/cold ratio, bytes per call, effective GB/s, worker count, and grouped/single mode.
-2. Add low-overhead worker diagnostics around FFN Down to measure dispatch, useful work, barrier wait, and per-worker
-   bytes. Use this to distinguish fixed helper overhead from insufficient memory-level parallelism.
-3. Evaluate Down-specific execution changes: multiple independent output-group streams per worker, software prefetch,
+1. Fuse SwiGLU output production with Q8_K preparation for FFN Down, or make the prepared activation an explicit
+   compiler-owned value, so the intermediate Float32 activation is not compared, copied, and quantized again.
+2. Add low-overhead phase and worker diagnostics around FFN Down to separate activation lookup/copy/quantization,
+   dispatch, useful work, barrier wait, and per-worker bytes.
+3. Evaluate residual Down-specific execution changes: multiple independent output-group streams per worker, prefetch,
    Q4_K x16 AVX2 under a cold-stream-only evidence gate, and Q6_K AVX2 versus AVX-512 selection.
-4. Fuse SwiGLU output production with Q8_K preparation for FFN Down so the intermediate Float32 activation is not
-   traversed and dispatched twice.
-5. Accept a change only after alternating full-decode LiteNN/llama.cpp runs. Cache-hot helper wins alone are not enough.
+4. Accept a change only after alternating full-decode LiteNN/llama.cpp runs. Cache-hot helper wins alone are not enough.
 
 Acceptance for CPU parity work:
 
@@ -193,4 +232,3 @@ Acceptance for CPU parity work:
 - Q4_K and Q6_K Down each sustain at least `40 GB/s` in the new cold-stream benchmark;
 - normalized FFN latency is within `10%` of the same-run llama.cpp FFN block;
 - LiteNN generated-token latency is within `5%` of the alternating CPU-only llama.cpp T8 control median.
-

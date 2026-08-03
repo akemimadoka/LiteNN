@@ -3214,16 +3214,21 @@ Priority classes:
       llama.cpp boundary. Gate/Up is comparatively close and Attention is not the immediate short-context owner.
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
-      - [ ] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
-            48-layer Qwen projection order; report bytes, effective bandwidth, warm/cold ratio, grouped/single mode,
-            resolved threads, and per-shape totals.
+      - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
+            observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
+            bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,
+            reference delta, and per-shape totals. Median Q4_K x24, Q6_K x24, and real mixed x48 times were `41.175`,
+            `53.221`, and `96.726 ms`; the same mixed weights with one shared activation took `64.065 ms`.
+      - [ ] Eliminate the measured FFN activation-handoff tax. The distinct/shared activation control isolates
+            `32.661 ms` in Float32 activation cache comparison/copy and Q8_K regeneration. Produce a compiler-owned
+            prepared activation at the SwiGLU boundary and consume it directly in Down without changing graph-visible
+            SwiGLU behavior.
       - [ ] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead, then establish whether
-            the missing bandwidth comes from helper fixed cost, task imbalance, or insufficient concurrent streams.
+            the residual shared-activation gap comes from helper fixed cost, task imbalance, or insufficient concurrent
+            streams. Include activation lookup/copy/quantization as separate phases.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.
-      - [ ] Fuse SwiGLU output with Q8_K preparation for the following Down projection while preserving the public
-            graph semantics, exact stateful schedule behavior, and quantized tolerance policy.
       - [ ] Re-run alternating LiteNN/llama.cpp T8 full-decode and stage profiles. Acceptance requires no fallback,
             unchanged generated output, prepared weights no larger than `1.03x` source quantized bytes, both Down
             formats above `40 GB/s` in cold-stream evidence, FFN within `10%`, and total latency within `5%` of the

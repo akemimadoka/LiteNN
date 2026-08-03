@@ -23,10 +23,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <optional>
 #include <random>
 #include <span>
@@ -442,6 +444,31 @@ namespace
 		GGMLGroupedProjectionBenchmarkSpec{ "qwen_qkv", 5120, { 5120, 1024, 1024 }, 3 },
 		GGMLGroupedProjectionBenchmarkSpec{ "qwen_gate_up", 5120, { 13824, 13824, 0 }, 2 },
 	};
+
+	constexpr auto kQwenQ4KDownProjectionStream = [] {
+		std::array<QuantizedBlockFormat, 24> formats{};
+		formats.fill(QuantizedBlockFormat::GGML_Q4_K);
+		return formats;
+	}();
+
+	constexpr auto kQwenQ6KDownProjectionStream = [] {
+		std::array<QuantizedBlockFormat, 24> formats{};
+		formats.fill(QuantizedBlockFormat::GGML_Q6_K);
+		return formats;
+	}();
+
+	constexpr auto kQwenMixedDownProjectionStream = [] {
+		std::array<QuantizedBlockFormat, 48> formats{};
+		formats.fill(QuantizedBlockFormat::GGML_Q6_K);
+		constexpr std::array<std::size_t, 24> q4Layers = {
+			5, 6, 8, 9, 12, 13, 15, 16, 18, 19, 21, 22, 24, 25, 27, 28, 30, 31, 33, 34, 36, 37, 39, 40,
+		};
+		for (const auto layer : q4Layers)
+		{
+			formats[layer] = QuantizedBlockFormat::GGML_Q4_K;
+		}
+		return formats;
+	}();
 
 	constexpr std::array<KVAppendBenchmarkSpec, 2> kKVAppendBenchmarkSpecs = {
 		KVAppendBenchmarkSpec{ "qwen_cache_2048", 2048, 8, 128 },
@@ -1422,7 +1449,7 @@ namespace
 	}
 
 	std::vector<std::uint8_t> MakeGGMLBenchmarkStorage(QuantizedBlockFormat format, std::size_t rows,
-	                                                   std::size_t columns)
+	                                                   std::size_t columns, std::uint32_t seedOffset = 0)
 	{
 		const auto layout = GetQuantizedBlockLayout(format);
 		if (!layout || columns % layout->elementsPerBlock != 0)
@@ -1437,7 +1464,7 @@ namespace
 			{
 				const auto offset = (row * blockCount + block) * layout->bytesPerBlock;
 				FillGGMLBenchmarkBlock(std::span<std::uint8_t>(storage).subspan(offset, layout->bytesPerBlock), format,
-				                       static_cast<std::uint32_t>(row * 131U + block * 17U));
+				                       seedOffset + static_cast<std::uint32_t>(row * 131U + block * 17U));
 			}
 		}
 		return storage;
@@ -1642,6 +1669,204 @@ namespace
 		state.counters["storage_ratio"] =
 		    benchmark::Counter(static_cast<double>(packed.size()) / static_cast<double>(rhs.size()));
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
+	}
+
+	struct GGMLPackedProjectionStreamEntry
+	{
+		QuantizedBlockFormat format;
+		std::size_t offset;
+		std::size_t packedBytes;
+	};
+
+	void BMGGMLFieldInterleavedV4ColdProjectionStream(benchmark::State& state,
+	                                                  std::span<const QuantizedBlockFormat> formats,
+	                                                  std::size_t inputWidth, std::size_t outputWidth,
+	                                                  std::uint64_t threadCount, bool uniqueActivations)
+	{
+		constexpr std::size_t packedAlignment = 64;
+		const auto alignPackedOffset = [](std::size_t value) {
+			return (value + packedAlignment - 1) & ~(packedAlignment - 1);
+		};
+		if (formats.empty())
+		{
+			state.SkipWithError("GGML projection stream must not be empty");
+			return;
+		}
+
+		std::vector<GGMLPackedProjectionStreamEntry> entries;
+		entries.reserve(formats.size());
+		std::size_t allocationBytes = 0;
+		std::size_t sourceBytes = 0;
+		std::size_t packedPayloadBytes = 0;
+		std::size_t q4Calls = 0;
+		std::size_t q6Calls = 0;
+		for (const auto format : formats)
+		{
+			const auto layout = GetQuantizedBlockLayout(format);
+			const auto packedBytes = static_cast<std::size_t>(litenn_cpu_ggml_field_interleaved_v4_bytes(
+			    static_cast<std::uint64_t>(format), static_cast<std::int64_t>(outputWidth),
+			    static_cast<std::int64_t>(inputWidth)));
+			if (!layout || inputWidth % layout->elementsPerBlock != 0 || packedBytes == 0)
+			{
+				state.SkipWithError("unsupported field-interleaved-v4 GGML projection-stream shape");
+				return;
+			}
+			const auto matrixSourceBytes =
+			    outputWidth * (inputWidth / layout->elementsPerBlock) * layout->bytesPerBlock;
+			allocationBytes = alignPackedOffset(allocationBytes);
+			if (packedBytes > std::numeric_limits<std::size_t>::max() - allocationBytes)
+			{
+				state.SkipWithError("GGML projection-stream allocation overflow");
+				return;
+			}
+			entries.push_back({ format, allocationBytes, packedBytes });
+			allocationBytes += packedBytes;
+			sourceBytes += matrixSourceBytes;
+			packedPayloadBytes += packedBytes;
+			q4Calls += format == QuantizedBlockFormat::GGML_Q4_K ? 1 : 0;
+			q6Calls += format == QuantizedBlockFormat::GGML_Q6_K ? 1 : 0;
+		}
+
+		std::vector<std::uint8_t> packed(allocationBytes);
+		std::mt19937 activationRng(0);
+		std::uniform_real_distribution<float> activationDist(-1.0F, 1.0F);
+		const auto activationCount = uniqueActivations ? entries.size() : std::size_t{ 1 };
+		std::vector<float> activations(activationCount * inputWidth);
+		for (auto& value : activations)
+		{
+			value = activationDist(activationRng);
+		}
+		std::vector<float> stagedReference(outputWidth);
+		std::vector<float> output(outputWidth);
+		float maxAbsDelta = 0.0F;
+		std::array<bool, 2> validatedFormats{};
+		const auto activationForEntry = [&](std::size_t entryIndex) {
+			const auto activationIndex = uniqueActivations ? entryIndex : std::size_t{ 0 };
+			return activations.data() + activationIndex * inputWidth;
+		};
+		for (std::size_t i = 0; i < entries.size(); ++i)
+		{
+			const auto& entry = entries[i];
+			auto rhs = MakeGGMLBenchmarkStorage(entry.format, outputWidth, inputWidth,
+			                                    static_cast<std::uint32_t>(i * 0x9e3779b9U));
+			litenn_cpu_ggml_prepack_field_interleaved_v4(
+			    nullptr, rhs.data(), 0, static_cast<std::int64_t>(rhs.size()), 1,
+			    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::uint64_t>(entry.format), nullptr, packed.data() + entry.offset, 0,
+			    static_cast<std::int64_t>(entry.packedBytes), 1);
+
+			const auto validationIndex = entry.format == QuantizedBlockFormat::GGML_Q4_K ? 0U : 1U;
+			if (!validatedFormats[validationIndex])
+			{
+				const auto* activation = activationForEntry(i);
+				litenn_cpu_ggml_block_matmul_q8k_staged_f32(
+				    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth),
+				    static_cast<std::int64_t>(inputWidth), 1, nullptr, rhs.data(), 0,
+				    static_cast<std::int64_t>(rhs.size()), 1, nullptr, stagedReference.data(), 0, 1,
+				    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+				    static_cast<std::uint64_t>(entry.format), threadCount,
+				    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+				litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+				    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth),
+				    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data() + entry.offset, 0,
+				    static_cast<std::int64_t>(entry.packedBytes), 1, nullptr, output.data(), 0, 1,
+				    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+				    static_cast<std::uint64_t>(entry.format), threadCount,
+				    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+				maxAbsDelta = std::max(maxAbsDelta, MaxAbsDifference(output, stagedReference));
+				validatedFormats[validationIndex] = true;
+			}
+		}
+
+		const auto invoke = [&](const GGMLPackedProjectionStreamEntry& entry, std::size_t entryIndex) {
+			const auto* activation = activationForEntry(entryIndex);
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
+			    1, nullptr, packed.data() + entry.offset, 0, static_cast<std::int64_t>(entry.packedBytes), 1, nullptr,
+			    output.data(), 0, 1, static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+			    static_cast<std::uint64_t>(entry.format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+
+		const auto measureMedianHotCall = [&](std::size_t index) {
+			std::array<double, 7> samples{};
+			for (auto& sample : samples)
+			{
+				const auto begin = std::chrono::steady_clock::now();
+				invoke(entries[index], index);
+				const auto end = std::chrono::steady_clock::now();
+				sample = std::chrono::duration<double>(end - begin).count();
+			}
+			std::sort(samples.begin(), samples.end());
+			return samples[samples.size() / 2];
+		};
+		std::optional<double> q4HotCallSeconds;
+		std::optional<double> q6HotCallSeconds;
+		for (std::size_t i = 0; i < entries.size(); ++i)
+		{
+			if (entries[i].format == QuantizedBlockFormat::GGML_Q4_K && !q4HotCallSeconds)
+			{
+				q4HotCallSeconds = measureMedianHotCall(i);
+			}
+			else if (entries[i].format == QuantizedBlockFormat::GGML_Q6_K && !q6HotCallSeconds)
+			{
+				q6HotCallSeconds = measureMedianHotCall(i);
+			}
+		}
+		const auto hotSequenceSeconds = q4HotCallSeconds.value_or(0.0) * static_cast<double>(q4Calls) +
+		                                q6HotCallSeconds.value_or(0.0) * static_cast<double>(q6Calls);
+		const auto weightedHotCallSeconds = hotSequenceSeconds / static_cast<double>(entries.size());
+
+		for (std::size_t i = 0; i < entries.size(); ++i)
+		{
+			invoke(entries[i], i);
+		}
+
+		double measuredSeconds = 0.0;
+		for (auto _ : state)
+		{
+			const auto begin = std::chrono::steady_clock::now();
+			for (std::size_t i = 0; i < entries.size(); ++i)
+			{
+				invoke(entries[i], i);
+			}
+			const auto end = std::chrono::steady_clock::now();
+			const auto elapsed = std::chrono::duration<double>(end - begin).count();
+			measuredSeconds += elapsed;
+			state.SetIterationTime(elapsed);
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto iterations = static_cast<double>(state.iterations());
+		const auto sequenceSeconds = measuredSeconds / iterations;
+		const auto coldCallSeconds = sequenceSeconds / static_cast<double>(entries.size());
+		state.counters["allocation_bytes"] = benchmark::Counter(static_cast<double>(allocationBytes));
+		state.counters["calls_per_iteration"] = benchmark::Counter(static_cast<double>(entries.size()));
+		state.counters["cold_call_ms"] = benchmark::Counter(coldCallSeconds * 1000.0);
+		state.counters["cold_hot_ratio"] = benchmark::Counter(sequenceSeconds / hotSequenceSeconds);
+		state.counters["effective_gbytes_per_second"] =
+		    benchmark::Counter(static_cast<double>(packedPayloadBytes) / sequenceSeconds / 1.0e9);
+		state.counters["full_sequence_ms"] = benchmark::Counter(sequenceSeconds * 1000.0);
+		state.counters["grouped"] = benchmark::Counter(0.0);
+		state.counters["hot_call_ms"] = benchmark::Counter(weightedHotCallSeconds * 1000.0);
+		state.counters["hot_sequence_ms"] = benchmark::Counter(hotSequenceSeconds * 1000.0);
+		state.counters["max_abs_delta"] = benchmark::Counter(static_cast<double>(maxAbsDelta));
+		state.counters["packed_bytes"] = benchmark::Counter(static_cast<double>(packedPayloadBytes));
+		state.counters["q4_calls"] = benchmark::Counter(static_cast<double>(q4Calls));
+		state.counters["q4_hot_call_ms"] = benchmark::Counter(q4HotCallSeconds.value_or(0.0) * 1000.0);
+		state.counters["q6_calls"] = benchmark::Counter(static_cast<double>(q6Calls));
+		state.counters["q6_hot_call_ms"] = benchmark::Counter(q6HotCallSeconds.value_or(0.0) * 1000.0);
+		state.counters["requested_threads"] = benchmark::Counter(static_cast<double>(threadCount));
+		state.counters["resolved_threads"] = benchmark::Counter(static_cast<double>(threadCount));
+		state.counters["source_bytes"] = benchmark::Counter(static_cast<double>(sourceBytes));
+		state.counters["storage_ratio"] =
+		    benchmark::Counter(static_cast<double>(packedPayloadBytes) / static_cast<double>(sourceBytes));
+		state.counters["unique_activations"] = benchmark::Counter(static_cast<double>(activationCount));
+		state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
+		                        static_cast<std::int64_t>(packedPayloadBytes));
+		state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations()) *
+		                        static_cast<std::int64_t>(entries.size()));
 	}
 
 	void BMGGMLBlockMatMulPreparedQ8KActivationHelper(benchmark::State& state, QuantizedBlockFormat format,
@@ -4777,6 +5002,24 @@ namespace
 				}
 			}
 		}
+		constexpr std::uint64_t projectionStreamThreadCount = 8;
+		const auto registerProjectionStream =
+		    [projectionStreamThreadCount](std::string_view name, std::span<const QuantizedBlockFormat> formats,
+		                                  bool uniqueActivations = true) {
+			    auto* benchmarkCase = benchmark::RegisterBenchmark(
+			        std::format("GGMLFieldInterleavedV4ColdProjectionStream/{}/T{}/batch:1/in:13824/out:5120", name,
+			                    projectionStreamThreadCount),
+			        [formats, uniqueActivations, projectionStreamThreadCount](benchmark::State& state) {
+				        BMGGMLFieldInterleavedV4ColdProjectionStream(state, formats, 13824, 5120,
+				                                                     projectionStreamThreadCount, uniqueActivations);
+			        });
+			    benchmarkCase->UseManualTime();
+			    benchmarkCase->Unit(benchmark::kMillisecond);
+		    };
+		registerProjectionStream("qwen_q4_k_down_24", kQwenQ4KDownProjectionStream);
+		registerProjectionStream("qwen_q6_k_down_24", kQwenQ6KDownProjectionStream);
+		registerProjectionStream("qwen_q4_k_m_down_48", kQwenMixedDownProjectionStream);
+		registerProjectionStream("qwen_q4_k_m_down_48_shared_activation", kQwenMixedDownProjectionStream, false);
 		for (const auto format : ggmlQ8KStagedBlockFormats)
 		{
 			for (const auto threadCount : kGGMLThreadCounts)

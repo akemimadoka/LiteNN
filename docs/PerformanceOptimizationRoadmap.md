@@ -42,16 +42,24 @@ FFN accounts for at least `46.54 ms` of the `53.39 ms/token` gap. Q4_K and Q6_K 
 
 P0 implementation order:
 
-- [ ] Build a cache-cold GGML projection-stream benchmark.
-  - Rotate through a prepared-weight working set larger than aggregate LLC instead of repeatedly reading one matrix.
-  - Support the real 48-layer Qwen ordering and isolated Q4_K/Q6_K `13824 -> 5120` Down sequences.
-  - Report source/prepared bytes, effective GB/s, warm/cold ratio, grouped/single mode, requested/resolved threads, and
-    per-call plus full-sequence latency.
-  - Keep existing cache-hot rows as instruction-throughput evidence; do not replace them or compare the two modes
-    without explicit labels.
-- [ ] Attribute the single-projection bandwidth loss before changing the kernel.
-  - Add opt-in low-overhead timestamps for helper dispatch, each worker's useful interval, bytes assigned, task claims,
-    and final barrier wait.
+- [x] Build a cache-cold GGML projection-stream benchmark.
+  - `GGMLFieldInterleavedV4ColdProjectionStream` covers isolated Q4_K/Q6_K `13824 -> 5120` Down streams, the observed
+    48-layer Q4_K_M order, and an otherwise identical shared-activation control. It reports source/prepared/allocation
+    bytes, effective GB/s, weighted hot/cold ratio, grouped/single mode, requested/resolved threads, unique activation
+    count, per-call/full-sequence latency, and reference delta.
+  - The 2026-08-04 T8 medians were `41.175 ms` for Q4_K x24, `53.221 ms` for Q6_K x24, `96.726 ms` for the real mixed
+    x48 distinct-activation stream, and `64.065 ms` for its shared-activation control. Prepared/source was `1.0113x`
+    for the mixed stream. Existing cache-hot rows remain separately labelled instruction-throughput evidence.
+- [ ] Eliminate the measured activation-handoff tax before speculative kernel work.
+  - The real-order distinct/shared activation A/B isolates `32.661 ms` (`51.0%` of the shared-control time) in the path
+    that compares/copies the new Float32 activation and regenerates Q8_K blocks for every Down helper.
+  - Add a fused SwiGLU-to-Q8_K preparation helper or compiler-owned prepared activation value so Down skips the second
+    cache lookup, Float32 comparison/copy, and quantization pass.
+  - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs; validate Q4_K/Q6_K parity,
+    mixed-format 48-layer schedules, state aliases, artifact load, and generated text.
+- [ ] Attribute the residual single-projection bandwidth loss before changing the kernel.
+  - Add opt-in low-overhead timestamps for activation lookup/copy/quantization, helper dispatch, each worker's useful
+    interval, bytes assigned, task claims, and final barrier wait.
   - Compare ordinary Down, hidden/output, grouped Gate/Up, and the llama.cpp stage control under alternating runs.
   - Exit when the evidence distinguishes fixed dispatch cost, task imbalance, cache/DRAM stalls, and insufficient
     memory-level parallelism well enough to predict a benchmark change.
@@ -63,11 +71,6 @@ P0 implementation order:
     is faster.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
-- [ ] Fuse the activation handoff into Down.
-  - Add a fused SwiGLU-to-Q8_K preparation helper or lowering so Down consumes prepared activation without a separate
-    Float32 traversal and helper dispatch.
-  - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs.
-  - Validate Q4_K/Q6_K parity, mixed-format 48-layer schedules, state aliases, artifact load, and generated text.
 - [ ] Close with controlled full-model evidence.
   - Alternate at least three LiteNN and three CPU-only llama.cpp T8 runs to control host frequency and filesystem-cache
     variance.
