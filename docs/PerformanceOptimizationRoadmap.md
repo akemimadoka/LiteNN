@@ -33,6 +33,59 @@ Priority classes for the GGUF/Qwen decode work:
 - P2, observability and validation gates: add per-helper/per-node timing, long-context benchmark rows, and golden
   validation. These do not directly speed up execution, but they keep P0/P1 changes measurable and regression-safe.
 
+### 2026-08-04 FFN-Down Closure Tranche
+
+Evidence owner: `docs/PerformanceAnalysis_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
+`256.616 ms/token` and llama.cpp at `202.224 ms/token`. After correcting each profiler by its own no-profile baseline,
+FFN accounts for at least `46.54 ms` of the `53.39 ms/token` gap. Q4_K and Q6_K activation-plus-Down are approximately
+`2.04x` and `1.82x` the corresponding llama.cpp boundaries, while Gate/Up is only about `5 ms` behind.
+
+P0 implementation order:
+
+- [ ] Build a cache-cold GGML projection-stream benchmark.
+  - Rotate through a prepared-weight working set larger than aggregate LLC instead of repeatedly reading one matrix.
+  - Support the real 48-layer Qwen ordering and isolated Q4_K/Q6_K `13824 -> 5120` Down sequences.
+  - Report source/prepared bytes, effective GB/s, warm/cold ratio, grouped/single mode, requested/resolved threads, and
+    per-call plus full-sequence latency.
+  - Keep existing cache-hot rows as instruction-throughput evidence; do not replace them or compare the two modes
+    without explicit labels.
+- [ ] Attribute the single-projection bandwidth loss before changing the kernel.
+  - Add opt-in low-overhead timestamps for helper dispatch, each worker's useful interval, bytes assigned, task claims,
+    and final barrier wait.
+  - Compare ordinary Down, hidden/output, grouped Gate/Up, and the llama.cpp stage control under alternating runs.
+  - Exit when the evidence distinguishes fixed dispatch cost, task imbalance, cache/DRAM stalls, and insufficient
+    memory-level parallelism well enough to predict a benchmark change.
+- [ ] Raise FFN-Down cold-stream throughput.
+  - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
+  - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
+    remains rejected.
+  - Compare Q6_K AVX2 x8/x16 and AVX-512 x16 under the same cold-stream/full-decode gate instead of assuming wider ISA
+    is faster.
+  - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
+    prepared-size ratio no greater than `1.03x`.
+- [ ] Fuse the activation handoff into Down.
+  - Add a fused SwiGLU-to-Q8_K preparation helper or lowering so Down consumes prepared activation without a separate
+    Float32 traversal and helper dispatch.
+  - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs.
+  - Validate Q4_K/Q6_K parity, mixed-format 48-layer schedules, state aliases, artifact load, and generated text.
+- [ ] Close with controlled full-model evidence.
+  - Alternate at least three LiteNN and three CPU-only llama.cpp T8 runs to control host frequency and filesystem-cache
+    variance.
+  - Record no-profile total latency plus low-boundary FFN/Attention/logits attribution; reject fine callbacks whose
+    overhead exceeds `15%`.
+  - Require no fallback, unchanged generated tokens, Q4_K/Q6_K Down cold-stream throughput of at least `40 GB/s`, FFN
+    latency within `10%` of the corresponding llama.cpp block, and total latency within `5%` of the same-run llama.cpp
+    median.
+
+P1 follow-up after the P0 gate:
+
+- [ ] Add optional PMU/platform sampling for LLC misses, memory stalls, and effective bandwidth. The profile bundle must
+  degrade cleanly when Windows policy or CI privileges do not permit system profiling.
+- [ ] Preserve a reproducible out-of-tree llama.cpp stage-control recipe without adding llama.cpp runtime linkage to
+  LiteNN production targets.
+- [ ] Add non-gating warm/cold benchmark trend output and alert when a cache-hot win regresses the cold-stream or
+  full-decode row.
+
 - [ ] Add a whole-process profile bundle command that combines existing `litenn_profile` evidence with waterfall
   timeline output and optional platform sampling.
   - [x] First slice: `benchmark/profile_bundle.py` wraps `litenn_profile` or an arbitrary command, captures

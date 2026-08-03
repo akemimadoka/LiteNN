@@ -3207,6 +3207,31 @@ Priority classes:
       corrected automatic T8 ceiling measured `285.087 ms/token` under profiling. Alternating unprofiled auto/explicit
       T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
       for controlled experiments but is not the production default.
+- [ ] P0: Close the remaining CPU FFN-Down streaming gap against the CPU-only llama.cpp control:
+      `docs/PerformanceAnalysis_2026-08-04.md` records an adjacent-run baseline of `256.616 ms/token` for LiteNN and
+      `202.224 ms/token` for llama.cpp at T8. Normalized stage attribution assigns at least `46.54 ms` of the
+      `53.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
+      llama.cpp boundary. Gate/Up is comparatively close and Attention is not the immediate short-context owner.
+      The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
+      2026-08-04 FFN-Down closure tranche.
+      - [ ] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
+            48-layer Qwen projection order; report bytes, effective bandwidth, warm/cold ratio, grouped/single mode,
+            resolved threads, and per-shape totals.
+      - [ ] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead, then establish whether
+            the missing bandwidth comes from helper fixed cost, task imbalance, or insufficient concurrent streams.
+      - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
+            Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
+            helper benchmark.
+      - [ ] Fuse SwiGLU output with Q8_K preparation for the following Down projection while preserving the public
+            graph semantics, exact stateful schedule behavior, and quantized tolerance policy.
+      - [ ] Re-run alternating LiteNN/llama.cpp T8 full-decode and stage profiles. Acceptance requires no fallback,
+            unchanged generated output, prepared weights no larger than `1.03x` source quantized bytes, both Down
+            formats above `40 GB/s` in cold-stream evidence, FFN within `10%`, and total latency within `5%` of the
+            same-run llama.cpp median.
+- [ ] P1: Harden CPU decode performance evidence after FFN-Down closure:
+      add optional PMU/platform-counter capture for cache misses and memory stalls, preserve the out-of-tree llama.cpp
+      stage control recipe, and add non-gating warm/cold trend rows so cache-hot microbenchmark regressions cannot be
+      mistaken for full-model regressions. Platform profiling must remain optional on CI hosts without privileges.
 - [x] P1: Skip vocabulary projection on prompt replay steps that cannot be sampled:
       completed on 2026-08-02 with an `emit_logits` Bool in stateful dense and paged-reference schedules. The compiled
       `CondNode` returns zero logits during replay while still updating KV/position aliases, then executes the unchanged
