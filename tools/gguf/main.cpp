@@ -1157,6 +1157,122 @@ namespace
 		}
 	}
 
+	struct GGUFParallelProfileSummary
+	{
+		std::uint64_t calls{};
+		double activationLookupMs{};
+		double activationCopyMs{};
+		double activationQuantizeMs{};
+		double lockWaitMs{};
+		double dispatchMs{};
+		double parallelWallMs{};
+		double callerUsefulMs{};
+		double workerUsefulMs{};
+		double barrierWaitMs{};
+	};
+
+	GGUFParallelProfileSummary
+	LogGGUFParallelProfile(bool enabled, std::size_t step,
+	                       std::span<const LiteNN::CompiledModuleCPUParallelProfileEvent> events)
+	{
+		GGUFParallelProfileSummary summary;
+		if (!enabled || events.empty())
+		{
+			return summary;
+		}
+
+		struct Aggregate
+		{
+			std::string helper;
+			std::string detail;
+			std::uint64_t calls{};
+			std::uint64_t cacheHits{};
+			std::uint64_t weightBytes{};
+			std::uint64_t workUnits{};
+			std::uint64_t taskClaims{};
+			std::uint64_t participants{};
+			std::uint64_t minTaskClaims{ std::numeric_limits<std::uint64_t>::max() };
+			std::uint64_t maxTaskClaims{};
+			std::uint64_t minWorkUnits{ std::numeric_limits<std::uint64_t>::max() };
+			std::uint64_t maxWorkUnits{};
+			double minUsefulMs{ std::numeric_limits<double>::max() };
+			double maxUsefulMs{};
+			GGUFParallelProfileSummary times;
+		};
+
+		std::vector<Aggregate> aggregates;
+		for (const auto& event : events)
+		{
+			auto aggregate = std::ranges::find_if(aggregates, [&](const Aggregate& candidate) {
+				return candidate.helper == event.helper && candidate.detail == event.detail;
+			});
+			if (aggregate == aggregates.end())
+			{
+				aggregates.push_back({ .helper = event.helper, .detail = event.detail });
+				aggregate = std::prev(aggregates.end());
+			}
+			++aggregate->calls;
+			aggregate->cacheHits += event.activationCacheHit ? 1 : 0;
+			aggregate->weightBytes += event.weightBytes;
+			aggregate->workUnits += event.workUnits;
+			aggregate->taskClaims += event.taskClaims;
+			aggregate->participants += event.participantCount;
+			aggregate->minTaskClaims = std::min(aggregate->minTaskClaims, event.minParticipantTaskClaims);
+			aggregate->maxTaskClaims = std::max(aggregate->maxTaskClaims, event.maxParticipantTaskClaims);
+			aggregate->minWorkUnits = std::min(aggregate->minWorkUnits, event.minParticipantWorkUnits);
+			aggregate->maxWorkUnits = std::max(aggregate->maxWorkUnits, event.maxParticipantWorkUnits);
+			aggregate->minUsefulMs = std::min(aggregate->minUsefulMs, event.minParticipantUsefulMilliseconds);
+			aggregate->maxUsefulMs = std::max(aggregate->maxUsefulMs, event.maxParticipantUsefulMilliseconds);
+			auto addTimes = [&](GGUFParallelProfileSummary& target) {
+				++target.calls;
+				target.activationLookupMs += event.activationLookupMilliseconds;
+				target.activationCopyMs += event.activationCopyMilliseconds;
+				target.activationQuantizeMs += event.activationQuantizeMilliseconds;
+				target.lockWaitMs += event.threadPoolLockWaitMilliseconds;
+				target.dispatchMs += event.dispatchMilliseconds;
+				target.parallelWallMs += event.parallelWallMilliseconds;
+				target.callerUsefulMs += event.callerUsefulMilliseconds;
+				target.workerUsefulMs += event.workerUsefulMilliseconds;
+				target.barrierWaitMs += event.barrierWaitMilliseconds;
+			};
+			addTimes(aggregate->times);
+			addTimes(summary);
+		}
+
+		LogGGUFDiagnostic(enabled,
+		                  std::format("decode step {} parallel_profile calls={} activation_lookup_ms={:.3f} "
+		                              "activation_copy_ms={:.3f} activation_quantize_ms={:.3f} lock_wait_ms={:.3f} "
+		                              "dispatch_ms={:.3f} parallel_wall_ms={:.3f} caller_useful_ms={:.3f} "
+		                              "worker_useful_sum_ms={:.3f} barrier_wait_ms={:.3f}",
+		                              step, summary.calls, summary.activationLookupMs, summary.activationCopyMs,
+		                              summary.activationQuantizeMs, summary.lockWaitMs, summary.dispatchMs,
+		                              summary.parallelWallMs, summary.callerUsefulMs, summary.workerUsefulMs,
+		                              summary.barrierWaitMs));
+		for (const auto& aggregate : aggregates)
+		{
+			const auto calls = static_cast<double>(aggregate.calls);
+			const auto detail =
+			    aggregate.detail.empty() ? std::string{} : std::format(" detail=\"{}\"", aggregate.detail);
+			LogGGUFDiagnostic(
+			    enabled,
+			    std::format("decode step {} parallel helper {}{} calls={} cache_hits={} weight_bytes={} work_units={} "
+			                "avg_participants={:.2f} task_claims={} participant_task_claims={}:{} "
+			                "participant_work_units={}:{} participant_useful_ms={:.6f}:{:.6f} "
+			                "avg_activation_lookup_ms={:.6f} avg_activation_copy_ms={:.6f} "
+			                "avg_activation_quantize_ms={:.6f} avg_lock_wait_ms={:.6f} avg_dispatch_ms={:.6f} "
+			                "avg_parallel_wall_ms={:.6f} avg_barrier_wait_ms={:.6f}",
+			                step, aggregate.helper, detail, aggregate.calls, aggregate.cacheHits, aggregate.weightBytes,
+			                aggregate.workUnits, static_cast<double>(aggregate.participants) / calls,
+			                aggregate.taskClaims, aggregate.minTaskClaims, aggregate.maxTaskClaims,
+			                aggregate.minWorkUnits, aggregate.maxWorkUnits, aggregate.minUsefulMs,
+			                aggregate.maxUsefulMs, aggregate.times.activationLookupMs / calls,
+			                aggregate.times.activationCopyMs / calls, aggregate.times.activationQuantizeMs / calls,
+			                aggregate.times.lockWaitMs / calls, aggregate.times.dispatchMs / calls,
+			                aggregate.times.parallelWallMs / calls, aggregate.times.barrierWaitMs / calls));
+		}
+		return summary;
+	}
+
 	void LogGGUFNodeProfile(bool enabled, std::size_t step,
 	                        std::span<const LiteNN::CompiledModuleCPUNodeProfileEvent> events)
 	{
@@ -1983,6 +2099,7 @@ namespace
 			double nodeInstrumentationMs = 0.0;
 			double moduleUnattributedMs = 0.0;
 			double helperProfileEmitMs = 0.0;
+			GGUFParallelProfileSummary parallelProfileSummary;
 			double logitsOutputMs = 0.0;
 			double samplingMs = 0.0;
 			double stateUpdateMs = 0.0;
@@ -2050,6 +2167,7 @@ namespace
 				const auto helperProfileEmitStart = std::chrono::steady_clock::now();
 				const auto helperEvents = helperProfiler->Snapshot();
 				const auto nodeEvents = helperProfiler->SnapshotNodes();
+				const auto parallelEvents = helperProfiler->SnapshotParallel();
 				nodeInstrumentationMs = helperProfiler->NodeInstrumentationMilliseconds();
 				for (const auto& event : helperEvents)
 				{
@@ -2063,6 +2181,8 @@ namespace
 				const auto attributedModuleMs = helperTotalMs + nodeSelfTotalMs + nodeInstrumentationMs;
 				moduleUnattributedMs = moduleRunMs >= attributedModuleMs ? moduleRunMs - attributedModuleMs : 0.0;
 				LogGGUFHelperProfile(options.profileHelpers || options.profileNodes, step + 1, helperEvents);
+				parallelProfileSummary =
+				    LogGGUFParallelProfile(options.profileHelpers || options.profileNodes, step + 1, parallelEvents);
 				LogGGUFNodeProfile(options.profileNodes, step + 1, nodeEvents);
 				const auto helperProfileEmitEnd = std::chrono::steady_clock::now();
 				helperProfileEmitMs =
@@ -2153,7 +2273,13 @@ namespace
 				if (helperProfiler)
 				{
 					std::cout << " helper_total_ms=" << helperTotalMs << " module_non_helper_ms=" << moduleNonHelperMs
-					          << " helper_profile_emit_ms=" << helperProfileEmitMs;
+					          << " helper_profile_emit_ms=" << helperProfileEmitMs
+					          << " parallel_profile_calls=" << parallelProfileSummary.calls
+					          << " activation_lookup_ms=" << parallelProfileSummary.activationLookupMs
+					          << " activation_copy_ms=" << parallelProfileSummary.activationCopyMs
+					          << " activation_quantize_ms=" << parallelProfileSummary.activationQuantizeMs
+					          << " parallel_wall_ms=" << parallelProfileSummary.parallelWallMs
+					          << " barrier_wait_ms=" << parallelProfileSummary.barrierWaitMs;
 					if (options.profileNodes)
 					{
 						std::cout << " node_self_total_ms=" << nodeSelfTotalMs

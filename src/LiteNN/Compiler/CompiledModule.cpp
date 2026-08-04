@@ -138,6 +138,7 @@ namespace LiteNN
 		CompiledModuleCPUHelperProfiler::Impl* previous{};
 		std::unordered_map<std::string, CompiledModuleCPUHelperProfileEvent> events;
 		std::unordered_map<std::string, CompiledModuleCPUNodeProfileEvent> nodeEvents;
+		std::vector<CompiledModuleCPUParallelProfileEvent> parallelEvents;
 		std::vector<NodeFrame> nodeStack;
 		double helperMilliseconds{};
 		double nodeInstrumentationMilliseconds{};
@@ -191,6 +192,14 @@ namespace LiteNN
 			{
 				current->nodeStack[parentIndex - 1].childInstrumentationMilliseconds +=
 				    std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
+			}
+		}
+
+		static void RecordParallel(CompiledModuleCPUParallelProfileEvent event)
+		{
+			if (current != nullptr)
+			{
+				current->parallelEvents.push_back(std::move(event));
 			}
 		}
 
@@ -812,6 +821,22 @@ namespace
 	class LiteNNCPUThreadPool
 	{
 	public:
+		struct ParticipantProfile
+		{
+			std::uint64_t taskClaims{};
+			std::uint64_t workUnits{};
+			double usefulMilliseconds{};
+		};
+
+		struct ParallelForProfile
+		{
+			std::vector<ParticipantProfile> participants;
+			double lockWaitMilliseconds{};
+			double dispatchMilliseconds{};
+			double wallMilliseconds{};
+			double barrierWaitMilliseconds{};
+		};
+
 		explicit LiteNNCPUThreadPool(std::size_t threadCount)
 		{
 			const auto workerCount = threadCount > 1 ? threadCount - 1 : 0;
@@ -847,7 +872,7 @@ namespace
 
 		void ParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain, LiteNNCPUParallelForBody body,
 		                 void* userData, std::size_t requestedThreads, CPUAOTAffinityPolicy affinityPolicy,
-		                 CPUAOTWorkerWaitPolicy waitPolicy)
+		                 CPUAOTWorkerWaitPolicy waitPolicy, ParallelForProfile* profile = nullptr)
 		{
 			if (begin >= end)
 			{
@@ -861,13 +886,29 @@ namespace
 			callerAffinity.Apply(affinityPolicy, 0);
 			if (participantCount <= 1 || workers_.empty())
 			{
+				const auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				body(begin, end, userData);
+				if (profile)
+				{
+					const auto elapsed =
+					    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+					profile->participants = { ParticipantProfile{
+						.taskClaims = 1, .workUnits = end - begin, .usefulMilliseconds = elapsed } };
+					profile->wallMilliseconds = elapsed;
+				}
 				return;
 			}
 
+			const auto lockStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			std::unique_lock runLock(runMutex_);
 			const auto desiredWorkers =
 			    std::min<std::size_t>(static_cast<std::size_t>(participantCount - 1), workers_.size());
+			if (profile)
+			{
+				profile->lockWaitMilliseconds =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lockStart).count();
+				profile->participants.assign(desiredWorkers + 1, {});
+			}
 			begin_ = begin;
 			end_ = end;
 			grain_ = grain;
@@ -878,17 +919,39 @@ namespace
 			next_.store(begin, std::memory_order_relaxed);
 			workersDone_.store(0, std::memory_order_relaxed);
 			desiredWorkers_ = desiredWorkers;
+			profile_ = profile;
+			const auto parallelStart =
+			    profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			for (std::size_t i = 0; i < desiredWorkers; ++i)
 			{
 				workers_[i]->generation.fetch_add(1, std::memory_order_release);
 				workers_[i]->start.release();
 			}
-			RunTasks();
+			if (profile)
+			{
+				profile->dispatchMilliseconds =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - parallelStart).count();
+				RunTasksProfiled(0);
+			}
+			else
+			{
+				RunTasks();
+			}
 
+			const auto barrierStart =
+			    profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			while (workersDone_.load(std::memory_order_acquire) != desiredWorkers)
 			{
 				LiteNNCPUThreadRelax();
 			}
+			if (profile)
+			{
+				const auto endTime = std::chrono::steady_clock::now();
+				profile->barrierWaitMilliseconds =
+				    std::chrono::duration<double, std::milli>(endTime - barrierStart).count();
+				profile->wallMilliseconds = std::chrono::duration<double, std::milli>(endTime - parallelStart).count();
+			}
+			profile_ = nullptr;
 		}
 
 	private:
@@ -910,6 +973,26 @@ namespace
 				}
 				const auto taskEnd = std::min<std::uint64_t>(taskBegin + grain_, end_);
 				body_(taskBegin, taskEnd, userData_);
+			}
+		}
+
+		void RunTasksProfiled(std::size_t participantIndex)
+		{
+			auto& participant = profile_->participants[participantIndex];
+			while (true)
+			{
+				const auto taskBegin = next_.fetch_add(grain_, std::memory_order_relaxed);
+				if (taskBegin >= end_)
+				{
+					break;
+				}
+				const auto taskEnd = std::min<std::uint64_t>(taskBegin + grain_, end_);
+				const auto start = std::chrono::steady_clock::now();
+				body_(taskBegin, taskEnd, userData_);
+				participant.usefulMilliseconds +=
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				++participant.taskClaims;
+				participant.workUnits += taskEnd - taskBegin;
 			}
 		}
 
@@ -952,7 +1035,14 @@ namespace
 				}
 
 				affinity.Apply(affinityPolicy_, workerIndex + 1);
-				RunTasks();
+				if (profile_)
+				{
+					RunTasksProfiled(workerIndex + 1);
+				}
+				else
+				{
+					RunTasks();
+				}
 				workersDone_.fetch_add(1, std::memory_order_release);
 			}
 		}
@@ -967,6 +1057,7 @@ namespace
 		void* userData_{};
 		CPUAOTAffinityPolicy affinityPolicy_{ CPUAOTAffinityPolicy::None };
 		std::atomic<CPUAOTWorkerWaitPolicy> waitPolicy_{ CPUAOTWorkerWaitPolicy::Adaptive };
+		ParallelForProfile* profile_{};
 		std::size_t desiredWorkers_{};
 		std::atomic<std::size_t> workersDone_{};
 		std::atomic<bool> stopping_{};
@@ -981,10 +1072,11 @@ namespace
 	void LiteNNCPUParallelFor(std::uint64_t begin, std::uint64_t end, std::uint64_t grain,
 	                          LiteNNCPUParallelForBody body, void* userData, std::uint64_t threadCount,
 	                          CPUAOTAffinityPolicy affinityPolicy,
-	                          CPUAOTWorkerWaitPolicy waitPolicy = CPUAOTWorkerWaitPolicy::Adaptive)
+	                          CPUAOTWorkerWaitPolicy waitPolicy = CPUAOTWorkerWaitPolicy::Adaptive,
+	                          LiteNNCPUThreadPool::ParallelForProfile* profile = nullptr)
 	{
 		GetLiteNNCPUThreadPool().ParallelFor(begin, end, grain, body, userData, static_cast<std::size_t>(threadCount),
-		                                     affinityPolicy, waitPolicy);
+		                                     affinityPolicy, waitPolicy, profile);
 	}
 
 	void LiteNNCPUMatMulBiasReLURange(const float* LITENN_RESTRICT lhs, const float* LITENN_RESTRICT rhs,
@@ -1944,18 +2036,41 @@ namespace
 		out.d = 1.0F / inverseScale;
 	}
 
+	struct GGMLQ8KActivationPreparationProfile
+	{
+		bool cacheHit{};
+		double lookupMilliseconds{};
+		double copyMilliseconds{};
+		double quantizeMilliseconds{};
+	};
+
 	class GGMLQ8KActivationThreadCache
 	{
 	public:
 		const GGMLQ8KActivationBlock* Prepare(const float* lhs, std::int64_t rows, std::int64_t columns,
-		                                      std::int64_t rowStride, std::int64_t columnStride)
+		                                      std::int64_t rowStride, std::int64_t columnStride,
+		                                      GGMLQ8KActivationPreparationProfile* profile = nullptr)
 		{
 			const auto elementCount = static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns);
-			if (Matches(lhs, rows, columns, rowStride, columnStride, elementCount))
+			bool matches = false;
+			if (profile)
+			{
+				const auto start = std::chrono::steady_clock::now();
+				matches = Matches(lhs, rows, columns, rowStride, columnStride, elementCount);
+				profile->lookupMilliseconds =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				profile->cacheHit = matches;
+			}
+			else
+			{
+				matches = Matches(lhs, rows, columns, rowStride, columnStride, elementCount);
+			}
+			if (matches)
 			{
 				return blocks_.data();
 			}
 
+			const auto copyStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			source_.resize(elementCount);
 			if (columnStride == 1 && rowStride == columns)
 			{
@@ -1972,7 +2087,14 @@ namespace
 					}
 				}
 			}
+			if (profile)
+			{
+				profile->copyMilliseconds =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStart).count();
+			}
 
+			const auto quantizeStart =
+			    profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const auto blockCount = static_cast<std::size_t>(columns / 256);
 			blocks_.resize(static_cast<std::size_t>(rows) * blockCount);
 			for (std::int64_t row = 0; row < rows; ++row)
@@ -1986,6 +2108,11 @@ namespace
 			}
 			rows_ = rows;
 			columns_ = columns;
+			if (profile)
+			{
+				profile->quantizeMilliseconds =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - quantizeStart).count();
+			}
 			return blocks_.data();
 		}
 
@@ -2060,9 +2187,10 @@ namespace
 
 	const GGMLQ8KActivationBlock* PrepareCachedGGMLQ8KActivation(const float* lhs, std::int64_t rows,
 	                                                             std::int64_t columns, std::int64_t rowStride,
-	                                                             std::int64_t columnStride)
+	                                                             std::int64_t columnStride,
+	                                                             GGMLQ8KActivationPreparationProfile* profile = nullptr)
 	{
-		return GetGGMLQ8KActivationThreadCache().Prepare(lhs, rows, columns, rowStride, columnStride);
+		return GetGGMLQ8KActivationThreadCache().Prepare(lhs, rows, columns, rowStride, columnStride, profile);
 	}
 
 	extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes()
@@ -4567,6 +4695,61 @@ namespace
 		}
 	}
 
+	void RecordGGMLFieldInterleavedV4ParallelProfile(std::string_view helper, std::string_view detail,
+	                                                 std::uint64_t workUnits, std::uint64_t weightBytes,
+	                                                 const GGMLQ8KActivationPreparationProfile& activation,
+	                                                 const LiteNNCPUThreadPool::ParallelForProfile& parallel)
+	{
+		if (!CompiledModuleCPUHelperProfilerAccess::Enabled())
+		{
+			return;
+		}
+
+		CompiledModuleCPUParallelProfileEvent event{
+			.helper = std::string(helper),
+			.detail = std::string(detail),
+			.workUnits = workUnits,
+			.weightBytes = weightBytes,
+			.participantCount = parallel.participants.size(),
+			.activationCacheHit = activation.cacheHit,
+			.activationLookupMilliseconds = activation.lookupMilliseconds,
+			.activationCopyMilliseconds = activation.copyMilliseconds,
+			.activationQuantizeMilliseconds = activation.quantizeMilliseconds,
+			.threadPoolLockWaitMilliseconds = parallel.lockWaitMilliseconds,
+			.dispatchMilliseconds = parallel.dispatchMilliseconds,
+			.parallelWallMilliseconds = parallel.wallMilliseconds,
+			.barrierWaitMilliseconds = parallel.barrierWaitMilliseconds,
+		};
+		if (!parallel.participants.empty())
+		{
+			event.minParticipantTaskClaims = std::numeric_limits<std::uint64_t>::max();
+			event.minParticipantWorkUnits = std::numeric_limits<std::uint64_t>::max();
+			event.minParticipantUsefulMilliseconds = std::numeric_limits<double>::max();
+			for (std::size_t i = 0; i < parallel.participants.size(); ++i)
+			{
+				const auto& participant = parallel.participants[i];
+				event.taskClaims += participant.taskClaims;
+				event.minParticipantTaskClaims = std::min(event.minParticipantTaskClaims, participant.taskClaims);
+				event.maxParticipantTaskClaims = std::max(event.maxParticipantTaskClaims, participant.taskClaims);
+				event.minParticipantWorkUnits = std::min(event.minParticipantWorkUnits, participant.workUnits);
+				event.maxParticipantWorkUnits = std::max(event.maxParticipantWorkUnits, participant.workUnits);
+				event.minParticipantUsefulMilliseconds =
+				    std::min(event.minParticipantUsefulMilliseconds, participant.usefulMilliseconds);
+				event.maxParticipantUsefulMilliseconds =
+				    std::max(event.maxParticipantUsefulMilliseconds, participant.usefulMilliseconds);
+				if (i == 0)
+				{
+					event.callerUsefulMilliseconds = participant.usefulMilliseconds;
+				}
+				else
+				{
+					event.workerUsefulMilliseconds += participant.usefulMilliseconds;
+				}
+			}
+		}
+		CompiledModuleCPUHelperProfilerAccess::RecordParallel(std::move(event));
+	}
+
 	extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
 	    const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
 	    std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
@@ -4594,15 +4777,19 @@ namespace
 		const auto threadCount = ResolveGGMLFieldInterleavedV4ThreadCount(format, lhsRows, lhsColumns, outColumns,
 		                                                                  schedulingUnits, requestedThreadCount, false);
 
-		CPUAOTHelperProfileTimer profileTimer(
-		    "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
-		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		constexpr std::string_view helper = "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
+		const auto profileEnabled = CompiledModuleCPUHelperProfilerAccess::Enabled();
+		const auto profileDetail =
+		    profileEnabled
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
 		                                            outRows, outColumns, requestedThreadCount, threadCount)
-		        : std::string{});
+		        : std::string{};
+		CPUAOTHelperProfileTimer profileTimer(helper, profileDetail);
 		const auto blockCount = header->blockCount;
+		GGMLQ8KActivationPreparationProfile activationProfile;
 		const auto* staged =
-		    PrepareCachedGGMLQ8KActivation(lhsAligned + lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride);
+		    PrepareCachedGGMLQ8KActivation(lhsAligned + lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
+		                                   profileEnabled ? &activationProfile : nullptr);
 		if (lhsRows > 0 && !staged)
 		{
 			return;
@@ -4756,12 +4943,31 @@ namespace
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 4));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
+		LiteNNCPUThreadPool::ParallelForProfile parallelProfile;
 		if (threadCount <= 1)
 		{
-			body(0, outputGroups, &context);
+			if (profileEnabled)
+			{
+				const auto start = std::chrono::steady_clock::now();
+				body(0, outputGroups, &context);
+				const auto elapsed =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				parallelProfile.participants = { LiteNNCPUThreadPool::ParticipantProfile{
+					.taskClaims = 1, .workUnits = outputGroups, .usefulMilliseconds = elapsed } };
+				parallelProfile.wallMilliseconds = elapsed;
+			}
+			else
+			{
+				body(0, outputGroups, &context);
+			}
+			RecordGGMLFieldInterleavedV4ParallelProfile(helper, profileDetail, outputGroups, header->payloadBytes,
+			                                            activationProfile, parallelProfile);
 			return;
 		}
-		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
+		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy,
+		                     profileEnabled ? &parallelProfile : nullptr);
+		RecordGGMLFieldInterleavedV4ParallelProfile(helper, profileDetail, outputGroups, header->payloadBytes,
+		                                            activationProfile, parallelProfile);
 	}
 
 	extern "C" void litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
@@ -19534,6 +19740,11 @@ std::vector<CompiledModuleCPUNodeProfileEvent> CompiledModuleCPUHelperProfiler::
 		return lhs.nodeId < rhs.nodeId;
 	});
 	return events;
+}
+
+std::vector<CompiledModuleCPUParallelProfileEvent> CompiledModuleCPUHelperProfiler::SnapshotParallel() const
+{
+	return impl_->parallelEvents;
 }
 
 double CompiledModuleCPUHelperProfiler::NodeInstrumentationMilliseconds() const

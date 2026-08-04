@@ -52,6 +52,32 @@ namespace LiteNN
 		double helperMilliseconds{};
 	};
 
+	struct CompiledModuleCPUParallelProfileEvent
+	{
+		std::string helper;
+		std::string detail;
+		std::uint64_t workUnits{};
+		std::uint64_t weightBytes{};
+		std::uint64_t participantCount{};
+		std::uint64_t taskClaims{};
+		std::uint64_t minParticipantTaskClaims{};
+		std::uint64_t maxParticipantTaskClaims{};
+		std::uint64_t minParticipantWorkUnits{};
+		std::uint64_t maxParticipantWorkUnits{};
+		bool activationCacheHit{};
+		double activationLookupMilliseconds{};
+		double activationCopyMilliseconds{};
+		double activationQuantizeMilliseconds{};
+		double threadPoolLockWaitMilliseconds{};
+		double dispatchMilliseconds{};
+		double parallelWallMilliseconds{};
+		double callerUsefulMilliseconds{};
+		double workerUsefulMilliseconds{};
+		double minParticipantUsefulMilliseconds{};
+		double maxParticipantUsefulMilliseconds{};
+		double barrierWaitMilliseconds{};
+	};
+
 	class CompiledModuleCPUHelperProfiler
 	{
 	public:
@@ -62,6 +88,7 @@ namespace LiteNN
 
 		std::vector<CompiledModuleCPUHelperProfileEvent> Snapshot() const;
 		std::vector<CompiledModuleCPUNodeProfileEvent> SnapshotNodes() const;
+		std::vector<CompiledModuleCPUParallelProfileEvent> SnapshotParallel() const;
 		double NodeInstrumentationMilliseconds() const;
 
 	private:

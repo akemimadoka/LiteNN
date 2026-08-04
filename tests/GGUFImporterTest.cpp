@@ -2711,21 +2711,45 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4DecodeThreadPolicyCapsSquare
 
 	std::vector<float> output(features);
 	std::vector<CompiledModuleCPUHelperProfileEvent> profileEvents;
+	std::vector<CompiledModuleCPUParallelProfileEvent> parallelEvents;
 	{
 		CompiledModuleCPUHelperProfiler profiler;
-		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
-		    nullptr, inputValues.data(), 0, 1, static_cast<std::int64_t>(features), static_cast<std::int64_t>(features),
-		    1, nullptr, packed.data(), 0, static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0, 1,
-		    static_cast<std::int64_t>(features), static_cast<std::int64_t>(features), 1,
-		    static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), 8,
-		    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		for (std::size_t call = 0; call < 2; ++call)
+		{
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, inputValues.data(), 0, 1, static_cast<std::int64_t>(features),
+			    static_cast<std::int64_t>(features), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, output.data(), 0, 1,
+			    static_cast<std::int64_t>(features), static_cast<std::int64_t>(features), 1,
+			    static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K), 8,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		}
 		profileEvents = profiler.Snapshot();
+		parallelEvents = profiler.SnapshotParallel();
 	}
 	const auto event = std::ranges::find_if(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& candidate) {
 		return candidate.helper == "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
 	});
 	ASSERT_NE(event, profileEvents.end());
 	EXPECT_NE(event->detail.find("requested_threads=8 resolved_threads=4"), std::string::npos) << event->detail;
+	EXPECT_EQ(event->calls, 2u);
+	ASSERT_EQ(parallelEvents.size(), 2u);
+	for (const auto& parallel : parallelEvents)
+	{
+		EXPECT_EQ(parallel.helper, "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32");
+		EXPECT_EQ(parallel.workUnits, features / 8);
+		EXPECT_GT(parallel.weightBytes, 0u);
+		EXPECT_EQ(parallel.participantCount, 4u);
+		EXPECT_GT(parallel.taskClaims, 0u);
+		EXPECT_LE(parallel.minParticipantTaskClaims, parallel.maxParticipantTaskClaims);
+		EXPECT_LE(parallel.minParticipantWorkUnits, parallel.maxParticipantWorkUnits);
+		EXPECT_LE(parallel.minParticipantUsefulMilliseconds, parallel.maxParticipantUsefulMilliseconds);
+		EXPECT_GT(parallel.parallelWallMilliseconds, 0.0);
+		EXPECT_GT(parallel.callerUsefulMilliseconds + parallel.workerUsefulMilliseconds, 0.0);
+	}
+	EXPECT_TRUE(parallelEvents.back().activationCacheHit);
+	EXPECT_DOUBLE_EQ(parallelEvents.back().activationCopyMilliseconds, 0.0);
+	EXPECT_DOUBLE_EQ(parallelEvents.back().activationQuantizeMilliseconds, 0.0);
 }
 
 TEST(GGUFLLaMAQuantizedExecution, Q8KPreparedActivationHelperMatchesInternalStaging)
