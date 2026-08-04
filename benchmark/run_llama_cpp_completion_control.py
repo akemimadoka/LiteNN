@@ -456,6 +456,7 @@ def main() -> int:
     binary = version_metadata(completion)
     binary["cmake"].update(parse_metadata(args.build_metadata))  # type: ignore[union-attr]
     replacements = {str(model): "<model>", str(completion): "<llama-completion>", args.prompt: "<prompt>"}
+    replacements.update({argument: "<path>" for argument in args.extra_arg if is_absolute_path(argument)})
     runs: list[dict[str, object]] = []
     commands_by_threads: dict[int, list[str]] = {}
     for threads in args.threads:
