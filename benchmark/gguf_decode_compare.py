@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 RUN_MS_RE = re.compile(r"\brun_ms=(?P<value>[0-9.eE+-]+)\b")
+PROMPT_TOKENS_RE = re.compile(r"\bprompt_tokens=(?P<value>\d+)\b")
 GENERATED_TOKENS_RE = re.compile(r"\bgenerated_tokens=(?P<value>\d+)\b")
 BACKEND_RE = re.compile(r"\bbackend=(?P<value>[A-Za-z0-9_.-]+)\b")
 DECODE_MODE_RE = re.compile(r"\bdecode_mode=(?P<value>[A-Za-z0-9_.-]+)\b")
@@ -64,6 +65,7 @@ def litenn_row(path: Path) -> dict[str, object]:
     stdout = resolve_evidence_path(step.get("stdout"), path)
     stdout_text = stdout.read_text(encoding="utf-8")
     run_match = last_match(RUN_MS_RE, stdout_text)
+    prompt_tokens_match = last_match(PROMPT_TOKENS_RE, stdout_text)
     tokens_match = last_match(GENERATED_TOKENS_RE, stdout_text)
     if run_match is None or tokens_match is None:
         raise SystemExit(f"LiteNN decode stdout has no run_ms/generated_tokens metrics: {stdout}")
@@ -109,6 +111,7 @@ def litenn_row(path: Path) -> dict[str, object]:
             decode_mode_match.group("value") if decode_mode_match is not None else report.get("decode_mode", "unknown")
         ),
         "config": config,
+        "promptTokens": int(prompt_tokens_match.group("value")) if prompt_tokens_match is not None else None,
         "tokens": token_count,
         "totalMs": run_ms,
         "promptReplayMs": float(prompt_replay_ms_match.group("value")) if prompt_replay_ms_match is not None else None,
