@@ -174,7 +174,7 @@ P0 implementation order:
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,
   but later worker arrival raised parallel wall/barrier time and total profiled latency regressed `0.54%`; the
   semaphore implementation remains.
-- [ ] P0 candidate, evidence-gated: reduce the measured per-helper dispatch floor.
+- [x] P0 candidate, evidence-gated: reduce the measured per-helper dispatch floor. Closed as rejected on 2026-08-04.
   - The post-quantizer stable median is `10.365 ms/step` across 97 ordinary projections, about `0.107 ms/call` and large
     enough to affect the remaining gap. It is already included in helper/parallel-wall time and must not be added to
     the non-helper residual.
@@ -187,6 +187,17 @@ P0 implementation order:
     a wide margin and was removed. Together with the rejected atomic-wait path and the prior `1.16%` Latency-policy
     median advantage, this closes wake-primitive-only work. The remaining route is sequence-level submission
     amortization.
+  - [x] Evaluate and reject module-level sequence standby. Keeping all participating workers resident reduced ordinary
+    projection dispatch from about `10.365` to `0.05 ms/token`, but parallel wall changed `66.225 -> 71.595 ms`; three
+    alternating same-interface pairs produced `-0.40%`, `+2.81%`, and `+3.90%` token-median gains, for a `2.81%`
+    paired median below the gate.
+  - [x] Evaluate and reject current-width sequence standby. Parking the extra four workers during T4 hidden projections
+    reduced profiled parallel wall to `68.795 ms`, but three alternating pairs produced `+1.46%`, `-1.73%`, and
+    `+2.95%`, for only `1.46%` paired median gain. Token ids matched in every pair. The production implementation and
+    mechanism test were removed; only a low-cost `signaledWorkerCount` profiler field remains.
+  - Do not schedule another wait primitive, polling budget, or module-standby policy as dispatch P0. Future helper
+    fusion may still reduce submission count, but it must be justified by its operation/dataflow benefit rather than
+    this closed thread-pool hypothesis.
 - [ ] P1 candidate, evidence-gated: reduce the projection-wrapper plus normalization cluster.
   - The accepted residual ledger measured `3.124 ms/token` projection-wrapper and `1.956 ms/token` normalization self
     time under intrusive profiling. Inspect generated IR and ABI boundaries, then use a non-profile paired A/B to

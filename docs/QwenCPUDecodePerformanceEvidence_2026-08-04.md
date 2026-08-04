@@ -192,19 +192,27 @@ Stable post-quantizer profiling measured `10.365 ms/token` of worker dispatch ac
 or about `0.107 ms/call`. Dispatch is already included in parallel-wall and helper time and must not be added to the
 non-helper ledger.
 
-Three controls constrain the implementation route:
+Five controls constrain the implementation route:
 
 | Control | Dispatch result | End-to-end/parallel result | Decision |
 | --- | ---: | --- | --- |
 | `atomic::wait/notify_one` | `21.7%` lower | Parallel wall/barrier rose; profiled token regressed `0.54%` | Rejected |
 | Worker wait `Latency` versus `Adaptive` | Not isolated | Median `252.650` versus `255.594 ms`, `1.16%` better | Keep explicit option; not the default |
 | Signal only sleeping workers | `10.365 -> 10.139 ms`, `2.2%` lower | Diagnostic parallel wall `66.225 -> 76.543 ms`; below gate | Rejected and removed |
+| Full module sequence standby | About `10.365 -> 0.05 ms`, over `99%` lower | Parallel wall `66.225 -> 71.595 ms`; paired median token gain `2.81%` | Rejected and removed |
+| Current-width module standby | Ordinary projection dispatch remained about `0.05 ms` | Parallel wall `68.795 ms`; paired median token gain `1.46%` | Rejected and removed |
 
-The last comparison was not an alternating throughput batch, so its wall-time regression is directional. It is still
-enough to reject the implementation because dispatch improvement was far below the required `50%` and no compensating
-whole-token gain was observed. The combined evidence says that swapping wake primitives or suppressing semaphore
-signals cannot close the gap. Any further P0 dispatch work needs a sequence-level contract that amortizes multiple
-helper submissions while preserving useful-worker arrival and memory bandwidth.
+The sleeping-worker signal-elision comparison was not an alternating throughput batch, so its wall-time regression is
+directional. The two module-sequence variants were then tested against a same-interface baseline in alternating order.
+Full standby produced per-pair median gains of `-0.40%`, `+2.81%`, and `+3.90%`; current-width standby, which parks the
+extra four workers across T4 hidden projections, produced `+1.46%`, `-1.73%`, and `+2.95%`. Generated token ids matched
+within every pair. Neither variant met the `3%` paired-median gate, and both retained a parallel-wall regression in the
+structured profile. Both implementations were removed.
+
+The combined evidence now closes dispatch-only work: the measured dispatch counter can be almost eliminated, but the
+saved producer-side signaling cost is exchanged for worker residency, wake arrival, or parallel-wall cost and does not
+produce a stable token-level win. The profiler retains `signaledWorkerCount` so a future helper fusion can demonstrate
+fewer submissions, but another thread-pool wait/standby policy is not a current optimization target.
 
 ## Current Conclusions
 
@@ -220,16 +228,14 @@ helper submissions while preserving useful-worker arrival and memory bandwidth.
    remains unattributed.
 5. `CallNode` inlining and marker removal cannot provide production gain. Projection wrapper plus normalization is the
    largest unresolved generated-code cluster, but its measured upper bound still requires non-profile validation.
-6. Dispatch remains a material helper-side owner. Two wake-path implementations failed, and the latency polling policy
-   produced only a `1.16%` median advantage, so the next attempt must amortize submissions across a helper sequence.
+6. Dispatch-only optimization is closed. Two wake paths and two sequence-standby variants failed token and/or
+   parallel-wall gates even when the dispatch counter fell by more than `99%`.
 
 ### Supported but not yet proven
 
-1. A sequence-level dispatch contract can remove enough of the `10.365 ms/token` floor without delaying useful worker
-   arrival or reducing memory bandwidth.
-2. Projection wrapper and normalization work contains a removable generated-code cost rather than unavoidable ABI,
+1. Projection wrapper and normalization work contains a removable generated-code cost rather than unavoidable ABI,
    shape, or profile-boundary overhead.
-3. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
+2. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
    reference; matched low-overhead reference-stage counters are still required before choosing that route.
 
 ### Not established
@@ -243,8 +249,7 @@ helper submissions while preserving useful-worker arrival and memory bandwidth.
 | Priority | Decision | Evidence gate |
 | --- | --- | --- |
 | Done | Close native module residual accounting | Closure within `2%`, instrumentation within `3%` |
-| Done | Reject wake-primitive-only dispatch changes | Dispatch plus parallel wall plus full-token gate |
-| P0 | Add sequence-level projection dispatch amortization | At least `50%` less dispatch, `3%` less token latency, no wall/barrier regression |
+| Done | Reject wake-primitive and sequence-standby dispatch changes | Dispatch plus parallel wall plus full-token gate |
 | P1 | Prove or reject projection-wrapper plus normalization removal | Non-profile paired A/B; at least `2%` full-token gain |
 | P1 | Add low-overhead matched reference-stage counters | Below `3%` total overhead and below `15%` stage CV |
 | P1 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |

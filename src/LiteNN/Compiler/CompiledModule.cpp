@@ -831,6 +831,7 @@ namespace
 		struct ParallelForProfile
 		{
 			std::vector<ParticipantProfile> participants;
+			std::uint64_t signaledWorkerCount{};
 			double lockWaitMilliseconds{};
 			double dispatchMilliseconds{};
 			double wallMilliseconds{};
@@ -926,6 +927,10 @@ namespace
 			{
 				workers_[i]->generation.fetch_add(1, std::memory_order_release);
 				workers_[i]->start.release();
+				if (profile)
+				{
+					++profile->signaledWorkerCount;
+				}
 			}
 			if (profile)
 			{
@@ -4718,6 +4723,7 @@ namespace
 			.workUnits = workUnits,
 			.weightBytes = weightBytes,
 			.participantCount = parallel.participants.size(),
+			.signaledWorkerCount = parallel.signaledWorkerCount,
 			.activationCacheHit = activation.cacheHit,
 			.activationLookupMilliseconds = activation.lookupMilliseconds,
 			.activationCopyMilliseconds = activation.copyMilliseconds,

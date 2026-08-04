@@ -3309,12 +3309,17 @@ Priority classes:
             remained unattributed. Marker time is measurement-only, while non-profile CallNode inlining had already
             regressed latency, leaving projection-wrapper plus normalization as the largest unresolved generated-code
             cluster. Evidence: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`.
-      - [ ] P0: amortize the post-quantizer `10.365 ms/step` dispatch floor across compatible helper sequences. Retain
-            workers or batch a layer sequence rather than only changing wake-up primitives. Require at least `50%`
-            lower dispatch, `3%` lower full-token latency, and no parallel-wall/barrier regression.
+      - [x] P0: evaluate amortizing the post-quantizer `10.365 ms/step` dispatch floor across compatible helper
+            sequences. The acceptance gate required at least `50%` lower dispatch, `3%` lower full-token latency, and
+            no parallel-wall/barrier regression; all tested routes were rejected.
             - [x] Reject sleeping-worker signal elision: dispatch changed only `10.365 -> 10.139 ms` (`2.2%`) and the
                   diagnostic parallel wall increased. Atomic wait and wait-policy controls already rejected the same
                   wake-primitive-only direction; proceed only with sequence-level amortization.
+            - [x] Evaluate and reject full module standby: ordinary dispatch fell by more than `99%`, but parallel wall
+                  regressed and three alternating pairs delivered only `2.81%` paired median token gain.
+            - [x] Evaluate and reject current-width standby: parking workers across T4 projections reduced interference,
+                  but three alternating pairs delivered only `1.46%` paired median gain. Both implementations were
+                  removed with token parity preserved; retain only signal-count profiling and close dispatch-only work.
       - [ ] P1: prove or reject projection-wrapper plus normalization removal with non-profile paired A/B evidence.
             The intrusive ledger measured `3.124 + 1.956 ms/token`; require unchanged output, no fallback, no more than
             `5%` compile-time growth, and at least `2%` full-token median improvement.

@@ -1163,6 +1163,7 @@ namespace
 		double activationLookupMs{};
 		double activationCopyMs{};
 		double activationQuantizeMs{};
+		std::uint64_t signaledWorkers{};
 		double lockWaitMs{};
 		double dispatchMs{};
 		double parallelWallMs{};
@@ -1217,6 +1218,7 @@ namespace
 			aggregate->workUnits += event.workUnits;
 			aggregate->taskClaims += event.taskClaims;
 			aggregate->participants += event.participantCount;
+			aggregate->times.signaledWorkers += event.signaledWorkerCount;
 			aggregate->minTaskClaims = std::min(aggregate->minTaskClaims, event.minParticipantTaskClaims);
 			aggregate->maxTaskClaims = std::max(aggregate->maxTaskClaims, event.maxParticipantTaskClaims);
 			aggregate->minWorkUnits = std::min(aggregate->minWorkUnits, event.minParticipantWorkUnits);
@@ -1228,6 +1230,7 @@ namespace
 				target.activationLookupMs += event.activationLookupMilliseconds;
 				target.activationCopyMs += event.activationCopyMilliseconds;
 				target.activationQuantizeMs += event.activationQuantizeMilliseconds;
+				target.signaledWorkers += event.signaledWorkerCount;
 				target.lockWaitMs += event.threadPoolLockWaitMilliseconds;
 				target.dispatchMs += event.dispatchMilliseconds;
 				target.parallelWallMs += event.parallelWallMilliseconds;
@@ -1239,15 +1242,15 @@ namespace
 			addTimes(summary);
 		}
 
-		LogGGUFDiagnostic(enabled,
-		                  std::format("decode step {} parallel_profile calls={} activation_lookup_ms={:.3f} "
-		                              "activation_copy_ms={:.3f} activation_quantize_ms={:.3f} lock_wait_ms={:.3f} "
-		                              "dispatch_ms={:.3f} parallel_wall_ms={:.3f} caller_useful_ms={:.3f} "
-		                              "worker_useful_sum_ms={:.3f} barrier_wait_ms={:.3f}",
-		                              step, summary.calls, summary.activationLookupMs, summary.activationCopyMs,
-		                              summary.activationQuantizeMs, summary.lockWaitMs, summary.dispatchMs,
-		                              summary.parallelWallMs, summary.callerUsefulMs, summary.workerUsefulMs,
-		                              summary.barrierWaitMs));
+		LogGGUFDiagnostic(
+		    enabled,
+		    std::format("decode step {} parallel_profile calls={} activation_lookup_ms={:.3f} "
+		                "activation_copy_ms={:.3f} activation_quantize_ms={:.3f} lock_wait_ms={:.3f} "
+		                "signaled_workers={} dispatch_ms={:.3f} parallel_wall_ms={:.3f} caller_useful_ms={:.3f} "
+		                "worker_useful_sum_ms={:.3f} barrier_wait_ms={:.3f}",
+		                step, summary.calls, summary.activationLookupMs, summary.activationCopyMs,
+		                summary.activationQuantizeMs, summary.lockWaitMs, summary.signaledWorkers, summary.dispatchMs,
+		                summary.parallelWallMs, summary.callerUsefulMs, summary.workerUsefulMs, summary.barrierWaitMs));
 		for (const auto& aggregate : aggregates)
 		{
 			const auto calls = static_cast<double>(aggregate.calls);
@@ -1255,20 +1258,21 @@ namespace
 			    aggregate.detail.empty() ? std::string{} : std::format(" detail=\"{}\"", aggregate.detail);
 			LogGGUFDiagnostic(
 			    enabled,
-			    std::format("decode step {} parallel helper {}{} calls={} cache_hits={} weight_bytes={} work_units={} "
-			                "avg_participants={:.2f} task_claims={} participant_task_claims={}:{} "
-			                "participant_work_units={}:{} participant_useful_ms={:.6f}:{:.6f} "
-			                "avg_activation_lookup_ms={:.6f} avg_activation_copy_ms={:.6f} "
-			                "avg_activation_quantize_ms={:.6f} avg_lock_wait_ms={:.6f} avg_dispatch_ms={:.6f} "
-			                "avg_parallel_wall_ms={:.6f} avg_barrier_wait_ms={:.6f}",
-			                step, aggregate.helper, detail, aggregate.calls, aggregate.cacheHits, aggregate.weightBytes,
-			                aggregate.workUnits, static_cast<double>(aggregate.participants) / calls,
-			                aggregate.taskClaims, aggregate.minTaskClaims, aggregate.maxTaskClaims,
-			                aggregate.minWorkUnits, aggregate.maxWorkUnits, aggregate.minUsefulMs,
-			                aggregate.maxUsefulMs, aggregate.times.activationLookupMs / calls,
-			                aggregate.times.activationCopyMs / calls, aggregate.times.activationQuantizeMs / calls,
-			                aggregate.times.lockWaitMs / calls, aggregate.times.dispatchMs / calls,
-			                aggregate.times.parallelWallMs / calls, aggregate.times.barrierWaitMs / calls));
+			    std::format(
+			        "decode step {} parallel helper {}{} calls={} cache_hits={} weight_bytes={} work_units={} "
+			        "avg_participants={:.2f} avg_signaled_workers={:.2f} task_claims={} participant_task_claims={}:{} "
+			        "participant_work_units={}:{} participant_useful_ms={:.6f}:{:.6f} "
+			        "avg_activation_lookup_ms={:.6f} avg_activation_copy_ms={:.6f} "
+			        "avg_activation_quantize_ms={:.6f} avg_lock_wait_ms={:.6f} avg_dispatch_ms={:.6f} "
+			        "avg_parallel_wall_ms={:.6f} avg_barrier_wait_ms={:.6f}",
+			        step, aggregate.helper, detail, aggregate.calls, aggregate.cacheHits, aggregate.weightBytes,
+			        aggregate.workUnits, static_cast<double>(aggregate.participants) / calls,
+			        static_cast<double>(aggregate.times.signaledWorkers) / calls, aggregate.taskClaims,
+			        aggregate.minTaskClaims, aggregate.maxTaskClaims, aggregate.minWorkUnits, aggregate.maxWorkUnits,
+			        aggregate.minUsefulMs, aggregate.maxUsefulMs, aggregate.times.activationLookupMs / calls,
+			        aggregate.times.activationCopyMs / calls, aggregate.times.activationQuantizeMs / calls,
+			        aggregate.times.lockWaitMs / calls, aggregate.times.dispatchMs / calls,
+			        aggregate.times.parallelWallMs / calls, aggregate.times.barrierWaitMs / calls));
 		}
 		return summary;
 	}
@@ -2282,6 +2286,7 @@ namespace
 					          << " activation_lookup_ms=" << parallelProfileSummary.activationLookupMs
 					          << " activation_copy_ms=" << parallelProfileSummary.activationCopyMs
 					          << " activation_quantize_ms=" << parallelProfileSummary.activationQuantizeMs
+					          << " signaled_workers=" << parallelProfileSummary.signaledWorkers
 					          << " parallel_wall_ms=" << parallelProfileSummary.parallelWallMs
 					          << " barrier_wait_ms=" << parallelProfileSummary.barrierWaitMs;
 					if (options.profileNodes)

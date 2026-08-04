@@ -59,6 +59,7 @@ namespace LiteNN
 		std::uint64_t workUnits{};
 		std::uint64_t weightBytes{};
 		std::uint64_t participantCount{};
+		std::uint64_t signaledWorkerCount{};
 		std::uint64_t taskClaims{};
 		std::uint64_t minParticipantTaskClaims{};
 		std::uint64_t maxParticipantTaskClaims{};

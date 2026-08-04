@@ -2759,6 +2759,7 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4DecodeThreadPolicyCapsSquare
 		EXPECT_EQ(parallel.workUnits, features / 8);
 		EXPECT_GT(parallel.weightBytes, 0u);
 		EXPECT_EQ(parallel.participantCount, 4u);
+		EXPECT_EQ(parallel.signaledWorkerCount, parallel.participantCount - 1);
 		EXPECT_GT(parallel.taskClaims, 0u);
 		EXPECT_LE(parallel.minParticipantTaskClaims, parallel.maxParticipantTaskClaims);
 		EXPECT_LE(parallel.minParticipantWorkUnits, parallel.maxParticipantWorkUnits);
