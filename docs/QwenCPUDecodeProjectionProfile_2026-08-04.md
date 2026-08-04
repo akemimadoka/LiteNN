@@ -1,0 +1,118 @@
+# Qwen CPU Decode Projection Phase Profile - 2026-08-04
+
+This document records the first production-model profile that separates Q8_K activation preparation from CPU thread
+pool execution for field-interleaved-v4 Q4_K/Q6_K projections. It is a focused evidence record for the FFN-Down
+closure work; the broader LiteNN/llama.cpp comparison remains in `QwenCPUDecodePerformanceEvidence_2026-08-04.md`.
+
+## Scope and Method
+
+- Model class: Qwen2.5 Coder 14B, Q4_K_M GGUF.
+- Backend: separated CPU AOT, cache hit required, field-interleaved-v4 prepared weights.
+- Runtime policy: 8 requested CPU AOT threads, adaptive worker wait, LLVM optimization level 0.
+- Instrumentation: `--profile-helpers --stream-stats`, with structured projection and worker events.
+- Stable sample: generated-token steps 10 through 24, 15 observations.
+- Exclusions: the first module run, prompt replay, and the first logits-bearing generation step were excluded because
+  they contained page-fault and first-touch costs.
+- Correctness gate: no runtime fallback and identical generated token sequence within the measured run.
+
+The private model path is intentionally omitted. The equivalent command shape is:
+
+```powershell
+python311 example/gguf/qwen_smoke.py `
+  --model <model.gguf> `
+  --litenn build-release/tools/gguf/litenn_gguf_convert.exe `
+  --llamacpp-tokenizer-tool build-release/tools/llamacpp-adapter/litenn_llamacpp_adapter.exe `
+  --prompt "hello" --stateful --max-tokens 16 `
+  --workdir <profile-workdir> --aot-cache-dir <existing-cache> `
+  --require-aot-cache-hit --profile-helpers --stream-stats --ignore-eos `
+  --llvm-opt-level 0 --cpu-aot-threads 8 --cpu-aot-worker-wait adaptive `
+  --cpu-aot-ggml-prepacked-weight-policy all `
+  --cpu-aot-ggml-prepacked-weight-layout field-interleaved-v4
+```
+
+The reused AOT artifact predates the direct SwiGLU-to-Down fusion. This does not affect the Q8_K preparation or
+field-v4 worker measurements below, but the run must not be used as post-fusion end-to-end evidence.
+
+## Stable Decode Results
+
+The stable profiled token took `266.887 ms` on average. Compiled-module execution accounted for `266.609 ms`, helper
+time for `256.184 ms`, and module work outside helper timers for `10.425 ms`.
+
+| Phase | Average per step | Minimum | Maximum | Share of step |
+| --- | ---: | ---: | ---: | ---: |
+| Activation cache lookup | `0.0076 ms` | `0.0050 ms` | `0.0120 ms` | `<0.01%` |
+| Float32 activation copy | `0.1726 ms` | `0.1460 ms` | `0.2010 ms` | `0.06%` |
+| Q8_K activation quantization | `45.2007 ms` | `44.2250 ms` | `46.1670 ms` | `16.94%` |
+| Thread-pool lock wait | `0.0075 ms` | `0.0070 ms` | `0.0080 ms` | `<0.01%` |
+| Worker dispatch | `14.9425 ms` | `12.9780 ms` | `17.1430 ms` | `5.60%` |
+| Parallel wall time | `77.7852 ms` | `74.1780 ms` | `83.7080 ms` | `29.15%` |
+| Final barrier wait | `3.8463 ms` | `2.7030 ms` | `4.8940 ms` | `1.44%` |
+
+`dispatch` and `barrier wait` are contained within `parallel wall time`; they must not be added to it. Activation
+lookup, copy, and quantization occur before the parallel interval and are additive. The profiled single-projection path
+therefore owns approximately `45.381 + 77.785 = 123.166 ms/step`, of which Q8_K preparation is `36.7%`.
+
+The caller contributed `58.943 ms` of useful work while worker useful time summed to `362.076 ms`. The worker sum is
+CPU time accumulated across participants, not wall time.
+
+Dynamic task claims were uneven on individual Q4_K calls. Averaged across the stable steps, the minimum/maximum claim
+extrema were `0.53/11.53` for Q4_K Down and `0.67/9.47` for Q4_K hidden projections; Q6_K Down was more even at
+`1.80/8.07`. Some Q4_K participants therefore arrived after the caller or other workers had claimed most tasks.
+However, the corresponding full-step barrier totals remained only `0.937`, `0.736`, and `1.432 ms`. This makes worker
+wake-up/dispatch batching a valid secondary target, but does not support treating final-barrier imbalance as the main
+bottleneck.
+
+## Shape Attribution
+
+| Format and shape | Calls/step | Threads | Quantize | Dispatch | Parallel wall | Barrier |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q4_K `13824 -> 5120` | 24 | 8 | `16.495 ms` | `5.872 ms` | `19.553 ms` | `0.937 ms` |
+| Q6_K `13824 -> 5120` | 24 | 8 | `16.398 ms` | `5.737 ms` | `29.087 ms` | `1.432 ms` |
+| Q4_K `5120 -> 5120` | 48 | 4 | `12.056 ms` | `3.107 ms` | `17.102 ms` | `0.736 ms` |
+| Q6_K `5120 -> 152064` | 1 | 8 | `0.251 ms` | `0.226 ms` | `12.044 ms` | `0.741 ms` |
+
+FFN-Down activation quantization alone costs `32.893 ms/step`. Hidden/output projections add `12.056 ms/step`, and
+the vocabulary projection adds `0.251 ms/step`. Lookup and copy are negligible for every shape.
+
+The structured events currently cover the 97 ordinary projection calls. Grouped Gate/Up helpers are not included in
+this phase table, so `45.2007 ms/step` is a measured lower bound for all Q8_K activation preparation in the complete
+decode schedule, not an estimate of its total cost.
+
+## Microbenchmark Correlation
+
+The dedicated Release benchmark used the same quantizer and exact Qwen activation sizes, with five repetitions:
+
+| Benchmark | Median | Throughput | Blocks |
+| --- | ---: | ---: | ---: |
+| `GGMLQ8KActivationPrepare/qwen_hidden/batch:1/in:5120` | `235 us` | `82.97 MiB/s` | 20 |
+| `GGMLQ8KActivationPrepare/qwen_ffn_down/batch:1/in:13824` | `640 us` | `82.17 MiB/s` | 54 |
+
+Production-profile averages were about `251 us` for 5120 elements and `685 us` for 13824 elements, only `6.8-7.1%`
+above the isolated benchmark. The benchmark is therefore representative enough to gate quantizer changes before an
+expensive full-model rerun.
+
+## Conclusions
+
+1. Q8_K activation quantization is the largest newly isolated fixed owner: at least `45.20 ms/step`, including
+   `32.89 ms/step` in FFN-Down. It is the first implementation target.
+2. The current scalar quantizer reaches only about `82 MiB/s` on tiny contiguous inputs. Its `std::nearbyint`-based
+   per-element rounding and scalar reductions should be replaced with parity-tested nearest-integer and SIMD paths.
+3. Activation identity lookup and Float32 copying are not performance problems. Removing or complicating the cache for
+   these phases cannot provide meaningful decode benefit.
+4. Thread-pool mutex contention is effectively zero. Final barrier cost is measurable but secondary. Affinity and
+   barrier-only tuning should not precede quantizer work.
+5. Dispatch costs `14.94 ms/step` across 97 calls and is the next fixed-cost target after quantization. Reducing helper
+   count or batching dispatch is more promising than optimizing the uncontended lock.
+6. Q6_K Down parallel execution remains slower than Q4_K Down (`29.09` versus `19.55 ms/step`) after activation
+   preparation is excluded. Kernel bandwidth/instruction work remains a separate P0 after quantization.
+7. A full-model conclusion requires a fresh post-change artifact and alternating no-profile LiteNN/llama.cpp controls.
+   The phase profile identifies owners; it does not by itself claim end-to-end speedup.
+
+## Acceptance Gates
+
+- Preserve byte-exact Q8_K scales, quantized values, and block sums against the scalar reference, including ties,
+  signed maxima, tails, and non-contiguous source views.
+- Require a stable improvement on both exact-size Q8_K preparation rows before running the private production model.
+- Require unchanged generated tokens, no fallback, and a lower stable no-profile token median before retaining a
+  full-model optimization.
+- Keep phase profiling opt-in; the default runtime path must not pay per-task timestamps or profile aggregation.

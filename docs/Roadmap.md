@@ -3209,7 +3209,8 @@ Priority classes:
       for controlled experiments but is not the production default.
 - [ ] P0: Close the remaining CPU FFN-Down streaming gap against the CPU-only llama.cpp control:
       `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical evidence record and
-      `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. The adjacent-run baseline is
+      `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. Projection/worker phase
+      evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`. The adjacent-run baseline is
       `256.616 ms/token` for LiteNN and
       `202.224 ms/token` for llama.cpp at T8. Normalized stage attribution assigns at least `46.54 ms` of the
       `54.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
@@ -3230,9 +3231,16 @@ Priority classes:
             - [x] Mark only single-consumer SwiGLU values that are not public results before bufferization.
             - [x] Lower the marked pair to the fused field-v4 Q4_K/Q6_K runtime helper and verify object imports.
             - [x] Pass runtime, artifact-load, and AOT execution parity and complete a paired mixed-format cold stream.
-      - [ ] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead, then establish whether
-            the residual shared-activation gap comes from helper fixed cost, task imbalance, or insufficient concurrent
-            streams. Include activation lookup/copy/quantization as separate phases.
+      - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
+            real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
+            `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
+            negligible. FFN-Down quantization alone accounts for `32.893 ms/step`. Exact-size microbenchmarks agree with
+            production quantization within `7.1%`, so Q8_K preparation is now the first measured implementation owner.
+      - [ ] Replace scalar Q8_K rounding and reductions with byte-exact optimized and SIMD paths, extend phase timing to
+            grouped Gate/Up helpers, then verify that the stable production `45.2007 ms/step` lower bound falls with
+            unchanged tokens and no fallback.
+      - [ ] Amortize the measured `14.9425 ms/step` dispatch floor across compatible helper sequences. Lock and barrier
+            tuning remain secondary unless a new profile changes their ranking.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.

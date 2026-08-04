@@ -36,7 +36,8 @@ Priority classes for the GGUF/Qwen decode work:
 ### 2026-08-04 FFN-Down Closure Tranche
 
 Evidence owner: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`; detailed profiling narrative:
-`docs/PerformanceAnalysis_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
+`docs/PerformanceAnalysis_2026-08-04.md`; projection phase evidence:
+`docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
 `256.616 ms/token` and llama.cpp at `202.224 ms/token`. After correcting each profiler by its own no-profile baseline,
 FFN accounts for at least `46.54 ms` of the `54.39 ms/token` gap. Q4_K and Q6_K activation-plus-Down are approximately
 `2.04x` and `1.82x` the corresponding llama.cpp boundaries, while Gate/Up is only about `5 ms` behind.
@@ -64,13 +65,29 @@ P0 implementation order:
   - [x] Add a paired materialized/fused mixed-format cold stream. Independent paired runs measured `+0.3185 ms`
     (`+0.38%`) and `-0.0696 ms` (`-0.09%`) materialized-minus-fused, so the optimization is neutral within noise and
     is retained for compiler dataflow cleanliness rather than counted toward CPU parity.
-- [ ] Attribute the residual single-projection bandwidth loss before changing the kernel.
-  - Add opt-in low-overhead timestamps for activation lookup/copy/quantization, helper dispatch, each worker's useful
-    interval, bytes assigned, task claims, and final barrier wait.
-  - Compare ordinary Down, hidden/output, grouped Gate/Up, and the llama.cpp stage control under alternating runs. Treat
-    prepared Q8_K reuse and Float32 activation identity as separate variables.
-  - Exit when the evidence distinguishes fixed dispatch cost, task imbalance, cache/DRAM stalls, and insufficient
-    memory-level parallelism well enough to predict a benchmark change.
+- [x] Attribute the residual single-projection bandwidth loss before changing the kernel.
+  - The opt-in structured profile now separates activation lookup/copy/quantization, helper dispatch, per-participant
+    task claims/useful work, parallel wall time, and final barrier wait without instrumenting the default path.
+  - Stable generated-token steps 10-24 measured `45.2007 ms/step` in Q8_K activation quantization, `14.9425 ms` in
+    dispatch, `77.7852 ms` parallel wall time, `3.8463 ms` final barrier wait, and effectively zero cache lookup,
+    Float32 copy, or lock contention. Dispatch and barrier are contained in parallel wall time.
+  - FFN-Down owns `32.893 ms/step` of the measured quantization. Exact-size microbenchmarks (`235 us` at 5120 and
+    `640 us` at 13824) agree with production per-call measurements within `7.1%`, making them the first acceptance gate.
+  - The 97 structured events cover ordinary projections; grouped Gate/Up preparation remains outside this table, so
+    `45.2007 ms/step` is a lower bound for complete-schedule Q8_K preparation.
+- [ ] Accelerate Q8_K activation preparation before further thread-policy work.
+  - [ ] Replace scalar `std::nearbyint` in the Q8_K quantizer with a parity-proven nearest-integer implementation and
+    cover signed maxima, ties, clamping, block sums, strided inputs, and multiple blocks with byte-exact tests.
+  - [ ] Add AVX2 and, where profitable, AVX-512 max/quantize/block-sum paths with a scalar fallback. Retain only paths
+    that improve both exact Qwen rows stably and preserve byte-exact helper output.
+  - [ ] Extend structured activation timing to grouped Gate/Up helpers and identify same-activation reuse opportunities;
+    do not infer total preparation cost from the ordinary-projection lower bound.
+  - [ ] Re-run the cache-hit production profile and require a corresponding reduction from the `45.2007 ms/step`
+    baseline with unchanged tokens and no fallback.
+- [ ] Reduce the measured per-helper dispatch floor.
+  - Batch compatible projection work or amortize worker wake-up across helper sequences before changing lock policy.
+  - Use `14.9425 ms/step` across 97 ordinary projections as the baseline; keep uncontended-lock and affinity tuning
+    below this work unless a new profile changes the ranking.
 - [ ] Raise FFN-Down cold-stream throughput.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
