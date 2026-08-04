@@ -3221,8 +3221,8 @@ Priority classes:
       time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
-      - [ ] Follow the evidence-backed order: add low-overhead matched reference-stage counters; complete the bounded
-            RMSNorm-to-grouped-Q8_K fusion A/B; reproduce the external `6.85 token/s` provenance; open Down-kernel work
+      - [ ] Follow the evidence-backed order: add low-overhead matched reference-stage counters; treat the completed
+            RMSNorm-to-grouped-Q8_K rejection as a closed branch; reproduce the external `6.85 token/s` provenance; open Down-kernel work
             only if selected by accepted stage data; then extend controls to sustained decode and long-context tiers.
             Rejected synchronized stage deltas and cache-hot-only wins must not reorder this sequence.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
@@ -3326,18 +3326,20 @@ Priority classes:
             - [x] Evaluate and reject current-width standby: parking workers across T4 projections reduced interference,
                   but three alternating pairs delivered only `1.46%` paired median gain. Both implementations were
                   removed with token parity preserved; retain only signal-count profiling and close dispatch-only work.
-      - [ ] P1: prove or reject projection-wrapper plus normalization removal with non-profile paired A/B evidence.
+      - [x] P1: prove or reject projection-wrapper plus normalization removal with non-profile paired A/B evidence.
             The intrusive ledger measured `3.124 + 1.956 ms/token`; require unchanged output, no fallback, no more than
             `5%` compile-time growth, and at least `2%` full-token median improvement.
             - [x] Lower strict Float32 last-axis RMSNorm to one CPU AOT helper. The real schedule invokes it 97 times per
                   token at `0.36-0.45 ms` total; LLVM instructions fell `6.66%`, object emission fell `10.23%`, and
                   exact-token alternating pairs produced a `1.47%` median gain. This is retained as a compiler-size
-                  improvement and fusion primitive, but does not satisfy the `2%` runtime gate.
-            - [ ] Fuse single-consumer RMSNorm into grouped field-v4 Q8_K activation staging, eliminating the
-                  normalized Float32 materialization and staging cache comparison/copy before repeating the gate.
-            - [ ] Treat the remaining `3.124 ms/token` projection-wrapper row as an instrumented upper bound until a
-                  low-overhead post-fusion profile proves removable non-helper work; do not revive broad CallNode
-                  inlining or an ABI rewrite from timer-boundary evidence.
+                  improvement, but does not satisfy the `2%` runtime gate.
+            - [x] Implement, validate, and reject single-consumer RMSNorm-to-grouped-field-v4 Q8_K staging fusion.
+                  Loaded AOT and public-result fallback parity passed, but three exact-token/no-fallback cache-hit pairs
+                  produced `-3.23%`, `+4.14%`, and `-0.19%` gains, for a `-0.19%` paired median. The experiment reduced
+                  LLVM instructions `1.26%` and object bytes `1.36%` but added two helper ABIs; it was removed.
+            - [x] Close broad projection-wrapper ABI work until new low-overhead evidence exists. The remaining
+                  `3.124 ms/token` row surrounds external helper calls and is an instrumented upper bound, not proof of
+                  removable wrapper cost; do not revive broad CallNode inlining or an ABI rewrite from timer boundaries.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.

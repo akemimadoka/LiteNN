@@ -210,13 +210,14 @@ The no-profile cache-hit control alternated materialized/helper order across thr
 latencies were `177.810/177.240`, `180.350/168.760`, and `176.300/173.700 ms/token`, corresponding to helper gains of
 `0.32%`, `6.42%`, and `1.47%`. Generated token ids matched in every pair. The preferred paired-median gain is `1.47%`,
 below the predefined `2%` full-token gate. The standalone helper is therefore retained for its measured compiler-size
-benefit and as the required primitive for fusion, but it does not close the runtime cluster target.
+benefit, but it does not close the runtime cluster target.
 
-The next experiment must fuse RMSNorm with the Q8_K activation staging of its single grouped projection consumer. It
-must eliminate the normalized Float32 materialization and the following cache comparison/copy, preserve standalone
-RMSNorm for other consumers, and re-run the same alternating full-token gate. Projection-wrapper self time remains an
-instrumented upper bound because the node timer surrounds external-helper calls; it is not evidence for broad ABI
-rewrites.
+The follow-up fused RMSNorm directly into Q8_K activation staging for a single grouped field-v4 projection consumer.
+Loaded AOT and public-result fallback parity passed, but three alternating cache-hit pairs measured `-3.23%`, `+4.14%`,
+and `-0.19%`, for a `-0.19%` paired median with identical tokens and no fallback. LLVM instructions fell `1.26%` and
+object bytes fell `1.36%`, but the runtime gate failed and the experimental lowering and two helper ABIs were removed.
+Projection-wrapper self remains an instrumented upper bound because the node timer surrounds external-helper calls;
+it is not evidence for broad ABI rewrites.
 
 ## Dispatch Controls
 
@@ -259,16 +260,15 @@ fewer submissions, but another thread-pool wait/standby policy is not a current 
 4. The native non-helper ledger now closes within the `2%` requirement with `2.62%` marker overhead. Only `0.658 ms`
    remains unattributed.
 5. `CallNode` inlining and marker removal cannot provide production gain. Standalone native RMSNorm reduced compiler
-   IR/object size and delivered a `1.47%` paired-median token gain, below the `2%` runtime gate. The remaining cluster
-   route is RMSNorm-to-Q8_K staging fusion; projection-wrapper self remains an instrumented upper bound.
+   IR/object size and delivered a `1.47%` paired-median token gain, below the `2%` runtime gate. RMSNorm-to-Q8_K staging
+   fusion then produced a `-0.19%` paired median and was removed; projection-wrapper self remains an instrumented upper
+   bound.
 6. Dispatch-only optimization is closed. Two wake paths and two sequence-standby variants failed token and/or
    parallel-wall gates even when the dispatch counter fell by more than `99%`.
 
 ### Supported but not yet proven
 
-1. Fusing RMSNorm with its single grouped projection consumer can turn the standalone helper's structural win into at
-   least a `2%` full-token gain without regressing helper parallel wall time.
-2. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
+1. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
    reference; matched low-overhead reference-stage counters are still required before choosing that route.
 
 ### Not established
@@ -283,7 +283,7 @@ fewer submissions, but another thread-pool wait/standby policy is not a current 
 | --- | --- | --- |
 | Done | Close native module residual accounting | Closure within `2%`, instrumentation within `3%` |
 | Done | Reject wake-primitive and sequence-standby dispatch changes | Dispatch plus parallel wall plus full-token gate |
-| P1 | Fuse RMSNorm into Q8_K activation staging; keep wrapper work evidence-gated | Non-profile paired A/B; at least `2%` full-token gain |
+| Done | Reject RMSNorm-to-Q8_K staging fusion and broad wrapper ABI work | Exact-token paired median `-0.19%`; experiment removed |
 | P1 | Add low-overhead matched reference-stage counters | Below `3%` total overhead and below `15%` stage CV |
 | P1 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
 | P0 | Re-run full-model no-profile controls after accepted changes | Identical generated tokens and alternating medians |

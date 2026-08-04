@@ -100,7 +100,8 @@ an upper bound rather than an expected gain.
 | Mixed Q4_K_M cold Down stream | `96.726 ms` for 48 distinct activations versus `64.065 ms` for one shared activation | Model-sized weight/activation turnover matters; not a pure materialization estimate |
 | Direct SwiGLU-to-Down fusion | Paired deltas `+0.38%` and `-0.09%` | Runtime-neutral; retained only for compiler dataflow |
 | Worker sequence standby | Dispatch reduced by over `99%`, but full/current-width paired gains were `2.81%` and `1.46%` | Dispatch-only optimization rejected |
-| Standalone RMSNorm helper | 97 calls total `0.36-0.45 ms/token`; paired median gain `1.47%` | Below runtime gate; retained for compile structure and fusion |
+| Standalone RMSNorm helper | 97 calls total `0.36-0.45 ms/token`; paired median gain `1.47%` | Below runtime gate; retained for compile structure |
+| RMSNorm-to-grouped-Q8_K staging fusion | Paired gains `-3.23%`, `+4.14%`, and `-0.19%`; median `-0.19%` | Rejected and removed |
 
 The standalone RMSNorm helper nevertheless produced structural compiler gains:
 
@@ -114,6 +115,30 @@ The standalone RMSNorm helper nevertheless produced structural compiler gains:
 | Object bytes | `-2.99%` |
 | Complete artifact compile time | `-1.53%` |
 
+## RMSNorm Staging Fusion Control
+
+The bounded fusion experiment recognized only non-public, single-consumer Float32 rank-2 last-axis RMSNorm followed
+by a grouped field-interleaved-v4 Q4_K/Q6_K projection. Its runtime helper computed RMSNorm directly into Q8_K blocks,
+while public or multiply consumed normalization values retained the standalone helper. Focused loaded-AOT parity and
+fallback tests passed before the performance gate.
+
+The same 14B stateful decode schedule was compiled once for each implementation and then executed in three alternating
+cache-hit pairs. Both paths used O0, T8, adaptive worker waiting, field-interleaved-v4 prepared weights, the same
+nine-token prompt, and 16 ignored-EOS greedy generated tokens.
+
+| Pair | Standalone RMSNorm | Fused staging | Fused gain |
+| ---: | ---: | ---: | ---: |
+| 1 | `186.512 ms/token` | `192.534 ms/token` | `-3.23%` |
+| 2 | `191.924 ms/token` | `183.969 ms/token` | `+4.14%` |
+| 3 | `186.459 ms/token` | `186.817 ms/token` | `-0.19%` |
+| Paired median | - | - | `-0.19%` |
+
+All runs produced the same token sequence and reported zero fallback. The sign changed across pairs and the paired
+median missed the required `+2%` gain by a wide margin. The fusion also reduced LLVM instructions from `228,166` to
+`225,286` (`-1.26%`) and object bytes from `1,015,284` to `1,001,483` (`-1.36%`), but the isolated structural reduction
+does not justify two new helper ABIs and a graph-specific lowering path. The experimental implementation was removed;
+the standalone RMSNorm helper remains.
+
 ## Conclusions
 
 1. The accepted local performance gap is approximately `5.49%`, not the historical `26.9%`. LiteNN is close enough
@@ -122,9 +147,8 @@ The standalone RMSNorm helper nevertheless produced structural compiler gains:
    matched-stage reference profile is the highest-value evidence task.
 3. Q8_K preparation and worker dispatch are closed directions for now. Their large isolated counters were either
    removed or failed to translate into the required full-token gain.
-4. RMSNorm-to-grouped-Q8_K staging fusion is the best bounded implementation experiment: it can remove normalized
-   Float32 materialization and staging comparison/copy while building on a parity-proven helper. It still requires the
-   `2%` non-profile full-token gate.
+4. RMSNorm-to-grouped-Q8_K staging fusion is closed as rejected. It preserved correctness but produced a `-0.19%`
+   paired median and did not justify its additional helper ABI or lowering complexity.
 5. FFN-Down kernel or prefetch work is conditional. It should proceed only if accepted matched-stage counters or a
    cache-cold full-model-correlated experiment identifies Down as the largest remaining deficit.
 6. The external `6.85 token/s` result affects the size of the target, but not implementation selection until its
@@ -135,7 +159,7 @@ The standalone RMSNorm helper nevertheless produced structural compiler gains:
 | Order | Work | Acceptance gate | Resulting action |
 | ---: | --- | --- | --- |
 | 1 | Add non-synchronizing reference-stage aggregate counters | Below `3%` total overhead and below `15%` CV per stage | Promote only the largest accepted cross-runtime deficit |
-| 2 | Fuse single-consumer RMSNorm into grouped field-v4 Q8_K staging | Exact tokens, no fallback, compile growth at most `5%`, paired median gain at least `2%` | Retain as runtime optimization or keep only the standalone helper |
+| 2 | Fuse single-consumer RMSNorm into grouped field-v4 Q8_K staging | Completed: exact tokens and no fallback, but `-0.19%` paired median | Rejected; keep only the standalone helper |
 | 3 | Reproduce the external `6.85 token/s` provenance | Two accepted paired batches with exact configuration | Update the controlled parity target |
 | 4 | Tune FFN-Down cold-stream/kernel behavior if selected | Cache-cold and full-decode gain; no cache-hot-only acceptance | Retain the measured variant only |
 | 5 | Re-run sustained and long-context controls | 128/512 generated tokens, then 2K through 1M context tiers | Validate that short-window parity survives production scale |

@@ -51,8 +51,9 @@ P0 implementation order:
 - [ ] Execute the decision gates in the recorded order; do not select work from rejected synchronized stage deltas.
   - [ ] First, replace reference callback differencing with non-synchronizing aggregate counters and accept a stage
     only below `3%` whole-token overhead and `15%` stage CV.
-  - [ ] In parallel with that evidence work, complete the bounded single-consumer RMSNorm-to-grouped-Q8_K staging A/B;
-    retain it as a runtime optimization only at or above the `2%` paired full-token gate.
+  - [x] Complete the bounded single-consumer RMSNorm-to-grouped-Q8_K staging A/B. Three exact-token, no-fallback pairs
+    measured `-3.23%`, `+4.14%`, and `-0.19%`, for a `-0.19%` median. The experimental lowering and helper ABIs were
+    removed; keep only the standalone RMSNorm compiler-size improvement.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] Open FFN-Down kernel/prefetch work only when the new stage evidence selects it, and require cache-cold plus
     full-decode improvement rather than a cache-hot-only win.
@@ -210,7 +211,8 @@ P0 implementation order:
   - Do not schedule another wait primitive, polling budget, or module-standby policy as dispatch P0. Future helper
     fusion may still reduce submission count, but it must be justified by its operation/dataflow benefit rather than
     this closed thread-pool hypothesis.
-- [ ] P1 candidate, evidence-gated: reduce the projection-wrapper plus normalization cluster.
+- [x] P1 candidate, evidence-gated: evaluate projection-wrapper plus normalization removal. Closed as rejected on
+  2026-08-04.
   - The accepted residual ledger measured `3.124 ms/token` projection-wrapper and `1.956 ms/token` normalization self
     time under intrusive profiling. Inspect generated IR and ABI boundaries, then use a non-profile paired A/B to
     distinguish removable wrapper/shape work from timer boundary effects.
@@ -220,14 +222,16 @@ P0 implementation order:
     Profiled helper time is `0.36-0.45 ms/token` versus the prior `1.956 ms/token` normalization row. LLVM IR
     instructions fell `6.66%`, object emission fell `10.23%`, object bytes fell `2.99%`, and complete artifact compile
     fell `1.53%`. Three no-profile alternating pairs preserved exact tokens and produced `0.32%`, `6.42%`, and `1.47%`
-    gains; the `1.47%` paired median does not close the `2%` runtime gate. Retain the helper as a compiler-size win and
-    fusion primitive, not as completion evidence.
-  - [ ] Fuse a single-consumer RMSNorm into grouped field-v4 Q8_K activation staging. Skip the normalized Float32
-    materialization and staging cache comparison/copy, keep standalone RMSNorm semantics elsewhere, and require the
-    same exact-token/no-fallback/compile/full-token gates.
-  - [ ] Re-profile projection-wrapper self only after fused staging. Node timers currently surround external helper
-    calls, so the `3.124 ms/token` row is an upper bound contaminated by profile boundaries rather than proof that C ABI
-    wrappers are expensive.
+    gains; the `1.47%` paired median does not close the `2%` runtime gate. Retain the helper as a compiler-size win, not
+    as completion evidence.
+  - [x] Implement, validate, and reject single-consumer RMSNorm-to-grouped-field-v4 Q8_K staging fusion. Loaded AOT and
+    public-result fallback parity passed. Three alternating 16-token cache-hit pairs produced `-3.23%`, `+4.14%`, and
+    `-0.19%` gains, for a `-0.19%` paired median with identical tokens and no fallback. LLVM instructions fell `1.26%`
+    and object bytes fell `1.36%`, but that structural reduction does not justify two helper ABIs and a graph-specific
+    lowering path; the experiment was removed.
+  - [x] Close broad projection-wrapper ABI work. Node timers surround external helper calls, so the `3.124 ms/token`
+    row remains an upper bound contaminated by profile boundaries. With both standalone and fused RMSNorm controls
+    below the runtime gate, do not revive broad CallNode inlining or wrapper rewrites without new low-overhead evidence.
 - [ ] P1 candidate, evidence-gated: raise FFN-Down cold-stream throughput.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
